@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Asynchronous workers for Pi in herdr.",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/boadij/pi-herdsman.git"

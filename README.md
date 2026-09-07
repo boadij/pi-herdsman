@@ -172,3 +172,7 @@ git diff --check
 ```
 
 See [Development validation](docs/development/validation.md) for the full gate.
+
+## License
+
+[Apache License 2.0](LICENSE)
