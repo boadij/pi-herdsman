@@ -13,9 +13,13 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   prepare:
-    if: inputs.mode == 'prepare'
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'prepare'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -30,17 +34,17 @@ jobs:
           skip-github-release: true
 
   publish:
-    if: inputs.mode == 'publish'
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'publish'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
