@@ -15,6 +15,8 @@ import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import {
   chiefMessagePath,
+  chiefMessageBytes,
+  CHIEF_MESSAGE_MAX_BYTES,
   chiefMessageQuarantined,
   chiefAskQueued,
   chiefAskMessageId,
@@ -23,6 +25,7 @@ import {
   drainChiefInbox,
   supervisionRuntime,
   invalidateLeadCoordinationState,
+  LEAD_STATE_MAX_BYTES,
   listChiefMessagePaths,
   normalizeHerdrLifecycleState,
   projectSupervision,
@@ -170,6 +173,40 @@ test("message locks fail closed for live and malformed owners", () => {
   }
 });
 
+test("chief message sizing is the exact serialized UTF-8 record size", () => {
+  const record = message({ text: "héllo" });
+  assert.equal(
+    chiefMessageBytes(record),
+    Buffer.byteLength(`${JSON.stringify(record)}\n`, "utf8"),
+  );
+});
+
+test("chief message admission accepts exactly 8 KiB and rejects the next byte", () => {
+  const runtime = supervisionRuntime(socket());
+  const prefix = "é\t".repeat(32);
+  const recordFor = (suffix: string) => message({ text: prefix + suffix });
+  let low = 0;
+  let high = CHIEF_MESSAGE_MAX_BYTES;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (
+      chiefMessageBytes(recordFor("x".repeat(middle))) <=
+      CHIEF_MESSAGE_MAX_BYTES
+    )
+      low = middle;
+    else high = middle - 1;
+  }
+  const exact = recordFor("x".repeat(low));
+  const over = recordFor("x".repeat(low + 1));
+  assert.equal(chiefMessageBytes(exact), CHIEF_MESSAGE_MAX_BYTES);
+  assert.equal(chiefMessageBytes(over), CHIEF_MESSAGE_MAX_BYTES + 1);
+  writeChiefMessage(exact, runtime);
+  assert.throws(
+    () => writeChiefMessage(over, runtime),
+    /Chief message record is too large/,
+  );
+});
+
 test("lead coordination state is strict, private, bounded, and atomic", () => {
   const runtime = supervisionRuntime(socket());
   const value = state("lead");
@@ -191,6 +228,38 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   assert.throws(
     () => readLeadCoordinationState(runtime, "lead"),
     /Unable to read/,
+  );
+});
+
+test("lead coordination state admits the exact UTF-8 16 KiB boundary", () => {
+  const runtime = supervisionRuntime(socket());
+  const askId = id();
+  const instanceId = id();
+  const prefix = "é\t".repeat(32);
+  const stateFor = (text: string): LeadCoordinationState =>
+    state("lead", {
+      instanceId,
+      pendingAsk: { askId, question: "Q", text: prefix + text },
+    });
+  const serializedBytes = (value: LeadCoordinationState) =>
+    Buffer.byteLength(`${JSON.stringify(value)}\n`, "utf8");
+  let low = 0;
+  let high = LEAD_STATE_MAX_BYTES;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (serializedBytes(stateFor("x".repeat(middle))) <= LEAD_STATE_MAX_BYTES)
+      low = middle;
+    else high = middle - 1;
+  }
+  const exact = stateFor("x".repeat(low));
+  const over = stateFor("x".repeat(low + 1));
+  assert.equal(serializedBytes(exact), LEAD_STATE_MAX_BYTES);
+  assert.equal(serializedBytes(over), LEAD_STATE_MAX_BYTES + 1);
+  writeLeadCoordinationState(runtime, exact);
+  assert.deepEqual(readLeadCoordinationState(runtime, "lead"), exact);
+  assert.throws(
+    () => writeLeadCoordinationState(runtime, over),
+    /Lead coordination state is too large/,
   );
 });
 
@@ -271,7 +340,11 @@ test("supervision authority is coordination state, not metadata", () => {
     workers: [],
     coordinationStates: [
       state("lead", {
-        pendingAsk: { askId: id(), question: "OAuth?" },
+        pendingAsk: {
+          askId: id(),
+          question: "OAuth?",
+          text: "Question: OAuth?",
+        },
       }),
     ],
   });

@@ -118,7 +118,7 @@ Create a temporary global definition with a whole-line body reference:
 
 ```markdown
 ---
-name: worker
+name: generalist
 bodyMode: append
 ---
 

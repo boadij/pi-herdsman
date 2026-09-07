@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -72,7 +72,7 @@ const SUPPORTED_FIELDS = new Set([
   ...BOOLEAN_CAPABILITY_FIELDS,
   ...ARRAY_FIELDS,
 ]);
-const BODY_FILE_REFERENCE = /^[ \t]*@((?:\/|\.\.?\/).+?)[ \t]*$/gmu;
+const BODY_FILE_REFERENCE = /^[ \t]*@((?:\/|~\/|\.\.?\/).+?)[ \t]*$/gmu;
 const BUILTIN_AGENT_DIR = fileURLToPath(
   new URL("./agent-definitions", import.meta.url),
 );
@@ -259,7 +259,13 @@ function resolveBodyFileReferences(
   return body.replace(
     BODY_FILE_REFERENCE,
     (_match, input: string) =>
-      `@${input.startsWith("/") ? input : resolve(dirname(definitionPath), input)}`,
+      `@${
+        input.startsWith("~/")
+          ? resolve(homedir(), input.slice(2))
+          : input.startsWith("/")
+            ? input
+            : resolve(dirname(definitionPath), input)
+      }`,
   );
 }
 

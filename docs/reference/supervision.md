@@ -22,7 +22,11 @@ directory, keyed by the SHA-256 hash of its exact Pi session ID:
   "version": 1,
   "instanceId": "<lead generation>",
   "piSessionId": "<exact Pi session ID>",
-  "pendingAsk": { "askId": "<id>", "question": "<text>" },
+  "pendingAsk": {
+    "askId": "<id>",
+    "question": "<text>",
+    "text": "<prepared text>"
+  },
   "updatedAt": 0
 }
 ```
@@ -31,7 +35,9 @@ directory, keyed by the SHA-256 hash of its exact Pi session ID:
 entry is authoritative during lead startup. A fresh `instanceId` is created
 for every initialization. The lead record is checked against exact live
 Herdr/Pi identity; missing, malformed, stale, duplicate, or ambiguous evidence
-fails closed. The record is bounded to 2 KiB. Questions are limited to 1,024
+fails closed. The coordination record is bounded to 16 KiB; individual
+transport message records remain bounded by the fixed 8 KiB supervision record
+ceiling. Questions are limited to 1,024
 characters and 1,024 UTF-8 bytes.
 
 The record does not represent scheduling, capacity, permission, or message
@@ -85,7 +91,10 @@ publication does not change communication authority.
 Messages are bounded, versioned JSON files in the target session's hashed
 `inbox/` directory. Each record includes exact sender, target, `leadSessionId`,
 chief lease, kind, ID, text, and `createdAt`; asks and replies also include an
-ask ID. Extra fields are rejected. Transport kinds are:
+ask ID. Attachments are consumed at submission and rendered into the ordinary
+text field using the same canonical file renderer and configured inline/mailbox
+limits as worker messages. The durable supervision record remains text-only.
+Extra fields are rejected. Transport kinds are:
 
 ```text
 chief_message
@@ -110,23 +119,36 @@ extra fields. Both actions require a currently valid chief; descendants use
 ### `message`
 
 ```json
-{ "action": "message", "message": "Build completed." }
+{
+  "action": "message",
+  "message": "Build completed.",
+  "files": ["/tmp/result.txt"]
+}
 ```
 
 Use `message` for meaningful progress, reports, results, warnings, and
 completion. It queues one bounded `chief_message` and does not change lead
 coordination state.
+`message` accepts an optional `files` array. Files use the same submission-time
+canonicalization, UTF-8 embedding, reference fallback, and configured byte
+limits as worker messages.
 
 ### `ask`
 
 ```json
-{ "action": "ask", "question": "Should the release include the endpoint?" }
+{
+  "action": "ask",
+  "question": "Should the release include the endpoint?",
+  "files": ["/tmp/evidence.md"]
+}
 ```
 
 Use `ask` only when a chief decision is genuinely required. One pending ask is
-allowed per lead. The call durably records its ask ID and question, then queues
-the question. It is a terminating coordination call: make it the final tool
-call of the turn and wait rather than guessing.
+allowed per lead. The call durably records its ask ID and clean question, then
+queues the prepared text. The prepared text, including attachment rendering, is
+persisted before publication so reconciliation can deliver it after a failed
+initial publication. It is a terminating coordination call: make it the final
+tool call of the turn and wait rather than guessing.
 
 ## `staff`
 
@@ -167,12 +189,14 @@ returns bounded identity-checked recent output and process evidence.
 {
   "action": "message",
   "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>",
-  "message": "Run checks."
+  "message": "Run checks.",
+  "files": ["/tmp/checklist.md"]
 }
 ```
 
 The exact lead must currently expose `message`. Atomic creation of one bounded
 `chief_message` record queues a follow-up and does not wait for completion.
+`staff message` accepts optional `files`.
 
 ### `reply`
 
@@ -181,12 +205,15 @@ The exact lead must currently expose `message`. Atomic creation of one bounded
   "action": "reply",
   "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>",
   "askId": "<exact pending ask ID>",
-  "message": "Proceed."
+  "message": "Proceed.",
+  "files": ["/tmp/decision.md"]
 }
 ```
 
 The exact lead, unchanged pending ask ID, current lead identity, and chief
 lease must validate. The pending ask is cleared only after accepted delivery.
+`staff reply` accepts optional `files`. Lead activity returns asynchronously;
+continue only independent chief work, otherwise end the turn and do not poll.
 
 ## UI and failure rules
 

@@ -19,9 +19,10 @@ Commands require a lead Pi session with UI.
 
 The plain command opens a native Pi selection menu with `Running`,
 `Definitions`, `Layout`, `Message limits`, and `Stop all…` destinations. The
-Message limits view edits the independent inline attachment and mailbox
-payload limits at global or trusted-project scope. It is available only to a
-lead Pi session with UI.
+Message limits view edits the independent global inline attachment and mailbox
+payload limits. It is available only to a lead Pi session with UI. Current
+values and presets show a rough token equivalent using four UTF-8 bytes per
+token. The enforced limits are bytes, not tokens.
 
 ## `/workers agents`
 
@@ -72,6 +73,10 @@ or Pi Herdsman's validated vocabulary when not.
 The command edits only the selected top-level `model`, `thinking`, or `enabled`
 line in the global Markdown override. It preserves unrelated frontmatter and
 the complete body.
+
+Details re-resolves the selected definition when opened, so it reflects current
+overlays and body references even if the menu remained open while configuration
+changed.
 
 Changes apply to future definition delegations and session continuations, not
 already-running workers or the lead Pi session.

@@ -56,13 +56,16 @@ Each accepts an integer from 1024 bytes (1 KiB) through 1048576 bytes (1 MiB)
 and defaults to 131072 bytes (128 KiB). The inline limit applies per file;
 eligible complete strict UTF-8 files are embedded in caller order only when
 the exact serialized mailbox record fits. Other files remain canonical
-references. The mailbox limit is the exact serialized `RequestRecord` or
-`AskRecord` admission size.
+references. The mailbox limit is the exact serialized `RequestRecord`,
+`AskRecord`, or text-only chief supervision record admission size. Chief
+supervision also has an existing fixed 8 KiB record ceiling, so its effective
+admission limit is the smaller of the configured mailbox limit and 8 KiB.
 
-Valid trusted project values override valid global values. Invalid values are
-ignored rather than clamped. Configure these values through `/workers` →
-`Message limits`; the fixed 1 MiB protocol safety ceiling remains in force for
-reading existing mailbox records.
+Only valid global values affect runtime behavior. Invalid global values are
+ignored rather than clamped, and project-local values for these two keys are
+inert. Configure the global values through `/workers` → `Message limits`; the
+fixed 1 MiB protocol safety ceiling remains in force for reading existing
+mailbox records.
 
 ## Settings scope
 

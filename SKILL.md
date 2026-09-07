@@ -24,7 +24,9 @@ conflict, follow runtime.
 
 Coordinate managed workers.
 
-Use list when the roster, ownership, or worker state is unknown.
+The session-start instructions include the current worker-definition roster.
+Use list for live worker state, ownership, or a refreshed definition roster
+after configuration changes.
 
 Use delegate to give one bounded assignment to a worker while retaining
 ownership:
@@ -73,11 +75,22 @@ If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact worker before
 starting another assignment; follow the stored recovery nextAction.
 
-Before delegate, steer, or reply, make the message self-contained. Pass supporting
-artifacts, including applicable instruction or skill files, through files instead
-of mentioning only their paths in task or message; explain each file's relevance
-in the accompanying text, and do not reattach skills already supplied by the
-selected agent definition. Complete strict UTF-8 text is embedded when it fits;
+Before delegate, steer, or reply, make the message self-contained.
+
+Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md,
+GEMINI.md, or equivalents merely because they exist. Rely on normal project or
+runtime discovery when it supplies those instructions.
+
+Attach an agent instruction file only when the task itself requires inspecting,
+modifying, comparing, or transmitting that file, the user explicitly requests
+it, or its instructions are required and the target would not otherwise receive
+them.
+
+Skills are separate. Attach a required SKILL.md only when the task needs it and
+the selected definition does not already provide that skill. Ordinary relevant
+source, documentation, configuration, and evidence files remain attachable.
+
+Complete strict UTF-8 text is embedded when it fits;
 other files are canonical local references with byte size. Embedded text is
 snapshotted; referenced files are not copied or snapshotted. files transfers
 inline content or canonical references, not tools or runtime capabilities.

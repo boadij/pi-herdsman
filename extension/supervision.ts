@@ -178,12 +178,13 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
   );
 }
 
+export function chiefMessageBytes(record: ChiefMessageRecord): number {
+  return Buffer.byteLength(`${JSON.stringify(record)}\n`, "utf8");
+}
+
 function assertMessage(value: unknown): asserts value is ChiefMessageRecord {
   if (!validMessage(value)) throw new Error("Invalid Chief message record");
-  if (
-    Buffer.byteLength(`${JSON.stringify(value)}\n`, "utf8") >
-    CHIEF_MESSAGE_MAX_BYTES
-  )
+  if (chiefMessageBytes(value) > CHIEF_MESSAGE_MAX_BYTES)
     throw new Error("Chief message record is too large");
 }
 
@@ -1154,7 +1155,7 @@ export type LeadCoordinationState = {
   version: 1;
   instanceId: string;
   piSessionId: string;
-  pendingAsk?: { askId: string; question: string };
+  pendingAsk?: { askId: string; question: string; text: string };
   updatedAt: number;
 };
 
@@ -1209,7 +1210,7 @@ export type ValidatedWorkerEvidence = {
   workerLabel?: string;
 };
 
-export const LEAD_STATE_MAX_BYTES = 2048;
+export const LEAD_STATE_MAX_BYTES = CHIEF_MESSAGE_MAX_BYTES * 2;
 /** Fits the complete coordination record, including JSON and UTF-8 overhead. */
 export const LEAD_STATE_MAX_QUESTION_CHARS = 1024;
 export const LEAD_STATE_MAX_QUESTION_BYTES = 1024;
@@ -1257,9 +1258,11 @@ function validLeadState(value: unknown): value is LeadCoordinationState {
     (ask === undefined ||
       (!!ask &&
         typeof ask === "object" &&
-        Object.keys(ask).length === 2 &&
+        Object.keys(ask).length === 3 &&
         UUID.test((ask as any).askId) &&
-        validLeadCoordinationQuestion((ask as any).question)))
+        validLeadCoordinationQuestion((ask as any).question) &&
+        typeof (ask as any).text === "string" &&
+        (ask as any).text.length > 0))
   );
 }
 export function readLeadCoordinationState(

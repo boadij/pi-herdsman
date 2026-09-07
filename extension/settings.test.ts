@@ -9,29 +9,16 @@ import {
   validByteLimit,
 } from "./settings.ts";
 
-test("byte limits resolve trusted project, global, and default values", () => {
-  assert.deepEqual(resolveEffectiveByteLimit(undefined, undefined, true), {
+test("byte limits resolve global and default values", () => {
+  assert.deepEqual(resolveEffectiveByteLimit(undefined), {
     bytes: DEFAULT_BYTE_LIMIT,
     source: "default",
   });
-  assert.deepEqual(resolveEffectiveByteLimit(65536, undefined, true), {
+  assert.deepEqual(resolveEffectiveByteLimit(65536), {
     bytes: 65536,
     source: "global",
   });
-  assert.deepEqual(resolveEffectiveByteLimit(65536, 262144, true), {
-    bytes: 262144,
-    source: "project",
-  });
-  assert.deepEqual(resolveEffectiveByteLimit(65536, 262144, false), {
-    bytes: 65536,
-    source: "global",
-  });
-  assert.deepEqual(resolveEffectiveByteLimit(65536, 0, true), {
-    bytes: 65536,
-    source: "global",
-    invalidSource: "project",
-  });
-  assert.deepEqual(resolveEffectiveByteLimit("128kb", undefined, true), {
+  assert.deepEqual(resolveEffectiveByteLimit("128kb"), {
     bytes: DEFAULT_BYTE_LIMIT,
     source: "default",
     invalidSource: "global",

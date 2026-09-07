@@ -120,6 +120,10 @@ References expand when each new worker generation is constructed. A session
 continuation keeps the saved Pi history but uses the current effective
 definition configuration for its new generation.
 
+The Definitions details view re-resolves the selected name when opened, so
+metadata and body references reflect current overlays even if configuration
+changes while the menu is open.
+
 See [Handoffs and files](handoffs.md).
 
 ## Local tools, skills, and extensions

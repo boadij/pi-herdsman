@@ -15,11 +15,17 @@ canonical local references and are not copied or snapshotted.
 ## Message `files`
 
 For `delegate` with `definition`, `delegate` with `session`, `steer`, and
-`reply`, pass supporting artifacts, including
-applicable instruction or skill files, through `files` instead of mentioning
-only their paths in the task or message; explain each file's relevance in the
-accompanying text, and do not reattach skills already supplied by the selected
-agent definition.
+`reply`, make the message self-contained. Do not attach or mention agent
+instruction files such as `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or equivalents
+merely because they exist; rely on normal project or runtime discovery.
+
+Attach an agent instruction file only when the task requires inspecting,
+modifying, comparing, or transmitting it, the user explicitly requests it, or
+its instructions are required and the target would not otherwise receive them.
+Skills are separate: attach a required `SKILL.md` only when the task needs it
+and the selected definition does not already provide that skill. Ordinary
+relevant source, documentation, configuration, and evidence files remain
+attachable.
 
 Example:
 
@@ -95,6 +101,7 @@ line has one of these shapes:
 @./relative.md
 @../relative.md
 @/absolute/path.md
+@~/home-relative.md
 ```
 
 These remain literal text:
@@ -102,6 +109,9 @@ These remain literal text:
 ```text
 @alice
 Use @./policy.md when needed
+@~user/file.md
+@$HOME/file.md
+@${HOME}/file.md
 ```
 
 Relative body references are resolved from the Markdown definition that

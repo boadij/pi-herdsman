@@ -2577,7 +2577,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
   realFs.mkdirSync(PI_AGENTS_DIR, { recursive: true });
   realFs.writeFileSync(
     join(PI_AGENTS_DIR, "automatic-close-test.md"),
-    "---\nname: worker\n---\nworker\n",
+    "---\nname: automatic-close-test\n---\nworker\n",
     "utf8",
   );
   try {

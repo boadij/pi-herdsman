@@ -18,8 +18,9 @@ Each lead has one private atomic record under the supervision runtime, keyed by
 the SHA-256 hash of its exact Pi session ID. The latest matching
 `pi-herdsman-lead-state` session entry supplies its persisted coordination
 state. A fresh `instanceId` on initialization protects against stale writers
-and publication races. The record is bounded to 2 KiB; its optional pending
-question is limited to 1,024 characters and 1,024 UTF-8 bytes.
+and publication races. The coordination record is bounded to 16 KiB, while
+individual transport message records retain the fixed 8 KiB ceiling. Its
+optional pending question is limited to 1,024 characters and 1,024 UTF-8 bytes.
 
 The record does not represent scheduling, capacity, permission, or message
 readiness. Herdr lifecycle observation is normalized to
@@ -57,7 +58,10 @@ chief list, inspect, message, and reply to supervised leads. A lead's message
 does not require an automatic chief reply. A `lead_ask` requires the exact
 correlated `staff reply`; a reply clears the pending ask only after accepted
 follow-up delivery. A replacement chief can answer an existing ask using its
-current lease and unchanged ask ID.
+current lease and unchanged ask ID. Chief and staff message actions accept
+files; their text is prepared with the same canonical attachment renderer and
+configured global byte limits as worker messages, while durable supervision
+records remain text-only.
 
 ## Supervision state
 
