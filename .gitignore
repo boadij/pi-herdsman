@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__
+node_modules
+.pi-herdsman
+*repomix*
+.backlog/
+dist/
+*.tgz
+.env*
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+/video/

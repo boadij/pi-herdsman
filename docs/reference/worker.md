@@ -1,0 +1,201 @@
+# `worker` API
+
+[Documentation index](../README.md) · [supervision reference](supervision.md)
+
+`worker` is the structured model-facing API for managed workers. It has exactly six actions:
+
+```text
+list
+delegate
+steer
+reply
+close
+inspect
+```
+
+Unknown fields and unsupported selector combinations fail with `invalid_request`.
+The tool is registered only for the lead controller and authorized delegating worker
+controllers.
+
+## `delegate`
+
+Delegation has exactly two strict variants. The required field (`definition` or
+`session`) selects the variant; there is no target discriminator.
+Every variant rejects additional properties.
+
+### Definition
+
+```json
+{
+  "action": "delegate",
+  "definition": "implementer",
+  "task": "Implement the approved change"
+}
+```
+
+Allowed fields are `action`, `definition`, `task`, optional `label`, `cwd`,
+`files`, `fork`, and `timeoutMs`. The definition is resolved from
+the effective roster and delegating worker controllers may use only their allowlisted
+definitions. Project definitions still require trusted project approval.
+`fork`, when supplied, is an exact saved Pi session path or full UUID used as
+the source for a new derived context; otherwise a new Pi session is launched.
+Each accepted definition delegation creates one worker generation for one
+assignment. The terminal result is delivered once and the worker is cleaned up.
+
+### Session
+
+```json
+{
+  "action": "delegate",
+  "session": "<exact .jsonl path or full UUID>",
+  "task": "Continue the investigation"
+}
+```
+
+Allowed fields are `action`, `session`, `task`, optional `files`, and
+`timeoutMs`. The exact saved session supplies its cwd, definition identity, and
+historical Pi context. Session delegation always creates a new worker generation
+for one assignment; it never assigns work to an existing worker. The saved
+definition must currently resolve to an enabled, authorized effective
+definition, whose current configuration is used for the new generation.
+Concurrent or otherwise conflicting managed representations of the exact
+session fail closed. The controller's own active Pi session cannot be delegated
+to itself; use definition delegation with `fork` when a separate derived
+context is required.
+
+All successful delegation results use `action: "delegate"` and include
+`worker`, `definition`, request, session, and startup evidence where available.
+Delegation returns after durable acceptance, not completion. A terminal result
+also makes the exact session identity prominent so it can be used with a later
+`delegate.session` call.
+
+## `list`
+
+Request:
+
+```json
+{ "action": "list" }
+```
+
+No selectors or other fields are accepted. A successful result includes the
+effective `agent_definitions` roster and visible worker records.
+
+Each actionable live worker record includes:
+
+| Field                                                           | Meaning                                                                                                                               |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `worker`                                                        | Exact live logical worker identity to copy into `steer.worker`, `reply.worker`, or `close.worker`. It is not a continuation identity. |
+| `state`                                                         | Safe lifecycle state for observability.                                                                                               |
+| `available_actions`                                             | Snapshot of operations currently eligible for this controller.                                                                        |
+| `workspace_id`, `pane_id`, `tab_id`, `tab_label`                | Herdr identity evidence.                                                                                                              |
+| `cwd`, `pi_session_id`, `pi_session_path`                       | Worker location and Pi session evidence.                                                                                              |
+| `owner_session_id`                                              | Exact direct owner Pi session.                                                                                                        |
+| `agent_definition`                                              | Effective definition name.                                                                                                            |
+| `active_request_id`, `last_activity_at`, `stale`, `inactive_ms` | Assignment and advisory activity evidence.                                                                                            |
+| `parent_label`, `orphan`                                        | Visible direct-owner ancestry and proven orphan recovery evidence.                                                                    |
+| `cleanup_error`, `result_error`, `diagnostic`, `tokens`         | Bounded recovery and presentation evidence when present.                                                                              |
+
+`available_actions` is authoritative model guidance for the current snapshot.
+Do not infer eligibility from `state`. Active work may list `steer`; a valid
+correlated pending `ask_owner` may list `reply`; exact direct ownership may list
+`close`. `available_actions` never lists `delegate`: a worker cannot receive a
+second assignment. Descendant visibility does not grant control. Lead orphan
+recovery may expose only `close`. Unknown and recovery-only records are
+non-actionable. Every operation rechecks identity, ownership, mailbox state, and
+lifecycle immediately before mutation.
+The public record does not expose `steerable`.
+
+Lead controllers see the complete effective definition roster and workers visible
+through their ownership boundary. Delegating workers see only allowed enabled
+leaf definitions and their visible workers. Unknown mailbox diagnostics remain
+non-actionable.
+
+## `inspect`
+
+```json
+{ "action": "inspect", "worker": "implementer-1" }
+```
+
+`inspect` accepts only `action` and the exact live worker label. It is available
+only to that worker's direct owner, and only when the worker is a current,
+unambiguous managed identity. The result is read-only and contains the exact
+session/pane identity, a bounded tail of the most recent 40 unwrapped terminal
+lines (at most 8 KiB), and advisory foreground process evidence when available.
+Its model-facing text includes the worker, session, pane, useful foreground
+commands, and recent activity; raw process and recent-output evidence remains
+in the structured result details.
+The identity is checked again after capture; if the pane or Pi session was
+replaced, inspection fails closed. Inspection does not change worker state,
+mailbox records, lifecycle, or available controls.
+
+## `files` and `timeoutMs`
+
+`files` is valid on all `delegate` variants and on `steer` and `reply`; it is not
+valid on `list` or `close`. Paths are resolved from the controller cwd, checked
+as readable regular files, canonicalized with `realpath`, and embedded only
+when the exact message limit permits. Otherwise they remain canonical references.
+
+`timeoutMs` is valid on definition and session delegation and must be an integer
+from `5001` through `300000`. The startup budget reserves one bounded diagnostic
+window. Current message limits are governed by effective global/project/default
+settings and the fixed mailbox protocol ceiling. Managed mailbox records use
+protocol version 3, and control requests use the marker prefix
+`__PI_HERDSMAN_WORKER_V3__:`.
+
+## `steer`
+
+```json
+{
+  "action": "steer",
+  "worker": "implementer-1",
+  "message": "Also update the focused regression.",
+  "files": [".pi-herdsman/review.md"]
+}
+```
+
+Use only when `steer` is listed in `available_actions`. Steering changes the
+current assignment and does not create another final result.
+
+## `reply`
+
+```json
+{
+  "action": "reply",
+  "worker": "implementer-1",
+  "message": "Use option B."
+}
+```
+
+Use only when `reply` is listed in `available_actions` for a valid correlated
+pending `ask_owner` question. The reply continues the same assignment and
+contains its request, ask, assignment, and session correlation evidence.
+
+See [`ask_owner` API](ask-owner.md).
+
+## `close`
+
+```json
+{ "action": "close", "worker": "implementer-1" }
+```
+
+Only `action` and `worker` are accepted. Close requires exact direct ownership,
+or the lead-only evidence-backed orphan recovery condition. Closing abandons a
+pending owner question; closing a delegating worker cascades through directly
+owned workers first. Cleanup remains fail-closed when exact identity or ownership
+cannot be proved.
+
+## Result delivery and errors
+
+An accepted delegated task remains the internal mailbox `kind: "task"` request
+and has one correlated final result. Delivery goes to the exact owning Pi
+session and occurs exactly once. Model-visible completion wording uses
+`worker=<worker>`, `definition=<definition>`, `session=<id>`,
+`request=<id>`, and status. Details retain durable `workerLabel`,
+`agentDefinition`, `piSessionId`, `piSessionFile`, result paths, elapsed time,
+context usage, truncation, and persistence-error evidence. The worker is cleaned
+up after the terminal result is delivered; the Pi session remains available for
+continuation.
+
+Tool failures return structured details for normal public errors. See
+[Errors](errors.md), [worker states](worker-states.md), and
+[workers and identity](../concepts/workers.md).

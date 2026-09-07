@@ -1,0 +1,70 @@
+{
+  "name": "pi-herdsman",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Asynchronous workers for Pi in herdr.",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/boadij/pi-herdsman.git"
+  },
+  "bugs": {
+    "url": "https://github.com/boadij/pi-herdsman/issues"
+  },
+  "homepage": "https://github.com/boadij/pi-herdsman#readme",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "workers",
+    "multi-agent",
+    "orchestration",
+    "delegation",
+    "supervision",
+    "herdr",
+    "pi-herdsman"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "skills": [
+      "."
+    ]
+  },
+  "scripts": {
+    "test": "node --experimental-test-module-mocks --test --test-timeout=10000",
+    "check": "node scripts/check.mjs",
+    "build": "node scripts/build.mjs",
+    "package:audit": "node scripts/package-audit.mjs",
+    "release:check": "npm run check && npm run build && npm run package:audit && npm publish --dry-run --ignore-scripts",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.84.2",
+    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@earendil-works/pi-tui": "^0.84.2",
+    "esbuild": "^0.28.2",
+    "typebox": "^1.3.7"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "README.md",
+    "SKILL.md",
+    "LICENSE",
+    "docs",
+    "dist"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  }
+}

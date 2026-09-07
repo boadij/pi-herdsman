@@ -1,0 +1,84 @@
+Pi Herdsman Early Access License 1.0
+
+Copyright © 2026 Jeffrey Boadi. All rights reserved.
+
+This Pi Herdsman Early Access License 1.0 (the “License”) governs your use of the Pi Herdsman software package and accompanying materials (the “Software”).
+
+By installing, accessing, or using the Software, you agree to this License. If you do not agree, do not use the Software.
+
+## 1. License Grant
+
+Subject to this License, Jeffrey Boadi (“Licensor”) grants you a limited, non-exclusive, non-transferable license to:
+
+1. install and use the Software for personal, internal business, and commercial software-development purposes;
+2. allow your employees and contractors to use the Software solely on your behalf and subject to this License;
+3. make copies reasonably necessary for installation, package management, backup, and recovery; and
+4. configure and customize the Software through its documented configuration, agent definitions, skills, prompts, and supported extension points.
+
+The Software is licensed, not sold.
+
+## 2. Restrictions
+
+Except where expressly permitted by this License or required by applicable law, you may not:
+
+1. redistribute, republish, sublicense, sell, rent, lease, transfer, or otherwise provide the Software to another person or entity;
+2. distribute a modified, adapted, repackaged, or derivative version of the Software;
+3. modify the distributed Software implementation except through documented configuration, customization, and supported extension mechanisms;
+4. reverse engineer, decompile, or disassemble the Software;
+5. remove, alter, or obscure copyright, license, or other proprietary notices; or
+6. misrepresent the authorship, ownership, origin, sponsorship, or affiliation of the Software.
+
+Restrictions on reverse engineering, decompilation, disassembly, or modification apply only to the extent permitted by applicable law.
+
+## 3. Ownership
+
+Licensor retains all intellectual-property and proprietary rights in and to the Software.
+
+Except for the limited rights expressly granted by this License, no rights are granted to you by implication, estoppel, or otherwise.
+
+This License grants no rights to any Pi Herdsman name, trademark, logo, or branding except as reasonably necessary to identify the Software accurately.
+
+## 4. No Warranty
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SOFTWARE IS PROVIDED “AS IS” AND “AS AVAILABLE,” WITHOUT WARRANTIES OF ANY KIND, EXPRESS, IMPLIED, OR STATUTORY.
+
+LICENSOR DISCLAIMS, TO THE MAXIMUM EXTENT PERMITTED BY LAW, ALL WARRANTIES INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, AND WARRANTIES ARISING FROM COURSE OF DEALING, USAGE, OR TRADE PRACTICE.
+
+LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL BE ERROR-FREE, SECURE, UNINTERRUPTED, OR SUITABLE FOR ANY PARTICULAR PURPOSE.
+
+## 5. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, LICENSOR WILL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF PROFITS, REVENUE, BUSINESS, DATA, GOODWILL, OR OTHER INTANGIBLE LOSSES ARISING OUT OF OR RELATING TO THE SOFTWARE OR THIS LICENSE.
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, LICENSOR’S TOTAL AGGREGATE LIABILITY ARISING OUT OF OR RELATING TO THE SOFTWARE OR THIS LICENSE WILL NOT EXCEED US$100.
+
+Nothing in this License excludes or limits liability that cannot lawfully be excluded or limited.
+
+## 6. Termination
+
+This License terminates automatically if you materially breach its terms.
+
+Upon termination, you must stop using the Software and delete all copies in your possession or control, except where retention is required by applicable law.
+
+Sections 2 through 8 survive termination to the extent necessary to give them effect.
+
+## 7. Future Releases
+
+Licensor may distribute future releases or versions of Pi Herdsman under different terms, including an open-source license.
+
+A future release under different terms does not automatically change the license applicable to this release.
+
+## 8. Severability
+
+If any provision of this License is held unenforceable, it will be enforced to the maximum extent permitted by applicable law, and the remaining provisions will remain in effect.
+
+## 9. Entire Agreement
+
+This License is the complete agreement concerning use of the Software unless Licensor and you enter into a separate written agreement that expressly supersedes it.
+
+## 10. Contact
+
+Questions concerning this License may be directed to:
+
+Jeffrey Boadi
+[boadij.fruit662@slmails.com](mailto:boadij.fruit662@slmails.com)
