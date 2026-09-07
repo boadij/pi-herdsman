@@ -21,10 +21,11 @@ import type {
   WorkerState,
 } from "./mailbox.ts";
 import { OperationError } from "./errors.ts";
-import {
+import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
   PARENT_SESSION_ID,
+  PI_AGENTS_DIR,
   REQUEST_ID,
   LEAD_SESSION_ID,
   WORKSPACE,
@@ -679,6 +680,47 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.equal(inspected.details?.lead, leadId);
     assert.ok(inspected.details?.identity);
 
+    const queuedBeforePreparationRace = listChiefMessagePaths(
+      supervisionRuntime(),
+      leadId,
+    );
+    const chiefDescriptorPath = supervisionRuntime().descriptor;
+    const chiefDescriptor = readFileSync(chiefDescriptorPath, "utf8");
+    support.settingsAccessHook = (access) => {
+      if (access === "reload")
+        writeFileSync(
+          chiefDescriptorPath,
+          JSON.stringify({
+            ...JSON.parse(chiefDescriptor),
+            leaseId: randomUUID(),
+          }),
+        );
+    };
+    try {
+      await assert.rejects(
+        chiefTool.execute(
+          "message",
+          {
+            action: "message",
+            lead: leadId,
+            message: "must not queue after authority changes",
+            files: [attachment],
+          },
+          undefined,
+          undefined,
+          chiefContext,
+        ),
+        /Lead or Chief changed before the message was queued/,
+      );
+    } finally {
+      support.settingsAccessHook = undefined;
+      writeFileSync(chiefDescriptorPath, chiefDescriptor);
+    }
+    assert.deepEqual(
+      listChiefMessagePaths(supervisionRuntime(), leadId),
+      queuedBeforePreparationRace,
+    );
+
     const sent = await chiefTool.execute(
       "message",
       {
@@ -1157,6 +1199,74 @@ test("malformed persisted role fails closed without authoritative lead state", a
   pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_PANE_ID;
   delete process.env.HERDR_SOCKET_PATH;
+});
+
+test("malformed definitions do not abort ordinary lead startup", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const malformed = join(PI_AGENTS_DIR, "malformed.md");
+  writeFileSync(
+    malformed,
+    "---\nname: malformed\nmodel: {not valid json\n---\nmalformed\n",
+  );
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.ok(
+      pi.calls.some((args) => isAgentList(args)),
+      "worker recovery must still run after roster discovery fails",
+    );
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_definition_error" &&
+          /malformed/.test(entry.data?.error),
+      ),
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(malformed, { force: true });
+    delete process.env.HERDR_PANE_ID;
+  }
+});
+
+test("persisted Chief startup skips worker definition discovery", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `supervision-malformed-chief-roster-${randomUUID()}.sock`,
+  );
+  const malformed = join(PI_AGENTS_DIR, "malformed.md");
+  writeFileSync(
+    malformed,
+    "---\nname: malformed\nmodel: {not valid json\n---\nmalformed\n",
+  );
+  const entries = [
+    { type: "custom", customType: "pi-herdsman-role", data: { role: "chief" } },
+  ];
+  const pi = fakePi({ entries, activeTools: ["worker", "chief"] });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
+    assert.equal(
+      entries.some(
+        (entry: any) => entry.customType === "pi_herdsman_definition_error",
+      ),
+      false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(malformed, { force: true });
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+  }
 });
 
 test("chief guidance carries the lead coordination contract", () => {

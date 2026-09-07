@@ -956,7 +956,7 @@ async function messageLimits(
   ctx: ExtensionContext,
 ): Promise<{ inline: EffectiveByteLimit; mailbox: EffectiveByteLimit }> {
   const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
-    projectTrusted: ctx.isProjectTrusted(),
+    projectTrusted: false,
   });
   await settings.reload();
   const global = (settings.getGlobalSettings() as any)?.piHerdsman ?? {};
@@ -8126,6 +8126,16 @@ export default function (pi: ExtensionAPI): void {
             throw new Error(
               "Lead target was not found or is no longer eligible. Retry with lead set to the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
             );
+          const sameLeadTarget = (
+            candidate: typeof lead,
+            expected: typeof lead,
+          ): boolean =>
+            candidate.lead === expected.lead &&
+            candidate.paneId === expected.paneId &&
+            candidate.workspaceId === expected.workspaceId &&
+            candidate.tabId === expected.tabId &&
+            candidate.instanceId === expected.instanceId &&
+            candidate.pendingAskId === expected.pendingAskId;
           if (!lead.availableActions.includes(params.action))
             throw new Error(`Lead does not currently allow ${params.action}`);
           if (params.action === "inspect") {
@@ -8190,19 +8200,13 @@ export default function (pi: ExtensionAPI): void {
           );
           if (
             !currentLead ||
-            currentLead.paneId !== lead.paneId ||
-            currentLead.workspaceId !== lead.workspaceId ||
-            currentLead.tabId !== lead.tabId ||
-            currentLead.lead !== lead.lead ||
-            currentLead.instanceId !== lead.instanceId ||
-            currentLead.pendingAskId !== lead.pendingAskId ||
+            !sameLeadTarget(currentLead, lead) ||
             !currentLead.availableActions.includes(params.action)
           )
             throw new Error(
               "Lead target changed before the message was queued",
             );
           // The supervision snapshot load is awaited and can observe a lease replacement.
-          // This is the final local authority check before transport write.
           const finalChief = await currentChiefAuthority(ctx);
           if (
             !finalChief ||
@@ -8236,6 +8240,27 @@ export default function (pi: ExtensionAPI): void {
               createdAt,
             }),
           );
+          // Attachment preparation can reload settings and read files. Recheck
+          // every identity and authority field immediately before transport.
+          const writeChief = await currentChiefAuthority(ctx);
+          const writeLead = (await loadSupervisionSnapshot(ctx)).leads.find(
+            (candidate) => candidate.lead === params.lead,
+          );
+          if (
+            !writeChief ||
+            !sameChiefDescriptor(writeChief, finalChief) ||
+            !writeLead ||
+            !sameLeadTarget(writeLead, currentLead) ||
+            !writeLead.availableActions.includes(params.action)
+          )
+            throw new Error(
+              "Lead or Chief changed before the message was queued",
+            );
+          if (
+            params.action === "reply" &&
+            params.askId !== writeLead.pendingAskId
+          )
+            throw new Error("Lead ask ID is no longer pending");
           const record: ChiefMessageRecord = {
             version: 1,
             id: recordId,
@@ -8770,10 +8795,20 @@ export default function (pi: ExtensionAPI): void {
       if (controllerScope.kind === "lead" && chiefMode === "active")
         startSupervisionUI?.(ctx);
       else startNormalUI?.(ctx);
-      startupDefinitionRoster = {
-        sessionId: ctx.sessionManager.getSessionId(),
-        definitions: await visibleAgentDefinitionMetadata(ctx, controllerScope),
-      };
+      if (!(controllerScope.kind === "lead" && chiefMode === "active")) {
+        try {
+          startupDefinitionRoster = {
+            sessionId: ctx.sessionManager.getSessionId(),
+            definitions: await visibleAgentDefinitionMetadata(
+              ctx,
+              controllerScope,
+            ),
+          };
+        } catch (error) {
+          startupDefinitionRoster = undefined;
+          appendDurableError(pi, ctx, "pi_herdsman_definition_error", error);
+        }
+      }
       if (controllerScope.kind === "worker") {
         requestStatusRefresh?.();
         return;
