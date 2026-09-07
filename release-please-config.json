@@ -1,0 +1,25 @@
+{
+  "bootstrap-sha": "ca99606abb64144ee2a66546a5cdaacdda8e1ef2",
+  "release-type": "node",
+  "include-component-in-tag": false,
+  "changelog-sections": [
+    { "type": "feat", "section": "Features", "hidden": false },
+    { "type": "fix", "section": "Fixes", "hidden": false },
+    { "type": "perf", "section": "Performance", "hidden": false },
+    { "type": "security", "section": "Security", "hidden": false },
+    { "type": "refactor", "section": "Refactoring", "hidden": false },
+    { "type": "docs", "section": "Documentation", "hidden": false },
+    { "type": "test", "section": "Tests", "hidden": false },
+    { "type": "build", "section": "Build", "hidden": false },
+    { "type": "ci", "section": "CI", "hidden": false },
+    { "type": "deps", "section": "Dependencies", "hidden": false },
+    { "type": "chore", "section": "Other Changes", "hidden": false },
+    { "type": "style", "section": "Other Changes", "hidden": false },
+    { "type": "revert", "section": "Reverts", "hidden": false }
+  ],
+  "packages": {
+    ".": {
+      "release-type": "node"
+    }
+  }
+}
