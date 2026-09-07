@@ -118,6 +118,22 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           echo "pi-herdsman@$VERSION is already complete"
 
+      - name: Reconcile an existing Release Please PR
+        if: env.ALREADY_PUBLISHED == 'true' || env.RECOVERY_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          RELEASE_SHA=$(git rev-parse "$TAG^{commit}")
+          RELEASE_PR=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_SHA/pulls" \
+            --jq "[.[] | select(.merged_at != null and .user.login == \"github-actions[bot]\" and .title == \"chore(main): release $VERSION\")][0].number // empty")
+          test -n "$RELEASE_PR"
+          if gh api "repos/$GITHUB_REPOSITORY/issues/$RELEASE_PR" --jq '.labels[].name' | grep -Fxq 'autorelease: pending'; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/issues/$RELEASE_PR/labels/autorelease%3A%20pending" >/dev/null
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$RELEASE_PR/labels" \
+            -f 'labels[]=autorelease: tagged' >/dev/null
+
       - name: Validate the exact release
         if: env.ALREADY_PUBLISHED != 'true'
         run: |
@@ -248,6 +264,19 @@ jobs:
           test "$(node -p "require('./package.json').version")" = "$VERSION"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           echo "pi-herdsman@$VERSION is already complete"
+
+      - name: Reconcile an existing Release Please PR
+        if: env.ALREADY_PUBLISHED == 'true' || env.RECOVERY_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/issues/$RELEASE_PR" --jq '.labels[].name' | grep -Fxq 'autorelease: pending'; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/issues/$RELEASE_PR/labels/autorelease%3A%20pending" >/dev/null
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$RELEASE_PR/labels" \
+            -f 'labels[]=autorelease: tagged' >/dev/null
 
       - name: Validate the exact release
         if: env.ALREADY_PUBLISHED != 'true'
