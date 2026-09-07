@@ -73,6 +73,35 @@ jobs:
             echo "ALREADY_PUBLISHED=false" >> "$GITHUB_ENV"
           fi
 
+      - name: Resolve an existing GitHub release
+        if: env.ALREADY_PUBLISHED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG_COMMIT=$(git rev-parse "$TAG^{commit}" 2>/dev/null || true)
+          if [ -n "$TAG_COMMIT" ]; then
+            TAG_EXISTS=true
+          else
+            TAG_EXISTS=false
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            RELEASE_EXISTS=true
+          else
+            RELEASE_EXISTS=false
+          fi
+          if [ "$TAG_EXISTS" != "$RELEASE_EXISTS" ]; then
+            echo "inconsistent GitHub release state for $TAG" >&2
+            exit 1
+          fi
+          if [ "$TAG_EXISTS" = true ]; then
+            git checkout --detach "$TAG"
+            test "$(node -p "require('./package.json').version")" = "$VERSION"
+            echo "RECOVERY_RELEASE=true" >> "$GITHUB_ENV"
+          else
+            echo "RECOVERY_RELEASE=false" >> "$GITHUB_ENV"
+          fi
+
       - name: Verify an already published release
         if: env.ALREADY_PUBLISHED == 'true'
         env:
@@ -80,6 +109,8 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin --tags
+          git checkout --detach "$TAG"
+          test "$(node -p "require('./package.json').version")" = "$VERSION"
           git rev-parse "$TAG^{commit}"
           test "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
@@ -96,7 +127,7 @@ jobs:
           npm pack --dry-run
 
       - uses: googleapis/release-please-action@v5
-        if: env.ALREADY_PUBLISHED != 'true'
+        if: env.ALREADY_PUBLISHED != 'true' && env.RECOVERY_RELEASE != 'true'
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
@@ -110,6 +141,8 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin --tags
+          git checkout --detach "$TAG"
+          test "$(node -p "require('./package.json').version")" = "$VERSION"
           git rev-parse "$TAG^{commit}"
           test "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
