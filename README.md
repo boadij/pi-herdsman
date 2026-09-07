@@ -1,15 +1,19 @@
 # Pi Herdsman 🐏
 
-![Pi Herdsman: orchestrate Pi agents as a herd](docs/assets/banner.webp)
+![Pi Herdsman: asynchronous subagents and multi-agent orchestration for Pi](docs/assets/banner.webp)
 
-**Asynchronous workers for [Pi](https://github.com/earendil-works/pi) in [herdr](https://github.com/herdrdev/herdr).**
+**Asynchronous subagents and multi-agent orchestration for [Pi](https://github.com/earendil-works/pi) in [herdr](https://github.com/herdrdev/herdr).**
 
 Keep the conversation. Delegate the work.
 
-Pi Herdsman combines Pi with [herdr](https://github.com/herdrdev/herdr) to run
-managed workers independently while your lead session stays interactive. Keep
-talking, planning, and delegating while they work. Results and questions return
-to the same lead session when they need attention.
+Pi Herdsman is a Pi extension for asynchronous subagents (sub-agents).
+Delegate coding tasks to managed background workers running in independent Pi
+sessions while the lead conversation stays interactive. Run agents in
+parallel, nest delegation, steer active workers, route questions and results
+back to their owning agent, and supervise multiple leads through one
+coordinated hierarchy.
+
+Pi Herdsman calls its managed subagents **workers**.
 
 ```text
 You ↔ lead
@@ -35,7 +39,7 @@ chief
 
 ## Demo
 
-![Pi Herdsman delegating a lifecycle fix to an implementer worker while the lead session remains interactive.](docs/assets/demo.gif)
+![Pi Herdsman delegating a coding task to an asynchronous subagent while the lead Pi session remains interactive.](docs/assets/demo.gif)
 
 ## Install
 
@@ -90,13 +94,13 @@ For the complete walkthrough, see [Getting started](docs/getting-started.md).
 
 ## Why Pi Herdsman?
 
-- **Async by default.** Assignments return after acceptance while workers keep
+- **Async subagents by default.** Assignments return after acceptance while workers keep
   running and the owning lead session remains available. Results and owner
   questions return when they need attention.
 - **One assignment per worker.** Each managed worker generation handles one
   bounded assignment, delivers its terminal result, and is cleaned up. Continue
   completed context by delegating to the exact returned Pi session.
-- **One coordinated system.** Delegation-enabled workers can own and manage
+- **Nested multi-agent orchestration.** Delegation-enabled workers can own and manage
   permitted workers themselves. Identity, ownership, steering, clarification,
   results, and cleanup share the same lifecycle across the hierarchy.
 - **Your workflow stays yours.** Use the bundled portable roles, override them,
