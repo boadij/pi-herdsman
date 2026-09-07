@@ -13,3 +13,4 @@ dist/
 *.p12
 *.pfx
 /video/
+.local
