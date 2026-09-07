@@ -10,6 +10,8 @@ on:
         options:
           - prepare
           - publish
+  pull_request:
+    types: [closed]
 
 permissions: {}
 
@@ -79,8 +81,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG_COMMIT=$(git rev-parse "$TAG^{commit}" 2>/dev/null || true)
-          if [ -n "$TAG_COMMIT" ]; then
+          if TAG_COMMIT=$(git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}"); then
             TAG_EXISTS=true
           else
             TAG_EXISTS=false
@@ -145,6 +146,138 @@ jobs:
           test "$(node -p "require('./package.json').version")" = "$VERSION"
           git rev-parse "$TAG^{commit}"
           test "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Publish to npm with provenance
+        if: env.ALREADY_PUBLISHED != 'true'
+        run: npm publish --access public --provenance
+
+  auto-publish:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'github-actions[bot]' &&
+      startsWith(github.event.pull_request.head.ref, 'release-please--branches--main--components--') &&
+      startsWith(github.event.pull_request.title, 'chore(main): release')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Check out the release commit
+        env:
+          RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          git checkout --detach "$RELEASE_SHA"
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          test -n "$VERSION"
+          echo "RELEASE_SHA=$RELEASE_SHA" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Determine npm publication state
+        run: |
+          set -euo pipefail
+          if npm view "pi-herdsman@$VERSION" version >/dev/null 2>&1; then
+            echo "pi-herdsman@$VERSION is already published"
+            echo "ALREADY_PUBLISHED=true" >> "$GITHUB_ENV"
+          else
+            echo "ALREADY_PUBLISHED=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Resolve an existing GitHub release
+        if: env.ALREADY_PUBLISHED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if TAG_COMMIT=$(git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}"); then
+            TAG_EXISTS=true
+          else
+            TAG_EXISTS=false
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            RELEASE_EXISTS=true
+          else
+            RELEASE_EXISTS=false
+          fi
+          if [ "$TAG_EXISTS" != "$RELEASE_EXISTS" ]; then
+            echo "inconsistent GitHub release state for $TAG" >&2
+            exit 1
+          fi
+          if [ "$TAG_EXISTS" = true ]; then
+            test "$TAG_COMMIT" = "$RELEASE_SHA"
+            git checkout --detach "$TAG"
+            test "$(node -p "require('./package.json').version")" = "$VERSION"
+            echo "RECOVERY_RELEASE=true" >> "$GITHUB_ENV"
+          else
+            echo "RECOVERY_RELEASE=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify an already published release
+        if: env.ALREADY_PUBLISHED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if TAG_COMMIT=$(git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}"); then
+            test "$TAG_COMMIT" = "$RELEASE_SHA"
+          else
+            echo "missing tag $TAG" >&2
+            exit 1
+          fi
+          git checkout --detach "$TAG"
+          test "$(node -p "require('./package.json').version")" = "$VERSION"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          echo "pi-herdsman@$VERSION is already complete"
+
+      - name: Validate the exact release
+        if: env.ALREADY_PUBLISHED != 'true'
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+          npm run build
+          npm run package:audit
+          npm pack --dry-run
+
+      - uses: googleapis/release-please-action@v5
+        if: env.ALREADY_PUBLISHED != 'true' && env.RECOVERY_RELEASE != 'true'
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-pull-request: true
+
+      - name: Verify the created release
+        if: env.ALREADY_PUBLISHED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch origin --tags
+          if TAG_COMMIT=$(git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}"); then
+            test "$TAG_COMMIT" = "$RELEASE_SHA"
+          else
+            echo "missing tag $TAG" >&2
+            exit 1
+          fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
 
       - name: Publish to npm with provenance
