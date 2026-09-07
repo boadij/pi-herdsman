@@ -129,6 +129,18 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.ok(tool);
   assert.equal(tool.label, "staff");
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
+  const chiefPrompt = pi.events.get("before_agent_start")![0](
+    { systemPromptOptions: { contextFiles: [] } },
+    context,
+  )?.systemPrompt;
+  assert.match(
+    String(chiefPrompt),
+    /Chief coordination is event-driven, not polling/,
+  );
+  assert.match(
+    String(chiefPrompt),
+    /Do not use list, inspect, repeated messages, status requests, sleep, or any other mechanism merely to wait for lead progress or completion/,
+  );
   const description = tool.description.replaceAll(/\s+/g, " ");
   assert.doesNotMatch(description, /remote needs_you.*unavailable/);
   assert.doesNotMatch(
@@ -676,6 +688,10 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assertToolResult(sent);
     assert.equal(sent.details?.action, "message");
     assert.equal(sent.details?.lead, leadId);
+    assert.equal(
+      sent.details?.next_action,
+      "Lead activity returns asynchronously; continue only independent chief work, otherwise end the turn. Do not poll.",
+    );
     const sentAgain = await chiefTool.execute(
       "message",
       { action: "message", lead: leadId, message: "second from the chief" },
@@ -863,6 +879,10 @@ test("registered lead and replacement chief exchange messages and asks", async (
       replacementContext,
     );
     assertToolResult(reply);
+    assert.equal(
+      reply.details?.next_action,
+      "Lead activity returns asynchronously; continue only independent chief work, otherwise end the turn. Do not poll.",
+    );
     await new Promise<void>((resolve) => setTimeout(resolve, 550));
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk,
