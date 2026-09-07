@@ -38,7 +38,8 @@
     ],
     "skills": [
       "."
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/boadij/pi-herdsman/main/docs/assets/banner.webp"
   },
   "scripts": {
     "test": "node --experimental-test-module-mocks --test --test-timeout=10000",
