@@ -49,13 +49,6 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - uses: googleapis/release-please-action@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-          skip-github-pull-request: true
-
       - name: Check out the release commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -66,13 +59,10 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
           test -n "$VERSION"
-          git rev-parse "$TAG^{commit}"
-          test "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)"
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
 
-      - name: Skip an already published version
+      - name: Determine npm publication state
         run: |
           set -euo pipefail
           if npm view "pi-herdsman@$VERSION" version >/dev/null 2>&1; then
@@ -81,6 +71,18 @@ jobs:
           else
             echo "ALREADY_PUBLISHED=false" >> "$GITHUB_ENV"
           fi
+
+      - name: Verify an already published release
+        if: env.ALREADY_PUBLISHED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch origin --tags
+          git rev-parse "$TAG^{commit}"
+          test "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          echo "pi-herdsman@$VERSION is already complete"
 
       - name: Validate the exact release
         if: env.ALREADY_PUBLISHED != 'true'
@@ -91,6 +93,25 @@ jobs:
           npm run build
           npm run package:audit
           npm pack --dry-run
+
+      - uses: googleapis/release-please-action@v5
+        if: env.ALREADY_PUBLISHED != 'true'
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-pull-request: true
+
+      - name: Verify the created release
+        if: env.ALREADY_PUBLISHED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch origin --tags
+          git rev-parse "$TAG^{commit}"
+          test "$(git rev-parse "$TAG^{commit}")" = "$(git rev-parse HEAD)"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
 
       - name: Publish to npm with provenance
         if: env.ALREADY_PUBLISHED != 'true'
