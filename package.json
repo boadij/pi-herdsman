@@ -1,6 +1,6 @@
 {
   "name": "pi-herdsman",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "type": "module",
   "description": "Asynchronous workers for Pi in herdr.",
   "license": "Apache-2.0",
