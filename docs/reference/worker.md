@@ -105,6 +105,11 @@ non-actionable. Every operation rechecks identity, ownership, mailbox state, and
 lifecycle immediately before mutation.
 The public record does not expose `steerable`.
 
+The session-start instructions include the same complete definition metadata
+projection returned by `list` for that controller. It is a startup snapshot;
+use `list` for live worker state, ownership, or a refreshed definition roster
+after configuration changes. Leaf workers do not receive a definition roster.
+
 Lead controllers see the complete effective definition roster and workers visible
 through their ownership boundary. Delegating workers see only allowed enabled
 leaf definitions and their visible workers. Unknown mailbox diagnostics remain
@@ -137,10 +142,19 @@ when the exact message limit permits. Otherwise they remain canonical references
 
 `timeoutMs` is valid on definition and session delegation and must be an integer
 from `5001` through `300000`. The startup budget reserves one bounded diagnostic
-window. Current message limits are governed by effective global/project/default
+window. Current message limits are governed by global/default
 settings and the fixed mailbox protocol ceiling. Managed mailbox records use
 protocol version 3, and control requests use the marker prefix
 `__PI_HERDSMAN_WORKER_V3__:`.
+
+Do not attach or mention agent instruction files such as `AGENTS.md`, `CLAUDE.md`,
+`GEMINI.md`, or equivalents merely because they exist. Rely on normal project or
+runtime discovery. Attach one only when the task requires inspecting,
+modifying, comparing, or transmitting it, the user requests it, or its required
+instructions would not otherwise reach the target. Attach a required `SKILL.md`
+only when the task needs it and the selected definition does not already provide
+that skill. Ordinary relevant source, documentation, configuration, and
+evidence files remain attachable.
 
 ## `steer`
 

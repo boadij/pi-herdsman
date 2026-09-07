@@ -184,6 +184,7 @@ A body line is a reference only when the complete trimmed line matches:
 @./relative/path
 @../relative/path
 @/absolute/path
+@~/home-relative/path
 ```
 
 Before bundled/global body composition, relative references are resolved from
@@ -191,7 +192,8 @@ the definition file that declared them.
 
 When a new worker generation is constructed:
 
-1. references are processed in body order;
+1. references are processed in body order; `~/` is resolved beneath the
+   current user's home directory;
 2. targets are canonicalized with `realpath`;
 3. each canonical file is included once;
 4. a caller `delegate.files` canonical overlap wins and removes the body copy;

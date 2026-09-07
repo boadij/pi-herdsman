@@ -31,6 +31,8 @@ export let failNextMailboxWrite = false;
 export let failNextResultRemoval = false;
 export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
+export let settingsAccessHook:
+  ((access: "reload" | "project") => void) | undefined;
 
 export type WidgetComponent = {
   render(width: number): string[];
@@ -218,10 +220,12 @@ mock.module("@earendil-works/pi-coding-agent", {
     },
     SettingsManager: {
       create: (cwd: string, agentDir: string, options: any) => ({
-        reload: async () => undefined,
+        reload: async () => settingsAccessHook?.("reload"),
         getGlobalSettings: () => testSettings(join(agentDir, "settings.json")),
-        getProjectSettings: () =>
-          testSettings(join(cwd, ".pi", "settings.json")),
+        getProjectSettings: () => {
+          settingsAccessHook?.("project");
+          return testSettings(join(cwd, ".pi", "settings.json"));
+        },
         isProjectTrusted: () => options?.projectTrusted === true,
       }),
     },
@@ -2305,5 +2309,11 @@ export default {
   },
   set agentDefinitionReadCount(value: number) {
     agentDefinitionReadCount = value;
+  },
+  get settingsAccessHook() {
+    return settingsAccessHook;
+  },
+  set settingsAccessHook(value: typeof settingsAccessHook) {
+    settingsAccessHook = value;
   },
 };

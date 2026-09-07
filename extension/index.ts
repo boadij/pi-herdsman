@@ -124,6 +124,8 @@ import {
   readChiefMessage,
   writeChiefMessage,
   writeChiefAskMessage,
+  chiefMessageBytes,
+  CHIEF_MESSAGE_MAX_BYTES,
   sessionLeadRole,
   type ChiefLease,
   type ChiefDescriptor,
@@ -198,9 +200,16 @@ const STALE_AFTER_MS = 10 * 60_000;
 const STALE_SCAN_MS = 30_000;
 const ACTIVITY_WRITE_MIN_MS = 5_000;
 const RESULT_WRITE_MAX_ATTEMPTS = 8;
+const TOKEN_ESTIMATE_BYTES = 4;
+function formatMessageLimit(bytes: number): string {
+  const tokens = Math.ceil(bytes / TOKEN_ESTIMATE_BYTES);
+  return `${bytes / 1024} KiB · ≈${tokens.toLocaleString("en-US")} tokens`;
+}
 const WORKER_OPERATIONAL_DESCRIPTION = `Coordinate managed workers.
 
-Use list when the roster, ownership, or worker state is unknown.
+The session-start instructions include the current worker-definition roster.
+Use list for live worker state, ownership, or a refreshed definition roster
+after configuration changes.
 
 Use delegate to give one bounded assignment to a worker while retaining ownership:
 - definition creates a new worker from an agent definition;
@@ -247,12 +256,22 @@ If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact worker before
 starting another assignment; follow the stored recovery nextAction.
 
-Before delegate, steer, or reply, make the message self-contained. Pass supporting
-artifacts, including applicable instruction or skill files, through files
-instead of mentioning only their paths in task or message; explain each file's
-relevance in the accompanying text, and do not reattach skills already supplied
-by the selected agent definition. Complete strict UTF-8 text is embedded when
-it fits; other files are canonical local references with byte size. Embedded
+Before delegate, steer, or reply, make the message self-contained.
+
+Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md,
+GEMINI.md, or equivalents merely because they exist. Rely on normal project or
+runtime discovery when it supplies those instructions.
+
+Attach an agent instruction file only when the task itself requires inspecting,
+modifying, comparing, or transmitting that file, the user explicitly requests
+it, or its instructions are required and the target would not otherwise receive
+them.
+
+Skills are separate. Attach a required SKILL.md only when the task needs it and
+the selected definition does not already provide that skill. Ordinary relevant
+source, documentation, configuration, and evidence files remain attachable.
+
+Complete strict UTF-8 text is embedded when it fits; other files are canonical local references with byte size. Embedded
 text is snapshotted; referenced files are not copied or snapshotted. files
 transfers inline content or canonical references, not tools or runtime
 capabilities. Assume the
@@ -333,9 +352,7 @@ messages to leads do not require automatic acknowledgment.
 Chief coordination is event-driven, not polling. After sending a message or
 reply, continue only useful independent chief work that does not depend on the
 lead response; otherwise end the turn normally. Lead reports and questions
-resume the chief automatically when attention is required. Do not use list,
-inspect, repeated messages, status requests, sleep, or any other mechanism
-merely to wait for lead progress or completion. A working lead does not require
+resume the chief automatically when attention is required. Do not use list, inspect, repeated messages, status requests, sleep, or any other mechanism merely to wait for lead progress or completion. A working lead does not require
 intervention, and available_actions describe capability, not a recommendation
 to act. Treat ordinary progress reports as informational; do not acknowledge or
 query them automatically. If the human task still depends on unfinished lead
@@ -397,6 +414,25 @@ type ControllerScope =
     };
 function controllerDescription(scope: ControllerScope): string {
   return `${WORKER_OPERATIONAL_DESCRIPTION}\n\n${scope.kind === "lead" ? LEAD_SCOPE_DESCRIPTION : WORKER_DELEGATION_SCOPE_DESCRIPTION}`;
+}
+async function visibleAgentDefinitionMetadata(
+  ctx: ExtensionContext,
+  scope: ControllerScope,
+): Promise<Record<string, unknown>[]> {
+  const definitions = (await contextAgentDefinitions(ctx)).definitions.map(
+    (definition) =>
+      agentDefinitionMetadata(
+        definition,
+        scope.kind === "worker" ? "leaf" : "delegating",
+      ),
+  );
+  return scope.kind === "worker"
+    ? definitions.filter(
+        (definition) =>
+          scope.allowedWorkers.has(definition.name as string) &&
+          definition.enabled !== false,
+      )
+    : definitions;
 }
 type Params = {
   action: "list" | "delegate" | "steer" | "reply" | "close" | "inspect";
@@ -920,23 +956,29 @@ async function messageLimits(
   ctx: ExtensionContext,
 ): Promise<{ inline: EffectiveByteLimit; mailbox: EffectiveByteLimit }> {
   const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
-    projectTrusted: ctx.isProjectTrusted(),
+    projectTrusted: false,
   });
   await settings.reload();
   const global = (settings.getGlobalSettings() as any)?.piHerdsman ?? {};
-  const project = (settings.getProjectSettings() as any)?.piHerdsman ?? {};
   return {
-    inline: resolveEffectiveByteLimit(
-      global.inlineAttachmentLimitBytes,
-      project.inlineAttachmentLimitBytes,
-      settings.isProjectTrusted(),
-    ),
-    mailbox: resolveEffectiveByteLimit(
-      global.mailboxPayloadLimitBytes,
-      project.mailboxPayloadLimitBytes,
-      settings.isProjectTrusted(),
-    ),
+    inline: resolveEffectiveByteLimit(global.inlineAttachmentLimitBytes),
+    mailbox: resolveEffectiveByteLimit(global.mailboxPayloadLimitBytes),
   };
+}
+async function prepareSupervisionText(
+  ctx: ExtensionContext,
+  text: string,
+  files: readonly string[],
+  operation: string,
+  heading: "Message" | "Reply" | "Question",
+  recordForText: (text: string) => ChiefMessageRecord,
+): Promise<string> {
+  const limits = await messageLimits(ctx);
+  return prepareMessageInput(text, files, ctx.cwd, operation, heading, {
+    inlineLimitBytes: limits.inline.bytes,
+    mailboxLimitBytes: Math.min(limits.mailbox.bytes, CHIEF_MESSAGE_MAX_BYTES),
+    serializedBytes: (candidate) => chiefMessageBytes(recordForText(candidate)),
+  }).text;
 }
 async function contextAgentDefinitions(ctx: ExtensionContext) {
   const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
@@ -1164,7 +1206,7 @@ export async function resolveAssignmentSession(
   };
 }
 
-function placementSettingsPath(
+function settingsPath(
   ctx: ExtensionContext,
   scope: "global" | "project",
 ): string {
@@ -2703,25 +2745,12 @@ async function list(
     ).filter((worker) => worker.recovery_only !== true),
     ...(scope?.kind === "lead" ? unknownWorkerRecords() : []),
   ];
-  const definitions = scope
-    ? (await contextAgentDefinitions(ctx)).definitions.map((definition) =>
-        agentDefinitionMetadata(
-          definition,
-          scope.kind === "worker" ? "leaf" : "delegating",
-        ),
-      )
-    : [];
   return {
     ok: true,
     workers,
-    agent_definitions:
-      scope?.kind === "worker"
-        ? definitions.filter(
-            (definition) =>
-              scope.allowedWorkers.has(definition.name as string) &&
-              definition.enabled !== false,
-          )
-        : definitions,
+    agent_definitions: scope
+      ? await visibleAgentDefinitionMetadata(ctx, scope)
+      : [],
   };
 }
 function resultPath(runtime: Runtime, requestId: string): string {
@@ -5491,6 +5520,8 @@ export default function (pi: ExtensionAPI): void {
             allowedWorkers: new Set(allowedWorkers),
           }
         : undefined;
+  let startupDefinitionRoster:
+    { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
   let chiefMode: ChiefMode = "inactive";
   let chiefLease: ChiefLease | undefined;
   let leadContext: ExtensionContext | undefined;
@@ -5533,7 +5564,8 @@ export default function (pi: ExtensionAPI): void {
   const clearSupervisionRunContext = (): void => {
     supervisionRunContext = undefined;
   };
-  let pendingChiefAsk: { askId: string; question: string } | undefined;
+  let pendingChiefAsk:
+    { askId: string; question: string; text: string } | undefined;
   let leadInstanceId = randomUUID();
   let leadCoordinationHealthy = true;
   let coordinationPublication = Promise.resolve();
@@ -5814,17 +5846,19 @@ export default function (pi: ExtensionAPI): void {
           ask === undefined ||
           (ask &&
             typeof ask === "object" &&
-            Object.keys(ask).length === 2 &&
+            Object.keys(ask).length === 3 &&
             typeof ask.askId === "string" &&
             /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
               ask.askId,
             ) &&
             typeof ask.question === "string" &&
-            validLeadCoordinationQuestion(ask.question));
+            validLeadCoordinationQuestion(ask.question) &&
+            typeof ask.text === "string" &&
+            ask.text.length > 0);
         if (!validAsk) malformed = true;
         else
           pendingChiefAsk = ask
-            ? { askId: ask.askId, question: ask.question }
+            ? { askId: ask.askId, question: ask.question, text: ask.text }
             : undefined;
       }
     }
@@ -6044,6 +6078,8 @@ export default function (pi: ExtensionAPI): void {
     text: string,
     ctx: ExtensionContext,
     askId?: string,
+    recordId?: string,
+    createdAt = Date.now(),
   ): ChiefMessageRecord => {
     assertCurrentLeadCoordination(ctx);
     const chief = await currentChiefAuthority(ctx);
@@ -6054,9 +6090,10 @@ export default function (pi: ExtensionAPI): void {
     const record: ChiefMessageRecord = {
       version: 1,
       id:
-        kind === "lead_ask" && askId
+        recordId ??
+        (kind === "lead_ask" && askId
           ? chiefAskMessageId(leadSessionId, askId, chief.leaseId)
-          : randomUUID(),
+          : randomUUID()),
       leaseId: chief.leaseId,
       kind,
       fromSessionId: leadSessionId,
@@ -6064,7 +6101,7 @@ export default function (pi: ExtensionAPI): void {
       leadSessionId,
       ...(askId ? { askId } : {}),
       text,
-      createdAt: Date.now(),
+      createdAt,
     };
     // Revalidate the descriptor and its live pane immediately before the
     // filesystem write. The earlier check only discovered a target.
@@ -6146,7 +6183,7 @@ export default function (pi: ExtensionAPI): void {
       // Recheck immediately before queueing. Sidecar creation is separate from
       // JSON replacement, so this remains conservative rather than atomic.
       assertCurrentLeadCoordination(ctx);
-      await queueChiefRecord("lead_ask", ask.question, ctx, ask.askId);
+      await queueChiefRecord("lead_ask", ask.text, ctx, ask.askId);
       assertCurrentLeadCoordination(ctx);
     } finally {
       release();
@@ -6535,7 +6572,8 @@ export default function (pi: ExtensionAPI): void {
               finalState.piSessionId !== sessionId ||
               finalState.instanceId !== state.instanceId ||
               finalState.pendingAsk?.askId !== ask.askId ||
-              finalState.pendingAsk?.question !== ask.question
+              finalState.pendingAsk?.question !== ask.question ||
+              finalState.pendingAsk?.text !== ask.text
             )
               continue;
             // Derive the repair ID from the exact lead session and chief lease
@@ -6549,7 +6587,7 @@ export default function (pi: ExtensionAPI): void {
               toSessionId: chief.piSessionId,
               leadSessionId: sessionId,
               askId: ask.askId,
-              text: ask.question,
+              text: ask.text,
               createdAt: Date.now(),
             });
           }
@@ -6712,12 +6750,27 @@ export default function (pi: ExtensionAPI): void {
       }
       return refreshed;
     };
-    if (controllerScope?.kind === "lead")
+    if (controllerScope)
       pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
-        if (!isCurrentChief(ctx)) return;
-        pi.setActiveTools([...CHIEF_TOOLS]);
+        if (controllerScope.kind === "lead" && isCurrentChief(ctx)) {
+          pi.setActiveTools([...CHIEF_TOOLS]);
+          return {
+            systemPrompt: chiefSystemPrompt(event.systemPromptOptions),
+          };
+        }
+        const roster = startupDefinitionRoster;
+        if (!roster || roster.sessionId !== ctx.sessionManager.getSessionId())
+          return;
         return {
-          systemPrompt: chiefSystemPrompt(event.systemPromptOptions),
+          systemPrompt:
+            `${event.systemPrompt}\n\n` +
+            `## Available worker definitions\n\n` +
+            `<agent_definitions>\n` +
+            `${JSON.stringify(roster.definitions, null, 2)}\n` +
+            `</agent_definitions>\n\n` +
+            `This is the session-start definition snapshot. ` +
+            `Use worker list for live worker state or to refresh ` +
+            `agent definitions after configuration changes.`,
         };
       });
     if (controllerScope?.kind === "lead")
@@ -7447,6 +7500,7 @@ export default function (pi: ExtensionAPI): void {
         );
         if (!selectedEntry) return;
         const definition = selectedEntry.definition;
+        const selectedName = definition.name;
         while (true) {
           const configuredModel =
             typeof definition.frontmatter.model === "string"
@@ -7466,10 +7520,26 @@ export default function (pi: ExtensionAPI): void {
           if (!action) return;
           if (action === "Back") break;
           if (action === "Details…") {
-            const metadata = agentDefinitionMetadata(definition);
+            let current;
+            try {
+              current = (await contextAgentDefinitions(ctx)).definitions.find(
+                (candidate) => candidate.name === selectedName,
+              );
+            } catch (error) {
+              ctx.ui.notify(String(error), "error");
+              break;
+            }
+            if (!current) {
+              ctx.ui.notify(
+                `Definition ${selectedName} is no longer available.`,
+                "warning",
+              );
+              break;
+            }
+            const metadata = agentDefinitionMetadata(current);
             if (ctx.mode === "tui") {
               const instructions = expandAgentBodyFiles(
-                definition.body,
+                current.body,
                 [],
                 "definition details",
               );
@@ -7570,10 +7640,7 @@ export default function (pi: ExtensionAPI): void {
       ]);
       if (!selected) return;
       const placement = selected.startsWith("split") ? "split" : "tab";
-      updateSpawnPlacementFile(
-        placementSettingsPath(ctx, current.scope),
-        placement,
-      );
+      updateSpawnPlacementFile(settingsPath(ctx, current.scope), placement);
       const verified = await placementSettings(ctx);
       if (verified.effective !== placement)
         throw new Error(
@@ -7636,24 +7703,20 @@ export default function (pi: ExtensionAPI): void {
         else if (selected.startsWith("Layout")) await openPlacementMenu(ctx);
         else if (selected === "Message limits") {
           const limits = await messageLimits(ctx);
+          const presets = [1, 4, 16, 64, 128].map((kib) => ({
+            label: formatMessageLimit(kib * 1024),
+            bytes: kib * 1024,
+          }));
           const setting = await ctx.ui.select("Message limits", [
-            `Inline attachments   ${Math.round(limits.inline.bytes / 1024)} KiB · ${limits.inline.source}${limits.inline.invalidSource ? ` (invalid ${limits.inline.invalidSource} override ignored)` : ""}`,
-            `Mailbox payload      ${Math.round(limits.mailbox.bytes / 1024)} KiB · ${limits.mailbox.source}${limits.mailbox.invalidSource ? ` (invalid ${limits.mailbox.invalidSource} override ignored)` : ""}`,
+            `Inline attachments   ${formatMessageLimit(limits.inline.bytes)} · ${limits.inline.source}${limits.inline.invalidSource ? ` (invalid ${limits.inline.invalidSource} override ignored)` : ""}`,
+            `Mailbox payload      ${formatMessageLimit(limits.mailbox.bytes)} · ${limits.mailbox.source}${limits.mailbox.invalidSource ? ` (invalid ${limits.mailbox.invalidSource} override ignored)` : ""}`,
           ]);
           if (!setting) continue;
           const key = setting.startsWith("Inline")
             ? "inlineAttachmentLimitBytes"
             : "mailboxPayloadLimitBytes";
-          const scope = ctx.isProjectTrusted()
-            ? await ctx.ui.select("Scope", ["Global", "Project"])
-            : "Global";
-          if (!scope) continue;
           const choice = await ctx.ui.select("Limit", [
-            "1 KiB",
-            "4 KiB",
-            "16 KiB",
-            "64 KiB",
-            "128 KiB",
+            ...presets.map(({ label }) => label),
             "Custom…",
             "Reset",
           ]);
@@ -7672,17 +7735,12 @@ export default function (pi: ExtensionAPI): void {
               continue;
             }
             value = kib * 1024;
-          } else value = Number.parseInt(choice, 10) * 1024;
-          updatePiHerdsmanSettingFile(
-            placementSettingsPath(
-              ctx,
-              scope === "Project" ? "project" : "global",
-            ),
-            key,
-            value,
-          );
+          } else value = presets.find(({ label }) => label === choice)?.bytes;
+          if (choice !== "Reset" && choice !== "Custom…" && value === undefined)
+            continue;
+          updatePiHerdsmanSettingFile(settingsPath(ctx, "global"), key, value);
           ctx.ui.notify(
-            `${key}: ${value === undefined ? "reset" : `${value / 1024} KiB`} · ${scope.toLowerCase()}`,
+            `${key}: ${value === undefined ? "reset" : formatMessageLimit(value)}`,
           );
         } else if (selected === "Stop all…") await confirmAndStopAll(ctx);
       }
@@ -7724,6 +7782,7 @@ export default function (pi: ExtensionAPI): void {
             {
               action: StringEnum(["message"] as const),
               message: Type.String({ minLength: 1 }),
+              files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
             },
             { additionalProperties: false },
           ),
@@ -7731,6 +7790,7 @@ export default function (pi: ExtensionAPI): void {
             {
               action: StringEnum(["ask"] as const),
               question: Type.String({ minLength: 1, maxLength: 1024 }),
+              files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
             },
             { additionalProperties: false },
           ),
@@ -7748,9 +7808,9 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Invalid chief action");
           const allowed =
             params.action === "message"
-              ? ["action", "message"]
+              ? ["action", "message", "files"]
               : params.action === "ask"
-                ? ["action", "question"]
+                ? ["action", "question", "files"]
                 : [];
           if (
             !allowed.length ||
@@ -7766,10 +7826,35 @@ export default function (pi: ExtensionAPI): void {
             const releaseCoordinationPublication =
               await enterCoordinationPublication();
             try {
+              const chief = await currentChiefAuthority(ctx);
+              if (!chief) throw new Error(chiefUnavailableMessage());
+              const recordId = randomUUID();
+              const createdAt = Date.now();
+              const text = await prepareSupervisionText(
+                ctx,
+                params.message,
+                params.files ?? [],
+                "chief.message",
+                "Message",
+                (candidate) => ({
+                  version: 1,
+                  id: recordId,
+                  leaseId: chief.leaseId,
+                  kind: "lead_message",
+                  fromSessionId: ctx.sessionManager.getSessionId(),
+                  toSessionId: chief.piSessionId,
+                  leadSessionId: ctx.sessionManager.getSessionId(),
+                  text: candidate,
+                  createdAt,
+                }),
+              );
               record = await queueChiefRecord(
                 "lead_message",
-                params.message,
+                text,
                 ctx,
+                undefined,
+                recordId,
+                createdAt,
               );
             } catch (error) {
               try {
@@ -7858,47 +7943,71 @@ export default function (pi: ExtensionAPI): void {
                 throw new Error(chiefUnavailableMessage());
               assertCurrentLeadCoordination(ctx);
               const askId = randomUUID();
+              const chief = await currentChiefAuthority(ctx);
+              if (!chief) throw new Error(chiefUnavailableMessage());
+              const recordId = chiefAskMessageId(
+                ctx.sessionManager.getSessionId(),
+                askId,
+                chief.leaseId,
+              );
+              const createdAt = Date.now();
+              const text = await prepareSupervisionText(
+                ctx,
+                params.question,
+                params.files ?? [],
+                "chief.ask",
+                "Question",
+                (candidate) => ({
+                  version: 1,
+                  id: recordId,
+                  leaseId: chief.leaseId,
+                  kind: "lead_ask",
+                  fromSessionId: ctx.sessionManager.getSessionId(),
+                  toSessionId: chief.piSessionId,
+                  leadSessionId: ctx.sessionManager.getSessionId(),
+                  askId,
+                  text: candidate,
+                  createdAt,
+                }),
+              );
               const previous = pendingChiefAsk;
-              pendingChiefAsk = { askId, question: params.question };
+              pendingChiefAsk = { askId, question: params.question, text };
               try {
                 if (!persistChiefState())
                   throw new Error("Lead coordination state is unavailable");
-                let record: ChiefMessageRecord | undefined;
-                try {
-                  record = await queueChiefRecord(
-                    "lead_ask",
-                    params.question,
-                    ctx,
-                    askId,
-                  );
-                  assertCurrentLeadCoordination(ctx);
-                } catch (error) {
-                  throw error;
-                }
-                if (process.env.HERDR_PANE_ID)
-                  queueLeadMetadata(ctx, {
-                    paneId: process.env.HERDR_PANE_ID,
-                    pendingAskId: askId,
-                  });
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: `Question sent to chief (${askId}).`,
-                    },
-                  ],
-                  details: {
-                    ...(record ? { id: record.id } : {}),
-                    askId,
-                    ...(record ? { chiefSessionId: record.toSessionId } : {}),
-                  },
-                  terminate: true,
-                };
               } catch (error) {
                 pendingChiefAsk = previous;
                 if (!persistChiefState()) leadCoordinationHealthy = false;
                 throw error;
               }
+              const record = await queueChiefRecord(
+                "lead_ask",
+                text,
+                ctx,
+                askId,
+                recordId,
+                createdAt,
+              );
+              assertCurrentLeadCoordination(ctx);
+              if (process.env.HERDR_PANE_ID)
+                queueLeadMetadata(ctx, {
+                  paneId: process.env.HERDR_PANE_ID,
+                  pendingAskId: askId,
+                });
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Question sent to chief (${askId}).`,
+                  },
+                ],
+                details: {
+                  id: record.id,
+                  askId,
+                  chiefSessionId: record.toSessionId,
+                },
+                terminate: true,
+              };
             } finally {
               releaseCoordinationPublication();
             }
@@ -7938,6 +8047,7 @@ export default function (pi: ExtensionAPI): void {
                   "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
               }),
               message: Type.String({ pattern: "\\S" }),
+              files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
             },
             { additionalProperties: false },
           ),
@@ -7951,6 +8061,7 @@ export default function (pi: ExtensionAPI): void {
               }),
               askId: Type.String({ pattern: "\\S" }),
               message: Type.String({ pattern: "\\S" }),
+              files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
             },
             { additionalProperties: false },
           ),
@@ -7969,8 +8080,8 @@ export default function (pi: ExtensionAPI): void {
           const allowed: Record<string, string[]> = {
             list: ["action"],
             inspect: ["action", "lead"],
-            message: ["action", "lead", "message"],
-            reply: ["action", "lead", "askId", "message"],
+            message: ["action", "lead", "message", "files"],
+            reply: ["action", "lead", "askId", "message", "files"],
           };
           if (
             !params ||
@@ -8015,6 +8126,16 @@ export default function (pi: ExtensionAPI): void {
             throw new Error(
               "Lead target was not found or is no longer eligible. Retry with lead set to the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
             );
+          const sameLeadTarget = (
+            candidate: typeof lead,
+            expected: typeof lead,
+          ): boolean =>
+            candidate.lead === expected.lead &&
+            candidate.paneId === expected.paneId &&
+            candidate.workspaceId === expected.workspaceId &&
+            candidate.tabId === expected.tabId &&
+            candidate.instanceId === expected.instanceId &&
+            candidate.pendingAskId === expected.pendingAskId;
           if (!lead.availableActions.includes(params.action))
             throw new Error(`Lead does not currently allow ${params.action}`);
           if (params.action === "inspect") {
@@ -8079,19 +8200,13 @@ export default function (pi: ExtensionAPI): void {
           );
           if (
             !currentLead ||
-            currentLead.paneId !== lead.paneId ||
-            currentLead.workspaceId !== lead.workspaceId ||
-            currentLead.tabId !== lead.tabId ||
-            currentLead.lead !== lead.lead ||
-            currentLead.instanceId !== lead.instanceId ||
-            currentLead.pendingAskId !== lead.pendingAskId ||
+            !sameLeadTarget(currentLead, lead) ||
             !currentLead.availableActions.includes(params.action)
           )
             throw new Error(
               "Lead target changed before the message was queued",
             );
           // The supervision snapshot load is awaited and can observe a lease replacement.
-          // This is the final local authority check before transport write.
           const finalChief = await currentChiefAuthority(ctx);
           if (
             !finalChief ||
@@ -8103,17 +8218,60 @@ export default function (pi: ExtensionAPI): void {
             params.askId !== currentLead.pendingAskId
           )
             throw new Error("Lead ask ID is no longer pending");
+          const recordId = randomUUID();
+          const createdAt = Date.now();
+          const text = await prepareSupervisionText(
+            ctx,
+            params.message,
+            params.files ?? [],
+            `staff.${params.action}`,
+            params.action === "message" ? "Message" : "Reply",
+            (candidate) => ({
+              version: 1,
+              id: recordId,
+              leaseId: finalChief.leaseId,
+              kind:
+                params.action === "message" ? "chief_message" : "chief_reply",
+              fromSessionId: finalChief.piSessionId,
+              toSessionId: lead.lead,
+              leadSessionId: lead.lead,
+              ...(params.action === "reply" ? { askId: params.askId } : {}),
+              text: candidate,
+              createdAt,
+            }),
+          );
+          // Attachment preparation can reload settings and read files. Recheck
+          // every identity and authority field immediately before transport.
+          const writeChief = await currentChiefAuthority(ctx);
+          const writeLead = (await loadSupervisionSnapshot(ctx)).leads.find(
+            (candidate) => candidate.lead === params.lead,
+          );
+          if (
+            !writeChief ||
+            !sameChiefDescriptor(writeChief, finalChief) ||
+            !writeLead ||
+            !sameLeadTarget(writeLead, currentLead) ||
+            !writeLead.availableActions.includes(params.action)
+          )
+            throw new Error(
+              "Lead or Chief changed before the message was queued",
+            );
+          if (
+            params.action === "reply" &&
+            params.askId !== writeLead.pendingAskId
+          )
+            throw new Error("Lead ask ID is no longer pending");
           const record: ChiefMessageRecord = {
             version: 1,
-            id: randomUUID(),
-            leaseId: chiefLease.descriptor.leaseId,
+            id: recordId,
+            leaseId: finalChief.leaseId,
             kind: params.action === "message" ? "chief_message" : "chief_reply",
-            fromSessionId: chiefLease.descriptor.piSessionId,
+            fromSessionId: finalChief.piSessionId,
             toSessionId: lead.lead,
             leadSessionId: lead.lead,
             ...(params.action === "reply" ? { askId: params.askId } : {}),
-            text: params.message,
-            createdAt: Date.now(),
+            text,
+            createdAt,
           };
           const runtime = supervisionRuntime();
           writeChiefMessage(record, runtime);
@@ -8173,7 +8331,7 @@ export default function (pi: ExtensionAPI): void {
               if (args.length === 1) return void (await openPlacementMenu(ctx));
               const current = await placementSettings(ctx);
               updateSpawnPlacementFile(
-                placementSettingsPath(ctx, current.scope),
+                settingsPath(ctx, current.scope),
                 args[1] as "tab" | "split",
               );
               const verified = await placementSettings(ctx);
@@ -8507,6 +8665,7 @@ export default function (pi: ExtensionAPI): void {
     };
     pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
       clearSupervisionRunContext();
+      startupDefinitionRoster = undefined;
       ++sessionGeneration;
       const previousChiefMode = chiefMode;
       const previousLeadContext = leadContext;
@@ -8636,6 +8795,20 @@ export default function (pi: ExtensionAPI): void {
       if (controllerScope.kind === "lead" && chiefMode === "active")
         startSupervisionUI?.(ctx);
       else startNormalUI?.(ctx);
+      if (!(controllerScope.kind === "lead" && chiefMode === "active")) {
+        try {
+          startupDefinitionRoster = {
+            sessionId: ctx.sessionManager.getSessionId(),
+            definitions: await visibleAgentDefinitionMetadata(
+              ctx,
+              controllerScope,
+            ),
+          };
+        } catch (error) {
+          startupDefinitionRoster = undefined;
+          appendDurableError(pi, ctx, "pi_herdsman_definition_error", error);
+        }
+      }
       if (controllerScope.kind === "worker") {
         requestStatusRefresh?.();
         return;
@@ -8661,6 +8834,7 @@ export default function (pi: ExtensionAPI): void {
     });
     pi.on("session_shutdown", async () => {
       ++sessionGeneration;
+      startupDefinitionRoster = undefined;
       ++chiefInboxGeneration;
       if (chiefInboxTimer) clearTimeout(chiefInboxTimer);
       chiefInboxTimer = undefined;

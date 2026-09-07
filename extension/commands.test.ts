@@ -569,7 +569,11 @@ test("Chief activation replaces the lead widget and overview selection is intera
     version: 1,
     instanceId: randomUUID(),
     piSessionId: PARENT_SESSION_ID,
-    pendingAsk: { askId: randomUUID(), question: "remote question" },
+    pendingAsk: {
+      askId: randomUUID(),
+      question: "remote question",
+      text: "Question: remote question",
+    },
     updatedAt: Date.now(),
   });
   assert.deepEqual(pi.pi.getActiveTools(), ["read", "worker", "chief"]);
@@ -1014,6 +1018,7 @@ test("Chief resume rejects a persisted pending chief ask without activation", as
         pendingAsk: {
           askId: "11111111-1111-4111-8111-111111111111",
           question: "Need a decision",
+          text: "Question: Need a decision",
         },
       },
     },
@@ -1167,6 +1172,41 @@ test("plain workers opens the native management menu", async () => {
   );
   assert.equal(prompts[1]?.label, "Layout");
   assert.deepEqual(prompts[1]?.options, ["tab (current)", "split"]);
+  await pi.events.get("session_shutdown")?.[0]();
+});
+
+test("message limits use global byte settings and one rough token formatter", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("workers");
+  const prompts: { label: string; options: string[] }[] = [];
+  const notices: string[] = [];
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.ui.notify = (message: string) => notices.push(message);
+  context.ui.select = async (label: string, options: string[]) => {
+    prompts.push({ label, options });
+    if (prompts.length === 1) return "Message limits";
+    if (prompts.length === 2) return options[0];
+    if (prompts.length === 3) return options[1];
+    return undefined;
+  };
+  await command.handler("", context);
+  assert.equal(prompts[1]?.label, "Message limits");
+  assert.match(prompts[1]?.options[0] ?? "", /≈32,768 tokens/);
+  assert.match(prompts[1]?.options[1] ?? "", /≈32,768 tokens/);
+  assert.ok(prompts.every(({ label }) => label !== "Scope"));
+  assert.deepEqual(prompts[2]?.options, [
+    "1 KiB · ≈256 tokens",
+    "4 KiB · ≈1,024 tokens",
+    "16 KiB · ≈4,096 tokens",
+    "64 KiB · ≈16,384 tokens",
+    "128 KiB · ≈32,768 tokens",
+    "Custom…",
+    "Reset",
+  ]);
+  assert.match(notices.at(-1) ?? "", /4 KiB · ≈1,024 tokens/);
   await pi.events.get("session_shutdown")?.[0]();
 });
 
@@ -1515,65 +1555,133 @@ test("Definitions edits standalone definitions through the shared override write
 test("Definitions Details snapshots effective append and replace instructions", async () => {
   setLeadEnvironment();
   const definitionPath = join(PI_AGENTS_DIR, "scout.md");
+  const customDefinitionPath = join(PI_AGENTS_DIR, "details-scout.md");
   const bodyPath = join(PI_AGENT_ROOT, "scout-details-body.md");
   const baseBody = discoverAgent("scout").body;
-  realFs.writeFileSync(bodyPath, "file instructions");
 
-  const selectDetails = async () => {
+  const selectDetails = async (
+    selectedName: string,
+    beforeDetails?: () => void,
+  ) => {
     const pi = fakePi();
     registerExtension!(pi.pi as never);
+    const initialEntryCount = pi.entries.length;
     const command = pi.commandOptions.get("workers");
     const context = fakeContext() as any;
     context.hasUI = true;
+    const notices: string[] = [];
+    context.ui.notify = (message: string) => notices.push(message);
     let selection = 0;
     context.ui.select = async (_label: string, options: string[]) => {
       if (selection++ === 0)
-        return options.find((option) => option.includes("scout"));
-      if (selection === 2) return "Details…";
+        return options.find((option) => option.includes(selectedName));
+      if (selection === 2) {
+        beforeDetails?.();
+        return "Details…";
+      }
       return undefined;
     };
-    await command.handler("agents", context);
-    await pi.events.get("session_shutdown")?.[0]();
-    return pi.entries[0] as {
-      customType: string;
-      data: { definitions: unknown[]; instructions: string };
+    let error: unknown;
+    try {
+      await command.handler("agents", context);
+    } catch (caught) {
+      error = caught;
+    } finally {
+      await pi.events.get("session_shutdown")?.[0]();
+    }
+    return {
+      entry: [...pi.entries.slice(initialEntryCount)]
+        .reverse()
+        .find(
+          (entry: any) => entry?.customType === "pi-herdsman-agent-definitions",
+        ) as
+        | {
+            customType: string;
+            data: {
+              definitions: Array<Record<string, unknown>>;
+              instructions: string;
+            };
+          }
+        | undefined,
+      notices,
+      error,
     };
   };
 
   try {
+    realFs.writeFileSync(bodyPath, "file instructions");
     realFs.writeFileSync(
       definitionPath,
-      `---\nname: scout\nbodyMode: append\n---\nAdditional instructions\n@${bodyPath}\n`,
+      `---\nname: scout\ndescription: before\nbodyMode: append\n---\nAdditional instructions\n@${bodyPath}\n`,
     );
     const appended = discoverAgent("scout");
     assert.equal(
       appended.body,
       `${baseBody}\n\nAdditional instructions\n@${bodyPath}`,
     );
-    const appendedEntry = await selectDetails();
+    const appendedResult = await selectDetails("scout", () => {
+      realFs.writeFileSync(bodyPath, "mutated after selection");
+      realFs.writeFileSync(
+        definitionPath,
+        `---\nname: scout\ndescription: after\nbodyMode: append\n---\nAdditional instructions\n@${bodyPath}\n`,
+      );
+    });
+    const appendedEntry = appendedResult.entry!;
     assert.equal(
       appendedEntry.data.instructions,
-      `${baseBody}\n\nAdditional instructions\nfile instructions`,
+      `${baseBody}\n\nAdditional instructions\nmutated after selection`,
     );
+    assert.equal(appendedEntry.data.definitions[0]?.description, "after");
 
-    realFs.writeFileSync(bodyPath, "changed file instructions");
     realFs.writeFileSync(
       definitionPath,
       `---\nname: scout\nbodyMode: replace\n---\nReplacement instructions\n@${bodyPath}\n`,
     );
-    const replaced = discoverAgent("scout");
-    assert.equal(replaced.body, `Replacement instructions\n@${bodyPath}`);
-    const replacedEntry = await selectDetails();
+    const replacedResult = await selectDetails("scout", () => {
+      realFs.writeFileSync(bodyPath, "changed file instructions");
+    });
+    const replacedEntry = replacedResult.entry!;
     assert.equal(
       replacedEntry.data.instructions,
       "Replacement instructions\nchanged file instructions",
     );
     assert.equal(
       appendedEntry.data.instructions,
-      `${baseBody}\n\nAdditional instructions\nfile instructions`,
+      `${baseBody}\n\nAdditional instructions\nmutated after selection`,
+    );
+
+    realFs.writeFileSync(
+      customDefinitionPath,
+      `---\nname: details-scout\ndescription: Still available\n---\nStill available\n`,
+    );
+    const deletedResult = await selectDetails("details-scout", () => {
+      realFs.rmSync(customDefinitionPath, { force: true });
+    });
+    assert.equal(deletedResult.entry, undefined);
+    assert.ok(
+      deletedResult.notices.some((notice) =>
+        notice.includes("Definition details-scout is no longer available."),
+      ),
+    );
+
+    realFs.writeFileSync(
+      customDefinitionPath,
+      `---\nname: details-scout\ndescription: Still available\n---\nStill available\n`,
+    );
+    const invalidResult = await selectDetails("details-scout", () => {
+      realFs.writeFileSync(
+        customDefinitionPath,
+        `---\nname: details-scout\nunknownField: true\n---\nInvalid\n`,
+      );
+    });
+    assert.ok(
+      invalidResult.notices.some((notice) =>
+        /unknownField|Malformed|invalid/i.test(notice),
+      ),
     );
   } finally {
     realFs.rmSync(definitionPath, { force: true });
+    realFs.rmSync(customDefinitionPath, { force: true });
     realFs.rmSync(bodyPath, { force: true });
   }
 });
@@ -2596,10 +2704,9 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
   assert.match(rendered, /1 working/);
   assert.match(rendered, /sleep-smoke-a/);
   assert.doesNotMatch(rendered, /\[read, bash, ask_owner\]/);
-  assert.equal(
-    support.agentDefinitionReadCount,
-    definitionReadsBeforeStatus,
-    "status refresh must not rediscover agent definitions",
+  assert.ok(
+    support.agentDefinitionReadCount > definitionReadsBeforeStatus,
+    "session-start roster should discover agent definitions once",
   );
   const listed = await pi.tools[0].execute(
     "id",
@@ -2611,7 +2718,7 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
   assert.equal(listed.details.ok, true, JSON.stringify(listed.details));
   assert.ok(
     support.agentDefinitionReadCount > definitionReadsBeforeStatus,
-    "worker list should discover agent definitions",
+    "worker list should continue to discover agent definitions",
   );
   await pi.events.get("session_shutdown")?.[0]();
 });

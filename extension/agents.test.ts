@@ -8,7 +8,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -123,16 +123,61 @@ test("resolves whole-line body file references from their definition", () => {
   const prompts = join(root, "prompts");
   mkdirSync(agents);
   const definitionPath = join(agents, "custom.md");
+  const absolutePath = join(root, "absolute.md");
   mkdirSync(prompts);
   writeFileSync(join(prompts, "one.md"), "one");
   writeFileSync(
     definitionPath,
-    "---\nname: custom\n---\nBefore\n@../prompts/one.md\nAfter\n@example",
+    `---\nname: custom\n---\nBefore\n@../prompts/one.md\n@./custom.md\n@~/prompts/home.md\n@${absolutePath}\nAfter\n@example`,
   );
   const definition = withPiAgentDir(root, () => discoverAgent("custom"));
   assert.equal(
     definition.body,
-    `Before\n@${join(prompts, "one.md")}\nAfter\n@example`,
+    `Before\n@${join(prompts, "one.md")}\n@${join(agents, "custom.md")}\n@${join(homedir(), "prompts", "home.md")}\n@${absolutePath}\nAfter\n@example`,
+  );
+});
+
+test("normalizes home-relative references in project and global definitions", () => {
+  const project = mkdtempSync(join(tmpdir(), "pi-herdsman-project-agents-"));
+  const global = mkdtempSync(join(tmpdir(), "pi-herdsman-global-agents-"));
+  const projectAgents = join(project, ".pi", "agents");
+  const globalAgents = join(global, "agents");
+  mkdirSync(projectAgents, { recursive: true });
+  mkdirSync(globalAgents);
+  writeFileSync(
+    join(projectAgents, "project.md"),
+    "---\nname: project\n---\n@~/project.md",
+  );
+  writeFileSync(
+    join(globalAgents, "global.md"),
+    "---\nname: global\n---\n@~/global.md",
+  );
+
+  const definitions = withPiAgentDir(global, () =>
+    discoverAgentDefinitions({ projectRoot: project }),
+  );
+  assert.equal(
+    definitions.find(({ name }) => name === "project")?.body,
+    `@${join(homedir(), "project.md")}`,
+  );
+  assert.equal(
+    definitions.find(({ name }) => name === "global")?.body,
+    `@${join(homedir(), "global.md")}`,
+  );
+});
+
+test("leaves unsupported home and shell-looking references unchanged", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-body-reference-"));
+  const agents = join(root, "agents");
+  mkdirSync(agents);
+  writeFileSync(
+    join(agents, "custom.md"),
+    "---\nname: custom\n---\n@~user/file\n@$HOME/file\n@${HOME}/file\ninline @~/file",
+  );
+
+  assert.equal(
+    withPiAgentDir(root, () => discoverAgent("custom")).body,
+    "@~user/file\n@$HOME/file\n@${HOME}/file\ninline @~/file",
   );
 });
 
@@ -315,7 +360,7 @@ test("discovers the five portable bundled definitions without a user agents dire
     withPiAgentDir(root, () =>
       discoverAgentDefinitions().map((definition) => definition.name),
     ),
-    ["implementer", "researcher", "reviewer", "scout", "worker"],
+    ["generalist", "implementer", "researcher", "reviewer", "scout"],
   );
 });
 
@@ -339,13 +384,13 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ],
     ["reviewer", ["read", "ls", "find", "grep", "worker"]],
     ["scout", ["read", "ls", "find", "grep"]],
-    ["worker", ["read", "bash", "edit", "write", "worker"]],
+    ["generalist", ["read", "bash", "edit", "write", "worker"]],
   ]);
   const required = withPiAgentDir(
     root,
     () =>
       new Map(
-        ["implementer", "researcher", "reviewer", "scout", "worker"].map(
+        ["generalist", "implementer", "researcher", "reviewer", "scout"].map(
           (name) =>
             [name, discoverAgent(name).body.replaceAll(/\s+/g, " ")] as const,
         ),
@@ -373,7 +418,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     );
   }
   assert.match(required.get("implementer")!, /scoped edits and validation/);
-  assert.match(required.get("worker")!, /smallest complete action/);
+  assert.match(required.get("generalist")!, /smallest complete action/);
   assert.match(required.get("reviewer")!, /strictly read-only/);
   assert.match(required.get("scout")!, /read-only codebase reconnaissance/);
   assert.match(
@@ -381,7 +426,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     /prefer official and primary sources.*active capabilities/i,
   );
   assert.match(required.get("researcher")!, /Do not mutate files/);
-  for (const name of ["implementer", "reviewer", "worker"])
+  for (const name of ["generalist", "implementer", "reviewer"])
     assert.doesNotMatch(required.get(name)!, /delegate|orchestrat/i);
   assert.equal(
     definitions.filter((definition) => required.has(definition.name)).length,
@@ -462,7 +507,7 @@ test("does not bundle the operator-local MCP runner", () => {
     withPiAgentDir(root, () =>
       discoverAgentDefinitions().map(({ name }) => name),
     ),
-    ["implementer", "researcher", "reviewer", "scout", "worker"],
+    ["generalist", "implementer", "researcher", "reviewer", "scout"],
   );
   assert.throws(
     () => withPiAgentDir(root, () => discoverAgent("mcp-runner")),
@@ -579,18 +624,20 @@ test("discovers trusted project definitions and gives global overlays final prec
 
 test("project discovery tolerates a missing directory and rejects a file", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-project-root-"));
-  assert.deepEqual(
-    discoverAgentDefinitions({ projectRoot: root }).some(
-      (d) => d.projectSource,
-    ),
-    false,
-  );
-  mkdirSync(join(root, ".pi"), { recursive: true });
-  writeFileSync(join(root, ".pi", "agents"), "not a directory");
-  assert.throws(
-    () => discoverAgentDefinitions({ projectRoot: root }),
-    /agent directory is not a directory/,
-  );
+  withPiAgentDir(root, () => {
+    assert.deepEqual(
+      discoverAgentDefinitions({ projectRoot: root }).some(
+        (d) => d.projectSource,
+      ),
+      false,
+    );
+    mkdirSync(join(root, ".pi"), { recursive: true });
+    writeFileSync(join(root, ".pi", "agents"), "not a directory");
+    assert.throws(
+      () => discoverAgentDefinitions({ projectRoot: root }),
+      /agent directory is not a directory/,
+    );
+  });
 });
 
 test("project approval is emitted only when requested", () => {
@@ -743,7 +790,14 @@ test("overlays a bundled definition and extends the roster", () => {
     const definitions = discoverAgentDefinitions();
     assert.deepEqual(
       definitions.map((definition) => definition.name),
-      ["custom", "implementer", "researcher", "reviewer", "scout", "worker"],
+      [
+        "custom",
+        "generalist",
+        "implementer",
+        "researcher",
+        "reviewer",
+        "scout",
+      ],
     );
     const implementer = discoverAgent("implementer");
     assert.equal(implementer.path, overridePath);
@@ -992,18 +1046,18 @@ test("requires a body prompt path for body-bearing agents", () => {
   );
 });
 
-test("bundled worker definitions retain their declared tool policy", () => {
+test("bundled generalist definition retains its declared tool policy", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-worker-policy-"));
-  const worker = withPiAgentDir(root, () => discoverAgent("worker"));
-  assert.equal(worker.frontmatter.noExtensions, true);
-  assert.deepEqual(worker.frontmatter.tools, [
+  const generalist = withPiAgentDir(root, () => discoverAgent("generalist"));
+  assert.equal(generalist.frontmatter.noExtensions, true);
+  assert.deepEqual(generalist.frontmatter.tools, [
     "read",
     "bash",
     "edit",
     "write",
     "worker",
   ]);
-  const args = agentLaunchArgs(worker, {
+  const args = agentLaunchArgs(generalist, {
     bodyPromptPath: "/tmp/prompt.txt",
     cwd: process.cwd(),
     managedWorker: true,
@@ -1050,8 +1104,8 @@ test("managed launch policy always includes ask_owner", () => {
     );
   }
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-worker-standalone-"));
-  const standalone = withPiAgentDir(root, () => discoverAgent("worker"));
-  assert.match(standalone.path, /agent-definitions\/worker\.md$/);
+  const standalone = withPiAgentDir(root, () => discoverAgent("generalist"));
+  assert.match(standalone.path, /agent-definitions\/generalist\.md$/);
   assert.equal(
     agentLaunchArgs(standalone, {
       bodyPromptPath: "/prompt",

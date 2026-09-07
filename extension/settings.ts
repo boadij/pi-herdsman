@@ -24,8 +24,8 @@ export const MIN_BYTE_LIMIT = 1024;
 export const MAX_BYTE_LIMIT = 1024 * 1024;
 export type EffectiveByteLimit = {
   bytes: number;
-  source: "project" | "global" | "default";
-  invalidSource?: "project" | "global";
+  source: "global" | "default";
+  invalidSource?: "global";
 };
 export function validByteLimit(value: unknown): value is number {
   return (
@@ -35,31 +35,12 @@ export function validByteLimit(value: unknown): value is number {
     value <= MAX_BYTE_LIMIT
   );
 }
-export function resolveEffectiveByteLimit(
-  globalValue: unknown,
-  projectValue: unknown,
-  trustedProject: boolean,
-): EffectiveByteLimit {
-  const invalidProject =
-    trustedProject &&
-    projectValue !== undefined &&
-    !validByteLimit(projectValue);
-  if (trustedProject && validByteLimit(projectValue))
-    return { bytes: projectValue, source: "project" };
-  if (validByteLimit(globalValue))
-    return {
-      bytes: globalValue,
-      source: "global",
-      ...(invalidProject ? { invalidSource: "project" } : {}),
-    };
+export function resolveEffectiveByteLimit(value: unknown): EffectiveByteLimit {
+  if (validByteLimit(value)) return { bytes: value, source: "global" };
   return {
     bytes: DEFAULT_BYTE_LIMIT,
     source: "default",
-    ...(invalidProject
-      ? { invalidSource: "project" }
-      : globalValue !== undefined && !validByteLimit(globalValue)
-        ? { invalidSource: "global" }
-        : {}),
+    ...(value === undefined ? {} : { invalidSource: "global" }),
   };
 }
 export function updatePiHerdsmanSettingJson(

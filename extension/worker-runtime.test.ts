@@ -472,6 +472,64 @@ test("worker ask_owner blocks settlement and reply resumes the same assignment",
   realFs.rmSync(askFile, { force: true });
 });
 
+test("message limits are global-only and do not consult project trust", async () => {
+  const mailbox = setWorkerEnvironment();
+  const worker = fakePi();
+  registerExtension!(worker.pi as never);
+  const branch: unknown[] = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "ask_owner" }],
+      },
+    },
+  ];
+  const context = fakeWorkerContext([], branch);
+  const assignment: RequestRecord = {
+    version: 3,
+    runId: WORKER_ID,
+    requestId: REQUEST_ID,
+    ownerSessionId: LEAD_SESSION_ID,
+    workspaceId: WORKSPACE,
+    workerLabel: "registered-worker",
+    paneId: "registered-pane",
+    kind: "task",
+    text: "choose",
+    createdAt: Date.now(),
+  };
+  const accesses: string[] = [];
+  try {
+    await worker.events.get("session_start")![0](undefined, context);
+    writeRequest(mailbox, assignment);
+    assert.deepEqual(
+      worker.events.get("input")![0](
+        { text: controlMarker(REQUEST_ID) },
+        context,
+      ),
+      { action: "transform", text: assignment.text },
+    );
+    context.isProjectTrusted = () => {
+      throw new Error("message limits must not consult project trust");
+    };
+    support.settingsAccessHook = (access) => accesses.push(access);
+    const askTool = worker.tools.find((tool) => tool.name === "ask_owner");
+    assert.ok(askTool);
+    await askTool.execute(
+      "global-only-limits",
+      { question: "Which option?" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.deepEqual(accesses, ["reload"]);
+  } finally {
+    support.settingsAccessHook = undefined;
+    worker.events.get("session_shutdown")?.[0]();
+    resetWorkerMailbox(mailbox);
+  }
+});
+
 test("ask_owner eligibility permits only ask-blocked direct-worker escalation", async () => {
   const cases = [
     { name: "no child", children: [], allowed: true },

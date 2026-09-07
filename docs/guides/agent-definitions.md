@@ -190,9 +190,14 @@ Supported forms:
 @./relative.md
 @../relative.md
 @/absolute/path.md
+@~/home-relative.md
 ```
 
 References are resolved from the Markdown file that declares them.
+
+The bundled definitions are `generalist`, `implementer`, `researcher`,
+`reviewer`, and `scout`. The session-start worker-definition roster and the
+`worker list` result use the same metadata projection.
 
 For exact expansion, deduplication, and caller-file precedence, see
 [Handoffs and files](handoffs.md).

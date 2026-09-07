@@ -159,7 +159,7 @@ export function prepareMessageInput(
   files: readonly string[],
   cwd: string,
   operation: string,
-  heading: "Task" | "Steer" | "Reply" | "Question",
+  heading: "Task" | "Steer" | "Reply" | "Question" | "Message",
   options: MessagePreparationOptions = {},
 ): PreparedMessageInput {
   if (!text.trim())

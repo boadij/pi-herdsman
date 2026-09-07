@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = process.cwd();
@@ -20,13 +20,12 @@ const expectedRoot = new Set([
   "SKILL.md",
   "LICENSE",
 ]);
+const expectedDefinitions = readdirSync(
+  resolve(root, "extension/agent-definitions"),
+).filter((name) => name.endsWith(".md"));
 const expectedDist = new Set([
   "dist/index.js",
-  "dist/agent-definitions/implementer.md",
-  "dist/agent-definitions/researcher.md",
-  "dist/agent-definitions/reviewer.md",
-  "dist/agent-definitions/scout.md",
-  "dist/agent-definitions/worker.md",
+  ...expectedDefinitions.map((name) => `dist/agent-definitions/${name}`),
 ]);
 for (const path of expectedRoot)
   if (!files.some((entry) => normalize(entry.path) === path)) {
