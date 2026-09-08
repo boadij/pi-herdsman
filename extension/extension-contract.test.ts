@@ -678,6 +678,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assertToolResult(inspected);
     assert.equal(inspected.details?.action, "inspect");
     assert.equal(inspected.details?.lead, leadId);
+    assert.equal(inspected.details?.recent_output_truncated, false);
     assert.ok(inspected.details?.identity);
 
     const queuedBeforePreparationRace = listChiefMessagePaths(
@@ -1713,6 +1714,7 @@ test("registered agent inspect exposes process and recent activity evidence", as
     assert.match(text, /sleep 600/);
     assert.match(text, /unique-inspect-marker/);
     assert.equal(result.details.recent_output, "unique-inspect-marker");
+    assert.equal(result.details.recent_output_truncated, false);
     assert.equal(
       result.details.process.foreground_processes[0].cmdline,
       "sleep 600",

@@ -76,7 +76,8 @@ export const STARTUP_TIMEOUT_MAX = HERDR_START_TIMEOUT_MAX;
 const STARTUP_TIMEOUT_DEFAULT =
   HERDR_START_TIMEOUT_MAX + START_DIAGNOSTIC_TIMEOUT;
 const RAW_DIAGNOSTIC_BYTES = 8 * 1024;
-const INSPECTION_LINES = 40;
+const INSPECTION_LINES = 80;
+const INSPECTION_OUTPUT_BYTES = 16 * 1024;
 const MAX_FOREGROUND_PROCESSES = 8;
 const MAX_PROCESS_ARGV0_BYTES = 256;
 const MAX_PROCESS_CMDLINE_BYTES = 4 * 1024;
@@ -104,26 +105,34 @@ function error(operation: string, message: string, details?: unknown): never {
   });
 }
 
-function boundedDiagnostic(value: string): string {
-  const bytes = Buffer.from(value.trim());
-  let result = (
-    bytes.length > RAW_DIAGNOSTIC_BYTES
-      ? bytes.subarray(bytes.length - RAW_DIAGNOSTIC_BYTES)
-      : bytes
-  ).toString();
-  // A byte slice can begin inside a UTF-8 code point; remove the replacement
-  // boundary (or any resulting excess) so the returned evidence stays bound.
-  while (Buffer.byteLength(result) > RAW_DIAGNOSTIC_BYTES)
-    result = result.slice(1);
-  return result;
+function boundedUtf8Tail(
+  value: string,
+  maxBytes: number,
+): { text: string; truncated: boolean } {
+  const bytes = Buffer.from(value);
+  if (bytes.length <= maxBytes) return { text: value, truncated: false };
+  let start = bytes.length - maxBytes;
+  while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++;
+  return {
+    text: bytes.subarray(start).toString(),
+    truncated: true,
+  };
 }
 
-function boundedInspectionOutput(value: string): string {
+function boundedDiagnostic(value: string): string {
+  return boundedUtf8Tail(value.trim(), RAW_DIAGNOSTIC_BYTES).text;
+}
+
+function boundedInspectionOutput(value: string): {
+  text: string;
+  truncated: boolean;
+} {
   // Pi's ExecOptions has no maxBuffer, and herdr 0.8.2's agent.read schema
   // bounds lines but not bytes. This bounds returned evidence only; pi.exec
   // may still buffer a larger subprocess response before returning it.
-  return boundedDiagnostic(
+  return boundedUtf8Tail(
     value.trim().split(/\r?\n/).slice(-INSPECTION_LINES).join("\n"),
+    INSPECTION_OUTPUT_BYTES,
   );
 }
 
@@ -140,6 +149,7 @@ export type AgentInspectionValidator = (
 export type AgentInspection = {
   identity: AgentInspectionTarget & { agent: HerdrRecord };
   capturedAt: number;
+  recentOutputTruncated: boolean;
   recentOutput?: string;
   process?: PaneProcess;
 };
@@ -188,8 +198,8 @@ export async function inspectHerdrAgent(
   if (!exactAgent(before, target) || (validate && !(await validate(before))))
     throw new Error("Inspection target identity did not match");
   // Pi's exec API exposes only signal, timeout, and cwd; it has no supported
-  // stdout/stderr max-buffer option. Keep the Herdr read at 40 lines and
-  // enforce the existing byte bound after capture instead of inventing one.
+  // stdout/stderr max-buffer option. Keep the Herdr read at 80 lines and
+  // enforce the local 16 KiB byte bound after capture instead of inventing one.
   const outputResult = await pi.exec(
     "herdr",
     [
@@ -199,7 +209,7 @@ export async function inspectHerdrAgent(
       "--source",
       "recent-unwrapped",
       "--lines",
-      "40",
+      "80",
       "--format",
       "text",
     ],
@@ -219,12 +229,16 @@ export async function inspectHerdrAgent(
   const after = afterResult?.agent ?? afterResult;
   if (!exactAgent(after, target) || (validate && !(await validate(after))))
     throw new Error("Inspection target changed during capture");
-  const raw = `${outputResult.stdout ?? ""}\n${outputResult.stderr ?? ""}`;
-  const recentOutput = boundedInspectionOutput(raw);
+  const raw = [outputResult.stdout, outputResult.stderr]
+    .map((value) => String(value ?? ""))
+    .filter((value) => value.length > 0)
+    .join("\n");
+  const inspectionOutput = boundedInspectionOutput(raw);
   return Object.freeze({
     identity: Object.freeze({ ...target, agent: after }),
     capturedAt: Date.now(),
-    ...(recentOutput ? { recentOutput } : {}),
+    recentOutputTruncated: inspectionOutput.truncated,
+    ...(inspectionOutput.text ? { recentOutput: inspectionOutput.text } : {}),
     ...(process ? { process } : {}),
   });
 }

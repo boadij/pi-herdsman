@@ -52,16 +52,23 @@ assignment. The terminal result is delivered once and the agent is cleaned up.
 }
 ```
 
-Allowed fields are `action`, `session`, `task`, optional `files`, and
+Allowed fields are `action`, `session`, `task`, optional `label`, `files`, and
 `timeoutMs`. The exact saved session supplies its cwd, definition identity, and
 historical Pi context. Session delegation always creates a new agent generation
-for one assignment; it never assigns work to an existing agent. The saved
-definition must currently resolve to an enabled, authorized effective
-definition, whose current configuration is used for the new generation.
+for one assignment with a live label; it never assigns work to an existing
+agent. The saved definition must currently resolve to an enabled, authorized
+effective definition, whose current configuration is used for the new
+generation.
 Concurrent or otherwise conflicting managed representations of the exact
 session fail closed. The controller's own active Pi session cannot be delegated
 to itself; use definition delegation with `fork` when a separate derived
 context is required.
+
+`label` is optional on both delegation variants and identifies the live
+generation, not the continuation session. When omitted, Herdsman chooses a
+fresh available label derived from the effective agent definition. An explicit
+label is used exactly as the live label; if that label is occupied, delegation
+fails with `agent_label_exists`.
 
 All successful delegation results use `action: "delegate"` and include
 `agent`, `definition`, request, session, and startup evidence where available.
@@ -123,12 +130,16 @@ non-actionable.
 
 `inspect` accepts only `action` and the exact live agent label. It is available
 only to that agent's direct owner, and only when the agent is a current,
-unambiguous managed identity. The result is read-only and contains the exact
-session/pane identity, a bounded tail of the most recent 40 unwrapped terminal
-lines (at most 8 KiB), and advisory foreground process evidence when available.
-Its model-facing text includes the agent, session, pane, useful foreground
-commands, and recent activity; raw process and recent-output evidence remains
-in the structured result details.
+unambiguous managed identity. The result is read-only live terminal/process
+evidence only: it contains the exact session/pane identity, Herdr's up to 80
+recent-unwrapped terminal lines, and advisory foreground process evidence when
+available. Herdsman applies a local 16 KiB byte cap to the captured terminal
+output. The public `recent_output_truncated` boolean is true only when that
+local byte cap truncates the output and false otherwise; process evidence has
+separate bounds. The result does not expose persisted Pi session-message
+history. Its model-facing text includes the agent, session, pane, useful
+foreground commands, and recent activity; raw process and recent-output
+evidence remains in the structured result details.
 The identity is checked again after capture; if the pane or Pi session was
 replaced, inspection fails closed. Inspection does not change agent state,
 mailbox records, lifecycle, or available controls.

@@ -44,10 +44,13 @@ Every managed agent has an exact Pi session. The list may expose the session
 ID and path for correlation.
 
 A session path or full UUID can be supplied as `delegate.session` to continue
-historical work. It is the continuation identity, not a live-control identity.
-Session delegation creates a new agent generation for one new assignment and
-uses the saved session's cwd and historical context. An exact active or
-unresolved managed representation blocks concurrent activation of that session.
+historical work. Session delegation creates a new agent generation for one new
+assignment and uses the saved session's cwd and historical context. With
+`delegate.session`, omitting `label` chooses a fresh available label derived
+from the saved definition; supplying one chooses the exact live label for that
+generation. The Pi session remains the continuation identity, not a
+live-control identity. An exact active or unresolved managed representation
+blocks concurrent activation of that session.
 
 ### herdr identities
 
