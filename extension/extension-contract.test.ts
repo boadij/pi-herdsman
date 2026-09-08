@@ -18,7 +18,7 @@ import type {
   AskRecord,
   RequestRecord,
   ResultRecord,
-  WorkerState,
+  ManagedAgentState,
 } from "./mailbox.ts";
 import { OperationError } from "./errors.ts";
 import support, {
@@ -33,24 +33,24 @@ import support, {
   controlMarker,
   fakeContext,
   fakePi,
-  fakeWorkerContext,
+  fakeAgentContext,
   isAgentList,
   managedState,
   nativeSessions,
-  workerControllerExecutor,
-  readWorkerState,
+  agentControllerExecutor,
+  readAgentState,
   realFs,
   recoveryIdentity,
   registerExtension,
-  resetWorkerMailbox,
+  resetAgentMailbox,
   setLeadEnvironment,
-  setWorkerEnvironment,
+  setAgentEnvironment,
   skillBlock,
   startupExecutor,
   waitForTestCondition,
-  workerMailboxPath,
+  agentMailboxPath,
   writeRequest,
-  writeWorkerState,
+  writeAgentState,
 } from "./support.ts";
 
 function assertToolResult(result: any): asserts result is {
@@ -71,18 +71,18 @@ test("registered lead and unmanaged roles expose the correct surface", () => {
   process.env.HERDR_PANE_ID = "lead-pane";
   const lead = fakePi();
   registerExtension!(lead.pi as never);
-  assert.deepEqual(lead.commands.sort(), ["chief", "workers"]);
+  assert.deepEqual(lead.commands.sort(), ["agents", "chief"]);
   assert.deepEqual(lead.tools.map((tool) => tool.name).sort(), [
+    "agent",
     "chief",
-    "worker",
   ]);
   assert.equal(
     lead.tools.find((tool) => tool.name === "chief")?.label,
     "chief",
   );
   assert.equal(
-    lead.tools.find((tool) => tool.name === "worker")?.label,
-    "worker",
+    lead.tools.find((tool) => tool.name === "agent")?.label,
+    "agent",
   );
   assert.ok(lead.tools.every((tool) => tool.executionMode === "sequential"));
   assert.equal(lead.commands.includes("subagents"), false);
@@ -103,7 +103,7 @@ test("registered lead and unmanaged roles expose the correct surface", () => {
   registerExtension!(unmanaged.pi as never);
   assert.equal(unmanaged.commands.length, 0);
   assert.equal(
-    unmanaged.tools.some((tool) => tool.name === "worker"),
+    unmanaged.tools.some((tool) => tool.name === "agent"),
     false,
   );
   assert.equal(unmanaged.events.size, 0);
@@ -124,7 +124,7 @@ test("active chief describes authoritative remote ask projection", async () => {
       data: { role: "chief" },
     },
   ];
-  const pi = fakePi({ entries, activeTools: ["worker", "chief"] });
+  const pi = fakePi({ entries, activeTools: ["agent", "chief"] });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   context.ui.notify = () => undefined;
@@ -505,27 +505,27 @@ test("registered lead and replacement chief exchange messages and asks", async (
     workspace_id: WORKSPACE,
     agent_status: "idle",
   };
-  const directWorker = {
-    ...managedState("snapshot-direct-worker", REQUEST_ID, {
-      ...recoveryIdentity("snapshot-direct-worker"),
+  const directAgent = {
+    ...managedState("snapshot-direct-agent", REQUEST_ID, {
+      ...recoveryIdentity("snapshot-direct-agent"),
       piSessionId: PARENT_SESSION_ID,
     }),
     ownerSessionId: leadId,
   };
-  const descendantWorker = {
-    ...managedState("snapshot-descendant-worker", REQUEST_ID, {
-      ...recoveryIdentity("snapshot-descendant-worker"),
+  const descendantAgent = {
+    ...managedState("snapshot-descendant-agent", REQUEST_ID, {
+      ...recoveryIdentity("snapshot-descendant-agent"),
       piSessionId: CHILD_SESSION_ID,
     }),
-    ownerSessionId: directWorker.piSessionId,
+    ownerSessionId: directAgent.piSessionId,
   };
-  const directWorkerMailbox = workerMailboxPath(
+  const directAgentMailbox = agentMailboxPath(
     WORKSPACE,
-    directWorker.workerLabel,
+    directAgent.agentLabel,
   );
-  const descendantWorkerMailbox = workerMailboxPath(
+  const descendantAgentMailbox = agentMailboxPath(
     WORKSPACE,
-    descendantWorker.workerLabel,
+    descendantAgent.agentLabel,
   );
   let duplicateChief = false;
   let unresolvableIdentity = false;
@@ -556,8 +556,8 @@ test("registered lead and replacement chief exchange messages and asks", async (
                 agents: [
                   leadAgent,
                   chiefAgent,
-                  agentFromState(directWorker, "working"),
-                  agentFromState(descendantWorker, "blocked"),
+                  agentFromState(directAgent, "working"),
+                  agentFromState(descendantAgent, "blocked"),
                   ...(unresolvableIdentity
                     ? [
                         {
@@ -628,8 +628,8 @@ test("registered lead and replacement chief exchange messages and asks", async (
   writeFileSync(attachment, "chief evidence\n", "utf8");
 
   try {
-    writeWorkerState(directWorkerMailbox, directWorker);
-    writeWorkerState(descendantWorkerMailbox, descendantWorker);
+    writeAgentState(directAgentMailbox, directAgent);
+    writeAgentState(descendantAgentMailbox, descendantAgent);
     await chief.events.get("agent_start")![0](undefined, chiefContext);
     const supervisionMessage = chief.events
       .get("context")![0]({ messages: [] }, chiefContext)
@@ -640,15 +640,15 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.match(supervisionMessage.content, /leads: 1/);
     assert.match(
       supervisionMessage.content,
-      /worker_counts: working=1 blocked=1 total=2/,
+      /agent_counts: working=1 blocked=1 total=2/,
     );
     assert.match(
       supervisionMessage.content,
-      /snapshot-direct-worker · working · id=eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee/,
+      /snapshot-direct-agent · working · id=eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee/,
     );
     assert.match(
       supervisionMessage.content,
-      /snapshot-descendant-worker · blocked · id=ffffffff-ffff-4fff-8fff-ffffffffffff/,
+      /snapshot-descendant-agent · blocked · id=ffffffff-ffff-4fff-8fff-ffffffffffff/,
     );
     assert.doesNotMatch(
       supervisionMessage.content,
@@ -864,28 +864,28 @@ test("registered lead and replacement chief exchange messages and asks", async (
       (lead: any) => lead.lead === leadId,
     );
     assert.ok(projectedLead);
-    assert.deepEqual(projectedLead.worker_counts, {
+    assert.deepEqual(projectedLead.agent_counts, {
       working: 1,
       blocked: 1,
       total: 2,
     });
     assert.deepEqual(
-      projectedLead.workers
-        .map((worker: any) => ({
-          id: worker.id,
-          label: worker.label,
-          state: worker.state,
+      projectedLead.agents
+        .map((agent: any) => ({
+          id: agent.id,
+          label: agent.label,
+          state: agent.state,
         }))
         .sort((a: any, b: any) => a.id.localeCompare(b.id)),
       [
         {
           id: PARENT_SESSION_ID,
-          label: "snapshot-direct-worker",
+          label: "snapshot-direct-agent",
           state: "working",
         },
         {
           id: CHILD_SESSION_ID,
-          label: "snapshot-descendant-worker",
+          label: "snapshot-descendant-agent",
           state: "blocked",
         },
       ].sort((a, b) => a.id.localeCompare(b.id)),
@@ -1092,8 +1092,8 @@ test("registered lead and replacement chief exchange messages and asks", async (
     nativeSessions.delete(leadPath);
     nativeSessions.delete(chiefPath);
     nativeSessions.delete(replacementPath);
-    resetWorkerMailbox(directWorkerMailbox);
-    resetWorkerMailbox(descendantWorkerMailbox);
+    resetAgentMailbox(directAgentMailbox);
+    resetAgentMailbox(descendantAgentMailbox);
   }
 });
 
@@ -1178,11 +1178,11 @@ test("malformed persisted role fails closed without authoritative lead state", a
       data: { role: "not-a-role" },
     },
   ];
-  const pi = fakePi({ entries, activeTools: ["worker", "chief"] });
+  const pi = fakePi({ entries, activeTools: ["agent", "chief"] });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["worker"]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["agent"]);
   assert.equal(
     readLeadCoordinationState(
       supervisionRuntime(),
@@ -1216,7 +1216,7 @@ test("malformed definitions do not abort ordinary lead startup", async () => {
     await pi.events.get("session_start")![0](undefined, context);
     assert.ok(
       pi.calls.some((args) => isAgentList(args)),
-      "worker recovery must still run after roster discovery fails",
+      "agent recovery must still run after roster discovery fails",
     );
     assert.ok(
       pi.entries.some(
@@ -1232,7 +1232,7 @@ test("malformed definitions do not abort ordinary lead startup", async () => {
   }
 });
 
-test("persisted Chief startup skips worker definition discovery", async () => {
+test("persisted Chief startup skips agent definition discovery", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -1248,7 +1248,7 @@ test("persisted Chief startup skips worker definition discovery", async () => {
   const entries = [
     { type: "custom", customType: "pi-herdsman-role", data: { role: "chief" } },
   ];
-  const pi = fakePi({ entries, activeTools: ["worker", "chief"] });
+  const pi = fakePi({ entries, activeTools: ["agent", "chief"] });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   try {
@@ -1304,7 +1304,7 @@ test("definition roster matches live list and rejects stale sessions", async () 
     { systemPrompt: "base" },
     context,
   );
-  assert.match(prompt?.systemPrompt ?? "", /## Available worker definitions/);
+  assert.match(prompt?.systemPrompt ?? "", /## Available agent definitions/);
   assert.match(prompt?.systemPrompt ?? "", /<agent_definitions>/);
   const roster = JSON.parse(
     prompt.systemPrompt.match(
@@ -1312,7 +1312,7 @@ test("definition roster matches live list and rejects stale sessions", async () 
     )[1],
   );
   const listResult = await pi.tools
-    .find((tool) => tool.name === "worker")!
+    .find((tool) => tool.name === "agent")!
     .execute("list", { action: "list" }, undefined, undefined, context);
   assert.deepEqual(roster, listResult.details.agent_definitions);
   sessionId = randomUUID();
@@ -1334,26 +1334,26 @@ test("definition roster matches live list and rejects stale sessions", async () 
   delete process.env.HERDR_PANE_ID;
 });
 
-test("delegating workers receive only their allowed definition roster", async () => {
-  const mailbox = setWorkerEnvironment("delegating-worker", ["scout"]);
+test("delegating agents receive only their allowed definition roster", async () => {
+  const mailbox = setAgentEnvironment("delegating-agent", ["scout"]);
   const controllerState = {
-    ...managedState("delegating-worker"),
+    ...managedState("delegating-agent"),
     piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-    piSessionFile: "/tmp/registered-worker.jsonl",
+    piSessionFile: "/tmp/registered-agent.jsonl",
   };
   const entries = [
     {
       type: "custom",
-      customType: "pi-herdsman-worker-definition",
-      data: { name: "worker" },
+      customType: "pi-herdsman-agent-definition",
+      data: { name: "agent" },
     },
   ];
   const pi = fakePi({
     entries,
-    exec: workerControllerExecutor(controllerState),
+    exec: agentControllerExecutor(controllerState),
   });
   registerExtension!(pi.pi as never);
-  const context = fakeWorkerContext(entries) as any;
+  const context = fakeAgentContext(entries) as any;
   for (const handler of pi.events.get("session_start") ?? [])
     await handler(undefined, context);
   const prompt = pi.events.get("before_agent_start")![0](
@@ -1371,21 +1371,21 @@ test("delegating workers receive only their allowed definition roster", async ()
     ["scout"],
   );
   const listResult = await pi.tools
-    .find((tool) => tool.name === "worker")!
+    .find((tool) => tool.name === "agent")!
     .execute("list", { action: "list" }, undefined, undefined, context);
   assert.deepEqual(roster, listResult.details.agent_definitions);
   pi.events.get("session_shutdown")?.[0]();
-  resetWorkerMailbox(mailbox);
+  resetAgentMailbox(mailbox);
   setLeadEnvironment();
 });
 
-test("leaf workers and active Chiefs do not receive worker definition rosters", async () => {
-  const mailbox = setWorkerEnvironment("leaf-worker");
+test("leaf agents and active Chiefs do not receive agent definition rosters", async () => {
+  const mailbox = setAgentEnvironment("leaf-agent");
   const leaf = fakePi();
   registerExtension!(leaf.pi as never);
   assert.equal(leaf.events.has("before_agent_start"), false);
   leaf.events.get("session_shutdown")?.[0]();
-  resetWorkerMailbox(mailbox);
+  resetAgentMailbox(mailbox);
 
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
@@ -1397,7 +1397,7 @@ test("leaf workers and active Chiefs do not receive worker definition rosters", 
   const entries = [
     { type: "custom", customType: "pi-herdsman-role", data: { role: "chief" } },
   ];
-  const chief = fakePi({ entries, activeTools: ["worker", "chief"] });
+  const chief = fakePi({ entries, activeTools: ["agent", "chief"] });
   registerExtension!(chief.pi as never);
   const context = fakeContext(entries) as any;
   await chief.events.get("session_start")![0](undefined, context);
@@ -1544,8 +1544,8 @@ test("lead metadata failures do not escape the serialized queue", async () => {
   }
 });
 
-test("delegation-enabled workers do not receive the lead workers command", () => {
-  setWorkerEnvironment("delegating-worker", ["workers"]);
+test("delegation-enabled agents do not receive the lead agents command", () => {
+  setAgentEnvironment("delegating-agent", ["agents"]);
   const parent = fakePi();
   registerExtension!(parent.pi as never);
   assert.deepEqual(parent.commands, []);
@@ -1595,42 +1595,42 @@ test("list ignores an unrelated unnamed Herdr agent", async () => {
   );
 
   assert.equal(result.details.ok, true);
-  assert.deepEqual(result.details.workers, []);
+  assert.deepEqual(result.details.agents, []);
 });
 
-test("invalid worker owner identity registers no managed worker hooks", () => {
-  const mailbox = setWorkerEnvironment();
+test("invalid agent owner identity registers no managed agent hooks", () => {
+  const mailbox = setAgentEnvironment();
   process.env.PI_HERDSMAN_OWNER_SESSION_ID = "not-a-session-id";
   const invalid = fakePi();
   registerExtension!(invalid.pi as never);
   assert.equal(invalid.tools.length, 0);
   assert.equal(invalid.events.has("before_agent_start"), false);
   assert.equal(invalid.events.size, 1);
-  assert.equal(readWorkerState(mailbox), undefined);
+  assert.equal(readAgentState(mailbox), undefined);
 });
 
-test("invalid mailbox-intent worker environment reports the exact field", async () => {
-  const mailbox = setWorkerEnvironment();
+test("invalid mailbox-intent agent environment reports the exact field", async () => {
+  const mailbox = setAgentEnvironment();
   process.env.HERDR_PANE_ID = "";
-  const worker = fakePi();
-  registerExtension!(worker.pi as never);
-  assert.equal(worker.tools.length, 0);
-  const starts = worker.events.get("session_start") ?? [];
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  assert.equal(agent.tools.length, 0);
+  const starts = agent.events.get("session_start") ?? [];
   assert.equal(starts.length, 1);
-  await starts[0](undefined, fakeWorkerContext(worker.entries));
-  const errorEntry = worker.entries.find(
+  await starts[0](undefined, fakeAgentContext(agent.entries));
+  const errorEntry = agent.entries.find(
     (entry: any) => entry.customType === "pi_herdsman_state_error",
   ) as any;
   assert.ok(errorEntry);
   assert.match(errorEntry.data.error, /HERDR_PANE_ID missing/);
-  resetWorkerMailbox(mailbox);
+  resetAgentMailbox(mailbox);
   setLeadEnvironment();
 });
 
-test("managed non-TUI workers do not receive the widget", async () => {
-  const mailbox = setWorkerEnvironment("non-tui-worker");
+test("managed non-TUI agents do not receive the widget", async () => {
+  const mailbox = setAgentEnvironment("non-tui-agent");
   const pi = fakePi();
-  const context = fakeWorkerContext() as any;
+  const context = fakeAgentContext() as any;
   context.mode = "rpc";
   let registrations = 0;
   context.ui = {
@@ -1642,18 +1642,18 @@ test("managed non-TUI workers do not receive the widget", async () => {
   await pi.events.get("session_start")![0](undefined, context);
   assert.equal(registrations, 0);
   pi.events.get("session_shutdown")?.[0]();
-  resetWorkerMailbox(mailbox);
+  resetAgentMailbox(mailbox);
   setLeadEnvironment();
 });
 
-test("registered worker inspect exposes process and recent activity evidence", async () => {
+test("registered agent inspect exposes process and recent activity evidence", async () => {
   setLeadEnvironment();
-  const label = "inspect-worker";
+  const label = "inspect-agent";
   const identity = recoveryIdentity(label);
-  const mailbox = workerMailboxPath(WORKSPACE, label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
   const state = managedState(label, undefined, identity);
-  writeWorkerState(mailbox, state);
-  const baseExec = workerControllerExecutor(state);
+  writeAgentState(mailbox, state);
+  const baseExec = agentControllerExecutor(state);
   const pi = fakePi({
     exec: (command, args, options) => {
       if (command === "herdr" && args[0] === "agent" && args[1] === "get")
@@ -1696,18 +1696,18 @@ test("registered worker inspect exposes process and recent activity evidence", a
   });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
-  const tool = pi.tools.find((candidate) => candidate.name === "worker");
+  const tool = pi.tools.find((candidate) => candidate.name === "agent");
   assert.ok(tool);
   try {
     const result = await tool.execute(
       "inspect-fixture",
-      { action: "inspect", worker: label },
+      { action: "inspect", agent: label },
       undefined,
       undefined,
       context,
     );
     const text = result.content[0].text;
-    assert.match(text, new RegExp(`Inspect worker ${label}`));
+    assert.match(text, new RegExp(`Inspect agent ${label}`));
     assert.match(text, new RegExp(`Session: ${identity.piSessionId}`));
     assert.match(text, new RegExp(`Pane: ${identity.paneId}`));
     assert.match(text, /sleep 600/);
@@ -1721,39 +1721,39 @@ test("registered worker inspect exposes process and recent activity evidence", a
       { content: result.content, details: result.details },
       { expanded: true, isPartial: false },
       { fg: (_color: string, value: string) => value },
-      { args: { action: "inspect", worker: label } },
+      { args: { action: "inspect", agent: label } },
     );
     assert.match(expanded.text, /sleep 600/);
     assert.match(expanded.text, /unique-inspect-marker/);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(mailbox);
+    resetAgentMailbox(mailbox);
     setLeadEnvironment();
   }
 });
 
-test("worker input accepts only the v3 Herdr control marker", async () => {
-  const mailbox = setWorkerEnvironment("reserved-input-worker");
-  const worker = fakePi();
-  const context = fakeWorkerContext();
+test("agent input accepts only the v3 Herdr control marker", async () => {
+  const mailbox = setAgentEnvironment("reserved-input-agent");
+  const agent = fakePi();
+  const context = fakeAgentContext();
   try {
-    registerExtension!(worker.pi as never);
-    await worker.events.get("session_start")![0](undefined, context);
-    const started = readWorkerState(mailbox)!;
+    registerExtension!(agent.pi as never);
+    await agent.events.get("session_start")![0](undefined, context);
+    const started = readAgentState(mailbox)!;
     const request: RequestRecord = {
-      version: 3,
+      version: 4,
       runId: started.runId,
       requestId: REQUEST_ID,
       ownerSessionId: started.ownerSessionId,
       workspaceId: started.workspaceId,
-      workerLabel: started.workerLabel,
+      agentLabel: started.agentLabel,
       paneId: started.paneId,
       kind: "task",
       text: "process this assignment",
       createdAt: Date.now(),
     };
     writeRequest(mailbox, request);
-    const input = worker.events.get("input")![0];
+    const input = agent.events.get("input")![0];
 
     assert.deepEqual(input({ text: "ordinary" }, context), {
       action: "continue",
@@ -1771,19 +1771,19 @@ test("worker input accepts only the v3 Herdr control marker", async () => {
       { action: "continue" },
     );
     assert.deepEqual(
-      input({ text: "__PI_HERDSMAN_WORKER_V3__:malformed" }, context),
+      input({ text: "__PI_HERDSMAN_AGENT_V4__:malformed" }, context),
       { action: "handled" },
     );
   } finally {
-    worker.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(mailbox);
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
     setLeadEnvironment();
   }
 });
 
 test("registered delegate embeds text and references binary evidence", async () => {
   setLeadEnvironment();
-  const label = "mixed-files-worker";
+  const label = "mixed-files-agent";
   const textPath = join("/tmp", `${label}.md`);
   const binaryPath = join("/tmp", `${label}.bin`);
   realFs.writeFileSync(textPath, "complete evidence");
@@ -1806,7 +1806,7 @@ test("registered delegate embeds text and references binary evidence", async () 
       "id",
       {
         action: "delegate",
-        definition: "worker",
+        definition: "agent",
         label,
         task: "Inspect these.",
         files: [textPath, binaryPath],
@@ -1827,7 +1827,7 @@ test("registered delegate embeds text and references binary evidence", async () 
     assert.equal(prompted, submittedRequest?.text);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(startup.mailbox);
+    resetAgentMailbox(startup.mailbox);
     realFs.rmSync(textPath, { force: true });
     realFs.rmSync(binaryPath, { force: true });
   }

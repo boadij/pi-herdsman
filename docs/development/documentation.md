@@ -56,7 +56,7 @@ Do not turn it into a structured API reference.
 
 Reading order and first-use orientation for model and agent-facing coordination.
 
-Link to the exact `worker`, `ask_owner`, lifecycle, delegation, handoff, state,
+Link to the exact `agent`, `ask_owner`, lifecycle, delegation, handoff, state,
 and error owners instead of restating their full contracts.
 
 ### Concepts
@@ -94,7 +94,7 @@ It does not own product API schemas or runtime behavior.
 
 Pi Herdsman has one deliberate instruction duplication.
 
-The runtime controller and managed-worker instructions are the authoritative,
+The runtime controller and managed agent instructions are the authoritative,
 self-contained operational contract. Root `SKILL.md` intentionally mirrors
 those mandatory operational instructions so loading the skill can reinforce
 them in a long model context.
@@ -148,8 +148,8 @@ When implementation and existing prose disagree:
 2. current accepted runtime evidence can clarify integration behavior;
 3. stale prose should be deleted, not preserved as an alternative contract.
 
-Particularly verify the runtime implementation for `worker`, `ask_owner`,
-`/workers`, `/chief`, `staff`, states, definition schema/composition, text-file snapshots,
+Particularly verify the runtime implementation for `agent`, `ask_owner`,
+`/agents`, `/chief`, `staff`, states, definition schema/composition, text-file snapshots,
 state projection, error categories, and presentation behavior;
 
 - `package.json` for supported Pi versions and package resources.

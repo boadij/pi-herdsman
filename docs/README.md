@@ -4,7 +4,7 @@
 
 This directory is the canonical product documentation for `pi-herdsman`.
 
-Pi Herdsman is built around asynchronous orchestration: managed workers can continue
+Pi Herdsman is built around asynchronous orchestration: managed agents can continue
 independently while the lead Pi session remains the user's interactive session.
 The exact lifecycle semantics live on [Lifecycle](concepts/lifecycle.md).
 
@@ -25,7 +25,7 @@ without reading the structured model-facing API first.
 
 Continue with:
 
-- [`/workers` commands](reference/commands.md)
+- [`/agents` commands](reference/commands.md)
 - [Status widget](reference/status-widget.md)
 - [Configuration](reference/configuration.md)
 - [Agent definitions](guides/agent-definitions.md)
@@ -38,18 +38,18 @@ Continue with:
 Start with [Agent coordination API](agent-api.md).
 
 This path is for model and agent coordination behavior: non-blocking assignment,
-exact worker identity, lifecycle, delegation, owner clarification, handoffs, and
+exact agent identity, lifecycle, delegation, owner clarification, handoffs, and
 failure handling.
 
 Continue with:
 
-- [`worker` API](reference/worker.md)
+- [`agent` API](reference/agent.md)
 - [`ask_owner` API](reference/ask-owner.md)
-- [Workers and identity](concepts/workers.md)
+- [Agents and identity](concepts/agents.md)
 - [Lifecycle](concepts/lifecycle.md)
 - [Delegation](concepts/delegation.md)
 - [Handoffs and files](guides/handoffs.md)
-- [Worker states](reference/worker-states.md)
+- [Agent states](reference/agent-states.md)
 - [Errors](reference/errors.md)
 
 For chief supervision of independent leads, read [Supervision](concepts/supervision.md)
@@ -75,22 +75,22 @@ before choosing the material relevant to them.
 | Human UI first use                    | [Getting started](getting-started.md)                           |
 | Agent/API first use                   | [Agent coordination API](agent-api.md)                          |
 | Asynchronous orchestration            | [Lifecycle](concepts/lifecycle.md)                              |
-| Worker identity                       | [Workers and identity](concepts/workers.md)                     |
+| Agent identity                        | [Agents and identity](concepts/agents.md)                       |
 | State transitions                     | [Lifecycle](concepts/lifecycle.md)                              |
 | Delegation model                      | [Delegation](concepts/delegation.md)                            |
 | Creating definitions                  | [Agent definitions](guides/agent-definitions.md)                |
 | Overrides and prompt composition      | [Customizing bundled agents](guides/customizing-agents.md)      |
 | `files`, body references, and results | [Handoffs and files](guides/handoffs.md)                        |
 | Operator recovery                     | [Recovery](guides/recovery.md)                                  |
-| `worker` request contract             | [`worker` API](reference/worker.md)                             |
+| `agent` request contract              | [`agent` API](reference/agent.md)                               |
 | `ask_owner` contract                  | [`ask_owner` API](reference/ask-owner.md)                       |
 | Pi Herdsman supervision concept       | [Supervision](concepts/supervision.md)                          |
 | Chief and staff tools                 | [Supervision reference](reference/supervision.md)               |
 | Frontmatter fields                    | [Agent-definition schema](reference/agent-definition-schema.md) |
-| Public worker states                  | [Worker states](reference/worker-states.md)                     |
-| `/workers` human commands             | [`/workers` commands](reference/commands.md)                    |
+| Public agent states                   | [Agent states](reference/agent-states.md)                       |
+| `/agents` human commands              | [`/agents` commands](reference/commands.md)                     |
 | Settings                              | [Configuration](reference/configuration.md)                     |
-| TUI worker widget                     | [Status widget](reference/status-widget.md)                     |
+| TUI agent widget                      | [Status widget](reference/status-widget.md)                     |
 | Error categories                      | [Errors](reference/errors.md)                                   |
 | Repository checks                     | [Validation](development/validation.md)                         |
 | Live acceptance                       | [Smoke testing](development/smoke-testing.md)                   |

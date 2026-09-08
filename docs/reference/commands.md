@@ -1,20 +1,20 @@
-# `/workers` commands
+# `/agents` commands
 
 [Documentation index](../README.md)
 
-`/workers` is the human-facing worker-management command namespace.
+`/agents` is the human-facing agent-management command namespace.
 
-It is separate from the structured model-facing `worker` API.
+It is separate from the structured model-facing `agent` API.
 
 Commands require a lead Pi session with UI.
 
 ## Usage
 
 ```text
-/workers
-/workers agents
-/workers placement [tab|split]
-/workers stop
+/agents
+/agents definitions
+/agents placement [tab|split]
+/agents stop
 ```
 
 The plain command opens a native Pi selection menu with `Running`,
@@ -24,7 +24,7 @@ payload limits. It is available only to a lead Pi session with UI. Current
 values and presets show a rough token equivalent using four UTF-8 bytes per
 token. The enforced limits are bytes, not tokens.
 
-## `/workers agents`
+## `/agents definitions`
 
 Opens the native Definitions menu for the effective bundled, project, and
 global roster. Project definitions are included only when the trusted project
@@ -45,10 +45,10 @@ The details view can show:
 
 Bundled implementation paths are intentionally hidden from the human overview.
 
-Structured `worker list` keeps exact deterministic metadata, including exact
+Structured `agent list` keeps exact deterministic metadata, including exact
 source and skill paths when available.
 
-`/workers agents` does not probe runtime tool availability.
+`/agents definitions` does not probe runtime tool availability.
 
 Selecting a definition opens:
 
@@ -79,48 +79,48 @@ overlays and body references even if the menu remained open while configuration
 changed.
 
 Changes apply to future definition delegations and session continuations, not
-already-running workers or the lead Pi session.
+already-running agents or the lead Pi session.
 
 Standalone global definitions are editable too. Removing a field from one uses
 Pi's normal default; removing a field from a bundled override restores the
 bundled value.
 
-## `/workers` Running
+## `/agents` Running
 
 Select a live managed agent from the shared status projection to focus its pane.
 Pi Herdsman refreshes and verifies the exact label, pane, and session identity
-before issuing herdr's focus command. If the worker changed, no focus command
+before issuing herdr's focus command. If the agent changed, no focus command
 is sent.
 
-## `/workers placement`
+## `/agents placement`
 
 Selecting Layout opens a native selector showing the effective setting.
 Explicit values continue to set directly:
 
 ```text
-/workers placement tab
-/workers placement split
+/agents placement tab
+/agents placement split
 ```
 
 See [Configuration](configuration.md).
 
-## `/workers stop`
+## `/agents stop`
 
 Destructive lead-only emergency control.
 
 It aborts the current lead turn and attempts to close the exactly proven owned
-worker tree.
+agent tree.
 
 It reports discarded active work or durable pending results when present.
 
 Cleanup uses existing exact ownership proofs and proceeds conservatively across
 independent failures.
 
-Use ordinary `worker close` for normal targeted model-driven control.
+Use ordinary `agent close` for normal targeted model-driven control.
 
 ## See also
 
 - [`/chief` and chief mode](supervision.md)
-- [`worker` API](worker.md)
+- [`agent` API](agent.md)
 - [Configuration](configuration.md)
 - [Status widget](status-widget.md)

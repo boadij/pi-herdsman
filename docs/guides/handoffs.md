@@ -6,8 +6,8 @@ Pi Herdsman has two text-file mechanisms with different purposes:
 
 - `files` supplies evidence to delegate (definition or session), steer, reply,
   or ask_owner.
-- whole-line body `@file` references put definition-owned text into the worker
-  system prompt when a new worker generation is built.
+- whole-line body `@file` references put definition-owned text into the agent
+  system prompt when a new agent generation is built.
 
 Strict UTF-8 text is embedded when it fits; non-text and non-fitting files are
 canonical local references and are not copied or snapshotted.
@@ -41,7 +41,7 @@ Example:
 `files` is supported by `delegate` with `definition`, `delegate` with `session`,
 `steer`, `reply`, and `ask_owner`. For
 controller actions, relative paths resolve from the calling controller's cwd;
-for `ask_owner`, they resolve from the managed worker's cwd. Every accepted
+for `ask_owner`, they resolve from the managed agent's cwd. Every accepted
 path is displayed using its canonical absolute path.
 
 Supplied paths must resolve to readable regular files. Missing, broken,
@@ -117,7 +117,7 @@ Use @./policy.md when needed
 Relative body references are resolved from the Markdown definition that
 declared them **before** bundled/global body composition.
 
-Expansion then happens once, in body order, when a new worker generation is
+Expansion then happens once, in body order, when a new agent generation is
 constructed.
 
 Included file contents are not recursively parsed for more `@file` references.
@@ -150,21 +150,21 @@ same canonical file in both
 
 ## Immutable prompt transport
 
-A definition body is expanded into text before worker lifecycle mutation.
+A definition body is expanded into text before agent lifecycle mutation.
 
-The final expanded body and shared herdr worker guidance are written to private
+The final expanded body and shared herdr agent guidance are written to private
 temporary snapshots (`0600` files under private `0700` directories), passed to
 Pi, and removed after the delegation attempt.
 
 Original body source paths are never handed to Pi as system-prompt paths.
 
-Each worker generation builds its system prompt once for its single assignment.
+Each agent generation builds its system prompt once for its single assignment.
 Session continuation builds a new generation with the current effective
 definition configuration while preserving the saved Pi session context.
 
 ## Result handoff
 
-Successful worker completion may expose a private `resultPath`.
+Successful agent completion may expose a private `resultPath`.
 
 For dependent work, pass the exact result path through `files` rather than
 copying a large result manually:
@@ -178,7 +178,7 @@ copying a large result manually:
 }
 ```
 
-Successful worker completions persist their complete output at the canonical
+Successful agent completions persist their complete output at the canonical
 `resultPath`; they do not receive a separate completion overflow path.
 Oversized non-completion registered-tool output may additionally expose
 `full_output_path` when overflow persistence succeeds. Model-visible content
@@ -213,12 +213,12 @@ These files are coordination state, not product state. Do not use `.pi-herdsman/
 for product source, permanent user documentation, application data, build
 output, caches, or generated artifacts.
 
-Read-only workers may consume existing coordination artifacts but do not gain
+Read-only agents may consume existing coordination artifacts but do not gain
 permission to modify them.
 
 When dependent work uses an artifact, pass the same path through `files` on the
 message that creates or updates the dependency: `delegate.files` for a new
-worker, `steer.files` for an active worker, `ask_owner.files` for supporting
+agent, `steer.files` for an active agent, `ask_owner.files` for supporting
 evidence in a question, or `reply.files` for the owner's answer. Update the
 artifact before submission. Small text is embedded at submission time; a
 reference-only artifact remains a live canonical local path.
@@ -229,6 +229,6 @@ actual runtime capability is required.
 
 ## See also
 
-- [`worker` API](../reference/worker.md)
+- [`agent` API](../reference/agent.md)
 - [Agent-definition schema](../reference/agent-definition-schema.md)
 - [Delegation](../concepts/delegation.md)

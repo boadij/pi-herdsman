@@ -5,9 +5,9 @@
 Pi Herdsman intentionally has very little settings state.
 
 Agent behavior lives in Markdown definitions. The extension settings currently
-own worker placement.
+own agent placement.
 
-## Worker placement
+## Agent placement
 
 Settings shape:
 
@@ -32,12 +32,12 @@ Default:
 tab
 ```
 
-`tab` places future workers in the managed worker-tab workflow.
+`tab` places future agents in the managed agent-tab workflow.
 
-`split` places future workers by splitting from the caller's tab/pane placement
+`split` places future agents by splitting from the caller's tab/pane placement
 boundary.
 
-This affects future starts, not existing workers.
+This affects future starts, not existing agents.
 
 ## Message limits
 
@@ -63,7 +63,7 @@ admission limit is the smaller of the configured mailbox limit and 8 KiB.
 
 Only valid global values affect runtime behavior. Invalid global values are
 ignored rather than clamped, and project-local values for these two keys are
-inert. Configure the global values through `/workers` → `Message limits`; the
+inert. Configure the global values through `/agents` → `Message limits`; the
 fixed 1 MiB protocol safety ceiling remains in force for reading existing
 mailbox records.
 
@@ -87,7 +87,7 @@ A project placement value is effective only when:
 
 If no valid trusted project placement is active, the global value is used.
 
-`/workers placement` opens a native selector showing the effective value and
+`/agents placement` opens a native selector showing the effective value and
 offering `tab` or `split`. Selecting a value writes to the current effective
 scope and verifies the value after writing; the confirmation reports whether
 that scope is `project` or `global`.
@@ -129,5 +129,5 @@ identity/restore behavior.
 
 ## See also
 
-- [`/workers` commands](commands.md)
+- [`/agents` commands](commands.md)
 - [Getting started](../getting-started.md)

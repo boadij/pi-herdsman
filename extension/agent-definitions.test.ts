@@ -12,6 +12,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  agentDefinitionDelegationEnabled,
   agentDefinitionMetadata,
   agentDefinitionEnabled,
   agentLaunchArgs,
@@ -23,10 +24,10 @@ import {
   parseFrontmatter,
   projectAgentDefinition,
   updateAgentOverride,
-  validateAgentDefinitionWorkers,
+  validateAgentDefinitionReferences,
   writePrivatePromptSnapshots,
   type Frontmatter,
-} from "./agents.ts";
+} from "./agent-definitions.ts";
 
 function withPiAgentDir<T>(agentDir: string, callback: () => T): T {
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -50,29 +51,29 @@ function discoverAgentDefinitionsWithContents(content: string) {
 test("parses scalar frontmatter fields and applies defaults", () => {
   assert.deepEqual(
     parseFrontmatter(
-      '---\nname: "worker"\ninheritSkills: false\n---\n\nPrompt\n',
+      '---\nname: "agent"\ninheritSkills: false\n---\n\nPrompt\n',
     ),
     {
-      frontmatter: { name: "worker", inheritSkills: false },
+      frontmatter: { name: "agent", inheritSkills: false },
       body: "Prompt",
     },
   );
   assert.deepEqual(
-    parseFrontmatter("---\nname: worker\nenabled: false\n---\nPrompt"),
+    parseFrontmatter("---\nname: agent\nenabled: false\n---\nPrompt"),
     {
-      frontmatter: { name: "worker", enabled: false },
+      frontmatter: { name: "agent", enabled: false },
       body: "Prompt",
     },
   );
-  assert.equal(parseFrontmatter("name: worker"), undefined);
+  assert.equal(parseFrontmatter("name: agent"), undefined);
   assert.throws(
     () => parseFrontmatter("---\ninheritSkills: yes\n---"),
     /inheritSkills must be a boolean/,
   );
   assert.deepEqual(
-    parseFrontmatter("---\nname: worker\nenabled: true\n---\nPrompt")
+    parseFrontmatter("---\nname: agent\nenabled: true\n---\nPrompt")
       ?.frontmatter,
-    { name: "worker", enabled: true },
+    { name: "agent", enabled: true },
   );
   for (const value of ["yes", '"false"', "1", "null", "[]", "{}"]) {
     assert.throws(
@@ -98,7 +99,7 @@ test("parses scalar frontmatter fields and applies defaults", () => {
 test("parses inline capability arrays and rejects unsupported fields", () => {
   assert.deepEqual(
     parseFrontmatter(
-      '---\ntools: ["read", " grep "]\nexcludeTools: []\nskills: ["./skills/local.md"]\nextensions: ["./extensions/local.ts"]\nworkers: ["scout", "reviewer"]\n---\nPrompt',
+      '---\ntools: ["read", " grep "]\nexcludeTools: []\nskills: ["./skills/local.md"]\nextensions: ["./extensions/local.ts"]\nagents: ["scout", "reviewer"]\n---\nPrompt',
     ),
     {
       frontmatter: {
@@ -106,7 +107,7 @@ test("parses inline capability arrays and rejects unsupported fields", () => {
         excludeTools: [],
         skills: ["./skills/local.md"],
         extensions: ["./extensions/local.ts"],
-        workers: ["scout", "reviewer"],
+        agents: ["scout", "reviewer"],
       },
       body: "Prompt",
     },
@@ -185,7 +186,7 @@ test("merges scalars, arrays, false, and nested inline objects", () => {
   assert.deepEqual(
     mergeFrontmatter(
       {
-        name: "worker",
+        name: "agent",
         model: "base/model",
         noTools: true,
         tools: ["read"],
@@ -193,7 +194,7 @@ test("merges scalars, arrays, false, and nested inline objects", () => {
         options: { keep: true, nested: { base: true, shared: "base" } },
       },
       {
-        name: "worker",
+        name: "agent",
         model: "override/model",
         noTools: false,
         tools: [],
@@ -202,7 +203,7 @@ test("merges scalars, arrays, false, and nested inline objects", () => {
       },
     ),
     {
-      name: "worker",
+      name: "agent",
       model: "override/model",
       noTools: false,
       tools: [],
@@ -227,13 +228,13 @@ test("rejects malformed capability fields", () => {
       /systemPromptFiles is not a supported agent-definition field/,
     ],
     ["tools", '["   "]', /tools must be an inline array/],
-    ["workers", '"scout"', /workers must be an inline array/],
-    ["workers", '["scout", 1]', /workers must be an inline array/],
-    ["workers", '["   "]', /workers must be an inline array/],
+    ["agents", '"scout"', /agents must be an inline array/],
+    ["agents", '["scout", 1]', /agents must be an inline array/],
+    ["agents", '["   "]', /agents must be an inline array/],
     [
-      "workers",
+      "agents",
       '["scout", "scout"]',
-      /workers must be an inline array of unique non-empty strings/,
+      /agents must be an inline array of unique non-empty strings/,
     ],
     ["noTools", '"true"', /noTools must be a boolean/],
     ["noBuiltinTools", "yes", /noBuiltinTools must be a boolean/],
@@ -310,7 +311,7 @@ test("selects global and project context independently in native order", () => {
     const append = (path: string) => ["--append-system-prompt", path];
     const noSkills = ["--no-skills"];
 
-    assert.deepEqual(launch("worker", {}), [
+    assert.deepEqual(launch("agent", {}), [
       "--system-prompt",
       "/prompt",
       ...noContext,
@@ -344,7 +345,7 @@ test("selects global and project context independently in native order", () => {
         ],
       ] as const)
         assert.deepEqual(
-          launch("worker", { ...frontmatter, systemPromptMode }),
+          launch("agent", { ...frontmatter, systemPromptMode }),
           [...prompt, ...contexts, ...noSkills],
         );
     }
@@ -368,7 +369,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   const root = mkdtempSync(join(tmpdir(), "herdr-bundled-prompts-"));
   const definitions = withPiAgentDir(root, () => discoverAgentDefinitions());
   const expectedTools = new Map([
-    ["implementer", ["read", "bash", "edit", "write", "worker"]],
+    ["implementer", ["read", "bash", "edit", "write", "agent"]],
     [
       "researcher",
       [
@@ -382,9 +383,9 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
         "source_check",
       ],
     ],
-    ["reviewer", ["read", "ls", "find", "grep", "worker"]],
+    ["reviewer", ["read", "ls", "find", "grep", "agent"]],
     ["scout", ["read", "ls", "find", "grep"]],
-    ["generalist", ["read", "bash", "edit", "write", "worker"]],
+    ["generalist", ["read", "bash", "edit", "write", "agent"]],
   ]);
   const required = withPiAgentDir(
     root,
@@ -407,10 +408,10 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
       assert.equal(definition.frontmatter.extensions, undefined);
     else assert.deepEqual(definition.frontmatter.extensions, []);
     assert.doesNotMatch(readFileSync(definition.path, "utf8"), /Users\/jeff/);
-    if (definition.frontmatter.workers?.length)
+    if (definition.frontmatter.agents?.length)
       assert.doesNotMatch(
         readFileSync(definition.path, "utf8"),
-        /tools:.*worker/,
+        /tools:.*agent/,
       );
     assert.doesNotMatch(
       definition.body,
@@ -452,7 +453,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
         "ask_owner",
       ],
     ],
-    ["reviewer", ["read", "ls", "find", "grep", "worker", "ask_owner"]],
+    ["reviewer", ["read", "ls", "find", "grep", "agent", "ask_owner"]],
   ]);
   const forbidden = ["bash", "powershell", "edit", "write"];
 
@@ -465,7 +466,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       const args = agentLaunchArgs(definition, {
         bodyPromptPath: "/tmp/prompt.txt",
         cwd: process.cwd(),
-        managedWorker: true,
+        managedAgent: true,
       });
       const toolsIndex = args.indexOf("--tools");
       assert.notEqual(toolsIndex, -1);
@@ -484,7 +485,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
     const args = agentLaunchArgs(reviewer, {
       bodyPromptPath: "/tmp/prompt.txt",
       cwd: process.cwd(),
-      managedWorker: true,
+      managedAgent: true,
     });
     const toolsIndex = args.indexOf("--tools");
     assert.deepEqual(args[toolsIndex + 1].split(","), [
@@ -495,7 +496,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       "ask_owner",
     ]);
     assert.equal(
-      args.flatMap((arg) => arg.split(",")).includes("worker"),
+      args.flatMap((arg) => arg.split(",")).includes("agent"),
       false,
     );
   });
@@ -672,7 +673,7 @@ test("composes all definition layers with provenance and whole-array replacement
   );
   assert.equal(effective.frontmatter.model, "global/model");
   assert.equal(effective.frontmatter.thinking, "high");
-  assert.deepEqual(effective.frontmatter.tools, ["read", "worker"]);
+  assert.deepEqual(effective.frontmatter.tools, ["read", "agent"]);
   assert.equal(
     effective.body,
     `${bundled.body}\n\nProject policy\n\nGlobal policy`,
@@ -711,7 +712,7 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   );
   writeFileSync(
     join(projectAgents, "parent.md"),
-    '---\nname: parent\nworkers: ["child"]\n---\nparent',
+    '---\nname: parent\nagents: ["child"]\n---\nparent',
   );
   writeFileSync(
     join(projectAgents, "body.md"),
@@ -745,7 +746,7 @@ test("project body modes, duplicate names, body-file provenance, and child valid
       ),
     ),
   );
-  validateAgentDefinitionWorkers(
+  validateAgentDefinitionReferences(
     definitions.find((definition) => definition.name === "parent")!,
     definitions,
   );
@@ -783,7 +784,7 @@ test("overlays a bundled definition and extends the roster", () => {
   writeFileSync(overridePath, override);
   writeFileSync(
     join(agents, "custom.md"),
-    '---\nname: custom\nworkers: ["researcher"]\n---\nCustom prompt',
+    '---\nname: custom\nagents: ["researcher"]\n---\nCustom prompt',
   );
 
   withPiAgentDir(root, () => {
@@ -824,7 +825,7 @@ test("merges enabled overrides and validates disabled children without hiding th
   );
   writeFileSync(
     join(agents, "parent.md"),
-    '---\nname: parent\nworkers: ["reviewer"]\n---\nParent',
+    '---\nname: parent\nagents: ["reviewer"]\n---\nParent',
   );
 
   withPiAgentDir(root, () => {
@@ -835,8 +836,8 @@ test("merges enabled overrides and validates disabled children without hiding th
     assert.equal(agentDefinitionEnabled(reviewer), false);
     assert.equal(agentDefinitionMetadata(reviewer).enabled, false);
     assert.throws(
-      () => validateAgentDefinitionWorkers(parent, definitions),
-      /agent parent references disabled worker reviewer; enable reviewer/,
+      () => validateAgentDefinitionReferences(parent, definitions),
+      /agent parent references disabled agent definition reviewer; enable reviewer/,
     );
     assert.equal(
       definitions.some(({ name }) => name === "reviewer"),
@@ -845,17 +846,17 @@ test("merges enabled overrides and validates disabled children without hiding th
   });
 });
 
-test("validates user duplicates and merged worker references", () => {
+test("validates user duplicates and merged agent references", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-"));
   const agents = join(root, "agents");
   mkdirSync(join(agents, "nested"), { recursive: true });
   writeFileSync(
     join(agents, "parent.md"),
-    '---\nname: parent\nworkers: ["child"]\n---\nParent',
+    '---\nname: parent\nagents: ["child"]\n---\nParent',
   );
   writeFileSync(
     join(agents, "child.md"),
-    '---\nname: child\nworkers: ["parent"]\n---\nChild',
+    '---\nname: child\nagents: ["parent"]\n---\nChild',
   );
   writeFileSync(
     join(agents, "nested", "parent.md"),
@@ -868,7 +869,7 @@ test("validates user duplicates and merged worker references", () => {
 
   unlinkSync(join(agents, "nested", "parent.md"));
   assert.deepEqual(
-    withPiAgentDir(root, () => discoverAgent("reviewer").frontmatter.workers),
+    withPiAgentDir(root, () => discoverAgent("reviewer").frontmatter.agents),
     ["scout", "researcher"],
   );
   assert.deepEqual(
@@ -880,11 +881,11 @@ test("validates user duplicates and merged worker references", () => {
 
   writeFileSync(
     join(agents, "parent.md"),
-    '---\nname: parent\nworkers: ["missing"]\n---\nParent',
+    '---\nname: parent\nagents: ["missing"]\n---\nParent',
   );
   assert.throws(
     () => withPiAgentDir(root, () => discoverAgentDefinitions()),
-    /agent parent references missing worker missing/,
+    /agent parent references missing agent definition missing/,
   );
 });
 
@@ -899,7 +900,7 @@ test("keeps a bundled parent valid when its child is overridden", () => {
   assert.equal(
     withPiAgentDir(
       root,
-      () => discoverAgent("reviewer").frontmatter.workers,
+      () => discoverAgent("reviewer").frontmatter.agents,
     )?.includes("scout"),
     true,
   );
@@ -1009,8 +1010,8 @@ test("appends the shared prompt after context additions", () => {
   assert.deepEqual(
     agentLaunchArgs(
       {
-        name: "worker",
-        path: "/worker.md",
+        name: "agent",
+        path: "/agent.md",
         frontmatter: { systemPromptMode: "replace" },
         body: "body",
       },
@@ -1035,19 +1036,19 @@ test("requires a body prompt path for body-bearing agents", () => {
     () =>
       agentLaunchArgs(
         {
-          name: "worker",
-          path: "/worker.md",
+          name: "agent",
+          path: "/agent.md",
           frontmatter: {},
           body: "body",
         },
         {},
       ),
-    /agent worker has a body but no bodyPromptPath was provided/,
+    /agent agent has a body but no bodyPromptPath was provided/,
   );
 });
 
 test("bundled generalist definition retains its declared tool policy", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-worker-policy-"));
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-policy-"));
   const generalist = withPiAgentDir(root, () => discoverAgent("generalist"));
   assert.equal(generalist.frontmatter.noExtensions, true);
   assert.deepEqual(generalist.frontmatter.tools, [
@@ -1055,26 +1056,26 @@ test("bundled generalist definition retains its declared tool policy", () => {
     "bash",
     "edit",
     "write",
-    "worker",
+    "agent",
   ]);
   const args = agentLaunchArgs(generalist, {
     bodyPromptPath: "/tmp/prompt.txt",
     cwd: process.cwd(),
-    managedWorker: true,
+    managedAgent: true,
   });
   const tools = args.indexOf("--tools");
   assert.notEqual(tools, -1);
-  assert.equal(args[tools + 1], "read,bash,edit,write,worker,ask_owner");
+  assert.equal(args[tools + 1], "read,bash,edit,write,agent,ask_owner");
 });
 
 test("managed launch policy always includes ask_owner", () => {
   const launch = (frontmatter: Record<string, unknown>) =>
     agentLaunchArgs(
-      { name: "worker", path: "/worker.md", frontmatter, body: "" },
+      { name: "agent", path: "/agent.md", frontmatter, body: "" },
       {
         bodyPromptPath: "/prompt",
         cwd: process.cwd(),
-        managedWorker: true,
+        managedAgent: true,
       },
     );
   const cases = [
@@ -1103,14 +1104,14 @@ test("managed launch policy always includes ask_owner", () => {
       expected.some((arg) => arg.split(",").includes("ask_owner")) ? 1 : 0,
     );
   }
-  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-worker-standalone-"));
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-standalone-"));
   const standalone = withPiAgentDir(root, () => discoverAgent("generalist"));
   assert.match(standalone.path, /agent-definitions\/generalist\.md$/);
   assert.equal(
     agentLaunchArgs(standalone, {
       bodyPromptPath: "/prompt",
       cwd: process.cwd(),
-      managedWorker: true,
+      managedAgent: true,
     })
       .flatMap((arg) => arg.split(","))
       .filter((arg) => arg === "ask_owner").length,
@@ -1121,7 +1122,7 @@ test("managed launch policy always includes ask_owner", () => {
 test("applies explicit noSkills before inheritSkills defaults", () => {
   const launch = (frontmatter: Record<string, string | boolean>) =>
     agentLaunchArgs(
-      { name: "worker", path: "/worker.md", frontmatter, body: "" },
+      { name: "agent", path: "/agent.md", frontmatter, body: "" },
       { bodyPromptPath: "/prompt" },
     );
   assert.deepEqual(launch({}), ["--no-context-files", "--no-skills"]);
@@ -1143,8 +1144,8 @@ test("passes native capability combinations through to Pi", () => {
   assert.deepEqual(
     agentLaunchArgs(
       {
-        name: "worker",
-        path: "/worker.md",
+        name: "agent",
+        path: "/agent.md",
         frontmatter: {
           inheritProjectContext: true,
           noTools: true,
@@ -1173,17 +1174,17 @@ test("passes native capability combinations through to Pi", () => {
 
 test("preserves current definition metadata", () => {
   const agent = {
-    name: "worker",
-    path: "/agents/worker.md",
+    name: "agent",
+    path: "/agents/agent.md",
     frontmatter: {
-      name: "worker",
-      description: "A worker",
+      name: "agent",
+      description: "An agent",
     },
     body: "",
   };
   assert.deepEqual(agentDefinitionMetadata(agent), {
-    name: "worker",
-    description: "A worker",
+    name: "agent",
+    description: "An agent",
   });
   const configured = agentDefinitionMetadata({
     name: "reviewer",
@@ -1198,21 +1199,21 @@ test("preserves current definition metadata", () => {
   });
   assert.deepEqual(
     agentDefinitionMetadata({
-      name: "worker",
-      path: "/agents/worker.md",
+      name: "agent",
+      path: "/agents/agent.md",
       frontmatter: { thinking: false },
       body: "",
     }),
-    { name: "worker", thinking: "off" },
+    { name: "agent", thinking: "off" },
   );
   assert.deepEqual(
     agentDefinitionMetadata({
-      name: "worker",
-      path: "/agents/worker.md",
+      name: "agent",
+      path: "/agents/agent.md",
       frontmatter: {},
       body: "",
     }),
-    { name: "worker" },
+    { name: "agent" },
   );
   const capabilityAgent = {
     name: "reviewer",
@@ -1245,10 +1246,10 @@ test("preserves current definition metadata", () => {
     agentDefinitionMetadata({
       name: "implementer",
       path: "/agents/implementer.md",
-      frontmatter: { workers: ["scout", "reviewer"] },
+      frontmatter: { agents: ["scout", "reviewer"] },
       body: "",
     }),
-    { name: "implementer", workers: ["scout", "reviewer"] },
+    { name: "implementer", agents: ["scout", "reviewer"] },
   );
 });
 
@@ -1272,7 +1273,22 @@ test("expands body references with caller precedence and no recursion", () => {
   );
 });
 
-test("infers worker only when native policy permits it", () => {
+test("rejects previous delegation frontmatter and tool capability", () => {
+  assert.throws(
+    () => parseFrontmatter('---\nworkers: ["scout"]\n---'),
+    /workers is not a supported agent-definition field/,
+  );
+  const definition = {
+    name: "parent",
+    path: "/parent.md",
+    frontmatter: { agents: ["scout"], noTools: true, tools: ["worker"] },
+    body: "",
+  };
+  assert.equal(inferAgentDefinitionTools(definition), definition);
+  assert.equal(agentDefinitionDelegationEnabled(definition), false);
+});
+
+test("infers agent only when native policy permits it", () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-tool-inference-"));
   const definitions = withPiAgentDir(root, () => discoverAgentDefinitions());
   const effective = new Map(
@@ -1283,16 +1299,16 @@ test("infers worker only when native policy permits it", () => {
     "bash",
     "edit",
     "write",
-    "worker",
+    "agent",
   ]);
   assert.deepEqual(
     agentDefinitionMetadata({
       name: "parent",
       path: "/parent.md",
-      frontmatter: { workers: ["child"], tools: ["read"] },
+      frontmatter: { agents: ["child"], tools: ["read"] },
       body: "",
     }),
-    { name: "parent", workers: ["child"], tools: ["read"] },
+    { name: "parent", agents: ["child"], tools: ["read"] },
   );
   const make = (frontmatter: Frontmatter) =>
     agentLaunchArgs(
@@ -1302,30 +1318,36 @@ test("infers worker only when native policy permits it", () => {
         frontmatter,
         body: "",
       }),
-      { managedWorker: true },
+      { managedAgent: true },
     );
   assert.deepEqual(
-    make({ workers: ["child"], tools: ["read", "worker"] }).filter(
+    make({ agents: ["child"], tools: ["read"] }).filter(
       (v) => v === "--tools" || v.includes("read"),
     ),
-    ["--tools", "read,worker,ask_owner"],
+    ["--tools", "read,agent,ask_owner"],
+  );
+  assert.deepEqual(
+    make({ agents: ["child"], tools: ["read", "agent"] }).filter(
+      (v) => v === "--tools" || v.includes("read"),
+    ),
+    ["--tools", "read,agent,ask_owner"],
   );
   assert.deepEqual(
     make({
-      workers: ["child"],
+      agents: ["child"],
       tools: ["read"],
-      excludeTools: ["worker"],
+      excludeTools: ["agent"],
     }).filter(
       (v) =>
         v === "--tools" ||
         v.startsWith("read") ||
         v === "--exclude-tools" ||
-        v === "worker",
+        v === "agent",
     ),
-    ["--tools", "read,ask_owner", "--exclude-tools", "worker"],
+    ["--tools", "read,ask_owner", "--exclude-tools", "agent"],
   );
   assert.deepEqual(
-    make({ workers: ["child"], noTools: true }).filter(
+    make({ agents: ["child"], noTools: true }).filter(
       (v) => v === "--tools" || v === "ask_owner",
     ),
     ["--tools", "ask_owner"],
@@ -1337,14 +1359,14 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     name: "parent",
     path: "/parent.md",
     frontmatter: {
-      workers: ["scout"],
-      tools: ["read,worker", "bash"],
+      agents: ["scout"],
+      tools: ["read,agent", "bash"],
       excludeTools: ["write"],
     },
     body: "",
   });
   const leaf = projectAgentDefinition(definition, "leaf");
-  assert.equal(leaf.frontmatter.workers, undefined);
+  assert.equal(leaf.frontmatter.agents, undefined);
   assert.deepEqual(leaf.frontmatter.tools, ["read", "bash"]);
   assert.deepEqual(agentDefinitionMetadata(definition, "leaf"), {
     name: "parent",
@@ -1352,7 +1374,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     excludeTools: ["write"],
   });
   assert.deepEqual(
-    agentLaunchArgs(leaf, { managedWorker: true }).filter(
+    agentLaunchArgs(leaf, { managedAgent: true }).filter(
       (value) => value === "--tools" || value.includes("ask_owner"),
     ),
     ["--tools", "read,bash,ask_owner"],
@@ -1361,56 +1383,54 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     {
       name: "empty",
       path: "/empty.md",
-      frontmatter: { workers: ["scout"], tools: [] },
+      frontmatter: { agents: ["scout"], tools: [] },
       body: "",
     },
     "leaf",
   );
   assert.deepEqual(empty.frontmatter.tools, []);
-  assert.equal(empty.frontmatter.workers, undefined);
+  assert.equal(empty.frontmatter.agents, undefined);
   const denied = projectAgentDefinition(
     {
       name: "denied",
       path: "/denied.md",
       frontmatter: {
-        workers: ["scout"],
-        tools: ["read", "worker"],
-        excludeTools: ["worker"],
+        agents: ["scout"],
+        tools: ["read", "agent"],
+        excludeTools: ["agent"],
       },
       body: "",
     },
     "leaf",
   );
   assert.deepEqual(denied.frontmatter.tools, ["read"]);
-  assert.deepEqual(denied.frontmatter.excludeTools, ["worker"]);
+  assert.deepEqual(denied.frontmatter.excludeTools, ["agent"]);
   const delegationOnlyLeaf = projectAgentDefinition(
     {
       name: "parent",
       path: "/parent.md",
-      frontmatter: { workers: ["scout"], tools: ["worker"] },
+      frontmatter: { agents: ["scout"], tools: ["agent"] },
       body: "",
     },
     "leaf",
   );
   assert.deepEqual(
-    agentLaunchArgs(delegationOnlyLeaf, { managedWorker: true }),
+    agentLaunchArgs(delegationOnlyLeaf, { managedAgent: true }),
     ["--no-context-files", "--no-tools", "--tools", "ask_owner", "--no-skills"],
   );
   const omittedToolsLeaf = projectAgentDefinition(
     inferAgentDefinitionTools({
       name: "parent",
       path: "/parent.md",
-      frontmatter: { workers: ["scout"] },
+      frontmatter: { agents: ["scout"] },
       body: "",
     }),
     "leaf",
   );
-  assert.equal(omittedToolsLeaf.frontmatter.workers, undefined);
+  assert.equal(omittedToolsLeaf.frontmatter.agents, undefined);
   assert.equal(omittedToolsLeaf.frontmatter.tools, undefined);
   assert.equal(
-    agentLaunchArgs(omittedToolsLeaf, { managedWorker: true }).includes(
-      "worker",
-    ),
+    agentLaunchArgs(omittedToolsLeaf, { managedAgent: true }).includes("agent"),
     false,
   );
 });

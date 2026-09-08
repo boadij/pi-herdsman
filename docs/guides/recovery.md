@@ -5,23 +5,23 @@
 Recovery is identity-safe and conservative. Use the public state and returned
 structured error before attempting another mutation.
 
-## Worker is `blocked`
+## Agent is `blocked`
 
-A blocked worker still has an active assignment.
+A blocked agent still has an active assignment.
 
-If the worker is waiting for an owner answer, use `reply` with its exact worker.
+If the agent is waiting for an owner answer, use `reply` with its exact agent.
 
 Otherwise resolve the reported external/attention condition. Do not delegate new
-task to a blocked worker.
+task to a blocked agent.
 
-## Worker is `settling`
+## Agent is `settling`
 
 `settling` means assignment convergence is incomplete. Typical causes include:
 
 - task handoff acknowledgement;
 - result delivery;
 - bounded result-persistence recovery;
-- delegating-worker/worker completion gating;
+- delegating-agent/agent completion gating;
 - launch handoff;
 - one-shot cleanup.
 
@@ -31,13 +31,13 @@ If nothing independent remains, end the turn normally and let result/attention
 delivery returns attention to the owner. Refresh `list` only when there is a reason to take
 another control action.
 
-If `list` reports `result_error`, the worker's result could not be persisted
-after bounded retries. The condition retains the run, request, owner, worker,
+If `list` reports `result_error`, the agent's result could not be persisted
+after bounded retries. The condition retains the run, request, owner, agent,
 and failure category. Do not delegate over it: resolve the mailbox persistence
-problem, then close the exact worker before delegating new work. The condition
+problem, then close the exact agent before delegating new work. The condition
 marks retry as unsafe and exact-owner cleanup as safe.
 
-## Worker is `unknown`
+## Agent is `unknown`
 
 `unknown` means the system cannot prove a safe control state from current exact
 evidence.
@@ -49,7 +49,7 @@ recovery error is present, inspect its exact details.
 
 ## Inactivity advisory
 
-A `working` worker with an exact active assignment can become advisory `stale`
+A `working` agent with an exact active assignment can become advisory `stale`
 after ten minutes without observed Pi turn, message, or tool activity.
 
 Possible list fields:
@@ -58,7 +58,7 @@ Possible list fields:
 - `inactive_ms`
 - `last_activity_at`
 
-This is not proof that the worker is hung, dead, safe to terminate, or safe to
+This is not proof that the agent is hung, dead, safe to terminate, or safe to
 replace.
 
 Do not close solely because of inactivity.
@@ -82,7 +82,7 @@ Do not "fix" this by manually deleting guessed panes or mailboxes.
 
 ## `pane_not_ready`
 
-A pane-readiness failure means the managed worker did not reach the required
+A pane-readiness failure means the managed agent did not reach the required
 safe startup boundary.
 
 The normal response is to inspect the returned stage/diagnostic and the current
@@ -104,13 +104,13 @@ uncertain.
 
 ## Close failure
 
-Normal `worker close` targets one exact directly owned live worker.
+Normal `agent close` targets one exact directly owned live agent.
 
-Closing a delegating worker cascades through its owned workers first. If a
-worker cannot be proved or closed safely, the delegating worker remains rather
+Closing a delegating agent cascades through its owned agents first. If a
+agent cannot be proved or closed safely, the delegating agent remains rather
 than being destructively guessed away.
 
-For lead-only human emergency cleanup, `/workers stop` operates on the proven
+For lead-only human emergency cleanup, `/agents stop` operates on the proven
 owned tree and reports discarded active work or durable pending results. It is
 not the normal model orchestration interface.
 
@@ -124,15 +124,15 @@ delegation uses that saved cwd and does not accept a caller-supplied `cwd`.
 The saved agent-definition name is resolved against the current effective
 definition roster. If it no longer exists, session delegation fails instead of guessing a
 replacement. The definition must also be enabled and authorized for the current
-controller, and its current effective configuration is used for the new worker
+controller, and its current effective configuration is used for the new agent
 generation.
 
 An exact session that is already represented by active or unresolved managed
 work cannot be activated concurrently. The session-start exclusion applies to
 the canonical session path, so an exact UUID and its exact path identify the
 same target. Wait for the existing assignment to finish and clean up, or close
-its exact live worker when abandoning it, then retry. Do not delegate another
-task through a worker label.
+its exact live agent when abandoning it, then retry. Do not delegate another
+task through an agent label.
 
 ## Before retrying
 
@@ -140,17 +140,17 @@ Check:
 
 1. exact error category;
 2. operation;
-3. worker identity;
+3. agent identity;
 4. known pane/session IDs;
 5. startup stage when present;
 6. primary cause;
 7. cleanup cause;
 8. `rollbackOccurred`;
 9. `nextAction`;
-10. current `worker list`.
+10. current `agent list`.
 
 ## See also
 
 - [Errors](../reference/errors.md)
-- [Worker states](../reference/worker-states.md)
-- [Workers and identity](../concepts/workers.md)
+- [Agent states](../reference/agent-states.md)
+- [Agents and identity](../concepts/agents.md)

@@ -94,7 +94,7 @@ mock.module("node:fs", {
 const {
   prepareMessageInput,
   snapshotTextFiles,
-  workerControlState,
+  agentControlState,
   extractAssistantText,
   displayIdentity,
   hasTaskText,
@@ -108,13 +108,13 @@ const {
 test("projects lifecycle and assignment state into control states", () => {
   const cases: Array<
     [
-      Parameters<typeof workerControlState>[0],
+      Parameters<typeof agentControlState>[0],
       string | undefined,
       boolean,
       boolean,
       boolean,
       boolean,
-      ReturnType<typeof workerControlState>,
+      ReturnType<typeof agentControlState>,
     ]
   > = [
     ["idle", undefined, false, false, false, false, "settling"],
@@ -138,7 +138,7 @@ test("projects lifecycle and assignment state into control states", () => {
     expected,
   ] of cases)
     assert.equal(
-      workerControlState(
+      agentControlState(
         lifecycle,
         activeRequestId,
         completionPending,
@@ -150,20 +150,20 @@ test("projects lifecycle and assignment state into control states", () => {
       `${lifecycle}/${activeRequestId}/${completionPending}/${handoffPending}/${waitingForOwner}/${recoveryPending}`,
     );
   assert.equal(
-    workerControlState("idle", undefined, false, true),
+    agentControlState("idle", undefined, false, true),
     "settling",
     "assignment handoff remains settling",
   );
   assert.equal(
-    workerControlState("idle", "request", false, false, true),
+    agentControlState("idle", "request", false, false, true),
     "blocked",
   );
   assert.equal(
-    workerControlState("unknown", "request", false, false, true),
+    agentControlState("unknown", "request", false, false, true),
     "unknown",
   );
   assert.equal(
-    workerControlState("idle", undefined, false, false, false, true),
+    agentControlState("idle", undefined, false, false, false, true),
     "settling",
     "result persistence recovery remains non-assignable",
   );
@@ -599,9 +599,9 @@ test("message preparation rejects a candidate read failure", () => {
   }
 });
 
-test("worker display identity uses the definition and fallback", () => {
-  assert.equal(displayIdentity("reviewer", "worker"), "reviewer:worker");
-  assert.equal(displayIdentity("worker", "worker"), "worker:worker");
+test("agent display identity uses the definition and fallback", () => {
+  assert.equal(displayIdentity("reviewer", "agent"), "reviewer:agent");
+  assert.equal(displayIdentity("agent", "agent"), "agent:agent");
   for (const [idle, request, pending, expected] of [
     [true, undefined, false, true],
     [false, undefined, false, false],

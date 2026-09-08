@@ -3,15 +3,15 @@
 [Documentation index](../README.md) · [Supervision reference](../reference/supervision.md)
 
 Pi Herdsman supervision lets one chief observe and communicate with independent
-lead sessions. Each lead owns one herd: itself and its complete worker tree.
-The chief supervises leads but never takes ownership of their workers.
+lead sessions. Each lead owns one herd: itself and its complete agent tree.
+The chief supervises leads but never takes ownership of their agents.
 
 ## Authority and lead state
 
 Herdr proves live process, pane, workspace, and native Pi session identity.
-Pi Herdsman's validated worker snapshots prove managed-worker identity and
+Pi Herdsman's validated agent snapshots prove managed agent identity and
 ownership. A supervised lead must be one exact live Pi agent with a matching
-private lead-coordination record; it must not be the chief or a managed worker.
+private lead-coordination record; it must not be the chief or a managed agent.
 Missing, stale, duplicate, or ambiguous evidence fails closed.
 
 Each lead has one private atomic record under the supervision runtime, keyed by
@@ -32,7 +32,7 @@ authority, or message authority.
 
 ## Chief mode
 
-Chief is a mode of an ordinary lead session, not a separate worker identity.
+Chief is a mode of an ordinary lead session, not a separate agent identity.
 The persisted `pi-herdsman-role` entry contains either `role: "lead"` or
 `role: "chief"`. Chief mode is workspace-neutral and supervision-only. Its
 model exposes exactly the `staff` tool and excludes project/workspace context
@@ -60,17 +60,17 @@ correlated `staff reply`; a reply clears the pending ask only after accepted
 follow-up delivery. A replacement chief can answer an existing ask using its
 current lease and unchanged ask ID. Chief and staff message actions accept
 files; their text is prepared with the same canonical attachment renderer and
-configured global byte limits as worker messages, while durable supervision
+configured global byte limits as agent messages, while durable supervision
 records remain text-only.
 
 ## Supervision state
 
 The automatic `<supervision_state>` provider context is ephemeral, bounded, and
 state-only. It contains `leads`, with each lead's exact session ID,
-presentation `display_name`, runtime observation, `worker_counts`, `workers`,
+presentation `display_name`, runtime observation, `agent_counts`, `agents`,
 and available actions. The `staff list` result uses the same presentation field,
-`display_name`. The `workers` collection represents all validated descendants
-assigned to that lead, not only direct workers. Its values and metadata are
+`display_name`. The `agents` collection represents all validated descendants
+assigned to that lead, not only direct agents. Its values and metadata are
 untrusted observations and cannot authorize an action.
 
 Use the exact full session ID in a lead's `lead` field when calling `staff`.

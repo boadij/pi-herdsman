@@ -9,7 +9,7 @@ import type {
   AskRecord,
   RequestRecord,
   ResultRecord,
-  WorkerState,
+  ManagedAgentState,
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
 import {
@@ -29,7 +29,7 @@ import support, {
   REQUEST_ID,
   LEAD_SESSION_ID,
   StatusWidget,
-  WORKER_ID,
+  AGENT_ID,
   WORKSPACE,
   agentFromState,
   buildStatusRows,
@@ -38,7 +38,7 @@ import support, {
   discoverAgent,
   fakeContext,
   fakePi,
-  fakeWorkerContext,
+  fakeAgentContext,
   herdrAlias,
   isAgentList,
   isPaneList,
@@ -47,23 +47,23 @@ import support, {
   managedState,
   nativeSessions,
   projectContextCwds,
-  readWorkerState,
+  readAgentState,
   realFs,
   recoveryIdentity,
   registerExtension,
   renderRunningOptions,
-  resetWorkerMailbox,
+  resetAgentMailbox,
   leadExec,
   runScopedHerdrAlias,
   setLeadEnvironment,
-  setWorkerEnvironment,
+  setAgentEnvironment,
   startupExecutor,
   stopSummary,
   visibleWidth,
   waitForTestCondition,
-  workerMailboxPath,
+  agentMailboxPath,
   writeResult,
-  writeWorkerState,
+  writeAgentState,
 } from "./support.ts";
 test("partial supervision registration is rolled back when host restoration fails", async () => {
   setLeadEnvironment();
@@ -329,7 +329,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
   const start = pi.events.get("session_start")![0];
   await start(undefined, context);
   await pi.commandOptions.get("chief").handler("", context);
-  const baseline = ["read", "bash", "worker", "chief"];
+  const baseline = ["read", "bash", "agent", "chief"];
   entries.push({
     type: "custom",
     customType: "pi-herdsman-role",
@@ -388,7 +388,7 @@ test("lead session-start continues when chief lease release fails", async () => 
 
   await start(undefined, context);
 
-  assert.deepEqual(pi.pi.getActiveTools(), ["read", "bash", "worker", "chief"]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["read", "bash", "agent", "chief"]);
   assert.ok(
     entries.some(
       (entry: any) =>
@@ -412,9 +412,9 @@ test("Chief activation rejects owned work outside the current workspace", async 
     `supervision-${randomUUID()}.sock`,
   );
   const foreignWorkspace = `foreign-${randomUUID()}`;
-  const mailbox = workerMailboxPath(foreignWorkspace, "foreign-worker");
-  writeWorkerState(mailbox, {
-    ...managedState("foreign-worker"),
+  const mailbox = agentMailboxPath(foreignWorkspace, "foreign-agent");
+  writeAgentState(mailbox, {
+    ...managedState("foreign-agent"),
     workspaceId: foreignWorkspace,
     ownerSessionId: LEAD_SESSION_ID,
   });
@@ -434,16 +434,14 @@ test("Chief activation rejects owned work outside the current workspace", async 
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
   await pi.commandOptions.get("chief").handler("", context);
-  assert.ok(
-    notices.some((message) => /owned worker work exists/.test(message)),
-  );
+  assert.ok(notices.some((message) => /owned agent work exists/.test(message)));
   realFs.rmSync(mailbox, { recursive: true, force: true });
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
   setLeadEnvironment();
 });
 
-test("lead workers command uses native completion and exact human grammar", async () => {
+test("lead agents command uses native completion and exact human grammar", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -456,10 +454,10 @@ test("lead workers command uses native completion and exact human grammar", asyn
       (message) => message.customType === "pi-herdsman-stop-summary",
     ),
   );
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   assert.ok(command);
   assert.deepEqual(command.getArgumentCompletions(""), [
-    { value: "agents", label: "agents" },
+    { value: "definitions", label: "definitions" },
     { value: "placement", label: "placement" },
     { value: "stop", label: "stop" },
   ]);
@@ -479,8 +477,8 @@ test("lead workers command uses native completion and exact human grammar", asyn
   await command.handler("agents extra", context);
   await command.handler("placement invalid", context);
   assert.deepEqual(notices, [
-    "Usage: /workers agents | placement [tab|split] | stop",
-    "Usage: /workers placement [tab|split]",
+    "Usage: /agents definitions | placement [tab|split] | stop",
+    "Usage: /agents placement [tab|split]",
   ]);
   assert.equal(pi.calls.length, 2);
 });
@@ -509,7 +507,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   };
   const entries: unknown[] = [];
   const pi = fakePi({
-    activeTools: ["worker", "chief", "read"],
+    activeTools: ["agent", "chief", "read"],
     autoActivateRegisteredTools: true,
     entries,
     exec: (_command, args) => {
@@ -576,7 +574,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
     },
     updatedAt: Date.now(),
   });
-  assert.deepEqual(pi.pi.getActiveTools(), ["read", "worker", "chief"]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["read", "agent", "chief"]);
   await pi.commandOptions.get("chief").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
   assert.ok(widgetKeys.includes("pi-herdsman"));
@@ -636,7 +634,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   );
   confirmLeave = true;
   await pi.commandOptions.get("chief").handler("leave", context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["read", "worker", "chief"]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["read", "agent", "chief"]);
   assert.match(confirmations[1], /Supervised leads will not be changed/);
   const baseline = pi.pi.getActiveTools();
   const setActiveTools = pi.pi.setActiveTools;
@@ -658,9 +656,9 @@ test("Chief shutdown restores tools before a fresh runtime resumes", async () =>
     `supervision-reload-${randomUUID()}.sock`,
   );
   const entries: unknown[] = [];
-  const ordinaryTools = ["read", "bash", "worker", "chief"];
+  const ordinaryTools = ["read", "bash", "agent", "chief"];
   const pi = fakePi({
-    activeTools: ["worker", "chief", "read", "bash"],
+    activeTools: ["agent", "chief", "read", "bash"],
     entries,
   });
   const context = fakeContext(entries) as any;
@@ -727,7 +725,7 @@ async function openChiefOverview(
       ]
     : [];
   const pi = fakePi({
-    activeTools: ["worker", "chief", "read"],
+    activeTools: ["agent", "chief", "read"],
     entries: [],
     exec: (_command, args) => {
       if (failRefresh && isAgentList(args))
@@ -1023,12 +1021,12 @@ test("Chief resume rejects a persisted pending chief ask without activation", as
       },
     },
   ];
-  const pi = fakePi({ entries, activeTools: ["worker", "chief"] });
+  const pi = fakePi({ entries, activeTools: ["agent", "chief"] });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   context.ui.notify = () => undefined;
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["worker", "chief"]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["agent", "chief"]);
   assert.equal(
     entries.some(
       (entry: any) =>
@@ -1109,7 +1107,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
     workspaceId: "incumbent-workspace",
   });
   try {
-    const pi = fakePi({ entries, activeTools: ["worker", "chief"] });
+    const pi = fakePi({ entries, activeTools: ["agent", "chief"] });
     registerExtension!(pi.pi as never);
     const context = fakeContext(entries) as any;
     context.ui.notify = () => undefined;
@@ -1131,7 +1129,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
   }
 });
 
-test("plain workers opens the native management menu", async () => {
+test("plain agents opens the native management menu", async () => {
   setLeadEnvironment();
   const pi = fakePi({
     exec: (command, args) => {
@@ -1154,7 +1152,7 @@ test("plain workers opens the native management menu", async () => {
     },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
@@ -1165,7 +1163,7 @@ test("plain workers opens the native management menu", async () => {
     return undefined;
   };
   await command.handler("", context);
-  assert.equal(prompts[0]?.label, "workers");
+  assert.equal(prompts[0]?.label, "agents");
   assert.deepEqual(
     prompts[0]?.options.map((option) => option.replace(/\s+.*/u, "")),
     ["Running", "Definitions", "Layout", "Message", "Stop"],
@@ -1179,7 +1177,7 @@ test("message limits use global byte settings and one rough token formatter", as
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const prompts: { label: string; options: string[] }[] = [];
   const notices: string[] = [];
   const context = fakeContext() as any;
@@ -1212,15 +1210,15 @@ test("message limits use global byte settings and one rough token formatter", as
 
 test("Running uses compact native options and focuses the freshly verified pane", async () => {
   setLeadEnvironment();
-  const label = "running-menu-worker";
+  const label = "running-menu-agent";
   const identity = defaultFixtureIdentity;
-  const mailbox = workerMailboxPath(WORKSPACE, label);
-  writeWorkerState(mailbox, managedState(label, REQUEST_ID, identity));
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   const pi = fakePi({
     exec: leadExec(label, "working", DEFAULT_PI_SESSION_ID),
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
@@ -1236,7 +1234,7 @@ test("Running uses compact native options and focuses the freshly verified pane"
           [
             {
               label,
-              agentType: "worker",
+              definition: "agent",
               state: "working",
               paneId: identity.paneId,
               sessionId: identity.piSessionId,
@@ -1247,7 +1245,7 @@ test("Running uses compact native options and focuses the freshly verified pane"
       )[0];
       assert.equal(prompts[1]?.label, "Running");
       assert.equal(options[0], expected);
-      assert.match(options[0]!, /└─ worker\s+running-menu-worker\s+● working/);
+      assert.match(options[0]!, /└─ agent\s+running-menu-agent\s+● working/);
       assert.doesNotMatch(options[0]!, /⠋|gpt|high|0s|Implement/);
       return options[0];
     }
@@ -1265,22 +1263,22 @@ test("Running uses compact native options and focuses the freshly verified pane"
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(mailbox);
+    resetAgentMailbox(mailbox);
   }
 });
 
-test("Running warns when the selected worker is replaced before focus", async () => {
+test("Running warns when the selected agent is replaced before focus", async () => {
   setLeadEnvironment();
-  const label = "running-menu-replaced-worker";
+  const label = "running-menu-replaced-agent";
   const identity = defaultFixtureIdentity;
   const replacementIdentity: FixtureIdentity = {
     paneId: "replacement-pane",
     tabId: "replacement-tab",
     piSessionId: "11111111-1111-4111-8111-111111111111",
-    piSessionFile: "/tmp/replacement-worker.jsonl",
+    piSessionFile: "/tmp/replacement-agent.jsonl",
   };
-  const mailbox = workerMailboxPath(WORKSPACE, label);
-  writeWorkerState(mailbox, managedState(label, REQUEST_ID, identity));
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   let currentIdentity = identity;
   const pi = fakePi({
     exec: (command, args) => {
@@ -1320,7 +1318,7 @@ test("Running warns when the selected worker is replaced before focus", async ()
     },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const notices: { message: string; level?: string }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
@@ -1335,7 +1333,7 @@ test("Running warns when the selected worker is replaced before focus", async ()
     if (selection === 1) {
       selection++;
       currentIdentity = replacementIdentity;
-      writeWorkerState(
+      writeAgentState(
         mailbox,
         managedState(label, REQUEST_ID, replacementIdentity),
       );
@@ -1357,7 +1355,7 @@ test("Running warns when the selected worker is replaced before focus", async ()
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(mailbox);
+    resetAgentMailbox(mailbox);
   }
 });
 
@@ -1371,7 +1369,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
         paneId: "reviewer-task-pane",
         tabId: "reviewer-task-tab",
         piSessionId: "22222222-2222-4222-8222-222222222222",
-        piSessionFile: "/tmp/reviewer-task-worker.jsonl",
+        piSessionFile: "/tmp/reviewer-task-agent.jsonl",
       },
     },
     {
@@ -1381,23 +1379,23 @@ test("Running keeps colliding display labels distinct and focuses the selected p
         paneId: "scout-task-pane",
         tabId: "scout-task-tab",
         piSessionId: "33333333-3333-4333-8333-333333333333",
-        piSessionFile: "/tmp/scout-task-worker.jsonl",
+        piSessionFile: "/tmp/scout-task-agent.jsonl",
       },
     },
   ] as const;
-  const workerStates = states.map(({ label, identity }) => ({
+  const agentStates = states.map(({ label, identity }) => ({
     ...managedState(label, REQUEST_ID, identity),
   }));
-  const mailboxes = workerStates.map((state, index) => {
-    const mailbox = workerMailboxPath(WORKSPACE, state.workerLabel);
-    writeWorkerState(mailbox, state);
+  const mailboxes = agentStates.map((state, index) => {
+    const mailbox = agentMailboxPath(WORKSPACE, state.agentLabel);
+    writeAgentState(mailbox, state);
     nativeSessions.set(state.piSessionFile!, {
       id: state.piSessionId!,
       path: state.piSessionFile!,
       entries: [
         {
           type: "custom",
-          customType: "pi-herdsman-worker-definition",
+          customType: "pi-herdsman-agent-definition",
           data: {
             name: states[index]!.definition,
           },
@@ -1423,7 +1421,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
               workspace_id: WORKSPACE,
               pane_id: identity.paneId,
               tab_id: identity.tabId,
-              tab_label: "workers",
+              tab_label: "agents",
               agent_session: {
                 source: "herdr:pi",
                 agent: "pi",
@@ -1461,7 +1459,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
     },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
@@ -1500,7 +1498,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     for (const [index, mailbox] of mailboxes.entries()) {
-      resetWorkerMailbox(mailbox);
+      resetAgentMailbox(mailbox);
       nativeSessions.delete(states[index]!.identity.piSessionFile);
     }
   }
@@ -1514,7 +1512,7 @@ test("Definitions edits standalone definitions through the shared override write
   realFs.writeFileSync(definitionPath, original);
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const prompts: { label: string; options: string[] }[] = [];
   let selection = 0;
   const context = fakeContext() as any;
@@ -1533,7 +1531,7 @@ test("Definitions edits standalone definitions through the shared override write
     return undefined;
   };
   try {
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     assert.ok(
       prompts.some(({ options }) =>
         options.some((option) => option.includes("--- Custom ---")),
@@ -1566,7 +1564,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
     const pi = fakePi();
     registerExtension!(pi.pi as never);
     const initialEntryCount = pi.entries.length;
-    const command = pi.commandOptions.get("workers");
+    const command = pi.commandOptions.get("agents");
     const context = fakeContext() as any;
     context.hasUI = true;
     const notices: string[] = [];
@@ -1583,7 +1581,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
     };
     let error: unknown;
     try {
-      await command.handler("agents", context);
+      await command.handler("definitions", context);
     } catch (caught) {
       error = caught;
     } finally {
@@ -1690,7 +1688,7 @@ test("Definitions Back navigates one menu level at a time", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const prompts: { label: string; options: string[] }[] = [];
   let selection = 0;
   const context = fakeContext() as any;
@@ -1722,7 +1720,7 @@ test("Definitions Back navigates one menu level at a time", async () => {
     }
   };
   try {
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     assert.deepEqual(
       prompts.map(({ label }) => label),
       [
@@ -1748,7 +1746,7 @@ test("Definitions preserves bundled model and thinking set/default semantics", a
     setLeadEnvironment();
     const pi = fakePi();
     registerExtension!(pi.pi as never);
-    const command = pi.commandOptions.get("workers");
+    const command = pi.commandOptions.get("agents");
     const definitionPath = join(PI_AGENTS_DIR, "implementer.md");
     const prompts: { label: string; options: string[] }[] = [];
     let selection = 0;
@@ -1787,7 +1785,7 @@ test("Definitions preserves bundled model and thinking set/default semantics", a
       }
     };
     try {
-      await command.handler("agents", context);
+      await command.handler("definitions", context);
       const content = realFs.readFileSync(definitionPath, "utf8");
       assert.doesNotMatch(content, new RegExp(`^${scenario.property}:`, "m"));
       assert.equal(
@@ -1806,7 +1804,7 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const definitionPath = join(PI_AGENTS_DIR, "implementer.md");
   let selection = 0;
   const context = fakeContext() as any;
@@ -1830,7 +1828,7 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
     }
   };
   try {
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     assert.match(
       realFs.readFileSync(definitionPath, "utf8"),
       /^enabled: true$/m,
@@ -1845,7 +1843,7 @@ test("Definitions refreshes the model registry before post-model thinking choice
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const definitionPath = join(PI_AGENTS_DIR, "implementer.md");
   const refreshedModel = {
     provider: "refresh-provider",
@@ -1888,7 +1886,7 @@ test("Definitions refreshes the model registry before post-model thinking choice
     }
   };
   try {
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     assert.equal(
       discoverAgent("implementer").frontmatter.model,
       "refresh-provider/refresh-model",
@@ -1917,7 +1915,7 @@ test("Definitions aligns Unicode names and models by display width", async () =>
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const prompts: string[][] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
@@ -1926,7 +1924,7 @@ test("Definitions aligns Unicode names and models by display width", async () =>
     return undefined;
   };
   try {
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     const options = prompts[0] ?? [];
     const rowA = options.find((option) => option.includes("模型"));
     const rowB = options.find((option) => option.includes("長い名前"));
@@ -1954,7 +1952,7 @@ test("Definitions separators are ignored and reopen the list", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const prompts: string[][] = [];
   let selections = 0;
   const context = fakeContext() as any;
@@ -1963,14 +1961,14 @@ test("Definitions separators are ignored and reopen the list", async () => {
     prompts.push(options);
     return selections++ === 0 ? options[0] : undefined;
   };
-  await command.handler("agents", context);
+  await command.handler("definitions", context);
   assert.equal(prompts.length, 2);
   assert.equal(prompts[0]![0], "--- Bundled (* overridden) ---");
   assert.deepEqual(prompts[0], prompts[1]);
   await pi.events.get("session_shutdown")?.[0]();
 });
 
-test("lead workers stop reports an empty owned inventory safely", async () => {
+test("lead agents stop reports an empty owned inventory safely", async () => {
   setLeadEnvironment();
   const pi = fakePi({
     exec: (command, args) =>
@@ -1983,7 +1981,7 @@ test("lead workers stop reports an empty owned inventory safely", async () => {
         : { stdout: "{}", stderr: "", code: 0 },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const notices: string[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
@@ -2002,10 +2000,10 @@ test("lead workers stop reports an empty owned inventory safely", async () => {
     ),
     false,
   );
-  assert.equal(stopSummary(pi), "No owned workers running.");
+  assert.equal(stopSummary(pi), "No owned agents running.");
 });
 
-test("lead workers stop closes a direct subtree workers-first", async () => {
+test("lead agents stop closes a direct subtree agents-first", async () => {
   setLeadEnvironment();
   const parent = {
     ...managedState(
@@ -2016,38 +2014,38 @@ test("lead workers stop closes a direct subtree workers-first", async () => {
     piSessionId: PARENT_SESSION_ID,
     piSessionFile: "/tmp/pi-herdsman-parent.jsonl",
   };
-  const workers = {
+  const agents = {
     ...managedState(
-      "pi-herdsman-workers",
+      "pi-herdsman-agents",
       undefined,
-      recoveryIdentity("pi-herdsman-workers"),
+      recoveryIdentity("pi-herdsman-agents"),
     ),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
-    piSessionFile: "/tmp/pi-herdsman-workers.jsonl",
+    piSessionFile: "/tmp/pi-herdsman-agents.jsonl",
   };
-  const parentMailbox = workerMailboxPath(WORKSPACE, parent.workerLabel);
-  const childMailbox = workerMailboxPath(WORKSPACE, workers.workerLabel);
-  resetWorkerMailbox(parentMailbox);
-  resetWorkerMailbox(childMailbox);
-  for (const state of [parent, workers])
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const childMailbox = agentMailboxPath(WORKSPACE, agents.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(childMailbox);
+  for (const state of [parent, agents])
     nativeSessions.set(state.piSessionFile!, {
       id: state.piSessionId!,
       path: state.piSessionFile!,
       entries: [
         {
           type: "custom",
-          customType: "pi-herdsman-worker-definition",
-          data: { name: "worker" },
+          customType: "pi-herdsman-agent-definition",
+          data: { name: "agent" },
         },
       ],
     });
-  writeWorkerState(parentMailbox, parent);
-  writeWorkerState(childMailbox, workers);
-  const lifecycle = cascadeExecutor([parent, workers]);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(childMailbox, agents);
+  const lifecycle = cascadeExecutor([parent, agents]);
   const pi = fakePi({ exec: lifecycle.exec, persistMessages: true });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const notices: string[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
@@ -2055,11 +2053,11 @@ test("lead workers stop closes a direct subtree workers-first", async () => {
   try {
     await command.handler("stop", context);
     assert.deepEqual(lifecycle.closeOrder, [
-      workers.workerLabel,
-      parent.workerLabel,
+      agents.agentLabel,
+      parent.agentLabel,
     ]);
-    assert.match(stopSummary(pi), /Stopped 2 workers/);
-    assert.match(stopSummary(pi), /✓ pi-herdsman-workers/);
+    assert.match(stopSummary(pi), /Stopped 2 agents/);
+    assert.match(stopSummary(pi), /✓ pi-herdsman-agents/);
     assert.match(stopSummary(pi), /✓ pi-herdsman-parent/);
     assert.equal(pi.sentMessageCalls.length, 1);
     assert.deepEqual(pi.sentMessageCalls[0]?.options, { triggerTurn: false });
@@ -2075,28 +2073,28 @@ test("lead workers stop closes a direct subtree workers-first", async () => {
           entry.details.summary === stopSummary(pi),
       ),
     );
-    assert.equal(readWorkerState(parentMailbox), undefined);
-    assert.equal(readWorkerState(childMailbox), undefined);
+    assert.equal(readAgentState(parentMailbox), undefined);
+    assert.equal(readAgentState(childMailbox), undefined);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(parentMailbox);
-    resetWorkerMailbox(childMailbox);
-    for (const state of [parent, workers])
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+    for (const state of [parent, agents])
       nativeSessions.delete(state.piSessionFile!);
   }
 });
 
-test("lead workers stop refuses a worker whose identity changes after inventory", async () => {
+test("lead agents stop refuses an agent whose identity changes after inventory", async () => {
   setLeadEnvironment();
-  const worker = managedState(
+  const agent = managedState(
     "pi-herdsman-identity-race",
     undefined,
     recoveryIdentity("pi-herdsman-identity-race"),
   );
-  const mailbox = workerMailboxPath(WORKSPACE, worker.workerLabel);
-  resetWorkerMailbox(mailbox);
-  writeWorkerState(mailbox, worker);
-  const lifecycle = cascadeExecutor([worker]);
+  const mailbox = agentMailboxPath(WORKSPACE, agent.agentLabel);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, agent);
+  const lifecycle = cascadeExecutor([agent]);
   let listCalls = 0;
   const pi = fakePi({
     exec: (command, args, options) => {
@@ -2113,7 +2111,7 @@ test("lead workers stop refuses a worker whose identity changes after inventory"
     },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const context = fakeContext() as any;
   context.hasUI = true;
   context.ui.notify = () => undefined;
@@ -2121,97 +2119,94 @@ test("lead workers stop refuses a worker whose identity changes after inventory"
     await command.handler("stop", context);
     assert.equal(lifecycle.closeOrder.length, 0);
     assert.match(stopSummary(pi), /pi-herdsman-identity-race/);
-    assert.match(
-      stopSummary(pi),
-      /not closed|No exact worker identity matched/,
-    );
-    assert.ok(readWorkerState(mailbox));
+    assert.match(stopSummary(pi), /not closed|No exact agent identity matched/);
+    assert.ok(readAgentState(mailbox));
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(mailbox);
+    resetAgentMailbox(mailbox);
   }
 });
 
-test("lead workers stop reports cleanup failures and preserves accurate discarded-work summary", async () => {
+test("lead agents stop reports cleanup failures and preserves accurate discarded-work summary", async () => {
   setLeadEnvironment();
   const failed = managedState(
-    "stop-failed-worker",
+    "stop-failed-agent",
     undefined,
-    recoveryIdentity("stop-failed-worker"),
+    recoveryIdentity("stop-failed-agent"),
   );
   const pending = managedState(
-    "stop-pending-worker",
+    "stop-pending-agent",
     REQUEST_ID,
-    recoveryIdentity("stop-pending-worker"),
+    recoveryIdentity("stop-pending-agent"),
   );
   pending.completedRequestId = randomUUID();
   const mailboxes = [failed, pending].map((state) =>
-    workerMailboxPath(WORKSPACE, state.workerLabel),
+    agentMailboxPath(WORKSPACE, state.agentLabel),
   );
-  mailboxes.forEach(resetWorkerMailbox);
-  writeWorkerState(mailboxes[0]!, failed);
-  writeWorkerState(mailboxes[1]!, pending);
+  mailboxes.forEach(resetAgentMailbox);
+  writeAgentState(mailboxes[0]!, failed);
+  writeAgentState(mailboxes[1]!, pending);
   writeResult(mailboxes[1]!, {
-    version: 3,
+    version: 4,
     runId: pending.runId,
     requestId: pending.completedRequestId,
     ownerSessionId: pending.ownerSessionId,
     workspaceId: pending.workspaceId,
-    workerLabel: pending.workerLabel,
+    agentLabel: pending.agentLabel,
     paneId: pending.paneId,
     status: "completed",
     text: "durable result",
     completedAt: Date.now(),
   });
   const lifecycle = cascadeExecutor([failed, pending], {
-    failCloseLabel: failed.workerLabel,
+    failCloseLabel: failed.agentLabel,
   });
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   try {
     await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
     const summary = stopSummary(pi);
-    assert.match(summary, /Stopped 1 of 2 workers/);
-    assert.match(summary, /✗ stop-failed-worker/);
+    assert.match(summary, /Stopped 1 of 2 agents/);
+    assert.match(summary, /✗ stop-failed-agent/);
     assert.match(summary, /Discarded:/);
-    assert.match(summary, /stop-pending-worker: active assignment/);
-    assert.match(summary, /stop-pending-worker: pending result/);
-    assert.deepEqual(lifecycle.closeOrder, [pending.workerLabel]);
+    assert.match(summary, /stop-pending-agent: active assignment/);
+    assert.match(summary, /stop-pending-agent: pending result/);
+    assert.deepEqual(lifecycle.closeOrder, [pending.agentLabel]);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    mailboxes.forEach((mailbox) => resetWorkerMailbox(mailbox));
+    mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox));
   }
 });
 
-test("lead workers stop continues independent leads after a partial cascade failure", async () => {
+test("lead agents stop continues independent leads after a partial cascade failure", async () => {
   setLeadEnvironment();
   const states = ["stop-partial-failure", "stop-independent"].map((label) =>
     managedState(label, undefined, recoveryIdentity(label)),
   );
   const mailboxes = states.map((state) =>
-    workerMailboxPath(WORKSPACE, state.workerLabel),
+    agentMailboxPath(WORKSPACE, state.agentLabel),
   );
-  states.forEach((state, index) => writeWorkerState(mailboxes[index]!, state));
+  states.forEach((state, index) => writeAgentState(mailboxes[index]!, state));
   const lifecycle = cascadeExecutor(states, {
-    failCloseLabel: states[0]!.workerLabel,
+    failCloseLabel: states[0]!.agentLabel,
   });
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   try {
     await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
-    assert.deepEqual(lifecycle.closeOrder, [states[1]!.workerLabel]);
-    assert.match(stopSummary(pi), /Stopped 1 of 2 workers/);
+    assert.deepEqual(lifecycle.closeOrder, [states[1]!.agentLabel]);
+    assert.match(stopSummary(pi), /Stopped 1 of 2 agents/);
     assert.match(stopSummary(pi), /✓ stop-independent/);
     assert.match(stopSummary(pi), /✗ stop-partial-failure/);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    mailboxes.forEach((mailbox) => resetWorkerMailbox(mailbox));
+    mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox));
   }
 });
 
-test("lead workers stop reports and closes a proven orphan subtree", async () => {
+test("lead agents stop reports and closes a proven orphan subtree", async () => {
   setLeadEnvironment();
   const parent = managedState(
     "orphan-stop-parent",
@@ -2227,72 +2222,72 @@ test("lead workers stop reports and closes a proven orphan subtree", async () =>
   child.ownerSessionId = parent.piSessionId;
   child.piSessionId = CHILD_SESSION_ID;
   const mailboxes = [parent, child].map((state) =>
-    workerMailboxPath(WORKSPACE, state.workerLabel),
+    agentMailboxPath(WORKSPACE, state.agentLabel),
   );
-  writeWorkerState(mailboxes[0]!, parent);
-  writeWorkerState(mailboxes[1]!, child);
+  writeAgentState(mailboxes[0]!, parent);
+  writeAgentState(mailboxes[1]!, child);
   const lifecycle = cascadeExecutor([child], {
-    omitAgentLabels: [parent.workerLabel],
+    omitAgentLabels: [parent.agentLabel],
   });
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   try {
     await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
-    assert.deepEqual(lifecycle.closeOrder, [child.workerLabel]);
-    assert.match(stopSummary(pi), /Stopped 1 workers/);
+    assert.deepEqual(lifecycle.closeOrder, [child.agentLabel]);
+    assert.match(stopSummary(pi), /Stopped 1 agents/);
     assert.match(stopSummary(pi), /✓ orphan-stop-child/);
     assert.doesNotMatch(stopSummary(pi), /orphan-stop-parent/);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    mailboxes.forEach((mailbox) => resetWorkerMailbox(mailbox));
+    mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox));
   }
 });
 
-test("lead workers stop scopes its summary to the current lead subtree", async () => {
+test("lead agents stop scopes its summary to the current lead subtree", async () => {
   setLeadEnvironment();
   const owned = managedState(
-    "scoped-owned-worker",
+    "scoped-owned-agent",
     undefined,
-    recoveryIdentity("scoped-owned-worker"),
+    recoveryIdentity("scoped-owned-agent"),
   );
   const foreign = {
     ...managedState(
-      "scoped-foreign-worker",
+      "scoped-foreign-agent",
       undefined,
-      recoveryIdentity("scoped-foreign-worker"),
+      recoveryIdentity("scoped-foreign-agent"),
     ),
     ownerSessionId: "foreign-lead-session",
   };
   const states = [owned, foreign];
   const mailboxes = states.map((state) =>
-    workerMailboxPath(WORKSPACE, state.workerLabel),
+    agentMailboxPath(WORKSPACE, state.agentLabel),
   );
-  states.forEach((state, index) => writeWorkerState(mailboxes[index]!, state));
+  states.forEach((state, index) => writeAgentState(mailboxes[index]!, state));
   const lifecycle = cascadeExecutor(states);
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   try {
     await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
-    assert.deepEqual(lifecycle.closeOrder, [owned.workerLabel]);
-    assert.match(stopSummary(pi), /Stopped 1 workers/);
-    assert.match(stopSummary(pi), /✓ scoped-owned-worker/);
-    assert.doesNotMatch(stopSummary(pi), /scoped-foreign-worker/);
+    assert.deepEqual(lifecycle.closeOrder, [owned.agentLabel]);
+    assert.match(stopSummary(pi), /Stopped 1 agents/);
+    assert.match(stopSummary(pi), /✓ scoped-owned-agent/);
+    assert.doesNotMatch(stopSummary(pi), /scoped-foreign-agent/);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    mailboxes.forEach((mailbox) => resetWorkerMailbox(mailbox));
+    mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox));
   }
 });
 
-test("valid managed leaf workers receive identity-only TUI presentation", async () => {
-  const mailbox = setWorkerEnvironment("leaf-worker");
+test("valid managed leaf agents receive identity-only TUI presentation", async () => {
+  const mailbox = setAgentEnvironment("leaf-agent");
   let sessionRuntimeInitialized = false;
   let activeToolsCalls = 0;
-  const state: WorkerState = {
-    ...managedState("leaf-worker"),
+  const state: ManagedAgentState = {
+    ...managedState("leaf-agent"),
     piSessionId: DEFAULT_PI_SESSION_ID,
-    piSessionFile: "/tmp/registered-worker.jsonl",
+    piSessionFile: "/tmp/registered-agent.jsonl",
   };
   const pi = fakePi({
     activeTools: () => {
@@ -2342,7 +2337,7 @@ test("valid managed leaf workers receive identity-only TUI presentation", async 
             }
           : { stdout: "{}", stderr: "", code: 0 },
   });
-  const context = fakeWorkerContext() as any;
+  const context = fakeAgentContext() as any;
   context.mode = "tui";
   context.hasUI = true;
   let widget: StatusWidget | undefined;
@@ -2367,12 +2362,12 @@ test("valid managed leaf workers receive identity-only TUI presentation", async 
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(widget);
   assert.deepEqual(widget!.render(160), [
-    "● ? → worker:leaf-worker  [read, bash, ask_owner]",
+    "● ? → agent:leaf-agent  [read, bash, ask_owner]",
   ]);
   assert.equal(pi.tools.filter((tool) => tool.name === "ask_owner").length, 1);
   assert.ok(activeToolsCalls > 0);
   await pi.events.get("session_shutdown")?.[0]();
-  resetWorkerMailbox(mailbox);
+  resetAgentMailbox(mailbox);
   setLeadEnvironment();
 });
 
@@ -2406,7 +2401,7 @@ test("TUI status widget is registered as a Pi component factory", async (t) => {
   );
   assert.ok(component instanceof StatusWidget);
   (component as StatusWidget).setSnapshot({
-    workers: [{ label: "worker", agentType: "worker", state: "working" }],
+    agents: [{ label: "agent", definition: "agent", state: "working" }],
     stale: false,
     unavailable: false,
   });
@@ -2460,7 +2455,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
                   {
                     pane_id: "registered-pane",
                     workspace_id: WORKSPACE,
-                    agent: "worker",
+                    agent: "agent",
                     agent_status: "idle",
                   },
                 ],
@@ -2527,7 +2522,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     assert.equal(activeTimers.size, 1);
     for (const pending of pendingLists.splice(0, 2))
       pending.resolve({
-        stdout: listResponse("old-worker"),
+        stdout: listResponse("old-agent"),
         stderr: "",
         code: 0,
       });
@@ -2536,7 +2531,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     assert.match(widgets[1].render(120)[0], /unavailable/);
     for (const pending of pendingLists.splice(0))
       pending.resolve({
-        stdout: listResponse("new-worker"),
+        stdout: listResponse("new-agent"),
         stderr: "",
         code: 0,
       });
@@ -2559,9 +2554,9 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
   setLeadEnvironment();
   const label = "sleep-smoke-a";
   const identity = recoveryIdentity(label);
-  const mailbox = workerMailboxPath(WORKSPACE, label);
-  resetWorkerMailbox(mailbox);
-  writeWorkerState(mailbox, managedState(label, REQUEST_ID, identity));
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   const calls: string[][] = [];
   const definitionReadsBeforeStatus = support.agentDefinitionReadCount;
   let refreshTimer: TimerHandler | undefined;
@@ -2582,7 +2577,7 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
     pane_id: identity.paneId,
     tab_id: identity.tabId,
     workspace_id: WORKSPACE,
-    display_agent: "worker",
+    display_agent: "agent",
     tokens: {
       task: "live task",
       started: "123",
@@ -2718,18 +2713,18 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
   assert.equal(listed.details.ok, true, JSON.stringify(listed.details));
   assert.ok(
     support.agentDefinitionReadCount > definitionReadsBeforeStatus,
-    "worker list should continue to discover agent definitions",
+    "agent list should continue to discover agent definitions",
   );
   await pi.events.get("session_shutdown")?.[0]();
 });
 
 test("zero-runtime reconciliation requests one status refresh", async (t) => {
   setLeadEnvironment();
-  const label = "fresh-widget-worker";
+  const label = "fresh-widget-agent";
   const identity = recoveryIdentity(label);
-  const mailbox = workerMailboxPath(WORKSPACE, label);
-  resetWorkerMailbox(mailbox);
-  writeWorkerState(mailbox, managedState(label, undefined, identity));
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, managedState(label, undefined, identity));
 
   const herdrAgent = {
     agent: "pi",
@@ -2744,7 +2739,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
     cwd: "/tmp",
     pane_id: identity.paneId,
     workspace_id: WORKSPACE,
-    display_agent: "worker",
+    display_agent: "agent",
     tokens: { task: "fresh task" },
   };
   const envelope = () =>
@@ -2822,17 +2817,17 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   await new Promise<void>((resolve) => setImmediate(resolve));
   const rendered = widget.render(160).join("\n");
   assert.match(rendered, /1 unknown/);
-  assert.match(rendered, /fresh-widget-worker/);
+  assert.match(rendered, /fresh-widget-agent/);
   await pi.events.get("session_shutdown")?.[0]();
-  resetWorkerMailbox(mailbox);
+  resetAgentMailbox(mailbox);
 });
 
 test("fresh assignment refreshes the widget after validation", async () => {
   setLeadEnvironment();
-  const label = "fresh-start-widget-worker";
-  const mailbox = workerMailboxPath(WORKSPACE, label);
+  const label = "fresh-start-widget-agent";
+  const mailbox = agentMailboxPath(WORKSPACE, label);
   const agentsDir = PI_AGENTS_DIR;
-  const definitionPath = `${agentsDir}/worker.md`;
+  const definitionPath = `${agentsDir}/agent.md`;
   const hadAgentsDir = realFs.existsSync(agentsDir);
   const hadDefinition = realFs.existsSync(definitionPath);
   const previousDefinition = hadDefinition
@@ -2841,11 +2836,11 @@ test("fresh assignment refreshes the widget after validation", async () => {
   realFs.mkdirSync(agentsDir, { recursive: true });
   realFs.writeFileSync(
     definitionPath,
-    "---\nname: worker\ninheritProjectContext: true\ninheritGlobalContext: false\n---\nworker instructions\n",
+    "---\nname: agent\ninheritProjectContext: true\ninheritGlobalContext: false\n---\nagent instructions\n",
   );
   projectContextCwds.length = 0;
   const requestedCwd = PI_AGENT_ROOT;
-  resetWorkerMailbox(mailbox);
+  resetAgentMailbox(mailbox);
   let live = false;
   let listCount = 0;
   let resolveInitialStatus: ((value: ExecResult) => void) | undefined;
@@ -2862,13 +2857,13 @@ test("fresh assignment refreshes the widget after validation", async () => {
       agent: "pi",
       kind: "path",
       source: "herdr:pi",
-      value: "/tmp/registered-worker.jsonl",
+      value: "/tmp/registered-agent.jsonl",
     },
     agent_status: "working",
     cwd: requestedCwd,
     pane_id: "startup-pane",
     workspace_id: WORKSPACE,
-    display_agent: "worker",
+    display_agent: "agent",
     tokens: { task: "fresh task" },
   };
   const emptyList = () => JSON.stringify({ id: 1, result: { agents: [] } });
@@ -2881,7 +2876,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
     foreground_process_group_id: 123,
     foreground_processes: [{ pid: 123, argv0: "/bin/zsh" }],
   };
-  let startedRunId = WORKER_ID;
+  let startedRunId = AGENT_ID;
   let startedOwnerSessionId = LEAD_SESSION_ID;
   const pi = fakePi({
     exec: (command, args, options) => {
@@ -2904,7 +2899,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
               tabs: [
                 {
                   tab_id: "startup-tab",
-                  label: "workers",
+                  label: "agents",
                   workspace_id: WORKSPACE,
                 },
               ],
@@ -3045,22 +3040,22 @@ test("fresh assignment refreshes the widget after validation", async () => {
         };
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
         live = true;
-        writeWorkerState(mailbox, {
-          version: 3,
+        writeAgentState(mailbox, {
+          version: 4,
           runId: startedRunId,
           ownerSessionId: startedOwnerSessionId,
           workspaceId: WORKSPACE,
-          workerLabel: label,
+          agentLabel: label,
           paneId: "startup-pane",
           piSessionId: DEFAULT_PI_SESSION_ID,
-          piSessionFile: "/tmp/registered-worker.jsonl",
+          piSessionFile: "/tmp/registered-agent.jsonl",
           cwd: requestedCwd,
           updatedAt: Date.now(),
         });
         return {
           stdout: JSON.stringify({
             tab_id: "startup-tab",
-            tab_label: "workers",
+            tab_label: "agents",
             pane_id: "startup-pane",
             cwd: requestedCwd,
             herdr_agent: herdrAlias(label),
@@ -3099,7 +3094,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       "id",
       {
         action: "delegate",
-        definition: "worker",
+        definition: "agent",
         label,
         task: "fresh task",
         cwd: requestedCwd,
@@ -3130,7 +3125,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       undefined,
       context,
     );
-    assert.equal(pendingList.details.workers[0].state, "settling");
+    assert.equal(pendingList.details.agents[0].state, "settling");
     releaseInitialPrompt!();
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
@@ -3165,16 +3160,16 @@ test("fresh assignment refreshes the widget after validation", async () => {
     );
     const rendered = widget!.render(160).join("\n");
     assert.match(rendered, /1 working/);
-    assert.match(rendered, /fresh-start-widget-worker/);
+    assert.match(rendered, /fresh-start-widget-agent/);
 
     failSubmit = true;
     live = false;
-    resetWorkerMailbox(mailbox);
+    resetAgentMailbox(mailbox);
     const failed = await pi.tools[0].execute(
       "id",
       {
         action: "delegate",
-        definition: "worker",
+        definition: "agent",
         label,
         task: "fail this task",
       },
@@ -3193,12 +3188,12 @@ test("fresh assignment refreshes the widget after validation", async () => {
     failSubmit = false;
     failValidation = true;
     live = false;
-    resetWorkerMailbox(mailbox);
+    resetAgentMailbox(mailbox);
     const invalid = await pi.tools[0].execute(
       "id",
       {
         action: "delegate",
-        definition: "worker",
+        definition: "agent",
         label,
         task: "invalid identity",
       },
@@ -3214,7 +3209,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
     assert.match(widget!.render(160).join("\n"), /herd/);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(mailbox);
+    resetAgentMailbox(mailbox);
     if (hadDefinition)
       realFs.writeFileSync(definitionPath, previousDefinition!);
     else if (!hadAgentsDir) {

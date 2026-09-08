@@ -17,12 +17,12 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 
-export interface WorkerState {
-  version: 3;
+export interface ManagedAgentState {
+  version: 4;
   runId: string;
   ownerSessionId: string;
   workspaceId: string;
-  workerLabel: string;
+  agentLabel: string;
   paneId: string;
   piSessionId: string;
   piSessionFile?: string;
@@ -48,7 +48,7 @@ export interface ResultPersistenceError {
   runId: string;
   ownerSessionId: string;
   workspaceId: string;
-  workerLabel: string;
+  agentLabel: string;
   paneId: string;
   originalStatus: "completed" | "failed";
   attempts: number;
@@ -58,12 +58,12 @@ export interface ResultPersistenceError {
   nextAction: string;
 }
 export interface RequestRecord {
-  version: 3;
+  version: 4;
   runId: string;
   requestId: string;
   ownerSessionId: string;
   workspaceId: string;
-  workerLabel: string;
+  agentLabel: string;
   paneId: string;
   kind: "task" | "steer" | "reply";
   askId?: string;
@@ -71,25 +71,25 @@ export interface RequestRecord {
   createdAt: number;
 }
 export interface AskRecord {
-  version: 3;
+  version: 4;
   askId: string;
   requestId: string;
   runId: string;
   ownerSessionId: string;
   workspaceId: string;
-  workerLabel: string;
+  agentLabel: string;
   paneId: string;
   piSessionId: string;
   question: string;
   createdAt: number;
 }
 export interface ResultRecord {
-  version: 3;
+  version: 4;
   runId: string;
   requestId: string;
   ownerSessionId: string;
   workspaceId: string;
-  workerLabel: string;
+  agentLabel: string;
   paneId: string;
   status: "completed" | "failed";
   text?: string;
@@ -107,7 +107,7 @@ export interface ResultRecord {
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const PREFIX = "__PI_HERDSMAN_WORKER_V3__:";
+const PREFIX = "__PI_HERDSMAN_AGENT_V4__:";
 /** Fixed protocol safety ceiling; configuration only limits new submissions. */
 export const MAILBOX_PROTOCOL_LIMIT_BYTES = 1024 * 1024;
 export function mailboxRecordBytes(record: RequestRecord | AskRecord): number {
@@ -126,21 +126,22 @@ const root = join(
   tmpdir(),
   "pi-herdsman",
   typeof process.getuid === "function" ? String(process.getuid()) : "user",
+  "mailboxes-v4",
 );
 
-export function workerMailboxPath(
+export function agentMailboxPath(
   workspaceId: string,
-  workerLabel: string,
+  agentLabel: string,
 ): string {
   return join(
     root,
     createHash("sha256")
-      .update(`${workspaceId}\0${workerLabel}`)
+      .update(`${workspaceId}\0${agentLabel}`)
       .digest("hex")
       .slice(0, 32),
   );
 }
-export type WorkerStateIssue = {
+export type ManagedAgentStateIssue = {
   path: string;
   diagnostic: string;
 };
@@ -156,13 +157,13 @@ function boundedDiagnostic(error: unknown): string {
     : text;
 }
 
-function scanWorkerStates(): {
-  states: Array<{ path: string; state: WorkerState }>;
-  issues: WorkerStateIssue[];
+function scanAgentStates(): {
+  states: Array<{ path: string; state: ManagedAgentState }>;
+  issues: ManagedAgentStateIssue[];
 } {
   if (!existsSync(root)) return { states: [], issues: [] };
-  const states: Array<{ path: string; state: WorkerState }> = [];
-  const issues: WorkerStateIssue[] = [];
+  const states: Array<{ path: string; state: ManagedAgentState }> = [];
+  const issues: ManagedAgentStateIssue[] = [];
   const entries: Array<{
     name: string;
     path: string;
@@ -197,7 +198,7 @@ function scanWorkerStates(): {
     try {
       if (statError !== undefined) throw statError;
       if (!directory) continue;
-      const state = readWorkerState(path);
+      const state = readAgentState(path);
       if (state) states.push({ path, state });
     } catch (error) {
       // Only hash-named directories can be current mailbox paths. Other
@@ -212,15 +213,15 @@ function scanWorkerStates(): {
   return { states, issues };
 }
 
-export function listWorkerStates(): Array<{
+export function listAgentStates(): Array<{
   path: string;
-  state: WorkerState;
+  state: ManagedAgentState;
 }> {
-  return scanWorkerStates().states;
+  return scanAgentStates().states;
 }
 
-export function listWorkerStateIssues(): WorkerStateIssue[] {
-  return scanWorkerStates().issues;
+export function listAgentStateIssues(): ManagedAgentStateIssue[] {
+  return scanAgentStates().issues;
 }
 function ensure(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -233,7 +234,7 @@ function validate(
   if (
     !value ||
     typeof value !== "object" ||
-    (value as { version?: unknown }).version !== 3
+    (value as { version?: unknown }).version !== 4
   )
     throw new Error("Invalid mailbox protocol version or record");
   const text = JSON.stringify(value);
@@ -247,7 +248,7 @@ function validate(
           "runId",
           "ownerSessionId",
           "workspaceId",
-          "workerLabel",
+          "agentLabel",
           "paneId",
           "piSessionId",
           "piSessionFile",
@@ -267,7 +268,7 @@ function validate(
             "requestId",
             "ownerSessionId",
             "workspaceId",
-            "workerLabel",
+            "agentLabel",
             "paneId",
             "kind",
             "askId",
@@ -282,7 +283,7 @@ function validate(
               "runId",
               "ownerSessionId",
               "workspaceId",
-              "workerLabel",
+              "agentLabel",
               "paneId",
               "piSessionId",
               "question",
@@ -294,7 +295,7 @@ function validate(
               "requestId",
               "ownerSessionId",
               "workspaceId",
-              "workerLabel",
+              "agentLabel",
               "paneId",
               "status",
               "text",
@@ -310,7 +311,7 @@ function validate(
           "runId",
           "ownerSessionId",
           "workspaceId",
-          "workerLabel",
+          "agentLabel",
           "paneId",
           "piSessionId",
           "cwd",
@@ -322,7 +323,7 @@ function validate(
             "runId",
             "ownerSessionId",
             "workspaceId",
-            "workerLabel",
+            "agentLabel",
             "paneId",
             "piSessionId",
           ]
@@ -331,7 +332,7 @@ function validate(
             "requestId",
             "ownerSessionId",
             "workspaceId",
-            "workerLabel",
+            "agentLabel",
             "paneId",
           ];
   for (const field of required)
@@ -392,7 +393,7 @@ function validate(
         "runId",
         "ownerSessionId",
         "workspaceId",
-        "workerLabel",
+        "agentLabel",
         "paneId",
         "originalStatus",
         "attempts",
@@ -410,7 +411,7 @@ function validate(
         error.runId !== v.runId ||
         error.ownerSessionId !== v.ownerSessionId ||
         error.workspaceId !== v.workspaceId ||
-        error.workerLabel !== v.workerLabel ||
+        error.agentLabel !== v.agentLabel ||
         error.paneId !== v.paneId ||
         (error.originalStatus !== "completed" &&
           error.originalStatus !== "failed") ||
@@ -567,7 +568,7 @@ function assertFileId(requestId: string): void {
   if (!UUID.test(requestId) || requestId.length !== 36)
     throw new Error("Invalid request ID");
 }
-export function claimWorkerMailbox(
+export function claimAgentMailbox(
   path: string,
   hooks: { afterStaleOwnerRemoved?: () => void } = {},
 ): () => void {
@@ -585,7 +586,7 @@ export function claimWorkerMailbox(
     throw error;
   }
 }
-export function resetWorkerMailbox(path: string): void {
+export function resetAgentMailbox(path: string): void {
   ensure(root);
   ensure(path);
   for (const name of [
@@ -602,7 +603,7 @@ export function resetWorkerMailbox(path: string): void {
     }
   }
 }
-export function removeWorkerMailbox(path: string): void {
+export function removeAgentMailbox(path: string): void {
   let names: string[];
   try {
     names = readdirSync(path);
@@ -626,14 +627,14 @@ export function removeWorkerMailbox(path: string): void {
       throw error;
   }
 }
-export function writeWorkerState(path: string, state: WorkerState): void {
+export function writeAgentState(path: string, state: ManagedAgentState): void {
   atomic(file(path, "state.json"), state, "state");
 }
-export function workerStatePath(path: string): string {
+export function agentStatePath(path: string): string {
   return file(path, "state.json");
 }
-export function readWorkerState(path: string): WorkerState | undefined {
-  const v = read<WorkerState>(file(path, "state.json"), "state");
+export function readAgentState(path: string): ManagedAgentState | undefined {
+  const v = read<ManagedAgentState>(file(path, "state.json"), "state");
   if (v) validate(v, "state");
   return v;
 }
@@ -658,11 +659,11 @@ export function readRequest(
 export function unacknowledgedRequestExists(
   path: string,
   state?: Pick<
-    WorkerState,
+    ManagedAgentState,
     | "runId"
     | "ownerSessionId"
     | "workspaceId"
-    | "workerLabel"
+    | "agentLabel"
     | "paneId"
     | "lastAck"
   >,
@@ -684,7 +685,7 @@ export function unacknowledgedRequestExists(
         (request.runId !== state.runId ||
           request.ownerSessionId !== state.ownerSessionId ||
           request.workspaceId !== state.workspaceId ||
-          request.workerLabel !== state.workerLabel ||
+          request.agentLabel !== state.agentLabel ||
           request.paneId !== state.paneId)
       )
         return true;
@@ -715,7 +716,7 @@ export function readAsk(path: string): AskRecord | undefined {
 }
 export function readPendingAsk(
   path: string,
-  state: WorkerState,
+  state: ManagedAgentState,
 ): AskRecord | undefined {
   if (!state.pendingAskId) return undefined;
   const ask = readAsk(path);
@@ -727,11 +728,11 @@ export function readPendingAsk(
     ask.runId !== state.runId ||
     ask.ownerSessionId !== state.ownerSessionId ||
     ask.workspaceId !== state.workspaceId ||
-    ask.workerLabel !== state.workerLabel ||
+    ask.agentLabel !== state.agentLabel ||
     ask.paneId !== state.paneId ||
     ask.piSessionId !== state.piSessionId
   )
-    throw new Error("Pending owner ask identity did not match worker state");
+    throw new Error("Pending owner ask identity did not match agent state");
   return ask;
 }
 export function removeAsk(path: string): void {
@@ -778,13 +779,13 @@ export function parseControlMarker(text: string): string | undefined {
 }
 export function waitForState(
   path: string,
-  predicate: (state: WorkerState) => boolean,
+  predicate: (state: ManagedAgentState) => boolean,
   options: { timeoutMs: number; signal?: AbortSignal },
-): Promise<WorkerState> {
+): Promise<ManagedAgentState> {
   return new Promise((resolve, reject) => {
     let done = false;
     let abortListener: (() => void) | undefined;
-    const finish = (error?: Error, state?: WorkerState) => {
+    const finish = (error?: Error, state?: ManagedAgentState) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
@@ -795,14 +796,14 @@ export function waitForState(
     };
     const check = () => {
       try {
-        const state = readWorkerState(path);
+        const state = readAgentState(path);
         if (state && predicate(state)) finish(undefined, state);
       } catch (e) {
         finish(e as Error);
       }
     };
     const timer = setTimeout(
-      () => finish(new Error("Timed out waiting for worker state")),
+      () => finish(new Error("Timed out waiting for agent state")),
       options.timeoutMs,
     );
     const interval = setInterval(check, 250);

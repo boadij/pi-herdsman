@@ -48,12 +48,12 @@ are loaded from `<cwd>/.pi/agents/` only when trusted project settings set
 `piHerdsman.projectAgents` to `true`. Precedence is `bundled < project < global`.
 
 All effective definitions are sorted and validated together, including every
-`workers` reference.
+`agents` reference.
 
 `enabled` controls definition availability. A disabled definition remains in the
 lead roster so it can be enabled again, but owner-visible definition lists omit
 it. Definition and session delegations reject a disabled definition. An already
-active worker may finish and remains controllable according to its current
+active agent may finish and remains controllable according to its current
 available actions; disabling a definition does not mutate that assignment.
 
 ## Fields
@@ -61,7 +61,7 @@ available actions; disabling a definition does not mutate that assignment.
 | Field                   | Accepted value                                                        | Omitted/default behavior                                          | Runtime/composition behavior                                                                           |
 | ----------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `name`                  | non-empty string                                                      | required                                                          | Effective definition identity.                                                                         |
-| `enabled`               | boolean                                                               | `true`                                                            | `false` makes definition and session delegation unavailable; it does not mutate an active worker.      |
+| `enabled`               | boolean                                                               | `true`                                                            | `false` makes definition and session delegation unavailable; it does not mutate an active agent.       |
 | `description`           | string                                                                | absent                                                            | Display/selection description.                                                                         |
 | `model`                 | non-empty string                                                      | Pi default/current launch behavior                                | Passed as Pi model selection.                                                                          |
 | `thinking`              | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `false` | Pi default/current launch behavior                                | `false` launches as `off`.                                                                             |
@@ -74,19 +74,20 @@ available actions; disabling a definition does not mutate that assignment.
 | `noSkills`              | boolean                                                               | skills disabled unless `inheritSkills: true`                      | Controls Pi native skill discovery; explicit `skills` values are still passed separately.              |
 | `inheritSkills`         | boolean                                                               | does not enable by itself unless `true`                           | `true` changes omitted `noSkills` default so native skills remain available. Explicit `noSkills` wins. |
 | `skills`                | inline array of non-empty strings                                     | no explicit skill arguments                                       | Each value is passed unchanged as a Pi skill path/resource.                                            |
-| `noExtensions`          | boolean                                                               | Pi normal extension policy                                        | `true` emits `--no-extensions`. Required herdr worker infrastructure remains injected by the launcher. |
+| `noExtensions`          | boolean                                                               | Pi normal extension policy                                        | `true` emits `--no-extensions`. Required herdr agent infrastructure remains injected by the launcher.  |
 | `extensions`            | inline array of non-empty strings                                     | no extra extension arguments                                      | Each value is passed unchanged to Pi.                                                                  |
-| `workers`               | inline array of unique non-empty definition names                     | no direct workers                                                 | Names direct definitions this worker may delegate to; every name must exist.                           |
+| `agents`                | inline array of unique non-empty definition names                     | no direct agents                                                  | Names direct definitions this agent may delegate to; every name must exist.                            |
 | `inheritProjectContext` | boolean                                                               | `true` only for definition name `delegate`; otherwise `false`     | Controls project context-file inheritance.                                                             |
 | `inheritGlobalContext`  | boolean                                                               | follows effective `inheritProjectContext`                         | Controls global context-file inheritance.                                                              |
 
 Arrays supplied by an override replace the complete inherited array, including
 an explicit `[]`.
 
-When a delegating worker declares a worker in `workers`, that worker must be enabled.
-A delegating worker referencing a disabled worker can remain discoverable, but is rejected
-during assignment or fresh worker startup with an explicit disabled-worker error
-rather than being silently removed from the delegating worker definition.
+When a delegating agent declares an agent definition in `agents`, that definition must
+be enabled. A delegating agent referencing a disabled agent definition can remain
+discoverable, but is rejected during assignment or fresh agent startup with an explicit
+disabled-agent error rather than being silently removed from the delegating agent
+definition.
 
 Skill and extension paths are passed to Pi unchanged. herdr does not resolve
 them relative to the definition file.
@@ -100,7 +101,7 @@ source-qualified permissions, such as an extension path plus tool name.
 
 An explicit `tools` allowlist takes precedence over the default-selection
 switches `noTools` and `noBuiltinTools`; `excludeTools` still removes matching
-names. Thus a managed worker may receive both `--no-tools` and an explicit
+names. Thus a managed agent may receive both `--no-tools` and an explicit
 `--tools ask_owner`. Pi Herdsman protects that mandatory `ask_owner` capability in
 managed launches and removes it from explicit exclusions. Unmanaged Pi
 launches do not receive this exception.
@@ -122,39 +123,39 @@ Tools with the same name are not independently permissionable by source, and
 the winner for a name collision is not a supported ordering contract.
 
 `noExtensions` disables ordinary extension discovery, but launcher-injected
-Pi Herdsman worker and Herdr-state extensions remain mandatory infrastructure.
+Pi Herdsman agent and Herdr-state extensions remain mandatory infrastructure.
 Explicit `extensions` entries remain separate launch inputs and are passed to
 Pi normally. Launcher-injected infrastructure remains separate from the
 definition's extension and tool policy.
 
-## Tool inference for `workers`
+## Tool inference for `agents`
 
-A non-empty `workers` list declares potential worker definitions; effective
-delegation also requires permitted `worker` capability and a controller depth
+A non-empty `agents` list declares potential agent definitions; effective
+delegation also requires permitted `agent` capability and a controller depth
 that allows delegation.
 
 This capability is projected by controller depth. Lead-launched definitions
-retain their declared worker allowlist and effective `worker` tool. A
-worker-launched worker receives no worker allowlist and no effective `worker`,
+retain their declared agent allowlist and effective `agent` tool. An
+agent-launched agent receives no agent allowlist and no effective `agent`,
 even when its definition is delegation-enabled at the lead. Explicit tool
 allowlists, empty arrays, `noTools`, and exclusions remain fail-closed.
 
 When it has an explicit non-empty `tools` allowlist and does not already contain
-`worker`, Pi Herdsman appends `worker` to the effective allowlist unless denied.
+`agent`, Pi Herdsman appends `agent` to the effective allowlist unless denied.
 
 Rules:
 
-| Configuration                                    | Effective inference                                                       |
-| ------------------------------------------------ | ------------------------------------------------------------------------- |
-| `workers` omitted or `[]`                        | no inferred `worker`                                                      |
-| non-empty `workers`, `tools` omitted             | keep Pi default tool policy; do not materialize a `worker`-only allowlist |
-| non-empty `workers`, explicit non-empty `tools`  | append `worker`                                                           |
-| `excludeTools` contains `worker`                 | explicit denial wins                                                      |
-| `noTools: true`, no explicit `worker` in `tools` | no inferred `worker`                                                      |
-| `noTools: true`, explicit `tools: ["worker"]`    | explicit allow is preserved                                               |
-| explicit allow plus explicit exclusion           | exclusion wins                                                            |
+| Configuration                                   | Effective inference                                                       |
+| ----------------------------------------------- | ------------------------------------------------------------------------- |
+| `agents` omitted or `[]`                        | no inferred `agent`                                                       |
+| non-empty `agents`, `tools` omitted             | keep Pi default tool policy; do not materialize an `agent`-only allowlist |
+| non-empty `agents`, explicit non-empty `tools`  | append `agent`                                                            |
+| `excludeTools` contains `agent`                 | explicit denial wins                                                      |
+| `noTools: true`, no explicit `agent` in `tools` | no inferred `agent`                                                       |
+| `noTools: true`, explicit `tools: ["agent"]`    | explicit allow is preserved                                               |
+| explicit allow plus explicit exclusion          | exclusion wins                                                            |
 
-`ask_owner` is separate mandatory managed-worker infrastructure and is not this
+`ask_owner` is separate mandatory managed agent infrastructure and is not this
 inference rule.
 
 ## Body composition
@@ -190,7 +191,7 @@ A body line is a reference only when the complete trimmed line matches:
 Before bundled/global body composition, relative references are resolved from
 the definition file that declared them.
 
-When a new worker generation is constructed:
+When a new agent generation is constructed:
 
 1. references are processed in body order; `~/` is resolved beneath the
    current user's home directory;
@@ -202,20 +203,20 @@ When a new worker generation is constructed:
 6. included text replaces that reference line;
 7. included text is not recursively expanded.
 
-Every new worker generation expands the effective body and its file references
+Every new agent generation expands the effective body and its file references
 once at launch. Session continuation preserves the Pi session history while
 using the current effective definition configuration.
 
 ## Runtime prompt order
 
-For a newly constructed managed worker, the effective launch composition is:
+For a newly constructed managed agent, the effective launch composition is:
 
 ```text
 Pi base system prompt
     ↓ effective body via systemPromptMode
 selected project/global context-file additions
     ↓
-shared herdr worker guidance
+shared herdr agent guidance
 ```
 
 The final effective body and shared guidance are delivered through private
@@ -240,7 +241,7 @@ inheritSkills: true
 skills: ["/absolute/path/to/code-review/SKILL.md"]
 noExtensions: false
 extensions: ["/absolute/path/to/local-extension.ts"]
-workers: ["scout"]
+agents: ["scout"]
 inheritProjectContext: true
 inheritGlobalContext: false
 ---
@@ -250,8 +251,8 @@ Additional local review instructions.
 @./prompts/review-policy.md
 ```
 
-Because `workers` is non-empty and the explicit `tools` list does not deny it,
-the effective tools include `worker`.
+Because `agents` is non-empty and the explicit `tools` list does not deny it,
+the effective tools include `agent`.
 
 To disable a bundled role without copying its definition, use a minimal global
 override:
@@ -263,7 +264,7 @@ enabled: false
 ---
 ```
 
-The `/workers agents` menu exposes the same enable and disable operations.
+The `/agents definitions` menu exposes the same enable and disable operations.
 Removing the `enabled` line inherits the bundled value; when no source declares
 the field, the effective value is `true`.
 

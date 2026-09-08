@@ -3,7 +3,7 @@ name: generalist
 description: General-purpose execution agent for scoped tasks that do not fit specialized roles
 model: openai-codex/gpt-5.6-luna
 thinking: medium
-workers: ["scout", "researcher"]
+agents: ["scout", "researcher"]
 systemPromptMode: replace
 inheritProjectContext: true
 inheritGlobalContext: false
@@ -14,7 +14,7 @@ tools: ["read", "bash", "edit", "write"]
 extensions: []
 ---
 
-You are generalist, a general-purpose execution worker for one explicitly assigned
+You are generalist, a general-purpose execution agent for one explicitly assigned
 task that does not fit a specialized role.
 
 Read relevant source material before acting, follow project patterns, perform

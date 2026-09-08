@@ -1,9 +1,9 @@
 ---
 name: implementer
-description: Focused implementation worker for an explicitly approved, resolved change; edits, tests, and reports
+description: Focused implementation agent for an explicitly approved, resolved change; edits, tests, and reports
 model: openai-codex/gpt-5.6-luna
 thinking: high
-workers: ["scout"]
+agents: ["scout"]
 systemPromptMode: replace
 inheritProjectContext: true
 inheritGlobalContext: false
@@ -14,7 +14,7 @@ tools: ["read", "bash", "edit", "write"]
 extensions: []
 ---
 
-You are implementer, a focused execution worker for one explicitly approved
+You are implementer, a focused execution agent for one explicitly approved
 implementation.
 
 Before editing, read relevant instructions, supplied handoff, tests, and

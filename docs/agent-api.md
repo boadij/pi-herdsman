@@ -25,14 +25,14 @@ must run inside [herdr](https://github.com/herdrdev/herdr).
 
 ## First use
 
-The exact controller contract is the [`worker` API](reference/worker.md).
-Start by inspecting the current roster and authoritative visible workers:
+The exact controller contract is the [`agent` API](reference/agent.md).
+Start by inspecting the current roster and authoritative visible agents:
 
 ```json
 { "action": "list" }
 ```
 
-Then delegate to a fresh worker by definition:
+Then delegate to a fresh agent by definition:
 
 ```json
 {
@@ -42,45 +42,45 @@ Then delegate to a fresh worker by definition:
 }
 ```
 
-`delegate` is non-blocking orchestration. It returns after the worker has accepted
-the assignment, not when the worker finishes.
+`delegate` is non-blocking orchestration. It returns after the agent has accepted
+the assignment, not when the agent finishes.
 
 The owner remains free to make useful progress, coordinate other independent
-work, or end its turn normally. It must not poll the worker. Completion or an
+work, or end its turn normally. It must not poll the agent. Completion or an
 `ask_owner` question is delivered back to the exact owner asynchronously.
 
 The detailed lifecycle contract, including result delivery, one-assignment
-cleanup, blocked work, settling, and delegating-worker completion, is owned by
+cleanup, blocked work, settling, and delegating-agent completion, is owned by
 [Lifecycle](concepts/lifecycle.md).
 
 The examples above establish the first-use path only. Use the
-[`worker` API](reference/worker.md) for exact accepted fields, validation,
+[`agent` API](reference/agent.md) for exact accepted fields, validation,
 control eligibility, session continuation, fork behavior, and return shapes.
 
-## Understand worker identity
+## Understand agent identity
 
-Read [Workers and identity](concepts/workers.md) for the identity model behind
-controller operations. The logical worker identity is exposed as `worker` for
+Read [Agents and identity](concepts/agents.md) for the identity model behind
+controller operations. The logical agent identity is exposed as `agent` for
 live control; physical herdr and Pi identifiers are validation evidence.
 
 For the exact public state vocabulary, see
-[Worker states](reference/worker-states.md).
+[Agent states](reference/agent-states.md).
 
 ## Delegate deliberately
 
-Read [Delegation](concepts/delegation.md) for lead and delegating-worker
+Read [Delegation](concepts/delegation.md) for lead and delegating-agent
 ownership and delegation limits.
 
-A worker that genuinely needs an owner decision uses the separate
+An agent that genuinely needs an owner decision uses the separate
 [`ask_owner` API](reference/ask-owner.md). The exact owner answers through the
-controller's `reply` action; ordinary active worker work is not an owner
+controller's `reply` action; ordinary active agent work is not an owner
 question.
 
 ## Pass evidence through handoffs
 
 Read [Handoffs and files](guides/handoffs.md) for `files`, result paths, body
 references, and coordination artifacts. That guide owns the evidence-transfer
-workflow; the `worker` reference owns the accepted request fields.
+workflow; the `agent` reference owns the accepted request fields.
 
 ## Handle failures conservatively
 
@@ -91,11 +91,11 @@ observations.
 
 ## Human UI is a separate surface
 
-The lead TUI exposes `/workers`, the status widget, definition
+The lead TUI exposes `/agents`, the status widget, definition
 configuration, layout selection, focus navigation, and emergency Stop all.
 Those are human-facing surfaces and are documented separately:
 
-- [`/workers` commands](reference/commands.md)
+- [`/agents` commands](reference/commands.md)
 - [Status widget](reference/status-widget.md)
 - [Configuration](reference/configuration.md)
 - [Getting started](getting-started.md)

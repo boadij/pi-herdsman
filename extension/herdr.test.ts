@@ -18,10 +18,10 @@ import {
   safeShellProcessTransition,
   sameRunningProcessOwner,
   sameCwd,
-  stopHerdrWorkerPreservingPane,
+  stopHerdrAgentPreservingPane,
   closeHerdrPane,
   rollbackHerdrStart,
-  startHerdrWorker,
+  startHerdrAgent,
   matchesExpectedSession,
   STARTUP_TIMEOUT_MAX,
   STARTUP_TIMEOUT_MIN,
@@ -648,8 +648,8 @@ test("serializes lifecycle mutations across managed and concrete tab identities"
   } as any;
 
   try {
-    const starting = startHerdrWorker(pi, { cwd: "/tmp" } as any, {
-      label: "worker",
+    const starting = startHerdrAgent(pi, { cwd: "/tmp" } as any, {
+      label: "agent",
       runId: "run-id",
       cwd: "/tmp",
       signal: startAbort.signal,
@@ -658,7 +658,7 @@ test("serializes lifecycle mutations across managed and concrete tab identities"
     const closing = closeHerdrPane(
       pi,
       { cwd: "/tmp" } as any,
-      "worker-run",
+      "agent-run",
       { tabId: "concrete-tab", workspaceId: "workspace-lock-test" },
       closeAbort.signal,
     );
@@ -700,7 +700,7 @@ test("start injects mandatory extensions before definition args and configures t
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "root-workspace";
-  const cwd = "/tmp/worker space/ユニコード";
+  const cwd = "/tmp/agent space/ユニコード";
   const processInfo = {
     pane_id: "pane-1",
     shell_pid: 12,
@@ -711,9 +711,9 @@ test("start injects mandatory extensions before definition args and configures t
     "PI_HERDSMAN_MAILBOX=/tmp/mailbox with $dollar 'quote' `backtick`",
     "PI_HERDSMAN_RUN_ID=run-id",
     "PI_HERDSMAN_OWNER_SESSION_ID=owner-session",
-    "PI_HERDSMAN_LABEL=worker",
-    "PI_HERDSMAN_WORKSPACE_ID=worker-workspace",
-    "PI_HERDSMAN_AGENT_DEFINITION=worker",
+    "PI_HERDSMAN_LABEL=agent",
+    "PI_HERDSMAN_WORKSPACE_ID=agent-workspace",
+    "PI_HERDSMAN_AGENT_DEFINITION=agent",
     "PI_OFFLINE=1",
   ];
   const calls: string[][] = [];
@@ -768,7 +768,7 @@ test("start injects mandatory extensions before definition args and configures t
           code: 0,
           stdout: JSON.stringify({
             result: {
-              tab: { tab_id: "tab-1", label: "workers" },
+              tab: { tab_id: "tab-1", label: "agents" },
               root_pane: { pane_id: "pane-1" },
             },
           }),
@@ -780,7 +780,7 @@ test("start injects mandatory extensions before definition args and configures t
           stdout: JSON.stringify({
             result: {
               agent: {
-                name: "worker-run",
+                name: "agent-run",
                 agent_session: { kind: "id", value: "session-id" },
               },
             },
@@ -792,8 +792,8 @@ test("start injects mandatory extensions before definition args and configures t
   } as any;
 
   try {
-    await startHerdrWorker(pi, { cwd } as any, {
-      label: "worker",
+    await startHerdrAgent(pi, { cwd } as any, {
+      label: "agent",
       runId: "run-id",
       cwd,
       extensionPath: join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
@@ -814,6 +814,7 @@ test("start injects mandatory extensions before definition args and configures t
     (args) => args[0] === "tab" && args[1] === "create",
   )!;
   assert.equal(tabCreate[tabCreate.indexOf("--cwd") + 1], cwd);
+  assert.equal(tabCreate[tabCreate.indexOf("--label") + 1], "agents");
   assert.deepEqual(
     tabCreate
       .flatMap((arg, index) => (arg === "--env" ? [tabCreate[index + 1]!] : []))
@@ -890,7 +891,7 @@ async function executeFailedStart(
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   const originalDateNow = Date.now;
   environment.HERDR_WORKSPACE_ID = "root-workspace";
-  const cwd = "/tmp/pi-herdsman-worker";
+  const cwd = "/tmp/pi-herdsman-agent";
   const calls: Array<{ args: string[]; timeout?: number }> = [];
   const response = (value: unknown) => ({
     code: 0,
@@ -911,7 +912,7 @@ async function executeFailedStart(
       if (key === "tab list") return response({ tabs: [] });
       if (key === "tab create")
         return response({
-          tab: { tab_id: "tab-1", label: "workers" },
+          tab: { tab_id: "tab-1", label: "agents" },
           root_pane: { pane_id: "pane-1" },
         });
       if (key === "pane list")
@@ -951,8 +952,8 @@ async function executeFailedStart(
   let failure: any;
   try {
     try {
-      await startHerdrWorker(pi, { cwd } as any, {
-        label: "worker",
+      await startHerdrAgent(pi, { cwd } as any, {
+        label: "agent",
         runId: "run-id",
         cwd,
         signal,
@@ -1257,8 +1258,8 @@ test("invalid environment assignments are rejected before topology mutation", as
       "PI_HERDSMAN_MAILBOX=has\0nul",
     ]) {
       await assert.rejects(
-        startHerdrWorker(pi, { cwd: "/tmp" } as any, {
-          label: "worker",
+        startHerdrAgent(pi, { cwd: "/tmp" } as any, {
+          label: "agent",
           runId: "run-id",
           cwd: "/tmp",
           env: [env],
@@ -1277,7 +1278,7 @@ test("readiness failure keeps one pane attempt and never starts a replacement ag
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "root-workspace";
-  const cwd = "/tmp/pi-herdsman-worker";
+  const cwd = "/tmp/pi-herdsman-agent";
   const calls: string[][] = [];
   let paneSplit = false;
   const response = (value: unknown) => ({
@@ -1290,7 +1291,7 @@ test("readiness failure keeps one pane attempt and never starts a replacement ag
       calls.push(args);
       const key = args.slice(0, 2).join(" ");
       if (key === "tab list")
-        return response({ tabs: [{ tab_id: "tab-1", label: "workers" }] });
+        return response({ tabs: [{ tab_id: "tab-1", label: "agents" }] });
       if (key === "pane list") {
         return response({
           panes: [
@@ -1333,8 +1334,8 @@ test("readiness failure keeps one pane attempt and never starts a replacement ag
 
   try {
     await assert.rejects(
-      startHerdrWorker(pi, { cwd } as any, {
-        label: "worker",
+      startHerdrAgent(pi, { cwd } as any, {
+        label: "agent",
         runId: "run-id",
         cwd,
         env: ["PI_HERDSMAN_MAILBOX=/tmp/mailbox"],
@@ -1373,7 +1374,7 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
   const workspaceId = "workspace-fresh";
   const tabId = "tab-fresh";
   const paneId = "pane-fresh";
-  const cwd = "/tmp/fresh-worker";
+  const cwd = "/tmp/fresh-agent";
   environment.HERDR_WORKSPACE_ID = workspaceId;
   const calls: string[][] = [];
   let paneLists = 0;
@@ -1398,7 +1399,7 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
       if (key === "tab list") return response({ tabs: [] });
       if (key === "tab create")
         return response({
-          tab: { tab_id: tabId, label: "workers", workspace_id: workspaceId },
+          tab: { tab_id: tabId, label: "agents", workspace_id: workspaceId },
           root_pane: { pane_id: paneId },
         });
       if (key === "pane list") {
@@ -1438,7 +1439,7 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
         agentStartAt = Date.now();
         return response({
           agent: {
-            name: "worker-run",
+            name: "agent-run",
             agent_session: { kind: "id", value: "session-id" },
           },
         });
@@ -1448,8 +1449,8 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
   } as any;
 
   try {
-    await startHerdrWorker(pi, { cwd } as any, {
-      label: "worker",
+    await startHerdrAgent(pi, { cwd } as any, {
+      label: "agent",
       runId: "run-id",
       cwd,
       env: ["PI_HERDSMAN_MAILBOX=/tmp/mailbox"],
@@ -1502,7 +1503,7 @@ test("startup does not launch while the exact readiness marker is pending", asyn
       if (key === "tab list") return response({ tabs: [] });
       if (key === "tab create")
         return response({
-          tab: { tab_id: "pending-tab", label: "workers" },
+          tab: { tab_id: "pending-tab", label: "agents" },
           root_pane: { pane_id: "pending-pane" },
         });
       if (key === "pane run") {
@@ -1527,7 +1528,7 @@ test("startup does not launch while the exact readiness marker is pending", asyn
               workspace_id: "pending-workspace",
               tab_id: "pending-tab",
               agent_status: "unknown",
-              foreground_cwd: "/tmp/pending-worker",
+              foreground_cwd: "/tmp/pending-agent",
             },
           ],
         });
@@ -1539,15 +1540,11 @@ test("startup does not launch while the exact readiness marker is pending", asyn
     },
   } as any;
   try {
-    const starting = startHerdrWorker(
-      pi,
-      { cwd: "/tmp/pending-worker" } as any,
-      {
-        label: "pending",
-        runId: "pending-run",
-        cwd: "/tmp/pending-worker",
-      },
-    );
+    const starting = startHerdrAgent(pi, { cwd: "/tmp/pending-agent" } as any, {
+      label: "pending",
+      runId: "pending-run",
+      cwd: "/tmp/pending-agent",
+    });
     await markerSeen;
     assert.equal(
       calls.filter((args) => args[0] === "agent" && args[1] === "start").length,
@@ -1580,7 +1577,7 @@ test("startup does not launch while the exact readiness marker is pending", asyn
   }
 });
 
-type StartWorkerCase =
+type StartAgentCase =
   | "missing-marker"
   | "corrupt-marker"
   | "workspace-mutation"
@@ -1594,15 +1591,15 @@ type StartWorkerCase =
   | "success"
   | "native-failure";
 
-async function startWorkerCase(
-  kind: StartWorkerCase,
+async function startAgentCase(
+  kind: StartAgentCase,
   onMarker?: () => void,
   timeoutMs = 30_000,
 ) {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "case-workspace";
-  const cwd = "/tmp/case-worker";
+  const cwd = "/tmp/case-agent";
   const calls: string[][] = [];
   let processInfoCalls = 0;
   const response = (value: unknown) => ({
@@ -1630,7 +1627,7 @@ async function startWorkerCase(
       if (key === "tab list") return response({ tabs: [] });
       if (key === "tab create")
         return response({
-          tab: { tab_id: "case-tab", label: "workers" },
+          tab: { tab_id: "case-tab", label: "agents" },
           root_pane: { pane_id: "case-pane" },
         });
       if (key === "pane run") return response({});
@@ -1666,7 +1663,7 @@ async function startWorkerCase(
               : kind === "pane-mutation"
                 ? { pane_id: "other-pane" }
                 : kind === "cwd-mutation"
-                  ? { foreground_cwd: "/tmp/other-worker" }
+                  ? { foreground_cwd: "/tmp/other-agent" }
                   : {};
         return response({
           panes: [
@@ -1702,7 +1699,7 @@ async function startWorkerCase(
   try {
     let failure: unknown;
     try {
-      await startHerdrWorker(pi, { cwd } as any, {
+      await startHerdrAgent(pi, { cwd } as any, {
         label: "case",
         runId: "case-run",
         cwd,
@@ -1730,7 +1727,7 @@ async function startWorkerCase(
   }
 }
 
-test("startHerdrWorker rejects unstable readiness observations without starting an agent", async () => {
+test("startHerdrAgent rejects unstable readiness observations without starting an agent", async () => {
   for (const kind of [
     "missing-marker",
     "corrupt-marker",
@@ -1744,19 +1741,19 @@ test("startHerdrWorker rejects unstable readiness observations without starting 
     "mismatched-process-info-pane",
   ] as const) {
     {
-      const result = await startWorkerCase(kind);
+      const result = await startAgentCase(kind);
       assert.equal(result.agentStarts, 0);
       assert.ok(result.failure);
     }
   }
 });
 
-test("startHerdrWorker handles stable readiness and native-start outcomes", async () => {
-  const result = await startWorkerCase("success");
+test("startHerdrAgent handles stable readiness and native-start outcomes", async () => {
+  const result = await startAgentCase("success");
   assert.equal(result.failure, undefined);
   assert.equal(result.agentStarts, 1);
   await (async () => {
-    const result = await startWorkerCase("native-failure");
+    const result = await startAgentCase("native-failure");
     assert.ok(result.failure);
     assert.equal(result.agentStarts, 1);
   })();
@@ -1765,7 +1762,7 @@ test("startHerdrWorker handles stable readiness and native-start outcomes", asyn
     let now = 1_000_000;
     Date.now = () => now;
     try {
-      const result = await startWorkerCase("success", () => {
+      const result = await startAgentCase("success", () => {
         now += 2_500;
       });
       assert.equal(result.agentStarts, 1);
@@ -1783,7 +1780,7 @@ test("readiness exhaustion preserves the diagnostic reserve and never starts", a
   let now = 1_000_000;
   Date.now = () => now;
   try {
-    const result = await startWorkerCase(
+    const result = await startAgentCase(
       "success",
       () => {
         now += 4_001;
@@ -1837,8 +1834,8 @@ test("split rejects a stale caller before topology mutation", async () => {
 
   try {
     await assert.rejects(
-      startHerdrWorker(pi, { cwd: "/tmp" } as any, {
-        label: "worker",
+      startHerdrAgent(pi, { cwd: "/tmp" } as any, {
+        label: "agent",
         runId: "run-id",
         cwd: "/tmp",
         placement: "split",
@@ -1873,7 +1870,7 @@ async function placementCalls(config: {
   };
   const workspaceId = "workspace-1";
   const tabId = "tab-1";
-  const cwd = "/tmp/placement-worker";
+  const cwd = "/tmp/placement-agent";
   environment.HERDR_WORKSPACE_ID = workspaceId;
   if (config.placement === "split") {
     environment.HERDR_TAB_ID = "stale-tab";
@@ -1895,7 +1892,7 @@ async function placementCalls(config: {
           tabs: [
             {
               tab_id: tabId,
-              label: "workers",
+              label: "agents",
               workspace_id: workspaceId,
             },
           ],
@@ -1933,7 +1930,7 @@ async function placementCalls(config: {
       if (key === "agent start")
         return response({
           agent: {
-            name: "worker-run",
+            name: "agent-run",
             agent_session: { kind: "id", value: "session-id" },
           },
         });
@@ -1942,8 +1939,8 @@ async function placementCalls(config: {
   } as any;
 
   try {
-    await startHerdrWorker(pi, { cwd } as any, {
-      label: "worker",
+    await startHerdrAgent(pi, { cwd } as any, {
+      label: "agent",
       runId: "run-id",
       cwd,
       placement: config.placement,
@@ -1960,7 +1957,7 @@ async function placementCalls(config: {
   return calls;
 }
 
-test("placement validates a non-lead caller and selects the largest worker axis", async () => {
+test("placement validates a non-lead caller and selects the largest agent axis", async () => {
   const callerCalls = await placementCalls({
     placement: "split",
     callerPaneId: "caller",
@@ -1981,7 +1978,7 @@ test("placement validates a non-lead caller and selects the largest worker axis"
   assert.equal(option(callerSplit, "--pane"), "caller");
   assert.equal(option(callerSplit, "--ratio"), "0.65");
   assert.equal(option(callerSplit, "--direction"), "down");
-  assert.equal(option(callerSplit, "--cwd"), "/tmp/placement-worker");
+  assert.equal(option(callerSplit, "--cwd"), "/tmp/placement-agent");
   assert.equal(callerSplit.includes("--no-focus"), true);
   assert.equal(
     callerCalls.some((args) => args[0] === "pane" && args[1] === "layout"),
@@ -2020,7 +2017,7 @@ test("placement validates a non-lead caller and selects the largest worker axis"
         pane_id: item.pane_id,
         workspace_id: "workspace-1",
         tab_id: "tab-1",
-        agent: "worker",
+        agent: "agent",
       })),
       layout: testCase.layout,
     });
@@ -2028,14 +2025,14 @@ test("placement validates a non-lead caller and selects the largest worker axis"
       calls.find((args) => args[0] === "pane" && args[1] === "layout"),
       ["pane", "layout", "--pane", testCase.layout.panes[0].pane_id],
     );
-    const workerSplit = calls.find(
+    const agentSplit = calls.find(
       (args) => args[0] === "pane" && args[1] === "split",
     )!;
-    assert.equal(option(workerSplit, "--pane"), testCase.anchor);
-    assert.equal(option(workerSplit, "--ratio"), "0.5");
-    assert.equal(option(workerSplit, "--direction"), testCase.direction);
-    assert.equal(option(workerSplit, "--cwd"), "/tmp/placement-worker");
-    assert.equal(workerSplit.includes("--no-focus"), true);
+    assert.equal(option(agentSplit, "--pane"), testCase.anchor);
+    assert.equal(option(agentSplit, "--ratio"), "0.5");
+    assert.equal(option(agentSplit, "--direction"), testCase.direction);
+    assert.equal(option(agentSplit, "--cwd"), "/tmp/placement-agent");
+    assert.equal(agentSplit.includes("--no-focus"), true);
   }
 });
 
@@ -2045,7 +2042,7 @@ test("preserving stop refuses a process takeover at the destructive boundary", a
   environment.HERDR_WORKSPACE_ID = "workspace-1";
   const session = { kind: "id" as const, value: "session-1" };
   const agent = {
-    name: "worker-1",
+    name: "agent-1",
     pane_id: "pane-1",
     workspace_id: "workspace-1",
     cwd: "/tmp",
@@ -2094,7 +2091,7 @@ test("preserving stop refuses a process takeover at the destructive boundary", a
 
   try {
     await assert.rejects(
-      stopHerdrWorkerPreservingPane(pi, { cwd: "/tmp" } as any, "worker-1", {
+      stopHerdrAgentPreservingPane(pi, { cwd: "/tmp" } as any, "agent-1", {
         paneId: "pane-1",
         tabId: "tab-1",
         workspaceId: "workspace-1",
@@ -2134,7 +2131,7 @@ test("preserving stop rejects malformed session identity observations", async ()
       if (args[0] === "agent" && args[1] === "get")
         return response({
           agent: {
-            name: "worker-1",
+            name: "agent-1",
             pane_id: "pane-1",
             workspace_id: "workspace-1",
             cwd: "/tmp",
@@ -2149,7 +2146,7 @@ test("preserving stop rejects malformed session identity observations", async ()
     for (const shape of sessionShapes) {
       sessionShape = shape;
       await assert.rejects(
-        stopHerdrWorkerPreservingPane(pi, { cwd: "/tmp" } as any, "worker-1", {
+        stopHerdrAgentPreservingPane(pi, { cwd: "/tmp" } as any, "agent-1", {
           paneId: "pane-1",
           tabId: "tab-1",
           workspaceId: "workspace-1",
@@ -2172,22 +2169,22 @@ test("preserving stop rejects malformed session identity observations", async ()
 test("session matching keeps id and path observations kind-aware", () => {
   assert.equal(
     matchesExpectedSession(
-      { kind: "path", value: "/tmp/worker-session.jsonl" },
-      { id: "different-id", path: "/tmp/./worker-session.jsonl" },
+      { kind: "path", value: "/tmp/agent-session.jsonl" },
+      { id: "different-id", path: "/tmp/./agent-session.jsonl" },
     ),
     true,
   );
   assert.equal(
     matchesExpectedSession(
-      { kind: "id", value: "worker-session" },
-      { id: "worker-session", path: "/tmp/other-session.jsonl" },
+      { kind: "id", value: "agent-session" },
+      { id: "agent-session", path: "/tmp/other-session.jsonl" },
     ),
     true,
   );
   assert.equal(
     matchesExpectedSession(
       { kind: "path", value: "/tmp/other-session.jsonl" },
-      { id: "worker-session", path: "/tmp/worker-session.jsonl" },
+      { id: "agent-session", path: "/tmp/agent-session.jsonl" },
     ),
     false,
   );
@@ -2218,7 +2215,7 @@ test("close accepts a scoped tab response without workspace_id", async () => {
       if (key === "agent get")
         return response({
           agent: {
-            name: "worker-1",
+            name: "agent-1",
             pane_id: "pane-1",
             workspace_id: "workspace-1",
             tab_id: "tab-1",
@@ -2250,7 +2247,7 @@ test("close accepts a scoped tab response without workspace_id", async () => {
   } as any;
 
   try {
-    await closeHerdrPane(pi, { cwd: "/tmp" } as any, "worker-1", {
+    await closeHerdrPane(pi, { cwd: "/tmp" } as any, "agent-1", {
       paneId: "pane-1",
       tabId: "tab-1",
       workspaceId: "workspace-1",
@@ -2272,7 +2269,7 @@ test("close accepts a scoped tab response without workspace_id", async () => {
   );
 });
 
-test("completed worker shell transition closes the pane without stop keys", async () => {
+test("completed agent shell transition closes the pane without stop keys", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "workspace-1";
@@ -2304,7 +2301,7 @@ test("completed worker shell transition closes the pane without stop keys", asyn
       if (key === "agent get")
         return response({
           agent: {
-            name: "worker-1",
+            name: "agent-1",
             pane_id: "pane-1",
             workspace_id: "workspace-1",
             tab_id: "tab-1",
@@ -2335,7 +2332,7 @@ test("completed worker shell transition closes the pane without stop keys", asyn
         return { code: 0, stdout: "", stderr: "" };
       }
       if (key === "agent list")
-        return response({ agents: closed ? [] : [{ name: "worker-1" }] });
+        return response({ agents: closed ? [] : [{ name: "agent-1" }] });
       if (key === "pane list")
         return response({ panes: closed ? [] : [{ pane_id: "pane-1" }] });
       throw new Error("unexpected Herdr call: " + args.join(" "));
@@ -2343,7 +2340,7 @@ test("completed worker shell transition closes the pane without stop keys", asyn
   } as any;
 
   try {
-    await closeHerdrPane(pi, { cwd: "/tmp" } as any, "worker-1", {
+    await closeHerdrPane(pi, { cwd: "/tmp" } as any, "agent-1", {
       paneId: "pane-1",
       tabId: "tab-1",
       workspaceId: "workspace-1",
@@ -2366,7 +2363,7 @@ test("completed worker shell transition closes the pane without stop keys", asyn
   );
 });
 
-test("strict close rejects a completed worker shell transition", async () => {
+test("strict close rejects a completed agent shell transition", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "workspace-1";
@@ -2397,7 +2394,7 @@ test("strict close rejects a completed worker shell transition", async () => {
       if (key === "agent get")
         return response({
           agent: {
-            name: "worker-1",
+            name: "agent-1",
             pane_id: "pane-1",
             workspace_id: "workspace-1",
             tab_id: "tab-1",
@@ -2429,7 +2426,7 @@ test("strict close rejects a completed worker shell transition", async () => {
 
   try {
     await assert.rejects(
-      closeHerdrPane(pi, { cwd: "/tmp" } as any, "worker-1", {
+      closeHerdrPane(pi, { cwd: "/tmp" } as any, "agent-1", {
         paneId: "pane-1",
         tabId: "tab-1",
         workspaceId: "workspace-1",
@@ -2471,7 +2468,7 @@ test("rollback refuses malformed or taken-over process ownership before cleanup"
       if (key === "agent get")
         return response({
           agent: {
-            name: "worker-1",
+            name: "agent-1",
             pane_id: "pane-1",
             workspace_id: "workspace-1",
             cwd: "/tmp",
@@ -2479,7 +2476,7 @@ test("rollback refuses malformed or taken-over process ownership before cleanup"
           },
         });
       if (key === "agent list")
-        return response({ agents: [{ name: "worker-1", pane_id: "pane-1" }] });
+        return response({ agents: [{ name: "agent-1", pane_id: "pane-1" }] });
       if (key === "pane get")
         return response({
           pane: {
@@ -2526,7 +2523,7 @@ test("rollback refuses malformed or taken-over process ownership before cleanup"
       calls.length = 0;
       await assert.rejects(
         rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
-          herdrAgent: "worker-1",
+          herdrAgent: "agent-1",
           workspaceId: "workspace-1",
           tabId: "tab-1",
           paneId: "pane-1",
@@ -2601,7 +2598,7 @@ test("rollback proves the boundary before keys and resources before close", asyn
       if (key === "agent get")
         return response({
           agent: {
-            name: "worker-1",
+            name: "agent-1",
             pane_id: "pane-1",
             workspace_id: "workspace-1",
             cwd: "/tmp",
@@ -2611,7 +2608,7 @@ test("rollback proves the boundary before keys and resources before close", asyn
       if (key === "agent list")
         return response(
           processInfoCalls < 2
-            ? { agents: [{ ...pane, name: "worker-1" }] }
+            ? { agents: [{ ...pane, name: "agent-1" }] }
             : malformedSettlement
               ? { agents: null }
               : { agents: [] },
@@ -2638,7 +2635,7 @@ test("rollback proves the boundary before keys and resources before close", asyn
   } as any;
 
   const attempt = {
-    herdrAgent: "worker-1",
+    herdrAgent: "agent-1",
     workspaceId: "workspace-1",
     tabId: "tab-1",
     paneId: "pane-1",
@@ -2752,7 +2749,7 @@ test("rollback cleans an exited created pane and preserves an exited reused pane
       },
     } as any;
     await rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
-      herdrAgent: "worker-1",
+      herdrAgent: "agent-1",
       workspaceId: "workspace-1",
       tabId: "tab-1",
       paneId: "pane-1",
@@ -2838,7 +2835,7 @@ test("rollback closes an exactly owned exited created tab", async () => {
   } as any;
   try {
     await rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
-      herdrAgent: "worker-1",
+      herdrAgent: "agent-1",
       workspaceId: "workspace-1",
       tabId: "tab-1",
       paneId: "pane-1",
@@ -2928,7 +2925,7 @@ test("rollback rejects zero-exit closes without exact disappearance", async () =
       } as any;
       await assert.rejects(
         rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
-          herdrAgent: "worker-1",
+          herdrAgent: "agent-1",
           workspaceId: "workspace-1",
           tabId: "tab-1",
           paneId: "pane-1",
@@ -3027,7 +3024,7 @@ test("exited-start rollback refuses agent, process, and tab ownership changes", 
     } as any;
     await assert.rejects(
       rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
-        herdrAgent: "worker-1",
+        herdrAgent: "agent-1",
         workspaceId: "workspace-1",
         tabId: "tab-1",
         paneId: "pane-1",
@@ -3058,12 +3055,12 @@ const process = {
 
 test("run-scoped aliases are stable and distinct by incarnation", () => {
   assert.equal(
-    herdrAgentAlias("ws", "worker", "run-1"),
-    herdrAgentAlias("ws", "worker", "run-1"),
+    herdrAgentAlias("ws", "agent", "run-1"),
+    herdrAgentAlias("ws", "agent", "run-1"),
   );
   assert.notEqual(
-    herdrAgentAlias("ws", "worker", "run-1"),
-    herdrAgentAlias("ws", "worker", "run-2"),
+    herdrAgentAlias("ws", "agent", "run-1"),
+    herdrAgentAlias("ws", "agent", "run-2"),
   );
 });
 
@@ -3080,7 +3077,7 @@ test("pane availability requires an empty pane and matching cwd", () => {
     paneIsAvailable(
       {
         tab_id: "tab",
-        agent: "worker",
+        agent: "agent",
         agent_status: "unknown",
         foreground_cwd: "/tmp",
       },

@@ -393,17 +393,18 @@ export function chooseLabel(base: string, labels: Set<string>): string {
     const candidate = `${base}-${i}`;
     if (!labels.has(candidate)) return candidate;
   }
-  throw new Error("Unable to choose worker label");
+  throw new Error("Unable to choose agent label");
 }
-export type WorkerControlState = "working" | "blocked" | "settling" | "unknown";
-export function workerControlState(
+export type ManagedAgentControlState =
+  "working" | "blocked" | "settling" | "unknown";
+export function agentControlState(
   lifecycle: "idle" | "working" | "blocked" | "done" | "unknown",
   activeRequestId: string | undefined,
   completionPending: boolean,
   handoffPending = false,
   waitingForOwner = false,
   recoveryPending = false,
-): WorkerControlState {
+): ManagedAgentControlState {
   if (completionPending || handoffPending || recoveryPending) return "settling";
   if (activeRequestId) {
     if (lifecycle === "working") return "working";

@@ -63,7 +63,7 @@ const ARRAY_FIELDS = new Set([
   "excludeTools",
   "skills",
   "extensions",
-  "workers",
+  "agents",
 ]);
 const SUPPORTED_FIELDS = new Set([
   "name",
@@ -92,7 +92,7 @@ export type Frontmatter = {
   skills?: string[];
   noExtensions?: boolean;
   extensions?: string[];
-  workers?: string[];
+  agents?: string[];
   inheritGlobalContext?: boolean;
   [key: string]: FrontmatterValue | undefined;
 };
@@ -139,11 +139,11 @@ export function parseFrontmatter(
         value.some(
           (entry) => typeof entry !== "string" || entry.trim().length === 0,
         ) ||
-        (field === "workers" && new Set(value).size !== value.length)
+        (field === "agents" && new Set(value).size !== value.length)
       )
         throw new Error(
-          field === "workers"
-            ? "workers must be an inline array of unique non-empty strings"
+          field === "agents"
+            ? "agents must be an inline array of unique non-empty strings"
             : `${field} must be an inline array of non-empty strings`,
         );
       frontmatter[field] = value;
@@ -318,11 +318,11 @@ function validateDefinition(definition: AgentDefinition): void {
         value.some(
           (entry) => typeof entry !== "string" || entry.trim().length === 0,
         ) ||
-        (field === "workers" && new Set(value).size !== value.length))
+        (field === "agents" && new Set(value).size !== value.length))
     )
       invalid(
         field,
-        field === "workers"
+        field === "agents"
           ? "must be an inline array of unique non-empty strings"
           : "must be an inline array of non-empty strings",
       );
@@ -451,10 +451,10 @@ export function discoverAgentDefinitions(
   );
   const names = new Set(effective.map((definition) => definition.name));
   for (const definition of effective)
-    for (const reference of definition.frontmatter.workers ?? [])
+    for (const reference of definition.frontmatter.agents ?? [])
       if (!names.has(reference))
         throw new Error(
-          `agent ${definition.name} references missing worker ${reference}`,
+          `agent ${definition.name} references missing agent definition ${reference}`,
         );
   return effective.map((definition) =>
     inferAgentDefinitionTools({
@@ -482,22 +482,22 @@ export function agentDefinitionEnabled(definition: AgentDefinition): boolean {
   return definition.frontmatter.enabled !== false;
 }
 
-export function validateAgentDefinitionWorkers(
+export function validateAgentDefinitionReferences(
   definition: AgentDefinition,
   definitions: readonly AgentDefinition[],
 ): void {
   const byName = new Map(
     definitions.map((candidate) => [candidate.name, candidate]),
   );
-  for (const reference of definition.frontmatter.workers ?? []) {
-    const worker = byName.get(reference);
-    if (!worker)
+  for (const reference of definition.frontmatter.agents ?? []) {
+    const referencedDefinition = byName.get(reference);
+    if (!referencedDefinition)
       throw new Error(
-        `agent ${definition.name} references missing worker ${reference}`,
+        `agent ${definition.name} references missing agent definition ${reference}`,
       );
-    if (!agentDefinitionEnabled(worker))
+    if (!agentDefinitionEnabled(referencedDefinition))
       throw new Error(
-        `agent ${definition.name} references disabled worker ${reference}; enable ${reference} before assigning ${definition.name}`,
+        `agent ${definition.name} references disabled agent definition ${reference}; enable ${reference} before assigning ${definition.name}`,
       );
   }
 }
@@ -507,7 +507,7 @@ export type AgentDefinitionScope = "delegating" | "leaf";
 function withoutDelegationCapability(
   definition: AgentDefinition,
 ): AgentDefinition {
-  const { workers: _workers, tools, ...frontmatter } = definition.frontmatter;
+  const { agents: _agents, tools, ...frontmatter } = definition.frontmatter;
   if (tools === undefined)
     return {
       ...definition,
@@ -516,7 +516,7 @@ function withoutDelegationCapability(
   const projectedTools = tools
     .flatMap((tool) => tool.split(","))
     .map((tool) => tool.trim())
-    .filter((tool) => tool && tool !== "worker");
+    .filter((tool) => tool && tool !== "agent");
   return {
     ...definition,
     frontmatter: {
@@ -576,9 +576,7 @@ export function agentDefinitionMetadata(
       ? {}
       : { inheritSkills: frontmatter.inheritSkills }),
     ...(frontmatter.skills === undefined ? {} : { skills: frontmatter.skills }),
-    ...(frontmatter.workers === undefined
-      ? {}
-      : { workers: frontmatter.workers }),
+    ...(frontmatter.agents === undefined ? {} : { agents: frontmatter.agents }),
   };
 }
 
@@ -747,8 +745,8 @@ export function expandAgentBodyFiles(
 export function inferAgentDefinitionTools(
   definition: AgentDefinition,
 ): AgentDefinition {
-  const workers = definition.frontmatter.workers ?? [];
-  if (workers.length === 0) return definition;
+  const allowedAgentDefinitions = definition.frontmatter.agents ?? [];
+  if (allowedAgentDefinitions.length === 0) return definition;
   const tools = (definition.frontmatter.tools ?? [])
     .flatMap((tool) => tool.split(","))
     .map((tool) => tool.trim())
@@ -760,17 +758,17 @@ export function inferAgentDefinitionTools(
       .filter(Boolean),
   );
   if (
-    excluded.has("worker") ||
-    (definition.frontmatter.noTools === true && !tools.includes("worker")) ||
+    excluded.has("agent") ||
+    (definition.frontmatter.noTools === true && !tools.includes("agent")) ||
     tools.length === 0 ||
-    tools.includes("worker")
+    tools.includes("agent")
   )
     return definition;
   return {
     ...definition,
     frontmatter: {
       ...definition.frontmatter,
-      tools: [...(definition.frontmatter.tools ?? []), "worker"],
+      tools: [...(definition.frontmatter.tools ?? []), "agent"],
     },
   };
 }
@@ -778,7 +776,7 @@ export function inferAgentDefinitionTools(
 export function agentDefinitionDelegationEnabled(
   definition: AgentDefinition,
 ): boolean {
-  if ((definition.frontmatter.workers?.length ?? 0) === 0) return false;
+  if ((definition.frontmatter.agents?.length ?? 0) === 0) return false;
   const tools = (definition.frontmatter.tools ?? [])
     .flatMap((tool) => tool.split(","))
     .map((tool) => tool.trim())
@@ -787,8 +785,8 @@ export function agentDefinitionDelegationEnabled(
     .flatMap((tool) => tool.split(","))
     .map((tool) => tool.trim())
     .filter(Boolean);
-  if (excluded.includes("worker")) return false;
-  if (definition.frontmatter.noTools === true && !tools.includes("worker"))
+  if (excluded.includes("agent")) return false;
+  if (definition.frontmatter.noTools === true && !tools.includes("agent"))
     return false;
   return definition.frontmatter.tools === undefined || tools.length > 0;
 }
@@ -797,7 +795,7 @@ export type AgentLaunchOptions = {
   bodyPromptPath?: string;
   sharedPromptPath?: string;
   cwd?: string;
-  managedWorker?: boolean;
+  managedAgent?: boolean;
   approveProject?: boolean;
 };
 
@@ -809,13 +807,13 @@ export function agentLaunchArgs(
     bodyPromptPath,
     sharedPromptPath,
     cwd,
-    managedWorker,
+    managedAgent,
     approveProject,
   } = {
     bodyPromptPath: options.bodyPromptPath,
     sharedPromptPath: options.sharedPromptPath,
     cwd: options.cwd ?? process.cwd(),
-    managedWorker: options.managedWorker ?? false,
+    managedAgent: options.managedAgent ?? false,
     approveProject: options.approveProject ?? false,
   };
   const bodyPromptPathForLaunch = agent.body ? bodyPromptPath : undefined;
@@ -868,7 +866,7 @@ export function agentLaunchArgs(
 
   if (frontmatter.noTools) args.push("--no-tools");
   if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");
-  if (managedWorker) {
+  if (managedAgent) {
     if (frontmatter.noTools || frontmatter.tools?.length) {
       const tools = [...(frontmatter.tools ?? []), "ask_owner"]
         .flatMap((tool) => tool.split(","))

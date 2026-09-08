@@ -67,12 +67,12 @@ test("Supervision context formatting preserves state, safety, and bounded record
           needsYou: true,
           pendingAskId: "ask-123",
           pendingAskQuestion: "OAuth or service accounts?",
-          workerCounts: { working: 1, blocked: 1, total: 2 },
+          agentCounts: { working: 1, blocked: 1, total: 2 },
           lastActivity: 123,
           availableActions: ["inspect", "message", "reply"] as const,
-          workers: [
-            { id: "worker-z", label: "reviewer", state: "blocked" as const },
-            { id: "worker-a", label: "implementer", state: "working" as const },
+          agents: [
+            { id: "agent-z", label: "reviewer", state: "blocked" as const },
+            { id: "agent-a", label: "implementer", state: "working" as const },
           ],
         },
         {
@@ -83,9 +83,9 @@ test("Supervision context formatting preserves state, safety, and bounded record
           paneId: "pane-a",
           runtimeState: "idle" as const,
           needsYou: false,
-          workerCounts: { working: 0, blocked: 0, total: 0 },
+          agentCounts: { working: 0, blocked: 0, total: 0 },
           availableActions: ["inspect", "message"] as const,
-          workers: [],
+          agents: [],
         },
       ],
     };
@@ -115,11 +115,11 @@ test("Supervision context formatting preserves state, safety, and bounded record
       "runtime: working",
       "runtime: idle",
       "actions: inspect, message, reply",
-      "worker_counts: working=1 blocked=1 total=2",
+      "agent_counts: working=1 blocked=1 total=2",
       "ask_id: ask-123",
       "question: OAuth or service accounts?",
-      "implementer · working · id=worker-a",
-      "reviewer · blocked · id=worker-z",
+      "implementer · working · id=agent-a",
+      "reviewer · blocked · id=agent-z",
       "diagnostics:",
     ])
       assert.match(
@@ -161,9 +161,9 @@ test("Supervision context formatting preserves state, safety, and bounded record
             needsYou: true,
             pendingAskId: hostile,
             pendingAskQuestion: hostile,
-            workerCounts: { working: 0, blocked: 0, total: 1 },
+            agentCounts: { working: 0, blocked: 0, total: 1 },
             availableActions: ["inspect", "message", "reply"],
-            workers: [{ id: hostile, label: hostile, state: "unknown" }],
+            agents: [{ id: hostile, label: hostile, state: "unknown" }],
           },
         ],
       },
@@ -196,9 +196,9 @@ test("Supervision context formatting preserves state, safety, and bounded record
           paneId: `pane-${index}`,
           runtimeState: "working" as const,
           needsYou: false,
-          workerCounts: { working: 0, blocked: 0, total: 0 },
+          agentCounts: { working: 0, blocked: 0, total: 0 },
           availableActions: ["inspect", "message"] as const,
-          workers: [],
+          agents: [],
         })),
       },
       { status: "fresh" },
@@ -379,7 +379,7 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
       groups.get("BLOCKED")!.map((item) => item.lead),
       ["blocked"],
     );
-    // A blocked worker is not part of this lead projection and cannot create needs-you.
+    // A blocked agent is not part of this lead projection and cannot create needs-you.
     assert.equal(
       groups.get("NEEDS YOU")!.some((item) => item.lead === "blocked"),
       false,
@@ -478,7 +478,7 @@ test("Supervision peeks remain bounded while exposing safe process evidence", (t
       lead({
         displayName: "api/backend",
         runtimeState: "working",
-        workerCounts: { working: 2 },
+        agentCounts: { working: 2 },
       }),
       {
         process: {
@@ -488,7 +488,7 @@ test("Supervision peeks remain bounded while exposing safe process evidence", (t
             { pid: 789, argv0: "node", cmdline: "node long-command" },
           ],
         },
-        workers: ["worker-a", "worker-b"],
+        agents: ["agent-a", "agent-b"],
         recentOutput: "line\n".repeat(100),
       },
       18,
@@ -527,10 +527,7 @@ test("Supervision peeks remain bounded while exposing safe process evidence", (t
     const output = renderSupervisionPeek(
       lead(),
       {
-        workers: Array.from(
-          { length: 100_000 },
-          (_, index) => `worker-${index}`,
-        ),
+        agents: Array.from({ length: 100_000 }, (_, index) => `agent-${index}`),
         recentOutput: "output\n".repeat(100_000),
       },
       80,
@@ -538,7 +535,7 @@ test("Supervision peeks remain bounded while exposing safe process evidence", (t
     );
     assert.equal(output.length, 10);
     assert.ok(output.includes("Recent activity"));
-    assert.doesNotMatch(output.join("\n"), /worker-99999/);
+    assert.doesNotMatch(output.join("\n"), /agent-99999/);
     assert.ok(output.every((line) => visibleWidth(line) <= 80));
   }
 });
@@ -584,16 +581,16 @@ test("Supervision selection uses opaque handles and moves safely", (t) => {
 
 test("status projection renders the complete stable tree with aligned columns", (t) => {
   {
-    const workers = [
+    const agents = [
       {
         label: "z",
-        agentType: "worker",
+        definition: "agent",
         state: "starting" as const,
         model: "a/long",
       },
       {
         label: "parent",
-        agentType: "worker",
+        definition: "agent",
         state: "working" as const,
         model: "a/short",
         thinking: "high",
@@ -602,7 +599,7 @@ test("status projection renders the complete stable tree with aligned columns", 
       },
       {
         label: "child",
-        agentType: "worker",
+        definition: "agent",
         state: "blocked" as const,
         parentLabel: "parent",
         model: "a/long",
@@ -611,19 +608,19 @@ test("status projection renders the complete stable tree with aligned columns", 
       },
       {
         label: "settled",
-        agentType: "worker",
+        definition: "agent",
         state: "settling" as const,
         model: "a/short",
         thinking: "low",
         contextPercent: 42,
       },
-      { label: "unknown", agentType: "worker", state: "unknown" as const },
+      { label: "unknown", definition: "agent", state: "unknown" as const },
     ];
     assert.deepEqual(
-      buildStatusTree(workers).map(({ worker }) => worker.label),
+      buildStatusTree(agents).map(({ agent }) => agent.label),
       ["parent", "child", "settled", "unknown", "z"],
     );
-    const rows = renderStatusRows(workers, { now: 0, frame: 0 });
+    const rows = renderStatusRows(agents, { now: 0, frame: 0 });
     assert.equal(rows.length, 5);
     assert.match(rows[0]!.text, /● working/);
     assert.match(rows[1]!.text, /◐ blocked/);
@@ -634,25 +631,25 @@ test("status projection renders the complete stable tree with aligned columns", 
     assert.match(rows[0]!.text, /7%/);
     assert.doesNotMatch(rows[0]!.text, /ctx/);
     assert.equal(
-      renderStatusRows(workers, { now: 0, frame: 1 })[1]!.text,
+      renderStatusRows(agents, { now: 0, frame: 1 })[1]!.text,
       rows[1]!.text,
     );
     assert.notEqual(
-      renderStatusRows(workers, { now: 0, frame: 1 })[2]!.text,
+      renderStatusRows(agents, { now: 0, frame: 1 })[2]!.text,
       rows[2]!.text,
     );
     assert.equal(
-      renderStatusRows(workers, { now: 0, frame: 1 })[3]!.text,
+      renderStatusRows(agents, { now: 0, frame: 1 })[3]!.text,
       rows[3]!.text,
     );
     assert.match(rows[4]!.text, /◌ starting/);
     assert.notEqual(
-      renderStatusRows(workers, { now: 0, frame: 1 })[0]!.text,
+      renderStatusRows(agents, { now: 0, frame: 1 })[0]!.text,
       rows[0]!.text,
     );
     assert.equal(compactModelToken("provider/model"), "model");
     assert.equal(
-      formatStatusCounts(workers),
+      formatStatusCounts(agents),
       "1 working · 1 blocked · 1 settling · 1 starting · 1 unknown",
     );
     const column = (line: string, token: string) => {
@@ -681,8 +678,8 @@ test("status projection renders the complete stable tree with aligned columns", 
     ] as const;
     const rows = buildStatusRows(
       expected.map(([state], index) => ({
-        label: `worker-${index}`,
-        agentType: "worker",
+        label: `agent-${index}`,
+        definition: "agent",
         state,
       })),
       { now: 0, frame: 0 },
@@ -710,12 +707,16 @@ test("status projection renders the complete stable tree with aligned columns", 
 
 test("Status tree ordering, running options, and responsive rows share invariants", (t) => {
   {
-    const workers = [
-      { label: "scout:a", agentType: "scout", state: "starting" as const },
-      { label: "reviewer:z", agentType: "reviewer", state: "unknown" as const },
+    const agents = [
+      { label: "scout:a", definition: "scout", state: "starting" as const },
+      {
+        label: "reviewer:z",
+        definition: "reviewer",
+        state: "unknown" as const,
+      },
     ];
     assert.deepEqual(
-      buildStatusTree(workers).map(({ worker }) => worker.label),
+      buildStatusTree(agents).map(({ agent }) => agent.label),
       ["reviewer:z", "scout:a"],
     );
   }
@@ -725,7 +726,7 @@ test("Status tree ordering, running options, and responsive rows share invariant
       [
         {
           label: "parent:task",
-          agentType: "implementer",
+          definition: "implementer",
           state: "blocked",
           model: "provider/model",
           thinking: "high",
@@ -735,7 +736,7 @@ test("Status tree ordering, running options, and responsive rows share invariant
         },
         {
           label: "child:task",
-          agentType: "scout",
+          definition: "scout",
           state: "working",
           parentLabel: "parent:task",
           model: "provider/model",
@@ -748,6 +749,9 @@ test("Status tree ordering, running options, and responsive rows share invariant
       { now: Date.now(), frame: 0 },
     );
     const options = renderRunningOptions(rows);
+    assert.equal(rows[0]!.definition, "implementer");
+    assert.equal(rows[0]!.agentLabel, "parent:task");
+    assert.equal(Object.hasOwn(rows[0]!, "agent"), false);
     assert.equal(options.length, 2);
     assert.match(options[0]!, /└─ implementer\s+parent:task\s+◐ blocked/);
     assert.match(options[1]!, /└─ scout\s+child:task\s+● working/);
@@ -765,7 +769,7 @@ test("Status tree ordering, running options, and responsive rows share invariant
       [
         {
           label: "pr-a-implementation",
-          agentType: "implementer",
+          definition: "implementer",
           state: "working",
           startedAt: now - 5 * 60_000 - 25_000,
           model: "provider/gpt-5.6-luna",
@@ -775,7 +779,7 @@ test("Status tree ordering, running options, and responsive rows share invariant
         },
         {
           label: "repo-recon",
-          agentType: "scout",
+          definition: "scout",
           state: "blocked",
           startedAt: now - 60_000,
           model: "provider/gpt-5.6-luna",
@@ -785,7 +789,7 @@ test("Status tree ordering, running options, and responsive rows share invariant
         },
         {
           label: "settling-agent",
-          agentType: "worker",
+          definition: "agent",
           state: "settling",
           startedAt: now - 41_000,
           model: "provider/short",
@@ -795,7 +799,7 @@ test("Status tree ordering, running options, and responsive rows share invariant
         },
         {
           label: "starting-agent",
-          agentType: "reviewer",
+          definition: "reviewer",
           state: "starting",
           startedAt: now - 2 * 60_000,
           model: "provider/short",
@@ -805,13 +809,13 @@ test("Status tree ordering, running options, and responsive rows share invariant
         },
         {
           label: "unknown-agent",
-          agentType: "scout",
+          definition: "scout",
           state: "unknown",
           startedAt: now - 3 * 60_000,
           model: "provider/long-model",
           thinking: "xhigh",
           contextPercent: 7,
-          task: "Recover the worker",
+          task: "Recover the agent",
         },
       ],
       { now, frame: 0 },
@@ -865,20 +869,20 @@ test("status widget animates only moving states and collapses quiet trees", (t) 
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [{ label: "blocked", agentType: "worker", state: "blocked" }],
+      agents: [{ label: "blocked", definition: "agent", state: "blocked" }],
       stale: false,
       unavailable: false,
     });
     assert.equal((widget as any).timer, undefined);
     assert.equal(widget.render(160).length, 2);
     widget.setSnapshot({
-      workers: [{ label: "settling", agentType: "worker", state: "settling" }],
+      agents: [{ label: "settling", definition: "agent", state: "settling" }],
       stale: false,
       unavailable: false,
     });
     assert.deepEqual(widget.render(160), [
       "● herd  1 settling",
-      "└─ ⠋ worker  settling  ◌ settling",
+      "└─ ⠋ agent  settling  ◌ settling",
     ]);
   }
 
@@ -886,11 +890,11 @@ test("status widget animates only moving states and collapses quiet trees", (t) 
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     const snapshot = {
-      workers: [
-        { label: "parent", agentType: "worker", state: "blocked" as const },
+      agents: [
+        { label: "parent", definition: "agent", state: "blocked" as const },
         {
           label: "child",
-          agentType: "worker",
+          definition: "agent",
           state: "working" as const,
           parentLabel: "parent",
         },
@@ -924,15 +928,15 @@ test("display text is normalized and only ellipsized when needed", (t) => {
           label: "auth-review",
           task: "check it",
         },
-        "worker delegate · definition=reviewer · check it",
+        "agent delegate · definition=reviewer · check it",
       ],
       [
         { action: "delegate", definition: "reviewer" },
-        "worker delegate · definition=reviewer",
+        "agent delegate · definition=reviewer",
       ],
       [
         { action: "delegate", session: "session-id", task: "check it" },
-        "worker delegate · session=session-id · check it",
+        "agent delegate · session=session-id · check it",
       ],
       [
         {
@@ -940,19 +944,19 @@ test("display text is normalized and only ellipsized when needed", (t) => {
           session: "session-id",
           task: "continue",
         },
-        "worker delegate · session=session-id · continue",
+        "agent delegate · session=session-id · continue",
       ],
       [
-        { action: "steer", worker: "auth-review" },
-        "worker steer · worker=auth-review",
+        { action: "steer", agent: "auth-review" },
+        "agent steer · agent=auth-review",
       ],
       [
-        { action: "reply", worker: "auth-review", message: "Use option B" },
-        "worker reply · worker=auth-review · Use option B",
+        { action: "reply", agent: "auth-review", message: "Use option B" },
+        "agent reply · agent=auth-review · Use option B",
       ],
       [
-        { action: "close", worker: "auth-review" },
-        "worker close · worker=auth-review",
+        { action: "close", agent: "auth-review" },
+        "agent close · agent=auth-review",
       ],
     ] as const)
       assert.equal(formatToolCall(args), expected);
@@ -967,19 +971,19 @@ test("expanded delegate results show original task and files without changing co
       task: "Review the approved change",
       files: ["z/path", "a/path"],
     };
-    const expanded = formatExpandedToolResult(args, "Worker delegate started.");
+    const expanded = formatExpandedToolResult(args, "Agent delegate started.");
     assert.match(
       expanded,
-      /Worker delegate started\.\n\ntask: Review the approved change/,
+      /Agent delegate started\.\n\ntask: Review the approved change/,
     );
     assert.match(expanded, /files:\n  z\/path\n  a\/path/);
     assert.equal(
       formatToolCall(args),
-      "worker delegate · definition=reviewer · Review the approved change",
+      "agent delegate · definition=reviewer · Review the approved change",
     );
     assert.equal(
-      formatToolCall({ action: "delegate", worker: "reviewer", task: "next" }),
-      "worker delegate · next",
+      formatToolCall({ action: "delegate", agent: "reviewer", task: "next" }),
+      "agent delegate · next",
     );
   }
 });
@@ -993,17 +997,17 @@ test("Expanded delegate results preserve details, failures, and width safety", (
         label: "quick-test",
         task: "check it",
       },
-      "Delegate worker quick-test.\nSession: session-id\nRequest: request-id",
+      "Delegate agent quick-test.\nSession: session-id\nRequest: request-id",
       { pane_id: "pane-id" },
     );
     assert.match(
       expanded,
-      /^Delegate worker quick-test\.\nDefinition: scout\nSession: session-id\nRequest: request-id\n\ntask: check it$/,
+      /^Delegate agent quick-test\.\nDefinition: scout\nSession: session-id\nRequest: request-id\n\ntask: check it$/,
     );
     assert.doesNotMatch(
       formatExpandedToolResult(
         { action: "delegate", session: "session-id" },
-        "Delegate worker quick-test.\nSession: session-id",
+        "Delegate agent quick-test.\nSession: session-id",
         { pane_id: "pane-id" },
       ),
       /Definition: scout/,
@@ -1011,7 +1015,7 @@ test("Expanded delegate results preserve details, failures, and width safety", (
     assert.doesNotMatch(
       formatExpandedToolResult(
         { action: "delegate", definition: "scout", label: "existing" },
-        "Delegate worker existing.\nSession: session-id\nRequest: request-id",
+        "Delegate agent existing.\nSession: session-id\nRequest: request-id",
         {},
       ),
       /Definition: scout/,
@@ -1040,9 +1044,9 @@ test("Expanded delegate results preserve details, failures, and width safety", (
     assert.equal(
       formatExpandedToolResult(
         { action: "delegate", task: "Attempted task", files: ["/tmp/🧪 path"] },
-        "Worker delegate failed.\nMessage: denied",
+        "Agent delegate failed.\nMessage: denied",
       ),
-      "Worker delegate failed.\nMessage: denied\n\ntask: Attempted task\n\nfiles:\n  /tmp/🧪 path",
+      "Agent delegate failed.\nMessage: denied\n\ntask: Attempted task\n\nfiles:\n  /tmp/🧪 path",
     );
     assert.equal(
       formatExpandedToolResult(
@@ -1061,7 +1065,7 @@ test("Expanded delegate results preserve details, failures, and width safety", (
         task: "Keep this task",
         files: ["z/path", path, "a/path"],
       },
-      "Worker delegate started.",
+      "Agent delegate started.",
     );
     assert.ok(formatted.indexOf("z/path") < formatted.indexOf(path));
     assert.ok(formatted.indexOf(path) < formatted.indexOf("a/path"));
@@ -1091,10 +1095,10 @@ test("widget never exceeds its width", (t) => {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
+      agents: [
         {
           label: "審査🙂",
-          agentType: "reviewer",
+          definition: "reviewer",
           state: "working",
           task: "作業",
         },
@@ -1114,13 +1118,13 @@ test("Status widgets distinguish refresh state and retain authoritative rows", (
     t.after(() => widget.dispose());
     assert.match(widget.render(160)[0], /unavailable/);
     widget.setSnapshot({
-      workers: [{ label: "w", agentType: "worker", state: "settling" }],
+      agents: [{ label: "w", definition: "agent", state: "settling" }],
       stale: false,
       unavailable: false,
     });
     assert.match(widget.render(160)[0], /1 settling/);
     widget.setSnapshot({
-      workers: [{ label: "w", agentType: "worker", state: "settling" }],
+      agents: [{ label: "w", definition: "agent", state: "settling" }],
       stale: true,
       unavailable: false,
     });
@@ -1131,10 +1135,10 @@ test("Status widgets distinguish refresh state and retain authoritative rows", (
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
-        { label: "settling-leaf", agentType: "worker", state: "settling" },
-        { label: "working", agentType: "worker", state: "working" },
-        { label: "settling-other", agentType: "worker", state: "settling" },
+      agents: [
+        { label: "settling-leaf", definition: "agent", state: "settling" },
+        { label: "working", definition: "agent", state: "working" },
+        { label: "settling-other", definition: "agent", state: "settling" },
       ],
       stale: false,
       unavailable: false,
@@ -1146,10 +1150,10 @@ test("Status widgets distinguish refresh state and retain authoritative rows", (
     assert.match(rendered, /settling-other/);
 
     widget.setSnapshot({
-      workers: [
-        { label: "settling-a", agentType: "worker", state: "settling" },
-        { label: "starting", agentType: "worker", state: "starting" },
-        { label: "settling-b", agentType: "worker", state: "settling" },
+      agents: [
+        { label: "settling-a", definition: "agent", state: "settling" },
+        { label: "starting", definition: "agent", state: "starting" },
+        { label: "settling-b", definition: "agent", state: "settling" },
       ],
       stale: false,
       unavailable: false,
@@ -1170,17 +1174,17 @@ test("Status widgets preserve parent families and settling counts", (t) => {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
-        { label: "parent", agentType: "worker", state: "settling" },
+      agents: [
+        { label: "parent", definition: "agent", state: "settling" },
         {
           label: "active-child",
-          agentType: "worker",
+          definition: "agent",
           state: "working",
           parentLabel: "parent",
         },
         {
           label: "blocked-sibling",
-          agentType: "worker",
+          definition: "agent",
           state: "blocked",
           parentLabel: "parent",
         },
@@ -1198,9 +1202,9 @@ test("Status widgets preserve parent families and settling counts", (t) => {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
-        { label: "settling-a", agentType: "worker", state: "settling" },
-        { label: "settling-b", agentType: "worker", state: "settling" },
+      agents: [
+        { label: "settling-a", definition: "agent", state: "settling" },
+        { label: "settling-b", definition: "agent", state: "settling" },
       ],
       stale: false,
       unavailable: false,
@@ -1215,7 +1219,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [],
+      agents: [],
       stale: false,
       unavailable: false,
       breadcrumb: ["lead", "implementer:one"],
@@ -1231,7 +1235,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
     assert.ok(visibleWidth(truncated) <= 32);
     assert.doesNotMatch(widget.render(20)[0]!, /\[|read|bash|ask_owner/);
     widget.setSnapshot({
-      workers: [],
+      agents: [],
       stale: false,
       unavailable: false,
       breadcrumb: ["lead", "implementer:one"],
@@ -1245,11 +1249,11 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
-        { label: "parent", agentType: "worker", state: "working" },
+      agents: [
+        { label: "parent", definition: "agent", state: "working" },
         {
           label: "child",
-          agentType: "worker",
+          definition: "agent",
           state: "working",
           parentLabel: "parent",
         },
@@ -1269,15 +1273,15 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
   }
 });
 
-test("widget renders worker inactivity separately from refresh failure and fits narrow widths", (t) => {
+test("widget renders agent inactivity separately from refresh failure and fits narrow widths", (t) => {
   {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
+      agents: [
         {
-          label: "long-worker-label",
-          agentType: "worker",
+          label: "long-agent-label",
+          definition: "agent",
           state: "working",
           stale: true,
           inactiveMs: 632_000,
@@ -1293,7 +1297,7 @@ test("widget renders worker inactivity separately from refresh failure and fits 
         widget.render(width).every((line) => visibleWidth(line) <= width),
       );
     widget.setSnapshot({
-      workers: [],
+      agents: [],
       stale: true,
       unavailable: false,
     });
@@ -1306,16 +1310,16 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
+      agents: [
         {
           label: "implementer:one",
-          agentType: "implementer",
+          definition: "implementer",
           state: "settling",
           model: "openai/gpt",
         },
         {
           label: "scout:one",
-          agentType: "scout",
+          definition: "scout",
           state: "working",
           parentLabel: "implementer:one",
           model: "openai/codex",
@@ -1337,10 +1341,10 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
     t.after(() => widget.dispose());
     const startedAt = Date.now();
     widget.setSnapshot({
-      workers: [
+      agents: [
         {
           label: "implementer:feature",
-          agentType: "implementer",
+          definition: "implementer",
           state: "working",
           task: "Parent task",
           startedAt,
@@ -1350,7 +1354,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
         },
         {
           label: "scout:child-1",
-          agentType: "scout",
+          definition: "scout",
           state: "working",
           parentLabel: "implementer:feature",
           task: "Child one",
@@ -1361,7 +1365,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
         },
         {
           label: "scout:child-2",
-          agentType: "scout",
+          definition: "scout",
           state: "working",
           parentLabel: "implementer:feature",
           task: "Child two",
@@ -1390,7 +1394,7 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [],
+      agents: [],
       stale: false,
       unavailable: false,
       breadcrumb: ["lead", "implementer", "scout"],
@@ -1398,7 +1402,7 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
     });
     assert.deepEqual(widget.render(160), ["● lead → implementer → scout"]);
     widget.setSnapshot({
-      workers: [],
+      agents: [],
       stale: false,
       unavailable: false,
       breadcrumb: ["?", "scout"],
@@ -1415,7 +1419,7 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [],
+      agents: [],
       stale: false,
       unavailable: false,
       breadcrumb: ["lead", "implementer", "scout"],
@@ -1432,7 +1436,7 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [],
+      agents: [],
       stale: false,
       unavailable: false,
       breadcrumb: ["lead\u001b[31m", "審査🙂e\u0301\u001b[0m"],
@@ -1452,9 +1456,9 @@ test("widget uses logical labels in the shared row formatter", (t) => {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
-        { label: "reviewer:task", agentType: "reviewer", state: "working" },
-        { label: "reviewerish:task", agentType: "reviewer", state: "working" },
+      agents: [
+        { label: "reviewer:task", definition: "reviewer", state: "working" },
+        { label: "reviewerish:task", definition: "reviewer", state: "working" },
       ],
       stale: false,
       unavailable: false,
@@ -1479,7 +1483,7 @@ test("widget uses logical labels in the shared row formatter", (t) => {
     const widget = new StatusWidget(undefined, theme);
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [{ label: "worker", agentType: "reviewer", state: "working" }],
+      agents: [{ label: "agent", definition: "reviewer", state: "working" }],
       stale: false,
       unavailable: false,
     });
@@ -1619,8 +1623,8 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
 test("tool and completion renderers retain structured action details", (t) => {
   {
     assert.equal(
-      formatToolResultSummary("list", { ok: true, workers: [1, 2] }),
-      "✓ 2 workers",
+      formatToolResultSummary("list", { ok: true, agents: [1, 2] }),
+      "✓ 2 agents",
     );
     assert.match(
       formatToolModelResult("close", {
@@ -1644,7 +1648,7 @@ test("tool and completion renderers retain structured action details", (t) => {
         content: "bounded result",
         details: {
           requestId: "req",
-          workerLabel: "worker",
+          agentLabel: "agent",
           status: "completed",
           truncated: false,
         },
@@ -1653,7 +1657,7 @@ test("tool and completion renderers retain structured action details", (t) => {
       theme,
     );
     assert.ok(rendered instanceof Box);
-    assert.deepEqual(rendered.render(160)[1].trim(), "✓ worker completed");
+    assert.deepEqual(rendered.render(160)[1].trim(), "✓ agent completed");
     assert.ok(bgTokens.length > 0);
     assert.deepEqual([...new Set(bgTokens)], ["customMessageBg"]);
   }
@@ -1675,7 +1679,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
           content: "bounded result",
           details: {
             requestId: "req",
-            workerLabel: "reviewer:auth-review",
+            agentLabel: "reviewer:auth-review",
             piSessionId: "session-id",
             status: "completed",
             elapsedMs,
@@ -1703,10 +1707,10 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const expanded = renderCompletionMessage(
       {
         content:
-          "Worker result · worker=worker · definition=reviewer · request=req · status=completed\n\nResult file: /tmp/result\n\nOutput truncated after 2000 lines.",
+          "Agent result · agent=agent · definition=reviewer · request=req · status=completed\n\nResult file: /tmp/result\n\nOutput truncated after 2000 lines.",
         details: {
           requestId: "req",
-          workerLabel: "worker",
+          agentLabel: "agent",
           piSessionId: "session-id",
           status: "completed",
           elapsedMs: 1_000,
@@ -1723,7 +1727,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const expandedText = expanded.render(120).join("\n");
     assert.match(
       expandedText,
-      /\[success\]✓ worker · session=session-id completed/,
+      /\[success\]✓ agent · session=session-id completed/,
     );
     assert.match(expandedText, /session: session-id/);
     assert.match(expandedText, /request: req/);
@@ -1739,19 +1743,19 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
         content: "failure reason",
         details: {
           requestId: "req",
-          workerLabel: "worker",
+          agentLabel: "agent",
           status: "failed",
           truncated: false,
           error: {
             code: "write_failure",
-            message: "Could not persist worker result",
+            message: "Could not persist agent result",
           },
         },
       },
       { expanded: false },
       theme,
     );
-    assert.match(failed.render(120).join("\n"), /\[error\]✗ worker failed/);
+    assert.match(failed.render(120).join("\n"), /\[error\]✗ agent failed/);
     assert.match(failed.render(120).join("\n"), /\[muted\]  failure reason/);
 
     const expandedFailed = renderCompletionMessage(
@@ -1759,12 +1763,12 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
         content: "failure reason",
         details: {
           requestId: "req",
-          workerLabel: "worker",
+          agentLabel: "agent",
           status: "failed",
           truncated: false,
           error: {
             code: "write_failure",
-            message: "Could not persist worker result",
+            message: "Could not persist agent result",
           },
         },
       },
@@ -1774,7 +1778,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const expandedFailureText = expandedFailed.render(120).join("\n");
     assert.match(
       expandedFailureText,
-      /error: write_failure: Could not persist worker result/,
+      /error: write_failure: Could not persist agent result/,
     );
   }
 
@@ -1788,7 +1792,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
         "A deliberately long completion result with Unicode ✓ 漢字 and enough content to wrap.\nSecond long line.",
       details: {
         requestId: "12345678-1234-4234-8234-123456789abc",
-        workerLabel: "implementer:completion",
+        agentLabel: "implementer:completion",
         status: "completed" as const,
         elapsedMs: 123_000,
         contextUsage: { tokens: 72, contextWindow: 100, percent: 72 },
@@ -1828,7 +1832,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
           content: "Result file: /private/result.md\n\ncompleted",
           details: {
             requestId: "req",
-            workerLabel: "reviewer:auth-review",
+            agentLabel: "reviewer:auth-review",
             status: "completed",
             ...(elapsedMs === undefined ? {} : { elapsedMs }),
             resultPath: "/private/result.md",
@@ -1870,7 +1874,7 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
         {
           name: "bundled",
           extensionSource: "/extension/agent-definitions/bundled.md",
-          description: "Bundled worker",
+          description: "Bundled agent",
           tools: ["exec"],
         },
         {
@@ -1884,13 +1888,13 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
             "/Users/example/.agents/skills/ego-browser/SKILL.md",
             "/Users/example/.pi/agent/skills/code-review/SKILL.md",
           ],
-          workers: ["scout"],
+          agents: ["scout"],
         },
         {
           name: "custom",
           overrideSource: `${home}/.pi/agent/agents/custom.md`,
           skills: [],
-          workers: [],
+          agents: [],
         },
       ],
       theme,
@@ -1936,7 +1940,7 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
       output,
       /<muted>delegates\s+<\/muted><customMessageText>scout/,
     );
-    assert.doesNotMatch(output, /workers|none/);
+    assert.doesNotMatch(output, /<muted>agents\s|none/);
     assert.match(
       output,
       /<customMessageLabel>Definitions<\/customMessageLabel><\/b><muted> · 3/,
@@ -2084,13 +2088,13 @@ test("stop summary renderer is width-safe and keeps its transcript text", (t) =>
     };
     const rendered = renderStopSummary(
       {
-        content: "[Pi Herd] Stop all result:\nStopped worker-🙂\n✓ worker-🙂",
-        details: { summary: "Stopped worker-🙂\n✓ worker-🙂" },
+        content: "[Pi Herd] Stop all result:\nStopped agent-🙂\n✓ agent-🙂",
+        details: { summary: "Stopped agent-🙂\n✓ agent-🙂" },
       },
       theme,
     );
     assert.match(rendered.render(80).join("\n"), /Stop all/);
-    assert.match(rendered.render(80).join("\n"), /Stopped worker-🙂/);
+    assert.match(rendered.render(80).join("\n"), /Stopped agent-🙂/);
     for (let width = 1; width <= 80; width++)
       assert.ok(
         rendered.render(width).every((line) => visibleWidth(line) <= width),
@@ -2102,10 +2106,10 @@ test("agent definition display helpers keep authoritative values untouched", (t)
   {
     const home = homedir();
     assert.equal(
-      displayHomePath(`${home}/.pi/agent/agents/worker.md`),
-      "~/.pi/agent/agents/worker.md",
+      displayHomePath(`${home}/.pi/agent/agents/agent.md`),
+      "~/.pi/agent/agents/agent.md",
     );
-    assert.equal(displayHomePath("/tmp/worker.md"), "/tmp/worker.md");
+    assert.equal(displayHomePath("/tmp/agent.md"), "/tmp/agent.md");
     assert.equal(displayHomePath(`${home}/..config`), "~/..config");
     assert.equal(
       displaySkillName("/Users/example/.agents/skills/ego-browser/SKILL.md"),
@@ -2152,7 +2156,7 @@ test("Agent definition skills remain readable, deduplicated, and width-safe", (t
           name: "dedupe",
           tools: ["exec"],
           skills: ["./skills/project/SKILL.md", "./skills/project/SKILL.md"],
-          workers: ["scout"],
+          agents: ["scout"],
           overrideSource: "/tmp/override.md",
         },
       ],
@@ -2187,12 +2191,12 @@ test("Agent definition skills remain readable, deduplicated, and width-safe", (t
             "A long description with Unicode ✓ 漢字 and enough content to wrap safely.",
           model: "provider/a-very-long-model-identifier",
           thinking: "high",
-          tools: ["exec", "wait", "worker"],
+          tools: ["exec", "wait", "agent"],
           skills: [
             "/Users/example/.agents/skills/ego-browser/SKILL.md",
             "./skills/project/SKILL.md",
           ],
-          workers: ["scout", "researcher"],
+          agents: ["scout", "researcher"],
           overrideSource: `${homedir()}/.pi/agent/agents/a-very-long-agent-name.md`,
         },
       ],
@@ -2210,12 +2214,12 @@ test("Agent definition skills remain readable, deduplicated, and width-safe", (t
   }
 });
 
-test("List output preserves definitions and worker action state", (t) => {
+test("List output preserves definitions and agent action state", (t) => {
   {
     assert.match(
       formatToolModelResult("list", {
         ok: true,
-        workers: [],
+        agents: [],
         agent_definitions: [
           { name: "reviewer", description: "Final independent review" },
         ],
@@ -2227,8 +2231,8 @@ test("List output preserves definitions and worker action state", (t) => {
   {
     const rendered = formatToolModelResult("list", {
       ok: true,
-      workers: [
-        { worker: "parent", state: "settling", available_actions: ["steer"] },
+      agents: [
+        { agent: "parent", state: "settling", available_actions: ["steer"] },
       ],
     });
     assert.match(rendered, /parent · settling · can steer/);
@@ -2246,13 +2250,13 @@ test("Definition formatting preserves model, status, and source contracts", (t) 
           thinking: "high",
           tools: ["read", "grep"],
           skills: ["review"],
-          workers: ["scout"],
+          agents: ["scout"],
         },
-        { name: "worker" },
+        { name: "agent" },
       ]),
       [
         "  reviewer — Final independent review | tools read, grep | skills review | delegates scout",
-        "  worker | tools default | skills none",
+        "  agent | tools default | skills none",
       ],
     );
   }
@@ -2261,11 +2265,11 @@ test("Definition formatting preserves model, status, and source contracts", (t) 
     assert.deepEqual(
       formatAgentDefinitions([
         { name: "reviewer", enabled: false, description: "Read-only review" },
-        { name: "worker", enabled: true },
+        { name: "agent", enabled: true },
       ]),
       [
         "  reviewer — Read-only review | status disabled | tools default | skills none",
-        "  worker | tools default | skills none",
+        "  agent | tools default | skills none",
       ],
     );
   }
@@ -2290,20 +2294,20 @@ test("Definition formatting preserves model, status, and source contracts", (t) 
   }
 });
 
-test("list model output renders only direct workers", (t) => {
+test("list model output renders only direct agents", (t) => {
   {
-    const parent = { worker: "parent", agent_definition: "reviewer" };
+    const parent = { agent: "parent", agent_definition: "reviewer" };
     const rendered = formatToolModelResult("list", {
       ok: true,
-      workers: [
+      agents: [
         parent,
-        { worker: "child", parent_label: "parent" },
-        { worker: "grandchild", parent_label: "child" },
+        { agent: "child", parent_label: "parent" },
+        { agent: "grandchild", parent_label: "child" },
       ],
     });
-    assert.match(rendered, /parent · agent reviewer · unknown/);
-    assert.match(rendered, /workers:\n    child · unknown/);
-    assert.match(rendered, /agent reviewer/);
+    assert.match(rendered, /parent · definition reviewer · unknown/);
+    assert.match(rendered, /agents:\n    child · unknown/);
+    assert.match(rendered, /definition reviewer/);
     assert.doesNotMatch(rendered, /role: reviewer/);
     assert.equal(parent.agent_definition, "reviewer");
     assert.match(rendered, /grandchild · unknown · non-actionable/);
@@ -2314,10 +2318,10 @@ test("List output preserves orphan, session, and diagnostic evidence", (t) => {
   {
     const rendered = formatToolModelResult("list", {
       ok: true,
-      workers: [
-        { worker: "lead", state: "settling" },
+      agents: [
+        { agent: "lead", state: "settling" },
         {
-          worker: "orphan",
+          agent: "orphan",
           parent_label: "missing",
           state: "working",
           available_actions: ["steer"],
@@ -2330,7 +2334,7 @@ test("List output preserves orphan, session, and diagnostic evidence", (t) => {
         },
       ],
     });
-    assert.match(rendered, /Workers: 3/);
+    assert.match(rendered, /Agents: 3/);
     assert.match(rendered, /Unmatched ancestry \(recovery only\):/);
     assert.match(rendered, /orphan · working · non-actionable · orphan/);
     assert.match(rendered, /parent: missing \(not present\)/);
@@ -2341,16 +2345,16 @@ test("List output preserves orphan, session, and diagnostic evidence", (t) => {
   {
     const rendered = formatToolModelResult("list", {
       ok: true,
-      workers: [{ worker: "worker", pi_session_path: "/tmp/worker.jsonl" }],
+      agents: [{ agent: "agent", pi_session_path: "/tmp/agent.jsonl" }],
     });
-    assert.match(rendered, /worker · unknown\n  session: \/tmp\/worker\.jsonl/);
+    assert.match(rendered, /agent · unknown\n  session: \/tmp\/agent\.jsonl/);
     assert.doesNotMatch(rendered, /pane/);
   }
 
   {
     const rendered = formatToolModelResult("list", {
       ok: true,
-      workers: [
+      agents: [
         {
           state: "unknown",
           available_actions: [],
@@ -2361,7 +2365,7 @@ test("List output preserves orphan, session, and diagnostic evidence", (t) => {
     });
     assert.equal(
       rendered,
-      "Workers: 1\n\nunknown · unknown · can nothing\n  diagnostic: Mailbox state unavailable: malformed state\n",
+      "Agents: 1\n\nunknown · unknown · can nothing\n  diagnostic: Mailbox state unavailable: malformed state\n",
     );
   }
 });
@@ -2463,7 +2467,7 @@ test("Capability summaries preserve deterministic tool and skill policy output",
     assert.match(
       formatToolModelResult("list", {
         ok: true,
-        workers: [],
+        agents: [],
         agent_definitions: [{ name: "delegate" }],
       }),
       /Agent definitions:\n  delegate \| tools default \| skills none/,
@@ -2476,11 +2480,11 @@ test("successful control results contain factual assignment evidence", (t) => {
     for (const action of ["delegate", "steer", "reply"]) {
       const rendered = formatToolModelResult(action, {
         ok: true,
-        worker: "worker",
+        agent: "agent",
         request_id: "request",
         session_id: "session",
       });
-      assert.match(rendered, /worker worker\./);
+      assert.match(rendered, /agent agent\./);
       assert.match(rendered, /Session: session/);
       assert.match(rendered, /Request: request/);
       assert.doesNotMatch(rendered, /Next:|Continue|poll|sleep|wait/);
@@ -2493,7 +2497,7 @@ test("Model output preserves inspection, concise controls, and structured errors
     const rendered = formatToolModelResult("inspect", {
       ok: true,
       action: "inspect",
-      worker: "worker",
+      agent: "agent",
       session_id: "session",
       pane_id: "pane",
       process: {
@@ -2505,7 +2509,7 @@ test("Model output preserves inspection, concise controls, and structured errors
       },
       recent_output: "unique-inspect-marker",
     });
-    assert.match(rendered, /Inspect worker worker\./);
+    assert.match(rendered, /Inspect agent agent\./);
     assert.match(rendered, /Session: session/);
     assert.match(rendered, /Pane: pane/);
     assert.match(rendered, /Foreground: sleep 600/);
@@ -2518,13 +2522,13 @@ test("Model output preserves inspection, concise controls, and structured errors
 
   {
     assert.doesNotMatch(
-      formatToolModelResult("close", { ok: true, worker: "worker" }),
+      formatToolModelResult("close", { ok: true, agent: "agent" }),
       /Next:/,
     );
     assert.doesNotMatch(
       formatToolModelResult("list", {
         ok: true,
-        workers: [],
+        agents: [],
         agent_definitions: [],
       }),
       /Next:/,
@@ -2537,11 +2541,11 @@ test("Model output preserves inspection, concise controls, and structured errors
         ok: false,
         error: {
           category: "target_not_found",
-          message: "Worker was not found",
-          nextAction: "Refresh the worker list",
+          message: "Agent was not found",
+          nextAction: "Refresh the agent list",
         },
       }),
-      /Next action: Refresh the worker list/,
+      /Next action: Refresh the agent list/,
     );
   }
 
@@ -2551,14 +2555,14 @@ test("Model output preserves inspection, concise controls, and structured errors
       error: {
         category: "rollback_failure",
         message: "startup failed",
-        ids: { label: "worker", paneId: "pane-1" },
+        ids: { label: "agent", paneId: "pane-1" },
         details: { stage: "agent_start" },
         primary: { category: "pane_not_ready", message: "Pi did not start" },
         cleanup: { category: "internal_failure", message: "pane preserved" },
         nextAction: "Inspect the preserved pane",
       },
     });
-    assert.match(rendered, /Identity: label=worker, paneId=pane-1/);
+    assert.match(rendered, /Identity: label=agent, paneId=pane-1/);
     assert.match(rendered, /Stage: agent_start/);
     assert.match(
       rendered,
@@ -2578,10 +2582,10 @@ test("Status rows drop task text before protected columns at every width", (t) =
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
+      agents: [
         {
           label: "reviewer",
-          agentType: "worker",
+          definition: "agent",
           state: "working",
           task: "a very long task that should be removed first",
           startedAt: Date.now(),
@@ -2601,10 +2605,10 @@ test("Status rows drop task text before protected columns at every width", (t) =
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
+      agents: [
         {
           label: "reviewer",
-          agentType: "worker",
+          definition: "agent",
           state: "working",
           task: "a task that cannot fit",
           startedAt: Date.now(),
@@ -2627,10 +2631,10 @@ test("Status rows drop task text before protected columns at every width", (t) =
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
     widget.setSnapshot({
-      workers: [
+      agents: [
         {
-          label: "worker",
-          agentType: "worker",
+          label: "agent",
+          definition: "agent",
           state: "working",
           task: "review the implementation",
           startedAt: Date.now(),
