@@ -2724,7 +2724,7 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
   );
   assert.match(
     aggregate.details.error.message,
-    /Allowed: action, session, task, files, timeoutMs/,
+    /Allowed: action, session, label, task, files, timeoutMs/,
   );
   assert.deepEqual(pi.calls, []);
   const legacy = await pi.tools[0].execute(

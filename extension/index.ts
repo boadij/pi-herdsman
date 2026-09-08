@@ -462,6 +462,7 @@ type ParsedParams =
   | {
       action: "delegate";
       session: string;
+      label?: string;
       task: string;
       files?: string[];
       timeoutMs?: number;
@@ -640,6 +641,7 @@ function parseRequest(p: Params): ParsedParams {
     rejectUnsupported(p, "Session delegation", [
       "action",
       "session",
+      "label",
       "task",
       "files",
       "timeoutMs",
@@ -660,6 +662,7 @@ function parseRequest(p: Params): ParsedParams {
       action: "delegate",
       session: p.session,
       task: p.task,
+      ...(p.label !== undefined ? { label: p.label } : {}),
       ...(p.files !== undefined ? { files: p.files } : {}),
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
     };
@@ -4655,7 +4658,7 @@ async function actionUnsafe(
         "Delegation requires a definition or session",
         "delegate",
       );
-    const requestedLabel = "definition" in p ? p.label : undefined;
+    const requestedLabel = p.label;
     const agentContext = await contextAgentDefinitions(ctx);
     const definition = agentContext.definitions.find(
       (candidate) => candidate.name === agentDefinition,
@@ -5281,6 +5284,7 @@ async function actionUnsafe(
       session_id: runtime.piSessionId,
       pane_id: runtime.paneId,
       captured_at: snapshot.capturedAt,
+      recent_output_truncated: snapshot.recentOutputTruncated,
       ...(snapshot.recentOutput
         ? { recent_output: snapshot.recentOutput }
         : {}),
@@ -8186,6 +8190,7 @@ export default function (pi: ExtensionAPI): void {
                 pi_session_id: lead.lead,
               },
               captured_at: evidence.capturedAt,
+              recent_output_truncated: evidence.recentOutputTruncated,
               ...(evidence.recentOutput
                 ? { recent_output: evidence.recentOutput }
                 : {}),
@@ -8950,7 +8955,7 @@ export default function (pi: ExtensionAPI): void {
               Type.String({
                 description:
                   "Optional logical agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
-                pattern: "^[a-z][a-z0-9_-]{0,31}$",
+                pattern: AGENT_LABEL_PATTERN.source,
               }),
             ),
             cwd: Type.Optional(
@@ -8989,6 +8994,13 @@ export default function (pi: ExtensionAPI): void {
           {
             action: StringEnum(["delegate"] as const),
             session: Type.String({ pattern: "\\S" }),
+            label: Type.Optional(
+              Type.String({
+                description:
+                  "Optional logical agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
+                pattern: AGENT_LABEL_PATTERN.source,
+              }),
+            ),
             task: Type.String({ pattern: "\\S" }),
             files: Type.Optional(Type.Array(Type.String())),
             timeoutMs: Type.Optional(
@@ -9004,7 +9016,7 @@ export default function (pi: ExtensionAPI): void {
           {
             action: StringEnum(["steer"] as const),
             agent: Type.String({
-              pattern: "^[a-z][a-z0-9_-]{0,31}$",
+              pattern: AGENT_LABEL_PATTERN.source,
             }),
             message: Type.String({ pattern: "\\S" }),
             files: Type.Optional(Type.Array(Type.String())),
@@ -9015,7 +9027,7 @@ export default function (pi: ExtensionAPI): void {
           {
             action: StringEnum(["reply"] as const),
             agent: Type.String({
-              pattern: "^[a-z][a-z0-9_-]{0,31}$",
+              pattern: AGENT_LABEL_PATTERN.source,
             }),
             message: Type.String({ pattern: "\\S" }),
             files: Type.Optional(Type.Array(Type.String())),
@@ -9026,7 +9038,7 @@ export default function (pi: ExtensionAPI): void {
           {
             action: StringEnum(["close"] as const),
             agent: Type.String({
-              pattern: "^[a-z][a-z0-9_-]{0,31}$",
+              pattern: AGENT_LABEL_PATTERN.source,
             }),
           },
           { additionalProperties: false },
@@ -9035,7 +9047,7 @@ export default function (pi: ExtensionAPI): void {
           {
             action: StringEnum(["inspect"] as const),
             agent: Type.String({
-              pattern: "^[a-z][a-z0-9_-]{0,31}$",
+              pattern: AGENT_LABEL_PATTERN.source,
             }),
           },
           { additionalProperties: false },

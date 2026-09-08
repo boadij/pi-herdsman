@@ -163,8 +163,9 @@ test("inspection reads raw bounded text and tolerates unavailable process eviden
     tabId: "tab",
     piSessionId: "session",
   });
-  assert.equal(snapshot.recentOutput?.length, 8 * 1024);
+  assert.equal(snapshot.recentOutput?.length, 9_000);
   assert.equal(snapshot.recentOutput?.at(-1), "x");
+  assert.equal(snapshot.recentOutputTruncated, false);
   assert.equal(snapshot.process, undefined);
   assert.deepEqual(calls[1], [
     "agent",
@@ -173,7 +174,7 @@ test("inspection reads raw bounded text and tolerates unavailable process eviden
     "--source",
     "recent-unwrapped",
     "--lines",
-    "40",
+    "80",
     "--format",
     "text",
   ]);
@@ -233,6 +234,7 @@ test("inspection keeps partial process evidence when pane identity is absent or 
     piSessionId: "session",
   });
   assert.equal(snapshot.recentOutput, "recent output");
+  assert.equal(snapshot.recentOutputTruncated, false);
   assert.equal(snapshot.process?.pane_id, undefined);
   assert.equal(snapshot.process?.foreground_processes?.length, 8);
   assert.equal(snapshot.process?.foreground_processes?.[0]?.pid, 1);
@@ -305,11 +307,13 @@ test("inspection omits malformed process entries without exposing extra fields",
     foreground_process_group_id: 12,
     foreground_processes: [{}, { pid: 13, argv0: "/bin/zsh" }],
   });
+  assert.equal(snapshot.recentOutputTruncated, false);
   assert.equal("extra" in (snapshot.process ?? {}), false);
 });
 
 test("inspection preserves bounded terminal output", async () => {
   const calls: string[][] = [];
+  let output = "界".repeat(7_000);
   const pi = {
     exec: async (_command: string, args: string[]) => {
       calls.push(args);
@@ -328,7 +332,7 @@ test("inspection preserves bounded terminal output", async () => {
           stderr: "",
         };
       if (args[0] === "agent" && args[1] === "read")
-        return { code: 0, stdout: "界".repeat(4_000), stderr: "" };
+        return { code: 0, stdout: output, stderr: "" };
       if (args[0] === "pane" && args[1] === "process-info")
         return { code: 1, stdout: "", stderr: "unavailable" };
       throw new Error(`unexpected command: ${args.join(" ")}`);
@@ -340,8 +344,18 @@ test("inspection preserves bounded terminal output", async () => {
     piSessionId: "session",
   });
   assert.ok(snapshot.recentOutput);
-  assert.ok(Buffer.byteLength(snapshot.recentOutput) <= 8 * 1024);
-  assert.deepEqual(calls[1]?.slice(-4), ["--lines", "40", "--format", "text"]);
+  assert.ok(Buffer.byteLength(snapshot.recentOutput) <= 16 * 1024);
+  assert.equal(snapshot.recentOutputTruncated, true);
+  assert.equal(snapshot.recentOutput?.includes("\uFFFD"), false);
+  assert.deepEqual(calls[1]?.slice(-4), ["--lines", "80", "--format", "text"]);
+  output = "x".repeat(16 * 1024);
+  const exact = await inspectHerdrAgent(pi, { cwd: "/tmp" } as any, {
+    workspaceId: "workspace",
+    paneId: "pane",
+    piSessionId: "session",
+  });
+  assert.equal(Buffer.byteLength(exact.recentOutput ?? ""), 16 * 1024);
+  assert.equal(exact.recentOutputTruncated, false);
   await (async () => {
     const pi = {
       exec: async (_command: string, args: string[]) => {
@@ -362,7 +376,7 @@ test("inspection preserves bounded terminal output", async () => {
         if (args[0] === "agent" && args[1] === "read")
           return {
             code: 0,
-            stdout: Array.from({ length: 50 }, (_, i) => `line-${i}`).join(
+            stdout: Array.from({ length: 100 }, (_, i) => `line-${i}`).join(
               "\n",
             ),
             stderr: "",
@@ -378,10 +392,11 @@ test("inspection preserves bounded terminal output", async () => {
       piSessionId: "session",
     });
     const lines = snapshot.recentOutput?.split("\n") ?? [];
-    assert.equal(lines.length, 40);
-    assert.equal(lines[0], "line-10");
-    assert.equal(lines.at(-1), "line-49");
-    assert.ok(Buffer.byteLength(snapshot.recentOutput ?? "") <= 8 * 1024);
+    assert.equal(lines.length, 80);
+    assert.equal(lines[0], "line-20");
+    assert.equal(lines.at(-1), "line-99");
+    assert.equal(snapshot.recentOutputTruncated, false);
+    assert.ok(Buffer.byteLength(snapshot.recentOutput ?? "") <= 16 * 1024);
   })();
 });
 

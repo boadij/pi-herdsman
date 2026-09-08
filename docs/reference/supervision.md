@@ -62,10 +62,10 @@ The `staff list` representation contains `lead` (the exact full Pi session ID),
 `display_name` (a presentation-only label), identity fields, `runtime_state`,
 `needs_you`, optional pending-ask fields, `agent_counts`, optional
 `last_activity`, and `available_actions`. The automatic
-`<supervision_state>` context is hard-bounded to 16 KiB and uses
-`leads`, `agent_counts`, and `agents`. Oversized output is truncated only at
-complete lead records and identifies omitted state. Use `staff list` when a
-fresh complete roster is required.
+`<supervision_state>` context is state-only and hard-bounded to 16 KiB; it uses
+`leads`, `agent_counts`, and `agents`, not inspect terminal/process evidence.
+Oversized output is truncated only at complete lead records and identifies
+omitted state. Use `staff list` when a fresh complete roster is required.
 
 The `lead` value is the exact full Pi session ID shown in a fresh supervision
 snapshot or returned by `staff list`; the `display_name` label is never accepted
@@ -181,7 +181,12 @@ Returns a fresh supervision projection and fresh `available_actions`.
 ```
 
 Inspect is read-only and requires an active chief and eligible exact lead. It
-returns bounded identity-checked recent output and process evidence.
+returns live identity-checked terminal/process evidence: Herdr's up to 80
+recent-unwrapped terminal lines with a Herdsman-local 16 KiB byte cap, plus
+separately bounded process evidence. The public
+`recent_output_truncated` boolean is true only when that local byte cap
+truncates the terminal output and false otherwise. It does not expose persisted
+Pi session-message history.
 
 ### `message`
 
@@ -226,5 +231,8 @@ The active chief gets a width-aware compact leads-only ambient widget and a
 native `/chief` overview with peek and focus. Leads are ordered by needs-you,
 working, blocked, idle/done, then unknown. The ambient widget uses
 presentation-only tree branches for visible lead rows, while the native
-overview stays flat. Missing, replaced, ambiguous, or conflicting identity
-fails closed. There is no descendant selector or force-takeover action.
+overview stays flat. Human supervision peek renders at most 40 lines after
+width-safe presentation of its state, recent output, agents, and process
+evidence; this rendering bound is separate from the inspect capture bounds.
+Missing, replaced, ambiguous, or conflicting identity fails closed. There is no
+descendant selector or force-takeover action.

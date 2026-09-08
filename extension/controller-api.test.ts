@@ -1200,6 +1200,142 @@ test("assignment session resolution accepts exact paths and UUIDs only", async (
   nativeSessions.clear();
 });
 
+test("session delegation supports explicit labels and preserves generated labels", async () => {
+  const run = async (label?: string) => {
+    setLeadEnvironment();
+    nativeSessions.clear();
+    const source = {
+      id: randomUUID(),
+      path: join(tmpdir(), `session-delegate-${randomUUID()}.jsonl`),
+      cwd: "/tmp",
+    };
+    realFs.writeFileSync(source.path, "{}", "utf8");
+    nativeSessions.set(source.id, source);
+    const startup = startupExecutor(
+      label ?? "agent",
+      () => DEFAULT_PI_SESSION_ID,
+    );
+    const pi = fakePi({ exec: startup.exec });
+    registerExtension!(pi.pi as never);
+    try {
+      const result = await pi.tools[0].execute(
+        "id",
+        {
+          action: "delegate",
+          session: source.path,
+          ...(label ? { label } : {}),
+          task: label
+            ? "continue with an explicit label"
+            : "continue with the generated label",
+        },
+        undefined,
+        undefined,
+        fakeContext(),
+      );
+      assert.equal(result.details.ok, true, JSON.stringify(result.details));
+      assert.equal(result.details.agent, label ?? "agent");
+      assert.equal(
+        readAgentState(agentMailboxPath(WORKSPACE, label ?? "agent"))
+          ?.agentLabel,
+        label ?? "agent",
+      );
+      const start = pi.calls.find(
+        (args) => args[0] === "agent" && args[1] === "start",
+      )!;
+      assert.ok(start);
+      assert.equal(
+        start[start.indexOf("--session") + 1],
+        realFs.realpathSync(source.path),
+      );
+      assert.equal(start.includes("--fork"), false);
+      return result;
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      nativeSessions.clear();
+      resetAgentMailbox(startup.mailbox);
+      realFs.rmSync(source.path, { force: true });
+    }
+  };
+
+  const first = await run("resume-explicit");
+  assert.equal(first.details.agent, "resume-explicit");
+  const reused = await run("resume-explicit");
+  assert.equal(reused.details.agent, "resume-explicit");
+  const generated = await run();
+  assert.equal(generated.details.agent, "agent");
+});
+
+test("session delegation rejects invalid and occupied explicit labels without starting Herdr", async () => {
+  setLeadEnvironment();
+  nativeSessions.clear();
+  const invalidPi = fakePi();
+  registerExtension!(invalidPi.pi as never);
+  try {
+    const invalidRequest = {
+      action: "delegate",
+      session: "/tmp/session.jsonl",
+      label: "Invalid_Label",
+      task: "reject the label",
+    } as const;
+    assert.equal(
+      Value.Check(invalidPi.tools[0].parameters, invalidRequest),
+      false,
+    );
+    const invalid = await invalidPi.tools[0].execute(
+      "id",
+      invalidRequest,
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(invalid.details.error.category, "invalid_request");
+    assert.equal(invalidPi.calls.length, 0);
+  } finally {
+    invalidPi.events.get("session_shutdown")?.[0]();
+  }
+
+  setLeadEnvironment();
+  const label = "resume-occupied";
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, managedState(label));
+  const source = {
+    id: randomUUID(),
+    path: join(tmpdir(), `session-occupied-${randomUUID()}.jsonl`),
+    cwd: "/tmp",
+  };
+  realFs.writeFileSync(source.path, "{}", "utf8");
+  nativeSessions.set(source.id, source);
+  const pi = fakePi({
+    exec: leadExec(label, "idle", DEFAULT_PI_SESSION_ID),
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      {
+        action: "delegate",
+        session: source.path,
+        label,
+        task: "must not fall back to another label",
+      },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.error.category, "agent_label_exists");
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    nativeSessions.clear();
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(source.path, { force: true });
+  }
+});
+
 test("public assignment normalizes invalid and unknown session sources", async () => {
   setLeadEnvironment();
   nativeSessions.clear();
@@ -1538,6 +1674,7 @@ test("session assignment fails closed on duplicate live representations", async 
       {
         action: "delegate",
         session: session.path,
+        label: "session-conflict-label",
         task: "continue the ambiguous session",
       },
       undefined,
