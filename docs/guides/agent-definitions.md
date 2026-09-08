@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md)
 
-Agent definitions describe a worker's capabilities, not a required
+Agent definitions describe an agent's capabilities, not a required
 workflow. They are Markdown files containing strict frontmatter plus an optional
 prompt body.
 
@@ -69,15 +69,15 @@ enabled: false
 ---
 ```
 
-The lead effective roster and `/workers agents` output keep disabled rows and
-show their disabled status so the source can be re-enabled. A delegating worker
-does not receive disabled workers in its definition list. A delegating worker referencing
-a disabled worker can remain discoverable, but is rejected during assignment or
-fresh worker startup with an explicit disabled-worker reason rather than silently
-dropping that worker.
+The lead effective roster and `/agents definitions` output keep disabled rows and
+show their disabled status so the source can be re-enabled. A delegating agent
+does not receive disabled definitions in its definition list. A delegating agent
+referencing a disabled definition can remain discoverable, but is rejected during
+assignment or fresh agent startup with an explicit disabled-definition reason
+rather than silently dropping that definition.
 
 Definition and session delegations reject disabled definitions with an
-actionable error. An already active worker may finish and remains controllable
+actionable error. An already active agent may finish and remains controllable
 according to its current available actions; disabling a definition does not
 mutate that assignment.
 
@@ -85,11 +85,11 @@ mutate that assignment.
 
 ### `implementer`
 
-Focused source-edit worker for an explicitly approved implementation.
+Focused source-edit agent for an explicitly approved implementation.
 
 ### `researcher`
 
-Focused current/external research worker. Read-only local policy. It also
+Focused current/external research agent. Read-only local policy. It also
 allows the default web tool names exposed by `pi-web-access`:
 `web_search`, `fetch_content`, `get_search_content`, and `source_check`.
 Web access is optional. Install it with:
@@ -114,9 +114,9 @@ Independent read-only reviewer.
 
 Fast read-only codebase reconnaissance.
 
-### `worker`
+### `generalist`
 
-General-purpose scoped execution worker.
+General-purpose scoped execution agent.
 
 The bundled definitions are portable defaults, not required workflow stages.
 Project definitions are for repository-specific policy; global definitions are
@@ -151,23 +151,23 @@ does not need extension-provided capabilities.
 The `name` is authoritative; the filename itself is not the public definition
 name.
 
-## Allow direct workers
+## Allow direct agents
 
 ```markdown
 ---
 name: coordinator
 tools: ["read", "bash"]
-workers: ["scout", "researcher"]
+agents: ["scout", "researcher"]
 ---
 
-Coordinate the assigned analysis and integrate direct worker results.
+Coordinate the assigned analysis and integrate direct agent results.
 ```
 
-The effective roster is validated atomically. Every `workers` name must exist.
+The effective roster is validated atomically. Every `agents` name must exist.
 Bundled role descriptions and bodies describe role behavior only; orchestration
 guidance comes from the active controller contract.
 
-With a non-empty explicit `tools` allowlist, `worker` is inferred unless
+With a non-empty explicit `tools` allowlist, `agent` is inferred unless
 explicitly denied. See [Delegation](../concepts/delegation.md).
 
 ## Add body files
@@ -196,8 +196,8 @@ Supported forms:
 References are resolved from the Markdown file that declares them.
 
 The bundled definitions are `generalist`, `implementer`, `researcher`,
-`reviewer`, and `scout`. The session-start worker-definition roster and the
-`worker list` result use the same metadata projection.
+`reviewer`, and `scout`. The session-start agent-definition roster and the
+`agent list` result use the same metadata projection.
 
 For exact expansion, deduplication, and caller-file precedence, see
 [Handoffs and files](handoffs.md).
@@ -207,7 +207,7 @@ For exact expansion, deduplication, and caller-file precedence, see
 A lead Pi session can use:
 
 ```text
-/workers agents
+/agents definitions
 ```
 
 or the model can use:
@@ -235,5 +235,5 @@ See [Customizing bundled agents](customizing-agents.md).
 ## See also
 
 - [Agent-definition schema](../reference/agent-definition-schema.md)
-- [`/workers` commands](../reference/commands.md)
+- [`/agents` commands](../reference/commands.md)
 - [Configuration](../reference/configuration.md)

@@ -52,7 +52,7 @@ supervised leads. `/chief leave` restores the session's ordinary tools.
 ## Lead projection and actions
 
 An eligible lead requires one exact live recognized Pi agent, a matching lead
-record, and no chief or validated managed-worker identity. A lead's observed
+record, and no chief or validated managed agent identity. A lead's observed
 runtime state is informational. Every exact-identity-verified live lead has
 `inspect` and `message`, whether it is idle, working, blocked, done, or unknown.
 A pending ask is separate attention state: it projects as `needs_you`, exposes
@@ -60,10 +60,10 @@ the bounded question and ask ID, and adds `reply`.
 
 The `staff list` representation contains `lead` (the exact full Pi session ID),
 `display_name` (a presentation-only label), identity fields, `runtime_state`,
-`needs_you`, optional pending-ask fields, `worker_counts`, optional
+`needs_you`, optional pending-ask fields, `agent_counts`, optional
 `last_activity`, and `available_actions`. The automatic
 `<supervision_state>` context is hard-bounded to 16 KiB and uses
-`leads`, `worker_counts`, and `workers`. Oversized output is truncated only at
+`leads`, `agent_counts`, and `agents`. Oversized output is truncated only at
 complete lead records and identifies omitted state. Use `staff list` when a
 fresh complete roster is required.
 
@@ -93,7 +93,7 @@ Messages are bounded, versioned JSON files in the target session's hashed
 chief lease, kind, ID, text, and `createdAt`; asks and replies also include an
 ask ID. Attachments are consumed at submission and rendered into the ordinary
 text field using the same canonical file renderer and configured inline/mailbox
-limits as worker messages. The durable supervision record remains text-only.
+limits as agent messages. The durable supervision record remains text-only.
 Extra fields are rejected. Transport kinds are:
 
 ```text
@@ -131,7 +131,7 @@ completion. It queues one bounded `chief_message` and does not change lead
 coordination state.
 `message` accepts an optional `files` array. Files use the same submission-time
 canonicalization, UTF-8 embedding, reference fallback, and configured byte
-limits as worker messages.
+limits as agent messages.
 
 ### `ask`
 

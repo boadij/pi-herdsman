@@ -337,7 +337,7 @@ test("supervision authority is coordination state, not metadata", () => {
   };
   const snapshot = projectSupervision({
     agents: [lead],
-    workers: [],
+    managedAgents: [],
     coordinationStates: [
       state("lead", {
         pendingAsk: {
@@ -378,7 +378,7 @@ test("every observed live lead state exposes inspect and message", () => {
   for (const runtimeState of ["idle", "working", "blocked"] as const) {
     const snapshot = projectSupervision({
       agents: [{ ...agent, runtimeState }],
-      workers: [],
+      managedAgents: [],
       coordinationStates: [state("lead")],
     });
     assert.deepEqual(snapshot.leads[0]?.availableActions, [
@@ -412,7 +412,7 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
       base(unnamedSessionA),
       base(unnamedSessionB),
     ] as any,
-    workers: [],
+    managedAgents: [],
     coordinationStates: [
       state(namedSession),
       state(unnamedSessionA),
@@ -472,7 +472,7 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
     agents[2]!.tokens = { pi_herdsman_name: "meaningful token" };
     const snapshot = projectSupervision({
       agents,
-      workers: [],
+      managedAgents: [],
       coordinationStates: sessions.map((sessionId) => state(sessionId)),
       workspaceProvenance: new Map([
         ["workspace", { workspaceLabel: "project" }],
@@ -502,7 +502,7 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
         makeAgent(sessions[1]!, "cwd"),
         makeAgent(sessions[2]!, "id"),
       ],
-      workers: [],
+      managedAgents: [],
       coordinationStates: sessions.map((sessionId) => state(sessionId)),
       workspaceProvenance: new Map([
         ["explicit", { workspaceLabel: "my-workspace" }],
@@ -539,14 +539,14 @@ test("supervision fails closed on invalid live identities and coordination recor
     projectSupervision({
       agents: [lead, { ...lead, paneId: "other" }],
       coordinationStates: [state("lead"), state("lead")],
-      workers: [],
+      managedAgents: [],
     }).leads,
     [],
   );
   assert.equal(
     projectSupervision({
       agents: [{ ...valid, paneId: "" }, valid],
-      workers: [],
+      managedAgents: [],
       coordinationStates: [state("lead")],
     }).leads.length,
     1,
@@ -554,7 +554,7 @@ test("supervision fails closed on invalid live identities and coordination recor
   assert.deepEqual(
     projectSupervision({
       agents: [valid, { ...valid, sessionId: "other" }],
-      workers: [],
+      managedAgents: [],
       coordinationStates: [state("lead"), state("other")],
     }).leads,
     [],
@@ -596,7 +596,7 @@ test("stale lead invalidation preserves a replacement generation", () => {
   assert.deepEqual(readLeadCoordinationState(runtime, "lead"), generationB);
 });
 
-test("validated worker evidence aggregates descendants without identity matching", () => {
+test("validated agent evidence aggregates descendants without identity matching", () => {
   const lead = {
     sessionId: "lead",
     sessionKind: "id" as const,
@@ -607,7 +607,7 @@ test("validated worker evidence aggregates descendants without identity matching
   const snapshot = projectSupervision({
     agents: [lead],
     coordinationStates: [state("lead")],
-    workers: [
+    managedAgents: [
       {
         piSessionId: "a",
         ownerSessionId: "lead",
@@ -624,14 +624,24 @@ test("validated worker evidence aggregates descendants without identity matching
       },
     ],
   });
-  assert.deepEqual(snapshot.leads[0].workerCounts, {
+  assert.deepEqual(snapshot.leads[0].agentCounts, {
     working: 1,
     blocked: 1,
     total: 2,
   });
+  const serialized = serializeSupervision(snapshot).leads[0];
+  assert.deepEqual(serialized.agent_counts, {
+    working: 1,
+    blocked: 1,
+    total: 2,
+  });
+  assert.deepEqual(serialized.agents, [
+    { id: "a", label: "a", state: "working" },
+    { id: "b", label: "b", state: "blocked" },
+  ]);
 });
 
-test("supervision excludes descendants of ambiguous worker owners", () => {
+test("supervision excludes descendants of ambiguous agent owners", () => {
   const lead = {
     sessionId: "lead",
     sessionKind: "id" as const,
@@ -642,7 +652,7 @@ test("supervision excludes descendants of ambiguous worker owners", () => {
   const snapshot = projectSupervision({
     agents: [lead],
     coordinationStates: [state("lead")],
-    workers: [
+    managedAgents: [
       {
         piSessionId: "parent",
         ownerSessionId: "lead",
@@ -666,7 +676,7 @@ test("supervision excludes descendants of ambiguous worker owners", () => {
       },
     ],
   });
-  assert.deepEqual(snapshot.leads[0].workerCounts, {
+  assert.deepEqual(snapshot.leads[0].agentCounts, {
     working: 0,
     blocked: 0,
     total: 0,

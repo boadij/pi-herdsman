@@ -9,7 +9,7 @@ import type {
   AskRecord,
   RequestRecord,
   ResultRecord,
-  WorkerState,
+  ManagedAgentState,
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
 import { OperationError } from "./errors.ts";
@@ -79,8 +79,8 @@ export const PI_AGENT_ROOT = realFs.mkdtempSync(
 export const PI_AGENTS_DIR = join(PI_AGENT_ROOT, "agents");
 realFs.mkdirSync(PI_AGENTS_DIR);
 realFs.writeFileSync(
-  join(PI_AGENTS_DIR, "worker.md"),
-  "---\nname: worker\n---\nworker instructions\n",
+  join(PI_AGENTS_DIR, "agent.md"),
+  "---\nname: agent\n---\nagent instructions\n",
 );
 function testSettings(path: string): Record<string, unknown> {
   try {
@@ -151,21 +151,21 @@ mock.module("node:fs", {
 
 export const {
   controlMarker,
-  listWorkerStates,
+  listAgentStates,
   readPendingAsk,
   readRequest,
   readResult,
-  readWorkerState,
+  readAgentState,
   removeAsk,
   removeRequest,
   removeResult,
   MAILBOX_PROTOCOL_LIMIT_BYTES,
-  resetWorkerMailbox,
-  workerMailboxPath,
+  resetAgentMailbox,
+  agentMailboxPath,
   writeAsk,
   writeRequest,
   writeResult,
-  writeWorkerState,
+  writeAgentState,
 } = await import("./mailbox.ts");
 
 mock.module("@earendil-works/pi-coding-agent", {
@@ -246,8 +246,8 @@ mock.module("@earendil-works/pi-coding-agent", {
             session?.entries ?? [
               {
                 type: "custom",
-                customType: "pi-herdsman-worker-definition",
-                data: { name: "worker" },
+                customType: "pi-herdsman-agent-definition",
+                data: { name: "agent" },
               },
             ],
         };
@@ -411,7 +411,7 @@ export const {
   agentDefinitionMetadata,
   discoverAgent,
   discoverAgentDefinitions,
-} = await import("./agents.ts");
+} = await import("./agent-definitions.ts");
 
 export type Context = {
   cwd: string;
@@ -438,7 +438,7 @@ export type Context = {
 export const WORKSPACE = `registered-test-workspace-${randomUUID()}`;
 export const LEAD_SESSION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 export const NON_PI_AGENT = "legacy-root";
-export const WORKER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+export const AGENT_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 export const REQUEST_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 export const DEFAULT_PI_SESSION_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 export const PARENT_SESSION_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
@@ -455,7 +455,7 @@ export const defaultFixtureIdentity: FixtureIdentity = {
   paneId: "registered-pane",
   tabId: "registered-tab",
   piSessionId: DEFAULT_PI_SESSION_ID,
-  piSessionFile: "/tmp/registered-worker.jsonl",
+  piSessionFile: "/tmp/registered-agent.jsonl",
 };
 
 export function recoveryIdentity(label: string): FixtureIdentity {
@@ -463,12 +463,12 @@ export function recoveryIdentity(label: string): FixtureIdentity {
     paneId: `${label}-pane`,
     tabId: `${label}-tab`,
     piSessionId: DEFAULT_PI_SESSION_ID,
-    piSessionFile: `/tmp/${label}-worker.jsonl`,
+    piSessionFile: `/tmp/${label}-agent.jsonl`,
   };
 }
 
 export function herdrAlias(label: string): string {
-  return runScopedHerdrAlias(WORKSPACE, label, WORKER_ID);
+  return runScopedHerdrAlias(WORKSPACE, label, AGENT_ID);
 }
 export function isPreservePaneStop(args: string[]): boolean {
   return (
@@ -540,7 +540,7 @@ export function fakeContext(
     },
   };
 }
-export function fakeWorkerContext(
+export function fakeAgentContext(
   entries: unknown[] = [],
   branch: unknown[] = entries,
 ): Context {
@@ -548,7 +548,7 @@ export function fakeWorkerContext(
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-    getSessionFile: () => "/tmp/registered-worker.jsonl",
+    getSessionFile: () => "/tmp/registered-agent.jsonl",
   };
   return context;
 }
@@ -706,8 +706,8 @@ export function setLeadEnvironment(): void {
   for (const entry of realFs.readdirSync(PI_AGENTS_DIR))
     if (entry.endsWith(".md")) realFs.rmSync(join(PI_AGENTS_DIR, entry));
   realFs.writeFileSync(
-    join(PI_AGENTS_DIR, "worker.md"),
-    "---\nname: worker\n---\nworker instructions\n",
+    join(PI_AGENTS_DIR, "agent.md"),
+    "---\nname: agent\n---\nagent instructions\n",
   );
   realFs.writeFileSync(
     join(PI_AGENTS_DIR, "child.md"),
@@ -722,30 +722,30 @@ export function setLeadEnvironment(): void {
     "PI_HERDSMAN_LABEL",
     "PI_HERDSMAN_WORKSPACE_ID",
     "PI_HERDSMAN_AGENT_DEFINITION",
-    "PI_HERDSMAN_ALLOWED_WORKERS",
+    "PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS",
     "HERDR_PANE_ID",
     "HERDR_SOCKET_PATH",
   ])
     delete process.env[key];
 }
 
-export function setWorkerEnvironment(
-  label = "registered-worker",
-  allowedWorkers?: string[],
+export function setAgentEnvironment(
+  label = "registered-agent",
+  allowedAgentDefinitions?: string[],
 ): string {
   clearTestMailboxes();
   for (const entry of realFs.readdirSync(PI_AGENTS_DIR))
     if (entry.endsWith(".md")) realFs.rmSync(join(PI_AGENTS_DIR, entry));
   realFs.writeFileSync(
-    join(PI_AGENTS_DIR, "worker.md"),
-    "---\nname: worker\n---\nworker instructions\n",
+    join(PI_AGENTS_DIR, "agent.md"),
+    "---\nname: agent\n---\nagent instructions\n",
   );
   realFs.writeFileSync(
     join(PI_AGENTS_DIR, "child.md"),
     "---\nname: child\n---\nchild\n",
   );
   const workspace = WORKSPACE;
-  const mailbox = workerMailboxPath(workspace, label);
+  const mailbox = agentMailboxPath(workspace, label);
   process.env.HERDR_ENV = "1";
   process.env.HERDR_WORKSPACE_ID = workspace;
   process.env.PI_HERDSMAN_MAILBOX = mailbox;
@@ -754,17 +754,20 @@ export function setWorkerEnvironment(
     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   process.env.PI_HERDSMAN_LABEL = label;
   process.env.PI_HERDSMAN_WORKSPACE_ID = workspace;
-  process.env.PI_HERDSMAN_AGENT_DEFINITION = "worker";
+  process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
   process.env.HERDR_PANE_ID = "registered-pane";
-  if (allowedWorkers === undefined)
-    delete process.env.PI_HERDSMAN_ALLOWED_WORKERS;
-  else process.env.PI_HERDSMAN_ALLOWED_WORKERS = JSON.stringify(allowedWorkers);
-  resetWorkerMailbox(mailbox);
+  if (allowedAgentDefinitions === undefined)
+    delete process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS;
+  else
+    process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS = JSON.stringify(
+      allowedAgentDefinitions,
+    );
+  resetAgentMailbox(mailbox);
   return mailbox;
 }
 
 function clearTestMailboxes(): void {
-  for (const { path, state } of listWorkerStates())
+  for (const { path, state } of listAgentStates())
     if (state.workspaceId === WORKSPACE)
       realFs.rmSync(path, { recursive: true, force: true });
 }
@@ -773,13 +776,13 @@ export function managedState(
   label: string,
   activeRequestId?: string,
   identity: FixtureIdentity = defaultFixtureIdentity,
-): WorkerState {
+): ManagedAgentState {
   return {
-    version: 3,
-    runId: WORKER_ID,
+    version: 4,
+    runId: AGENT_ID,
     ownerSessionId: LEAD_SESSION_ID,
     workspaceId: WORKSPACE,
-    workerLabel: label,
+    agentLabel: label,
     paneId: identity.paneId,
     piSessionId: identity.piSessionId,
     piSessionFile: identity.piSessionFile,
@@ -789,13 +792,16 @@ export function managedState(
   };
 }
 
-export function resultEntryDetails(state: WorkerState, requestId: string) {
+export function resultEntryDetails(
+  state: ManagedAgentState,
+  requestId: string,
+) {
   return {
     runId: state.runId,
     requestId,
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     cwd: state.cwd,
     piSessionId: state.piSessionId,
@@ -812,7 +818,7 @@ export function listResponse(
   identity: FixtureIdentity = defaultFixtureIdentity,
   useAgentStatus = false,
   agentStatus: unknown = status,
-  runId = WORKER_ID,
+  runId = AGENT_ID,
 ): string {
   const agent = {
     herdr_agent: runScopedHerdrAlias(WORKSPACE, label, runId),
@@ -823,7 +829,7 @@ export function listResponse(
     workspace_id: WORKSPACE,
     pane_id: identity.paneId,
     tab_id: identity.tabId,
-    tab_label: "workers",
+    tab_label: "agents",
     ...(sessionId
       ? {
           agent_session: {
@@ -848,18 +854,18 @@ export function listResponse(
 }
 
 export function requestRecordBytes(
-  workerLabel: string,
+  agentLabel: string,
   paneId: string,
   text: string,
 ): number {
   return Buffer.byteLength(
     JSON.stringify({
-      version: 3,
-      runId: WORKER_ID,
+      version: 4,
+      runId: AGENT_ID,
       requestId: REQUEST_ID,
       ownerSessionId: LEAD_SESSION_ID,
       workspaceId: WORKSPACE,
-      workerLabel,
+      agentLabel,
       paneId,
       kind: "task",
       text,
@@ -941,7 +947,7 @@ export function leadExec(
         code: 0,
       };
     if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
-      onPrompt?.(workerMailboxPath(WORKSPACE, label), args.at(-1) ?? "");
+      onPrompt?.(agentMailboxPath(WORKSPACE, label), args.at(-1) ?? "");
       return { stdout: "{}", stderr: "", code: 0 };
     }
     return { stdout: "{}", stderr: "", code: 0 };
@@ -949,12 +955,12 @@ export function leadExec(
 }
 
 export function agentFromState(
-  state: WorkerState,
+  state: ManagedAgentState,
   status: "idle" | "working" | "blocked" | "done" = "idle",
 ): Record<string, unknown> {
   const alias = runScopedHerdrAlias(
     state.workspaceId,
-    state.workerLabel,
+    state.agentLabel,
     state.runId,
   );
   return {
@@ -964,8 +970,8 @@ export function agentFromState(
     cwd: state.cwd,
     workspace_id: state.workspaceId,
     pane_id: state.paneId,
-    tab_id: `${state.workerLabel}-tab`,
-    tab_label: "workers",
+    tab_id: `${state.agentLabel}-tab`,
+    tab_label: "agents",
     agent_session: {
       source: "herdr:pi",
       agent: "pi",
@@ -975,9 +981,9 @@ export function agentFromState(
   };
 }
 
-export function workerControllerExecutor(
-  parent: WorkerState,
-  children: WorkerState[] = [],
+export function agentControllerExecutor(
+  parent: ManagedAgentState,
+  children: ManagedAgentState[] = [],
 ): ExecHandler {
   return (command, args) => {
     if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
@@ -1003,7 +1009,7 @@ export function workerControllerExecutor(
               pane_id: state.paneId,
               workspace_id: state.workspaceId,
               cwd: state.cwd,
-              agent: state.workerLabel,
+              agent: state.agentLabel,
               agent_status: state.activeRequestId ? "working" : "idle",
             })),
           },
@@ -1015,18 +1021,14 @@ export function workerControllerExecutor(
       const requested = args[2];
       const state =
         requested ===
-        runScopedHerdrAlias(
-          parent.workspaceId,
-          parent.workerLabel,
-          parent.runId,
-        )
+        runScopedHerdrAlias(parent.workspaceId, parent.agentLabel, parent.runId)
           ? parent
           : children.find(
               (candidate) =>
                 candidate.paneId === requested ||
                 runScopedHerdrAlias(
                   candidate.workspaceId,
-                  candidate.workerLabel,
+                  candidate.agentLabel,
                   candidate.runId,
                 ) === requested,
             );
@@ -1047,17 +1049,14 @@ export function workerControllerExecutor(
     if (args[0] === "agent" && args[1] === "prompt") {
       const state = children.find((candidate) => candidate.paneId === args[2]);
       const marker = args.at(-1) ?? "";
-      const requestId = marker.startsWith("__PI_HERDSMAN_WORKER_V3__:")
-        ? marker.slice("__PI_HERDSMAN_WORKER_V3__:".length)
+      const requestId = marker.startsWith("__PI_HERDSMAN_AGENT_V4__:")
+        ? marker.slice("__PI_HERDSMAN_AGENT_V4__:".length)
         : "";
       const request = state
-        ? readRequest(
-            workerMailboxPath(WORKSPACE, state.workerLabel),
-            requestId,
-          )
+        ? readRequest(agentMailboxPath(WORKSPACE, state.agentLabel), requestId)
         : undefined;
       if (state && request) {
-        writeWorkerState(workerMailboxPath(WORKSPACE, state.workerLabel), {
+        writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), {
           ...state,
           ...(request.kind === "task"
             ? {
@@ -1080,18 +1079,18 @@ export function workerControllerExecutor(
 }
 
 export function delegatedLifecycleExecutor(
-  parent: WorkerState,
-  initialChildren: WorkerState[] = [],
+  parent: ManagedAgentState,
+  initialChildren: ManagedAgentState[] = [],
   testCwd = "/tmp",
 ): {
   exec: ExecHandler;
-  live: Map<string, WorkerState>;
+  live: Map<string, ManagedAgentState>;
   closeOrder: string[];
   environmentCommands: string[];
   paneEnvironment: Record<string, string>;
 } {
   const live = new Map(
-    [parent, ...initialChildren].map((state) => [state.workerLabel, state]),
+    [parent, ...initialChildren].map((state) => [state.agentLabel, state]),
   );
   const slots = ["delegated-slot-1", "delegated-slot-2", "delegated-slot-3"];
   const childSessionIds = [
@@ -1105,12 +1104,14 @@ export function delegatedLifecycleExecutor(
   const paneEnvironment: Record<string, string> = {};
   const tabId = "delegated-tab";
   let createdChildren = 0;
-  const currentStateForPane = (paneId: string): WorkerState | undefined =>
+  const currentStateForPane = (paneId: string): ManagedAgentState | undefined =>
     [...live.values()].find((state) => state.paneId === paneId);
-  const agentForState = (state: WorkerState): Record<string, unknown> => ({
+  const agentForState = (
+    state: ManagedAgentState,
+  ): Record<string, unknown> => ({
     ...agentFromState(state, state.activeRequestId ? "working" : "idle"),
     tab_id: tabId,
-    tab_label: "workers",
+    tab_label: "agents",
   });
   const panes = (): Record<string, unknown>[] => [
     ...[...live.values()].map((state) => ({
@@ -1119,7 +1120,7 @@ export function delegatedLifecycleExecutor(
       workspace_id: WORKSPACE,
       cwd: state.cwd,
       foreground_cwd: state.cwd,
-      agent: state.workerLabel,
+      agent: state.agentLabel,
       agent_status: state.activeRequestId ? "working" : "idle",
     })),
     ...slots
@@ -1160,7 +1161,7 @@ export function delegatedLifecycleExecutor(
             (candidate) =>
               runScopedHerdrAlias(
                 candidate.workspaceId,
-                candidate.workerLabel,
+                candidate.agentLabel,
                 candidate.runId,
               ) === requested,
           );
@@ -1177,7 +1178,7 @@ export function delegatedLifecycleExecutor(
           stdout: JSON.stringify({
             result: {
               tabs: [
-                { tab_id: tabId, label: "workers", workspace_id: WORKSPACE },
+                { tab_id: tabId, label: "agents", workspace_id: WORKSPACE },
               ],
             },
           }),
@@ -1298,12 +1299,12 @@ export function delegatedLifecycleExecutor(
         const ownerSessionId = paneEnvironment.PI_HERDSMAN_OWNER_SESSION_ID;
         const workspaceId = paneEnvironment.PI_HERDSMAN_WORKSPACE_ID;
         const paneId = args[args.indexOf("--pane") + 1];
-        const state: WorkerState = {
-          version: 3,
+        const state: ManagedAgentState = {
+          version: 4,
           runId,
           ownerSessionId,
           workspaceId,
-          workerLabel: label,
+          agentLabel: label,
           paneId,
           piSessionId: childSessionIds[createdChildren++],
           piSessionFile: `/tmp/${label}.jsonl`,
@@ -1311,14 +1312,14 @@ export function delegatedLifecycleExecutor(
           updatedAt: Date.now(),
         };
         live.set(label, state);
-        writeWorkerState(workerMailboxPath(workspaceId, label), state);
+        writeAgentState(agentMailboxPath(workspaceId, label), state);
         const agent = agentForState(state);
         return {
           stdout: JSON.stringify({
             result: {
               agent,
               tab_id: tabId,
-              tab_label: "workers",
+              tab_label: "agents",
               pane_id: paneId,
               cwd: testCwd,
               herdr_agent: agent.name,
@@ -1333,12 +1334,12 @@ export function delegatedLifecycleExecutor(
       if (args[0] === "agent" && args[1] === "prompt") {
         const state = currentStateForPane(args[2]!);
         const requestId = (args.at(-1) ?? "").replace(
-          "__PI_HERDSMAN_WORKER_V3__:",
+          "__PI_HERDSMAN_AGENT_V4__:",
           "",
         );
         const request = state
           ? readRequest(
-              workerMailboxPath(WORKSPACE, state.workerLabel),
+              agentMailboxPath(WORKSPACE, state.agentLabel),
               requestId,
             )
           : undefined;
@@ -1355,20 +1356,17 @@ export function delegatedLifecycleExecutor(
             },
             updatedAt: Date.now(),
           };
-          live.set(state.workerLabel, next);
-          writeWorkerState(
-            workerMailboxPath(WORKSPACE, state.workerLabel),
-            next,
-          );
+          live.set(state.agentLabel, next);
+          writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), next);
         }
         return { stdout: "{}", stderr: "", code: 0 };
       }
       if (args[0] === "pane" && args[1] === "close") {
         const state = currentStateForPane(args[2]!);
         if (!state) return { stdout: "{}", stderr: "missing pane", code: 1 };
-        live.delete(state.workerLabel);
+        live.delete(state.agentLabel);
         closedPanes.add(state.paneId);
-        closeOrder.push(state.workerLabel);
+        closeOrder.push(state.agentLabel);
         return { stdout: "{}", stderr: "", code: 0 };
       }
       return { stdout: "{}", stderr: "", code: 0 };
@@ -1377,7 +1375,7 @@ export function delegatedLifecycleExecutor(
 }
 
 export function cascadeExecutor(
-  states: WorkerState[],
+  states: ManagedAgentState[],
   options: {
     failCloseLabel?: string;
     mismatchSessionLabel?: string;
@@ -1385,8 +1383,12 @@ export function cascadeExecutor(
     omitAgentLabels?: string[];
     omitPaneLabels?: string[];
   } = {},
-): { exec: ExecHandler; closeOrder: string[]; live: Map<string, WorkerState> } {
-  const live = new Map(states.map((state) => [state.workerLabel, state]));
+): {
+  exec: ExecHandler;
+  closeOrder: string[];
+  live: Map<string, ManagedAgentState>;
+} {
+  const live = new Map(states.map((state) => [state.agentLabel, state]));
   const paneOnly = new Set(options.paneOnly ?? []);
   const omitAgentLabels = new Set(options.omitAgentLabels ?? []);
   const omitPaneLabels = new Set(options.omitPaneLabels ?? []);
@@ -1402,10 +1404,10 @@ export function cascadeExecutor(
         return { stdout: "0.8.0", stderr: "", code: 0 };
       if (isAgentList(args)) {
         const agents = [...live.values()]
-          .filter((state) => !omitAgentLabels.has(state.workerLabel))
+          .filter((state) => !omitAgentLabels.has(state.agentLabel))
           .map((state) => {
             const agent = agentFromState(state);
-            if (state.workerLabel === options.mismatchSessionLabel)
+            if (state.agentLabel === options.mismatchSessionLabel)
               agent.agent_session = {
                 kind: "id",
                 value: "22222222-2222-4222-8222-222222222222",
@@ -1426,7 +1428,7 @@ export function cascadeExecutor(
               candidate.paneId === requested ||
               runScopedHerdrAlias(
                 candidate.workspaceId,
-                candidate.workerLabel,
+                candidate.agentLabel,
                 candidate.runId,
               ) === requested,
           ) ?? undefined;
@@ -1437,7 +1439,7 @@ export function cascadeExecutor(
             code: 0,
           };
         const agent = agentFromState(state);
-        if (state.workerLabel === options.mismatchSessionLabel)
+        if (state.agentLabel === options.mismatchSessionLabel)
           agent.agent_session = {
             kind: "id",
             value: "22222222-2222-4222-8222-222222222222",
@@ -1453,7 +1455,7 @@ export function cascadeExecutor(
           stdout: JSON.stringify({
             result: {
               tabs: [...live.values()].map((state) => ({
-                tab_id: `${state.workerLabel}-tab`,
+                tab_id: `${state.agentLabel}-tab`,
                 workspace_id: state.workspaceId,
               })),
             },
@@ -1467,10 +1469,10 @@ export function cascadeExecutor(
             result: {
               panes: [
                 ...[...live.values()]
-                  .filter((state) => !omitPaneLabels.has(state.workerLabel))
+                  .filter((state) => !omitPaneLabels.has(state.agentLabel))
                   .map((state) => ({
                     pane_id: state.paneId,
-                    tab_id: `${state.workerLabel}-tab`,
+                    tab_id: `${state.agentLabel}-tab`,
                     workspace_id: state.workspaceId,
                     cwd: state.cwd,
                     foreground_cwd: state.cwd,
@@ -1495,7 +1497,7 @@ export function cascadeExecutor(
               pane: state
                 ? {
                     pane_id: state.paneId,
-                    tab_id: `${state.workerLabel}-tab`,
+                    tab_id: `${state.agentLabel}-tab`,
                     workspace_id: state.workspaceId,
                     cwd: state.cwd,
                     agent_session: {
@@ -1528,10 +1530,10 @@ export function cascadeExecutor(
       if (args[0] === "pane" && args[1] === "close") {
         const state = paneFor(args[2]!);
         if (!state) return { stdout: "{}", stderr: "pane not found", code: 1 };
-        if (state.workerLabel === options.failCloseLabel)
+        if (state.agentLabel === options.failCloseLabel)
           return { stdout: "{}", stderr: "close failed", code: 1 };
-        live.delete(state.workerLabel);
-        closeOrder.push(state.workerLabel);
+        live.delete(state.agentLabel);
+        closeOrder.push(state.agentLabel);
         return { stdout: "{}", stderr: "", code: 0 };
       }
       return { stdout: "{}", stderr: "", code: 0 };
@@ -1554,17 +1556,17 @@ export async function assertRestrictiveManagedDefinition(
         environmentCommands.push(args.at(-1) ?? "");
       if (command === "herdr" && args[0] === "pane" && args[1] === "split") {
         const allowed = args.find((arg) =>
-          arg.startsWith("PI_HERDSMAN_ALLOWED_WORKERS="),
+          arg.startsWith("PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS="),
         );
         if (allowed)
           environmentCommands.push(
-            `PI_HERDSMAN_ALLOWED_WORKERS='${allowed.slice("PI_HERDSMAN_ALLOWED_WORKERS=".length)}'`,
+            `PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS='${allowed.slice("PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS=".length)}'`,
           );
       }
       return startup.exec(command, args, options);
     },
   });
-  let allowedWorkers: string[] = [];
+  let allowedAgentDefinitions: string[] = [];
   try {
     registerExtension!(root.pi as never);
     const result = await root.tools[0].execute(
@@ -1581,42 +1583,39 @@ export async function assertRestrictiveManagedDefinition(
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     const environment = environmentCommands.find((command) =>
-      command.includes("PI_HERDSMAN_ALLOWED_WORKERS="),
+      command.includes("PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS="),
     );
     assert.ok(environment);
-    const encoded = /PI_HERDSMAN_ALLOWED_WORKERS='([^']*)'/.exec(
+    const encoded = /PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS='([^']*)'/.exec(
       environment,
     )?.[1];
     assert.equal(encoded, "[]");
-    allowedWorkers = JSON.parse(encoded);
+    allowedAgentDefinitions = JSON.parse(encoded);
   } catch (error) {
     realFs.rmSync(definitionPath, { force: true });
     throw error;
   } finally {
     root.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(startup.mailbox);
+    resetAgentMailbox(startup.mailbox);
   }
 
-  const mailbox = setWorkerEnvironment(name, allowedWorkers);
+  const mailbox = setAgentEnvironment(name, allowedAgentDefinitions);
   process.env.PI_HERDSMAN_AGENT_DEFINITION = name;
-  const worker = fakePi();
-  registerExtension!(worker.pi as never);
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
   try {
+    assert.equal(agent.tools.filter((tool) => tool.name === "agent").length, 0);
     assert.equal(
-      worker.tools.filter((tool) => tool.name === "worker").length,
-      0,
-    );
-    assert.equal(
-      worker.tools.filter((tool) => tool.name === "ask_owner").length,
+      agent.tools.filter((tool) => tool.name === "ask_owner").length,
       1,
     );
-    await worker.events.get("session_start")![0](
+    await agent.events.get("session_start")![0](
       undefined,
-      fakeWorkerContext(worker.entries),
+      fakeAgentContext(agent.entries),
     );
   } finally {
-    worker.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(mailbox);
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
     realFs.rmSync(definitionPath, { force: true });
     setLeadEnvironment();
   }
@@ -1704,9 +1703,9 @@ export function createStagedAssignmentFixture(
           await start.promise;
         }
         const result = await startup.exec(command, args, options);
-        const state = readWorkerState(startup.mailbox);
+        const state = readAgentState(startup.mailbox);
         assert.ok(state, "staged startup must create mailbox state");
-        writeWorkerState(startup.mailbox, {
+        writeAgentState(startup.mailbox, {
           ...state,
           updatedAt: Date.now(),
         });
@@ -1715,17 +1714,17 @@ export function createStagedAssignmentFixture(
       }
       if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
         promptRequestId = (args.at(-1) ?? "").slice(
-          "__PI_HERDSMAN_WORKER_V3__:".length,
+          "__PI_HERDSMAN_AGENT_V4__:".length,
         );
         if (holdPrompt) {
           holdPrompt = false;
           await prompt.promise;
         }
         const result = await startup.exec(command, args, options);
-        const state = readWorkerState(startup.mailbox);
+        const state = readAgentState(startup.mailbox);
         assert.ok(state, "staged prompt must retain mailbox state");
         acceptedRequestIdWritten = state.activeRequestId;
-        writeWorkerState(startup.mailbox, {
+        writeAgentState(startup.mailbox, {
           ...state,
           activeRequestId: undefined,
           completedRequestId: undefined,
@@ -1815,9 +1814,9 @@ export function createStagedAssignmentFixture(
       );
     },
     markWorking(requestId: string) {
-      const state = readWorkerState(startup.mailbox);
+      const state = readAgentState(startup.mailbox);
       assert.ok(state);
-      writeWorkerState(startup.mailbox, {
+      writeAgentState(startup.mailbox, {
         ...state,
         activeRequestId: requestId,
         completedRequestId: undefined,
@@ -1826,21 +1825,21 @@ export function createStagedAssignmentFixture(
     },
     completeFast(requestId: string) {
       assert.equal(fastCompletion, true);
-      const state = readWorkerState(startup.mailbox);
+      const state = readAgentState(startup.mailbox);
       assert.ok(state);
-      writeWorkerState(startup.mailbox, {
+      writeAgentState(startup.mailbox, {
         ...state,
         activeRequestId: undefined,
         completedRequestId: requestId,
         updatedAt: Date.now(),
       });
       writeResult(startup.mailbox, {
-        version: 3,
+        version: 4,
         runId: state.runId,
         requestId,
         ownerSessionId: state.ownerSessionId,
         workspaceId: state.workspaceId,
-        workerLabel: state.workerLabel,
+        agentLabel: state.agentLabel,
         paneId: state.paneId,
         status: "completed",
         text: "completed before working was observed",
@@ -1853,7 +1852,7 @@ export function createStagedAssignmentFixture(
     },
     shutdown() {
       pi.events.get("session_shutdown")?.[0]();
-      resetWorkerMailbox(startup.mailbox);
+      resetAgentMailbox(startup.mailbox);
     },
   };
 }
@@ -1863,14 +1862,14 @@ export function writeMetadataTask(
   text: string,
   requestId = REQUEST_ID,
 ): RequestRecord {
-  const state = readWorkerState(mailbox)!;
+  const state = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 3,
+    version: 4,
     runId: state.runId,
     requestId,
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     kind: "task",
     text,
@@ -1888,12 +1887,12 @@ export function startupExecutor(
   reportNullSession = false,
   onStart?: (args: string[]) => void,
   testCwd = "/tmp",
-  testRunId = WORKER_ID,
+  testRunId = AGENT_ID,
   includeResult = false,
   closePaneOnClose = false,
   countStartup = false,
 ): { exec: ExecHandler; mailbox: string; getCount: () => number } {
-  const mailbox = workerMailboxPath(WORKSPACE, label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
   let getCount = 0;
   let runId = testRunId;
   let ownerSessionId = testRunId ? LEAD_SESSION_ID : "";
@@ -1940,7 +1939,7 @@ export function startupExecutor(
           stdout: JSON.stringify({
             result: {
               agent: {
-                name: runScopedHerdrAlias(WORKSPACE, label, runId || WORKER_ID),
+                name: runScopedHerdrAlias(WORKSPACE, label, runId || AGENT_ID),
                 pane_id: "startup-pane",
                 workspace_id: WORKSPACE,
                 cwd: testCwd,
@@ -1964,11 +1963,11 @@ export function startupExecutor(
       if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
         const requestId = args
           .at(-1)!
-          .slice("__PI_HERDSMAN_WORKER_V3__:".length);
+          .slice("__PI_HERDSMAN_AGENT_V4__:".length);
         const request = readRequest(mailbox, requestId);
         onPrompt?.(request?.text ?? "", request);
-        const state = readWorkerState(mailbox)!;
-        writeWorkerState(mailbox, {
+        const state = readAgentState(mailbox)!;
+        writeAgentState(mailbox, {
           ...state,
           ...(request?.kind === "task"
             ? { activeRequestId: requestId, completedRequestId: undefined }
@@ -1986,7 +1985,7 @@ export function startupExecutor(
               tabs: [
                 {
                   tab_id: "startup-tab",
-                  label: "workers",
+                  label: "agents",
                   workspace_id: WORKSPACE,
                 },
               ],
@@ -2009,7 +2008,7 @@ export function startupExecutor(
                         workspace_id: WORKSPACE,
                         cwd: testCwd,
                         foreground_cwd: testCwd,
-                        ...(runId && !stopped && readWorkerState(mailbox)
+                        ...(runId && !stopped && readAgentState(mailbox)
                           ? {
                               agent: label,
                               agent_status: "idle",
@@ -2134,9 +2133,9 @@ export function startupExecutor(
       if (isAgentList(args))
         return {
           stdout:
-            runId && !stopped && readWorkerState(mailbox)
+            runId && !stopped && readAgentState(mailbox)
               ? (() => {
-                  const state = readWorkerState(mailbox)!;
+                  const state = readAgentState(mailbox)!;
                   const value = JSON.parse(
                     listResponse(
                       label,
@@ -2180,15 +2179,15 @@ export function startupExecutor(
           value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         },
       };
-      writeWorkerState(mailbox, {
-        version: 3,
+      writeAgentState(mailbox, {
+        version: 4,
         runId,
         ownerSessionId,
         workspaceId: WORKSPACE,
-        workerLabel: label,
+        agentLabel: label,
         paneId: activePaneId,
         piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-        piSessionFile: "/tmp/registered-worker.jsonl",
+        piSessionFile: "/tmp/registered-agent.jsonl",
         cwd: testCwd,
         updatedAt: Date.now(),
       });
@@ -2196,14 +2195,10 @@ export function startupExecutor(
         stdout: JSON.stringify({
           ...(includeResult ? { result: { agent: startedAgent } } : {}),
           tab_id: "startup-tab",
-          tab_label: "workers",
+          tab_label: "agents",
           pane_id: activePaneId,
           cwd: testCwd,
-          herdr_agent: runScopedHerdrAlias(
-            WORKSPACE,
-            label,
-            runId || WORKER_ID,
-          ),
+          herdr_agent: runScopedHerdrAlias(WORKSPACE, label, runId || AGENT_ID),
           created_tab: false,
           created_pane: true,
           agent: startedAgent,
@@ -2211,7 +2206,7 @@ export function startupExecutor(
             herdr_agent: runScopedHerdrAlias(
               WORKSPACE,
               label,
-              runId || WORKER_ID,
+              runId || AGENT_ID,
             ),
             herdr_kind: "pi",
             agent_definition: null,

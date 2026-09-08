@@ -1,11 +1,11 @@
 export type ErrorCategory =
   | "not_running_inside_herdr"
-  | "worker_label_exists"
+  | "agent_label_exists"
   | "pane_not_ready"
   | "target_not_found"
   | "target_ambiguous"
   | "rollback_failure"
-  | "worker_busy"
+  | "agent_busy"
   | "invalid_request"
   | "internal_failure";
 

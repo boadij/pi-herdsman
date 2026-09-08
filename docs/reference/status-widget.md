@@ -3,12 +3,12 @@
 [Documentation index](../README.md)
 
 The TUI status widget is a local, display-only projection of exact managed
-workers plus controller-local transient starting assignments.
+agents plus controller-local transient starting assignments.
 
 It does not replace mailbox assignment/result authority.
 
 An active chief receives a separate leads-only widget. It shows the
-supervision projection, not managed worker rows. Its complete
+supervision projection, not managed agent rows. Its complete
 overview, peek, and focus behavior is documented in the
 [supervision reference](supervision.md). The two widgets are never combined.
 
@@ -28,16 +28,16 @@ A lead Pi session gets its exact owned subtree view.
 
 A valid managed leaf can receive an identity-only header.
 
-A delegation-enabled worker can receive its direct-worker counts and rows.
+A delegation-enabled agent can receive its direct-agent counts and rows.
 
-Unmanaged or invalid worker environments do not receive the managed widget.
+Unmanaged or invalid agent environments do not receive the managed widget.
 
 ## Refresh
 
 The widget refreshes managed herdr data plus mailbox state every two seconds.
 
 Refresh performs a bounded herdr pane-list lookup to validate the lead
-boundary. It does not add a socket transport or another worker-control protocol.
+boundary. It does not add a socket transport or another agent-control protocol.
 
 A refresh failure never mutates mailbox/control eligibility.
 
@@ -49,12 +49,12 @@ Example:
 ● herd → implementer → scout
 ```
 
-The breadcrumb uses validated definition/worker ancestry.
+The breadcrumb uses validated definition/agent ancestry.
 
-Delegating-worker and leaf panes append their current Pi active tool names as
+Delegating-agent and leaf panes append their current Pi active tool names as
 muted bracketed metadata after the current identity, preserving Pi's exact
 order. Lead Pi sessions do not show this metadata. It is local to the current
-pane, is never copied to worker rows or authoritative worker state, and is
+pane, is never copied to agent rows or authoritative agent state, and is
 truncated or omitted before breadcrumb identity is shortened when width is
 limited.
 
@@ -76,7 +76,7 @@ Example:
 The header reports exact non-zero lifecycle states in the order `working`,
 `blocked`, `settling`, `starting`, and `unknown`. `starting` is a
 presentation-only count for assignments whose final label and mailbox claim
-are known but whose authoritative worker startup has not completed. It is not
+are known but whose authoritative agent startup has not completed. It is not
 mailbox state, control authority, or Running inventory.
 
 Before the first successful refresh, the header says `unavailable`.
@@ -84,13 +84,13 @@ Before the first successful refresh, the header says `unavailable`.
 After a later refresh failure, the widget retains the last valid snapshot and
 marks the header `stale`.
 
-Header refresh staleness is not worker inactivity.
+Header refresh staleness is not agent inactivity.
 
-## Worker rows
+## Agent rows
 
-Every visible worker is rendered in a stable tree. Siblings are sorted by
+Every visible agent is rendered in a stable tree. Siblings are sorted by
 logical label and use Pi's `├─`, `└─`, and `│` connectors.
-The row shows the agent definition and its exact logical worker label
+The row shows the agent definition and its exact logical agent label
 separately. Recovery-only ancestry evidence is retained by structured status
 paths but is not included in this human projection.
 
@@ -105,12 +105,12 @@ Working rows use `● working`, blocked rows use `◐ blocked`, settling rows us
 `◌ settling`, starting rows use `◌ starting`, and unknown rows use `? unknown`.
 Working, settling, and starting animate; blocked and unknown rows are static. A
 starting row is reconciled away
-when authoritative worker evidence replaces it, and is removed on startup
+when authoritative agent evidence replaces it, and is removed on startup
 failure, rollback, repeated session start, or shutdown.
 
-`Running` inspection shows every authoritative worker row and excludes
+`Running` inspection shows every authoritative agent row and excludes
 presentation-only starting rows. A terminal result is followed by cleanup; the
-widget does not retain an idle completed worker.
+widget does not retain an idle completed agent.
 
 ## Optional metadata
 
@@ -121,7 +121,7 @@ Rows can include best-effort:
 - compact model;
 - thinking;
 - context percentage;
-- worker type/display metadata.
+- agent type/display metadata.
 
 These fields are not control authority.
 
@@ -131,18 +131,18 @@ and bounds every output line by visible Unicode width.
 The current widget does **not** claim to display the full effective tool list.
 That remains separate from the definition overview.
 
-## Worker inactivity
+## Agent inactivity
 
-A `working` worker can expose an advisory inactivity marker based on durable
+A `working` agent can expose an advisory inactivity marker based on durable
 Pi-observed activity.
 
 This is distinct from header `stale`, which means the widget failed to refresh
 its latest snapshot.
 
-Neither changes worker control state.
+Neither changes agent control state.
 
 ## See also
 
-- [Worker states](worker-states.md)
-- [`/workers agents`](commands.md#workers-agents)
+- [Agent states](agent-states.md)
+- [`/agents definitions`](commands.md#agents-definitions)
 - [Recovery](../guides/recovery.md)

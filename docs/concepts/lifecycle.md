@@ -14,7 +14,7 @@ accepted
   ↓
 working
   ↓
-worker completes
+agent completes
   ↓
 settling
   ↓ result delivered once
@@ -28,7 +28,7 @@ ID.
 
 ## Clarification flow
 
-A worker that requires an owner decision stays on the same assignment:
+An agent that requires an owner decision stays on the same assignment:
 
 ```text
 working
@@ -53,23 +53,23 @@ The public states are:
 - `settling`
 - `unknown`
 
-See [Worker states](../reference/worker-states.md) for their exact control
+See [Agent states](../reference/agent-states.md) for their exact control
 meaning.
 
 Raw herdr lifecycle alone is insufficient. Mailbox handoff, pending result
-delivery, pending owner questions, and cleanup may make a worker unsafe to
+delivery, pending owner questions, and cleanup may make an agent unsafe to
 control until convergence is complete.
 
 ## Asynchronous orchestration
 
-Delegation does not suspend the owning controller until a worker finishes.
+Delegation does not suspend the owning controller until an agent finishes.
 
-`delegate` returns after the task has been durably accepted. The worker then runs
+`delegate` returns after the task has been durably accepted. The agent then runs
 independently in its managed Pi session while the owner remains available for
 other useful work and, for a lead Pi session, continued user interaction.
 
 The owner must not poll for completion. It may continue with work that does not
-depend on the result or end its turn normally. Worker completion or an
+depend on the result or end its turn normally. Agent completion or an
 `ask_owner` question is delivered back to that same owner when attention is
 required.
 
@@ -80,7 +80,7 @@ assignment accepted
        ↓
 owner remains available
        ↓
-worker runs independently
+agent runs independently
        ↓
 result or question returns to the owner
 ```
@@ -92,18 +92,18 @@ requests, and remains responsible for result delivery and lifecycle control.
 ## Exactly-once assignment result
 
 Each accepted task request maps to one final assignment result. Each managed
-worker generation receives exactly one assignment; a completed worker is not
+agent generation receives exactly one assignment; a completed agent is not
 available for another task.
 
-Result publication and cleanup are separate convergence steps. A worker may
+Result publication and cleanup are separate convergence steps. An agent may
 therefore appear `settling` after its model has finished. Cleanup follows
 exactly-once delivery for both completed and failed terminal results.
 
 ## Session continuation
 
-Worker cleanup does not delete the Pi session. To continue completed context,
+Agent cleanup does not delete the Pi session. To continue completed context,
 use the exact returned session with `delegate.session`; Pi Herdsman starts a new
-worker generation for the new assignment. The continuation uses the saved cwd
+agent generation for the new assignment. The continuation uses the saved cwd
 and session history together with the current effective authorized definition
 configuration. Use `delegate.definition` with `fork` when a separate derived
 session is required.
@@ -113,37 +113,37 @@ session is required.
 `steer` changes the current active assignment. It does not create an independent
 result.
 
-Steering is at-least-once at the worker boundary: a worker can apply a steer
+Steering is at-least-once at the agent boundary: an agent can apply a steer
 before its acknowledgement write becomes durable. If that acknowledgement
 write fails, retrying the same request may apply the steer again.
 
-Use `steer` only when `worker list` reports `steer` in `available_actions`.
+Use `steer` only when `agent list` reports `steer` in `available_actions`.
 
-## Delegating worker completion
+## Delegating agent completion
 
-Direct worker work is a completion gate for a delegating worker.
+Direct agent work is a completion gate for a delegating agent.
 
-A delegating worker cannot publish its own final result while:
+A delegating agent cannot publish its own final result while:
 
-- a direct worker has ordinary active work; or
-- a completed direct-worker result has not yet been delivered to the delegating worker.
+- a direct agent has ordinary active work; or
+- a completed direct-agent result has not yet been delivered to the delegating agent.
 
-This completion gate does not create a separate public delegating-worker state.
-The delegating worker's own state projection remains authoritative.
+This completion gate does not create a separate public delegating-agent state.
+The delegating agent's own state projection remains authoritative.
 
 ## Restart and recovery
 
-Durable mailbox state allows exact managed workers to be reconstructed after a
+Durable mailbox state allows exact managed agents to be reconstructed after a
 controller restart. Live metadata can be rebuilt only when exact herdr and Pi
 identity still match.
 
 Unknown evidence remains `unknown`; recovery never rebinds stale metadata to a
-different worker generation.
+different agent generation.
 
 ## See also
 
-- [Pi Herdsman](supervision.md) for lead supervision that does not alter worker
+- [Pi Herdsman](supervision.md) for lead supervision that does not alter agent
   assignment ownership.
-- [Workers and identity](workers.md)
-- [Worker states](../reference/worker-states.md)
+- [Agents and identity](agents.md)
+- [Agent states](../reference/agent-states.md)
 - [Recovery](../guides/recovery.md)

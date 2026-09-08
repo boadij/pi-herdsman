@@ -40,11 +40,9 @@ enabled: false
 ```
 
 The disabled row remains visible to the lead Pi session, while owner-visible
-definition lists omit it. A delegating worker referencing a disabled worker can remain
-discoverable, but is rejected during assignment or fresh worker startup with an
-explicit disabled-worker reason.
-
-There is no compatibility layer or second definition registry.
+definition lists omit it. A delegating agent referencing a disabled agent can remain
+discoverable, but is rejected during assignment or fresh agent startup with an
+explicit disabled-agent reason.
 
 ## Body composition
 
@@ -98,7 +96,7 @@ prompt.
 `systemPromptMode: append` appends the effective body to Pi's normal system
 prompt.
 
-Managed workers additionally receive shared herdr worker guidance at launch,
+Managed agents additionally receive shared herdr agent guidance at launch,
 including the `ask_owner` contract. This shared guidance is infrastructure and
 is not copied into every bundled role body.
 
@@ -116,7 +114,7 @@ bodyMode: append
 The path is resolved relative to the declaring project or global file before
 body composition, so each layer preserves its own declaring-file provenance.
 
-References expand when each new worker generation is constructed. A session
+References expand when each new agent generation is constructed. A session
 continuation keeps the saved Pi history but uses the current effective
 definition configuration for its new generation.
 
@@ -161,10 +159,10 @@ setting.
 
 An explicit `tools` list controls selection even when `noTools` or
 `noBuiltinTools` also selects restrictive defaults, while `excludeTools` wins
-over the list. Managed workers retain `ask_owner` as mandatory infrastructure
+over the list. Managed agents retain `ask_owner` as mandatory infrastructure
 and remove it from explicit exclusions; this exception does not apply to
 unmanaged Pi launches. Same-named tools cannot be permissioned by source, and
-collision winner ordering is not promised. Launcher-injected worker and
+collision winner ordering is not promised. Launcher-injected agent and
 Herdr-state extensions are separate from definition extensions and remain
 available when `noExtensions` disables ordinary discovery.
 
@@ -196,7 +194,7 @@ references, herdr does not resolve them relative to the definition file.
 Lead Pi sessions with UI can use:
 
 ```text
-/workers agents
+/agents definitions
 ```
 
 The native Definitions menu lists bundled, project, and global participation.
@@ -233,10 +231,10 @@ declares it.
 
 Changes affect future definition delegations and session continuations, whose
 runtime configuration comes from the current effective definition. They do not
-mutate an already-running worker or the lead Pi session.
+mutate an already-running agent or the lead Pi session.
 
 ## See also
 
 - [Agent-definition schema](../reference/agent-definition-schema.md)
-- [`/workers` commands](../reference/commands.md)
+- [`/agents` commands](../reference/commands.md)
 - [Agent definitions](agent-definitions.md)

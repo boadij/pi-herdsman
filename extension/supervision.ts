@@ -1171,10 +1171,10 @@ export type SupervisedLead = {
   needsYou: boolean;
   pendingAskId?: string;
   pendingAskQuestion?: string;
-  workerCounts: { working: number; blocked: number; total: number };
+  agentCounts: { working: number; blocked: number; total: number };
   lastActivity?: number;
   availableActions: Array<"inspect" | "message" | "reply">;
-  workers: Array<{ id: string; label: string; state: RuntimeState }>;
+  agents: Array<{ id: string; label: string; state: RuntimeState }>;
 };
 export type SupervisionSnapshot = {
   leads: SupervisedLead[];
@@ -1201,13 +1201,13 @@ export type WorkspaceProvenance = Readonly<{
   repoName?: string;
   branch?: string;
 }>;
-export type ValidatedWorkerEvidence = {
+export type ValidatedManagedAgentEvidence = {
   piSessionId: string;
   ownerSessionId: string;
   workspaceId: string;
   paneId: string;
   runtimeState: RuntimeState;
-  workerLabel?: string;
+  agentLabel?: string;
 };
 
 export const LEAD_STATE_MAX_BYTES = CHIEF_MESSAGE_MAX_BYTES * 2;
@@ -1346,14 +1346,14 @@ export function normalizeHerdrLifecycleState(agent: any): RuntimeState {
     : "unknown";
 }
 
-/** Projects caller-proven live leads and validated worker evidence; metadata is never authority. */
+/** Projects caller-proven live leads and validated agent evidence; metadata is never authority. */
 export function projectSupervision(options: {
   agents: LiveAgent[];
-  workers: ValidatedWorkerEvidence[];
+  managedAgents: ValidatedManagedAgentEvidence[];
   coordinationStates: LeadCoordinationState[];
   workspaceProvenance?: ReadonlyMap<string, WorkspaceProvenance>;
   chiefSessionId?: string;
-  managedWorkerSessionIds?: Set<string>;
+  managedAgentSessionIds?: Set<string>;
 }): SupervisionSnapshot {
   const states = new Map<string, LeadCoordinationState>();
   const duplicateStates = new Set<string>();
@@ -1394,7 +1394,7 @@ export function projectSupervision(options: {
       duplicateAgents.has(agent.sessionId) ||
       duplicateStates.has(agent.sessionId) ||
       agent.sessionId === options.chiefSessionId ||
-      options.managedWorkerSessionIds?.has(agent.sessionId) ||
+      options.managedAgentSessionIds?.has(agent.sessionId) ||
       duplicatePhysical.has(
         `${agent.workspaceId}\0${agent.tabId}\0${agent.paneId}`,
       )
@@ -1443,27 +1443,28 @@ export function projectSupervision(options: {
       needsYou: !!pending,
       ...(pending ? { pendingAskId: pending.askId } : {}),
       ...(pending ? { pendingAskQuestion: pending.question } : {}),
-      workerCounts: { working: 0, blocked: 0, total: 0 },
+      agentCounts: { working: 0, blocked: 0, total: 0 },
       ...(agent.lastActivity !== undefined
         ? { lastActivity: agent.lastActivity }
         : {}),
       availableActions: ["inspect"],
-      workers: [],
+      agents: [],
     });
   }
   const leadIds = new Set(leads.map((r) => r.lead));
-  const ambiguousWorkers = new Set<string>();
-  const byId = new Map<string, ValidatedWorkerEvidence>();
-  for (const worker of options.workers) {
-    if (byId.has(worker.piSessionId)) ambiguousWorkers.add(worker.piSessionId);
-    else byId.set(worker.piSessionId, worker);
+  const ambiguousAgents = new Set<string>();
+  const byId = new Map<string, ValidatedManagedAgentEvidence>();
+  for (const managedAgent of options.managedAgents) {
+    if (byId.has(managedAgent.piSessionId))
+      ambiguousAgents.add(managedAgent.piSessionId);
+    else byId.set(managedAgent.piSessionId, managedAgent);
   }
-  for (const worker of options.workers) {
-    if (ambiguousWorkers.has(worker.piSessionId)) continue;
-    let owner = worker.ownerSessionId;
+  for (const managedAgent of options.managedAgents) {
+    if (ambiguousAgents.has(managedAgent.piSessionId)) continue;
+    let owner = managedAgent.ownerSessionId;
     const seen = new Set<string>();
     while (!leadIds.has(owner)) {
-      if (ambiguousWorkers.has(owner) || seen.has(owner)) {
+      if (ambiguousAgents.has(owner) || seen.has(owner)) {
         owner = "";
         break;
       }
@@ -1472,14 +1473,14 @@ export function projectSupervision(options: {
     }
     const lead = leads.find((r) => r.lead === owner);
     if (!lead) continue;
-    lead.workerCounts.total++;
-    if (worker.runtimeState === "working") lead.workerCounts.working++;
-    if (worker.runtimeState === "blocked") lead.workerCounts.blocked++;
-    if (lead.workers.length < 32)
-      lead.workers.push({
-        id: worker.piSessionId,
-        label: worker.workerLabel ?? worker.piSessionId,
-        state: worker.runtimeState,
+    lead.agentCounts.total++;
+    if (managedAgent.runtimeState === "working") lead.agentCounts.working++;
+    if (managedAgent.runtimeState === "blocked") lead.agentCounts.blocked++;
+    if (lead.agents.length < 32)
+      lead.agents.push({
+        id: managedAgent.piSessionId,
+        label: managedAgent.agentLabel ?? managedAgent.piSessionId,
+        state: managedAgent.runtimeState,
       });
   }
   for (const lead of leads) {
@@ -1512,12 +1513,12 @@ export function serializeSupervision(snapshot: SupervisionSnapshot) {
       ...(r.pendingAskQuestion
         ? { pending_ask_question: r.pendingAskQuestion }
         : {}),
-      worker_counts: r.workerCounts,
+      agent_counts: r.agentCounts,
       ...(r.lastActivity !== undefined
         ? { last_activity: r.lastActivity }
         : {}),
       available_actions: r.availableActions,
-      workers: r.workers,
+      agents: r.agents,
     })),
   };
 }

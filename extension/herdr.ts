@@ -32,7 +32,7 @@ export type ExpectedSession = {
   id?: string;
   path?: string;
 };
-export type StartedHerdrWorker = {
+export type StartedHerdrAgent = {
   herdrAgent: string;
   workspaceId: string;
   tabId: string;
@@ -49,13 +49,13 @@ export type StartedHerdrWorker = {
 export class HerdrStartFailure extends Error {
   readonly cause: unknown;
   readonly stage: string;
-  readonly attempt: StartedHerdrWorker;
+  readonly attempt: StartedHerdrAgent;
   readonly retryAttempted: boolean;
 
   constructor(
     cause: unknown,
     stage: string,
-    attempt: StartedHerdrWorker,
+    attempt: StartedHerdrAgent,
     retryAttempted = false,
   ) {
     super(cause instanceof Error ? cause.message : String(cause));
@@ -82,14 +82,14 @@ const MAX_PROCESS_ARGV0_BYTES = 256;
 const MAX_PROCESS_CMDLINE_BYTES = 4 * 1024;
 const POLL_INTERVAL = 75;
 const INITIAL_RATIO = 0.65;
-const WORKER_RATIO = 0.5;
+const AGENT_SPLIT_RATIO = 0.5;
 const SHELLS = new Set(["bash", "dash", "fish", "ksh", "sh", "tcsh", "zsh"]);
 const HERDR_AGENT_STATE_EXTENSION = join(
   getAgentDir(),
   "extensions",
   "herdr-agent-state.ts",
 );
-const WORKERS_TAB = "workers";
+const AGENTS_TAB = "agents";
 
 function error(operation: string, message: string, details?: unknown): never {
   throw new OperationError({
@@ -665,7 +665,7 @@ async function selectSplitPlacement(
   deadline: number,
   signal?: AbortSignal,
 ): Promise<SplitPlacement> {
-  const workerPanes = panes.filter(
+  const agentPanes = panes.filter(
     (pane: any) =>
       pane.workspace_id === workspaceId &&
       pane.tab_id === tabId &&
@@ -675,7 +675,7 @@ async function selectSplitPlacement(
           pane.agent_status !== null &&
           pane.agent_status !== "unknown")),
   );
-  if (!workerPanes.length) {
+  if (!agentPanes.length) {
     const anchor =
       callerPaneId ??
       panes.find(
@@ -690,7 +690,7 @@ async function selectSplitPlacement(
     };
   }
 
-  const layoutPaneId = callerPaneId ?? workerPanes[0]?.pane_id;
+  const layoutPaneId = callerPaneId ?? agentPanes[0]?.pane_id;
   if (!layoutPaneId) error("start", `tab ${tabId} has no pane layout anchor`);
   const layout = (
     await runHerdr(pi, ctx, ["pane", "layout", "--pane", layoutPaneId], {
@@ -706,7 +706,7 @@ async function selectSplitPlacement(
   )
     error(
       "start",
-      `cannot safely select a worker split anchor in tab ${tabId}`,
+      `cannot safely select an agent split anchor in tab ${tabId}`,
     );
 
   const rectangles = new Map<string, { width: number; height: number }>();
@@ -716,7 +716,7 @@ async function selectSplitPlacement(
     if (typeof paneId !== "string" || rectangles.has(paneId) || !rect)
       error(
         "start",
-        `cannot safely select a worker split anchor in tab ${tabId}`,
+        `cannot safely select an agent split anchor in tab ${tabId}`,
       );
     const { width, height } = rect;
     if (
@@ -727,7 +727,7 @@ async function selectSplitPlacement(
     )
       error(
         "start",
-        `cannot safely select a worker split anchor in tab ${tabId}`,
+        `cannot safely select an agent split anchor in tab ${tabId}`,
       );
     rectangles.set(paneId, { width, height });
   }
@@ -735,19 +735,19 @@ async function selectSplitPlacement(
   let anchor:
     { pane: any; rect: { width: number; height: number } } | undefined;
   let anchorArea = -1;
-  for (const pane of workerPanes) {
+  for (const pane of agentPanes) {
     const paneId = pane.pane_id;
     const rect = rectangles.get(paneId);
     if (typeof paneId !== "string" || !rect)
       error(
         "start",
-        `cannot safely select a worker split anchor in tab ${tabId}`,
+        `cannot safely select an agent split anchor in tab ${tabId}`,
       );
     const area = rect.width * rect.height;
     if (!Number.isFinite(area))
       error(
         "start",
-        `cannot safely select a worker split anchor in tab ${tabId}`,
+        `cannot safely select an agent split anchor in tab ${tabId}`,
       );
     if (area > anchorArea) {
       anchor = { pane, rect };
@@ -757,24 +757,24 @@ async function selectSplitPlacement(
   if (!anchor)
     error(
       "start",
-      `cannot safely select a worker split anchor in tab ${tabId}`,
+      `cannot safely select an agent split anchor in tab ${tabId}`,
     );
   return {
     paneId: anchor.pane.pane_id,
-    ratio: WORKER_RATIO,
+    ratio: AGENT_SPLIT_RATIO,
     direction: anchor.rect.width >= anchor.rect.height ? "right" : "down",
   };
 }
 
-export async function startHerdrWorker(
+export async function startHerdrAgent(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   options: StartHerdrOptions,
-): Promise<StartedHerdrWorker> {
+): Promise<StartedHerdrAgent> {
   const workspaceId = workspace(ctx);
   const env = validateEnvironment(options.env ?? []);
   const release = await lockLifecycle(ctx, options.signal);
-  let attempt: StartedHerdrWorker | undefined;
+  let attempt: StartedHerdrAgent | undefined;
   let stage = "topology";
   try {
     const cwd = canonicalCwd(options.cwd);
@@ -835,9 +835,9 @@ export async function startHerdrWorker(
           "caller pane " + callerPaneId + " has no owning Herdr tab",
         );
     } else {
-      const matches = tabs.filter((t: any) => t.label === WORKERS_TAB);
+      const matches = tabs.filter((t: any) => t.label === AGENTS_TAB);
       if (matches.length > 1)
-        error("start", `multiple Herdr tabs labeled ${WORKERS_TAB}`);
+        error("start", `multiple Herdr tabs labeled ${AGENTS_TAB}`);
       tab = matches[0];
     }
     if (!tab) {
@@ -852,7 +852,7 @@ export async function startHerdrWorker(
           "--cwd",
           cwd,
           "--label",
-          WORKERS_TAB,
+          AGENTS_TAB,
           ...topologyEnv.flatMap((x) => ["--env", x]),
           "--no-focus",
         ],
@@ -1289,14 +1289,14 @@ async function settlePreservedPane(
   );
 }
 
-type RunningWorkerExpectation = {
+type RunningAgentExpectation = {
   paneId?: string;
   tabId: string;
   workspaceId?: string;
   cwd?: string;
   session?: ExpectedSession;
 };
-type RunningWorkerProof = {
+type RunningAgentProof = {
   paneId: string;
   tabId: string;
   workspaceId: string;
@@ -1337,16 +1337,16 @@ export function matchesExpectedSession(
   );
 }
 
-async function proveExactRunningWorker(
+async function proveExactRunningAgent(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   herdrAgent: string,
-  expected: RunningWorkerExpectation,
+  expected: RunningAgentExpectation,
   processOwner: PaneProcess | undefined,
   operation: "close" | "rollback",
   allowPostCompletionTransition = false,
   signal?: AbortSignal,
-): Promise<RunningWorkerProof> {
+): Promise<RunningAgentProof> {
   if (!expected.tabId) error(operation, "exact Herdr tab identity is required");
   const agent = (
     await runHerdr(pi, ctx, ["agent", "get", herdrAgent], { signal })
@@ -1488,7 +1488,7 @@ export async function closeHerdrPane(
     expected?.allowPostCompletionTransition === true;
   const release = await lockLifecycle(ctx, signal);
   try {
-    const initial = await proveExactRunningWorker(
+    const initial = await proveExactRunningAgent(
       pi,
       ctx,
       herdrAgent,
@@ -1498,7 +1498,7 @@ export async function closeHerdrPane(
       false,
       signal,
     );
-    const proved = await proveExactRunningWorker(
+    const proved = await proveExactRunningAgent(
       pi,
       ctx,
       herdrAgent,
@@ -1532,7 +1532,7 @@ export async function closeHerdrPane(
   }
 }
 
-export async function stopHerdrWorkerPreservingPane(
+export async function stopHerdrAgentPreservingPane(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   herdrAgent: string,
@@ -1549,7 +1549,7 @@ export async function stopHerdrWorkerPreservingPane(
   if (!tabId) error("rollback", "exact Herdr tab identity is required");
   const release = await lockLifecycle(ctx, signal);
   try {
-    const initial = await proveExactRunningWorker(
+    const initial = await proveExactRunningAgent(
       pi,
       ctx,
       herdrAgent,
@@ -1559,7 +1559,7 @@ export async function stopHerdrWorkerPreservingPane(
       false,
       signal,
     );
-    const proved = await proveExactRunningWorker(
+    const proved = await proveExactRunningAgent(
       pi,
       ctx,
       herdrAgent,
@@ -1603,7 +1603,7 @@ export async function stopHerdrWorkerPreservingPane(
 export async function rollbackHerdrStart(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  started: StartedHerdrWorker,
+  started: StartedHerdrAgent,
   signal?: AbortSignal,
 ): Promise<void> {
   const release = await lockLifecycle(ctx, signal);
@@ -1642,7 +1642,7 @@ export async function rollbackHerdrStart(
           : observedSession?.kind === "path"
             ? { path: observedSession.value }
             : undefined);
-      const initial = await proveExactRunningWorker(
+      const initial = await proveExactRunningAgent(
         pi,
         ctx,
         started.herdrAgent,
@@ -1658,7 +1658,7 @@ export async function rollbackHerdrStart(
         false,
         signal,
       );
-      const proved = await proveExactRunningWorker(
+      const proved = await proveExactRunningAgent(
         pi,
         ctx,
         started.herdrAgent,

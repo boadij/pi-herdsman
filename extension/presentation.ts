@@ -23,12 +23,12 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { SupervisionSnapshot } from "./supervision.ts";
 
-export type WorkerLifecycleState =
+export type AgentLifecycleState =
   "working" | "blocked" | "settling" | "starting" | "unknown";
-export interface StatusWorker {
+export interface StatusAgent {
   label: string;
-  state: WorkerLifecycleState;
-  agentType: string;
+  state: AgentLifecycleState;
+  definition: string;
   paneId?: string;
   sessionId?: string;
   task?: string;
@@ -42,7 +42,7 @@ export interface StatusWorker {
   orphan?: boolean;
 }
 export interface StatusSnapshot {
-  workers: StatusWorker[];
+  agents: StatusAgent[];
   stale: boolean;
   unavailable: boolean;
   breadcrumb?: string[];
@@ -52,7 +52,7 @@ export interface StatusSnapshot {
 }
 export interface CompletionMessageDetails {
   requestId: string;
-  workerLabel: string;
+  agentLabel: string;
   agentDefinition?: string;
   piSessionId?: string;
   piSessionFile?: string;
@@ -115,37 +115,37 @@ export function formatElapsed(
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
-export type StatusTreeRow = { worker: StatusWorker; tree: string };
+export type StatusTreeRow = { agent: StatusAgent; tree: string };
 
 export function buildStatusTree(
-  workers: readonly StatusWorker[],
+  agents: readonly StatusAgent[],
 ): StatusTreeRow[] {
-  const byLabel = new Map(workers.map((worker) => [worker.label, worker]));
-  const children = new Map<string, StatusWorker[]>();
-  const roots: StatusWorker[] = [];
-  for (const worker of workers) {
-    if (!worker.parentLabel || !byLabel.has(worker.parentLabel))
-      roots.push(worker);
+  const byLabel = new Map(agents.map((agent) => [agent.label, agent]));
+  const children = new Map<string, StatusAgent[]>();
+  const roots: StatusAgent[] = [];
+  for (const agent of agents) {
+    if (!agent.parentLabel || !byLabel.has(agent.parentLabel))
+      roots.push(agent);
     else
-      children.set(worker.parentLabel, [
-        ...(children.get(worker.parentLabel) ?? []),
-        worker,
+      children.set(agent.parentLabel, [
+        ...(children.get(agent.parentLabel) ?? []),
+        agent,
       ]);
   }
-  const sort = (left: StatusWorker, right: StatusWorker) =>
+  const sort = (left: StatusAgent, right: StatusAgent) =>
     left.label.localeCompare(right.label);
   roots.sort(sort);
   for (const siblings of children.values()) siblings.sort(sort);
   const rows: StatusTreeRow[] = [];
   const visit = (
-    worker: StatusWorker,
+    agent: StatusAgent,
     tree: string,
     ancestors: ReadonlySet<string>,
   ): void => {
-    rows.push({ worker, tree });
-    if (ancestors.has(worker.label)) return;
-    const nextAncestors = new Set(ancestors).add(worker.label);
-    const nested = children.get(worker.label) ?? [];
+    rows.push({ agent, tree });
+    if (ancestors.has(agent.label)) return;
+    const nextAncestors = new Set(ancestors).add(agent.label);
+    const nested = children.get(agent.label) ?? [];
     nested.forEach((child, index) => {
       const last = index === nested.length - 1;
       visit(
@@ -158,13 +158,13 @@ export function buildStatusTree(
   roots.forEach((root, index) =>
     visit(root, index === roots.length - 1 ? "└─ " : "├─ ", new Set()),
   );
-  // Cyclic ancestry cannot be safely attached. Keep every such worker visible
+  // Cyclic ancestry cannot be safely attached. Keep every such agent visible
   // as an explicit unresolved root instead of guessing its parent.
-  const rendered = new Set(rows.map(({ worker }) => worker.label));
-  workers
-    .filter((worker) => !rendered.has(worker.label))
+  const rendered = new Set(rows.map(({ agent }) => agent.label));
+  agents
+    .filter((agent) => !rendered.has(agent.label))
     .sort(sort)
-    .forEach((worker) => rows.push({ worker, tree: "├─ " }));
+    .forEach((agent) => rows.push({ agent, tree: "├─ " }));
   return rows;
 }
 
@@ -188,7 +188,7 @@ export function compactModelToken(model: string | undefined): string {
   return model?.split("/").at(-1) ?? "";
 }
 
-function activitySpinner(state: WorkerLifecycleState, frame: number): string {
+function activitySpinner(state: AgentLifecycleState, frame: number): string {
   return state === "working" || state === "settling" || state === "starting"
     ? spinner[frame % spinner.length]!
     : " ";
@@ -204,8 +204,8 @@ export type StatusRow = {
   sessionId?: string;
   tree: string;
   spinner: string;
-  agent: string;
-  workerLabel: string;
+  definition: string;
+  agentLabel: string;
   state: StateLabel;
   elapsed: string;
   model: string;
@@ -216,40 +216,43 @@ export type StatusRow = {
 };
 
 export function buildStatusRows(
-  workers: readonly StatusWorker[],
+  agents: readonly StatusAgent[],
   options: { now: number; frame?: number },
 ): StatusRow[] {
-  return buildStatusTree(workers).map(({ worker, tree }) => {
+  return buildStatusTree(agents).map(({ agent, tree }) => {
     const inactivity =
-      worker.stale && worker.inactiveMs !== undefined
-        ? `inactive ${formatDuration(worker.inactiveMs)}`
+      agent.stale && agent.inactiveMs !== undefined
+        ? `inactive ${formatDuration(agent.inactiveMs)}`
         : "";
     return {
-      label: worker.label,
-      ...(worker.paneId ? { paneId: worker.paneId } : {}),
-      ...(worker.sessionId ? { sessionId: worker.sessionId } : {}),
+      label: agent.label,
+      ...(agent.paneId ? { paneId: agent.paneId } : {}),
+      ...(agent.sessionId ? { sessionId: agent.sessionId } : {}),
       tree,
-      spinner: activitySpinner(worker.state, options.frame ?? 0),
-      agent: worker.agentType || "?",
-      workerLabel: worker.label,
-      state: STATE[worker.state],
-      elapsed: formatElapsed(worker.startedAt, options.now) ?? "",
-      model: compactModelToken(worker.model),
-      thinking: worker.thinking ?? "",
-      context: Number.isInteger(worker.contextPercent)
-        ? `${worker.contextPercent}%`
+      spinner: activitySpinner(agent.state, options.frame ?? 0),
+      definition: agent.definition || "?",
+      agentLabel: agent.label,
+      state: STATE[agent.state],
+      elapsed: formatElapsed(agent.startedAt, options.now) ?? "",
+      model: compactModelToken(agent.model),
+      thinking: agent.thinking ?? "",
+      context: Number.isInteger(agent.contextPercent)
+        ? `${agent.contextPercent}%`
         : "",
       inactivity,
-      task: collapseDisplayText(worker.task) ?? "",
+      task: collapseDisplayText(agent.task) ?? "",
     };
   });
 }
 
 export function renderRunningOptions(rows: readonly StatusRow[]): string[] {
-  const agentWidth = Math.max(0, ...rows.map((row) => visibleWidth(row.agent)));
+  const definitionWidth = Math.max(
+    0,
+    ...rows.map((row) => visibleWidth(row.definition)),
+  );
   return rows.map(
     (row) =>
-      `${row.tree}${padVisible(row.agent, agentWidth)}  ${row.workerLabel}  ${row.state}`,
+      `${row.tree}${padVisible(row.definition, definitionWidth)}  ${row.agentLabel}  ${row.state}`,
   );
 }
 
@@ -270,10 +273,13 @@ function themed(theme: any, color: string, text: string): string {
 }
 
 function statusColumns(rows: readonly StatusRow[]) {
-  const agentWidth = Math.max(0, ...rows.map((row) => visibleWidth(row.agent)));
+  const definitionWidth = Math.max(
+    0,
+    ...rows.map((row) => visibleWidth(row.definition)),
+  );
   const identities = rows.map(
     (row) =>
-      `${row.tree}${row.spinner} ${padVisible(row.agent, agentWidth)}  ${row.workerLabel}`,
+      `${row.tree}${row.spinner} ${padVisible(row.definition, definitionWidth)}  ${row.agentLabel}`,
   );
   const identityWidth = Math.max(0, ...identities.map(visibleWidth));
   const widths = {
@@ -285,7 +291,7 @@ function statusColumns(rows: readonly StatusRow[]) {
     context: Math.max(0, ...rows.map((row) => visibleWidth(row.context))),
     inactivity: Math.max(0, ...rows.map((row) => visibleWidth(row.inactivity))),
   };
-  return { agentWidth, widths };
+  return { definitionWidth, widths };
 }
 
 type StatusLayout = (typeof STATUS_LAYOUTS)[number];
@@ -312,16 +318,16 @@ function layoutWidth(
 
 function renderIdentity(
   row: StatusRow,
-  agentWidth: number,
+  definitionWidth: number,
   identityWidth: number,
   theme: any,
 ): string {
-  const agent = padVisible(row.agent, agentWidth);
-  const raw = `${row.tree}${row.spinner} ${agent}  ${row.workerLabel}`;
+  const definition = padVisible(row.definition, definitionWidth);
+  const raw = `${row.tree}${row.spinner} ${definition}  ${row.agentLabel}`;
   return (
     themed(theme, "muted", `${row.tree}${row.spinner} `) +
-    (theme?.bold?.(agent) ?? agent) +
-    themed(theme, "muted", `  ${row.workerLabel}`) +
+    (theme?.bold?.(definition) ?? definition) +
+    themed(theme, "muted", `  ${row.agentLabel}`) +
     " ".repeat(Math.max(0, identityWidth - visibleWidth(raw)))
   );
 }
@@ -333,9 +339,9 @@ function renderStatusLine(
   width: number,
   theme: any,
 ): string {
-  const { agentWidth, widths } = columns;
+  const { definitionWidth, widths } = columns;
   const cells = [
-    renderIdentity(row, agentWidth, widths.identity, theme),
+    renderIdentity(row, definitionWidth, widths.identity, theme),
     themed(theme, STATE_COLOR[row.state], padVisible(row.state, widths.state)),
     ...(layout.elapsed && widths.elapsed
       ? [themed(theme, "muted", padVisible(row.elapsed, widths.elapsed))]
@@ -393,7 +399,7 @@ export function layoutStatusRows(
 }
 
 export function renderStatusRows(
-  workers: readonly StatusWorker[],
+  agents: readonly StatusAgent[],
   options: {
     now: number;
     frame?: number;
@@ -402,7 +408,7 @@ export function renderStatusRows(
     theme?: any;
   },
 ): StatusDisplayRow[] {
-  return layoutStatusRows(buildStatusRows(workers, options), options.width, {
+  return layoutStatusRows(buildStatusRows(agents, options), options.width, {
     compact: options.compact,
     theme: options.theme,
   });
@@ -416,13 +422,13 @@ function formatDuration(milliseconds: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-export function formatStatusCounts(workers: readonly StatusWorker[]): string {
+export function formatStatusCounts(agents: readonly StatusAgent[]): string {
   const counts = {
-    working: workers.filter((worker) => worker.state === "working").length,
-    blocked: workers.filter((worker) => worker.state === "blocked").length,
-    settling: workers.filter((worker) => worker.state === "settling").length,
-    starting: workers.filter((worker) => worker.state === "starting").length,
-    unknown: workers.filter((worker) => worker.state === "unknown").length,
+    working: agents.filter((agent) => agent.state === "working").length,
+    blocked: agents.filter((agent) => agent.state === "blocked").length,
+    settling: agents.filter((agent) => agent.state === "settling").length,
+    starting: agents.filter((agent) => agent.state === "starting").length,
+    unknown: agents.filter((agent) => agent.state === "unknown").length,
   };
   return Object.entries(counts)
     .filter(([, count]) => count > 0)
@@ -439,7 +445,7 @@ export type SupervisedLeadSnapshot = Readonly<{
   needsYou?: boolean;
   pendingAskId?: string;
   pendingAskQuestion?: string;
-  workerCounts?: Readonly<{
+  agentCounts?: Readonly<{
     working?: number;
     blocked?: number;
     total?: number;
@@ -596,17 +602,17 @@ export function orderedSupervisionLeads(
   return SUPERVISION_GROUPS.flatMap((group) => groups.get(group)!);
 }
 
-function leadWorkerCounts(lead: SupervisedLeadSnapshot): string {
-  const counts = lead.workerCounts;
-  if (!counts) return "no workers";
+function leadAgentCounts(lead: SupervisedLeadSnapshot): string {
+  const counts = lead.agentCounts;
+  if (!counts) return "no agents";
   const total = counts.total ?? (counts.working ?? 0) + (counts.blocked ?? 0);
-  if (!total) return "no workers";
+  if (!total) return "no agents";
   const parts = [
     counts.working ? `${counts.working} working` : "",
     counts.blocked ? `${counts.blocked} blocked` : "",
   ].filter(Boolean);
-  const workers = `${total} worker${total === 1 ? "" : "s"}`;
-  return parts.length ? `${workers} · ${parts.join(" · ")}` : workers;
+  const agents = `${total} agent${total === 1 ? "" : "s"}`;
+  return parts.length ? `${agents} · ${parts.join(" · ")}` : agents;
 }
 
 function safeLine(text: string, width: number): string {
@@ -649,7 +655,7 @@ export function renderSupervisionLeads(
               ? "●"
               : "○";
       return safeLine(
-        `${branch} ${marker} ${lead.displayName}  ${leadWorkerCounts(lead)}`,
+        `${branch} ${marker} ${lead.displayName}  ${leadAgentCounts(lead)}`,
         width,
       );
     }),
@@ -670,7 +676,7 @@ export function formatSupervisionNotification(
       .slice(0, 8)
       .map(
         (lead) =>
-          `${classifySupervisedLead(lead).toLowerCase()}: ${lead.displayName}  ${leadWorkerCounts(lead)}`,
+          `${classifySupervisedLead(lead).toLowerCase()}: ${lead.displayName}  ${leadAgentCounts(lead)}`,
       ),
   ];
   if (ordered.length > 8) lines.push(`… ${ordered.length - 8} more · /chief`);
@@ -773,20 +779,20 @@ export function formatSupervisionContext(
       `  actions: ${lead.availableActions.map(supervisionValue).join(", ")}`,
     );
     lines.push(
-      `  worker_counts: working=${supervisionValue(lead.workerCounts.working)} blocked=${supervisionValue(lead.workerCounts.blocked)} total=${supervisionValue(lead.workerCounts.total)}`,
+      `  agent_counts: working=${supervisionValue(lead.agentCounts.working)} blocked=${supervisionValue(lead.agentCounts.blocked)} total=${supervisionValue(lead.agentCounts.total)}`,
     );
     if (lead.lastActivity !== undefined)
       lines.push(`  last_activity: ${supervisionValue(lead.lastActivity)}`);
-    if (!lead.workers.length) lines.push("  workers: none");
+    if (!lead.agents.length) lines.push("  agents: none");
     else {
-      lines.push("  workers:");
-      for (const worker of [...lead.workers].sort(
+      lines.push("  agents:");
+      for (const agent of [...lead.agents].sort(
         (left, right) =>
           left.label.localeCompare(right.label) ||
           left.id.localeCompare(right.id),
       ))
         lines.push(
-          `    ${supervisionValue(worker.label)} · ${supervisionValue(worker.state)} · id=${supervisionValue(worker.id)}`,
+          `    ${supervisionValue(agent.label)} · ${supervisionValue(agent.state)} · id=${supervisionValue(agent.id)}`,
         );
     }
     sections.push(lines.join("\n"));
@@ -840,7 +846,7 @@ export type SupervisionPeekEvidence = Readonly<{
       cmdline?: string;
     }>[];
   }>;
-  workers?: readonly string[];
+  agents?: readonly string[];
 }>;
 
 function renderProcessEvidence(
@@ -873,7 +879,7 @@ export function renderSupervisionPeek(
   };
   add(lead.displayName);
   add(`State: ${lead.runtimeState}`);
-  add(`workers: ${leadWorkerCounts(lead)}`);
+  add(`agents: ${leadAgentCounts(lead)}`);
   if (lead.pendingAskQuestion)
     add(`Pending question: ${lead.pendingAskQuestion}`);
   if (evidence.recentOutput && add("Recent activity")) {
@@ -892,8 +898,8 @@ export function renderSupervisionPeek(
       start = end + 1;
     }
   }
-  if (evidence.workers?.length && add("workers"))
-    for (const worker of evidence.workers) if (!add(worker)) break;
+  if (evidence.agents?.length && add("agents"))
+    for (const agent of evidence.agents) if (!add(agent)) break;
   if (evidence.process)
     for (const line of renderProcessEvidence(evidence.process))
       if (!add(line)) break;
@@ -1031,8 +1037,8 @@ export function formatAgentDefinitions(
       ...(definition.enabled === false ? ["status disabled"] : []),
       `tools ${formatTools(definition)}`,
       `skills ${formatSkills(definition)}`,
-      ...(Array.isArray(definition.workers) && definition.workers.length
-        ? [`delegates ${definition.workers.join(", ")}`]
+      ...(Array.isArray(definition.agents) && definition.agents.length
+        ? [`delegates ${definition.agents.join(", ")}`]
         : []),
     ];
     return [
@@ -1198,7 +1204,7 @@ export function renderAgentDefinitionsOverview(
     if (tools) lines.push(humanRow(theme, "tools", tools));
     const skills = humanSkills(definition);
     if (skills) lines.push(humanRow(theme, "skills", skills));
-    const delegates = names(definition.workers);
+    const delegates = names(definition.agents);
     if (delegates.length)
       lines.push(humanRow(theme, "delegates", delegates.join(", ")));
 
@@ -1275,7 +1281,7 @@ export function formatToolCall(args: unknown): string {
   >;
   const action = value(a.action);
   const definition = value(a.definition);
-  const worker = value(a.worker);
+  const agent = value(a.agent);
   const target =
     action === "delegate"
       ? definition
@@ -1283,12 +1289,12 @@ export function formatToolCall(args: unknown): string {
         : value(a.session)
           ? `session=${value(a.session)}`
           : undefined
-      : worker
-        ? `worker=${worker}`
+      : agent
+        ? `agent=${agent}`
         : undefined;
   const preview = collapseDisplayText(value(a.task) || value(a.message));
   return (
-    ["worker", action].filter(Boolean).join(" ") +
+    ["agent", action].filter(Boolean).join(" ") +
     [target, preview && truncateLine(preview).text]
       .filter(Boolean)
       .map((part) => ` · ${part}`)
@@ -1299,16 +1305,16 @@ export function formatToolResultSummary(
   action: string,
   v: Record<string, unknown>,
 ): string {
-  action = value(action) || "worker";
+  action = value(action) || "agent";
   if (v.ok === false) {
     const e = (v.error ?? {}) as Record<string, unknown>;
     return `✗ ${value(e.category) || "error"} · ${value(e.message) || "Operation failed"}`;
   }
-  const worker = value(v.worker),
+  const agent = value(v.agent),
     session = value(v.session_id);
   if (action === "list") {
-    const workers = Array.isArray(v.workers) ? v.workers : [];
-    const active = workers.filter(
+    const agents = Array.isArray(v.agents) ? v.agents : [];
+    const active = agents.filter(
       (item) =>
         item &&
         typeof item === "object" &&
@@ -1316,9 +1322,9 @@ export function formatToolResultSummary(
           (item as Record<string, unknown>).state as string,
         ),
     ).length;
-    return `✓ ${workers.length} workers${active ? ` · ${active} active` : ""}`;
+    return `✓ ${agents.length} agents${active ? ` · ${active} active` : ""}`;
   }
-  return `✓ ${action}${worker ? ` ${worker}` : ""}${session ? ` · ${session}` : ""}`;
+  return `✓ ${action}${agent ? ` ${agent}` : ""}${session ? ` · ${session}` : ""}`;
 }
 function evidenceLine(label: string, input: unknown): string | undefined {
   if (input === undefined || input === null) return undefined;
@@ -1337,7 +1343,7 @@ export function formatToolModelResult(
   action: string,
   v: Record<string, unknown>,
 ): string {
-  action = value(action) || "worker";
+  action = value(action) || "agent";
   const definition = value(v.definition);
   const cleanup =
     v.cleanup_errors && typeof v.cleanup_errors === "object"
@@ -1346,7 +1352,7 @@ export function formatToolModelResult(
   if (v.ok === false) {
     const e = (v.error ?? {}) as Record<string, unknown>;
     return [
-      `Worker ${action} failed.`,
+      `Agent ${action} failed.`,
       `Category: ${value(e.category) || "error"}`,
       `Message: ${value(e.message) || "Operation failed"}`,
       ...(e.ids && typeof e.ids === "object"
@@ -1388,7 +1394,7 @@ export function formatToolModelResult(
           .filter(Boolean)
       : [];
     return [
-      `Inspect worker ${value(v.worker) || "unknown"}.`,
+      `Inspect agent ${value(v.agent) || "unknown"}.`,
       ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
       ...(value(v.pane_id) ? [`Pane: ${v.pane_id}`] : []),
       ...(foreground.length ? [`Foreground: ${foreground.join(" · ")}`] : []),
@@ -1398,84 +1404,82 @@ export function formatToolModelResult(
     ].join("\n");
   }
   if (action === "list") {
-    const workers = Array.isArray(v.workers)
-      ? (v.workers as Record<string, unknown>[])
+    const agents = Array.isArray(v.agents)
+      ? (v.agents as Record<string, unknown>[])
       : [];
     const definitions = Array.isArray(v.agent_definitions)
       ? (v.agent_definitions as Record<string, unknown>[])
       : [];
-    const roots = workers.filter((worker) => !value(worker.parent_label));
+    const roots = agents.filter((agent) => !value(agent.parent_label));
     const children = (parent: Record<string, unknown>) => {
-      const parentLabel = value(parent.worker);
+      const parentLabel = value(parent.agent);
       return parentLabel
-        ? workers.filter((worker) => value(worker.parent_label) === parentLabel)
+        ? agents.filter((agent) => value(agent.parent_label) === parentLabel)
         : [];
     };
-    const workerLines = (
-      worker: Record<string, unknown>,
+    const agentLines = (
+      agent: Record<string, unknown>,
       indent = "",
       fallback = false,
     ): string[] => {
       const session =
-        value(worker.pi_session_id) || value(worker.pi_session_path);
-      const identity = value(worker.worker) || "unknown";
-      const agent = value(worker.agent_definition);
-      const status = value(worker.state) || "unknown";
+        value(agent.pi_session_id) || value(agent.pi_session_path);
+      const identity = value(agent.agent) || "unknown";
+      const definition = value(agent.agent_definition);
+      const status = value(agent.state) || "unknown";
       const controls = [
-        ...(agent ? [`agent ${agent}`] : []),
+        ...(definition ? [`definition ${definition}`] : []),
         status,
         ...(fallback ? ["non-actionable"] : []),
-        ...(!fallback && Array.isArray(worker.available_actions)
-          ? [`can ${worker.available_actions.join(", ") || "nothing"}`]
+        ...(!fallback && Array.isArray(agent.available_actions)
+          ? [`can ${agent.available_actions.join(", ") || "nothing"}`]
           : []),
-        ...(worker.orphan === true ? ["orphan"] : []),
-        ...(worker.stale === true
+        ...(agent.orphan === true ? ["orphan"] : []),
+        ...(agent.stale === true
           ? [
-              `stale${typeof worker.inactive_ms === "number" ? ` ${Math.floor(worker.inactive_ms / 60000)}m inactive` : ""}`,
+              `stale${typeof agent.inactive_ms === "number" ? ` ${Math.floor(agent.inactive_ms / 60000)}m inactive` : ""}`,
             ]
           : []),
       ];
       return [
         `${indent}${identity} · ${controls.join(" · ")}`,
         ...(session ? [`${indent}  session: ${session}`] : []),
-        ...(worker.state === "unknown" && value(worker.diagnostic)
-          ? [`${indent}  diagnostic: ${value(worker.diagnostic)}`]
+        ...(agent.state === "unknown" && value(agent.diagnostic)
+          ? [`${indent}  diagnostic: ${value(agent.diagnostic)}`]
           : []),
-        ...(value(worker.cleanup_error)
-          ? [`${indent}  cleanup warning: ${value(worker.cleanup_error)}`]
+        ...(value(agent.cleanup_error)
+          ? [`${indent}  cleanup warning: ${value(agent.cleanup_error)}`]
           : []),
-        ...(worker.result_error && typeof worker.result_error === "object"
-          ? [`${indent}  result error: ${JSON.stringify(worker.result_error)}`]
+        ...(agent.result_error && typeof agent.result_error === "object"
+          ? [`${indent}  result error: ${JSON.stringify(agent.result_error)}`]
           : []),
-        ...(fallback && value(worker.parent_label)
-          ? [`${indent}  parent: ${value(worker.parent_label)} (not present)`]
+        ...(fallback && value(agent.parent_label)
+          ? [`${indent}  parent: ${value(agent.parent_label)} (not present)`]
           : []),
       ];
     };
     const rendered = new Set<Record<string, unknown>>();
-    const renderedWorkers = roots.flatMap((root) => {
+    const renderedAgents = roots.flatMap((root) => {
       const directChildren = children(root);
       rendered.add(root);
       directChildren.forEach((child) => rendered.add(child));
 
       return [
-        ...workerLines(root),
-        ...(directChildren.length ? ["  workers:"] : []),
-        ...directChildren.flatMap((child) => workerLines(child, "    ")),
+        ...agentLines(root),
+        ...(directChildren.length ? ["  agents:"] : []),
+        ...directChildren.flatMap((child) => agentLines(child, "    ")),
         "",
       ];
     });
-    const fallbackWorkers = workers.filter((worker) => !rendered.has(worker));
+    const fallbackAgents = agents.filter((agent) => !rendered.has(agent));
     return [
-      `Workers: ${workers.length}`,
+      `Agents: ${agents.length}`,
       "",
-      ...renderedWorkers,
-      ...(fallbackWorkers.length
+      ...renderedAgents,
+      ...(fallbackAgents.length
         ? [
             "Unmatched ancestry (recovery only):",
-            ...fallbackWorkers.flatMap((worker) =>
-              workerLines(worker, "  ", true),
-            ),
+            ...fallbackAgents.flatMap((agent) => agentLines(agent, "  ", true)),
             "",
           ]
         : []),
@@ -1485,7 +1489,7 @@ export function formatToolModelResult(
     ].join("\n");
   }
   return [
-    `${action[0].toUpperCase()}${action.slice(1)} worker ${value(v.worker) || "unknown"}${definition ? ` (${definition})` : ""}.`,
+    `${action[0].toUpperCase()}${action.slice(1)} agent ${value(v.agent) || "unknown"}${definition ? ` (${definition})` : ""}.`,
     ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
     ...(value(v.request_id) ? [`Request: ${v.request_id}`] : []),
     ...(value(v.assignment_request_id)
@@ -1511,7 +1515,7 @@ export function formatExpandedToolResult(
   if (value(a.action) !== "delegate") return content;
   const lines = content.split("\n");
   const successfulAssignment =
-    lines[0]?.startsWith("Delegate worker ") &&
+    lines[0]?.startsWith("Delegate agent ") &&
     lines[0]?.endsWith(".") &&
     lines.some((line) => line.startsWith("Session: ")) &&
     lines.some((line) => line.startsWith("Request: ")) &&
@@ -1693,10 +1697,10 @@ export function renderCompletionMessage(
         : undefined,
     prefix = theme.fg(
       failed ? "error" : "success",
-      `${failed ? "✗" : "✓"} ${d?.workerLabel ?? "worker"}${d?.agentDefinition ? ` (${d.agentDefinition})` : ""}${d?.piSessionId ? ` · session=${d.piSessionId}` : ""} ${failed ? "failed" : "completed"}`,
+      `${failed ? "✗" : "✓"} ${d?.agentLabel ?? "agent"}${d?.agentDefinition ? ` (${d.agentDefinition})` : ""}${d?.piSessionId ? ` · session=${d.piSessionId}` : ""} ${failed ? "failed" : "completed"}`,
     );
   const humanContent = (message.content ?? "")
-    .replace(/^Worker result · [^\n]*\n\n/u, "")
+    .replace(/^Agent result · [^\n]*\n\n/u, "")
     .replace(/^Result file: [^\n]*\n\n/u, "")
     .replace(/^Result file could not be saved\.\n\n/u, "");
   const body =
@@ -1734,7 +1738,7 @@ export function renderCompletionMessage(
 const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 export class StatusWidget {
   private snapshot: StatusSnapshot = {
-    workers: [],
+    agents: [],
     stale: false,
     unavailable: true,
   };
@@ -1751,11 +1755,11 @@ export class StatusWidget {
   }
   setSnapshot(snapshot: StatusSnapshot): void {
     this.snapshot = snapshot;
-    const animated = snapshot.workers.some(
-      (worker) =>
-        worker.state === "working" ||
-        worker.state === "settling" ||
-        worker.state === "starting",
+    const animated = snapshot.agents.some(
+      (agent) =>
+        agent.state === "working" ||
+        agent.state === "settling" ||
+        agent.state === "starting",
     );
     if (animated && !this.timer)
       this.timer = setInterval(() => {
@@ -1775,7 +1779,7 @@ export class StatusWidget {
     const s = this.snapshot;
     const suffix = s.unavailable
       ? "unavailable"
-      : `${formatStatusCounts(s.workers)}${s.stale ? " · stale" : ""}`;
+      : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
     const breadcrumb = renderBreadcrumbWithTools(
       s.breadcrumb ?? ["herd"],
       s.ownTools,
@@ -1794,7 +1798,7 @@ export class StatusWidget {
     const out = [truncateToWidth(header, Math.max(0, width), "…")];
     if (s.identityOnly) return out;
     out.push(
-      ...renderStatusRows(s.workers, {
+      ...renderStatusRows(s.agents, {
         now: Date.now(),
         frame: this.frame,
         width: Math.max(0, width),

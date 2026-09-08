@@ -10,74 +10,74 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import {
   controlMarker,
-  claimWorkerMailbox,
+  claimAgentMailbox,
   MailboxClaimOccupiedError,
   parseControlMarker,
   readRequest,
   readAsk,
   readPendingAsk,
   readResult,
-  readWorkerState,
-  listWorkerStateIssues,
-  removeWorkerMailbox,
+  readAgentState,
+  listAgentStates,
+  listAgentStateIssues,
+  removeAgentMailbox,
   removeResult,
   removeAsk,
-  resetWorkerMailbox,
+  resetAgentMailbox,
   unacknowledgedRequestExists,
   writeResult,
   waitForState,
   writeRequest,
   writeAsk,
-  writeWorkerState,
-  workerMailboxPath,
+  writeAgentState,
+  agentMailboxPath,
   type RequestRecord,
   type AskRecord,
-  type WorkerState,
+  type ManagedAgentState,
 } from "./mailbox.ts";
 import { chooseLabel } from "./core.ts";
 
-const state: WorkerState = {
-  version: 3,
+const state: ManagedAgentState = {
+  version: 4,
   runId: "11111111-1111-4111-8111-111111111111",
   ownerSessionId: "22222222-2222-4222-8222-222222222222",
   workspaceId: "w",
-  workerLabel: "worker",
+  agentLabel: "agent",
   paneId: "p",
   piSessionId: "33333333-3333-4333-8333-333333333333",
   cwd: "/tmp",
   updatedAt: Date.now(),
 };
-test("V3 markers require canonical UUIDs and never contain task text", () => {
+test("V4 markers require canonical UUIDs and never contain task text", () => {
   const id = "44444444-4444-4444-8444-444444444444";
-  assert.equal(controlMarker(id), `__PI_HERDSMAN_WORKER_V3__:${id}`);
+  assert.equal(controlMarker(id), `__PI_HERDSMAN_AGENT_V4__:${id}`);
   assert.equal(parseControlMarker(controlMarker(id)), id);
   assert.equal(parseControlMarker(`${controlMarker(id)} task`), undefined);
-  assert.equal(parseControlMarker(`__HERDR_SUBAGENT_V2__:${id}`), undefined);
-  assert.equal(parseControlMarker("__PI_HERDSMAN_WORKER_V3__:bad"), undefined);
-  assert.equal(parseControlMarker("__PI_HERDSMAN_WORKER_V3__:"), undefined);
+  assert.equal(parseControlMarker("__PI_HERDSMAN_AGENT_V4__:bad"), undefined);
+  assert.equal(parseControlMarker("__PI_HERDSMAN_AGENT_V4__:"), undefined);
 });
 test("Pi UUIDv7 session and run identities are valid mailbox fields", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  const v7State: WorkerState = {
+  const v7State: ManagedAgentState = {
     ...state,
     runId: "018f2f2e-7b11-7abc-8def-0123456789ab",
     ownerSessionId: "018f2f2e-7b12-7abc-8def-0123456789ab",
     piSessionId: "018f2f2e-7b13-7abc-8def-0123456789ab",
   };
-  writeWorkerState(path, v7State);
-  assert.deepEqual(readWorkerState(path), v7State);
+  writeAgentState(path, v7State);
+  assert.deepEqual(readAgentState(path), v7State);
   const requestId = "018f2f2e-7b14-7abc-8def-0123456789ab";
   writeRequest(path, {
-    version: 3,
+    version: 4,
     runId: v7State.runId,
     requestId,
     ownerSessionId: v7State.ownerSessionId,
     workspaceId: v7State.workspaceId,
-    workerLabel: v7State.workerLabel,
+    agentLabel: v7State.agentLabel,
     paneId: v7State.paneId,
     kind: "task",
     text: "work",
@@ -88,13 +88,13 @@ test("Pi UUIDv7 session and run identities are valid mailbox fields", () => {
 test("asks and reply requests round-trip with strict correlation", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const ask: AskRecord = {
-    version: 3,
+    version: 4,
     askId: "44444444-4444-4444-8444-444444444444",
     requestId: state.runId,
     runId: state.runId,
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     piSessionId: state.piSessionId,
     question: "Choose A or B",
@@ -103,12 +103,12 @@ test("asks and reply requests round-trip with strict correlation", () => {
   writeAsk(path, ask);
   assert.deepEqual(readAsk(path), ask);
   const request: RequestRecord = {
-    version: 3,
+    version: 4,
     runId: state.runId,
     requestId: "55555555-5555-4555-8555-555555555555",
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     kind: "reply",
     askId: ask.askId,
@@ -123,12 +123,12 @@ test("asks and reply requests round-trip with strict correlation", () => {
 test("reply ask IDs are required and non-reply requests cannot carry one", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const base = {
-    version: 3 as const,
+    version: 4 as const,
     runId: state.runId,
     requestId: "55555555-5555-4555-8555-555555555555",
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     text: "reply",
     createdAt: Date.now(),
@@ -147,12 +147,12 @@ test("reply ask IDs are required and non-reply requests cannot carry one", () =>
     /reply ask ID/,
   );
   assert.throws(
-    () => writeWorkerState(path, { ...state, pendingAskId: "not-a-uuid" }),
+    () => writeAgentState(path, { ...state, pendingAskId: "not-a-uuid" }),
     /pendingAskId/,
   );
   assert.throws(
     () =>
-      writeWorkerState(path, {
+      writeAgentState(path, {
         ...state,
         pendingAskId: state.runId,
       }),
@@ -160,7 +160,7 @@ test("reply ask IDs are required and non-reply requests cannot carry one", () =>
   );
   assert.throws(
     () =>
-      writeWorkerState(path, {
+      writeAgentState(path, {
         ...state,
         activeRequestId: state.runId,
         completedRequestId: "88888888-8888-4888-8888-888888888888",
@@ -176,17 +176,17 @@ test("readPendingAsk fails closed for a missing or mismatched artifact", () => {
     activeRequestId: state.runId,
     pendingAskId: state.runId,
   };
-  writeWorkerState(path, waiting);
+  writeAgentState(path, waiting);
   assert.equal(readPendingAsk(path, state), undefined);
   assert.throws(() => readPendingAsk(path, waiting), /artifact is missing/);
   writeAsk(path, {
-    version: 3,
+    version: 4,
     askId: state.runId,
     requestId: state.runId,
     runId: state.runId,
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     piSessionId: state.piSessionId,
     question: "Choose",
@@ -194,13 +194,13 @@ test("readPendingAsk fails closed for a missing or mismatched artifact", () => {
   });
   assert.equal(readPendingAsk(path, waiting)?.askId, state.runId);
   writeAsk(path, {
-    version: 3,
+    version: 4,
     askId: state.runId,
     requestId: "77777777-7777-4777-8777-777777777777",
     runId: state.runId,
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     piSessionId: state.piSessionId,
     question: "Choose",
@@ -214,7 +214,7 @@ test("rejects malformed state records", () => {
     join(path, "state.json"),
     JSON.stringify({ ...state, extra: true }),
   );
-  assert.throws(() => readWorkerState(path), /Unknown mailbox field/);
+  assert.throws(() => readAgentState(path), /Unknown mailbox field/);
   writeFileSync(
     join(path, "state.json"),
     JSON.stringify({
@@ -227,16 +227,21 @@ test("rejects malformed state records", () => {
       },
     }),
   );
-  assert.throws(() => readWorkerState(path), /Accepted acknowledgement/);
+  assert.throws(() => readAgentState(path), /Accepted acknowledgement/);
   writeFileSync(join(path, "state.json"), "x".repeat(65 * 1024));
-  assert.throws(() => readWorkerState(path), /too large/);
+  assert.throws(() => readAgentState(path), /too large/);
   for (const value of ["1", 1.5, -1, Infinity, NaN]) {
     writeFileSync(
       join(path, "state.json"),
       JSON.stringify({ ...state, lastActivityAt: value }),
     );
-    assert.throws(() => readWorkerState(path), /lastActivityAt/);
+    assert.throws(() => readAgentState(path), /lastActivityAt/);
   }
+  writeFileSync(
+    join(path, "state.json"),
+    JSON.stringify({ ...state, workerLabel: "legacy" }),
+  );
+  assert.throws(() => readAgentState(path), /Unknown mailbox field/);
 });
 test("waits on the exact state path and resolves after an update", async () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
@@ -246,21 +251,21 @@ test("waits on the exact state path and resolves after an update", async () => {
     { timeoutMs: 1000 },
   );
   setTimeout(
-    () => writeWorkerState(path, { ...state, completedRequestId: state.runId }),
+    () => writeAgentState(path, { ...state, completedRequestId: state.runId }),
     20,
   );
   assert.equal((await waiting).completedRequestId, state.runId);
 });
 test("state waiter observes a write made during its initial check", async () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  writeWorkerState(path, state);
+  writeAgentState(path, state);
   let written = false;
   const waiting = waitForState(
     path,
     (value) => {
       if (!written) {
         written = true;
-        writeWorkerState(path, { ...state, completedRequestId: state.runId });
+        writeAgentState(path, { ...state, completedRequestId: state.runId });
       }
       return value.completedRequestId === state.runId;
     },
@@ -273,12 +278,12 @@ test("rejects unsafe IDs and invalid conditional results", () => {
   assert.throws(
     () =>
       writeRequest(path, {
-        version: 3,
+        version: 4,
         runId: state.runId,
         requestId: "../escape",
         ownerSessionId: state.ownerSessionId,
         workspaceId: state.workspaceId,
-        workerLabel: state.workerLabel,
+        agentLabel: state.agentLabel,
         paneId: state.paneId,
         kind: "task",
         text: "x",
@@ -289,12 +294,12 @@ test("rejects unsafe IDs and invalid conditional results", () => {
   assert.throws(
     () =>
       writeResult(path, {
-        version: 3,
+        version: 4,
         runId: state.runId,
         requestId: state.runId,
         ownerSessionId: state.ownerSessionId,
         workspaceId: state.workspaceId,
-        workerLabel: state.workerLabel,
+        agentLabel: state.agentLabel,
         paneId: state.paneId,
         status: "completed",
         text: "   ",
@@ -314,16 +319,16 @@ test("rejects unsafe IDs and invalid conditional results", () => {
       },
     }),
   );
-  assert.throws(() => readWorkerState(path), /acknowledgement/);
+  assert.throws(() => readAgentState(path), /acknowledgement/);
   assert.throws(
     () =>
       writeResult(path, {
-        version: 3,
+        version: 4,
         runId: state.runId,
         requestId: state.runId,
         ownerSessionId: state.ownerSessionId,
         workspaceId: state.workspaceId,
-        workerLabel: state.workerLabel,
+        agentLabel: state.agentLabel,
         paneId: state.paneId,
         status: "completed",
         text: "ok",
@@ -347,16 +352,16 @@ test("aborted state waits reject immediately", async () => {
 });
 test("mailbox records are atomic JSON files with strict identity fields", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  resetWorkerMailbox(path);
-  writeWorkerState(path, state);
-  assert.deepEqual(readWorkerState(path), state);
+  resetAgentMailbox(path);
+  writeAgentState(path, state);
+  assert.deepEqual(readAgentState(path), state);
   const request: RequestRecord = {
-    version: 3,
+    version: 4,
     runId: state.runId,
     requestId: "55555555-5555-4555-8555-555555555555",
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     kind: "task",
     text: "do the work",
@@ -367,16 +372,16 @@ test("mailbox records are atomic JSON files with strict identity fields", () => 
 });
 test("acknowledgement identity determines whether a handoff remains pending", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  resetWorkerMailbox(path);
-  writeWorkerState(path, state);
+  resetAgentMailbox(path);
+  writeAgentState(path, state);
   const requestId = "66666666-6666-4666-8666-666666666666";
   writeRequest(path, {
-    version: 3,
+    version: 4,
     runId: state.runId,
     requestId,
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     kind: "task",
     text: "handoff",
@@ -419,46 +424,63 @@ test("acknowledgement identity determines whether a handoff remains pending", ()
 });
 test("malformed request handoff fails closed", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  resetWorkerMailbox(path);
-  writeWorkerState(path, state);
+  resetAgentMailbox(path);
+  writeAgentState(path, state);
   writeFileSync(join(path, "request-bad.json"), "not json");
   assert.equal(unacknowledgedRequestExists(path, state), true);
 });
 test("mailbox paths separate workspace and label and use private directories", () => {
-  const first = workerMailboxPath("workspace-a", "worker");
-  assert.equal(first, workerMailboxPath("workspace-a", "worker"));
-  assert.notEqual(first, workerMailboxPath("workspace-b", "worker"));
-  assert.notEqual(first, workerMailboxPath("workspace-a", "worker-2"));
+  const first = agentMailboxPath("workspace-a", "agent");
+  assert.equal(basename(dirname(first)), "mailboxes-v4");
+  assert.equal(first, agentMailboxPath("workspace-a", "agent"));
+  assert.notEqual(first, agentMailboxPath("workspace-b", "agent"));
+  assert.notEqual(first, agentMailboxPath("workspace-a", "agent-2"));
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  resetWorkerMailbox(path);
+  resetAgentMailbox(path);
   assert.equal(statSync(path).mode & 0o777, 0o700);
+});
+test("mailbox scans stay inside the current protocol namespace", () => {
+  const path = agentMailboxPath("namespace-test", `agent-${process.pid}`);
+  const outside = join(dirname(dirname(path)), basename(path));
+  writeAgentState(path, state);
+  mkdirSync(outside, { recursive: true });
+  try {
+    writeFileSync(join(outside, "state.json"), "not json");
+    assert.ok(listAgentStates().some((entry) => entry.path === path));
+    assert.ok(!listAgentStateIssues().some((entry) => entry.path === outside));
+    writeAgentState(outside, state);
+    assert.ok(!listAgentStates().some((entry) => entry.path === outside));
+  } finally {
+    removeAgentMailbox(path);
+    removeAgentMailbox(outside);
+  }
 });
 test("startup claims serialize access and reset preserves the claim", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  resetWorkerMailbox(path);
-  writeWorkerState(path, state);
+  resetAgentMailbox(path);
+  writeAgentState(path, state);
   const requestId = "88888888-8888-4888-8888-888888888888";
   writeRequest(path, {
-    version: 3,
+    version: 4,
     runId: state.runId,
     requestId,
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     kind: "task",
     text: "preserve",
     createdAt: Date.now(),
   });
   const resultBefore = JSON.stringify({ ...state, activeRequestId: requestId });
-  writeWorkerState(path, { ...state, activeRequestId: requestId });
+  writeAgentState(path, { ...state, activeRequestId: requestId });
   writeResult(path, {
-    version: 3,
+    version: 4,
     runId: state.runId,
     requestId,
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     status: "completed",
     text: "preserve",
@@ -473,8 +495,8 @@ test("startup claims serialize access and reset preserves the claim", () => {
     join(path, `result-${requestId}.json`),
     "utf8",
   );
-  const release = claimWorkerMailbox(path);
-  assert.throws(() => claimWorkerMailbox(path), MailboxClaimOccupiedError);
+  const release = claimAgentMailbox(path);
+  assert.throws(() => claimAgentMailbox(path), MailboxClaimOccupiedError);
   assert.equal(readFileSync(join(path, "state.json"), "utf8"), stateBefore);
   assert.equal(
     readFileSync(join(path, `request-${requestId}.json`), "utf8"),
@@ -484,13 +506,13 @@ test("startup claims serialize access and reset preserves the claim", () => {
     readFileSync(join(path, `result-${requestId}.json`), "utf8"),
     resultFileBefore,
   );
-  resetWorkerMailbox(path);
+  resetAgentMailbox(path);
   const claimDir = join(path, ".starting");
   assert.equal(statSync(claimDir).mode & 0o777, 0o700);
   const owners = readdirSync(claimDir);
   assert.equal(owners.length, 1);
   assert.equal(statSync(join(claimDir, owners[0])).mode & 0o777, 0o600);
-  assert.equal(readWorkerState(path), undefined);
+  assert.equal(readAgentState(path), undefined);
   assert.equal(readRequest(path, requestId), undefined);
   assert.equal(readResult(path, requestId), undefined);
   assert.equal(
@@ -503,23 +525,23 @@ test("startup claims serialize access and reset preserves the claim", () => {
 });
 test("startup claims recover one valid dead PID and reject malformed claims", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  resetWorkerMailbox(path);
+  resetAgentMailbox(path);
   mkdirSync(join(path, ".starting"));
   writeFileSync(
     join(path, ".starting", "999999-dead"),
     JSON.stringify({ pid: 999999, id: "dead" }),
   );
-  const release = claimWorkerMailbox(path);
+  const release = claimAgentMailbox(path);
   release();
   mkdirSync(join(path, ".starting"));
   writeFileSync(join(path, ".starting", "999999-malformed"), "not json");
-  assert.throws(() => claimWorkerMailbox(path), /Unable to verify/);
+  assert.throws(() => claimAgentMailbox(path), /Unable to verify/);
   unlinkSync(join(path, ".starting", "999999-malformed"));
 });
 test("stale recovery cannot remove a replacement owner", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const claimDir = join(path, ".starting");
-  resetWorkerMailbox(path);
+  resetAgentMailbox(path);
   mkdirSync(claimDir);
   writeFileSync(
     join(claimDir, "999999-stale"),
@@ -530,7 +552,7 @@ test("stale recovery cannot remove a replacement owner", () => {
   let staleObserved = false;
   assert.throws(
     () =>
-      claimWorkerMailbox(path, {
+      claimAgentMailbox(path, {
         afterStaleOwnerRemoved: () => {
           staleObserved = !readdirSync(claimDir).includes("999999-stale");
           writeFileSync(
@@ -547,7 +569,7 @@ test("stale recovery cannot remove a replacement owner", () => {
     JSON.parse(readFileSync(join(claimDir, freshOwner))),
     freshPayload,
   );
-  assert.throws(() => claimWorkerMailbox(path), MailboxClaimOccupiedError);
+  assert.throws(() => claimAgentMailbox(path), MailboxClaimOccupiedError);
   assert.deepEqual(readdirSync(claimDir), [freshOwner]);
   assert.deepEqual(
     JSON.parse(readFileSync(join(claimDir, freshOwner))),
@@ -556,42 +578,42 @@ test("stale recovery cannot remove a replacement owner", () => {
 });
 test("empty startup claim directories fail closed", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  resetWorkerMailbox(path);
+  resetAgentMailbox(path);
   mkdirSync(join(path, ".starting"));
-  assert.throws(() => claimWorkerMailbox(path), /Unable to verify/);
+  assert.throws(() => claimAgentMailbox(path), /Unable to verify/);
 });
 test("mailbox cleanup preserves the owning startup claim until release", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
-  resetWorkerMailbox(path);
-  writeWorkerState(path, state);
-  const release = claimWorkerMailbox(path);
-  removeWorkerMailbox(path);
-  assert.equal(readWorkerState(path), undefined);
+  resetAgentMailbox(path);
+  writeAgentState(path, state);
+  const release = claimAgentMailbox(path);
+  removeAgentMailbox(path);
+  assert.equal(readAgentState(path), undefined);
   assert.equal(readdirSync(path).includes(".starting"), true);
-  assert.throws(() => claimWorkerMailbox(path), MailboxClaimOccupiedError);
+  assert.throws(() => claimAgentMailbox(path), MailboxClaimOccupiedError);
   release();
   assert.equal(readdirSync(path).includes(".starting"), false);
-  removeWorkerMailbox(path);
+  removeAgentMailbox(path);
 });
 test("malformed JSON and legacy protocol records are rejected", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   writeFileSync(join(path, "state.json"), "not json");
-  assert.throws(() => readWorkerState(path), /Unexpected token|JSON/);
+  assert.throws(() => readAgentState(path), /Unexpected token|JSON/);
   writeFileSync(
     join(path, "state.json"),
-    JSON.stringify({ ...state, version: 2 }),
+    JSON.stringify({ ...state, version: 3 }),
   );
-  assert.throws(() => readWorkerState(path), /protocol version/);
+  assert.throws(() => readAgentState(path), /protocol version/);
   const requestId = "66666666-6666-4666-8666-666666666666";
   writeFileSync(
     join(path, `request-${requestId}.json`),
     JSON.stringify({
-      version: 2,
+      version: 3,
       runId: state.runId,
       requestId,
       ownerSessionId: state.ownerSessionId,
       workspaceId: state.workspaceId,
-      workerLabel: state.workerLabel,
+      agentLabel: state.agentLabel,
       paneId: state.paneId,
       kind: "task",
       text: "work",
@@ -602,13 +624,13 @@ test("malformed JSON and legacy protocol records are rejected", () => {
   writeFileSync(
     join(path, "ask.json"),
     JSON.stringify({
-      version: 2,
+      version: 3,
       askId: state.runId,
       requestId: state.runId,
       runId: state.runId,
       ownerSessionId: state.ownerSessionId,
       workspaceId: state.workspaceId,
-      workerLabel: state.workerLabel,
+      agentLabel: state.agentLabel,
       paneId: state.paneId,
       piSessionId: state.piSessionId,
       question: "Choose",
@@ -619,12 +641,12 @@ test("malformed JSON and legacy protocol records are rejected", () => {
   writeFileSync(
     join(path, `result-${requestId}.json`),
     JSON.stringify({
-      version: 2,
+      version: 3,
       runId: state.runId,
       requestId,
       ownerSessionId: state.ownerSessionId,
       workspaceId: state.workspaceId,
-      workerLabel: state.workerLabel,
+      agentLabel: state.agentLabel,
       paneId: state.paneId,
       status: "completed",
       text: "done",
@@ -634,7 +656,7 @@ test("malformed JSON and legacy protocol records are rejected", () => {
   assert.throws(() => readResult(path, requestId), /protocol version/);
 });
 test("lists malformed current mailbox state as bounded diagnostics", () => {
-  const path = workerMailboxPath("unknown-workspace", "unknown-worker");
+  const path = agentMailboxPath("unknown-workspace", "unknown-agent");
   mkdirSync(path, { recursive: true });
   try {
     for (const [kind, setup, expected] of [
@@ -664,7 +686,7 @@ test("lists malformed current mailbox state as bounded diagnostics", () => {
       ],
     ] as const) {
       setup();
-      const issue = listWorkerStateIssues().find(
+      const issue = listAgentStateIssues().find(
         (candidate) => candidate.path === path,
       );
       assert.ok(issue, kind);
@@ -683,18 +705,18 @@ test("lists malformed current mailbox state as bounded diagnostics", () => {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    removeWorkerMailbox(path);
+    removeAgentMailbox(path);
   }
 });
 test("valid results round-trip and atomic temporary files are removed", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const result = {
-    version: 3 as const,
+    version: 4 as const,
     runId: state.runId,
     requestId: "66666666-6666-4666-8666-666666666666",
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     status: "completed" as const,
     text: "completed",
@@ -713,12 +735,12 @@ test("valid results round-trip and atomic temporary files are removed", () => {
 test("request and result size limits remain independent", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const request = {
-    version: 3 as const,
+    version: 4 as const,
     runId: state.runId,
     requestId: "77777777-7777-4777-8777-777777777777",
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     kind: "task" as const,
     text: "x".repeat(1024 * 1024),
@@ -726,12 +748,12 @@ test("request and result size limits remain independent", () => {
   };
   assert.throws(() => writeRequest(path, request), /too large/);
   const result = {
-    version: 3 as const,
+    version: 4 as const,
     runId: state.runId,
     requestId: "88888888-8888-4888-8888-888888888888",
     ownerSessionId: state.ownerSessionId,
     workspaceId: state.workspaceId,
-    workerLabel: state.workerLabel,
+    agentLabel: state.agentLabel,
     paneId: state.paneId,
     status: "completed" as const,
     text: "x".repeat(4 * 1024 * 1024),
@@ -755,7 +777,7 @@ test("state waiter removes its abort listener after resolution", async () => {
     timeoutMs: 1000,
     signal,
   });
-  writeWorkerState(path, state);
+  writeAgentState(path, state);
   await waiting;
   assert.equal(listeners.size, 0);
 });

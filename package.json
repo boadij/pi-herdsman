@@ -2,7 +2,7 @@
   "name": "pi-herdsman",
   "version": "0.1.5",
   "type": "module",
-  "description": "Asynchronous Pi subagents with nested delegation, parallel multi-agent orchestration, and supervision in herdr.",
+  "description": "Asynchronous Pi agent orchestration with nested delegation, parallel execution, and supervision in herdr.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -19,7 +19,6 @@
     "pi-extension",
     "subagent",
     "subagents",
-    "workers",
     "agents",
     "ai-agents",
     "coding-agents",

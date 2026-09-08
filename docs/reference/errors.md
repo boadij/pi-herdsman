@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md)
 
-Normal public `worker` failures use structured error details.
+Normal public `agent` failures use structured error details.
 
 ## Shape
 
@@ -38,12 +38,12 @@ must not be presented as exhausted cleanup.
 | Category                   | Meaning                                                                             |
 | -------------------------- | ----------------------------------------------------------------------------------- |
 | `not_running_inside_herdr` | Required herdr environment is missing.                                              |
-| `worker_label_exists`      | Requested/generated live label conflicts with an existing worker.                   |
-| `pane_not_ready`           | Worker pane/startup did not reach the required readiness boundary.                  |
+| `agent_label_exists`       | Requested/generated live label conflicts with an existing agent.                    |
+| `pane_not_ready`           | Agent pane/startup did not reach the required readiness boundary.                   |
 | `target_not_found`         | Exact requested identity or ownership evidence was not found.                       |
 | `target_ambiguous`         | More than one live candidate matched an identity that must be exact.                |
 | `rollback_failure`         | Primary operation failed and cleanup did not fully converge.                        |
-| `worker_busy`              | Worker state does not allow the requested control action.                           |
+| `agent_busy`               | Agent state does not allow the requested control action.                            |
 | `invalid_request`          | Request fields, values, definition input, file input, or preconditions are invalid. |
 | `internal_failure`         | An invariant or underlying operation failed outside a narrower public category.     |
 
@@ -58,7 +58,7 @@ Both are fail-closed behavior.
 
 ## Rollback
 
-When a worker launch fails, exact resources created by that attempt are cleaned
+When an agent launch fails, exact resources created by that attempt are cleaned
 only when ownership is proved.
 
 A `rollback_failure` can preserve:
@@ -84,4 +84,4 @@ This is output presentation behavior, not an error category.
 ## See also
 
 - [Recovery](../guides/recovery.md)
-- [`worker` API](worker.md)
+- [`agent` API](agent.md)

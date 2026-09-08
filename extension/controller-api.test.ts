@@ -9,7 +9,7 @@ import type {
   AskRecord,
   RequestRecord,
   ResultRecord,
-  WorkerState,
+  ManagedAgentState,
 } from "./mailbox.ts";
 import { OperationError } from "./errors.ts";
 import support, {
@@ -20,7 +20,7 @@ import support, {
   PI_AGENT_ROOT,
   REQUEST_ID,
   LEAD_SESSION_ID,
-  WORKER_ID,
+  AGENT_ID,
   WORKSPACE,
   agentFromState,
   cascadeExecutor,
@@ -30,37 +30,37 @@ import support, {
   discoverAgent,
   fakeContext,
   fakePi,
-  fakeWorkerContext,
+  fakeAgentContext,
   herdrAlias,
   isAgentList,
   isPaneList,
   managedState,
   nativeSessions,
-  workerControllerExecutor,
+  agentControllerExecutor,
   promptLaunchContents,
   promptLaunchPaths,
   readRequest,
   readResult,
-  readWorkerState,
+  readAgentState,
   realFs,
   recoveryIdentity,
   registerExtension,
   removeAsk,
   removeRequest,
   removeResult,
-  resetWorkerMailbox,
+  resetAgentMailbox,
   resolveAssignmentSession,
   resolveManagedSession,
   leadExec,
   setLeadEnvironment,
-  setWorkerEnvironment,
+  setAgentEnvironment,
   startupExecutor,
-  workerMailboxPath,
+  agentMailboxPath,
   writeAsk,
   writePromptDefinition,
   writeRequest,
   writeResult,
-  writeWorkerState,
+  writeAgentState,
 } from "./support.ts";
 
 test("project agent discovery is gated by trusted project settings", async () => {
@@ -78,7 +78,7 @@ test("project agent discovery is gated by trusted project settings", async () =>
     );
     pi = fakePi();
     registerExtension!(pi.pi as never);
-    const command = pi.commandOptions.get("workers");
+    const command = pi.commandOptions.get("agents");
     const context = fakeContext() as any;
     context.cwd = project;
     context.hasUI = true;
@@ -91,7 +91,7 @@ test("project agent discovery is gated by trusted project settings", async () =>
       join(PI_AGENT_ROOT, "settings.json"),
       JSON.stringify({ piHerd: { projectAgents: true } }),
     );
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     assert.equal(
       selections.at(-1)?.some((value) => value.includes("project-only")),
       false,
@@ -100,7 +100,7 @@ test("project agent discovery is gated by trusted project settings", async () =>
       join(PI_AGENT_ROOT, "settings.json"),
       JSON.stringify({ piHerdsman: { projectAgents: true } }),
     );
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     assert.equal(
       selections.flat().some((value) => value.includes("project-only")),
       false,
@@ -110,7 +110,7 @@ test("project agent discovery is gated by trusted project settings", async () =>
       join(project, ".pi", "settings.json"),
       JSON.stringify({ piHerdsman: { projectAgents: true } }),
     );
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     assert.equal(
       selections.flat().some((value) => value.includes("project-only")),
       true,
@@ -127,7 +127,7 @@ test("project agent discovery is gated by trusted project settings", async () =>
       join(PI_AGENTS_DIR, "scout.md"),
       "---\nname: scout\nmodel: global/model\n---\nglobal",
     );
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     const options = selections.at(-1) ?? [];
     assert.ok(
       options.some((value) => value.startsWith("project-only [project] *")),
@@ -143,7 +143,7 @@ test("project agent discovery is gated by trusted project settings", async () =>
       join(project, ".pi", "settings.json"),
       JSON.stringify({ piHerdsman: { projectAgents: false } }),
     );
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     assert.equal(
       selections.at(-1)?.some((value) => value.includes("project-only")),
       false,
@@ -153,7 +153,7 @@ test("project agent discovery is gated by trusted project settings", async () =>
       join(project, ".pi", "settings.json"),
       JSON.stringify({ piHerdsman: { projectAgents: true } }),
     );
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     assert.equal(
       selections.at(-1)?.some((value) => value.includes("project-only")),
       false,
@@ -168,10 +168,10 @@ test("project agent discovery is gated by trusted project settings", async () =>
   }
 });
 
-test("managed worker validates project definitions before publishing state", async () => {
-  const mailbox = setWorkerEnvironment("project-validation-worker");
+test("managed agent validates project definitions before publishing state", async () => {
+  const mailbox = setAgentEnvironment("project-validation-agent");
   const project = realFs.mkdtempSync(
-    join(tmpdir(), "pi-herdsman-worker-project-"),
+    join(tmpdir(), "pi-herdsman-agent-project-"),
   );
   realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
   realFs.writeFileSync(
@@ -180,29 +180,29 @@ test("managed worker validates project definitions before publishing state", asy
   );
   realFs.writeFileSync(
     join(project, ".pi", "agents", "broken.md"),
-    '---\nname: broken-parent\nworkers: ["missing-child"]\n---\nbroken',
+    '---\nname: broken-parent\nagents: ["missing-child"]\n---\nbroken',
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const context = fakeWorkerContext([
+  const context = fakeAgentContext([
     {
       type: "custom",
-      customType: "pi-herdsman-worker-definition",
+      customType: "pi-herdsman-agent-definition",
       data: { name: "project-parent" },
     },
   ]) as any;
   context.cwd = project;
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    assert.equal(readWorkerState(mailbox), undefined);
+    assert.equal(readAgentState(mailbox), undefined);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(mailbox);
+    resetAgentMailbox(mailbox);
     realFs.rmSync(project, { recursive: true, force: true });
   }
 });
 
-test("project agents reject cross-cwd assignment before worker startup", async () => {
+test("project agents reject cross-cwd assignment before agent startup", async () => {
   setLeadEnvironment();
   const project = realFs.mkdtempSync(
     join(tmpdir(), "pi-herdsman-assign-project-"),
@@ -273,7 +273,7 @@ test("trusted same-cwd project assignment launches with native approval", async 
     false,
     (args) => startArgs.push(args),
     project,
-    WORKER_ID,
+    AGENT_ID,
     true,
   );
   const pi = fakePi({ exec: startup.exec });
@@ -296,7 +296,7 @@ test("trusted same-cwd project assignment launches with native approval", async 
     assert.ok(startArgs[0]?.includes("--approve"));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(startup.mailbox);
+    resetAgentMailbox(startup.mailbox);
     realFs.rmSync(project, { recursive: true, force: true });
   }
   await (async () => {
@@ -324,7 +324,7 @@ test("trusted same-cwd project assignment launches with native approval", async 
       false,
       (args) => startArgs.push(args),
       project,
-      WORKER_ID,
+      AGENT_ID,
       true,
     );
     const pi = fakePi({ exec: startup.exec });
@@ -347,7 +347,7 @@ test("trusted same-cwd project assignment launches with native approval", async 
       assert.ok(startArgs[0]?.includes("--approve"));
     } finally {
       pi.events.get("session_shutdown")?.[0]();
-      resetWorkerMailbox(startup.mailbox);
+      resetAgentMailbox(startup.mailbox);
       realFs.rmSync(projectLink, { force: true });
       realFs.rmSync(project, { recursive: true, force: true });
     }
@@ -370,14 +370,14 @@ test("inactive and cross-cwd non-project assignments omit feature approval", asy
     );
     const startArgs: string[][] = [];
     const startup = startupExecutor(
-      "worker",
+      "agent",
       () => DEFAULT_PI_SESSION_ID,
       undefined,
       undefined,
       false,
       (args) => startArgs.push(args),
       scenario.cwd ?? project,
-      WORKER_ID,
+      AGENT_ID,
     );
     const pi = fakePi({ exec: startup.exec });
     registerExtension!(pi.pi as never);
@@ -388,7 +388,7 @@ test("inactive and cross-cwd non-project assignments omit feature approval", asy
         "id",
         {
           action: "delegate",
-          definition: "worker",
+          definition: "agent",
           cwd: scenario.cwd,
           task: scenario.name,
         },
@@ -400,7 +400,7 @@ test("inactive and cross-cwd non-project assignments omit feature approval", asy
       assert.equal(startArgs[0]?.includes("--approve"), false);
     } finally {
       pi.events.get("session_shutdown")?.[0]();
-      resetWorkerMailbox(startup.mailbox);
+      resetAgentMailbox(startup.mailbox);
       realFs.rmSync(project, { recursive: true, force: true });
     }
   }
@@ -421,7 +421,7 @@ test("project-only Definitions edits create a global override", async () => {
   realFs.writeFileSync(projectPath, original);
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("workers");
+  const command = pi.commandOptions.get("agents");
   const context = fakeContext() as any;
   context.cwd = project;
   context.hasUI = true;
@@ -444,7 +444,7 @@ test("project-only Definitions edits create a global override", async () => {
     }
   };
   try {
-    await command.handler("agents", context);
+    await command.handler("definitions", context);
     const globalPath = join(PI_AGENTS_DIR, "project-only.md");
     assert.equal(realFs.readFileSync(projectPath, "utf8"), original);
     assert.match(
@@ -464,7 +464,7 @@ test("project-only Definitions edits create a global override", async () => {
 });
 
 test("same-cwd managed parents resolve project children", async () => {
-  setWorkerEnvironment("project-parent", ["project-child"]);
+  setAgentEnvironment("project-parent", ["project-child"]);
   const project = realFs.mkdtempSync(
     join(tmpdir(), "pi-herdsman-parent-project-"),
   );
@@ -475,7 +475,7 @@ test("same-cwd managed parents resolve project children", async () => {
   );
   realFs.writeFileSync(
     join(project, ".pi", "agents", "project-parent.md"),
-    '---\nname: project-parent\nworkers: ["project-child"]\n---\nparent',
+    '---\nname: project-parent\nagents: ["project-child"]\n---\nparent',
   );
   realFs.writeFileSync(
     join(project, ".pi", "agents", "project-child.md"),
@@ -483,16 +483,16 @@ test("same-cwd managed parents resolve project children", async () => {
   );
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "project-parent";
   const parent = { ...managedState("project-parent"), cwd: project };
-  const parentMailbox = workerMailboxPath(WORKSPACE, parent.workerLabel);
-  resetWorkerMailbox(parentMailbox);
-  writeWorkerState(parentMailbox, parent);
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  writeAgentState(parentMailbox, parent);
   const lifecycle = delegatedLifecycleExecutor(parent, [], project);
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
-  const context = fakeWorkerContext([
+  const context = fakeAgentContext([
     {
       type: "custom",
-      customType: "pi-herdsman-worker-definition",
+      customType: "pi-herdsman-agent-definition",
       data: { name: "project-parent" },
     },
   ]) as any;
@@ -513,8 +513,8 @@ test("same-cwd managed parents resolve project children", async () => {
       context,
     );
     assert.equal(started.details.ok, true, JSON.stringify(started.details));
-    const childState = readWorkerState(
-      workerMailboxPath(WORKSPACE, "project-child"),
+    const childState = readAgentState(
+      agentMailboxPath(WORKSPACE, "project-child"),
     );
     assert.equal(childState?.ownerSessionId, parent.piSessionId);
     assert.equal(childState?.cwd, project);
@@ -525,35 +525,35 @@ test("same-cwd managed parents resolve project children", async () => {
     );
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
-    resetWorkerMailbox(parentMailbox);
-    resetWorkerMailbox(workerMailboxPath(WORKSPACE, "project-child"));
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(agentMailboxPath(WORKSPACE, "project-child"));
     realFs.rmSync(project, { recursive: true, force: true });
     setLeadEnvironment();
   }
 });
 
 test("parent controller readiness, allowlist, and cwd preflight fail closed", async () => {
-  setWorkerEnvironment("delegating-parent", ["child"]);
+  setAgentEnvironment("delegating-parent", ["child"]);
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parent = managedState("delegating-parent");
-  const parentMailbox = workerMailboxPath(WORKSPACE, parent.workerLabel);
-  resetWorkerMailbox(parentMailbox);
-  writeWorkerState(parentMailbox, parent);
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  writeAgentState(parentMailbox, parent);
   const files = [
-    ["parent.md", '---\nname: parent\nworkers: ["child"]\n---\nparent\n'],
+    ["parent.md", '---\nname: parent\nagents: ["child"]\n---\nparent\n'],
     ["child.md", "---\nname: child\n---\nchild\n"],
     ["other.md", "---\nname: other\n---\nother\n"],
   ];
   for (const [name, content] of files)
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
-  const context = fakeWorkerContext([
+  const context = fakeAgentContext([
     {
       type: "custom",
-      customType: "pi-herdsman-worker-definition",
+      customType: "pi-herdsman-agent-definition",
       data: { name: "parent" },
     },
   ]);
-  const pi = fakePi({ exec: workerControllerExecutor(parent) });
+  const pi = fakePi({ exec: agentControllerExecutor(parent) });
   registerExtension!(pi.pi as never);
   const tool = pi.tools[0];
   try {
@@ -603,7 +603,7 @@ test("parent controller readiness, allowlist, and cwd preflight fail closed", as
       context,
     );
     assert.equal(cwdMismatch.details.error.category, "invalid_request");
-    assert.match(cwdMismatch.details.error.message, /delegating worker cwd/);
+    assert.match(cwdMismatch.details.error.message, /delegating agent cwd/);
     assert.equal(
       pi.calls
         .slice(beforeLifecycle)
@@ -612,27 +612,27 @@ test("parent controller readiness, allowlist, and cwd preflight fail closed", as
     );
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
-    resetWorkerMailbox(parentMailbox);
+    resetAgentMailbox(parentMailbox);
     for (const [name] of files) realFs.unlinkSync(join(PI_AGENTS_DIR, name));
   }
 
-  setWorkerEnvironment("conflicting-parent", ["child"]);
+  setAgentEnvironment("conflicting-parent", ["child"]);
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const conflict = managedState("conflicting-parent");
-  const conflictMailbox = workerMailboxPath(WORKSPACE, conflict.workerLabel);
-  resetWorkerMailbox(conflictMailbox);
-  writeWorkerState(conflictMailbox, {
+  const conflictMailbox = agentMailboxPath(WORKSPACE, conflict.agentLabel);
+  resetAgentMailbox(conflictMailbox);
+  writeAgentState(conflictMailbox, {
     ...conflict,
     runId: "11111111-1111-4111-8111-111111111111",
   });
   for (const [name, content] of files)
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
-  const failing = fakePi({ exec: workerControllerExecutor(conflict) });
+  const failing = fakePi({ exec: agentControllerExecutor(conflict) });
   registerExtension!(failing.pi as never);
-  const failingContext = fakeWorkerContext([
+  const failingContext = fakeAgentContext([
     {
       type: "custom",
-      customType: "pi-herdsman-worker-definition",
+      customType: "pi-herdsman-agent-definition",
       data: { name: "parent" },
     },
   ]);
@@ -654,13 +654,13 @@ test("parent controller readiness, allowlist, and cwd preflight fail closed", as
   } finally {
     for (const handler of failing.events.get("session_shutdown") ?? [])
       handler();
-    resetWorkerMailbox(conflictMailbox);
+    resetAgentMailbox(conflictMailbox);
     for (const [name] of files) realFs.unlinkSync(join(PI_AGENTS_DIR, name));
   }
 });
 
 test("parent list hides disabled allowed definitions", async () => {
-  setWorkerEnvironment("listing-parent", ["enabled-child", "disabled-child"]);
+  setAgentEnvironment("listing-parent", ["enabled-child", "disabled-child"]);
   const files = [
     ["enabled-child.md", "---\nname: enabled-child\n---\nchild\n"],
     [
@@ -671,11 +671,11 @@ test("parent list hides disabled allowed definitions", async () => {
   for (const [name, content] of files)
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
   const pi = fakePi({
-    exec: workerControllerExecutor(managedState("listing-parent")),
+    exec: agentControllerExecutor(managedState("listing-parent")),
   });
   registerExtension!(pi.pi as never);
   const entries = pi.entries;
-  const context = fakeWorkerContext(entries);
+  const context = fakeAgentContext(entries);
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
@@ -700,7 +700,7 @@ test("parent list hides disabled allowed definitions", async () => {
 });
 
 test("parent list omits unrelated unknown mailbox diagnostics", async () => {
-  setWorkerEnvironment("recovery-parent-no-self-get", ["child"]);
+  setAgentEnvironment("recovery-parent-no-self-get", ["child"]);
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parent = managedState("recovery-parent-no-self-get");
   const child = {
@@ -714,25 +714,25 @@ test("parent list omits unrelated unknown mailbox diagnostics", async () => {
     piSessionFile: "/tmp/recovered-child.jsonl",
   };
   const mailboxes = [parent, child].map((state) =>
-    workerMailboxPath(WORKSPACE, state.workerLabel),
+    agentMailboxPath(WORKSPACE, state.agentLabel),
   );
-  const unknownMailbox = workerMailboxPath(
+  const unknownMailbox = agentMailboxPath(
     "unrelated-workspace",
-    "unrelated-worker",
+    "unrelated-agent",
   );
-  for (const mailbox of mailboxes) resetWorkerMailbox(mailbox);
-  writeWorkerState(mailboxes[0], parent);
-  writeWorkerState(mailboxes[1], child);
+  for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
+  writeAgentState(mailboxes[0], parent);
+  writeAgentState(mailboxes[1], child);
   realFs.mkdirSync(unknownMailbox, { recursive: true });
   realFs.writeFileSync(join(unknownMailbox, "state.json"), "{malformed");
   const files = [
-    ["parent.md", '---\nname: parent\nworkers: ["child"]\n---\nparent\n'],
+    ["parent.md", '---\nname: parent\nagents: ["child"]\n---\nparent\n'],
     ["child.md", "---\nname: child\n---\nchild\n"],
   ];
   for (const [name, content] of files)
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
   const getTargets: string[] = [];
-  const base = workerControllerExecutor(parent, [child]);
+  const base = agentControllerExecutor(parent, [child]);
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = base(command, args, options);
@@ -742,10 +742,10 @@ test("parent list omits unrelated unknown mailbox diagnostics", async () => {
     },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeWorkerContext([
+  const context = fakeAgentContext([
     {
       type: "custom",
-      customType: "pi-herdsman-worker-definition",
+      customType: "pi-herdsman-agent-definition",
       data: { name: "parent" },
     },
   ]);
@@ -764,14 +764,14 @@ test("parent list omits unrelated unknown mailbox diagnostics", async () => {
     );
     assert.equal(listed.details.ok, true, JSON.stringify(listed.details));
     assert.deepEqual(
-      (listed.details.workers as { worker?: string }[])
-        .map((worker) => worker.worker)
-        .filter((worker): worker is string => worker !== undefined),
-      [child.workerLabel],
+      (listed.details.agents as { agent?: string }[])
+        .map((agent) => agent.agent)
+        .filter((agent): agent is string => agent !== undefined),
+      [child.agentLabel],
     );
     assert.equal(
-      (listed.details.workers as { state?: string }[]).some(
-        (worker) => worker.state === "unknown",
+      (listed.details.agents as { state?: string }[]).some(
+        (agent) => agent.state === "unknown",
       ),
       false,
     );
@@ -781,7 +781,7 @@ test("parent list omits unrelated unknown mailbox diagnostics", async () => {
     );
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
-    for (const mailbox of mailboxes) resetWorkerMailbox(mailbox);
+    for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
     realFs.rmSync(unknownMailbox, { recursive: true, force: true });
     for (const [name] of files) realFs.unlinkSync(join(PI_AGENTS_DIR, name));
   }
@@ -789,21 +789,21 @@ test("parent list omits unrelated unknown mailbox diagnostics", async () => {
 
 test("foreign-workspace mailbox is ignored by recovery and list", async () => {
   setLeadEnvironment();
-  const label = "cross-workspace-worker";
+  const label = "cross-workspace-agent";
   const identity = recoveryIdentity(label);
   const current = managedState(label, undefined, identity);
-  const foreign: WorkerState = {
+  const foreign: ManagedAgentState = {
     ...current,
     workspaceId: "foreign-workspace",
     paneId: "foreign-pane",
-    piSessionFile: "/tmp/foreign-workspace-worker.jsonl",
+    piSessionFile: "/tmp/foreign-workspace-agent.jsonl",
   };
-  const currentMailbox = workerMailboxPath(WORKSPACE, label);
-  const foreignMailbox = workerMailboxPath(foreign.workspaceId, label);
-  resetWorkerMailbox(currentMailbox);
-  resetWorkerMailbox(foreignMailbox);
-  writeWorkerState(currentMailbox, current);
-  writeWorkerState(foreignMailbox, foreign);
+  const currentMailbox = agentMailboxPath(WORKSPACE, label);
+  const foreignMailbox = agentMailboxPath(foreign.workspaceId, label);
+  resetAgentMailbox(currentMailbox);
+  resetAgentMailbox(foreignMailbox);
+  writeAgentState(currentMailbox, current);
+  writeAgentState(foreignMailbox, foreign);
   const entries: unknown[] = [];
   const lifecycle = cascadeExecutor([current]);
   const pi = fakePi({ entries, exec: lifecycle.exec });
@@ -823,9 +823,9 @@ test("foreign-workspace mailbox is ignored by recovery and list", async () => {
     );
     assert.equal(listed.details.ok, true, JSON.stringify(listed.details));
     assert.deepEqual(
-      (listed.details.workers as { worker?: string }[])
-        .map((worker) => worker.worker)
-        .filter((worker): worker is string => worker !== undefined),
+      (listed.details.agents as { agent?: string }[])
+        .map((agent) => agent.agent)
+        .filter((agent): agent is string => agent !== undefined),
       [label],
     );
     assert.equal(
@@ -836,13 +836,13 @@ test("foreign-workspace mailbox is ignored by recovery and list", async () => {
     );
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
-    resetWorkerMailbox(currentMailbox);
-    resetWorkerMailbox(foreignMailbox);
+    resetAgentMailbox(currentMailbox);
+    resetAgentMailbox(foreignMailbox);
   }
 });
 
 test("parent controls only direct children and enforces session allowlists", async () => {
-  setWorkerEnvironment("ownership-parent", ["child"]);
+  setAgentEnvironment("ownership-parent", ["child"]);
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parent = managedState("ownership-parent");
   const child = {
@@ -877,15 +877,15 @@ test("parent controls only direct children and enforces session allowlists", asy
     piSessionFile: "/tmp/ownership-sibling.jsonl",
   };
   const mailboxes = [parent, child, workingChild, sibling].map((state) =>
-    workerMailboxPath(WORKSPACE, state.workerLabel),
+    agentMailboxPath(WORKSPACE, state.agentLabel),
   );
-  for (const mailbox of mailboxes) resetWorkerMailbox(mailbox);
-  writeWorkerState(mailboxes[0], parent);
-  writeWorkerState(mailboxes[1], child);
-  writeWorkerState(mailboxes[2], workingChild);
-  writeWorkerState(mailboxes[3], sibling);
+  for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
+  writeAgentState(mailboxes[0], parent);
+  writeAgentState(mailboxes[1], child);
+  writeAgentState(mailboxes[2], workingChild);
+  writeAgentState(mailboxes[3], sibling);
   const files = [
-    ["parent.md", '---\nname: parent\nworkers: ["child"]\n---\nparent\n'],
+    ["parent.md", '---\nname: parent\nagents: ["child"]\n---\nparent\n'],
     ["child.md", "---\nname: child\n---\nchild\n"],
     ["other.md", "---\nname: other\n---\nother\n"],
   ];
@@ -894,15 +894,15 @@ test("parent controls only direct children and enforces session allowlists", asy
   const entries = [
     {
       type: "custom",
-      customType: "pi-herdsman-worker-definition",
+      customType: "pi-herdsman-agent-definition",
       data: { name: "parent" },
     },
   ];
   const pi = fakePi({
-    exec: workerControllerExecutor(parent, [child, workingChild, sibling]),
+    exec: agentControllerExecutor(parent, [child, workingChild, sibling]),
   });
   registerExtension!(pi.pi as never);
-  const context = fakeWorkerContext(entries);
+  const context = fakeAgentContext(entries);
   const resumePath = "/tmp/ownership-resume.jsonl";
   nativeSessions.set("ownership-resume", {
     id: "33333333-3333-4333-8333-333333333333",
@@ -911,7 +911,7 @@ test("parent controls only direct children and enforces session allowlists", asy
     entries: [
       {
         type: "custom",
-        customType: "pi-herdsman-worker-definition",
+        customType: "pi-herdsman-agent-definition",
         data: { name: "other" },
       },
     ],
@@ -927,17 +927,17 @@ test("parent controls only direct children and enforces session allowlists", asy
       context,
     );
     assert.deepEqual(
-      (listed.details.workers as { worker: string }[])
-        .map((worker) => worker.worker)
+      (listed.details.agents as { agent: string }[])
+        .map((agent) => agent.agent)
         .sort(),
-      [child.workerLabel, workingChild.workerLabel],
+      [child.agentLabel, workingChild.agentLabel],
     );
 
     const steered = await pi.tools[0].execute(
       "steer",
       {
         action: "steer",
-        worker: workingChild.workerLabel,
+        agent: workingChild.agentLabel,
         message: "steer direct child",
       },
       undefined,
@@ -947,7 +947,7 @@ test("parent controls only direct children and enforces session allowlists", asy
     assert.equal(steered.details.ok, true);
     const siblingResult = await pi.tools[0].execute(
       "sibling",
-      { action: "steer", worker: sibling.workerLabel, message: "wrong owner" },
+      { action: "steer", agent: sibling.agentLabel, message: "wrong owner" },
       undefined,
       undefined,
       context,
@@ -983,23 +983,23 @@ test("parent controls only direct children and enforces session allowlists", asy
   } finally {
     nativeSessions.delete("ownership-resume");
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
-    for (const mailbox of mailboxes) resetWorkerMailbox(mailbox);
+    for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
     for (const [name] of files) realFs.unlinkSync(join(PI_AGENTS_DIR, name));
   }
 });
 
-test("list exposes only workers with exact mailbox and Pi identities", async () => {
+test("list exposes only agents with exact mailbox and Pi identities", async () => {
   setLeadEnvironment();
-  const validLabel = "valid-list-worker";
-  const invalidLabel = "invalid-list-worker";
+  const validLabel = "valid-list-agent";
+  const invalidLabel = "invalid-list-agent";
   const valid = recoveryIdentity(validLabel);
   const invalid = recoveryIdentity(invalidLabel);
-  const validMailbox = workerMailboxPath(WORKSPACE, validLabel);
-  const invalidMailbox = workerMailboxPath(WORKSPACE, invalidLabel);
-  resetWorkerMailbox(validMailbox);
-  resetWorkerMailbox(invalidMailbox);
-  writeWorkerState(validMailbox, managedState(validLabel, undefined, valid));
-  writeWorkerState(
+  const validMailbox = agentMailboxPath(WORKSPACE, validLabel);
+  const invalidMailbox = agentMailboxPath(WORKSPACE, invalidLabel);
+  resetAgentMailbox(validMailbox);
+  resetAgentMailbox(invalidMailbox);
+  writeAgentState(validMailbox, managedState(validLabel, undefined, valid));
+  writeAgentState(
     invalidMailbox,
     managedState(invalidLabel, undefined, invalid),
   );
@@ -1093,27 +1093,27 @@ test("list exposes only workers with exact mailbox and Pi identities", async () 
       undefined,
       fakeContext(),
     );
-    const workers = (
-      result.details as { workers: Array<Record<string, unknown>> }
-    ).workers;
+    const agents = (
+      result.details as { agents: Array<Record<string, unknown>> }
+    ).agents;
     assert.deepEqual(
-      workers
-        .filter((worker) => typeof worker.worker === "string")
-        .map((worker) => worker.worker),
+      agents
+        .filter((agent) => typeof agent.agent === "string")
+        .map((agent) => agent.agent),
       [validLabel],
     );
-    assert.equal(workers[0].agent_definition, "worker");
-    assert.equal(workers[0].managed, true);
+    assert.equal(agents[0].agent_definition, "agent");
+    assert.equal(agents[0].managed, true);
   } finally {
     nativeSessions.delete(invalid.piSessionId);
-    resetWorkerMailbox(validMailbox);
-    resetWorkerMailbox(invalidMailbox);
+    resetAgentMailbox(validMailbox);
+    resetAgentMailbox(invalidMailbox);
   }
 });
 
 test("list projects an unreadable current mailbox as non-actionable unknown", async () => {
   setLeadEnvironment();
-  const mailbox = workerMailboxPath(WORKSPACE, "unreadable-list-worker");
+  const mailbox = agentMailboxPath(WORKSPACE, "unreadable-list-agent");
   realFs.mkdirSync(mailbox, { recursive: true });
   realFs.writeFileSync(join(mailbox, "state.json"), "x".repeat(70 * 1024));
   const pi = fakePi();
@@ -1126,9 +1126,9 @@ test("list projects an unreadable current mailbox as non-actionable unknown", as
       undefined,
       fakeContext(),
     );
-    assert.equal(result.details.workers.length, 1);
+    assert.equal(result.details.agents.length, 1);
     assert.deepEqual(
-      { ...result.details.workers[0], diagnostic: undefined },
+      { ...result.details.agents[0], diagnostic: undefined },
       {
         state: "unknown",
         available_actions: [],
@@ -1137,7 +1137,7 @@ test("list projects an unreadable current mailbox as non-actionable unknown", as
       },
     );
     assert.match(
-      result.details.workers[0].diagnostic,
+      result.details.agents[0].diagnostic,
       /Mailbox state unavailable: .*Mailbox record is too large/,
     );
     assert.match(
@@ -1158,11 +1158,11 @@ test("assignment session resolution accepts exact paths and UUIDs only", async (
   const session = {
     id: "018f2f2e-7b13-7abc-8def-0123456789ab",
     path: join(homedir(), "native-resume.jsonl"),
-    cwd: join(homedir(), "saved-worker"),
+    cwd: join(homedir(), "saved-agent"),
     entries: [
       {
         type: "custom",
-        customType: "pi-herdsman-worker-definition",
+        customType: "pi-herdsman-agent-definition",
         data: { name: "reviewer" },
       },
     ],
@@ -1229,7 +1229,7 @@ test("public assignment normalizes invalid and unknown session sources", async (
           task: "resolve the source",
           ...(field === "session"
             ? { session: value }
-            : { definition: "worker", fork: value }),
+            : { definition: "agent", fork: value }),
         },
         undefined,
         undefined,
@@ -1255,8 +1255,8 @@ test("session assignment rejects the controller's active session", async () => {
     entries: [
       {
         type: "custom",
-        customType: "pi-herdsman-worker-definition",
-        data: { name: "worker" },
+        customType: "pi-herdsman-agent-definition",
+        data: { name: "agent" },
       },
     ],
   };
@@ -1352,7 +1352,7 @@ test("assignment session rejects unusable saved cwd headers without mutation", a
     const id = randomUUID();
     const label = `assignment-session-cwd-${name}-${id}`;
     const path = `/tmp/${id}.jsonl`;
-    const mailbox = workerMailboxPath(WORKSPACE, label);
+    const mailbox = agentMailboxPath(WORKSPACE, label);
     assert.equal(realFs.existsSync(mailbox), false);
     nativeSessions.clear();
     nativeSessions.set(id, { id, path, cwd });
@@ -1418,7 +1418,7 @@ test("agent assignment uses only an explicit exact fork source", async () => {
     entries: [],
   };
   nativeSessions.set(source.id, source);
-  const label = `${name}-worker`;
+  const label = `${name}-agent`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
   const promptPath = join(PI_AGENT_ROOT, `${name}-prompt.md`);
   realFs.writeFileSync(promptPath, "current fork prompt");
@@ -1470,7 +1470,7 @@ test("agent assignment uses only an explicit exact fork source", async () => {
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     nativeSessions.clear();
-    resetWorkerMailbox(startup.mailbox);
+    resetAgentMailbox(startup.mailbox);
     realFs.rmSync(definitionPath, { force: true });
     realFs.rmSync(promptPath, { force: true });
   }
@@ -1485,8 +1485,8 @@ test("session assignment fails closed on duplicate live representations", async 
     entries: [
       {
         type: "custom",
-        customType: "pi-herdsman-worker-definition",
-        data: { name: "worker" },
+        customType: "pi-herdsman-agent-definition",
+        data: { name: "agent" },
       },
     ],
   };
@@ -1509,9 +1509,9 @@ test("session assignment fails closed on duplicate live representations", async 
   first.piSessionId = session.id;
   first.piSessionFile = session.path;
   const mailboxes = [first, second].map((state) => {
-    const mailbox = workerMailboxPath(WORKSPACE, state.workerLabel);
-    resetWorkerMailbox(mailbox);
-    writeWorkerState(mailbox, state);
+    const mailbox = agentMailboxPath(WORKSPACE, state.agentLabel);
+    resetAgentMailbox(mailbox);
+    writeAgentState(mailbox, state);
     return mailbox;
   });
   const pi = fakePi({
@@ -1552,18 +1552,18 @@ test("session assignment fails closed on duplicate live representations", async 
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     nativeSessions.clear();
-    for (const mailbox of mailboxes) resetWorkerMailbox(mailbox);
+    for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
     realFs.rmSync(session.path, { force: true });
   }
 });
 
-test("registered delegate validates duplicate workers, selectors, and timeout before lifecycle use", async () => {
+test("registered delegate validates duplicate agents, selectors, and timeout before lifecycle use", async () => {
   setLeadEnvironment();
-  const label = "duplicate-worker";
+  const label = "duplicate-agent";
   const identity = recoveryIdentity(label);
-  const mailbox = workerMailboxPath(WORKSPACE, label);
-  resetWorkerMailbox(mailbox);
-  writeWorkerState(mailbox, managedState(label, undefined, identity));
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, managedState(label, undefined, identity));
   const duplicate = fakePi({
     exec: leadExec(
       label,
@@ -1577,27 +1577,27 @@ test("registered delegate validates duplicate workers, selectors, and timeout be
   registerExtension!(duplicate.pi as never);
   await duplicate.events.get("session_start")![0](undefined, fakeContext());
   const tool = duplicate.tools[0];
-  assert.equal(tool.name, "worker");
+  assert.equal(tool.name, "agent");
   assert.equal(
     duplicate.tools.some((candidate) => candidate.name === "subagent"),
     false,
   );
-  assert.equal(duplicate.commandOptions.has("workers"), true);
+  assert.equal(duplicate.commandOptions.has("agents"), true);
   assert.equal(duplicate.commandOptions.has("subagents"), false);
   const context = fakeContext();
   const duplicateResult = await tool.execute(
     "id",
     {
       action: "delegate",
-      definition: "worker",
-      label: "duplicate-worker",
+      definition: "agent",
+      label: "duplicate-agent",
       task: "duplicate task",
     },
     undefined,
     undefined,
     context,
   );
-  assert.equal(duplicateResult.details.error.category, "worker_label_exists");
+  assert.equal(duplicateResult.details.error.category, "agent_label_exists");
   assert.equal(
     duplicate.calls.some((args) => args.includes("--env")),
     false,
@@ -1607,7 +1607,7 @@ test("registered delegate validates duplicate workers, selectors, and timeout be
     "id",
     {
       action: "delegate",
-      definition: "worker",
+      definition: "agent",
       timeoutMs: 5000,
       task: "invalid timeout task",
     },
@@ -1620,22 +1620,22 @@ test("registered delegate validates duplicate workers, selectors, and timeout be
     invalidTimeout.details.error.message,
     "timeoutMs must be an integer from 5001 through 300000",
   );
-  const missingWorkerTask = await tool.execute(
+  const missingAgentTask = await tool.execute(
     "id",
-    { action: "delegate", worker: "session-worker" },
+    { action: "delegate", agent: "session-agent" },
     undefined,
     undefined,
     context,
   );
-  assert.equal(missingWorkerTask.details.error.category, "invalid_request");
+  assert.equal(missingAgentTask.details.error.category, "invalid_request");
   for (const legacy of [
-    { action: "start", definition: "worker", task: "legacy start" },
+    { action: "start", definition: "agent", task: "legacy start" },
     {
       action: "resume",
       session: "/tmp/session.jsonl",
       task: "legacy resume",
     },
-    { action: "assign", worker: label, task: "legacy assign" },
+    { action: "assign", agent: label, task: "legacy assign" },
   ]) {
     const result = await tool.execute(
       "id",
@@ -1645,7 +1645,7 @@ test("registered delegate validates duplicate workers, selectors, and timeout be
       context,
     );
     assert.equal(result.details.error.category, "invalid_request");
-    assert.equal(result.details.error.message, "Unsupported worker action");
+    assert.equal(result.details.error.message, "Unsupported agent action");
   }
   const substitutedResume = await tool.execute(
     "id",
@@ -1664,7 +1664,7 @@ test("registered delegate validates duplicate workers, selectors, and timeout be
 
 test("registered delegate ignores an unrelated agent and forwards its child budget", async () => {
   setLeadEnvironment();
-  const label = "minimum-timeout-worker";
+  const label = "minimum-timeout-agent";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({
     exec: (command, args, options) => {
@@ -1691,7 +1691,7 @@ test("registered delegate ignores an unrelated agent and forwards its child budg
       "id",
       {
         action: "delegate",
-        definition: "worker",
+        definition: "agent",
         label,
         task: "minimum timeout task",
         timeoutMs: 6000,
@@ -1719,32 +1719,32 @@ test("registered delegate ignores an unrelated agent and forwards its child budg
 test("registered delegate protects a live mailbox owned by another owner", async () => {
   setLeadEnvironment();
   const label = "reviewer";
-  const mailbox = workerMailboxPath(WORKSPACE, label);
-  resetWorkerMailbox(mailbox);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
   const state = {
     ...managedState(label, undefined, defaultFixtureIdentity),
     ownerSessionId: "owner-a",
   };
-  writeWorkerState(mailbox, state);
+  writeAgentState(mailbox, state);
   writeRequest(mailbox, {
-    version: 3,
+    version: 4,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
     workspaceId: WORKSPACE,
-    workerLabel: label,
+    agentLabel: label,
     paneId: state.paneId,
     kind: "task",
     text: "preserve me",
     createdAt: Date.now(),
   });
   writeResult(mailbox, {
-    version: 3,
+    version: 4,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
     workspaceId: WORKSPACE,
-    workerLabel: label,
+    agentLabel: label,
     paneId: state.paneId,
     status: "completed",
     text: "preserve this result",
@@ -1766,12 +1766,12 @@ test("registered delegate protects a live mailbox owned by another owner", async
   const tool = pi.tools[0];
   const result = await tool.execute(
     "id",
-    { action: "delegate", definition: "worker", label, task: "preserve me" },
+    { action: "delegate", definition: "agent", label, task: "preserve me" },
     undefined,
     undefined,
     fakeContext(),
   );
-  assert.equal(result.details.error.category, "worker_label_exists");
+  assert.equal(result.details.error.category, "agent_label_exists");
   assert.equal(
     pi.calls.some((args) => args.includes("--placement")),
     false,
@@ -1790,18 +1790,18 @@ test("registered delegate protects a live mailbox owned by another owner", async
 
 test("fresh assignments do not reset an unacknowledged stale mailbox", async () => {
   setLeadEnvironment();
-  const explicitLabel = "stale-explicit-worker";
-  const explicitMailbox = workerMailboxPath(WORKSPACE, explicitLabel);
+  const explicitLabel = "stale-explicit-agent";
+  const explicitMailbox = agentMailboxPath(WORKSPACE, explicitLabel);
   const explicitState = managedState(explicitLabel);
   const explicitRequestId = randomUUID();
-  writeWorkerState(explicitMailbox, explicitState);
+  writeAgentState(explicitMailbox, explicitState);
   writeRequest(explicitMailbox, {
-    version: 3,
+    version: 4,
     runId: explicitState.runId,
     requestId: explicitRequestId,
     ownerSessionId: explicitState.ownerSessionId,
     workspaceId: explicitState.workspaceId,
-    workerLabel: explicitState.workerLabel,
+    agentLabel: explicitState.agentLabel,
     paneId: explicitState.paneId,
     kind: "task",
     text: "preserve stale handoff",
@@ -1814,7 +1814,7 @@ test("fresh assignments do not reset an unacknowledged stale mailbox", async () 
     "id",
     {
       action: "delegate",
-      definition: "worker",
+      definition: "agent",
       label: explicitLabel,
       task: "must not reset stale handoff",
     },
@@ -1822,7 +1822,7 @@ test("fresh assignments do not reset an unacknowledged stale mailbox", async () 
     undefined,
     fakeContext(),
   );
-  assert.equal(explicit.details.error.category, "worker_label_exists");
+  assert.equal(explicit.details.error.category, "agent_label_exists");
   assert.ok(readRequest(explicitMailbox, explicitRequestId));
   assert.equal(
     explicitPi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
@@ -1830,18 +1830,18 @@ test("fresh assignments do not reset an unacknowledged stale mailbox", async () 
   );
   explicitPi.events.get("session_shutdown")?.[0]();
 
-  const automaticLabel = "worker";
-  const automaticMailbox = workerMailboxPath(WORKSPACE, automaticLabel);
+  const automaticLabel = "agent";
+  const automaticMailbox = agentMailboxPath(WORKSPACE, automaticLabel);
   const automaticState = managedState(automaticLabel);
   const automaticRequestId = randomUUID();
-  writeWorkerState(automaticMailbox, automaticState);
+  writeAgentState(automaticMailbox, automaticState);
   writeRequest(automaticMailbox, {
-    version: 3,
+    version: 4,
     runId: automaticState.runId,
     requestId: automaticRequestId,
     ownerSessionId: automaticState.ownerSessionId,
     workspaceId: automaticState.workspaceId,
-    workerLabel: automaticState.workerLabel,
+    agentLabel: automaticState.agentLabel,
     paneId: automaticState.paneId,
     kind: "task",
     text: "preserve automatic handoff",
@@ -1857,7 +1857,7 @@ test("fresh assignments do not reset an unacknowledged stale mailbox", async () 
     "id",
     {
       action: "delegate",
-      definition: "worker",
+      definition: "agent",
       task: "use the next safe label",
     },
     undefined,
@@ -1865,16 +1865,16 @@ test("fresh assignments do not reset an unacknowledged stale mailbox", async () 
     fakeContext(),
   );
   assert.equal(automatic.details.ok, true, JSON.stringify(automatic.details));
-  assert.equal(automatic.details.worker, `${automaticLabel}-2`);
+  assert.equal(automatic.details.agent, `${automaticLabel}-2`);
   assert.ok(readRequest(automaticMailbox, automaticRequestId));
   automaticPi.events.get("session_shutdown")?.[0]();
-  resetWorkerMailbox(automaticStartup.mailbox);
-  resetWorkerMailbox(explicitMailbox);
+  resetAgentMailbox(automaticStartup.mailbox);
+  resetAgentMailbox(explicitMailbox);
 });
 
 test("assignment retains its request when acknowledgement never arrives", async () => {
   setLeadEnvironment();
-  const label = "ack-timeout-worker";
+  const label = "ack-timeout-agent";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const controller = new AbortController();
   const pi = fakePi({
@@ -1891,7 +1891,7 @@ test("assignment retains its request when acknowledgement never arrives", async 
     "id",
     {
       action: "delegate",
-      definition: "worker",
+      definition: "agent",
       label,
       task: "retain on timeout",
     },
@@ -1908,17 +1908,17 @@ test("assignment retains its request when acknowledgement never arrives", async 
     1,
   );
   pi.events.get("session_shutdown")?.[0]();
-  resetWorkerMailbox(startup.mailbox);
+  resetAgentMailbox(startup.mailbox);
 });
 
 test("registered lead exposes only explicit live controls", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
-  const label = "action-worker";
+  const label = "action-agent";
   const identity = recoveryIdentity(label);
-  const mailbox = workerMailboxPath(WORKSPACE, label);
-  resetWorkerMailbox(mailbox);
-  writeWorkerState(mailbox, managedState(label, REQUEST_ID, identity));
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   const steerFile = join("/tmp", `${label}-update.md`);
   realFs.writeFileSync(steerFile, "steer evidence");
   let steerSubmitted: RequestRecord | undefined;
@@ -1928,10 +1928,10 @@ test("registered lead exposes only explicit live controls", async () => {
       "working",
       identity.piSessionId,
       (requestMailbox, marker) => {
-        const requestId = marker.slice("__PI_HERDSMAN_WORKER_V3__:".length);
+        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
         steerSubmitted = readRequest(requestMailbox, requestId);
-        const current = readWorkerState(requestMailbox)!;
-        writeWorkerState(requestMailbox, {
+        const current = readAgentState(requestMailbox)!;
+        writeAgentState(requestMailbox, {
           ...current,
           lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
           updatedAt: Date.now(),
@@ -1944,7 +1944,7 @@ test("registered lead exposes only explicit live controls", async () => {
   registerExtension!(accepting.pi as never);
   assert.deepEqual(
     accepting.tools.map((candidate) => candidate.name),
-    ["worker", "chief"],
+    ["agent", "chief"],
   );
   assert.equal(
     accepting.tools.some((candidate) => candidate.name === "subagent"),
@@ -1963,21 +1963,21 @@ test("registered lead exposes only explicit live controls", async () => {
     undefined,
     context,
   );
-  assert.deepEqual(listed.details.workers[0].available_actions, [
+  assert.deepEqual(listed.details.agents[0].available_actions, [
     "inspect",
     "steer",
     "close",
   ]);
   const steer = await accepting.tools[0].execute(
     "id",
-    { action: "steer", worker: label, message: "continue", files: [steerFile] },
+    { action: "steer", agent: label, message: "continue", files: [steerFile] },
     undefined,
     undefined,
     context,
   );
   assert.equal(steer.details.ok, true);
   assert.equal(steer.details.action, "steer");
-  assert.equal(steer.details.worker, label);
+  assert.equal(steer.details.agent, label);
   assert.equal(steer.details.session_id, identity.piSessionId);
   assert.equal(steer.details.assignment_request_id, REQUEST_ID);
   assert.equal(steer.details.truncated, false);
@@ -1996,7 +1996,7 @@ test("registered lead exposes only explicit live controls", async () => {
     { content: steer.content, details: steer.details },
     { expanded: true, isPartial: false },
     { fg: (_color: string, text: string) => text },
-    { args: { action: "steer", worker: label, message: "continue" } },
+    { args: { action: "steer", agent: label, message: "continue" } },
   );
   assert.match(rendered.text, new RegExp(`Session: ${identity.piSessionId}`));
   assert.match(rendered.text, /Assignment request: /);
@@ -2025,30 +2025,30 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     piSessionId: CHILD_SESSION_ID,
     piSessionFile: "/tmp/steerable-child.jsonl",
   };
-  const parentMailbox = workerMailboxPath(WORKSPACE, parent.workerLabel);
-  const childMailbox = workerMailboxPath(WORKSPACE, child.workerLabel);
-  const foreignChildMailbox = workerMailboxPath(
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
+  const foreignChildMailbox = agentMailboxPath(
     "foreign-steerable-workspace",
     "foreign-steerable-child",
   );
-  resetWorkerMailbox(parentMailbox);
-  resetWorkerMailbox(childMailbox);
-  resetWorkerMailbox(foreignChildMailbox);
-  writeWorkerState(parentMailbox, parent);
-  writeWorkerState(childMailbox, child);
-  const childBefore = readWorkerState(childMailbox);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(childMailbox);
+  resetAgentMailbox(foreignChildMailbox);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(childMailbox, child);
+  const childBefore = readAgentState(childMailbox);
   const observedParent = { ...parent, activeRequestId: undefined };
   let parentStatus: "idle" | "working" = "idle";
-  const base = workerControllerExecutor(observedParent, [child]);
+  const base = agentControllerExecutor(observedParent, [child]);
   const pi = fakePi({
     exec: (command, args, options) => {
       if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
         const requestId = (args.at(-1) ?? "").replace(
-          "__PI_HERDSMAN_WORKER_V3__:",
+          "__PI_HERDSMAN_AGENT_V4__:",
           "",
         );
-        const current = readWorkerState(parentMailbox)!;
-        writeWorkerState(parentMailbox, {
+        const current = readAgentState(parentMailbox)!;
+        writeAgentState(parentMailbox, {
           ...current,
           lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
           updatedAt: Date.now(),
@@ -2056,8 +2056,8 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
         return { stdout: "{}", stderr: "", code: 0 };
       }
       if (command === "herdr" && isAgentList(args)) {
-        const liveParent = readWorkerState(parentMailbox) ?? observedParent;
-        const liveChild = readWorkerState(childMailbox) ?? child;
+        const liveParent = readAgentState(parentMailbox) ?? observedParent;
+        const liveChild = readAgentState(childMailbox) ?? child;
         return {
           stdout: JSON.stringify({
             result: {
@@ -2108,13 +2108,13 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       context,
     );
     assert.equal(
-      listed.details.workers[0]?.state,
+      listed.details.agents[0]?.state,
       "blocked",
       JSON.stringify(listed.details),
     );
-    assert.ok(listed.details.workers[0].available_actions.includes("steer"));
-    const listedChild = (listed.details.workers as any[]).find(
-      (worker) => worker.worker === child.workerLabel,
+    assert.ok(listed.details.agents[0].available_actions.includes("steer"));
+    const listedChild = (listed.details.agents as any[]).find(
+      (agent) => agent.agent === child.agentLabel,
     );
     assert.deepEqual(listedChild?.available_actions, []);
 
@@ -2126,13 +2126,13 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       undefined,
       context,
     );
-    assert.equal(workingParent.details.workers[0].state, "working");
+    assert.equal(workingParent.details.agents[0].state, "working");
     assert.ok(
-      workingParent.details.workers[0].available_actions.includes("steer"),
+      workingParent.details.agents[0].available_actions.includes("steer"),
     );
 
     parentStatus = "idle";
-    writeWorkerState(childMailbox, {
+    writeAgentState(childMailbox, {
       ...child,
       activeRequestId: undefined,
       completedRequestId: undefined,
@@ -2144,15 +2144,15 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       undefined,
       context,
     );
-    assert.equal(noChildWork.details.workers[0].state, "settling");
+    assert.equal(noChildWork.details.agents[0].state, "settling");
     assert.ok(
-      !noChildWork.details.workers[0].available_actions.includes("steer"),
+      !noChildWork.details.agents[0].available_actions.includes("steer"),
     );
 
-    writeWorkerState(foreignChildMailbox, {
+    writeAgentState(foreignChildMailbox, {
       ...child,
       workspaceId: "foreign-steerable-workspace",
-      workerLabel: "foreign-steerable-child",
+      agentLabel: "foreign-steerable-child",
       activeRequestId: randomUUID(),
     });
     const foreignWorkspaceChild = await pi.tools[0].execute(
@@ -2163,14 +2163,14 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       context,
     );
     assert.ok(
-      !foreignWorkspaceChild.details.workers[0].available_actions.includes(
+      !foreignWorkspaceChild.details.agents[0].available_actions.includes(
         "steer",
       ),
     );
-    resetWorkerMailbox(foreignChildMailbox);
-    writeWorkerState(childMailbox, child);
+    resetAgentMailbox(foreignChildMailbox);
+    writeAgentState(childMailbox, child);
 
-    writeWorkerState(childMailbox, {
+    writeAgentState(childMailbox, {
       ...child,
       ownerSessionId: "11111111-1111-4111-8111-111111111111",
     });
@@ -2182,11 +2182,11 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       context,
     );
     assert.ok(
-      !otherOwnerChild.details.workers[0].available_actions.includes("steer"),
+      !otherOwnerChild.details.agents[0].available_actions.includes("steer"),
     );
-    writeWorkerState(childMailbox, child);
+    writeAgentState(childMailbox, child);
 
-    writeWorkerState(parentMailbox, {
+    writeAgentState(parentMailbox, {
       ...parent,
       activeRequestId: undefined,
     });
@@ -2198,20 +2198,18 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       context,
     );
     assert.ok(
-      !noParentAssignment.details.workers[0].available_actions.includes(
-        "steer",
-      ),
+      !noParentAssignment.details.agents[0].available_actions.includes("steer"),
     );
-    writeWorkerState(parentMailbox, parent);
+    writeAgentState(parentMailbox, parent);
 
     const handoffRequestId = randomUUID();
     writeRequest(parentMailbox, {
-      version: 3,
+      version: 4,
       runId: parent.runId,
       requestId: handoffRequestId,
       ownerSessionId: parent.ownerSessionId,
       workspaceId: parent.workspaceId,
-      workerLabel: parent.workerLabel,
+      agentLabel: parent.agentLabel,
       paneId: parent.paneId,
       kind: "task",
       text: "pending handoff",
@@ -2224,35 +2222,35 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       undefined,
       context,
     );
-    assert.equal(handoffPending.details.workers[0].state, "settling");
+    assert.equal(handoffPending.details.agents[0].state, "settling");
     assert.ok(
-      !handoffPending.details.workers[0].available_actions.includes("steer"),
+      !handoffPending.details.agents[0].available_actions.includes("steer"),
     );
     removeRequest(parentMailbox, handoffRequestId);
 
     const steered = await pi.tools[0].execute(
       "steer",
-      { action: "steer", worker: parent.workerLabel, message: "continue" },
+      { action: "steer", agent: parent.agentLabel, message: "continue" },
       undefined,
       undefined,
       context,
     );
     assert.equal(steered.details.ok, true, JSON.stringify(steered.details));
-    assert.equal(readWorkerState(parentMailbox)?.activeRequestId, REQUEST_ID);
-    assert.deepEqual(readWorkerState(childMailbox), childBefore);
+    assert.equal(readAgentState(parentMailbox)?.activeRequestId, REQUEST_ID);
+    assert.deepEqual(readAgentState(childMailbox), childBefore);
 
-    writeWorkerState(childMailbox, {
+    writeAgentState(childMailbox, {
       ...child,
       activeRequestId: undefined,
       completedRequestId: child.activeRequestId,
     });
     writeResult(childMailbox, {
-      version: 3,
+      version: 4,
       runId: child.runId,
       requestId: child.activeRequestId!,
       ownerSessionId: child.ownerSessionId,
       workspaceId: child.workspaceId,
-      workerLabel: child.workerLabel,
+      agentLabel: child.agentLabel,
       paneId: child.paneId,
       status: "completed",
       text: "child result",
@@ -2266,30 +2264,30 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       undefined,
       context,
     );
-    assert.equal(completedChild.details.workers[0].state, "blocked");
+    assert.equal(completedChild.details.agents[0].state, "blocked");
     assert.ok(
-      completedChild.details.workers[0].available_actions.includes("steer"),
+      completedChild.details.agents[0].available_actions.includes("steer"),
     );
     assert.equal(
-      readWorkerState(childMailbox)?.completedRequestId,
+      readAgentState(childMailbox)?.completedRequestId,
       child.activeRequestId,
     );
 
     const ownerAskId = randomUUID();
     writeAsk(parentMailbox, {
-      version: 3,
+      version: 4,
       askId: ownerAskId,
       requestId: REQUEST_ID,
       runId: parent.runId,
       ownerSessionId: parent.ownerSessionId,
       workspaceId: parent.workspaceId,
-      workerLabel: parent.workerLabel,
+      agentLabel: parent.agentLabel,
       paneId: parent.paneId,
       piSessionId: parent.piSessionId,
       question: "owner clarification",
       createdAt: Date.now(),
     });
-    writeWorkerState(parentMailbox, {
+    writeAgentState(parentMailbox, {
       ...parent,
       pendingAskId: ownerAskId,
     });
@@ -2300,27 +2298,27 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       undefined,
       context,
     );
-    assert.equal(ownerAsk.details.workers[0].state, "blocked");
-    assert.deepEqual(ownerAsk.details.workers[0].available_actions, [
+    assert.equal(ownerAsk.details.agents[0].state, "blocked");
+    assert.deepEqual(ownerAsk.details.agents[0].available_actions, [
       "inspect",
       "reply",
       "close",
     ]);
     removeAsk(parentMailbox, ownerAskId);
-    writeWorkerState(parentMailbox, parent);
+    writeAgentState(parentMailbox, parent);
 
-    writeWorkerState(parentMailbox, {
+    writeAgentState(parentMailbox, {
       ...parent,
       activeRequestId: undefined,
       completedRequestId: REQUEST_ID,
     });
     writeResult(parentMailbox, {
-      version: 3,
+      version: 4,
       runId: parent.runId,
       requestId: REQUEST_ID,
       ownerSessionId: parent.ownerSessionId,
       workspaceId: parent.workspaceId,
-      workerLabel: parent.workerLabel,
+      agentLabel: parent.agentLabel,
       paneId: parent.paneId,
       status: "completed",
       text: "parent result while child result is pending",
@@ -2333,17 +2331,17 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       undefined,
       context,
     );
-    assert.equal(completionWithChild.details.workers[0].state, "settling");
+    assert.equal(completionWithChild.details.agents[0].state, "settling");
     assert.ok(
-      !completionWithChild.details.workers[0].available_actions.includes(
+      !completionWithChild.details.agents[0].available_actions.includes(
         "steer",
       ),
     );
-    writeWorkerState(parentMailbox, parent);
+    writeAgentState(parentMailbox, parent);
 
     removeResult(childMailbox, child.activeRequestId!);
     assert.equal(
-      readWorkerState(childMailbox)?.completedRequestId,
+      readAgentState(childMailbox)?.completedRequestId,
       child.activeRequestId,
     );
     const completedChildWithoutResult = await pi.tools[0].execute(
@@ -2354,24 +2352,24 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       context,
     );
     assert.equal(
-      completedChildWithoutResult.details.workers[0].available_actions.includes(
+      completedChildWithoutResult.details.agents[0].available_actions.includes(
         "steer",
       ),
       false,
     );
 
-    writeWorkerState(parentMailbox, {
+    writeAgentState(parentMailbox, {
       ...parent,
       activeRequestId: undefined,
       completedRequestId: REQUEST_ID,
     });
     writeResult(parentMailbox, {
-      version: 3,
+      version: 4,
       runId: parent.runId,
       requestId: REQUEST_ID,
       ownerSessionId: parent.ownerSessionId,
       workspaceId: parent.workspaceId,
-      workerLabel: parent.workerLabel,
+      agentLabel: parent.agentLabel,
       paneId: parent.paneId,
       status: "completed",
       text: "parent result",
@@ -2384,18 +2382,18 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       undefined,
       context,
     );
-    assert.equal(ownCompletion.details.workers[0].state, "settling");
+    assert.equal(ownCompletion.details.agents[0].state, "settling");
     assert.ok(
-      !ownCompletion.details.workers[0].available_actions.includes("steer"),
+      !ownCompletion.details.agents[0].available_actions.includes("steer"),
     );
     const rejected = await pi.tools[0].execute(
       "steer",
-      { action: "steer", worker: parent.workerLabel, message: "late" },
+      { action: "steer", agent: parent.agentLabel, message: "late" },
       undefined,
       undefined,
       context,
     );
-    assert.equal(rejected.details.error.category, "worker_busy");
+    assert.equal(rejected.details.error.category, "agent_busy");
     assert.match(
       rejected.details.error.message,
       /not currently accepting steering/,
@@ -2435,12 +2433,12 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       fakeContext(),
     );
     assert.ok(
-      !restartedList.details.workers[0].available_actions.includes("steer"),
+      !restartedList.details.agents[0].available_actions.includes("steer"),
     );
     restarted.events.get("session_shutdown")?.[0]();
 
-    writeWorkerState(parentMailbox, parent);
-    writeWorkerState(childMailbox, child);
+    writeAgentState(parentMailbox, parent);
+    writeAgentState(childMailbox, child);
     const recoveredPositive = fakePi({ exec: base });
     registerExtension!(recoveredPositive.pi as never);
     const recoveredPositiveList = await recoveredPositive.tools[0].execute(
@@ -2451,16 +2449,16 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       fakeContext(),
     );
     assert.ok(
-      recoveredPositiveList.details.workers[0].available_actions.includes(
+      recoveredPositiveList.details.agents[0].available_actions.includes(
         "steer",
       ),
     );
     recoveredPositive.events.get("session_shutdown")?.[0]();
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(parentMailbox);
-    resetWorkerMailbox(childMailbox);
-    resetWorkerMailbox(foreignChildMailbox);
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+    resetAgentMailbox(foreignChildMailbox);
   }
 });
 
@@ -2474,7 +2472,7 @@ test("acknowledgement state-write failures retain requests for terminal retry", 
       expected: {
         accepted: false,
         code: "busy" as const,
-        message: "Worker already has an active assignment",
+        message: "Agent already has an active assignment",
       },
     },
     {
@@ -2484,7 +2482,7 @@ test("acknowledgement state-write failures retain requests for terminal retry", 
       expected: {
         accepted: false,
         code: "idle" as const,
-        message: "Worker is not accepting steering",
+        message: "Agent is not accepting steering",
       },
     },
     {
@@ -2510,27 +2508,27 @@ test("acknowledgement state-write failures retain requests for terminal retry", 
 
   for (const [index, scenario] of cases.entries()) {
     const label = `ack-retry-${index}`;
-    const mailbox = setWorkerEnvironment(label);
+    const mailbox = setAgentEnvironment(label);
     const activeRequestId = scenario.activeRequestId;
-    writeWorkerState(mailbox, managedState(label, activeRequestId));
-    const worker = fakePi();
-    registerExtension!(worker.pi as never);
-    const context = fakeWorkerContext();
+    writeAgentState(mailbox, managedState(label, activeRequestId));
+    const agent = fakePi();
+    registerExtension!(agent.pi as never);
+    const context = fakeAgentContext();
     (context as any).isIdle = () => scenario.isIdle;
-    worker.events.get("session_start")![0](undefined, context);
+    agent.events.get("session_start")![0](undefined, context);
     if (scenario.deliveryFailure)
-      worker.pi.sendUserMessage = () => {
+      agent.pi.sendUserMessage = () => {
         throw new Error("injected steer delivery failure");
       };
 
-    const started = readWorkerState(mailbox)!;
+    const started = readAgentState(mailbox)!;
     const request: RequestRecord = {
-      version: 3,
+      version: 4,
       runId: started.runId,
       requestId: randomUUID(),
       ownerSessionId: started.ownerSessionId,
       workspaceId: started.workspaceId,
-      workerLabel: started.workerLabel,
+      agentLabel: started.agentLabel,
       paneId: started.paneId,
       kind: scenario.kind,
       text: scenario.name,
@@ -2538,17 +2536,17 @@ test("acknowledgement state-write failures retain requests for terminal retry", 
     };
     writeRequest(mailbox, request);
     support.failNextMailboxWrite = true;
-    const input = worker.events.get("input")![0];
+    const input = agent.events.get("input")![0];
     assert.deepEqual(
       input({ text: controlMarker(request.requestId) }, context),
       {
         action: "handled",
       },
     );
-    assert.equal(readWorkerState(mailbox)?.lastAck, undefined);
+    assert.equal(readAgentState(mailbox)?.lastAck, undefined);
     assert.ok(readRequest(mailbox, request.requestId));
     if (scenario.name === "successful steer delivery")
-      assert.equal(worker.sentUsers.length, 1);
+      assert.equal(agent.sentUsers.length, 1);
 
     assert.deepEqual(
       input({ text: controlMarker(request.requestId) }, context),
@@ -2556,16 +2554,16 @@ test("acknowledgement state-write failures retain requests for terminal retry", 
         action: "handled",
       },
     );
-    const acknowledged = readWorkerState(mailbox)?.lastAck;
+    const acknowledged = readAgentState(mailbox)?.lastAck;
     assert.equal(acknowledged?.requestId, request.requestId, scenario.name);
     assert.equal(acknowledged?.accepted, scenario.expected.accepted);
     assert.equal(acknowledged?.code, scenario.expected.code);
     assert.equal(acknowledged?.message, scenario.expected.message);
     assert.equal(readRequest(mailbox, request.requestId), undefined);
     if (scenario.name === "successful steer delivery")
-      assert.equal(worker.sentUsers.length, 2);
-    worker.events.get("session_shutdown")?.[0]();
-    resetWorkerMailbox(mailbox);
+      assert.equal(agent.sentUsers.length, 2);
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
   }
 });
 
@@ -2608,20 +2606,20 @@ test("assignment status normalization fails closed safely", async () => {
     setLeadEnvironment();
     const label = `status-${scenario.suffix}`;
     const identity = recoveryIdentity(label);
-    const mailbox = workerMailboxPath(WORKSPACE, label);
-    resetWorkerMailbox(mailbox);
+    const mailbox = agentMailboxPath(WORKSPACE, label);
+    resetAgentMailbox(mailbox);
     const state = managedState(label, undefined, identity);
-    writeWorkerState(mailbox, state);
+    writeAgentState(mailbox, state);
     if (scenario.result) {
       state.completedRequestId = REQUEST_ID;
-      writeWorkerState(mailbox, state);
+      writeAgentState(mailbox, state);
       writeResult(mailbox, {
-        version: 3,
-        runId: WORKER_ID,
+        version: 4,
+        runId: AGENT_ID,
         requestId: REQUEST_ID,
         ownerSessionId: LEAD_SESSION_ID,
         workspaceId: WORKSPACE,
-        workerLabel: label,
+        agentLabel: label,
         paneId: identity.paneId,
         status: "completed",
         text: "pending",
@@ -2634,9 +2632,9 @@ test("assignment status normalization fails closed safely", async () => {
         scenario.status,
         identity.piSessionId,
         (requestMailbox, marker) => {
-          const requestId = marker.slice("__PI_HERDSMAN_WORKER_V3__:".length);
-          const current = readWorkerState(requestMailbox)!;
-          writeWorkerState(requestMailbox, {
+          const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+          const current = readAgentState(requestMailbox)!;
+          writeAgentState(requestMailbox, {
             ...current,
             lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
             updatedAt: Date.now(),
@@ -2658,30 +2656,30 @@ test("assignment status normalization fails closed safely", async () => {
         undefined,
         context,
       );
-      const workers = (listed.details as { workers: any[] }).workers;
-      assert.equal(workers.length, 1);
-      assert.equal(workers[0].state, scenario.expectedState);
+      const agents = (listed.details as { agents: any[] }).agents;
+      assert.equal(agents.length, 1);
+      assert.equal(agents[0].state, scenario.expectedState);
     } finally {
       pi.events.get("session_shutdown")?.[0]();
-      resetWorkerMailbox(mailbox);
+      resetAgentMailbox(mailbox);
     }
   }
   await (async () => {
     setLeadEnvironment();
-    const label = "mailbox-eligibility-worker";
+    const label = "mailbox-eligibility-agent";
     const identity = recoveryIdentity(label);
-    const mailbox = workerMailboxPath(WORKSPACE, label);
+    const mailbox = agentMailboxPath(WORKSPACE, label);
     const state = managedState(label, undefined, identity);
-    writeWorkerState(mailbox, state);
+    writeAgentState(mailbox, state);
     const pi = fakePi({
       exec: leadExec(
         label,
         "idle",
         identity.piSessionId,
         (requestMailbox, marker) => {
-          const requestId = marker.slice("__PI_HERDSMAN_WORKER_V3__:".length);
-          const current = readWorkerState(requestMailbox)!;
-          writeWorkerState(requestMailbox, {
+          const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+          const current = readAgentState(requestMailbox)!;
+          writeAgentState(requestMailbox, {
             ...current,
             activeRequestId: requestId,
             completedRequestId: undefined,
@@ -2698,12 +2696,12 @@ test("assignment status normalization fails closed safely", async () => {
     try {
       const handoffRequestId = randomUUID();
       writeRequest(mailbox, {
-        version: 3,
+        version: 4,
         runId: state.runId,
         requestId: handoffRequestId,
         ownerSessionId: state.ownerSessionId,
         workspaceId: state.workspaceId,
-        workerLabel: state.workerLabel,
+        agentLabel: state.agentLabel,
         paneId: state.paneId,
         kind: "task",
         text: "recover this handoff",
@@ -2717,15 +2715,15 @@ test("assignment status normalization fails closed safely", async () => {
         undefined,
         context,
       );
-      assert.equal(handoffList.details.workers[0].state, "settling");
+      assert.equal(handoffList.details.agents[0].state, "settling");
       assert.equal(
-        handoffList.details.workers[0].available_actions.includes("delegate"),
+        handoffList.details.agents[0].available_actions.includes("delegate"),
         false,
       );
       removeRequest(mailbox, handoffRequestId);
 
       const requestA = randomUUID();
-      writeWorkerState(mailbox, {
+      writeAgentState(mailbox, {
         ...state,
         activeRequestId: requestA,
       });
@@ -2736,24 +2734,24 @@ test("assignment status normalization fails closed safely", async () => {
         undefined,
         context,
       );
-      assert.equal(activeList.details.workers[0].state, "settling");
-      assert.equal(activeList.details.workers[0].active_request_id, requestA);
+      assert.equal(activeList.details.agents[0].state, "settling");
+      assert.equal(activeList.details.agents[0].active_request_id, requestA);
       assert.equal(
-        activeList.details.workers[0].available_actions.includes("delegate"),
+        activeList.details.agents[0].available_actions.includes("delegate"),
         false,
       );
 
-      writeWorkerState(mailbox, {
+      writeAgentState(mailbox, {
         ...state,
         completedRequestId: requestA,
       });
       writeResult(mailbox, {
-        version: 3,
+        version: 4,
         runId: state.runId,
         requestId: requestA,
         ownerSessionId: state.ownerSessionId,
         workspaceId: state.workspaceId,
-        workerLabel: state.workerLabel,
+        agentLabel: state.agentLabel,
         paneId: state.paneId,
         status: "completed",
         text: "done",
@@ -2766,9 +2764,9 @@ test("assignment status normalization fails closed safely", async () => {
         undefined,
         context,
       );
-      assert.equal(completedList.details.workers[0].state, "settling");
+      assert.equal(completedList.details.agents[0].state, "settling");
       assert.equal(
-        completedList.details.workers[0].available_actions.includes("delegate"),
+        completedList.details.agents[0].available_actions.includes("delegate"),
         false,
       );
 
@@ -2780,14 +2778,14 @@ test("assignment status normalization fails closed safely", async () => {
         undefined,
         context,
       );
-      assert.equal(settledList.details.workers[0].state, "settling");
-      assert.deepEqual(settledList.details.workers[0].available_actions, [
+      assert.equal(settledList.details.agents[0].state, "settling");
+      assert.deepEqual(settledList.details.agents[0].available_actions, [
         "inspect",
         "close",
       ]);
     } finally {
       pi.events.get("session_shutdown")?.[0]();
-      resetWorkerMailbox(mailbox);
+      resetAgentMailbox(mailbox);
     }
   })();
 });
@@ -2807,7 +2805,7 @@ test("rejects context injection before unsupported actions perform work", async 
   assert.equal(pi.calls.length, 0);
   const closeFilesResult = await pi.tools[0].execute(
     "id",
-    { action: "close", worker: "worker", files: ["missing.txt"] },
+    { action: "close", agent: "agent", files: ["missing.txt"] },
     undefined,
     undefined,
     fakeContext(),

@@ -39,7 +39,7 @@ Use the existing bundled roles:
 - `scout`: fast local evidence gathering;
 - `researcher`: current upstream/API verification only when external truth materially affects a finding;
 - `implementer`: never during the audit itself;
-- `worker`: only as fallback when a required read-only role is unavailable.
+- `agent`: only as fallback when a required read-only role is unavailable.
 
 Start with:
 
@@ -218,7 +218,7 @@ Trace successful and failed outputs all the way to the owning model.
 Check:
 
 - structured `details` versus model-visible `content`;
-- source worker identity;
+- source agent identity;
 - request correlation;
 - result paths;
 - truncation/overflow;
@@ -240,7 +240,7 @@ Map all instruction layers:
 system/base prompt
 tool description
 controller-scope prompt/description
-shared managed-worker prompt
+shared managed-agent prompt
 agent-definition body
 body @file content
 skills
@@ -393,7 +393,7 @@ Flag:
 Inspect:
 
 - status widget;
-- `/workers agents`;
+- `/agents definitions`;
 - completion renderer;
 - warnings;
 - compact versus expanded views.
@@ -522,7 +522,7 @@ definition
 
 ```text
 controller contract
-↔ shared worker contract
+↔ shared agent contract
 ↔ role body
 ↔ skills
 ↔ dynamic results
@@ -554,7 +554,7 @@ Herdr/Pi/mailbox evidence
 ## 6. Completion contract
 
 ```text
-worker completion
+agent completion
 ↔ durable result
 ↔ result file
 ↔ owner custom message
@@ -612,14 +612,14 @@ Compare:
 
 ```text
 root
-direct worker / parent
+direct agent / parent
 nested child / leaf
 unmanaged session
 ```
 
 Ask whether the same definition, prompt, tool list, metadata, and instructions remain truthful in each context.
 
-## Worker generation
+## Agent generation
 
 Compare:
 
@@ -629,7 +629,7 @@ exact-session continuation
 fork
 ```
 
-Ask what is re-resolved for each new worker generation and what historical Pi
+Ask what is re-resolved for each new agent generation and what historical Pi
 session context remains stable.
 
 ## Visibility
@@ -689,7 +689,7 @@ Example:
 
 ```text
 role prompt: delegate to scout
-runtime context: this worker is a leaf and cannot receive worker assignments
+runtime context: this agent is a leaf and cannot receive agent assignments
 ```
 
 ## `GAP`
@@ -699,7 +699,7 @@ The system requires knowledge or behavior that no appropriate instruction/result
 Example:
 
 ```text
-completion delivered without identifying which parallel worker produced it
+completion delivered without identifying which parallel agent produced it
 ```
 
 ## `GHOST_CAPABILITY`
@@ -890,7 +890,7 @@ Prefer discriminating regressions over assertion volume.
 Check model messages and human rendering for:
 
 - result path;
-- worker identity;
+- agent identity;
 - model;
 - state;
 - warnings;
@@ -913,7 +913,7 @@ Do not turn this into a repository-wide file-reading contest.
 9. Do not assign an implementer during diagnosis.
 10. Stop when the contract matrix is covered and new searches produce no materially new issue class.
 
-The objective is maximum useful insight per worker, not maximum worker count.
+The objective is maximum useful insight per agent, not maximum agent count.
 
 ---
 
@@ -971,7 +971,7 @@ Summarize the desired/current ownership of:
 tool schema
 tool description
 controller scope
-shared worker prompt
+shared agent prompt
 role body
 skill
 dynamic success guidance

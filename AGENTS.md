@@ -14,8 +14,8 @@ behavior.
 ## Runtime / skill instruction synchronization
 
 The runtime operational contract must be self-contained. Loading root
-`SKILL.md` must never be required for a lead session, delegating worker, or
-managed worker to operate Pi Herdsman correctly.
+`SKILL.md` must never be required for a lead session, delegating agent, or
+managed agent to operate Pi Herdsman correctly.
 
 `SKILL.md` intentionally repeats mandatory runtime operational instructions as
 optional reinforcement for long contexts and may add strategy, rationale,
@@ -35,8 +35,8 @@ or depend on the skill.
 
 ## Code map
 
-- `extension/index.ts`: Extension integration and controller/worker lifecycle.
-- `extension/agents.ts`: Agent-definition discovery, validation, overrides, and launch arguments.
+- `extension/index.ts`: Extension integration and controller/agent lifecycle.
+- `extension/agent-definitions.ts`: Agent-definition discovery, validation, overrides, and launch arguments.
 - `extension/herdr.ts`: Herdr topology, startup, shutdown, and process ownership.
 - `extension/mailbox.ts`: Durable mailbox protocol and record persistence.
 - `extension/core.ts`: Shared lifecycle and message-preparation logic.
@@ -50,9 +50,9 @@ or depend on the skill.
 - `extension/controller-api.test.ts`: Controller authorization and live-control behavior.
 - `extension/herdr.test.ts`: Herdr inspection/read and topology contract behavior.
 - `extension/controller-lifecycle.test.ts`: Authorized delegation lifecycle behavior.
-- `extension/worker-runtime.test.ts`: Managed-worker runtime behavior.
+- `extension/agent-runtime.test.ts`: Managed-agent runtime behavior.
 - `extension/recovery.test.ts`: Failure, recovery, and cleanup behavior.
-- `extension/commands.test.ts`: `/workers` and `/chief` configuration UI behavior.
+- `extension/commands.test.ts`: `/agents` and `/chief` configuration UI behavior.
 - `extension/supervision.test.ts`: Chief roles, lease, supervision, transport, and staff tool behavior.
 - `extension/supervision-malformed-cleanup.test.ts`: malformed supervision cleanup behavior.
 
