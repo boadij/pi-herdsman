@@ -67,6 +67,7 @@ import {
   writeAsk,
   writePromptDefinition,
   writeRequest,
+  writeResult,
   writeAgentState,
 } from "./support.ts";
 
@@ -629,6 +630,94 @@ test("restored herd run keeps its start and closes after settlement", async () =
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
+  }
+});
+
+test("recovery cleanup finishes an idle restored herd without settlement", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `recovered-completed-${randomUUID()}.sock`,
+  );
+  const startedAt = 1_700_000_000_000;
+  const requestId = randomUUID();
+  const label = `recovered-completed-${randomUUID().slice(0, 8)}`;
+  const identity = {
+    paneId: "startup-pane",
+    tabId: "startup-tab",
+    piSessionId: DEFAULT_PI_SESSION_ID,
+    piSessionFile: "/tmp/registered-agent.jsonl",
+  };
+  const state = {
+    ...managedState(label, requestId, identity),
+    activeRequestId: undefined,
+    completedRequestId: requestId,
+  };
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+  );
+  resetAgentMailbox(startup.mailbox);
+  writeAgentState(startup.mailbox, state);
+  writeResult(startup.mailbox, {
+    version: 4,
+    runId: state.runId,
+    requestId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    status: "completed",
+    text: "already delivered",
+    completedAt: startedAt + 1,
+  });
+  const entries: unknown[] = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: { phase: "started", sessionId: LEAD_SESSION_ID, startedAt },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-result",
+      details: resultEntryDetails(state, requestId),
+    },
+  ];
+  const pi = fakePi({ entries, exec: startup.exec });
+  const context = fakeContext(entries);
+  const herdEntries = () =>
+    entries.filter(
+      (entry: any) => entry.customType === "pi-herdsman-herd-run",
+    ) as any[];
+  registerExtension!(pi.pi as never);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const finished = herdEntries().filter(
+      (entry) => entry.data?.phase === "finished",
+    );
+    assert.equal(finished.length, 1);
+    assert.equal(finished[0].data.startedAt, startedAt);
+    assert.equal(readAgentState(startup.mailbox), undefined);
+    assert.equal(readResult(startup.mailbox, requestId), undefined);
+    assert.equal(
+      pi.sent.filter(
+        (message: any) => message.customType === "pi-herdsman-agent-result",
+      ).length,
+      0,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+    delete process.env.HERDR_SOCKET_PATH;
   }
 });
 

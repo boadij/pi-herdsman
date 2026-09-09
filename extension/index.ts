@@ -8974,6 +8974,14 @@ export default function (pi: ExtensionAPI): void {
         return;
       }
       await recoverControllerRuntimes(ctx, sessionSignal);
+      if (
+        controllerScope.kind === "lead" &&
+        herdRunStartedAt !== undefined &&
+        ctx.isIdle()
+      ) {
+        leadSettled = true;
+        maybeFinishHerdRun(ctx);
+      }
       startStaleScanner(ctx, sessionSignal);
     });
     if (controllerScope.kind === "lead")
