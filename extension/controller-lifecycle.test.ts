@@ -140,6 +140,12 @@ test("parent delegates two same-definition children with exact ownership", async
         undefined,
       );
     }
+    assert.equal(
+      pi.entries.filter(
+        (entry: any) => entry.customType === "pi-herdsman-herd-run",
+      ).length,
+      0,
+    );
     assert.deepEqual(lifecycle.closeOrder, labels);
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
@@ -495,6 +501,230 @@ test("staged fresh assignment removes a fast completion without observing workin
     assert.doesNotMatch(renderedAfterRefresh, /working/);
   } finally {
     fixture.shutdown();
+  }
+});
+
+test("lead herd runs start once and stay open through intermediate settlement", async () => {
+  setLeadEnvironment();
+  const label = `herd-run-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+  );
+  const pi = fakePi({ exec: startup.exec });
+  const context = fakeContext(pi.entries);
+  const herdEntries = () =>
+    pi.entries.filter(
+      (entry: any) => entry.customType === "pi-herdsman-herd-run",
+    ) as any[];
+  const emit = async (name: string) => {
+    for (const handler of pi.events.get(name) ?? [])
+      await handler(undefined, context);
+  };
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await emit("agent_start");
+    const first = await pi.tools[0].execute(
+      "first-delegate",
+      { action: "delegate", definition: "agent", label, task: "first task" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(first.details.ok, true, JSON.stringify(first.details));
+    const started = herdEntries().filter(
+      (entry) => entry.data?.phase === "started",
+    );
+    assert.equal(started.length, 1);
+    assert.equal(started[0].data.sessionId, LEAD_SESSION_ID);
+    assert.equal(Number.isFinite(started[0].data.startedAt), true);
+
+    await emit("agent_settled");
+    assert.equal(
+      herdEntries().filter((entry) => entry.data?.phase === "finished").length,
+      0,
+    );
+    resetAgentMailbox(startup.mailbox);
+    await emit("agent_start");
+    const second = await pi.tools[0].execute(
+      "second-delegate",
+      { action: "delegate", definition: "agent", label, task: "second task" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(second.details.ok, true, JSON.stringify(second.details));
+    assert.equal(
+      herdEntries().filter((entry) => entry.data?.phase === "started").length,
+      1,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+  }
+});
+
+test("restored herd run keeps its start and closes after settlement", async () => {
+  setLeadEnvironment();
+  const startedAt = 1_700_000_000_000;
+  const entries: unknown[] = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: {
+        phase: "started",
+        sessionId: LEAD_SESSION_ID,
+        startedAt,
+      },
+    },
+  ];
+  const label = `restored-herd-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const pi = fakePi({ entries, exec: startup.exec });
+  const context = fakeContext(entries);
+  const herdEntries = () =>
+    entries.filter(
+      (entry: any) => entry.customType === "pi-herdsman-herd-run",
+    ) as any[];
+  registerExtension!(pi.pi as never);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler(undefined, context);
+    await waitForTestCondition(
+      () =>
+        herdEntries().filter((entry) => entry.data?.phase === "finished")
+          .length === 1,
+      "restored herd run did not finish after settlement",
+    );
+    const finished = herdEntries().find(
+      (entry) => entry.data?.phase === "finished",
+    );
+    assert.equal(finished.data.startedAt, startedAt);
+    assert.ok(finished.data.completedAt >= startedAt);
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, context);
+    const second = await pi.tools[0].execute(
+      "second-run",
+      { action: "delegate", definition: "agent", label, task: "second run" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(second.details.ok, true, JSON.stringify(second.details));
+    assert.equal(
+      herdEntries().filter((entry) => entry.data?.phase === "started").length,
+      2,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+  }
+});
+
+test("completed and mismatched herd history does not resurrect", async () => {
+  for (const history of [
+    [
+      {
+        phase: "started",
+        sessionId: LEAD_SESSION_ID,
+        startedAt: 1_000,
+      },
+      {
+        phase: "finished",
+        sessionId: LEAD_SESSION_ID,
+        startedAt: 1_000,
+        completedAt: 2_000,
+      },
+    ],
+    [
+      {
+        phase: "started",
+        sessionId: "other-session",
+        startedAt: 1_000,
+      },
+    ],
+  ]) {
+    setLeadEnvironment();
+    const entries = history.map((data) => ({
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data,
+    }));
+    const pi = fakePi({ entries });
+    const context = fakeContext(entries);
+    registerExtension!(pi.pi as never);
+    try {
+      for (const handler of pi.events.get("session_start") ?? [])
+        await handler(undefined, context);
+      for (const handler of pi.events.get("agent_settled") ?? [])
+        await handler(undefined, context);
+      assert.equal(
+        entries.filter(
+          (entry: any) =>
+            entry.customType === "pi-herdsman-herd-run" &&
+            entry.data?.phase === "finished",
+        ).length,
+        history.filter((data) => data.phase === "finished").length,
+      );
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+    }
+  }
+});
+
+test("restored herd waits for direct durable cleanup before finishing", async () => {
+  setLeadEnvironment();
+  const label = `recovered-herd-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const entries: unknown[] = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: { phase: "started", sessionId: LEAD_SESSION_ID, startedAt: 1_000 },
+    },
+  ];
+  const state = managedState(label);
+  resetAgentMailbox(startup.mailbox);
+  writeAgentState(startup.mailbox, state);
+  const pi = fakePi({ entries, exec: startup.exec });
+  const context = fakeContext(entries);
+  const herdEntries = () =>
+    entries.filter(
+      (entry: any) => entry.customType === "pi-herdsman-herd-run",
+    ) as any[];
+  registerExtension!(pi.pi as never);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler(undefined, context);
+    assert.equal(
+      herdEntries().filter((entry) => entry.data?.phase === "finished").length,
+      0,
+    );
+    resetAgentMailbox(startup.mailbox);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler(undefined, context);
+    await waitForTestCondition(
+      () =>
+        herdEntries().filter((entry) => entry.data?.phase === "finished")
+          .length === 1,
+      "herd run did not finish after direct durable cleanup",
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
   }
 });
 
@@ -1473,6 +1703,8 @@ test("startup failure cleans private prompt snapshots", async () => {
   });
   registerExtension!(pi.pi as never);
   try {
+    const context = fakeContext();
+    await pi.events.get("agent_start")![0](undefined, context);
     const result = await pi.tools[0].execute(
       "id",
       {
@@ -1483,9 +1715,15 @@ test("startup failure cleans private prompt snapshots", async () => {
       },
       undefined,
       undefined,
-      fakeContext(),
+      context,
     );
     assert.notEqual(result.details.ok, true);
+    assert.equal(
+      pi.entries.filter(
+        (entry: any) => entry.customType === "pi-herdsman-herd-run",
+      ).length,
+      0,
+    );
     assert.equal(launched.length, 1);
     assert.ok(launched[0].length > 0);
     for (const path of launched[0])

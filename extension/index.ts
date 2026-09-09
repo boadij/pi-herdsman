@@ -185,6 +185,7 @@ import {
   retainSupervisionSelection,
   orderedSupervisionLeads,
   visibleWidth,
+  renderHerdRunEntry,
 } from "./presentation.ts";
 import type { SupervisionContextStatus } from "./presentation.ts";
 
@@ -195,6 +196,15 @@ const LEAD_INSTANCE_ID =
 const PI_SESSION_ID_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$";
 const HERDSMAN_EXTENSION_PATH = fileURLToPath(import.meta.url);
 const AGENT_DEFINITIONS_ENTRY = "pi-herdsman-agent-definitions";
+const HERD_RUN_ENTRY = "pi-herdsman-herd-run";
+type HerdRunEntry =
+  | { phase: "started"; sessionId: string; startedAt: number }
+  | {
+      phase: "finished";
+      sessionId: string;
+      startedAt: number;
+      completedAt: number;
+    };
 const CHIEF_TOOLS = ["staff"] as const;
 const STALE_AFTER_MS = 10 * 60_000;
 const STALE_SCAN_MS = 30_000;
@@ -782,6 +792,7 @@ const resultCleanupRetries = new Map<string, ReturnType<typeof setTimeout>>();
 // In-process replay suppression only; durable owner-session entries remain authoritative.
 const resultDeliveryEvidence = new Set<string>();
 let requestStatusRefresh: (() => void) | undefined;
+let requestHerdRunFinishCheck: ((ctx: ExtensionContext) => void) | undefined;
 let controllerSessionActive = true;
 let controllerAbortController: AbortController | undefined;
 let agentControllerReady = false;
@@ -937,6 +948,42 @@ function appendDurableError(
   } catch {
     ctx.ui?.notify?.(type, "error");
   }
+}
+function validHerdRunTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+function restoreHerdRunStartedAt(
+  entries: readonly unknown[],
+  sessionId: string,
+): number | undefined {
+  let active: number | undefined;
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as {
+      type?: unknown;
+      customType?: unknown;
+      data?: unknown;
+    };
+    if (record.type !== "custom" || record.customType !== HERD_RUN_ENTRY)
+      continue;
+    const data = record.data;
+    if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+    const value = data as Record<string, unknown>;
+    if (value.sessionId !== sessionId) continue;
+    if (value.phase === "started" && validHerdRunTimestamp(value.startedAt)) {
+      if (active === undefined) active = value.startedAt;
+      continue;
+    }
+    if (
+      value.phase === "finished" &&
+      validHerdRunTimestamp(value.startedAt) &&
+      validHerdRunTimestamp(value.completedAt) &&
+      value.completedAt >= value.startedAt &&
+      active === value.startedAt
+    )
+      active = undefined;
+  }
+  return active;
 }
 async function placementSettings(
   ctx: ExtensionContext,
@@ -3087,6 +3134,7 @@ async function cleanupAfterDeliveredResult(
       await closeManagedAgentCascade(pi, ctx, agent, state, signal, {
         allowPostCompletionTransition: true,
       });
+    requestHerdRunFinishCheck?.(ctx);
     return true;
   } catch (error) {
     const message = String(error);
@@ -3141,6 +3189,7 @@ async function finalizeDeliveredResult(
   );
   clearCleanupError(runtime.label);
   requestStatusRefresh?.();
+  if (runtime.noLiveAgent) requestHerdRunFinishCheck?.(ctx);
   return true;
 }
 async function deliverResult(
@@ -5516,6 +5565,9 @@ export default function (pi: ExtensionAPI): void {
       instructions,
     });
   });
+  pi.registerEntryRenderer(HERD_RUN_ENTRY, (entry, _options, theme) =>
+    renderHerdRunEntry(entry, theme),
+  );
   pi.registerMessageRenderer(
     "pi-herdsman-stop-summary",
     (message, _options, theme) => renderStopSummary(message, theme),
@@ -6516,6 +6568,52 @@ export default function (pi: ExtensionAPI): void {
   if (controllerScope) {
     let statusWidget: ReturnType<typeof createStatusWidget> | undefined;
     const pendingStarts = new Map<string, PendingStart>();
+    let leadAgentStartedAt: number | undefined;
+    let herdRunStartedAt: number | undefined;
+    let leadSettled = true;
+    const beginHerdRun = (ctx: ExtensionContext): void => {
+      if (herdRunStartedAt !== undefined) return;
+      const startedAt = leadAgentStartedAt ?? Date.now();
+      herdRunStartedAt = startedAt;
+      try {
+        pi.appendEntry(HERD_RUN_ENTRY, {
+          phase: "started",
+          sessionId: ctx.sessionManager.getSessionId(),
+          startedAt,
+        } satisfies HerdRunEntry);
+      } catch (error) {
+        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+      }
+      requestStatusRefresh?.();
+    };
+    const maybeFinishHerdRun = (ctx: ExtensionContext): void => {
+      if (herdRunStartedAt === undefined || !leadSettled) return;
+      const sessionId = ctx.sessionManager.getSessionId();
+      // Direct owned durable state anchors the whole descendant subtree until cleanup.
+      if (
+        pendingStarts.size > 0 ||
+        listAgentStates().some(
+          ({ state }) => state.ownerSessionId === sessionId,
+        )
+      )
+        return;
+      const startedAt = herdRunStartedAt;
+      const completedAt = Date.now();
+      try {
+        pi.appendEntry(HERD_RUN_ENTRY, {
+          phase: "finished",
+          sessionId,
+          startedAt,
+          completedAt,
+        } satisfies HerdRunEntry);
+        herdRunStartedAt = undefined;
+        requestStatusRefresh?.();
+      } catch (error) {
+        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+      }
+    };
+    if (controllerScope.kind === "lead")
+      requestHerdRunFinishCheck = maybeFinishHerdRun;
     let statusTimer: ReturnType<typeof setInterval> | undefined;
     let statusRefresh = false;
     let statusInFlight = false;
@@ -6807,6 +6905,10 @@ export default function (pi: ExtensionAPI): void {
       });
     pi.on("agent_start", async (_event: unknown, ctx: ExtensionContext) => {
       clearSupervisionRunContext();
+      if (controllerScope.kind === "lead") {
+        leadAgentStartedAt = Date.now();
+        leadSettled = false;
+      }
       if (!isCurrentChief(ctx)) return;
       const roleGeneration = chiefModeGeneration;
       const sessionEpoch = sessionGeneration;
@@ -7318,6 +7420,9 @@ export default function (pi: ExtensionAPI): void {
         agents,
         stale: false,
         unavailable: false,
+        ...(controllerScope.kind === "lead" && herdRunStartedAt !== undefined
+          ? { herdRunStartedAt }
+          : {}),
         breadcrumb:
           controllerScope.kind === "lead"
             ? ["herd"]
@@ -7700,9 +7805,13 @@ export default function (pi: ExtensionAPI): void {
       );
       if (!confirmed) return;
       ctx.abort();
-      presentStopSummary(
-        await stopOwnedAgents(pi, ctx, controllerAbortController?.signal),
+      const summary = await stopOwnedAgents(
+        pi,
+        ctx,
+        controllerAbortController?.signal,
       );
+      presentStopSummary(summary);
+      if (controllerScope.kind === "lead") maybeFinishHerdRun(ctx);
     };
     const openAgentsMenu = async (
       ctx: ExtensionCommandContext,
@@ -8540,6 +8649,10 @@ export default function (pi: ExtensionAPI): void {
     };
     if (processRole !== "managed-agent")
       pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
+        if (controllerScope.kind === "lead") {
+          leadSettled = true;
+          maybeFinishHerdRun(ctx);
+        }
         void settlePersistedResults(
           pi,
           ctx,
@@ -8727,6 +8840,16 @@ export default function (pi: ExtensionAPI): void {
       resetSupervisionSnapshot();
       if (lifecycleError)
         appendDurableError(pi, ctx, "pi_herdsman_role_error", lifecycleError);
+      if (controllerScope.kind === "lead") {
+        const sessionId = ctx.sessionManager.getSessionId();
+        leadAgentStartedAt = undefined;
+        herdRunStartedAt = restoreHerdRunStartedAt(
+          (ctx.sessionManager as any).getEntries?.() ?? [],
+          sessionId,
+        );
+        leadSettled = herdRunStartedAt === undefined;
+        requestHerdRunFinishCheck = maybeFinishHerdRun;
+      }
       if (controllerScope.kind === "lead") {
         restoreChiefState(ctx);
         let persisted: "lead" | "chief" = "lead";
@@ -8923,6 +9046,12 @@ export default function (pi: ExtensionAPI): void {
       statusContext = undefined;
       leadContext = undefined;
       requestStatusRefresh = undefined;
+      if (controllerScope.kind === "lead") {
+        leadAgentStartedAt = undefined;
+        herdRunStartedAt = undefined;
+        leadSettled = true;
+        requestHerdRunFinishCheck = undefined;
+      }
       for (const [path, watcher] of resultWatchers) {
         unwatchFile(path, watcher);
       }
@@ -9093,6 +9222,12 @@ export default function (pi: ExtensionAPI): void {
             pendingStarts,
           );
           requestStatusRefresh?.();
+          if (
+            controllerScope.kind === "lead" &&
+            p.action === "delegate" &&
+            value.ok === true
+          )
+            beginHerdRun(ctx);
           if (
             p.action === "delegate" &&
             value.ok === true &&

@@ -447,7 +447,7 @@ test("lead agents command uses native completion and exact human grammar", async
   registerExtension!(pi.pi as never);
   assert.deepEqual(
     pi.entryRenderers.map((entry) => entry.customType),
-    ["pi-herdsman-agent-definitions"],
+    ["pi-herdsman-agent-definitions", "pi-herdsman-herd-run"],
   );
   assert.ok(
     pi.messageRenderers.some(
