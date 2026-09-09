@@ -43,6 +43,21 @@ lead's placement setting controls direct agents: `tab` shares one tab per lead,
 tab. Nested delegation always splits inside the owner's current tab, regardless
 of the setting.
 
+For example, the logical ownership tree and a subtree layout are separate:
+
+```text
+logical ownership             physical subtree layout
+
+lead                          [lead]
+├── implementer        →      [implementer]
+│   └── scout                  ├─ implementer
+└── reviewer                    │  └─ scout
+                               └─ [reviewer]
+```
+
+Physical layout never determines ownership; the durable owner/session
+relationships do.
+
 ## Inferred `agent` capability
 
 A non-empty `agents` field implies the `agent` tool when the definition uses

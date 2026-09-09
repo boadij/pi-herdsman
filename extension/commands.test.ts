@@ -485,6 +485,32 @@ test("lead agents command uses native completion and exact human grammar", async
   assert.equal(pi.calls.length, 2);
 });
 
+test("/agents placement subtree writes and rereads trusted project settings", async () => {
+  setLeadEnvironment();
+  const projectRoot = join(PI_AGENT_ROOT, "placement-project");
+  const projectSettings = join(projectRoot, ".pi", "settings.json");
+  realFs.mkdirSync(join(projectRoot, ".pi"), { recursive: true });
+  realFs.writeFileSync(
+    projectSettings,
+    JSON.stringify({ piHerdsman: { spawnPlacement: "tab" } }),
+  );
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.cwd = projectRoot;
+  context.hasUI = true;
+  try {
+    await pi.commandOptions.get("agents").handler("placement subtree", context);
+    assert.equal(
+      JSON.parse(realFs.readFileSync(projectSettings, "utf8")).piHerdsman
+        .spawnPlacement,
+      "subtree",
+    );
+  } finally {
+    realFs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test("Chief activation replaces the lead widget and overview selection is interactive", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";

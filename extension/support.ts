@@ -1102,6 +1102,7 @@ export function delegatedLifecycleExecutor(
   parent: ManagedAgentState,
   initialChildren: ManagedAgentState[] = [],
   testCwd = "/tmp",
+  callerPane?: { paneId: string; tabId: string },
 ): {
   exec: ExecHandler;
   live: Map<string, ManagedAgentState>;
@@ -1131,6 +1132,10 @@ export function delegatedLifecycleExecutor(
     ]),
   );
   const tabLabels = new Map([["delegated-tab", "agents"]]);
+  if (callerPane) {
+    tabByPane.set(callerPane.paneId, callerPane.tabId);
+    tabLabels.set(callerPane.tabId, "lead");
+  }
   let createdTabs = 0;
   let createdChildren = 0;
   const currentStateForPane = (paneId: string): ManagedAgentState | undefined =>
@@ -1143,6 +1148,19 @@ export function delegatedLifecycleExecutor(
     tab_label: tabLabels.get(tabByPane.get(state.paneId) ?? ""),
   });
   const panes = (): Record<string, unknown>[] => [
+    ...(callerPane
+      ? [
+          {
+            pane_id: callerPane.paneId,
+            tab_id: callerPane.tabId,
+            workspace_id: WORKSPACE,
+            cwd: testCwd,
+            foreground_cwd: testCwd,
+            agent: "pi",
+            agent_status: "idle",
+          },
+        ]
+      : []),
     ...[...live.values()].map((state) => ({
       pane_id: state.paneId,
       tab_id: tabByPane.get(state.paneId),

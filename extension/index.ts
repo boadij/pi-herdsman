@@ -1026,6 +1026,14 @@ async function reusableLeadTab(
   const workspaceId = process.env.HERDR_WORKSPACE_ID;
   if (!workspaceId) return undefined;
   const snapshot = await managedAgentSnapshots(pi, ctx, signal);
+  if (
+    snapshot.ambiguous.some(
+      ({ state }) =>
+        state.workspaceId === workspaceId &&
+        state.ownerSessionId === leadSessionId,
+    )
+  )
+    return undefined;
   const direct = snapshot.agents.filter(
     ({ state, listed }) =>
       state.workspaceId === workspaceId &&
@@ -1037,6 +1045,31 @@ async function reusableLeadTab(
   const tabs = new Set(direct.map(({ listed }) => listed.tab_id as string));
   if (tabs.size !== 1) return undefined;
   const candidate = [...tabs][0];
+
+  const callerPaneId = process.env.HERDR_PANE_ID;
+  if (!callerPaneId) return undefined;
+  let callerTab: string | undefined;
+  try {
+    const panes = (
+      await runHerdr(pi, ctx, ["pane", "list", "--workspace", workspaceId], {
+        signal,
+      })
+    )?.panes;
+    const callerPanes = Array.isArray(panes)
+      ? panes.filter(
+          (pane: any) =>
+            pane?.pane_id === callerPaneId &&
+            pane?.workspace_id === workspaceId &&
+            typeof pane.tab_id === "string" &&
+            pane.tab_id.length > 0,
+        )
+      : [];
+    if (callerPanes.length !== 1) return undefined;
+    callerTab = callerPanes[0].tab_id;
+  } catch {
+    return undefined;
+  }
+  if (callerTab === candidate) return undefined;
 
   const owners = new Set<string>([leadSessionId]);
   let changed = true;
@@ -1058,6 +1091,18 @@ async function reusableLeadTab(
         listed.tab_id === candidate &&
         state.workspaceId === workspaceId &&
         !owners.has(state.ownerSessionId),
+    )
+  )
+    return undefined;
+  if (
+    snapshot.ambiguous.some(
+      ({ state, liveAgents }) =>
+        state.workspaceId === workspaceId &&
+        !owners.has(state.ownerSessionId) &&
+        liveAgents.some(
+          (agent: any) =>
+            agent?.workspace_id === workspaceId && agent?.tab_id === candidate,
+        ),
     )
   )
     return undefined;
@@ -2359,6 +2404,10 @@ type ManagedAgentSnapshot = {
   agentDefinition: string;
   lifecycleState: ReturnType<typeof normalizeHerdrLifecycleState>;
 };
+type AmbiguousManagedAgentSnapshot = {
+  state: ManagedAgentState;
+  liveAgents: any[];
+};
 type VisibleManagedAgentSnapshot = ManagedAgentSnapshot & {
   parentLabel?: string;
   orphan?: boolean;
@@ -2377,6 +2426,7 @@ async function managedAgentSnapshots(
   suppliedAgents?: any[],
 ): Promise<{
   agents: ManagedAgentSnapshot[];
+  ambiguous: AmbiguousManagedAgentSnapshot[];
   mailboxes: ReturnType<typeof listAgentStates>;
   liveAgents: any[];
   leadSessionIds: string[];
@@ -2397,6 +2447,7 @@ async function managedAgentSnapshots(
         ({ state }) => state.workspaceId === currentWorkspaceId,
       );
 
+  const ambiguous: AmbiguousManagedAgentSnapshot[] = [];
   const agents = mailboxes.flatMap(({ path, state }) => {
     const expectedAlias = herdrAgentAlias(
       state.workspaceId,
@@ -2404,17 +2455,54 @@ async function managedAgentSnapshots(
       state.runId,
     );
 
-    const matches = live.agents.filter(
-      (agent: any) =>
-        agent.workspace_id === state.workspaceId &&
-        agent.pane_id === state.paneId &&
-        (!agent.cwd || sameCwd(agent.cwd, state.cwd)) &&
-        herdrAliasMatchesIfReported(agent, expectedAlias) &&
-        herdrSessionsMatch(
+    const matches = live.agents.filter((agent: any) => {
+      if (
+        agent.workspace_id !== state.workspaceId ||
+        agent.pane_id !== state.paneId ||
+        (agent.cwd && !sameCwd(agent.cwd, state.cwd)) ||
+        !herdrAliasMatchesIfReported(agent, expectedAlias)
+      )
+        return false;
+      try {
+        return herdrSessionsMatch(
           agent,
           expectedSession(state.piSessionId, state.piSessionFile),
-        ),
-    );
+        );
+      } catch {
+        return false;
+      }
+    });
+
+    const relatedLiveAgents = live.agents.filter((agent: any) => {
+      if (agent?.workspace_id !== state.workspaceId) return false;
+      const aliases = [agent?.name, agent?.herdr_agent].filter(
+        (value): value is string =>
+          typeof value === "string" && value.length > 0,
+      );
+      const sessionRelated = herdrSessionObservations(agent).some(
+        (observation) => {
+          try {
+            return sessionObservationMatchesExpected(
+              observation,
+              expectedSession(state.piSessionId, state.piSessionFile),
+            );
+          } catch {
+            return false;
+          }
+        },
+      );
+      return (
+        agent?.pane_id === state.paneId ||
+        aliases.includes(expectedAlias) ||
+        sessionRelated
+      );
+    });
+    if (
+      matches.length !== 1 ||
+      relatedLiveAgents.some((agent) => !matches.includes(agent))
+    )
+      if (relatedLiveAgents.length)
+        ambiguous.push({ state, liveAgents: relatedLiveAgents });
 
     // Read/list paths do not guess through ambiguity.
     if (matches.length !== 1) return [];
@@ -2564,6 +2652,7 @@ async function managedAgentSnapshots(
 
   return {
     agents,
+    ambiguous,
     mailboxes,
     liveAgents: live.agents,
     leadSessionIds,
@@ -7394,12 +7483,14 @@ export default function (pi: ExtensionAPI): void {
                   {
                     workspaceId: lead.workspaceId,
                     paneId: lead.paneId,
+                    tabId: lead.tabId,
                     piSessionId: lead.lead,
                   },
                   ctx.signal,
                   (agent: any) =>
                     isPiAgent(agent) &&
                     agent?.pane_id === lead.paneId &&
+                    agent?.tab_id === lead.tabId &&
                     herdrSessionId(agent) === lead.lead &&
                     readLeadCoordinationState(supervisionRuntime(), lead.lead)
                       ?.piSessionId === lead.lead &&
@@ -8398,6 +8489,7 @@ export default function (pi: ExtensionAPI): void {
               {
                 workspaceId: lead.workspaceId,
                 paneId: lead.paneId,
+                tabId: lead.tabId,
                 piSessionId: lead.lead,
               },
               signal,
@@ -8406,6 +8498,7 @@ export default function (pi: ExtensionAPI): void {
                   isPiAgent(agent) &&
                   herdrSessionId(agent) === lead.lead &&
                   agent.pane_id === lead.paneId &&
+                  agent.tab_id === lead.tabId &&
                   (() => {
                     const state = readLeadCoordinationState(
                       supervisionRuntime(),

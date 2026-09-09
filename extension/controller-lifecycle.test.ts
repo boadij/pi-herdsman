@@ -193,12 +193,26 @@ test("lead direct placement modes use real controller delegation", async () => {
       ...managedState(`placement-parent-${placement}`),
       paneId: `placement-parent-pane-${placement}`,
     };
+    const callerPane =
+      placement === "tab"
+        ? {
+            paneId: `placement-lead-pane-${placement}`,
+            tabId: `placement-lead-tab-${placement}`,
+          }
+        : undefined;
     if (placement === "split") process.env.HERDR_PANE_ID = parent.paneId;
+    else if (callerPane) process.env.HERDR_PANE_ID = callerPane.paneId;
+    else delete process.env.HERDR_PANE_ID;
     const mailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
     resetAgentMailbox(mailbox);
     writeAgentState(mailbox, parent);
     registerNativeAgentSession(parent);
-    const lifecycle = delegatedLifecycleExecutor(parent);
+    const lifecycle = delegatedLifecycleExecutor(
+      parent,
+      [],
+      "/tmp",
+      callerPane,
+    );
     const pi = fakePi({ exec: lifecycle.exec });
     registerExtension!(pi.pi as never);
     const childMailboxes: string[] = [];
@@ -265,6 +279,195 @@ test("lead direct placement modes use real controller delegation", async () => {
       nativeSessions.delete(parent.piSessionId);
       realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
     }
+  }
+});
+
+test("lead split-to-tab placement creates a dedicated agents tab", async () => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState("split-to-tab-parent"),
+    paneId: "split-to-tab-parent-pane",
+  };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  writeAgentState(parentMailbox, parent);
+  registerNativeAgentSession(parent);
+  const callerPane = { paneId: parent.paneId, tabId: "delegated-tab" };
+  process.env.HERDR_PANE_ID = parent.paneId;
+  const lifecycle = delegatedLifecycleExecutor(parent, [], "/tmp", callerPane);
+  const pi = fakePi({ exec: lifecycle.exec });
+  registerExtension!(pi.pi as never);
+  const childMailboxes: string[] = [];
+  try {
+    const placements = ["split", "split", "tab"] as const;
+    for (const [index, placement] of placements.entries()) {
+      writePlacementSetting(placement);
+      const label = `split-to-tab-${placement}-${index}`;
+      const result = await pi.tools[0].execute(
+        `start-${label}`,
+        { action: "delegate", definition: "agent", label, task: placement },
+        undefined,
+        undefined,
+        fakeContext(),
+      );
+      assert.equal(result.details.ok, true, JSON.stringify(result.details));
+      childMailboxes.push(agentMailboxPath(WORKSPACE, label));
+      const state = readAgentState(childMailboxes.at(-1)!);
+      assert.ok(state);
+      if (placement === "split")
+        assert.equal(lifecycle.tabForPane(state.paneId), "delegated-tab");
+      else {
+        assert.equal(lifecycle.createdTabs(), 1);
+        assert.notEqual(lifecycle.tabForPane(state.paneId), "delegated-tab");
+      }
+    }
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(parentMailbox);
+    for (const mailbox of childMailboxes) resetAgentMailbox(mailbox);
+    nativeSessions.delete(parent.piSessionId);
+    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+  }
+});
+
+test("lead tab placement vetoes an ambiguous current-lead direct root", async () => {
+  setLeadEnvironment();
+  writePlacementSetting("tab");
+  const parent = {
+    ...managedState("ambiguous-current-root"),
+    paneId: "ambiguous-current-root-pane",
+  };
+  const direct = {
+    ...managedState("ambiguous-current-sibling", undefined, {
+      paneId: "ambiguous-current-sibling-pane",
+      tabId: "ambiguous-current-sibling-tab",
+      piSessionId: "11111111-1111-4111-8111-111111111111",
+      piSessionFile: "/tmp/ambiguous-current-sibling.jsonl",
+    }),
+  };
+  const callerPane = { paneId: "lead-pane", tabId: "lead-tab" };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const directMailbox = agentMailboxPath(WORKSPACE, direct.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(directMailbox);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(directMailbox, direct);
+  registerNativeAgentSession(parent);
+  registerNativeAgentSession(direct);
+  const lifecycle = delegatedLifecycleExecutor(
+    parent,
+    [direct],
+    "/tmp",
+    callerPane,
+  );
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      const result = lifecycle.exec(command, args, options);
+      if (command !== "herdr" || !isAgentList(args)) return result;
+      const value = JSON.parse(result.stdout);
+      value.result.agents.push(agentFromState(parent));
+      return { ...result, stdout: JSON.stringify(value) };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const childMailbox = agentMailboxPath(WORKSPACE, "ambiguous-current-child");
+  try {
+    const result = await pi.tools[0].execute(
+      "ambiguous-current-start",
+      {
+        action: "delegate",
+        definition: "agent",
+        label: "ambiguous-current-child",
+        task: "reject ambiguous root reuse",
+      },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(lifecycle.createdTabs(), 1);
+    assert.equal(
+      pi.calls.some((args) => args[0] === "pane" && args[1] === "split"),
+      false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    for (const mailbox of [parentMailbox, directMailbox, childMailbox])
+      resetAgentMailbox(mailbox);
+    nativeSessions.delete(parent.piSessionId);
+    nativeSessions.delete(direct.piSessionId);
+    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+  }
+});
+
+test("lead tab placement vetoes ambiguous foreign-herd evidence", async () => {
+  setLeadEnvironment();
+  writePlacementSetting("tab");
+  const parent = {
+    ...managedState("ambiguous-foreign-parent"),
+    paneId: "ambiguous-foreign-parent-pane",
+  };
+  const foreign = {
+    ...managedState("ambiguous-foreign-agent", undefined, {
+      paneId: "ambiguous-foreign-agent-pane",
+      tabId: "ambiguous-foreign-agent-tab",
+      piSessionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      piSessionFile: "/tmp/ambiguous-foreign-agent.jsonl",
+    }),
+    ownerSessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  };
+  const callerPane = { paneId: "lead-pane", tabId: "lead-tab" };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const foreignMailbox = agentMailboxPath(WORKSPACE, foreign.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(foreignMailbox);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(foreignMailbox, foreign);
+  registerNativeAgentSession(parent);
+  registerNativeAgentSession(foreign);
+  const lifecycle = delegatedLifecycleExecutor(
+    parent,
+    [foreign],
+    "/tmp",
+    callerPane,
+  );
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      const result = lifecycle.exec(command, args, options);
+      if (command !== "herdr" || !isAgentList(args)) return result;
+      const value = JSON.parse(result.stdout);
+      value.result.agents.push(agentFromState(foreign));
+      return { ...result, stdout: JSON.stringify(value) };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const childMailbox = agentMailboxPath(WORKSPACE, "ambiguous-foreign-child");
+  try {
+    const result = await pi.tools[0].execute(
+      "ambiguous-foreign-start",
+      {
+        action: "delegate",
+        definition: "agent",
+        label: "ambiguous-foreign-child",
+        task: "reject foreign ambiguity",
+      },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(lifecycle.createdTabs(), 1);
+    assert.equal(
+      pi.calls.some((args) => args[0] === "pane" && args[1] === "split"),
+      false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    for (const mailbox of [parentMailbox, foreignMailbox, childMailbox])
+      resetAgentMailbox(mailbox);
+    nativeSessions.delete(parent.piSessionId);
+    nativeSessions.delete(foreign.piSessionId);
+    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
   }
 });
 
