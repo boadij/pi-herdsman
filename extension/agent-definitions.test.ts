@@ -21,7 +21,6 @@ import {
   expandAgentBodyFiles,
   inferAgentDefinitionTools,
   mergeFrontmatter,
-  parseFrontmatter,
   projectAgentDefinition,
   updateAgentOverride,
   validateAgentDefinitionReferences,
@@ -49,36 +48,32 @@ function discoverAgentDefinitionsWithContents(content: string) {
 }
 
 test("parses scalar frontmatter fields and applies defaults", () => {
+  const definition = discoverAgentDefinitionsWithContents(
+    "---\nname: custom\ninheritSkills: false\n---\n\nPrompt\n",
+  ).find(({ name }) => name === "custom")!;
+  assert.deepEqual(definition.frontmatter, {
+    name: "custom",
+    inheritSkills: false,
+    enabled: true,
+  });
+  assert.equal(definition.body, "Prompt");
   assert.deepEqual(
-    parseFrontmatter(
-      '---\nname: "agent"\ninheritSkills: false\n---\n\nPrompt\n',
-    ),
-    {
-      frontmatter: { name: "agent", inheritSkills: false },
-      body: "Prompt",
-    },
+    discoverAgentDefinitionsWithContents(
+      "---\nname: custom\nenabled: false\n---\nPrompt",
+    ).find(({ name }) => name === "custom")?.frontmatter,
+    { name: "custom", enabled: false },
   );
-  assert.deepEqual(
-    parseFrontmatter("---\nname: agent\nenabled: false\n---\nPrompt"),
-    {
-      frontmatter: { name: "agent", enabled: false },
-      body: "Prompt",
-    },
-  );
-  assert.equal(parseFrontmatter("name: agent"), undefined);
   assert.throws(
-    () => parseFrontmatter("---\ninheritSkills: yes\n---"),
-    /inheritSkills must be a boolean/,
-  );
-  assert.deepEqual(
-    parseFrontmatter("---\nname: agent\nenabled: true\n---\nPrompt")
-      ?.frontmatter,
-    { name: "agent", enabled: true },
+    () => discoverAgentDefinitionsWithContents("---\ninheritSkills: yes\n---"),
+    /custom\.md field name: must be a non-empty string/,
   );
   for (const value of ["yes", '"false"', "1", "null", "[]", "{}"]) {
     assert.throws(
-      () => parseFrontmatter(`---\nenabled: ${value}\n---`),
-      /enabled must be a boolean/,
+      () =>
+        discoverAgentDefinitionsWithContents(
+          `---\nname: custom\nenabled: ${value}\n---`,
+        ),
+      /must be a boolean/,
     );
   }
   assert.throws(
@@ -86,7 +81,7 @@ test("parses scalar frontmatter fields and applies defaults", () => {
       discoverAgentDefinitionsWithContents(
         "---\nname: custom\nenabled: yes\n---\n",
       ),
-    /custom\.md agent custom field enabled: enabled must be a boolean/,
+    /custom\.md agent custom field enabled: must be a boolean/,
   );
 
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-enabled-default-"));
@@ -96,25 +91,79 @@ test("parses scalar frontmatter fields and applies defaults", () => {
   );
 });
 
-test("parses inline capability arrays and rejects unsupported fields", () => {
-  assert.deepEqual(
-    parseFrontmatter(
-      '---\ntools: ["read", " grep "]\nexcludeTools: []\nskills: ["./skills/local.md"]\nextensions: ["./extensions/local.ts"]\nagents: ["scout", "reviewer"]\n---\nPrompt',
-    ),
-    {
-      frontmatter: {
-        tools: ["read", " grep "],
-        excludeTools: [],
-        skills: ["./skills/local.md"],
-        extensions: ["./extensions/local.ts"],
-        agents: ["scout", "reviewer"],
-      },
-      body: "Prompt",
-    },
-  );
+test("parses native YAML capability arrays and rejects unsupported fields", () => {
+  const definition = discoverAgentDefinitionsWithContents(`---
+name: custom
+tools: ["read", " grep "]
+excludeTools: []
+skills:
+  - "./skills/local.md"
+extensions:
+  - "./extensions/local.ts"
+agents:
+  - "scout"
+  - "reviewer"
+---
+Prompt`).find(({ name }) => name === "custom")!;
+  assert.deepEqual(definition.frontmatter, {
+    name: "custom",
+    tools: ["read", " grep ", "agent"],
+    excludeTools: [],
+    skills: ["./skills/local.md"],
+    extensions: ["./extensions/local.ts"],
+    agents: ["scout", "reviewer"],
+    enabled: true,
+  });
   assert.throws(
-    () => parseFrontmatter('---\nsubagents: ["scout"]\n---'),
-    /subagents is not a supported agent-definition field/,
+    () =>
+      discoverAgentDefinitionsWithContents(
+        '---\nname: custom\nsubagents: ["scout"]\n---',
+      ),
+    /is not a supported agent-definition field/,
+  );
+});
+
+test("loads multiline flow arrays and preserves compact arrays", () => {
+  const definition = discoverAgentDefinitionsWithContents(`---
+name: custom
+skills:
+  [
+    "~/.agents/skills/ego-browser/SKILL.md",
+    "~/Coding/AI/agent-skills/skills/backlog/SKILL.md",
+    "~/Coding/AI/agent-skills/skills/gh-github/SKILL.md",
+  ]
+extensions:
+  [
+    "~/.pi/agent/npm/node_modules/@howaboua/pi-codex-conversion/dist/index.js",
+    "~/.pi/agent/extensions/agents-md-imports.ts",
+  ]
+tools: ["read", "grep"]
+---
+Prompt`).find(({ name }) => name === "custom")!;
+  assert.deepEqual(definition.frontmatter.skills, [
+    "~/.agents/skills/ego-browser/SKILL.md",
+    "~/Coding/AI/agent-skills/skills/backlog/SKILL.md",
+    "~/Coding/AI/agent-skills/skills/gh-github/SKILL.md",
+  ]);
+  assert.deepEqual(definition.frontmatter.extensions, [
+    "~/.pi/agent/npm/node_modules/@howaboua/pi-codex-conversion/dist/index.js",
+    "~/.pi/agent/extensions/agents-md-imports.ts",
+  ]);
+  assert.deepEqual(definition.frontmatter.tools, ["read", "grep"]);
+});
+
+test("reports malformed YAML with the source definition path", () => {
+  assert.throws(
+    () =>
+      discoverAgentDefinitionsWithContents("---\nname: custom\nskills: [\n---"),
+    /custom\.md:/,
+  );
+});
+
+test("requires a YAML mapping as the frontmatter root", () => {
+  assert.throws(
+    () => discoverAgentDefinitionsWithContents("---\n- foo\n- bar\n---"),
+    /custom\.md: frontmatter must be a YAML mapping/,
   );
 });
 
@@ -182,7 +231,7 @@ test("leaves unsupported home and shell-looking references unchanged", () => {
   );
 });
 
-test("merges scalars, arrays, false, and nested inline objects", () => {
+test("merges scalars, arrays, and false values", () => {
   assert.deepEqual(
     mergeFrontmatter(
       {
@@ -191,7 +240,6 @@ test("merges scalars, arrays, false, and nested inline objects", () => {
         noTools: true,
         tools: ["read"],
         skills: ["base"],
-        options: { keep: true, nested: { base: true, shared: "base" } },
       },
       {
         name: "agent",
@@ -199,7 +247,6 @@ test("merges scalars, arrays, false, and nested inline objects", () => {
         noTools: false,
         tools: [],
         skills: ["override"],
-        options: { nested: { shared: "override", added: false } },
       },
     ),
     {
@@ -208,57 +255,51 @@ test("merges scalars, arrays, false, and nested inline objects", () => {
       noTools: false,
       tools: [],
       skills: ["override"],
-      options: {
-        keep: true,
-        nested: { base: true, shared: "override", added: false },
-      },
     },
   );
 });
 
 test("rejects malformed capability fields", () => {
   for (const [field, value, message] of [
-    ["tools", '"read"', /tools must be an inline array/],
-    ["excludeTools", "[", /excludeTools must be an inline array/],
-    ["skills", '["ok", 1]', /skills must be an inline array/],
-    ["extensions", '[""]', /extensions must be an inline array/],
+    ["tools", '"read"', /must be an array/],
+    ["skills", '["ok", 1]', /must be an array/],
+    ["extensions", '[""]', /must be an array/],
     [
       "systemPromptFiles",
       '["prompt.md"]',
-      /systemPromptFiles is not a supported agent-definition field/,
+      /is not a supported agent-definition field/,
     ],
-    ["tools", '["   "]', /tools must be an inline array/],
-    ["agents", '"scout"', /agents must be an inline array/],
-    ["agents", '["scout", 1]', /agents must be an inline array/],
-    ["agents", '["   "]', /agents must be an inline array/],
+    ["tools", '["   "]', /must be an array/],
+    ["agents", '"scout"', /must be an array/],
+    ["agents", '["scout", 1]', /must be an array/],
+    ["agents", '["   "]', /must be an array/],
     [
       "agents",
       '["scout", "scout"]',
-      /agents must be an inline array of unique non-empty strings/,
+      /must be an array of unique non-empty strings/,
     ],
-    ["noTools", '"true"', /noTools must be a boolean/],
-    ["noBuiltinTools", "yes", /noBuiltinTools must be a boolean/],
-    ["noSkills", "1", /noSkills must be a boolean/],
-    ["noExtensions", '"false"', /noExtensions must be a boolean/],
-    ["enabled", '"false"', /enabled must be a boolean/],
-    ["enabled", "yes", /enabled must be a boolean/],
-    ["enabled", "1", /enabled must be a boolean/],
-    ["enabled", "null", /enabled must be a boolean/],
-    [
-      "inheritGlobalContext",
-      '"false"',
-      /inheritGlobalContext must be a boolean/,
-    ],
-    ["inheritGlobalContext", "1", /inheritGlobalContext must be a boolean/],
-    ["inheritGlobalContext", "yes", /inheritGlobalContext must be a boolean/],
+    ["noTools", '"true"', /must be a boolean/],
+    ["noBuiltinTools", "yes", /must be a boolean/],
+    ["noSkills", "1", /must be a boolean/],
+    ["noExtensions", '"false"', /must be a boolean/],
+    ["enabled", '"false"', /must be a boolean/],
+    ["enabled", "yes", /must be a boolean/],
+    ["enabled", "1", /must be a boolean/],
+    ["enabled", "null", /must be a boolean/],
+    ["inheritGlobalContext", '"false"', /must be a boolean/],
+    ["inheritGlobalContext", "1", /must be a boolean/],
+    ["inheritGlobalContext", "yes", /must be a boolean/],
   ] as const)
     assert.throws(
-      () => parseFrontmatter(`---\n${field}: ${value}\n---`),
+      () =>
+        discoverAgentDefinitionsWithContents(
+          `---\nname: custom\n${field}: ${value}\n---`,
+        ),
       message,
     );
   for (const [field, value, message] of [
     ["model", "[]", /model.*must be a non-empty string/],
-    ["model", "[", /model.*must be a string/],
+    ["model", "false", /model.*must be a non-empty string/],
     ["thinking", "1", /thinking.*must be one of/],
     [
       "systemPromptMode",
@@ -266,6 +307,11 @@ test("rejects malformed capability fields", () => {
       /systemPromptMode.*must be append or replace/,
     ],
     ["bodyMode", "merge", /bodyMode.*must be append or replace/],
+    [
+      "agents",
+      "[\n  scout,\n  scout,\n]",
+      /must be an array of unique non-empty strings/,
+    ],
   ] as const)
     assert.throws(
       () =>
@@ -289,12 +335,6 @@ test("selects global and project context independently in native order", () => {
   writeFileSync(global, "Global");
   writeFileSync(outer, "Outer");
   writeFileSync(inner, "Inner");
-
-  assert.equal(
-    parseFrontmatter("---\ninheritGlobalContext: false\n---")?.frontmatter
-      .inheritGlobalContext,
-    false,
-  );
 
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -1299,8 +1339,11 @@ test("expands body references with caller precedence and no recursion", () => {
 
 test("rejects previous delegation frontmatter and tool capability", () => {
   assert.throws(
-    () => parseFrontmatter('---\nworkers: ["scout"]\n---'),
-    /workers is not a supported agent-definition field/,
+    () =>
+      discoverAgentDefinitionsWithContents(
+        '---\nname: custom\nworkers: ["scout"]\n---',
+      ),
+    /is not a supported agent-definition field/,
   );
   const definition = {
     name: "parent",

@@ -16,6 +16,7 @@ import {
   CONFIG_DIR_NAME,
   getAgentDir,
   loadProjectContextFiles,
+  parseFrontmatter as parsePiFrontmatter,
 } from "@earendil-works/pi-coding-agent";
 import { snapshotTextFiles } from "./core.ts";
 import { herdsmanTempRoot } from "./tmp.ts";
@@ -84,7 +85,7 @@ export type Frontmatter = {
   enabled?: boolean;
   model?: string;
   thinking?: string | false;
-  bodyMode?: string;
+  bodyMode?: BodyMode;
   noTools?: boolean;
   noBuiltinTools?: boolean;
   tools?: string[];
@@ -108,102 +109,6 @@ export type AgentDefinition = {
   overrideSource?: string;
 };
 
-export function parseFrontmatter(
-  content: string,
-): { frontmatter: Frontmatter; body: string } | undefined {
-  const lines = content.replaceAll("\r\n", "\n").split("\n");
-  if (lines[0]?.trim() !== "---") return undefined;
-  const end = lines.findIndex(
-    (line, index) => index > 0 && line.trim() === "---",
-  );
-  if (end < 0) return undefined;
-
-  const frontmatter: Frontmatter = {};
-  for (const line of lines.slice(1, end)) {
-    const match = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!match) continue;
-    const field = match[1];
-    const raw = match[2].trim();
-    if (!SUPPORTED_FIELDS.has(field))
-      throw new Error(`${field} is not a supported agent-definition field`);
-    if (ARRAY_FIELDS.has(field)) {
-      let value: unknown;
-      try {
-        value = JSON.parse(raw);
-      } catch {
-        throw new Error(
-          `${field} must be an inline array of non-empty strings`,
-        );
-      }
-      if (
-        !Array.isArray(value) ||
-        value.some(
-          (entry) => typeof entry !== "string" || entry.trim().length === 0,
-        ) ||
-        (field === "agents" && new Set(value).size !== value.length)
-      )
-        throw new Error(
-          field === "agents"
-            ? "agents must be an inline array of unique non-empty strings"
-            : `${field} must be an inline array of non-empty strings`,
-        );
-      frontmatter[field] = value;
-      continue;
-    }
-    if (
-      STRING_FIELDS.has(field) &&
-      (raw.startsWith("[") ||
-        raw === "null" ||
-        /^[-+]?\d(?:[\d.eE+-]*)$/u.test(raw))
-    ) {
-      let value: unknown;
-      try {
-        value = JSON.parse(raw);
-      } catch {
-        throw new Error(`${field} must be a string`);
-      }
-      frontmatter[field] = value as FrontmatterValue;
-      continue;
-    }
-    if (BOOLEAN_CAPABILITY_FIELDS.has(field) && raw.startsWith("{"))
-      throw new Error(`${field} must be a boolean`);
-    if (raw.startsWith("{")) {
-      let value: unknown;
-      try {
-        value = JSON.parse(raw);
-      } catch {
-        throw new Error(`${field} must be an inline JSON object`);
-      }
-      if (!value || typeof value !== "object" || Array.isArray(value))
-        throw new Error(`${field} must be an inline JSON object`);
-      frontmatter[field] = value as { [key: string]: unknown };
-      continue;
-    }
-    let value: string | boolean = raw;
-    if (
-      value.length >= 2 &&
-      value[0] === value[value.length - 1] &&
-      (value[0] === "'" || value[0] === '"')
-    ) {
-      value = value.slice(1, -1);
-    } else if (value.toLowerCase() === "true") {
-      value = true;
-    } else if (value.toLowerCase() === "false") {
-      value = false;
-    }
-    if (BOOLEAN_CAPABILITY_FIELDS.has(field) && typeof value !== "boolean")
-      throw new Error(`${field} must be a boolean`);
-    frontmatter[field] = value;
-  }
-  return {
-    frontmatter,
-    body: lines
-      .slice(end + 1)
-      .join("\n")
-      .trim(),
-  };
-}
-
 function markdownFiles(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);
@@ -218,26 +123,24 @@ function readAgentDefinitions(root: string): AgentDefinition[] {
     .sort()
     .map((path) => {
       const content = readFileSync(path, "utf8");
-      let parsed: ReturnType<typeof parseFrontmatter>;
+      let parsed: ReturnType<typeof parsePiFrontmatter>;
       try {
-        parsed = parseFrontmatter(content);
+        parsed = parsePiFrontmatter<Record<string, unknown>>(content);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const field = /^([A-Za-z0-9_-]+)\s/u.exec(message)?.[1];
-        const name = /^name:\s*["']?([^"'\r\n]+)["']?\s*$/mu.exec(content)?.[1];
-        throw new Error(
-          `${path}${name ? ` agent ${name}` : ""}${field ? ` field ${field}` : ""}: ${message}`,
-        );
+        throw new Error(`${path}: ${message}`, { cause: error });
       }
-      const name = parsed?.frontmatter.name;
-      if (!parsed || typeof name !== "string" || name.length === 0)
-        throw new Error(`invalid agent definition: ${path}`);
-      return {
-        name,
+      if (!isPlainObject(parsed.frontmatter))
+        throw new Error(`${path}: frontmatter must be a YAML mapping`);
+      const frontmatter = parsed.frontmatter as Frontmatter;
+      const definition: AgentDefinition = {
+        name: typeof frontmatter.name === "string" ? frontmatter.name : "",
         path,
-        frontmatter: parsed.frontmatter,
+        frontmatter,
         body: resolveBodyFileReferences(parsed.body, path),
       };
+      validateDefinition(definition, { allowBodyMode: true });
+      return definition;
     });
   const pathsByName = new Map<string, string[]>();
   for (const definition of definitions)
@@ -280,25 +183,21 @@ export function mergeFrontmatter(
   base: Frontmatter,
   override: Frontmatter,
 ): Frontmatter {
-  const merge = (left: unknown, right: unknown): unknown => {
-    if (isPlainObject(left) && isPlainObject(right)) {
-      const merged: { [key: string]: unknown } = { ...left };
-      for (const [key, value] of Object.entries(right))
-        merged[key] = merge(merged[key], value);
-      return merged;
-    }
-    return right;
-  };
-  return merge(base, override) as Frontmatter;
+  return { ...base, ...override };
 }
 
-function validateDefinition(definition: AgentDefinition): void {
+function validateDefinition(
+  definition: AgentDefinition,
+  options: { allowBodyMode?: boolean } = {},
+): void {
   const { frontmatter, name, overrideSource, projectSource, extensionSource } =
     definition;
   const source =
     overrideSource ?? projectSource ?? extensionSource ?? definition.path;
   const invalid = (field: string, reason: string): never => {
-    throw new Error(`${source} agent ${name} field ${field}: ${reason}`);
+    throw new Error(
+      `${source}${name ? ` agent ${name}` : ""} field ${field}: ${reason}`,
+    );
   };
   for (const field of Object.keys(frontmatter))
     if (!SUPPORTED_FIELDS.has(field))
@@ -324,8 +223,8 @@ function validateDefinition(definition: AgentDefinition): void {
       invalid(
         field,
         field === "agents"
-          ? "must be an inline array of unique non-empty strings"
-          : "must be an inline array of non-empty strings",
+          ? "must be an array of unique non-empty strings"
+          : "must be an array of non-empty strings",
       );
   }
   if (frontmatter.model !== undefined) {
@@ -359,7 +258,7 @@ function validateDefinition(definition: AgentDefinition): void {
       !BODY_MODES.has(frontmatter.bodyMode))
   )
     invalid("bodyMode", "must be append or replace");
-  if (frontmatter.bodyMode !== undefined)
+  if (frontmatter.bodyMode !== undefined && !options.allowBodyMode)
     invalid("bodyMode", "only valid when overlaying an existing agent");
 }
 
@@ -374,13 +273,7 @@ function mergeDefinitionBody(
 }
 
 function overrideBodyMode(definition: AgentDefinition): BodyMode {
-  const mode = definition.frontmatter.bodyMode;
-  if (mode === undefined) return "replace";
-  if (typeof mode !== "string" || !BODY_MODES.has(mode))
-    throw new Error(
-      `${definition.path} agent ${definition.name} field bodyMode: must be append or replace`,
-    );
-  return mode as BodyMode;
+  return definition.frontmatter.bodyMode ?? "replace";
 }
 
 function readOptionalAgentDefinitions(root: string): AgentDefinition[] {
