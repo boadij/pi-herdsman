@@ -1,6 +1,7 @@
 {
   "bootstrap-sha": "ca99606abb64144ee2a66546a5cdaacdda8e1ef2",
   "release-type": "node",
+  "include-commit-authors": true,
   "include-component-in-tag": false,
   "changelog-sections": [
     {
