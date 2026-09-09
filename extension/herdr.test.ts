@@ -869,10 +869,7 @@ test("start injects mandatory extensions before definition args and configures t
   const markerRun = calls.find(
     (args) => args[0] === "pane" && args[1] === "run",
   )!;
-  assert.match(
-    markerRun[3]!,
-    /^echo __PI_HERDSMAN_READY_[0-9a-f-]{36}__$/,
-  );
+  assert.match(markerRun[3]!, /^echo __PI_HERDSMAN_READY_[0-9a-f-]{36}__$/);
   const markerWait = calls.find(
     (args) => args[0] === "pane" && args[1] === "wait-output",
   )!;
@@ -2342,8 +2339,7 @@ test("completed agent shell transition closes the pane without stop keys", async
         return response({
           process: processInfoCalls++ === 0 ? running : shell,
         });
-      if (key === "pane run" || key === "pane wait-output")
-        return response({});
+      if (key === "pane run" || key === "pane wait-output") return response({});
       if (key === "pane close") {
         closed = true;
         return { code: 0, stdout: "", stderr: "" };
