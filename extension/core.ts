@@ -304,7 +304,7 @@ export function displayIdentity(
 ): string {
   return `${agentDefinition}:${label}`;
 }
-export type SpawnPlacement = "tab" | "split";
+export type SpawnPlacement = "tab" | "subtree" | "split";
 export type SpawnPlacementScope = "global" | "project";
 export interface ContextUsageSnapshot {
   tokens: number | null;
@@ -364,7 +364,10 @@ export function hasTaskText(task: string | undefined): boolean {
   return task !== undefined && !!task.trim();
 }
 export function resolveSpawnPlacement(value: unknown): SpawnPlacement {
-  return value === "split" ? "split" : "tab";
+  return isSpawnPlacement(value) ? value : "tab";
+}
+export function isSpawnPlacement(value: unknown): value is SpawnPlacement {
+  return value === "tab" || value === "subtree" || value === "split";
 }
 export function resolveSpawnPlacementScope(
   project: string | undefined,
@@ -375,8 +378,9 @@ export function spawnPlacementMenuOptions(
   current: SpawnPlacement,
 ): Array<{ label: string; value: SpawnPlacement }> {
   const options: Array<{ label: string; value: SpawnPlacement }> = [
-    { label: "tab", value: "tab" },
-    { label: "split", value: "split" },
+    { label: "Lead agents tab", value: "tab" },
+    { label: "Subtree tabs", value: "subtree" },
+    { label: "Split from caller", value: "split" },
   ];
   return options.map((x) => ({
     ...x,
@@ -386,7 +390,7 @@ export function spawnPlacementMenuOptions(
 export function spawnPlacementFromMenuSelection(
   value: unknown,
 ): SpawnPlacement | undefined {
-  return value === "tab" || value === "split" ? value : undefined;
+  return isSpawnPlacement(value) ? value : undefined;
 }
 export function updateSpawnPlacementJson(
   content: string | undefined,

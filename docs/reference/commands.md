@@ -13,7 +13,7 @@ Commands require a lead Pi session with UI.
 ```text
 /agents
 /agents definitions
-/agents placement [tab|split]
+/agents placement [tab|subtree|split]
 /agents stop
 ```
 
@@ -99,6 +99,7 @@ Explicit values continue to set directly:
 
 ```text
 /agents placement tab
+/agents placement subtree
 /agents placement split
 ```
 

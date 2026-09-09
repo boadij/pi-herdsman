@@ -463,9 +463,11 @@ test("lead agents command uses native completion and exact human grammar", async
   ]);
   assert.deepEqual(command.getArgumentCompletions("placement "), [
     { value: "placement tab", label: "tab" },
+    { value: "placement subtree", label: "subtree" },
     { value: "placement split", label: "split" },
   ]);
   assert.deepEqual(command.getArgumentCompletions("placement s"), [
+    { value: "placement subtree", label: "subtree" },
     { value: "placement split", label: "split" },
   ]);
   const context = fakeContext([]) as any;
@@ -477,8 +479,8 @@ test("lead agents command uses native completion and exact human grammar", async
   await command.handler("agents extra", context);
   await command.handler("placement invalid", context);
   assert.deepEqual(notices, [
-    "Usage: /agents definitions | placement [tab|split] | stop",
-    "Usage: /agents placement [tab|split]",
+    "Usage: /agents definitions | placement [tab|subtree|split] | stop",
+    "Usage: /agents placement [tab|subtree|split]",
   ]);
   assert.equal(pi.calls.length, 2);
 });
@@ -1169,7 +1171,11 @@ test("plain agents opens the native management menu", async () => {
     ["Running", "Definitions", "Layout", "Message", "Stop"],
   );
   assert.equal(prompts[1]?.label, "Layout");
-  assert.deepEqual(prompts[1]?.options, ["tab (current)", "split"]);
+  assert.deepEqual(prompts[1]?.options, [
+    "Lead agents tab (current)",
+    "Subtree tabs",
+    "Split from caller",
+  ]);
   await pi.events.get("session_shutdown")?.[0]();
 });
 
@@ -2908,6 +2914,27 @@ test("fresh assignment refreshes the widget after validation", async () => {
           stderr: "",
           code: 0,
         };
+      if (command === "herdr" && args[0] === "tab" && args[1] === "create") {
+        const value = (key: string) =>
+          args
+            .slice(0, -1)
+            .find((arg) => arg.startsWith(`${key}=`))
+            ?.slice(key.length + 1);
+        startedRunId = value("PI_HERDSMAN_RUN_ID") ?? startedRunId;
+        startedOwnerSessionId =
+          value("PI_HERDSMAN_OWNER_SESSION_ID") ?? startedOwnerSessionId;
+        herdrAgent.name = runScopedHerdrAlias(WORKSPACE, label, startedRunId);
+        return {
+          stdout: JSON.stringify({
+            result: {
+              tab: { tab_id: "startup-tab" },
+              root_pane: { pane_id: "startup-pane" },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
       if (command === "herdr" && isPaneList(args))
         return {
           stdout: JSON.stringify({
@@ -3137,7 +3164,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
           (args) => args[0] === "pane" && args[1] === "split",
         ),
       },
-      { discoveryCwds: [requestedCwd], splitForMismatchedCwd: true },
+      { discoveryCwds: [requestedCwd], splitForMismatchedCwd: false },
     );
     context.cwd = requestedCwd;
     const getIndexes = pi.calls.flatMap((args, index) =>

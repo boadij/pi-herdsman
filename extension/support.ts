@@ -1108,6 +1108,8 @@ export function delegatedLifecycleExecutor(
   closeOrder: string[];
   environmentCommands: string[];
   paneEnvironment: Record<string, string>;
+  createdTabs: () => number;
+  tabForPane: (paneId: string) => string | undefined;
 } {
   const live = new Map(
     [parent, ...initialChildren].map((state) => [state.agentLabel, state]),
@@ -1122,7 +1124,14 @@ export function delegatedLifecycleExecutor(
   const environmentCommands: string[] = [];
   const closedPanes = new Set<string>();
   const paneEnvironment: Record<string, string> = {};
-  const tabId = "delegated-tab";
+  const tabByPane = new Map(
+    [parent, ...initialChildren].map((state) => [
+      state.paneId,
+      "delegated-tab",
+    ]),
+  );
+  const tabLabels = new Map([["delegated-tab", "agents"]]);
+  let createdTabs = 0;
   let createdChildren = 0;
   const currentStateForPane = (paneId: string): ManagedAgentState | undefined =>
     [...live.values()].find((state) => state.paneId === paneId);
@@ -1130,13 +1139,13 @@ export function delegatedLifecycleExecutor(
     state: ManagedAgentState,
   ): Record<string, unknown> => ({
     ...agentFromState(state, state.activeRequestId ? "working" : "idle"),
-    tab_id: tabId,
-    tab_label: "agents",
+    tab_id: tabByPane.get(state.paneId),
+    tab_label: tabLabels.get(tabByPane.get(state.paneId) ?? ""),
   });
   const panes = (): Record<string, unknown>[] => [
     ...[...live.values()].map((state) => ({
       pane_id: state.paneId,
-      tab_id: tabId,
+      tab_id: tabByPane.get(state.paneId),
       workspace_id: WORKSPACE,
       cwd: state.cwd,
       foreground_cwd: state.cwd,
@@ -1149,7 +1158,7 @@ export function delegatedLifecycleExecutor(
       )
       .map((paneId) => ({
         pane_id: paneId,
-        tab_id: tabId,
+        tab_id: tabByPane.get(paneId) ?? "delegated-tab",
         workspace_id: WORKSPACE,
         cwd: testCwd,
         foreground_cwd: testCwd,
@@ -1161,6 +1170,8 @@ export function delegatedLifecycleExecutor(
     closeOrder,
     environmentCommands,
     paneEnvironment,
+    createdTabs: () => createdTabs,
+    tabForPane: (paneId) => tabByPane.get(paneId),
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
       if (args[0] === "--version")
@@ -1197,14 +1208,46 @@ export function delegatedLifecycleExecutor(
         return {
           stdout: JSON.stringify({
             result: {
-              tabs: [
-                { tab_id: tabId, label: "agents", workspace_id: WORKSPACE },
-              ],
+              tabs: [...tabLabels].map(([tab_id, label]) => ({
+                tab_id,
+                label,
+                workspace_id: WORKSPACE,
+              })),
             },
           }),
           stderr: "",
           code: 0,
         };
+      if (args[0] === "tab" && args[1] === "create") {
+        for (let i = 0; i < args.length - 1; i++) {
+          if (args[i] !== "--env") continue;
+          const assignment = args[i + 1]!;
+          const separator = assignment.indexOf("=");
+          if (separator > 0) {
+            environmentCommands.push(assignment);
+            paneEnvironment[assignment.slice(0, separator)] = assignment.slice(
+              separator + 1,
+            );
+          }
+        }
+        const createdTabId = `delegated-tab-${++createdTabs}`;
+        const rootPane = slots.find(
+          (paneId) => !closedPanes.has(paneId) && !currentStateForPane(paneId),
+        );
+        if (!rootPane) return { stdout: "{}", stderr: "no pane", code: 1 };
+        tabLabels.set(createdTabId, "agents");
+        tabByPane.set(rootPane, createdTabId);
+        return {
+          stdout: JSON.stringify({
+            result: {
+              tab: { tab_id: createdTabId },
+              root_pane: { pane_id: rootPane },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
       if (isPaneList(args))
         return {
           stdout: JSON.stringify({ result: { panes: panes() } }),
@@ -1219,7 +1262,7 @@ export function delegatedLifecycleExecutor(
               pane: state
                 ? {
                     pane_id: state.paneId,
-                    tab_id: tabId,
+                    tab_id: tabByPane.get(state.paneId),
                     workspace_id: WORKSPACE,
                     cwd: state.cwd,
                     agent_session: {
@@ -1266,7 +1309,7 @@ export function delegatedLifecycleExecutor(
             result: {
               layout: {
                 workspace_id: WORKSPACE,
-                tab_id: tabId,
+                tab_id: tabByPane.get(args.at(-1) ?? "") ?? "delegated-tab",
                 panes: panes().map((pane, index) => ({
                   pane_id: pane.pane_id,
                   rect: { width: 100 - index, height: 40 },
@@ -1305,6 +1348,8 @@ export function delegatedLifecycleExecutor(
             !closedPanes.has(candidate) && !currentStateForPane(candidate),
         );
         if (!paneId) return { stdout: "{}", stderr: "no pane", code: 1 };
+        const anchor = args[args.indexOf("--pane") + 1];
+        tabByPane.set(paneId, tabByPane.get(anchor ?? "") ?? "delegated-tab");
         return {
           stdout: JSON.stringify({
             result: { pane: { pane_id: paneId } },
@@ -1319,6 +1364,7 @@ export function delegatedLifecycleExecutor(
         const ownerSessionId = paneEnvironment.PI_HERDSMAN_OWNER_SESSION_ID;
         const workspaceId = paneEnvironment.PI_HERDSMAN_WORKSPACE_ID;
         const paneId = args[args.indexOf("--pane") + 1];
+        const tabForPane = tabByPane.get(paneId) ?? "delegated-tab";
         const state: ManagedAgentState = {
           version: 4,
           runId,
@@ -1332,14 +1378,15 @@ export function delegatedLifecycleExecutor(
           updatedAt: Date.now(),
         };
         live.set(label, state);
+        tabByPane.set(paneId, tabForPane);
         writeAgentState(agentMailboxPath(workspaceId, label), state);
         const agent = agentForState(state);
         return {
           stdout: JSON.stringify({
             result: {
               agent,
-              tab_id: tabId,
-              tab_label: "agents",
+              tab_id: tabForPane,
+              tab_label: tabLabels.get(tabForPane),
               pane_id: paneId,
               cwd: testCwd,
               herdr_agent: agent.name,
@@ -1919,6 +1966,8 @@ export function startupExecutor(
   let activePaneId = "startup-pane";
   const paneEnvironment: Record<string, string> = {};
   let stopped = false;
+  let tabClosed = false;
+  let paneClosed = false;
   const emptyList = () => {
     const value = JSON.parse(listResponse(label));
     value.agents = [];
@@ -1961,6 +2010,7 @@ export function startupExecutor(
               agent: {
                 name: runScopedHerdrAlias(WORKSPACE, label, runId || AGENT_ID),
                 pane_id: "startup-pane",
+                tab_id: "startup-tab",
                 workspace_id: WORKSPACE,
                 cwd: testCwd,
                 ...(session
@@ -2002,24 +2052,51 @@ export function startupExecutor(
         return {
           stdout: JSON.stringify({
             result: {
-              tabs: [
-                {
-                  tab_id: "startup-tab",
-                  label: "agents",
-                  workspace_id: WORKSPACE,
-                },
-              ],
+              tabs:
+                closePaneOnClose && tabClosed
+                  ? []
+                  : [
+                      {
+                        tab_id: "startup-tab",
+                        label: "agents",
+                        workspace_id: WORKSPACE,
+                      },
+                    ],
             },
           }),
           stderr: "",
           code: 0,
         };
+      if (args[0] === "tab" && args[1] === "create")
+        return (() => {
+          for (let i = 0; i < args.length - 1; i++) {
+            if (args[i] !== "--env") continue;
+            const assignment = args[i + 1]!;
+            const separator = assignment.indexOf("=");
+            if (separator <= 0) continue;
+            const key = assignment.slice(0, separator);
+            const value = assignment.slice(separator + 1);
+            paneEnvironment[key] = value;
+            if (key === "PI_HERDSMAN_RUN_ID") runId = value;
+            if (key === "PI_HERDSMAN_OWNER_SESSION_ID") ownerSessionId = value;
+          }
+          return {
+            stdout: JSON.stringify({
+              result: {
+                tab: { tab_id: "startup-tab" },
+                root_pane: { pane_id: "startup-pane" },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        })();
       if (isPaneList(args))
         return {
           stdout: JSON.stringify({
             result: {
               panes:
-                closePaneOnClose && stopped
+                closePaneOnClose && (paneClosed || tabClosed)
                   ? []
                   : [
                       {
@@ -2171,6 +2248,7 @@ export function startupExecutor(
                   value.agents[0].name = alias;
                   value.agents[0].pane_id = "startup-pane";
                   value.agents[0].tab_id = "startup-tab";
+                  if (reportNullSession) value.agents[0].agent_session = null;
                   return JSON.stringify(value);
                 })()
               : emptyList(),
@@ -2178,7 +2256,17 @@ export function startupExecutor(
           code: 0,
         };
       if (isPaneClose(args)) {
-        if (closePaneOnClose) stopped = true;
+        if (closePaneOnClose) {
+          stopped = true;
+          paneClosed = true;
+        }
+        return { stdout: "{}", stderr: "", code: 0 };
+      }
+      if (isTabClose(args)) {
+        if (closePaneOnClose) {
+          stopped = true;
+          tabClosed = true;
+        }
         return { stdout: "{}", stderr: "", code: 0 };
       }
       if (isPreservePaneStop(args)) {

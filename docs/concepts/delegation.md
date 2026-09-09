@@ -37,6 +37,12 @@ A lead may have many direct agents, and each direct agent that is explicitly
 delegation-enabled may have its own direct agents. A delegation-capable agent
 remains an agent at every depth; it is not a separate public role.
 
+Physical placement is presentation only and never determines ownership. The
+lead's placement setting controls direct agents: `tab` shares one tab per lead,
+`subtree` gives each direct agent a fresh tab, and `split` stays in the caller's
+tab. Nested delegation always splits inside the owner's current tab, regardless
+of the setting.
+
 ## Inferred `agent` capability
 
 A non-empty `agents` field implies the `agent` tool when the definition uses

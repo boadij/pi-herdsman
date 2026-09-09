@@ -74,6 +74,9 @@ import {
   steerAcceptanceAllowed,
   taskAcceptanceAllowed,
   agentControlState,
+  isSpawnPlacement,
+  resolveSpawnPlacement,
+  type SpawnPlacement,
 } from "./core.ts";
 import {
   agentLaunchArgs,
@@ -107,6 +110,7 @@ import {
   STARTUP_TIMEOUT_MIN,
   type ExpectedSession,
   type StartedHerdrAgent,
+  type HerdrStartPlacement,
 } from "./herdr.ts";
 import { reportLeadMetadata } from "./herdr.ts";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
@@ -691,7 +695,6 @@ type Runtime = {
   herdrAgent: string;
   workspaceId: string;
   paneId: string;
-  tabId: string;
   cwd: string;
   runId: string;
   ownerSessionId: string;
@@ -984,7 +987,7 @@ function restoreHerdRunStartedAt(
 }
 async function placementSettings(
   ctx: ExtensionContext,
-): Promise<{ effective: "tab" | "split"; scope: "global" | "project" }> {
+): Promise<{ effective: SpawnPlacement; scope: "global" | "project" }> {
   const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
     projectTrusted: ctx.isProjectTrusted(),
   });
@@ -993,13 +996,107 @@ async function placementSettings(
     ?.spawnPlacement;
   const projectValue = (settings.getProjectSettings() as any)?.piHerdsman
     ?.spawnPlacement;
-  const project =
-    settings.isProjectTrusted() &&
-    (projectValue === "tab" || projectValue === "split");
+  const project = settings.isProjectTrusted() && isSpawnPlacement(projectValue);
   return {
-    effective:
-      (project ? projectValue : globalValue) === "split" ? "split" : "tab",
+    effective: resolveSpawnPlacement(project ? projectValue : globalValue),
     scope: project ? "project" : "global",
+  };
+}
+
+async function leadTabLabel(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+): Promise<string> {
+  const name =
+    (pi as any).getSessionName?.() ??
+    (ctx.sessionManager as any).getSessionName?.();
+  const identity =
+    typeof name === "string" && name.trim()
+      ? name.trim()
+      : `lead-${ctx.sessionManager.getSessionId().slice(0, 8)}`;
+  return `agents · ${identity}`;
+}
+
+async function reusableLeadTab(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const leadSessionId = ctx.sessionManager.getSessionId();
+  const workspaceId = process.env.HERDR_WORKSPACE_ID;
+  if (!workspaceId) return undefined;
+  const snapshot = await managedAgentSnapshots(pi, ctx, signal);
+  const direct = snapshot.agents.filter(
+    ({ state, listed }) =>
+      state.workspaceId === workspaceId &&
+      state.ownerSessionId === leadSessionId &&
+      typeof listed.tab_id === "string" &&
+      listed.tab_id.length > 0,
+  );
+  if (!direct.length) return undefined;
+  const tabs = new Set(direct.map(({ listed }) => listed.tab_id as string));
+  if (tabs.size !== 1) return undefined;
+  const candidate = [...tabs][0];
+
+  const owners = new Set<string>([leadSessionId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const { state } of snapshot.mailboxes)
+      if (
+        state.workspaceId === workspaceId &&
+        owners.has(state.ownerSessionId) &&
+        !owners.has(state.piSessionId)
+      ) {
+        owners.add(state.piSessionId);
+        changed = true;
+      }
+  }
+  if (
+    snapshot.agents.some(
+      ({ state, listed }) =>
+        listed.tab_id === candidate &&
+        state.workspaceId === workspaceId &&
+        !owners.has(state.ownerSessionId),
+    )
+  )
+    return undefined;
+  return candidate;
+}
+
+async function physicalPlacement(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  label: string,
+  scope: ControllerScope | undefined,
+  configured: SpawnPlacement,
+  signal?: AbortSignal,
+): Promise<HerdrStartPlacement> {
+  const callerPaneId = process.env.HERDR_PANE_ID;
+  if (scope?.kind === "managed-agent") {
+    if (!callerPaneId)
+      fail(
+        "invalid_request",
+        "Managed-agent delegation requires its current Herdr pane",
+        "delegate",
+      );
+    return { kind: "split", paneId: callerPaneId };
+  }
+  if (configured === "split") {
+    if (!callerPaneId)
+      fail(
+        "invalid_request",
+        "Caller pane is required for split placement",
+        "delegate",
+      );
+    return { kind: "split", paneId: callerPaneId };
+  }
+  if (configured === "subtree") return { kind: "tab", label };
+  const tabId = await reusableLeadTab(pi, ctx, signal);
+  return {
+    kind: "tab",
+    label: await leadTabLabel(pi, ctx),
+    ...(tabId ? { tabId } : {}),
   };
 }
 async function messageLimits(
@@ -3582,7 +3679,6 @@ function runtimeIdentityMatches(
     runtime.ownerSessionId === state.ownerSessionId &&
     runtime.workspaceId === agent.workspace_id &&
     runtime.paneId === agent.pane_id &&
-    runtime.tabId === agent.tab_id &&
     runtime.piSessionId === state.piSessionId &&
     sameSessionPath(runtime.piSessionFile, state.piSessionFile) &&
     sameCwd(runtime.cwd, agent.cwd)
@@ -3741,7 +3837,6 @@ async function resolveRuntime(
     herdrAgent: herdrAgentAlias(agent.workspace_id, agent.label, state.runId),
     workspaceId: agent.workspace_id,
     paneId: agent.pane_id,
-    tabId: agent.tab_id,
     cwd: agent.cwd,
     runId: state.runId,
     ownerSessionId: state.ownerSessionId,
@@ -3757,7 +3852,6 @@ async function resolveRuntime(
     herdrAgent: herdrAgentAlias(agent.workspace_id, agent.label, state.runId),
     workspaceId: agent.workspace_id,
     paneId: agent.pane_id,
-    tabId: agent.tab_id,
     cwd: agent.cwd,
     runId: state.runId,
     ownerSessionId: state.ownerSessionId,
@@ -3788,7 +3882,6 @@ function runtimeForListedAgent(
       herdrAgent: herdrAgentAlias(agent.workspace_id, agent.label, state.runId),
       workspaceId: agent.workspace_id,
       paneId: agent.pane_id,
-      tabId: agent.tab_id ?? "",
       cwd: agent.cwd,
       runId: state.runId,
       ownerSessionId: state.ownerSessionId,
@@ -3818,7 +3911,6 @@ function runtimeForCompletedState(
     ),
     workspaceId: state.workspaceId,
     paneId: state.paneId,
-    tabId: "",
     cwd: state.cwd,
     runId: state.runId,
     ownerSessionId: state.ownerSessionId,
@@ -3896,7 +3988,6 @@ async function closeManagedAgent(
       runtime.herdrAgent,
       {
         paneId: agent.pane_id,
-        tabId: runtime.tabId,
         workspaceId: runtime.workspaceId,
         cwd: runtime.cwd,
         session: expectedSession(runtime.piSessionId, runtime.piSessionFile),
@@ -4451,7 +4542,6 @@ async function rollbackUnknownStartedAgent(
     herdrAgent: herdrAgentAlias(agent.workspace_id, label, state.runId),
     workspaceId: agent.workspace_id,
     paneId: agent.pane_id,
-    tabId: agent.tab_id,
     cwd: agent.cwd,
     runId: state.runId,
     ownerSessionId: state.ownerSessionId,
@@ -4463,7 +4553,6 @@ async function rollbackUnknownStartedAgent(
   validateIdentity(runtime, state, agent);
   await stopHerdrAgentPreservingPane(pi, ctx, runtime.herdrAgent, {
     paneId: runtime.paneId,
-    tabId: runtime.tabId,
     workspaceId: runtime.workspaceId,
     cwd: runtime.cwd,
     session: expectedSession(runtime.piSessionId, runtime.piSessionFile),
@@ -4839,7 +4928,29 @@ async function actionUnsafe(
       agentDefinitionDelegationEnabled(effectiveDefinition);
     const runId = assignment!.runId;
     const owner = assignment!.ownerSessionId;
-    const placement = (await placementSettings(ctx)).effective;
+    const configuredPlacement = (await placementSettings(ctx)).effective;
+    const placement = await physicalPlacement(
+      pi,
+      ctx,
+      label,
+      scope,
+      configuredPlacement,
+      signal,
+    );
+    const placementRevalidator =
+      scope?.kind !== "managed-agent" && configuredPlacement === "tab"
+        ? async (
+            current: HerdrStartPlacement,
+          ): Promise<HerdrStartPlacement> => {
+            if (current.kind !== "tab") return current;
+            const candidate = await reusableLeadTab(pi, ctx, signal);
+            return {
+              kind: "tab",
+              label: current.label,
+              ...(candidate ? { tabId: candidate } : {}),
+            };
+          }
+        : undefined;
     if (resumed) {
       releaseSessionActivation = claimSessionActivationLock(
         resumedSessionPath!,
@@ -5034,9 +5145,9 @@ async function actionUnsafe(
         cwd: agentCwd,
         extensionPath: HERDSMAN_EXTENSION_PATH,
         placement,
+        ...(placementRevalidator ? { placementRevalidator } : {}),
         agentArgs: [...launchArgs, ...sessionArgs],
         env,
-        paneId: process.env.HERDR_PANE_ID,
         timeoutMs: p.timeoutMs,
         signal,
       });
@@ -5078,7 +5189,6 @@ async function actionUnsafe(
         herdrAgent: expectedHerdrAgent,
         workspaceId,
         paneId: started.paneId,
-        tabId: started.tabId,
         cwd: started.cwd,
         runId: state.runId,
         ownerSessionId: owner,
@@ -5311,7 +5421,6 @@ async function actionUnsafe(
         workspaceId: runtime.workspaceId,
         paneId: runtime.paneId,
         piSessionId: runtime.piSessionId!,
-        tabId: runtime.tabId,
       },
       signal,
       (agent) => {
@@ -7285,14 +7394,12 @@ export default function (pi: ExtensionAPI): void {
                   {
                     workspaceId: lead.workspaceId,
                     paneId: lead.paneId,
-                    tabId: lead.tabId,
                     piSessionId: lead.lead,
                   },
                   ctx.signal,
                   (agent: any) =>
                     isPiAgent(agent) &&
                     agent?.pane_id === lead.paneId &&
-                    agent?.tab_id === lead.tabId &&
                     herdrSessionId(agent) === lead.lead &&
                     readLeadCoordinationState(supervisionRuntime(), lead.lead)
                       ?.piSessionId === lead.lead &&
@@ -7761,11 +7868,22 @@ export default function (pi: ExtensionAPI): void {
     ): Promise<void> => {
       const current = await placementSettings(ctx);
       const selected = await ctx.ui.select("Layout", [
-        current.effective === "tab" ? "tab (current)" : "tab",
-        current.effective === "split" ? "split (current)" : "split",
+        current.effective === "tab"
+          ? "Lead agents tab (current)"
+          : "Lead agents tab",
+        current.effective === "subtree"
+          ? "Subtree tabs (current)"
+          : "Subtree tabs",
+        current.effective === "split"
+          ? "Split from caller (current)"
+          : "Split from caller",
       ]);
       if (!selected) return;
-      const placement = selected.startsWith("split") ? "split" : "tab";
+      const placement = selected.startsWith("Lead agents")
+        ? "tab"
+        : selected.startsWith("Subtree")
+          ? "subtree"
+          : "split";
       updateSpawnPlacementFile(settingsPath(ctx, current.scope), placement);
       const verified = await placementSettings(ctx);
       if (verified.effective !== placement)
@@ -8280,7 +8398,6 @@ export default function (pi: ExtensionAPI): void {
               {
                 workspaceId: lead.workspaceId,
                 paneId: lead.paneId,
-                tabId: lead.tabId,
                 piSessionId: lead.lead,
               },
               signal,
@@ -8289,7 +8406,6 @@ export default function (pi: ExtensionAPI): void {
                   isPiAgent(agent) &&
                   herdrSessionId(agent) === lead.lead &&
                   agent.pane_id === lead.paneId &&
-                  agent.tab_id === lead.tabId &&
                   (() => {
                     const state = readLeadCoordinationState(
                       supervisionRuntime(),
@@ -8449,31 +8565,28 @@ export default function (pi: ExtensionAPI): void {
           const parts = trimmed.trim().split(/\s+/u);
           if (parts[0] !== "placement" || parts.length > 2) return null;
           const prefix = parts[1] ?? "";
-          return ["tab", "split"]
+          return ["tab", "subtree", "split"]
             .filter((value) => value.startsWith(prefix))
             .map((value) => ({ value: `placement ${value}`, label: value }));
         },
         handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
           if (!ctx.hasUI) return;
           const usage =
-            "Usage: /agents definitions | placement [tab|split] | stop";
-          const placementUsage = "Usage: /agents placement [tab|split]";
+            "Usage: /agents definitions | placement [tab|subtree|split] | stop";
+          const placementUsage = "Usage: /agents placement [tab|subtree|split]";
           const args = rawArgs.trim() ? rawArgs.trim().split(/\s+/u) : [];
           try {
             if (!args.length) return void (await openAgentsMenu(ctx));
             if (args[0] === "definitions" && args.length === 1)
               return void (await openDefinitionsMenu(ctx));
             if (args[0] === "placement") {
-              if (
-                args.length > 2 ||
-                (args[1] && !["tab", "split"].includes(args[1]))
-              )
+              if (args.length > 2 || (args[1] && !isSpawnPlacement(args[1])))
                 return ctx.ui.notify(placementUsage, "error");
               if (args.length === 1) return void (await openPlacementMenu(ctx));
               const current = await placementSettings(ctx);
               updateSpawnPlacementFile(
                 settingsPath(ctx, current.scope),
-                args[1] as "tab" | "split",
+                args[1] as SpawnPlacement,
               );
               const verified = await placementSettings(ctx);
               if (verified.effective !== args[1])
@@ -8568,7 +8681,6 @@ export default function (pi: ExtensionAPI): void {
             ),
             workspaceId: state.workspaceId,
             paneId: state.paneId,
-            tabId: match.listed.tab_id ?? "",
             cwd: state.cwd,
             runId: state.runId,
             ownerSessionId: state.ownerSessionId,

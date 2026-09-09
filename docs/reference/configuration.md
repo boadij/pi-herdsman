@@ -23,6 +23,7 @@ Supported values:
 
 ```text
 tab
+subtree
 split
 ```
 
@@ -32,10 +33,13 @@ Default:
 tab
 ```
 
-`tab` places future agents in the managed agent-tab workflow.
+`tab` places future direct agents owned by a lead in one dedicated agents tab.
 
-`split` places future agents by splitting from the caller's tab/pane placement
-boundary.
+`subtree` gives each future lead-direct agent its own tab. Descendants always
+split inside their owner's current tab.
+
+`split` places future lead-direct agents by splitting from the caller's current
+pane. Descendants always split inside their owner's current tab.
 
 This affects future starts, not existing agents.
 
@@ -83,12 +87,12 @@ Project settings are stored in:
 A project placement value is effective only when:
 
 - the project is trusted by Pi; and
-- the project setting is `tab` or `split`.
+- the project setting is `tab`, `subtree`, or `split`.
 
 If no valid trusted project placement is active, the global value is used.
 
 `/agents placement` opens a native selector showing the effective value and
-offering `tab` or `split`. Selecting a value writes to the current effective
+offering `tab`, `subtree`, or `split`. Selecting a value writes to the current effective
 scope and verifies the value after writing; the confirmation reports whether
 that scope is `project` or `global`.
 

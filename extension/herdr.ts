@@ -90,8 +90,6 @@ const HERDR_AGENT_STATE_EXTENSION = join(
   "extensions",
   "herdr-agent-state.ts",
 );
-const AGENTS_TAB = "agents";
-
 function error(operation: string, message: string, details?: unknown): never {
   throw new OperationError({
     category: "internal_failure",
@@ -140,7 +138,6 @@ export type AgentInspectionTarget = {
   workspaceId: string;
   paneId: string;
   piSessionId: string;
-  tabId?: string;
 };
 export type AgentInspectionValidator = (
   agent: HerdrRecord,
@@ -174,7 +171,6 @@ function exactAgent(agent: any, target: AgentInspectionTarget): boolean {
   return (
     agent?.workspace_id === target.workspaceId &&
     agent?.pane_id === target.paneId &&
-    (!target.tabId || agent?.tab_id === target.tabId) &&
     sessionMatches
   );
 }
@@ -510,14 +506,20 @@ export type StartHerdrOptions = {
   runId: string;
   cwd: string;
   extensionPath?: string;
-  placement?: "tab" | "split";
+  placement: HerdrStartPlacement;
+  placementRevalidator?: (
+    placement: HerdrStartPlacement,
+  ) => Promise<HerdrStartPlacement>;
   agentArgs?: string[];
   env?: string[];
   timeoutMs?: number;
   direction?: "right" | "down";
-  paneId?: string;
   signal?: AbortSignal;
 };
+
+export type HerdrStartPlacement =
+  | { kind: "tab"; label: string; tabId?: string }
+  | { kind: "split"; paneId: string };
 
 type SplitPlacement = {
   paneId: string;
@@ -795,9 +797,11 @@ export async function startHerdrAgent(
     );
     const startupDeadline = Date.now() + totalTimeout;
     const topologyEnv = structuredTopologyEnvironment(workspaceId, env);
-    const placement = options.placement ?? "tab";
-    const callerPaneId = options.paneId ?? process.env.HERDR_PANE_ID;
-    if (placement === "split" && !callerPaneId)
+    const placement = options.placementRevalidator
+      ? await options.placementRevalidator(options.placement)
+      : options.placement;
+    if (!placement) error("start", "physical Herdr placement is required");
+    if (placement.kind === "split" && !placement.paneId)
       error("start", "caller pane is required for split placement");
     let tab: any;
     let panes: any[] | undefined;
@@ -807,13 +811,20 @@ export async function startHerdrAgent(
     const ownership: Record<string, PaneProcess> = {};
     const tabOwnership: Record<string, PaneProcess> = {};
     const tabs =
-      (
-        await runHerdr(pi, ctx, ["tab", "list", "--workspace", workspaceId], {
-          signal: options.signal,
-          timeout: startupCallTimeout(startupDeadline),
-        })
-      ).tabs ?? [];
-    if (placement === "split") {
+      placement.kind === "tab" && !placement.tabId
+        ? undefined
+        : ((
+            await runHerdr(
+              pi,
+              ctx,
+              ["tab", "list", "--workspace", workspaceId],
+              {
+                signal: options.signal,
+                timeout: startupCallTimeout(startupDeadline),
+              },
+            )
+          ).tabs ?? []);
+    if (placement.kind === "split") {
       panes =
         (
           await runHerdr(
@@ -828,12 +839,16 @@ export async function startHerdrAgent(
         ).panes ?? [];
       const callerPane = panes.find(
         (pane: any) =>
-          pane.pane_id === callerPaneId && pane.workspace_id === workspaceId,
+          pane.pane_id === placement.paneId &&
+          pane.workspace_id === workspaceId,
       );
       if (!callerPane)
         error(
           "start",
-          "caller pane " + callerPaneId + " is not in workspace " + workspaceId,
+          "caller pane " +
+            placement.paneId +
+            " is not in workspace " +
+            workspaceId,
         );
       tab = tabs.find(
         (item: any) =>
@@ -844,15 +859,14 @@ export async function startHerdrAgent(
       if (!tab)
         error(
           "start",
-          "caller pane " + callerPaneId + " has no owning Herdr tab",
+          "caller pane " + placement.paneId + " has no owning Herdr tab",
         );
     } else {
-      const matches = tabs.filter((t: any) => t.label === AGENTS_TAB);
-      if (matches.length > 1)
-        error("start", `multiple Herdr tabs labeled ${AGENTS_TAB}`);
-      tab = matches[0];
+      tab = tabs?.find((item: any) => item.tab_id === placement.tabId);
     }
     if (!tab) {
+      if (placement.kind !== "tab")
+        error("start", "cannot create a tab for split placement");
       const made = await runHerdr(
         pi,
         ctx,
@@ -864,7 +878,7 @@ export async function startHerdrAgent(
           "--cwd",
           cwd,
           "--label",
-          AGENTS_TAB,
+          placement.label,
           ...topologyEnv.flatMap((x) => ["--env", x]),
           "--no-focus",
         ],
@@ -892,17 +906,24 @@ export async function startHerdrAgent(
         ).panes ??
         [];
       {
-        const splitPlacement = await selectSplitPlacement(
-          pi,
-          ctx,
-          existingPanes,
-          workspaceId,
-          tab.tab_id,
-          placement === "split" ? callerPaneId : undefined,
-          options.direction ?? "right",
-          startupDeadline,
-          options.signal,
-        );
+        const splitPlacement =
+          placement.kind === "split"
+            ? {
+                paneId: placement.paneId,
+                ratio: INITIAL_RATIO,
+                direction: options.direction ?? "right",
+              }
+            : await selectSplitPlacement(
+                pi,
+                ctx,
+                existingPanes,
+                workspaceId,
+                tab.tab_id,
+                undefined,
+                options.direction ?? "right",
+                startupDeadline,
+                options.signal,
+              );
         const split = await runHerdr(
           pi,
           ctx,
@@ -1303,7 +1324,7 @@ async function settlePreservedPane(
 
 type RunningAgentExpectation = {
   paneId?: string;
-  tabId: string;
+  tabId?: string;
   workspaceId?: string;
   cwd?: string;
   session?: ExpectedSession;
@@ -1359,7 +1380,6 @@ async function proveExactRunningAgent(
   allowPostCompletionTransition = false,
   signal?: AbortSignal,
 ): Promise<RunningAgentProof> {
-  if (!expected.tabId) error(operation, "exact Herdr tab identity is required");
   const agent = (
     await runHerdr(pi, ctx, ["agent", "get", herdrAgent], { signal })
   ).agent;
@@ -1378,7 +1398,8 @@ async function proveExactRunningAgent(
     (expected.workspaceId !== undefined &&
       workspaceId !== expected.workspaceId) ||
     (expected.cwd !== undefined && !sameCwd(cwd, expected.cwd)) ||
-    (agent.tab_id !== undefined && agent.tab_id !== expected.tabId) ||
+    (expected.tabId !== undefined && agent.tab_id !== expected.tabId) ||
+    typeof agent.tab_id !== "string" ||
     (expected.session !== undefined &&
       !matchesExpectedSession(agent?.agent_session, expected.session)) ||
     (processOwner !== undefined && expected.session === undefined) ||
@@ -1395,7 +1416,8 @@ async function proveExactRunningAgent(
     !pane ||
     pane.pane_id !== paneId ||
     pane.workspace_id !== workspaceId ||
-    pane.tab_id !== expected.tabId ||
+    pane.tab_id !== agent.tab_id ||
+    (expected.tabId !== undefined && pane.tab_id !== expected.tabId) ||
     !sameCwd(pane.cwd, cwd) ||
     (pane.agent_session !== undefined &&
       pane.agent_session !== null &&
@@ -1416,12 +1438,12 @@ async function proveExactRunningAgent(
   if (!Array.isArray(listedTabs?.tabs))
     error(operation, "tab list ownership proof is unavailable");
   const tabs = listedTabs.tabs;
-  const tab = tabs.find((item: any) => item.tab_id === expected.tabId);
+  const tab = tabs.find((item: any) => item.tab_id === agent.tab_id);
   if (
     !tab ||
     (tab.workspace_id !== undefined && tab.workspace_id !== workspaceId)
   )
-    error(operation, `tab ${expected.tabId} ownership is unproven`);
+    error(operation, `tab ${agent.tab_id} ownership is unproven`);
 
   const observed = await paneProcess(pi, ctx, paneId, signal);
   if (
@@ -1437,7 +1459,7 @@ async function proveExactRunningAgent(
     error(operation, `pane ${paneId} process ownership is unproven`);
   return {
     paneId,
-    tabId: expected.tabId,
+    tabId: agent.tab_id,
     workspaceId,
     cwd,
     session: expected.session,
@@ -1494,8 +1516,6 @@ export async function closeHerdrPane(
   },
   signal?: AbortSignal,
 ): Promise<void> {
-  const tabId = expected?.tabId ?? process.env.HERDR_TAB_ID;
-  if (!tabId) error("close", "exact Herdr tab identity is required");
   const allowPostCompletionTransition =
     expected?.allowPostCompletionTransition === true;
   const release = await lockLifecycle(ctx, signal);
@@ -1504,7 +1524,7 @@ export async function closeHerdrPane(
       pi,
       ctx,
       herdrAgent,
-      { ...expected, tabId },
+      expected ?? {},
       undefined,
       "close",
       false,
@@ -1516,7 +1536,6 @@ export async function closeHerdrPane(
       herdrAgent,
       {
         paneId: initial.paneId,
-        tabId,
         workspaceId: initial.workspaceId,
         cwd: initial.cwd,
         session: initial.session,
@@ -1557,15 +1576,13 @@ export async function stopHerdrAgentPreservingPane(
   },
   signal?: AbortSignal,
 ): Promise<void> {
-  const tabId = expected?.tabId ?? process.env.HERDR_TAB_ID;
-  if (!tabId) error("rollback", "exact Herdr tab identity is required");
   const release = await lockLifecycle(ctx, signal);
   try {
     const initial = await proveExactRunningAgent(
       pi,
       ctx,
       herdrAgent,
-      { ...expected, tabId },
+      expected ?? {},
       undefined,
       "rollback",
       false,
@@ -1577,7 +1594,6 @@ export async function stopHerdrAgentPreservingPane(
       herdrAgent,
       {
         paneId: initial.paneId,
-        tabId,
         workspaceId: initial.workspaceId,
         cwd: initial.cwd,
         session: initial.session,
@@ -1599,7 +1615,7 @@ export async function stopHerdrAgentPreservingPane(
       herdrAgent,
       {
         paneId: proved.paneId,
-        tabId,
+        tabId: proved.tabId,
         workspaceId: proved.workspaceId,
         cwd: proved.cwd,
       },
@@ -1721,8 +1737,9 @@ export async function rollbackHerdrStart(
       !tab ||
       (tab.workspace_id !== undefined &&
         tab.workspace_id !== started.workspaceId)
-    )
+    ) {
       error("rollback", `tab ${started.tabId} ownership is unproven`);
+    }
     if (started.createdTab) {
       const listedPanes = await runHerdr(
         pi,
@@ -1743,8 +1760,9 @@ export async function rollbackHerdrStart(
         currentIds.some(
           (paneId: string, index: number) => paneId !== expectedIds[index],
         )
-      )
+      ) {
         error("rollback", `tab ${started.tabId} pane ownership is unproven`);
+      }
     }
     for (const [paneId, expected] of Object.entries(processOwnership)) {
       const pane = (

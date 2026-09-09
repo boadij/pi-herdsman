@@ -38,6 +38,7 @@ import {
   isPaneClose,
   isPaneList,
   isPreservePaneStop,
+  isTabClose,
   isTabList,
   listResponse,
   listAgentStates,
@@ -127,6 +128,7 @@ test("parent delegates two same-definition children with exact ownership", async
       ).length,
       2,
     );
+    assert.equal(lifecycle.createdTabs(), 0);
     for (const label of labels) {
       const closed = await pi.tools[0].execute(
         "close",
@@ -153,6 +155,335 @@ test("parent delegates two same-definition children with exact ownership", async
     resetAgentMailbox(parentMailbox);
     for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
     for (const [name] of files) realFs.unlinkSync(join(PI_AGENTS_DIR, name));
+  }
+});
+
+function writePlacementSetting(placement: "tab" | "subtree" | "split") {
+  realFs.writeFileSync(
+    join(PI_AGENT_ROOT, "settings.json"),
+    JSON.stringify({ piHerdsman: { spawnPlacement: placement } }),
+  );
+}
+
+function registerNativeAgentSession(state: ManagedAgentState): void {
+  nativeSessions.set(state.piSessionId, {
+    id: state.piSessionId,
+    path: state.piSessionFile!,
+    cwd: state.cwd,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { name: "agent" },
+      },
+    ],
+  });
+}
+
+async function liveAgentList(pi: ReturnType<typeof fakePi>) {
+  const response = await pi.pi.exec("herdr", ["agent", "list"]);
+  return JSON.parse(response.stdout).result.agents as Record<string, unknown>[];
+}
+
+test("lead direct placement modes use real controller delegation", async () => {
+  for (const placement of ["tab", "subtree", "split"] as const) {
+    setLeadEnvironment();
+    writePlacementSetting(placement);
+    const parent = {
+      ...managedState(`placement-parent-${placement}`),
+      paneId: `placement-parent-pane-${placement}`,
+    };
+    if (placement === "split") process.env.HERDR_PANE_ID = parent.paneId;
+    const mailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+    resetAgentMailbox(mailbox);
+    writeAgentState(mailbox, parent);
+    registerNativeAgentSession(parent);
+    const lifecycle = delegatedLifecycleExecutor(parent);
+    const pi = fakePi({ exec: lifecycle.exec });
+    registerExtension!(pi.pi as never);
+    const childMailboxes: string[] = [];
+    try {
+      const start = async (label: string) => {
+        const result = await pi.tools[0].execute(
+          `start-${label}`,
+          { action: "delegate", definition: "agent", label, task: "placement" },
+          undefined,
+          undefined,
+          fakeContext(),
+        );
+        assert.equal(result.details.ok, true, JSON.stringify(result.details));
+        const childMailbox = agentMailboxPath(WORKSPACE, label);
+        childMailboxes.push(childMailbox);
+        return readAgentState(childMailbox)!;
+      };
+      const first = await start(`placement-${placement}-one`);
+      const second = await start(`placement-${placement}-two`);
+      const firstTab = lifecycle.tabForPane(first.paneId);
+      const secondTab = lifecycle.tabForPane(second.paneId);
+      assert.ok(firstTab);
+      assert.ok(secondTab);
+      if (placement === "tab" || placement === "split") {
+        assert.equal(lifecycle.createdTabs(), 0);
+        assert.equal(firstTab, lifecycle.tabForPane(parent.paneId));
+        assert.equal(secondTab, firstTab);
+        assert.equal(
+          pi.calls.filter((args) => args[0] === "pane" && args[1] === "split")
+            .length,
+          2,
+        );
+      } else {
+        assert.equal(lifecycle.createdTabs(), 2);
+        assert.notEqual(firstTab, secondTab);
+        assert.equal(
+          pi.calls.filter((args) => args[0] === "tab" && args[1] === "create")
+            .length,
+          2,
+        );
+      }
+      const agents = await liveAgentList(pi);
+      assert.deepEqual(
+        agents
+          .filter((agent) =>
+            [first, second].some(
+              (state) =>
+                agent.name ===
+                runScopedHerdrAlias(
+                  state.workspaceId,
+                  state.agentLabel,
+                  state.runId,
+                ),
+            ),
+          )
+          .map((agent) => agent.tab_id),
+        [firstTab, secondTab],
+      );
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+      for (const childMailbox of childMailboxes)
+        resetAgentMailbox(childMailbox);
+      nativeSessions.delete(parent.piSessionId);
+      realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+    }
+  }
+});
+
+test("lead tab placement rejects old shared tabs and only changes future starts", async () => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState("future-placement-parent"),
+    paneId: "future-placement-parent-pane",
+  };
+  const sibling = {
+    ...managedState(
+      "future-placement-sibling",
+      undefined,
+      recoveryIdentity("future-placement-sibling"),
+    ),
+    ownerSessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    piSessionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    piSessionFile: "/tmp/future-placement-sibling.jsonl",
+  };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const siblingMailbox = agentMailboxPath(WORKSPACE, sibling.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(siblingMailbox);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(siblingMailbox, sibling);
+  registerNativeAgentSession(parent);
+  registerNativeAgentSession(sibling);
+  writePlacementSetting("tab");
+  const lifecycle = delegatedLifecycleExecutor(parent, [sibling]);
+  const pi = fakePi({ exec: lifecycle.exec });
+  registerExtension!(pi.pi as never);
+  const childMailboxes: string[] = [];
+  try {
+    const start = async (label: string) => {
+      const result = await pi.tools[0].execute(
+        `start-${label}`,
+        { action: "delegate", definition: "agent", label, task: "placement" },
+        undefined,
+        undefined,
+        fakeContext(),
+      );
+      assert.equal(result.details.ok, true, JSON.stringify(result.details));
+      const childMailbox = agentMailboxPath(WORKSPACE, label);
+      childMailboxes.push(childMailbox);
+      return readAgentState(childMailbox)!;
+    };
+    const first = await start("future-placement-first");
+    assert.equal(lifecycle.createdTabs(), 1);
+    const firstTab = lifecycle.tabForPane(first.paneId);
+    assert.notEqual(firstTab, lifecycle.tabForPane(parent.paneId));
+    assert.equal(
+      lifecycle.tabForPane(sibling.paneId),
+      lifecycle.tabForPane(parent.paneId),
+    );
+
+    writePlacementSetting("subtree");
+    const second = await start("future-placement-second");
+    assert.equal(lifecycle.createdTabs(), 2);
+    assert.notEqual(lifecycle.tabForPane(second.paneId), firstTab);
+    assert.equal(lifecycle.tabForPane(first.paneId), firstTab);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(siblingMailbox);
+    for (const childMailbox of childMailboxes) resetAgentMailbox(childMailbox);
+    nativeSessions.delete(parent.piSessionId);
+    nativeSessions.delete(sibling.piSessionId);
+    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+  }
+});
+
+test("lead tab revalidation rejects a newly contaminated candidate under the lock", async () => {
+  setLeadEnvironment();
+  writePlacementSetting("tab");
+  const parent = {
+    ...managedState("revalidation-parent"),
+    paneId: "revalidation-parent-pane",
+  };
+  const sibling = {
+    ...managedState(
+      "revalidation-sibling",
+      undefined,
+      recoveryIdentity("revalidation-sibling"),
+    ),
+    ownerSessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    piSessionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    piSessionFile: "/tmp/revalidation-sibling.jsonl",
+  };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const siblingMailbox = agentMailboxPath(WORKSPACE, sibling.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(siblingMailbox);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(siblingMailbox, sibling);
+  registerNativeAgentSession(parent);
+  registerNativeAgentSession(sibling);
+  const lifecycle = delegatedLifecycleExecutor(parent);
+  let agentLists = 0;
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      const result = lifecycle.exec(command, args, options);
+      if (command !== "herdr" || !isAgentList(args)) return result;
+      agentLists++;
+      if (agentLists < 3) return result;
+      const value = JSON.parse(result.stdout);
+      value.result.agents.push({
+        ...agentFromState(sibling),
+        tab_id: lifecycle.tabForPane(parent.paneId),
+      });
+      return { ...result, stdout: JSON.stringify(value) };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const childMailbox = agentMailboxPath(WORKSPACE, "revalidation-child");
+  try {
+    const result = await pi.tools[0].execute(
+      "revalidation-start",
+      {
+        action: "delegate",
+        definition: "agent",
+        label: "revalidation-child",
+        task: "reject contaminated candidate",
+      },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(agentLists >= 3, true);
+    assert.equal(lifecycle.createdTabs(), 1);
+    assert.notEqual(
+      lifecycle.tabForPane(parent.paneId),
+      lifecycle.tabForPane("delegated-slot-1"),
+    );
+    assert.equal(
+      pi.calls.some((args) => args[0] === "pane" && args[1] === "split"),
+      false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(siblingMailbox);
+    resetAgentMailbox(childMailbox);
+    nativeSessions.delete(parent.piSessionId);
+    nativeSessions.delete(sibling.piSessionId);
+    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+  }
+});
+
+test("managed-agent delegation always splits in its current pane for every lead layout", async () => {
+  for (const placement of ["tab", "subtree", "split"] as const) {
+    setLeadEnvironment();
+    writePlacementSetting(placement);
+    const parent = {
+      ...managedState(`nested-placement-parent-${placement}`),
+      paneId: `nested-placement-parent-pane-${placement}`,
+    };
+    const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+    resetAgentMailbox(parentMailbox);
+    writeAgentState(parentMailbox, parent);
+    const lifecycle = delegatedLifecycleExecutor(parent);
+    process.env.PI_HERDSMAN_MAILBOX = parentMailbox;
+    process.env.PI_HERDSMAN_RUN_ID = parent.runId;
+    process.env.PI_HERDSMAN_OWNER_SESSION_ID = parent.ownerSessionId;
+    process.env.PI_HERDSMAN_LABEL = parent.agentLabel;
+    process.env.PI_HERDSMAN_WORKSPACE_ID = WORKSPACE;
+    process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
+    process.env.PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS = JSON.stringify([
+      "agent",
+    ]);
+    process.env.HERDR_PANE_ID = parent.paneId;
+    const pi = fakePi({ exec: lifecycle.exec });
+    registerExtension!(pi.pi as never);
+    const context = fakeAgentContext([
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { name: "agent" },
+      },
+    ]);
+    const childMailbox = agentMailboxPath(
+      WORKSPACE,
+      `nested-placement-child-${placement}`,
+    );
+    try {
+      for (const handler of pi.events.get("session_start") ?? [])
+        await handler(undefined, context);
+      const result = await pi.tools[0].execute(
+        `nested-${placement}`,
+        {
+          action: "delegate",
+          definition: "agent",
+          label: `nested-placement-child-${placement}`,
+          task: "nested placement",
+        },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(result.details.ok, true, JSON.stringify(result.details));
+      assert.equal(lifecycle.createdTabs(), 0);
+      assert.equal(
+        lifecycle.tabForPane(parent.paneId),
+        lifecycle.tabForPane("delegated-slot-1"),
+      );
+      assert.ok(
+        pi.calls.some(
+          (args) =>
+            args[0] === "pane" &&
+            args[1] === "split" &&
+            args[args.indexOf("--pane") + 1] === parent.paneId,
+        ),
+      );
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(parentMailbox);
+      resetAgentMailbox(childMailbox);
+      realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+    }
   }
 });
 
@@ -3129,24 +3460,18 @@ test("empty early launch cleans exact resources and same-label retry creates one
   let starts = 0;
   let splits = 0;
   let closes = 0;
+  let tabCloses = 0;
   let panePresent = false;
   let closeProvedByList = false;
   const pi = fakePi({
     exec: (command, args, options) => {
       if (command === "herdr" && isPaneList(args)) {
-        if (closes > 0 && !panePresent) closeProvedByList = true;
+        if ((closes > 0 || tabCloses > 0) && !panePresent)
+          closeProvedByList = true;
         return {
           stdout: JSON.stringify({
             result: {
               panes: [
-                {
-                  pane_id: "source-pane",
-                  tab_id: "startup-tab",
-                  workspace_id: WORKSPACE,
-                  cwd: "/other",
-                  foreground_cwd: "/other",
-                  agent_status: "unknown",
-                },
                 ...(panePresent
                   ? [
                       {
@@ -3166,6 +3491,10 @@ test("empty early launch cleans exact resources and same-label retry creates one
           code: 0,
         };
       }
+      if (command === "herdr" && args[0] === "tab" && args[1] === "create") {
+        panePresent = true;
+        return startup.exec(command, args, options);
+      }
       if (command === "herdr" && args[0] === "pane" && args[1] === "split") {
         assert.equal(panePresent, false);
         panePresent = true;
@@ -3179,6 +3508,18 @@ test("empty early launch cleans exact resources and same-label retry creates one
         closes++;
         return { stdout: "{}", stderr: "", code: 0 };
       }
+      if (command === "herdr" && args[0] === "tab" && args[1] === "close") {
+        assert.equal(panePresent, true);
+        panePresent = false;
+        tabCloses++;
+        return { stdout: "{}", stderr: "", code: 0 };
+      }
+      if (command === "herdr" && isTabList(args) && tabCloses > 0)
+        return {
+          stdout: JSON.stringify({ result: { tabs: [] } }),
+          stderr: "",
+          code: 0,
+        };
       if (
         command === "herdr" &&
         args[0] === "pane" &&
@@ -3240,7 +3581,7 @@ test("empty early launch cleans exact resources and same-label retry creates one
     pi.calls.filter((args) => args[0] === "pane" && args[1] === "read").length,
     1,
   );
-  assert.equal(closes, 1);
+  assert.equal(tabCloses, 1);
   assert.equal(closeProvedByList, true);
   assert.equal(panePresent, false);
 
@@ -3266,7 +3607,7 @@ test("empty early launch cleans exact resources and same-label retry creates one
   );
   assert.equal(retried.details.ok, true);
   assert.equal(starts, 2);
-  assert.equal(splits, 2);
+  assert.equal(splits, 0);
   assert.equal(panePresent, true);
   assert.equal(readAgentState(startup.mailbox)?.agentLabel, label);
   pi.events.get("session_shutdown")?.[0]();
@@ -3287,6 +3628,7 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
     AGENT_ID,
     false,
     true,
+    true,
   );
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
@@ -3302,7 +3644,7 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
     undefined,
     fakeContext(),
   );
-  assert.equal(startup.getCount(), 9);
+  assert.equal(startup.getCount(), 11);
   assert.equal(result.details.error.category, "invalid_request");
   assert.match(
     result.details.error.message,
@@ -3310,7 +3652,10 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
   );
   assert.equal(result.details.error.retryAttempted, true);
   assert.equal(pi.calls.filter((args) => isPreservePaneStop(args)).length, 1);
-  assert.equal(pi.calls.filter((args) => isPaneClose(args)).length, 1);
+  assert.equal(
+    pi.calls.filter((args) => isPaneClose(args) || isTabClose(args)).length,
+    1,
+  );
   pi.events.get("session_shutdown")?.[0]();
 });
 
@@ -3324,6 +3669,13 @@ test("assignment integration grace aborts without a later lookup or timer", asyn
     (count) => {
       if (count === 1) setTimeout(() => controller.abort(), 10);
     },
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
   );
   const pi = fakePi({
     exec: (command, args, options) => {
@@ -3341,14 +3693,17 @@ test("assignment integration grace aborts without a later lookup or timer", asyn
     fakeContext(),
   );
   assert.ok(Date.now() - startedAt < 2500);
-  assert.equal(result.details.error.category, "rollback_failure");
+  assert.equal(result.details.error.category, "internal_failure");
   assert.equal(startup.getCount(), 1);
   const cleanupCalls = pi.calls.filter(
     (args) =>
-      isPreservePaneStop(args) || isPaneClose(args) || isHerdrList(args),
+      isPreservePaneStop(args) ||
+      isPaneClose(args) ||
+      isTabClose(args) ||
+      isHerdrList(args),
   );
   assert.equal(
-    cleanupCalls.some((args) => isPaneClose(args)),
+    cleanupCalls.some((args) => isTabClose(args) || isPaneClose(args)),
     true,
   );
   assert.equal(
@@ -3364,13 +3719,16 @@ test("assignment integration grace aborts without a later lookup or timer", asyn
         if (index < firstCleanupIndex) return false;
         const args = pi.calls[index];
         return (
-          isPreservePaneStop(args) || isPaneClose(args) || isHerdrList(args)
+          isPreservePaneStop(args) ||
+          isPaneClose(args) ||
+          isTabClose(args) ||
+          isHerdrList(args)
         );
       })
       .some((options) => options.signal?.aborted === true),
     false,
   );
-  assert.ok(readAgentState(startup.mailbox));
+  assert.equal(readAgentState(startup.mailbox), undefined);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(startup.getCount(), 1);
   pi.events.get("session_shutdown")?.[0]();
