@@ -2562,6 +2562,69 @@ test("completion result prose renders Markdown while metadata stays structural",
   assert.doesNotMatch(expanded, /\*\*one blocker\*\*|`controller\.ts`/);
 });
 
+test("completion warnings preserve truncation and persistence evidence", () => {
+  const collapsedTruncated = renderedText(
+    renderCompletionMessage(
+      {
+        content: "truncated result",
+        details: {
+          requestId: "request-id",
+          agentLabel: "agent",
+          status: "completed",
+          truncated: true,
+        },
+      },
+      { expanded: false },
+      presentationTheme,
+    ),
+  );
+  assert.match(collapsedTruncated, /output truncated · Ctrl\+O/);
+
+  const persistenceError = "permission denied";
+  const expandedPersistence = renderedText(
+    renderCompletionMessage(
+      {
+        content: "saved result",
+        details: {
+          requestId: "request-id",
+          agentLabel: "agent",
+          status: "completed",
+          truncated: false,
+          resultPersistenceError: persistenceError,
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(
+    expandedPersistence,
+    new RegExp(`result persistence error: ${persistenceError}`),
+  );
+
+  const collapsedBoth = renderedText(
+    renderCompletionMessage(
+      {
+        content: "partially saved result",
+        details: {
+          requestId: "request-id",
+          agentLabel: "agent",
+          status: "completed",
+          truncated: true,
+          resultPersistenceError: persistenceError,
+        },
+      },
+      { expanded: false },
+      presentationTheme,
+    ),
+  );
+  assert.match(collapsedBoth, /output truncated · result not saved · Ctrl\+O/);
+  assert.equal(
+    collapsedBoth.split("output truncated · result not saved · Ctrl+O").length,
+    2,
+  );
+});
+
 test("ask and stale custom messages preserve attention semantics and identity boundaries", () => {
   const ask = {
     details: {
@@ -3273,12 +3336,14 @@ test("Model output preserves inspection, concise controls, and structured errors
         ],
       },
       recent_output: "unique-inspect-marker",
+      recent_output_truncated: true,
     });
     assert.match(rendered, /Inspect agent agent\./);
     assert.match(rendered, /Session: session/);
     assert.match(rendered, /Pane: pane/);
     assert.match(rendered, /Foreground: sleep 600/);
     assert.match(rendered, /unique-inspect-marker/);
+    assert.match(rendered, /Recent output truncated: yes/);
     assert.doesNotMatch(
       rendered,
       /shell_pid|foreground_process_group_id|pid=789/,
