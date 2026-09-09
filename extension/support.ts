@@ -183,6 +183,7 @@ mock.module("@earendil-works/pi-coding-agent", {
     DEFAULT_MAX_BYTES: 50 * 1024,
     DEFAULT_MAX_LINES: 2000,
     formatSize: (n: number) => `${n} B`,
+    getMarkdownTheme: () => ({}),
     truncateHead: (
       text: string,
       options: { maxBytes?: number; maxLines?: number },
@@ -315,6 +316,26 @@ mock.module("@earendil-works/pi-tui", {
       }
       render(_width: number) {
         return this.text.split("\n");
+      }
+    },
+    Markdown: class {
+      private readonly text: string;
+      constructor(text: string) {
+        this.text = text;
+      }
+      invalidate() {}
+      render(_width: number) {
+        return this.text.split("\n");
+      }
+    },
+    Spacer: class {
+      private readonly height: number;
+      constructor(height = 1) {
+        this.height = height;
+      }
+      invalidate() {}
+      render(_width: number) {
+        return Array.from({ length: this.height }, () => "");
       }
     },
     SelectList: class {

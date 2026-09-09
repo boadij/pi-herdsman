@@ -156,7 +156,11 @@ test("active chief describes authoritative remote ask projection", async () => {
     { fg: (_color: string, value: string) => value },
     { argsComplete: true },
   );
-  assert.match(renderedStaffCall.text, /^message  lead-bbbbbb…/);
+  assert.equal(typeof renderedStaffCall.render, "function");
+  assert.match(
+    renderedStaffCall.render(160).join("\n"),
+    /^staff message  lead-bbbbbb…/,
+  );
   const renderedStaffResult = tool.renderResult(
     {
       content: [{ type: "text", text: "model result" }],
