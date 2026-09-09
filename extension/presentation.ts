@@ -1568,6 +1568,7 @@ function expandedCallLines(
     } else if (args.agent) fields.push(["agent", args.agent]);
   } else if (tool === "staff") {
     if (args.lead) fields.push(["lead", args.lead]);
+    if (args.askId) fields.push(["ask", args.askId]);
   }
   for (const [label, field] of fields)
     lines.push("", `${label}: ${String(field)}`);
@@ -1666,8 +1667,19 @@ function errorLines(
           ),
         ].filter(Boolean) as string[])
       : []),
-    ...(value(error.primary) ? [`primary: ${value(error.primary)}`] : []),
-    ...(value(error.cleanup) ? [`cleanup: ${value(error.cleanup)}`] : []),
+    ...(error.primary
+      ? [evidenceLine("primary", error.primary)].filter(
+          (line): line is string => line !== undefined,
+        )
+      : []),
+    ...(error.cleanup
+      ? [evidenceLine("cleanup", error.cleanup)].filter(
+          (line): line is string => line !== undefined,
+        )
+      : []),
+    ...(details.cleanup_errors && typeof details.cleanup_errors === "object"
+      ? ["cleanup errors:", JSON.stringify(details.cleanup_errors, null, 2)]
+      : []),
   ];
 }
 
@@ -1721,12 +1733,39 @@ function agentHierarchy(details: Record<string, unknown>): string[] {
     seen.add(agent);
     const label = value(agent.agent) || "unknown";
     const state = value(agent.state) || "unknown";
+    const definition = value(agent.agent_definition);
     const actions = Array.isArray(agent.available_actions)
       ? agent.available_actions.join(", ")
       : "";
-    lines.push(
-      `${indent}${label}  ${state}${actions ? ` · can: ${actions}` : ""}`,
-    );
+    const parent = value(agent.parent_label);
+    const session = value(agent.pi_session_id) || value(agent.pi_session_path);
+    const controls = [
+      state,
+      ...(definition ? [`definition: ${definition}`] : []),
+      ...(actions ? [`can: ${actions}`] : []),
+      ...(agent.orphan === true ? ["orphan"] : []),
+      ...(agent.stale === true
+        ? [
+            `stale${typeof agent.inactive_ms === "number" ? ` · inactive ${formatDuration(agent.inactive_ms)}` : ""}`,
+          ]
+        : []),
+    ];
+    lines.push(`${indent}${label}  ${controls.join(" · ")}`);
+    if (session) lines.push(`${indent}  session: ${session}`);
+    if (value(agent.diagnostic))
+      lines.push(`${indent}  diagnostic: ${value(agent.diagnostic)}`);
+    if (value(agent.cleanup_error))
+      lines.push(`${indent}  cleanup warning: ${value(agent.cleanup_error)}`);
+    if (agent.result_error !== undefined && agent.result_error !== null)
+      lines.push(
+        `${indent}  result error: ${
+          typeof agent.result_error === "object"
+            ? JSON.stringify(agent.result_error)
+            : String(agent.result_error)
+        }`,
+      );
+    if (parent && !byLabel.has(parent))
+      lines.push(`${indent}  parent: ${parent} (not present)`);
     const next = new Set(ancestors).add(label);
     for (const child of byParent.get(label) ?? []) {
       if (!next.has(value(child.agent))) visit(child, `${indent}  `, next);
@@ -1776,10 +1815,16 @@ function expandedResultLines(
   const lines = [heading];
   const fields: Array<[string, unknown]> = [
     ["definition", details.definition ?? details.agent_definition],
-    ["session", details.session_id ?? details.pi_session_id ?? details.session],
+    [
+      "session",
+      details.session_id ??
+        details.pi_session_id ??
+        details.session ??
+        details.chiefSessionId,
+    ],
     ["request", details.request_id],
     ["assignment request", details.assignment_request_id],
-    ["ask", details.ask_id],
+    ["ask", details.ask_id ?? details.askId ?? args.askId],
     ["pane", details.pane_id],
     ["lead", details.lead],
     ["record", details.id],
@@ -1829,10 +1874,36 @@ function expandedResultLines(
       ...leads.flatMap((lead: any) => {
         if (!lead || typeof lead !== "object") return [];
         const agents = Array.isArray(lead.agents) ? lead.agents.length : 0;
+        const counts =
+          lead.agent_counts && typeof lead.agent_counts === "object"
+            ? (lead.agent_counts as Record<string, unknown>)
+            : {};
+        const totalAgents =
+          typeof counts.total === "number" ? counts.total : agents;
         const state = value(lead.runtime_state) || "unknown";
         return [
-          `${value(lead.display_name) || value(lead.lead) || "lead"}  ${state}${agents ? ` · ${agents} agent${agents === 1 ? "" : "s"}` : ""}`,
+          `${value(lead.display_name) || value(lead.lead) || "lead"}  ${state}${totalAgents ? ` · ${totalAgents} agent${totalAgents === 1 ? "" : "s"}` : ""}`,
           `  lead: ${value(lead.lead)}`,
+          ...(typeof lead.needs_you === "boolean"
+            ? [`  needs you: ${lead.needs_you ? "yes" : "no"}`]
+            : []),
+          ...(value(lead.pending_ask_id)
+            ? [`  ask: ${value(lead.pending_ask_id)}`]
+            : []),
+          ...(value(lead.pending_ask_question)
+            ? [`  question: ${value(lead.pending_ask_question)}`]
+            : []),
+          ...(lead.last_activity !== undefined && lead.last_activity !== null
+            ? [`  last activity: ${String(lead.last_activity)}`]
+            : []),
+          ...(lead.agent_counts && typeof lead.agent_counts === "object"
+            ? [
+                `  agent counts: ${Object.entries(counts)
+                  .filter(([, count]) => count !== undefined)
+                  .map(([name, count]) => `${name}=${String(count)}`)
+                  .join(" · ")}`,
+              ]
+            : []),
           ...(Array.isArray(lead.available_actions)
             ? [`  can: ${lead.available_actions.join(", ")}`]
             : []),
@@ -1861,6 +1932,12 @@ function expandedResultLines(
   }
   if (details.cleanup_error)
     lines.push("", `cleanup warning: ${String(details.cleanup_error)}`);
+  if (details.cleanup_errors && typeof details.cleanup_errors === "object")
+    lines.push(
+      "",
+      "cleanup errors:",
+      JSON.stringify(details.cleanup_errors, null, 2),
+    );
   return lines;
 }
 

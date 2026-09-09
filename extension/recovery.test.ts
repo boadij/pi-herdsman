@@ -751,6 +751,11 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
     rendered.text,
     /next: Inspect cleanup_errors before retrying cleanup/,
   );
+  assert.match(
+    rendered.text,
+    /primary: category=target_not_found, message=live Herdr agent Pi session mismatch/,
+  );
+  assert.match(rendered.text, /cleanup: .*operation=rollback/);
   assert.equal(agentGetCount, 1);
   assert.equal(
     pi.calls.some((args) => isPreservePaneStop(args)),

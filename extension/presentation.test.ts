@@ -1144,6 +1144,8 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
               parent_label: "root",
               state: "blocked",
               available_actions: ["reply"],
+              cleanup_error: "child cleanup warning",
+              result_error: { code: "write_failure", message: "result lost" },
             },
             {
               agent: "grandchild",
@@ -1156,6 +1158,12 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
               parent_label: "missing",
               state: "unknown",
               available_actions: ["inspect"],
+              agent_definition: "reviewer",
+              pi_session_id: "orphan-session",
+              orphan: true,
+              stale: true,
+              inactive_ms: 120000,
+              diagnostic: "session identity unavailable",
             },
           ],
         },
@@ -1167,7 +1175,19 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   );
   assert.ok(hierarchy.indexOf("root") < hierarchy.indexOf("  child"));
   assert.ok(hierarchy.indexOf("  child") < hierarchy.indexOf("    grandchild"));
-  assert.match(hierarchy, /^orphan  unknown · can: inspect$/m);
+  assert.match(
+    hierarchy,
+    /^orphan  unknown · definition: reviewer · can: inspect · orphan · stale · inactive 2m$/m,
+  );
+  assert.match(hierarchy, /definition: reviewer/);
+  assert.match(hierarchy, /  session: orphan-session/);
+  assert.match(hierarchy, /  parent: missing \(not present\)/);
+  assert.match(hierarchy, /  diagnostic: session identity unavailable/);
+  assert.match(hierarchy, /cleanup warning: child cleanup warning/);
+  assert.match(
+    hierarchy,
+    /result error: \{"code":"write_failure","message":"result lost"\}/,
+  );
   const inspect = renderedText(
     renderCoordinationResult(
       "agent",
@@ -1224,7 +1244,10 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
             nextAction: "refresh agents",
             ids: { agent: "researcher", session: "session-id" },
             details: { stage: "validate" },
+            primary: { category: "agent_busy", message: "still busy" },
+            cleanup: { category: "cleanup_failed", message: "pane preserved" },
           },
+          cleanup_errors: { researcher: "pane preserved" },
         },
       },
       { expanded: true },
@@ -1235,6 +1258,16 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   assert.match(expandedError, /category: agent_busy/);
   assert.match(expandedError, /identity: agent=researcher, session=session-id/);
   assert.match(expandedError, /stage: validate/);
+  assert.match(
+    expandedError,
+    /primary: category=agent_busy, message=still busy/,
+  );
+  assert.match(
+    expandedError,
+    /cleanup: category=cleanup_failed, message=pane preserved/,
+  );
+  assert.match(expandedError, /cleanup errors:/);
+  assert.match(expandedError, /researcher/);
   const plainError = renderedText(
     renderCoordinationResult(
       "chief",
@@ -1322,6 +1355,111 @@ test("chief and staff coordination renderers share semantic status language", ()
     ),
     /✓ sent to workspace\/api/,
   );
+
+  const chiefAsk = renderedText(
+    renderCoordinationResult(
+      "chief",
+      {
+        details: {
+          ok: true,
+          id: "record-ask",
+          askId: "ask-camel",
+          chiefSessionId: "chief-session",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "ask" } },
+    ),
+  );
+  assert.match(chiefAsk, /ask: ask-camel/);
+  assert.match(chiefAsk, /session: chief-session/);
+
+  const chiefMessage = renderedText(
+    renderCoordinationResult(
+      "chief",
+      {
+        details: {
+          ok: true,
+          id: "record-message",
+          chiefSessionId: "chief-session-message",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "message" } },
+    ),
+  );
+  assert.match(chiefMessage, /session: chief-session-message/);
+
+  const staffReplyArgs = {
+    action: "reply",
+    lead: "lead-opaque",
+    askId: "ask-for-lead",
+    message: "answer",
+  };
+  assert.match(
+    renderedText(
+      renderCoordinationCall("staff", staffReplyArgs, presentationTheme, {
+        expanded: true,
+      }),
+    ),
+    /lead: lead-opaque\n\nask: ask-for-lead/,
+  );
+  assert.match(
+    renderedText(
+      renderCoordinationResult(
+        "staff",
+        {
+          details: {
+            ok: true,
+            action: "reply",
+            display_name: "workspace\/api",
+          },
+        },
+        { expanded: true },
+        presentationTheme,
+        { args: staffReplyArgs },
+      ),
+    ),
+    /ask: ask-for-lead/,
+  );
+
+  const staffList = renderedText(
+    renderCoordinationResult(
+      "staff",
+      {
+        details: {
+          ok: true,
+          leads: [
+            {
+              lead: "lead-opaque",
+              display_name: "workspace/api",
+              runtime_state: "blocked",
+              needs_you: true,
+              pending_ask_id: "pending-ask",
+              pending_ask_question: "Which provider should I use?",
+              last_activity: 1735787045000,
+              agent_counts: { working: 2, blocked: 1, total: 3 },
+              agents: [{ label: "one" }, { label: "two" }, { label: "three" }],
+              available_actions: ["inspect", "reply"],
+            },
+          ],
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "list" } },
+    ),
+  );
+  for (const evidence of [
+    "needs you: yes",
+    "ask: pending-ask",
+    "question: Which provider should I use?",
+    "last activity: 1735787045000",
+    "agent counts: working=2 · blocked=1 · total=3",
+  ])
+    assert.ok(staffList.includes(evidence));
 });
 
 test("model selection reports provider and id for Pi model objects", (t) => {
