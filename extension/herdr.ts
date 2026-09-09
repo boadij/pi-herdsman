@@ -6,11 +6,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { OperationError } from "./errors.ts";
+import { herdsmanTempRoot } from "./tmp.ts";
 
 export type HerdrRecord = Record<string, any>;
 export type HerdrContext = {
@@ -424,9 +424,7 @@ async function lockLifecycle(
   // ponytail: serialize physical lifecycle mutations per workspace.
   // Split only if lifecycle throughput becomes a measured problem.
   const path = join(
-    tmpdir(),
-    "pi-herdsman",
-    process.getuid?.().toString() ?? "user",
+    herdsmanTempRoot(),
     "locks",
     createHash("sha256").update(id).digest("hex"),
   );

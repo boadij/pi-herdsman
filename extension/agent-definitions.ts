@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -18,6 +18,7 @@ import {
   loadProjectContextFiles,
 } from "@earendil-works/pi-coding-agent";
 import { snapshotTextFiles } from "./core.ts";
+import { herdsmanTempRoot } from "./tmp.ts";
 
 const THINKING_LEVELS = new Set([
   "off",
@@ -689,15 +690,9 @@ function configuredThinking(agent: AgentDefinition): string | undefined {
 export function writePrivatePromptSnapshots(
   contents: readonly string[],
 ): string[] {
-  const root = join(
-    tmpdir(),
-    "pi-herdsman",
-    String(process.getuid?.() ?? "user"),
-  );
-  const privateRoot = join(tmpdir(), "pi-herdsman");
+  const root = herdsmanTempRoot();
   const prompts = join(root, "prompts");
   mkdirSync(prompts, { recursive: true, mode: 0o700 });
-  chmodSync(privateRoot, 0o700);
   chmodSync(root, 0o700);
   chmodSync(prompts, 0o700);
   const paths: string[] = [];

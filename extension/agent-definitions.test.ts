@@ -942,18 +942,12 @@ test("transports complex prompts through a private temporary file", () => {
   try {
     assert.equal(readFileSync(promptPath, "utf8"), body);
     assert.equal(statSync(promptPath).mode & 0o777, 0o600);
-    assert.equal(statSync(join(tmpdir(), "pi-herdsman")).mode & 0o777, 0o700);
-    assert.equal(
-      statSync(
-        join(
-          tmpdir(),
-          "pi-herdsman",
-          String(process.getuid?.() ?? "user"),
-          "prompts",
-        ),
-      ).mode & 0o777,
-      0o700,
+    const tempRoot = join(
+      tmpdir(),
+      `pi-herdsman-${process.getuid?.() ?? "user"}`,
     );
+    assert.equal(statSync(tempRoot).mode & 0o777, 0o700);
+    assert.equal(statSync(join(tempRoot, "prompts")).mode & 0o777, 0o700);
     const launch = agentLaunchArgs(
       {
         name: "delegate",

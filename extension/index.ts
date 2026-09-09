@@ -21,9 +21,10 @@ import {
   unwatchFile,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { herdsmanTempRoot } from "./tmp.ts";
 import { Type } from "typebox";
 import {
   Container,
@@ -801,9 +802,7 @@ function delegationLockPath(
   parentSessionId: string,
 ): string {
   return join(
-    tmpdir(),
-    "pi-herdsman",
-    process.getuid?.().toString() ?? "user",
+    herdsmanTempRoot(),
     "locks",
     `delegation-${createHash("sha256")
       .update(`${workspaceId}\0${parentSessionId}`)
@@ -838,9 +837,7 @@ function claimDelegationLock(
 function sessionActivationLockPath(sessionPath: string): string {
   const canonicalPath = canonicalSessionPath(sessionPath);
   return join(
-    tmpdir(),
-    "pi-herdsman",
-    process.getuid?.().toString() ?? "user",
+    herdsmanTempRoot(),
     "locks",
     `session-${createHash("sha256").update(canonicalPath).digest("hex")}`,
   );
