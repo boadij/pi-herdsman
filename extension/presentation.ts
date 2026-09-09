@@ -2,13 +2,21 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   formatSize,
+  getMarkdownTheme,
   truncateHead,
   truncateLine,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import * as PiTui from "@earendil-works/pi-tui";
-import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { Box as TuiBox } from "@earendil-works/pi-tui";
+import {
+  Container,
+  Markdown,
+  Spacer,
+  Text,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import type { Box as TuiBox, Component } from "@earendil-works/pi-tui";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -1260,10 +1268,14 @@ export function renderStopSummary(
       ? (message.details as { summary?: unknown }).summary
       : undefined;
   return renderMessageBox(
-    [
-      theme.bold(theme.fg("customMessageLabel", "Stop all")),
-      typeof summary === "string" ? summary : "",
-    ],
+    new WidthSafeText(
+      [
+        theme.bold(theme.fg("customMessageLabel", "Stop all")),
+        typeof summary === "string" ? summary : "",
+      ].join("\n"),
+      0,
+      0,
+    ),
     theme,
     1,
   );
@@ -1543,19 +1555,39 @@ function inspectEvidence(
   return lines.slice(0, 3);
 }
 
-function callTask(args: Record<string, unknown>): string | undefined {
-  return collapseDisplayText(
-    value(args.task) || value(args.message) || value(args.question),
-  );
+type CoordinationBody = {
+  label: "task" | "message" | "question";
+  text: string;
+};
+
+function coordinationBody(
+  args: Record<string, unknown>,
+): CoordinationBody | undefined {
+  const action = value(args.action);
+  const label =
+    action === "delegate" ? "task" : action === "ask" ? "question" : "message";
+  const text = args[label];
+  return typeof text === "string" && text.trim() ? { label, text } : undefined;
 }
 
-function expandedCallLines(
+function coordinationHeader(
+  tool: CoordinationTool,
+  verb: string,
+  target: string,
+  theme: any,
+): string {
+  const title = [tool, verb].filter(Boolean).join(" ");
+  return `${humanText(theme, "toolTitle", theme.bold(title))}${target ? `  ${humanText(theme, "accent", target)}` : ""}`;
+}
+
+function renderExpandedCoordinationCall(
   tool: CoordinationTool,
   args: Record<string, unknown>,
   theme: any,
-): string[] {
+  header: string,
+): Component {
   const action = value(args.action);
-  const lines = [tool === "agent" ? action || "agent" : `${tool} ${action}`];
+  const body = coordinationBody(args);
   const fields: Array<[string, unknown]> = [];
   if (tool === "agent") {
     if (action === "delegate") {
@@ -1570,26 +1602,40 @@ function expandedCallLines(
     if (args.lead) fields.push(["lead", args.lead]);
     if (args.askId) fields.push(["ask", args.askId]);
   }
-  for (const [label, field] of fields)
-    lines.push("", `${label}: ${String(field)}`);
-  const body = value(args.task) || value(args.message) || value(args.question);
-  if (body)
-    lines.push(
-      "",
-      `${action === "ask" ? "question" : action === "delegate" ? "task" : "message"}:`,
-      body,
+  const content = new Container();
+  content.addChild(new Text(header, 0, 0));
+  if (fields.length)
+    content.addChild(
+      new WidthSafeText(
+        fields
+          .flatMap(([label, field]) => [
+            "",
+            label === "definition"
+              ? humanText(theme, "muted", `${label}: ${String(field)}`)
+              : `${label}: ${String(field)}`,
+          ])
+          .join("\n"),
+        0,
+        0,
+      ),
     );
-  if (Array.isArray(args.files) && args.files.length)
-    lines.push(
-      "",
-      "files:",
-      ...args.files
+  if (body) {
+    content.addChild(new Spacer(1));
+    content.addChild(new Text(`${body.label}:`, 0, 0));
+    content.addChild(new Markdown(body.text, 0, 0, getMarkdownTheme()));
+  }
+  const files = Array.isArray(args.files)
+    ? args.files
         .filter((file): file is string => typeof file === "string")
-        .map((file) => `  ${file}`),
-    );
-  return lines.map((line) =>
-    line.startsWith("definition:") ? humanText(theme, "muted", line) : line,
-  );
+        .map((file) => `  ${file}`)
+    : [];
+  if (files.length) {
+    content.addChild(new Spacer(1));
+    content.addChild(new WidthSafeText(["files:", ...files].join("\n"), 0, 0));
+  }
+  const box = createWidthSafeBox(0, 0, (line) => line);
+  box.addChild(content);
+  return box;
 }
 
 export function renderCoordinationCall(
@@ -1597,33 +1643,37 @@ export function renderCoordinationCall(
   args: unknown,
   theme: any,
   context: any = {},
-): WidthSafeText {
+): Component {
   const a = (context?.args ?? args) as Record<string, unknown>;
   const action = value(a.action);
   const continuation = tool === "agent" && action === "delegate" && !!a.session;
-  const verb = continuation ? "continue" : action || tool;
+  const verb = continuation ? "continue" : action;
   let target = "";
   if (tool === "agent" && action === "delegate")
     target = value(a.label) || value(a.definition);
   else if (tool === "agent") target = value(a.agent);
   else if (tool === "staff")
     target = action === "list" ? "" : shortIdentity(a.lead);
-  const head =
-    tool === "chief"
-      ? `${tool} ${action}`
-      : [verb, target].filter(Boolean).join("  ");
-  const task = callTask(a);
-  const lines = humanExpanded(context, undefined)
-    ? expandedCallLines(tool, a, theme)
-    : [
-        humanText(theme, "toolTitle", head || tool),
-        ...(task ? [humanText(theme, "muted", `  ${task}`)] : []),
-      ];
-  if (context?.isPartial || context?.argsComplete === false) {
-    const first = lines[0] ?? tool;
-    lines[0] = `${first}${first.endsWith("…") ? "" : "…"}`;
+  const header = coordinationHeader(tool, verb, target, theme);
+  const partial = context?.isPartial || context?.argsComplete === false;
+  const partialHeader = partial ? `${header}…` : header;
+  if (humanExpanded(context, undefined))
+    return renderExpandedCoordinationCall(tool, a, theme, partialHeader);
+  const content = new Container();
+  content.addChild(new Text(partialHeader, 0, 0));
+  const body = coordinationBody(a);
+  if (body) {
+    const preview = collapseDisplayText(body.text);
+    if (preview)
+      content.addChild(
+        new Markdown(`  ${preview}`, 0, 0, getMarkdownTheme(), {
+          color: (text) => humanText(theme, "muted", text),
+        }),
+      );
   }
-  return new WidthSafeText(lines.join("\n"), 0, 0);
+  const box = createWidthSafeBox(0, 0, (line) => line);
+  box.addChild(content);
+  return box;
 }
 
 function errorLines(
@@ -2236,11 +2286,15 @@ export class WidthSafeText extends Text {
   }
 }
 
-function renderMessageBox(lines: string[], theme: any, outputPad = 0): TuiBox {
+function renderMessageBox(
+  content: Component,
+  theme: any,
+  outputPad = 0,
+): TuiBox {
   const box = createWidthSafeBox(outputPad, 1, (line) =>
     theme.bg("customMessageBg", line),
   );
-  box.addChild(new WidthSafeText(lines.join("\n"), 0, 0));
+  box.addChild(content);
   return box;
 }
 
@@ -2262,38 +2316,55 @@ export function renderCompletionMessage(
     d?.agentDefinition && d.agentDefinition !== label
       ? ` · ${d.agentDefinition}`
       : "";
-  const prefix = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${label}${failed ? " failed" : " completed"}${definition}`;
+  const heading = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${theme.bold(label)}${failed ? " failed" : " completed"}${definition ? humanText(theme, "muted", definition) : ""}`;
   const humanContent = (message.content ?? "")
     .replace(/^Agent result · [^\n]*\n\n/u, "")
     .replace(/^Result file: [^\n]*\n\n/u, "")
     .replace(/^Result file could not be saved\.\n\n/u, "");
-  const body =
-    humanContent.split("\n").find((line) => line.trim()) ?? humanContent ?? "";
-  const lines = options.expanded
-    ? [
-        `${label}${failed ? " failed" : " completed"}`,
-        ...(d?.agentDefinition ? [`definition: ${d.agentDefinition}`] : []),
-        ...(d?.piSessionId ? [`session: ${d.piSessionId}`] : []),
-        ...(d?.requestId ? [`request: ${d.requestId}`] : []),
-        ...(elapsed ? [`elapsed: ${elapsed}`] : []),
-        ...(d?.contextUsage?.percent != null
-          ? [`context: ${Math.round(d.contextUsage.percent)}%`]
-          : []),
-        ...(d?.fullOutputPath ? [`full output: ${d.fullOutputPath}`] : []),
-        ...(d?.resultPath ? [`result file: ${d.resultPath}`] : []),
-        ...(d?.error ? [`error: ${d.error.code}: ${d.error.message}`] : []),
-        "",
-        humanContent,
-      ]
-    : [
-        prefix +
+  const content = new Container();
+  if (options.expanded) {
+    content.addChild(new Text(heading, 0, 0));
+    const metadata = [
+      ...(d?.agentDefinition ? [`definition: ${d.agentDefinition}`] : []),
+      ...(d?.piSessionId ? [`session: ${d.piSessionId}`] : []),
+      ...(d?.requestId ? [`request: ${d.requestId}`] : []),
+      ...(elapsed ? [`elapsed: ${elapsed}`] : []),
+      ...(d?.contextUsage?.percent != null
+        ? [`context: ${Math.round(d.contextUsage.percent)}%`]
+        : []),
+      ...(d?.fullOutputPath ? [`full output: ${d.fullOutputPath}`] : []),
+      ...(d?.resultPath ? [`result file: ${d.resultPath}`] : []),
+      ...(d?.error ? [`error: ${d.error.code}: ${d.error.message}`] : []),
+    ];
+    if (metadata.length) {
+      content.addChild(new Spacer(1));
+      content.addChild(new WidthSafeText(metadata.join("\n"), 0, 0));
+    }
+    if (humanContent) {
+      content.addChild(new Spacer(1));
+      content.addChild(new Markdown(humanContent, 0, 0, getMarkdownTheme()));
+    }
+  } else {
+    content.addChild(
+      new Text(
+        heading +
           (elapsed ? ` · ${elapsed}` : "") +
           (d?.contextUsage?.percent != null
             ? ` · ctx ${Math.round(d.contextUsage.percent)}%`
             : ""),
-        theme.fg("muted", `  ${collapseDisplayText(body) ?? ""}`),
-      ];
-  return renderMessageBox(lines, theme, options.outputPad ?? 0);
+        0,
+        0,
+      ),
+    );
+    const preview = collapseDisplayText(humanContent);
+    if (preview)
+      content.addChild(
+        new Markdown(preview, 2, 0, getMarkdownTheme(), {
+          color: (text) => humanText(theme, "muted", text),
+        }),
+      );
+  }
+  return renderMessageBox(content, theme, options.outputPad ?? 0);
 }
 
 export function renderAgentAskMessage(
@@ -2307,26 +2378,36 @@ export function renderAgentAskMessage(
       : {};
   const label = value(details.agentLabel) || "agent";
   const question = value(details.question) || "Input is required.";
-  const lines = options.expanded
-    ? [
-        `${label} needs input`,
-        "",
-        "question:",
-        question,
-        ...(value(details.askId) ? ["", `ask: ${value(details.askId)}`] : []),
-        ...(value(details.requestId)
-          ? [`request: ${value(details.requestId)}`]
-          : []),
-        ...(value(details.piSessionId)
-          ? [`session: ${value(details.piSessionId)}`]
-          : []),
-        ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
-      ]
-    : [
-        statusLine(theme, "warning", "?", `${label} needs input`),
-        `  ${collapseDisplayText(question, 240) ?? "Input is required."}`,
-      ];
-  return renderMessageBox(lines, theme, options.outputPad ?? 0);
+  const heading = `${humanText(theme, "warning", "?")} ${theme.bold(label)} needs input`;
+  const content = new Container();
+  content.addChild(new Text(heading, 0, 0));
+  if (options.expanded) {
+    content.addChild(new Spacer(1));
+    content.addChild(new Text("question:", 0, 0));
+    content.addChild(new Markdown(question, 0, 0, getMarkdownTheme()));
+    const metadata = [
+      ...(value(details.askId) ? [`ask: ${value(details.askId)}`] : []),
+      ...(value(details.requestId)
+        ? [`request: ${value(details.requestId)}`]
+        : []),
+      ...(value(details.piSessionId)
+        ? [`session: ${value(details.piSessionId)}`]
+        : []),
+      ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
+    ];
+    if (metadata.length) {
+      content.addChild(new Spacer(1));
+      content.addChild(new WidthSafeText(metadata.join("\n"), 0, 0));
+    }
+  } else {
+    const preview = collapseDisplayText(question, 240) ?? "Input is required.";
+    content.addChild(
+      new Markdown(`  ${preview}`, 0, 0, getMarkdownTheme(), {
+        color: (text) => humanText(theme, "muted", text),
+      }),
+    );
+  }
+  return renderMessageBox(content, theme, options.outputPad ?? 0);
 }
 
 export function renderAgentStaleMessage(
@@ -2370,7 +2451,11 @@ export function renderAgentStaleMessage(
         statusLine(theme, "warning", "!", `${label} inactive · ${duration}`),
         "  working · inactivity is not proof of a hang",
       ];
-  return renderMessageBox(lines, theme, options.outputPad ?? 0);
+  return renderMessageBox(
+    new WidthSafeText(lines.join("\n"), 0, 0),
+    theme,
+    options.outputPad ?? 0,
+  );
 }
 
 const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];

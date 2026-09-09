@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import test from "node:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { Box } from "@earendil-works/pi-tui";
 import {
   collapseDisplayText,
@@ -44,6 +45,8 @@ import {
   truncateModelText,
   visibleWidth,
 } from "./presentation.ts";
+
+initTheme("dark");
 
 const lead = (overrides: Record<string, unknown> = {}) => ({
   lead: "session-a",
@@ -939,7 +942,19 @@ function renderedText(
     .trim();
 }
 
-test("coordination calls use semantic collapsed and exact expanded presentation", () => {
+test("empty partial coordination calls do not duplicate the tool name", () => {
+  assert.equal(
+    renderedText(
+      renderCoordinationCall("agent", {}, presentationTheme, {
+        isPartial: true,
+        argsComplete: false,
+      }),
+    ),
+    "agent…",
+  );
+});
+
+test("coordination calls use semantic collapsed and expanded presentation", () => {
   assert.match(
     renderedText(
       renderCoordinationCall(
@@ -954,7 +969,7 @@ test("coordination calls use semantic collapsed and exact expanded presentation"
         { argsComplete: true },
       ),
     ),
-    /^delegate  release-review\n  Find why the release PR is missing$/,
+    /^agent delegate  release-review\n  Find why the release PR is missing$/,
   );
   assert.equal(
     renderedText(
@@ -964,7 +979,7 @@ test("coordination calls use semantic collapsed and exact expanded presentation"
         presentationTheme,
       ),
     ),
-    "delegate  researcher\n  Investigate",
+    "agent delegate  researcher\n  Investigate",
   );
   assert.match(
     renderedText(
@@ -978,7 +993,7 @@ test("coordination calls use semantic collapsed and exact expanded presentation"
         presentationTheme,
       ),
     ),
-    /^continue\n  Apply the findings$/,
+    /^agent continue\n  Apply the findings$/,
   );
   assert.equal(
     renderedText(
@@ -989,7 +1004,7 @@ test("coordination calls use semantic collapsed and exact expanded presentation"
         { isPartial: true, argsComplete: false },
       ),
     ),
-    "delegate  researcher…\n  streaming",
+    "agent delegate  researcher…\n  streaming",
   );
   const expanded = renderedText(
     renderCoordinationCall(
@@ -1013,6 +1028,136 @@ test("coordination calls use semantic collapsed and exact expanded presentation"
   assert.match(expanded, /timeout: 300000/);
   assert.match(expanded, /task:\nFind why the release PR is missing/);
   assert.match(expanded, /files:\n  investigation\.md/);
+});
+
+test("coordination headers use semantic typography without ANSI-specific assertions", () => {
+  const tokens: string[] = [];
+  const styleProbeTheme = {
+    ...presentationTheme,
+    bold: (text: string) => {
+      tokens.push(`bold:${text}`);
+      return `<bold>${text}</bold>`;
+    },
+    fg: (color: string, text: string) => {
+      tokens.push(`${color}:${text}`);
+      return `<${color}>${text}</${color}>`;
+    },
+  };
+  const rendered = renderedText(
+    renderCoordinationCall(
+      "agent",
+      { action: "close", agent: "researcher" },
+      styleProbeTheme,
+    ),
+  );
+  assert.match(rendered, /<toolTitle><bold>agent close<\/bold><\/toolTitle>/);
+  assert.match(rendered, /<accent>researcher<\/accent>/);
+  assert.ok(tokens.includes("bold:agent close"));
+  assert.ok(tokens.includes("toolTitle:<bold>agent close</bold>"));
+  assert.ok(tokens.includes("accent:researcher"));
+});
+
+test("human coordination prose renders Markdown in compact and expanded calls", () => {
+  const collapsed = renderedText(
+    renderCoordinationCall(
+      "agent",
+      {
+        action: "delegate",
+        definition: "researcher",
+        task: "Review **Release Please** and `release-please-config.json`.",
+      },
+      presentationTheme,
+    ),
+  );
+  for (const text of ["Review", "Release Please", "release-please-config.json"])
+    assert.ok(collapsed.includes(text));
+  assert.doesNotMatch(
+    collapsed,
+    /\*\*Release Please\*\*|`release-please-config\.json`/,
+  );
+
+  const expanded = renderedText(
+    renderCoordinationCall(
+      "agent",
+      {
+        action: "delegate",
+        definition: "researcher",
+        task: "## Investigation\n\nCheck:\n\n- **release state**\n- `release-please-config.json`\n\nThen report the result.",
+      },
+      presentationTheme,
+      { expanded: true },
+    ),
+  );
+  for (const text of [
+    "Investigation",
+    "release state",
+    "release-please-config.json",
+    "Then report the result.",
+  ])
+    assert.ok(expanded.includes(text));
+  assert.doesNotMatch(expanded, /^## /m);
+  assert.doesNotMatch(
+    expanded,
+    /\*\*release state\*\*|`release-please-config\.json`/,
+  );
+});
+
+test("coordination prose source mapping covers agent, chief, and staff actions", () => {
+  const cases = [
+    [
+      "agent",
+      { action: "delegate", definition: "researcher", task: "delegate task" },
+      "delegate task",
+    ],
+    [
+      "agent",
+      { action: "steer", agent: "researcher", message: "steer message" },
+      "steer message",
+    ],
+    [
+      "agent",
+      { action: "reply", agent: "researcher", message: "reply message" },
+      "reply message",
+    ],
+    ["chief", { action: "message", message: "chief message" }, "chief message"],
+    ["chief", { action: "ask", question: "chief question" }, "chief question"],
+    [
+      "staff",
+      { action: "message", lead: "lead-id", message: "staff message" },
+      "staff message",
+    ],
+    [
+      "staff",
+      { action: "reply", lead: "lead-id", message: "staff reply" },
+      "staff reply",
+    ],
+  ] as const;
+  for (const [tool, args, prose] of cases)
+    assert.ok(
+      renderedText(
+        renderCoordinationCall(tool, args, presentationTheme),
+      ).includes(prose),
+    );
+});
+
+test("partial Markdown coordination calls remain useful and retain the partial header", () => {
+  assert.doesNotThrow(() => {
+    const rendered = renderedText(
+      renderCoordinationCall(
+        "agent",
+        {
+          action: "delegate",
+          definition: "researcher",
+          task: "Investigate **the current",
+        },
+        presentationTheme,
+        { isPartial: true, argsComplete: false },
+      ),
+    );
+    assert.match(rendered, /agent delegate  researcher…/);
+    assert.match(rendered, /Investigate/);
+    assert.match(rendered, /the current/);
+  });
 });
 
 test("coordination results keep collapsed identity bounded and expose structured evidence when expanded", () => {
@@ -1209,6 +1354,27 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
     inspect,
     /inspect  researcher\n  npm run check · 433 passed\n  output truncated · Ctrl\+O/,
   );
+  const literalInspect = renderedText(
+    renderCoordinationResult(
+      "agent",
+      {
+        details: {
+          ok: true,
+          agent: "researcher",
+          recent_output: "** FAILED **\n# heading-looking-output\n`literal`",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "inspect", agent: "researcher" } },
+    ),
+  );
+  for (const marker of [
+    "** FAILED **",
+    "# heading-looking-output",
+    "`literal`",
+  ])
+    assert.ok(literalInspect.includes(marker));
   const structuredError = renderedText(
     renderCoordinationResult(
       "agent",
@@ -1217,7 +1383,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
           ok: false,
           error: {
             category: "agent_busy",
-            message: "Agent is not accepting steering",
+            message: "** FAILED ** `steering`",
             nextAction: "refresh agents",
           },
         },
@@ -1229,7 +1395,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   );
   assert.match(
     structuredError,
-    /✗ agent steer\n  Agent is not accepting steering\n  next: refresh agents/,
+    /✗ agent steer\n  \*\* FAILED \*\* `steering`\n  next: refresh agents/,
   );
   assert.doesNotMatch(structuredError, /agent_busy/);
   const expandedError = renderedText(
@@ -1240,7 +1406,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
           ok: false,
           error: {
             category: "agent_busy",
-            message: "Agent is not accepting steering",
+            message: "** FAILED ** `steering`",
             nextAction: "refresh agents",
             ids: { agent: "researcher", session: "session-id" },
             details: { stage: "validate" },
@@ -1268,6 +1434,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   );
   assert.match(expandedError, /cleanup errors:/);
   assert.match(expandedError, /researcher/);
+  assert.match(expandedError, /message: \*\* FAILED \*\* `steering`/);
   const plainError = renderedText(
     renderCoordinationResult(
       "chief",
@@ -1284,7 +1451,9 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   const wideArgs = {
     action: "delegate",
     definition: "界".repeat(30),
-    task: "🙂".repeat(100),
+    task: "Review **the long release plan** and `presentation.ts`; see https://example.com/this/is/a/very/long/release/plan for details. 🙂".repeat(
+      3,
+    ),
   };
   for (const width of [1, 8, 16, 32, 80]) {
     for (const rendered of [
@@ -2041,6 +2210,7 @@ test("tool and completion renderers retain structured action details", (t) => {
         bgTokens.push(name);
         return text;
       },
+      bold: (text: string) => text,
     };
     const rendered = renderCompletionMessage(
       {
@@ -2067,6 +2237,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const theme = {
       fg: (_name: string, text: string) => text,
       bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
     };
     for (const [elapsedMs, expected] of [
       [5_000, "5s"],
@@ -2100,6 +2271,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const theme = {
       fg: (name: string, text: string) => `[${name}]${text}`,
       bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
     };
     const expanded = renderCompletionMessage(
       {
@@ -2151,7 +2323,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
       theme,
     );
     assert.match(failed.render(120).join("\n"), /\[error\]✗ agent failed/);
-    assert.match(failed.render(120).join("\n"), /\[muted\]  failure reason/);
+    assert.match(failed.render(120).join("\n"), /\[muted\]failure reason/);
 
     const expandedFailed = renderCompletionMessage(
       {
@@ -2181,6 +2353,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const theme = {
       fg: (_name: string, text: string) => text,
       bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
     };
     const message = {
       content:
@@ -2215,6 +2388,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const theme = {
       fg: (_name: string, text: string) => text,
       bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
     };
     for (const elapsedMs of [
       undefined,
@@ -2246,11 +2420,43 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
   }
 });
 
+test("completion result prose renders Markdown while metadata stays structural", () => {
+  const message = {
+    content: "Found **one blocker** in `controller.ts`.",
+    details: {
+      requestId: "request-id",
+      agentLabel: "reviewer",
+      agentDefinition: "code-review",
+      piSessionId: "session-id",
+      status: "completed" as const,
+      truncated: false,
+    },
+  };
+  const collapsed = renderedText(
+    renderCompletionMessage(message, { expanded: false }, presentationTheme),
+  );
+  assert.match(collapsed, /Found one blocker in/);
+  assert.match(collapsed, /controller\.ts/);
+  assert.doesNotMatch(collapsed, /\*\*one blocker\*\*|`controller\.ts`/);
+  assert.doesNotMatch(collapsed, /session-id|request-id/);
+
+  const expanded = renderedText(
+    renderCompletionMessage(message, { expanded: true }, presentationTheme),
+  );
+  assert.match(expanded, /reviewer completed/);
+  assert.match(expanded, /definition: code-review/);
+  assert.match(expanded, /session: session-id/);
+  assert.match(expanded, /request: request-id/);
+  assert.match(expanded, /one blocker/);
+  assert.match(expanded, /controller\.ts/);
+  assert.doesNotMatch(expanded, /\*\*one blocker\*\*|`controller\.ts`/);
+});
+
 test("ask and stale custom messages preserve attention semantics and identity boundaries", () => {
   const ask = {
     details: {
       agentLabel: "implementer",
-      question: "Should this preserve compatibility?",
+      question: "Preserve **legacy behavior** or use `v4` only?",
       askId: "ask-id",
       requestId: "request-id",
       piSessionId: "session-id",
@@ -2261,14 +2467,20 @@ test("ask and stale custom messages preserve attention semantics and identity bo
     renderAgentAskMessage(ask, { expanded: false }, presentationTheme),
   );
   assert.match(collapsedAsk, /\? implementer needs input/);
-  assert.match(collapsedAsk, /Should this preserve compatibility/);
+  assert.match(collapsedAsk, /Preserve legacy behavior/);
+  assert.match(collapsedAsk, /v4/);
+  assert.doesNotMatch(collapsedAsk, /\*\*legacy behavior\*\*|`v4`/);
   assert.doesNotMatch(collapsedAsk, /ask-id|request-id|session-id|pane-id/);
   const expandedAsk = renderedText(
     renderAgentAskMessage(ask, { expanded: true }, presentationTheme),
   );
-  assert.match(expandedAsk, /question:\nShould this preserve compatibility/);
+  assert.match(expandedAsk, /question:\nPreserve legacy behavior/);
+  assert.match(expandedAsk, /v4/);
+  assert.doesNotMatch(expandedAsk, /\*\*legacy behavior\*\*|`v4`/);
   assert.match(expandedAsk, /ask: ask-id/);
+  assert.match(expandedAsk, /request: request-id/);
   assert.match(expandedAsk, /session: session-id/);
+  assert.match(expandedAsk, /pane: pane-id/);
 
   const stale = {
     details: {
