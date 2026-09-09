@@ -46,6 +46,7 @@ import {
   truncateModelText,
   visibleWidth,
 } from "./presentation.ts";
+import { herdsmanTempRoot } from "./tmp.ts";
 
 initTheme("dark");
 
@@ -2174,9 +2175,7 @@ test("tail truncation keeps the end and reuses its deterministic path", (t) => {
     assert.equal(
       first.fullOutputPath,
       join(
-        tmpdir(),
-        "pi-herdsman",
-        String(process.getuid?.() ?? "user"),
+        herdsmanTempRoot(),
         "output",
         createHash("sha256").update("stable").digest("hex"),
         `${createHash("sha256").update("same").digest("hex")}.txt`,
@@ -2197,9 +2196,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     const text = "Found three authentication problems.";
     const result = truncateModelText(text, options);
     const expected = join(
-      tmpdir(),
-      "pi-herdsman",
-      String(process.getuid?.() ?? "user"),
+      herdsmanTempRoot(),
       "results",
       options.requestId,
     );

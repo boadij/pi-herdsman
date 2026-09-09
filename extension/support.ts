@@ -13,6 +13,7 @@ import type {
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
 import { OperationError } from "./errors.ts";
+import { herdsmanTempRoot } from "./tmp.ts";
 
 export const watchedResultPaths = new Map<string, Function>();
 export const projectContextCwds: string[] = [];
@@ -522,9 +523,7 @@ export function delegationLockPathForTest(
   parentSessionId: string,
 ): string {
   return join(
-    tmpdir(),
-    "pi-herdsman",
-    process.getuid?.().toString() ?? "user",
+    herdsmanTempRoot(),
     "locks",
     "delegation-" +
       createHash("sha256")
