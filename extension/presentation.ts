@@ -53,6 +53,7 @@ export interface StatusSnapshot {
   agents: StatusAgent[];
   stale: boolean;
   unavailable: boolean;
+  herdRunStartedAt?: number;
   breadcrumb?: string[];
   ownTools?: string[];
   identityOnly?: boolean;
@@ -112,6 +113,7 @@ export function formatElapsed(
 ): string | undefined {
   if (
     !Number.isFinite(startedAt) ||
+    !Number.isFinite(now) ||
     startedAt === undefined ||
     startedAt < 0 ||
     now < startedAt
@@ -1278,6 +1280,29 @@ export function renderStopSummary(
     ),
     theme,
     1,
+  );
+}
+export function renderHerdRunEntry(
+  entry: { data?: unknown },
+  theme: any,
+): Component | undefined {
+  const data = entry.data;
+  if (!data || typeof data !== "object" || Array.isArray(data))
+    return undefined;
+  const value = data as Record<string, unknown>;
+  if (
+    value.phase !== "finished" ||
+    typeof value.sessionId !== "string" ||
+    typeof value.startedAt !== "number" ||
+    typeof value.completedAt !== "number"
+  )
+    return undefined;
+  const elapsed = formatElapsed(value.startedAt, value.completedAt);
+  if (!elapsed) return undefined;
+  return new Text(
+    `${theme.bold(theme.fg("customMessageLabel", "herd run"))}${theme.fg("muted", " · ")}${theme.fg("accent", elapsed)}`,
+    0,
+    0,
   );
 }
 function evidenceLine(label: string, input: unknown): string | undefined {
@@ -2510,14 +2535,14 @@ export class StatusWidget {
       this.theme,
     );
     const styledBreadcrumb = this.theme.fg("success", breadcrumb);
+    const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
+    const styledRun =
+      !s.identityOnly && elapsed
+        ? this.theme.fg("accent", ` · ${elapsed}`)
+        : "";
     const styledSuffix =
       s.identityOnly || !suffix ? "" : this.theme.fg("muted", `  ${suffix}`);
-    const suffixWidth = Math.max(0, width - visibleWidth(styledBreadcrumb));
-    const header = styledSuffix
-      ? `${styledBreadcrumb}${
-          suffixWidth > 0 ? truncateToWidth(styledSuffix, suffixWidth, "…") : ""
-        }`
-      : styledBreadcrumb;
+    const header = `${styledBreadcrumb}${styledRun}${styledSuffix}`;
     const out = [truncateToWidth(header, Math.max(0, width), "…")];
     if (s.identityOnly) return out;
     out.push(

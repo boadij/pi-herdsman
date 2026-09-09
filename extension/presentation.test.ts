@@ -38,6 +38,7 @@ import {
   renderCoordinationCall,
   renderCoordinationResult,
   renderAgentDefinitionsOverview,
+  renderHerdRunEntry,
   renderStopSummary,
   selectedModelToken,
   StatusWidget,
@@ -915,6 +916,61 @@ test("status widget animates only moving states and collapses quiet trees", (t) 
   }
 });
 
+test("status widget projects active herd duration without changing counts", (t) => {
+  const widget = new StatusWidget();
+  t.after(() => widget.dispose());
+  widget.setSnapshot({ agents: [], stale: false, unavailable: false });
+  assert.doesNotMatch(widget.render(160)[0]!, /\d+[sm]/);
+
+  widget.setSnapshot({
+    agents: [],
+    stale: false,
+    unavailable: false,
+    herdRunStartedAt: Date.now() - 2_000,
+  });
+  assert.match(widget.render(160)[0]!, /herd · \d+s/);
+
+  widget.setSnapshot({
+    agents: [
+      { label: "working", definition: "agent", state: "working" },
+      { label: "blocked", definition: "agent", state: "blocked" },
+    ],
+    stale: false,
+    unavailable: false,
+    herdRunStartedAt: Date.now() - 2_000,
+  });
+  assert.match(widget.render(160)[0]!, /herd · \d+s/);
+  assert.match(widget.render(160)[0]!, /1 working · 1 blocked/);
+});
+
+test("status widget styles herd duration separately and remains width-safe", (t) => {
+  const calls: string[] = [];
+  const widget = new StatusWidget(undefined, {
+    fg: (color: string, text: string) => {
+      calls.push(`${color}:${text}`);
+      return text;
+    },
+    bold: (text: string) => text,
+  });
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [
+      { label: "working", definition: "agent", state: "working" },
+      { label: "blocked", definition: "agent", state: "blocked" },
+    ],
+    stale: false,
+    unavailable: false,
+    herdRunStartedAt: Date.now() - 2_000,
+  });
+  widget.render(160);
+  assert.ok(calls.some((call) => call.startsWith("accent: · ")));
+  assert.ok(calls.some((call) => call.startsWith("muted:  1 working")));
+  for (let width = 1; width <= 160; width++)
+    assert.ok(
+      widget.render(width).every((line) => visibleWidth(line) <= width),
+    );
+});
+
 test("display text is normalized and only ellipsized when needed", (t) => {
   {
     assert.equal(collapseDisplayText("  hello\n\tworld  "), "hello world");
@@ -941,6 +997,60 @@ function renderedText(
     .join("\n")
     .trim();
 }
+
+test("herd run entries render only valid finished durations", () => {
+  assert.equal(
+    renderHerdRunEntry(
+      {
+        data: {
+          phase: "started",
+          sessionId: "session",
+          startedAt: 1_000,
+        },
+      },
+      presentationTheme,
+    ),
+    undefined,
+  );
+  assert.equal(
+    renderedText(
+      renderHerdRunEntry(
+        {
+          data: {
+            phase: "finished",
+            sessionId: "session",
+            startedAt: 1_000,
+            completedAt: 878_000,
+          },
+        },
+        presentationTheme,
+      )!,
+    ),
+    "herd run · 14m 37s",
+  );
+  for (const data of [
+    { phase: "finished", sessionId: "session", startedAt: 1_000 },
+    {
+      phase: "finished",
+      sessionId: "session",
+      startedAt: "1_000",
+      completedAt: 878_000,
+    },
+    {
+      phase: "finished",
+      sessionId: "session",
+      startedAt: 878_000,
+      completedAt: 1_000,
+    },
+    {
+      phase: "finished",
+      sessionId: "session",
+      startedAt: 1_000,
+      completedAt: Number.NaN,
+    },
+  ])
+    assert.equal(renderHerdRunEntry({ data }, presentationTheme), undefined);
+});
 
 test("empty partial coordination calls do not duplicate the tool name", () => {
   assert.equal(
