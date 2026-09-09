@@ -83,6 +83,8 @@ realFs.writeFileSync(
   join(PI_AGENTS_DIR, "agent.md"),
   "---\nname: agent\n---\nagent instructions\n",
 );
+const { parseFrontmatter: nativeParseFrontmatter } =
+  await import("@earendil-works/pi-coding-agent");
 function testSettings(path: string): Record<string, unknown> {
   try {
     return JSON.parse(realFs.readFileSync(path, "utf8")) as Record<
@@ -216,6 +218,7 @@ mock.module("@earendil-works/pi-coding-agent", {
     truncateLine: (text: string) => ({ text, wasTruncated: false }),
     CONFIG_DIR_NAME: ".pi",
     getAgentDir: () => PI_AGENT_ROOT,
+    parseFrontmatter: nativeParseFrontmatter,
     loadProjectContextFiles: ({ cwd }: { cwd: string }) => {
       projectContextCwds.push(cwd);
       return [];

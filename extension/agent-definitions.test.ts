@@ -64,8 +64,11 @@ test("parses scalar frontmatter fields and applies defaults", () => {
     { name: "custom", enabled: false },
   );
   assert.throws(
-    () => discoverAgentDefinitionsWithContents("---\ninheritSkills: yes\n---"),
-    /custom\.md field name: must be a non-empty string/,
+    () =>
+      discoverAgentDefinitionsWithContents(
+        "---\nname: custom\ninheritSkills: yes\n---",
+      ),
+    /custom\.md agent custom field inheritSkills: must be a boolean/,
   );
   for (const value of ["yes", '"false"', "1", "null", "[]", "{}"]) {
     assert.throws(
@@ -89,6 +92,13 @@ test("parses scalar frontmatter fields and applies defaults", () => {
     withPiAgentDir(root, () => discoverAgent("scout").frontmatter.enabled),
     true,
   );
+});
+
+test("accepts a UTF-8 BOM before native YAML frontmatter", () => {
+  const definition = discoverAgentDefinitionsWithContents(
+    "\uFEFF---\nname: custom\nskills:\n  - one\n  - two\n---\n",
+  ).find(({ name }) => name === "custom")!;
+  assert.deepEqual(definition.frontmatter.skills, ["one", "two"]);
 });
 
 test("parses native YAML capability arrays and rejects unsupported fields", () => {

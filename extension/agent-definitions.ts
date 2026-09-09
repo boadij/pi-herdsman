@@ -122,7 +122,7 @@ function readAgentDefinitions(root: string): AgentDefinition[] {
     .filter((path) => !path.endsWith(".example.md"))
     .sort()
     .map((path) => {
-      const content = readFileSync(path, "utf8");
+      const content = readFileSync(path, "utf8").replace(/^\uFEFF/u, "");
       let parsed: ReturnType<typeof parsePiFrontmatter>;
       try {
         parsed = parsePiFrontmatter<Record<string, unknown>>(content);
