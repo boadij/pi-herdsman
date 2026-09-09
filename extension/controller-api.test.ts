@@ -2135,8 +2135,8 @@ test("registered lead exposes only explicit live controls", async () => {
     { fg: (_color: string, text: string) => text },
     { args: { action: "steer", agent: label, message: "continue" } },
   );
-  assert.match(rendered.text, new RegExp(`Session: ${identity.piSessionId}`));
-  assert.match(rendered.text, /Assignment request: /);
+  assert.match(rendered.text, new RegExp(`session: ${identity.piSessionId}`));
+  assert.match(rendered.text, /assignment request: /);
   accepting.events.get("session_shutdown")?.[0]();
   realFs.rmSync(steerFile, { force: true });
 });

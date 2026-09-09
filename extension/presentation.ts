@@ -1259,72 +1259,14 @@ export function renderStopSummary(
     message.details && typeof message.details === "object"
       ? (message.details as { summary?: unknown }).summary
       : undefined;
-  const box = createWidthSafeBox(1, 1, (line) =>
-    theme.bg("customMessageBg", line),
+  return renderMessageBox(
+    [
+      theme.bold(theme.fg("customMessageLabel", "Stop all")),
+      typeof summary === "string" ? summary : "",
+    ],
+    theme,
+    1,
   );
-  box.addChild(
-    new WidthSafeText(
-      [
-        theme.bold(theme.fg("customMessageLabel", "Stop all")),
-        typeof summary === "string" ? summary : "",
-      ].join("\n"),
-      0,
-      0,
-    ),
-  );
-  return box;
-}
-export function formatToolCall(args: unknown): string {
-  const a = (args && typeof args === "object" ? args : {}) as Record<
-    string,
-    unknown
-  >;
-  const action = value(a.action);
-  const definition = value(a.definition);
-  const agent = value(a.agent);
-  const target =
-    action === "delegate"
-      ? definition
-        ? `definition=${definition}`
-        : value(a.session)
-          ? `session=${value(a.session)}`
-          : undefined
-      : agent
-        ? `agent=${agent}`
-        : undefined;
-  const preview = collapseDisplayText(value(a.task) || value(a.message));
-  return (
-    ["agent", action].filter(Boolean).join(" ") +
-    [target, preview && truncateLine(preview).text]
-      .filter(Boolean)
-      .map((part) => ` · ${part}`)
-      .join("")
-  );
-}
-export function formatToolResultSummary(
-  action: string,
-  v: Record<string, unknown>,
-): string {
-  action = value(action) || "agent";
-  if (v.ok === false) {
-    const e = (v.error ?? {}) as Record<string, unknown>;
-    return `✗ ${value(e.category) || "error"} · ${value(e.message) || "Operation failed"}`;
-  }
-  const agent = value(v.agent),
-    session = value(v.session_id);
-  if (action === "list") {
-    const agents = Array.isArray(v.agents) ? v.agents : [];
-    const active = agents.filter(
-      (item) =>
-        item &&
-        typeof item === "object" &&
-        ["working", "blocked"].includes(
-          (item as Record<string, unknown>).state as string,
-        ),
-    ).length;
-    return `✓ ${agents.length} agents${active ? ` · ${active} active` : ""}`;
-  }
-  return `✓ ${action}${agent ? ` ${agent}` : ""}${session ? ` · ${session}` : ""}`;
 }
 function evidenceLine(label: string, input: unknown): string | undefined {
   if (input === undefined || input === null) return undefined;
@@ -1499,37 +1441,649 @@ export function formatToolModelResult(
     ...cleanup,
   ].join("\n");
 }
-export function formatExpandedToolResult(
-  args: unknown,
-  content: string,
-  details?: unknown,
+type CoordinationTool = "agent" | "chief" | "staff";
+
+function humanText(theme: any, color: string, text: string): string {
+  return theme?.fg ? theme.fg(color, text) : text;
+}
+
+function statusLine(
+  theme: any,
+  color: string,
+  marker: string,
+  text: string,
 ): string {
-  const a = (args && typeof args === "object" ? args : {}) as Record<
-    string,
-    unknown
-  >;
-  const result =
-    details && typeof details === "object"
-      ? (details as Record<string, unknown>)
-      : {};
-  if (value(a.action) !== "delegate") return content;
-  const lines = content.split("\n");
-  const successfulAssignment =
-    lines[0]?.startsWith("Delegate agent ") &&
-    lines[0]?.endsWith(".") &&
-    lines.some((line) => line.startsWith("Session: ")) &&
-    lines.some((line) => line.startsWith("Request: ")) &&
-    value(result.pane_id);
-  if (value(a.definition) && !value(a.session) && successfulAssignment)
-    lines.splice(1, 0, `Definition: ${value(a.definition)}`);
-  if (typeof a.task === "string" && a.task.length > 0)
-    lines.push("", `task: ${a.task}`);
-  const files = Array.isArray(a.files)
-    ? a.files.filter((path): path is string => typeof path === "string")
+  return `${humanText(theme, color, marker)} ${text}`;
+}
+
+function humanExpanded(context: any, options: any): boolean {
+  return context?.expanded === true || options?.expanded === true;
+}
+
+function resultDetails(result: any): Record<string, unknown> {
+  const details = result?.details ?? result?.result;
+  return details && typeof details === "object" ? details : {};
+}
+
+function resultContent(result: any): string {
+  if (Array.isArray(result?.content))
+    return result.content
+      .filter((part: any) => part?.type === "text")
+      .map((part: any) => (typeof part.text === "string" ? part.text : ""))
+      .join("\n");
+  return typeof result?.content === "string" ? result.content : "";
+}
+
+function shortIdentity(input: unknown): string {
+  const text = value(input);
+  return text.length > 12 ? `${Array.from(text).slice(0, 11).join("")}…` : text;
+}
+
+function textLines(valueToRender: unknown): string[] {
+  return typeof valueToRender === "string"
+    ? valueToRender.split("\n").filter((line) => line.length > 0)
     : [];
-  if (files.length)
-    lines.push("", "files:", ...files.map((path) => `  ${path}`));
-  return lines.join("\n");
+}
+
+function foregroundCommands(process: unknown): string[] {
+  if (!process || typeof process !== "object") return [];
+  const foreground = (process as Record<string, unknown>).foreground_processes;
+  if (!Array.isArray(foreground)) return [];
+  return foreground.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const item = entry as Record<string, unknown>;
+    const command = value(item.cmdline) || value(item.argv0);
+    return command ? [command] : [];
+  });
+}
+
+function recentOutput(details: Record<string, unknown>): string[] {
+  return textLines(details.recent_output);
+}
+
+function inspectEvidence(
+  details: Record<string, unknown>,
+  expanded: boolean,
+  theme: any,
+): string[] {
+  const commands = foregroundCommands(details.process);
+  const output = recentOutput(details);
+  const lines: string[] = [];
+  if (expanded) {
+    const process = details.process as Record<string, unknown> | undefined;
+    if (process && typeof process === "object") {
+      lines.push(
+        "",
+        humanText(theme, "customMessageLabel", "foreground:"),
+        ...(commands.length
+          ? commands.map((command) => `  ${command}`)
+          : ["  (none)"]),
+      );
+    }
+    if (output.length) {
+      lines.push(
+        "",
+        humanText(theme, "customMessageLabel", "recent activity:"),
+        ...output.map((line) => `  ${line}`),
+      );
+    }
+    if (details.recent_output_truncated === true)
+      lines.push(
+        "",
+        humanText(theme, "warning", "recent output truncated: yes"),
+      );
+    return lines;
+  }
+  const command = commands[0] ? collapseDisplayText(commands[0]) : undefined;
+  const tail = output.at(-1) ? collapseDisplayText(output.at(-1)) : undefined;
+  if (command && tail) lines.push(`${command} · ${tail}`);
+  else if (command || tail) lines.push(command || tail!);
+  if (details.recent_output_truncated === true)
+    lines.push("output truncated · Ctrl+O");
+  return lines.slice(0, 3);
+}
+
+function callTask(args: Record<string, unknown>): string | undefined {
+  return collapseDisplayText(
+    value(args.task) || value(args.message) || value(args.question),
+  );
+}
+
+function expandedCallLines(
+  tool: CoordinationTool,
+  args: Record<string, unknown>,
+  theme: any,
+): string[] {
+  const action = value(args.action);
+  const lines = [tool === "agent" ? action || "agent" : `${tool} ${action}`];
+  const fields: Array<[string, unknown]> = [];
+  if (tool === "agent") {
+    if (action === "delegate") {
+      if (args.session) fields.push(["session", args.session]);
+      if (args.definition) fields.push(["definition", args.definition]);
+      if (args.label) fields.push(["label", args.label]);
+      if (args.cwd) fields.push(["cwd", displayHomePath(String(args.cwd))]);
+      if (args.timeoutMs) fields.push(["timeout", args.timeoutMs]);
+      if (args.fork) fields.push(["fork", args.fork]);
+    } else if (args.agent) fields.push(["agent", args.agent]);
+  } else if (tool === "staff") {
+    if (args.lead) fields.push(["lead", args.lead]);
+    if (args.askId) fields.push(["ask", args.askId]);
+  }
+  for (const [label, field] of fields)
+    lines.push("", `${label}: ${String(field)}`);
+  const body = value(args.task) || value(args.message) || value(args.question);
+  if (body)
+    lines.push(
+      "",
+      `${action === "ask" ? "question" : action === "delegate" ? "task" : "message"}:`,
+      body,
+    );
+  if (Array.isArray(args.files) && args.files.length)
+    lines.push(
+      "",
+      "files:",
+      ...args.files
+        .filter((file): file is string => typeof file === "string")
+        .map((file) => `  ${file}`),
+    );
+  return lines.map((line) =>
+    line.startsWith("definition:") ? humanText(theme, "muted", line) : line,
+  );
+}
+
+export function renderCoordinationCall(
+  tool: CoordinationTool,
+  args: unknown,
+  theme: any,
+  context: any = {},
+): WidthSafeText {
+  const a = (context?.args ?? args) as Record<string, unknown>;
+  const action = value(a.action);
+  const continuation = tool === "agent" && action === "delegate" && !!a.session;
+  const verb = continuation ? "continue" : action || tool;
+  let target = "";
+  if (tool === "agent" && action === "delegate")
+    target = value(a.label) || value(a.definition);
+  else if (tool === "agent") target = value(a.agent);
+  else if (tool === "staff")
+    target = action === "list" ? "" : shortIdentity(a.lead);
+  const head =
+    tool === "chief"
+      ? `${tool} ${action}`
+      : [verb, target].filter(Boolean).join("  ");
+  const task = callTask(a);
+  const lines = humanExpanded(context, undefined)
+    ? expandedCallLines(tool, a, theme)
+    : [
+        humanText(theme, "toolTitle", head || tool),
+        ...(task ? [humanText(theme, "muted", `  ${task}`)] : []),
+      ];
+  if (context?.isPartial || context?.argsComplete === false) {
+    const first = lines[0] ?? tool;
+    lines[0] = `${first}${first.endsWith("…") ? "" : "…"}`;
+  }
+  return new WidthSafeText(lines.join("\n"), 0, 0);
+}
+
+function errorLines(
+  details: Record<string, unknown>,
+  theme: any,
+  expanded: boolean,
+  action: string,
+): string[] {
+  const error =
+    details.error && typeof details.error === "object"
+      ? (details.error as Record<string, unknown>)
+      : {};
+  const message = value(error.message) || "Operation failed";
+  if (!expanded)
+    return [
+      statusLine(theme, "error", "✗", action),
+      `  ${collapseDisplayText(message, 160)}`,
+      ...(value(error.nextAction)
+        ? [
+            humanText(
+              theme,
+              "muted",
+              `  next: ${collapseDisplayText(value(error.nextAction), 120)}`,
+            ),
+          ]
+        : []),
+    ];
+  return [
+    `${action} failed`,
+    `category: ${value(error.category) || "error"}`,
+    `message: ${message}`,
+    ...(value(error.nextAction) ? [`next: ${value(error.nextAction)}`] : []),
+    ...(error.ids && typeof error.ids === "object"
+      ? [evidenceLine("identity", error.ids)!]
+      : []),
+    ...(error.details && typeof error.details === "object"
+      ? ([
+          evidenceLine(
+            "stage",
+            (error.details as Record<string, unknown>).stage,
+          ),
+        ].filter(Boolean) as string[])
+      : []),
+    ...(error.primary
+      ? [evidenceLine("primary", error.primary)].filter(
+          (line): line is string => line !== undefined,
+        )
+      : []),
+    ...(error.cleanup
+      ? [evidenceLine("cleanup", error.cleanup)].filter(
+          (line): line is string => line !== undefined,
+        )
+      : []),
+    ...(details.cleanup_errors && typeof details.cleanup_errors === "object"
+      ? ["cleanup errors:", JSON.stringify(details.cleanup_errors, null, 2)]
+      : []),
+  ];
+}
+
+function agentListSummary(details: Record<string, unknown>): string {
+  const agents = Array.isArray(details.agents) ? details.agents : [];
+  let working = 0;
+  let blocked = 0;
+  let needsReply = 0;
+  for (const item of agents) {
+    if (!item || typeof item !== "object") continue;
+    const agent = item as Record<string, unknown>;
+    if (agent.state === "working") working++;
+    if (agent.state === "blocked") blocked++;
+    if (
+      Array.isArray(agent.available_actions) &&
+      agent.available_actions.includes("reply")
+    )
+      needsReply++;
+  }
+  return [
+    `agents ${agents.length}`,
+    working ? `${working} working` : "",
+    blocked ? `${blocked} blocked` : "",
+    needsReply ? `${needsReply} needs reply` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function agentHierarchy(details: Record<string, unknown>): string[] {
+  const agents = (Array.isArray(details.agents) ? details.agents : []).filter(
+    (item): item is Record<string, unknown> =>
+      !!item && typeof item === "object",
+  );
+  const byParent = new Map<string, Record<string, unknown>[]>();
+  const byLabel = new Map<string, Record<string, unknown>>();
+  for (const agent of agents) {
+    const label = value(agent.agent);
+    if (label) byLabel.set(label, agent);
+    const parent = value(agent.parent_label);
+    if (parent) byParent.set(parent, [...(byParent.get(parent) ?? []), agent]);
+  }
+  const lines: string[] = [];
+  const seen = new Set<Record<string, unknown>>();
+  const visit = (
+    agent: Record<string, unknown>,
+    indent: string,
+    ancestors: Set<string>,
+  ) => {
+    if (seen.has(agent)) return;
+    seen.add(agent);
+    const label = value(agent.agent) || "unknown";
+    const state = value(agent.state) || "unknown";
+    const definition = value(agent.agent_definition);
+    const actions = Array.isArray(agent.available_actions)
+      ? agent.available_actions.join(", ")
+      : "";
+    const parent = value(agent.parent_label);
+    const session = value(agent.pi_session_id) || value(agent.pi_session_path);
+    const controls = [
+      state,
+      ...(definition ? [`definition: ${definition}`] : []),
+      ...(actions ? [`can: ${actions}`] : []),
+      ...(agent.orphan === true ? ["orphan"] : []),
+      ...(agent.stale === true
+        ? [
+            `stale${typeof agent.inactive_ms === "number" ? ` · inactive ${formatDuration(agent.inactive_ms)}` : ""}`,
+          ]
+        : []),
+    ];
+    lines.push(`${indent}${label}  ${controls.join(" · ")}`);
+    if (session) lines.push(`${indent}  session: ${session}`);
+    if (value(agent.diagnostic))
+      lines.push(`${indent}  diagnostic: ${value(agent.diagnostic)}`);
+    if (value(agent.cleanup_error))
+      lines.push(`${indent}  cleanup warning: ${value(agent.cleanup_error)}`);
+    if (agent.result_error !== undefined && agent.result_error !== null)
+      lines.push(
+        `${indent}  result error: ${
+          typeof agent.result_error === "object"
+            ? JSON.stringify(agent.result_error)
+            : String(agent.result_error)
+        }`,
+      );
+    if (parent && !byLabel.has(parent))
+      lines.push(`${indent}  parent: ${parent} (not present)`);
+    const next = new Set(ancestors).add(label);
+    for (const child of byParent.get(label) ?? []) {
+      if (!next.has(value(child.agent))) visit(child, `${indent}  `, next);
+    }
+  };
+  for (const agent of agents)
+    if (!byLabel.has(value(agent.parent_label))) visit(agent, "", new Set());
+  for (const agent of agents) if (!seen.has(agent)) visit(agent, "", new Set());
+  return lines;
+}
+
+function expandedResultLines(
+  tool: CoordinationTool,
+  action: string,
+  details: Record<string, unknown>,
+  args: Record<string, unknown>,
+  theme: any,
+): string[] {
+  const display =
+    value(details.display_name) ||
+    value(details.agent) ||
+    value(details.label) ||
+    value(details.lead) ||
+    value(args.agent) ||
+    value(args.label) ||
+    "agent";
+  const heading =
+    action === "list"
+      ? tool === "staff"
+        ? "staff"
+        : "agents"
+      : action === "inspect"
+        ? `inspect ${display}`
+        : action === "delegate"
+          ? `${display} started`
+          : tool === "chief"
+            ? action === "ask"
+              ? "waiting for Chief"
+              : "sent to Chief"
+            : action === "steer"
+              ? "steering sent"
+              : action === "reply"
+                ? `reply sent to ${display}`
+                : action === "close"
+                  ? `${display} closed`
+                  : `${action} ${display}`;
+  const lines = [heading];
+  const fields: Array<[string, unknown]> = [
+    ["definition", details.definition ?? details.agent_definition],
+    [
+      "session",
+      details.session_id ??
+        details.pi_session_id ??
+        details.session ??
+        details.chiefSessionId,
+    ],
+    ["request", details.request_id],
+    ["assignment request", details.assignment_request_id],
+    ["ask", details.ask_id ?? details.askId ?? args.askId],
+    ["pane", details.pane_id],
+    ["lead", details.lead],
+    ["record", details.id],
+    ["workspace", details.workspace_id],
+    ["captured", details.captured_at],
+  ];
+  const identity =
+    details.identity && typeof details.identity === "object"
+      ? (details.identity as Record<string, unknown>)
+      : {};
+  if (tool === "staff" && action === "inspect") {
+    fields.push(
+      ["session", identity.pi_session_id],
+      ["pane", identity.pane_id],
+      ["workspace", identity.workspace_id],
+    );
+  }
+  for (const [label, field] of fields)
+    if (field !== undefined && field !== "")
+      lines.push(`${label}: ${String(field)}`);
+  if (action === "list" && tool === "agent")
+    lines.push(
+      "",
+      ...agentHierarchy(details),
+      ...(Array.isArray(details.agent_definitions) &&
+      details.agent_definitions.length
+        ? [
+            "",
+            "Agent definitions:",
+            ...details.agent_definitions.flatMap((definition) => {
+              const name =
+                definition && typeof definition === "object"
+                  ? value(
+                      (definition as Record<string, unknown>).name ??
+                        (definition as Record<string, unknown>).agent,
+                    )
+                  : "";
+              return name ? [`  ${name}`] : [];
+            }),
+          ]
+        : []),
+    );
+  if (action === "list" && tool === "staff") {
+    const leads = Array.isArray(details.leads) ? details.leads : [];
+    lines.push(
+      "",
+      ...leads.flatMap((lead: any) => {
+        if (!lead || typeof lead !== "object") return [];
+        const agents = Array.isArray(lead.agents) ? lead.agents.length : 0;
+        const counts =
+          lead.agent_counts && typeof lead.agent_counts === "object"
+            ? (lead.agent_counts as Record<string, unknown>)
+            : {};
+        const totalAgents =
+          typeof counts.total === "number" ? counts.total : agents;
+        const state = value(lead.runtime_state) || "unknown";
+        return [
+          `${value(lead.display_name) || value(lead.lead) || "lead"}  ${state}${totalAgents ? ` · ${totalAgents} agent${totalAgents === 1 ? "" : "s"}` : ""}`,
+          `  lead: ${value(lead.lead)}`,
+          ...(typeof lead.needs_you === "boolean"
+            ? [`  needs you: ${lead.needs_you ? "yes" : "no"}`]
+            : []),
+          ...(value(lead.pending_ask_id)
+            ? [`  ask: ${value(lead.pending_ask_id)}`]
+            : []),
+          ...(value(lead.pending_ask_question)
+            ? [`  question: ${value(lead.pending_ask_question)}`]
+            : []),
+          ...(lead.last_activity !== undefined && lead.last_activity !== null
+            ? [`  last activity: ${String(lead.last_activity)}`]
+            : []),
+          ...(lead.agent_counts && typeof lead.agent_counts === "object"
+            ? [
+                `  agent counts: ${Object.entries(counts)
+                  .filter(([, count]) => count !== undefined)
+                  .map(([name, count]) => `${name}=${String(count)}`)
+                  .join(" · ")}`,
+              ]
+            : []),
+          ...(Array.isArray(lead.available_actions)
+            ? [`  can: ${lead.available_actions.join(", ")}`]
+            : []),
+        ];
+      }),
+    );
+  }
+  if (action === "inspect")
+    lines.push(...inspectEvidence(details, true, theme));
+  if (
+    tool === "staff" &&
+    action === "inspect" &&
+    Array.isArray(details.agents)
+  ) {
+    lines.push(
+      "",
+      "agents:",
+      ...details.agents.flatMap((agent) => {
+        if (!agent || typeof agent !== "object") return [];
+        const item = agent as Record<string, unknown>;
+        return [
+          `  ${value(item.label) || value(item.id) || "agent"} · ${value(item.state) || "unknown"}`,
+        ];
+      }),
+    );
+  }
+  if (details.cleanup_error)
+    lines.push("", `cleanup warning: ${String(details.cleanup_error)}`);
+  if (details.cleanup_errors && typeof details.cleanup_errors === "object")
+    lines.push(
+      "",
+      "cleanup errors:",
+      JSON.stringify(details.cleanup_errors, null, 2),
+    );
+  return lines;
+}
+
+export function renderCoordinationResult(
+  tool: CoordinationTool,
+  result: any,
+  options: any,
+  theme: any,
+  context: any = {},
+): WidthSafeText {
+  const details = resultDetails(result);
+  const args = (context?.args ?? {}) as Record<string, unknown>;
+  const action = value(args.action) || value(details.action) || "agent";
+  const expanded = humanExpanded(context, options);
+  const failed = details.ok === false || context?.isError === true;
+  if (failed && details.error && typeof details.error === "object")
+    return new WidthSafeText(
+      errorLines(details, theme, expanded, `${tool} ${action}`).join("\n"),
+      0,
+      0,
+    );
+  if (failed) {
+    const raw = resultContent(result);
+    const fallback = expanded
+      ? raw.length > 4000
+        ? `${raw.slice(0, 3999)}…`
+        : raw || "Operation failed"
+      : collapseDisplayText(raw, 240) || "Operation failed";
+    return new WidthSafeText(statusLine(theme, "error", "✗", fallback), 0, 0);
+  }
+  if (options?.isPartial || context?.isPartial)
+    return renderCoordinationCall(tool, args, theme, {
+      ...context,
+      expanded: false,
+    });
+  if (expanded)
+    return new WidthSafeText(
+      expandedResultLines(tool, action, details, args, theme).join("\n"),
+      0,
+      0,
+    );
+  if (tool === "agent") {
+    if (action === "list")
+      return new WidthSafeText(
+        humanText(theme, "toolTitle", agentListSummary(details)),
+        0,
+        0,
+      );
+    if (action === "inspect") {
+      const label = value(details.agent) || "agent";
+      return new WidthSafeText(
+        [
+          humanText(theme, "toolTitle", `inspect  ${label}`),
+          ...inspectEvidence(details, false, theme).map((line) =>
+            humanText(theme, "muted", `  ${line}`),
+          ),
+        ].join("\n"),
+        0,
+        0,
+      );
+    }
+    const label =
+      value(details.agent) ||
+      value(details.label) ||
+      value(details.agent_label) ||
+      value(args.agent) ||
+      value(args.label) ||
+      value(args.definition) ||
+      "agent";
+    const message =
+      action === "delegate"
+        ? `${label} started`
+        : action === "steer"
+          ? "steering sent"
+          : action === "reply"
+            ? "reply sent"
+            : action === "close"
+              ? `${label} closed`
+              : `${action} ${label}`;
+    return new WidthSafeText(
+      statusLine(theme, "success", "✓", message) +
+        (details.cleanup_error
+          ? `\n${humanText(theme, "warning", `  ! cleanup warning · Ctrl+O`)}`
+          : ""),
+      0,
+      0,
+    );
+  }
+  if (tool === "chief") {
+    const waiting = action === "ask";
+    return new WidthSafeText(
+      statusLine(
+        theme,
+        waiting ? "warning" : "success",
+        waiting ? "?" : "✓",
+        waiting ? "waiting for Chief" : "sent to Chief",
+      ),
+      0,
+      0,
+    );
+  }
+  if (action === "list") {
+    const leads = Array.isArray(details.leads) ? details.leads : [];
+    const working = leads.filter(
+      (lead: any) => lead?.runtime_state === "working",
+    ).length;
+    const needs = leads.filter((lead: any) => lead?.needs_you === true).length;
+    return new WidthSafeText(
+      humanText(
+        theme,
+        "toolTitle",
+        [
+          `staff ${leads.length} leads`,
+          working ? `${working} working` : "",
+          needs ? `${needs} needs you` : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      ),
+      0,
+      0,
+    );
+  }
+  const display =
+    value(details.display_name) || shortIdentity(details.lead) || "lead";
+  if (action === "inspect")
+    return new WidthSafeText(
+      [
+        humanText(theme, "toolTitle", `inspect  ${display}`),
+        ...inspectEvidence(details, false, theme).map((line) =>
+          humanText(theme, "muted", `  ${line}`),
+        ),
+      ].join("\n"),
+      0,
+      0,
+    );
+  return new WidthSafeText(
+    statusLine(
+      theme,
+      "success",
+      "✓",
+      `${action === "reply" ? "replied" : "sent"} to ${display}`,
+    ),
+    0,
+    0,
+  );
 }
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -1682,23 +2236,33 @@ export class WidthSafeText extends Text {
   }
 }
 
+function renderMessageBox(lines: string[], theme: any, outputPad = 0): TuiBox {
+  const box = createWidthSafeBox(outputPad, 1, (line) =>
+    theme.bg("customMessageBg", line),
+  );
+  box.addChild(new WidthSafeText(lines.join("\n"), 0, 0));
+  return box;
+}
+
 export function renderCompletionMessage(
   message: { content?: string; details?: CompletionMessageDetails },
   options: { expanded?: boolean; outputPad?: number },
   theme: any,
 ): TuiBox {
-  const d = message.details,
-    failed = d?.status === "failed",
-    elapsed =
-      Number.isFinite(d?.elapsedMs) &&
-      d?.elapsedMs !== undefined &&
-      d.elapsedMs >= 0
-        ? formatElapsed(0, d.elapsedMs)
-        : undefined,
-    prefix = theme.fg(
-      failed ? "error" : "success",
-      `${failed ? "✗" : "✓"} ${d?.agentLabel ?? "agent"}${d?.agentDefinition ? ` (${d.agentDefinition})` : ""}${d?.piSessionId ? ` · session=${d.piSessionId}` : ""} ${failed ? "failed" : "completed"}`,
-    );
+  const d = message.details;
+  const failed = d?.status === "failed";
+  const elapsed =
+    Number.isFinite(d?.elapsedMs) &&
+    d?.elapsedMs !== undefined &&
+    d.elapsedMs >= 0
+      ? formatElapsed(0, d.elapsedMs)
+      : undefined;
+  const label = d?.agentLabel ?? "agent";
+  const definition =
+    d?.agentDefinition && d.agentDefinition !== label
+      ? ` · ${d.agentDefinition}`
+      : "";
+  const prefix = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${label}${failed ? " failed" : " completed"}${definition}`;
   const humanContent = (message.content ?? "")
     .replace(/^Agent result · [^\n]*\n\n/u, "")
     .replace(/^Result file: [^\n]*\n\n/u, "")
@@ -1707,7 +2271,8 @@ export function renderCompletionMessage(
     humanContent.split("\n").find((line) => line.trim()) ?? humanContent ?? "";
   const lines = options.expanded
     ? [
-        prefix,
+        `${label}${failed ? " failed" : " completed"}`,
+        ...(d?.agentDefinition ? [`definition: ${d.agentDefinition}`] : []),
         ...(d?.piSessionId ? [`session: ${d.piSessionId}`] : []),
         ...(d?.requestId ? [`request: ${d.requestId}`] : []),
         ...(elapsed ? [`elapsed: ${elapsed}`] : []),
@@ -1728,11 +2293,84 @@ export function renderCompletionMessage(
             : ""),
         theme.fg("muted", `  ${collapseDisplayText(body) ?? ""}`),
       ];
-  const box = createWidthSafeBox(options.outputPad ?? 0, 1, (line) =>
-    theme.bg("customMessageBg", line),
-  );
-  box.addChild(new WidthSafeText(lines.join("\n"), 0, 0));
-  return box;
+  return renderMessageBox(lines, theme, options.outputPad ?? 0);
+}
+
+export function renderAgentAskMessage(
+  message: { details?: unknown },
+  options: { expanded?: boolean; outputPad?: number },
+  theme: any,
+): TuiBox {
+  const details =
+    message.details && typeof message.details === "object"
+      ? (message.details as Record<string, unknown>)
+      : {};
+  const label = value(details.agentLabel) || "agent";
+  const question = value(details.question) || "Input is required.";
+  const lines = options.expanded
+    ? [
+        `${label} needs input`,
+        "",
+        "question:",
+        question,
+        ...(value(details.askId) ? ["", `ask: ${value(details.askId)}`] : []),
+        ...(value(details.requestId)
+          ? [`request: ${value(details.requestId)}`]
+          : []),
+        ...(value(details.piSessionId)
+          ? [`session: ${value(details.piSessionId)}`]
+          : []),
+        ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
+      ]
+    : [
+        statusLine(theme, "warning", "?", `${label} needs input`),
+        `  ${collapseDisplayText(question, 240) ?? "Input is required."}`,
+      ];
+  return renderMessageBox(lines, theme, options.outputPad ?? 0);
+}
+
+export function renderAgentStaleMessage(
+  message: { details?: unknown },
+  options: { expanded?: boolean; outputPad?: number },
+  theme: any,
+): TuiBox {
+  const details =
+    message.details && typeof message.details === "object"
+      ? (message.details as Record<string, unknown>)
+      : {};
+  const label = value(details.agentLabel) || "agent";
+  const duration =
+    Number.isFinite(details.inactiveMs) && Number(details.inactiveMs) >= 0
+      ? (formatElapsed(0, Number(details.inactiveMs)) ?? "unknown")
+      : "unknown";
+  const lines = options.expanded
+    ? [
+        `${label} inactive`,
+        "",
+        "state: working",
+        `inactive: ${duration}`,
+        ...(Number.isFinite(details.thresholdMs)
+          ? [
+              `threshold: ${formatElapsed(0, Number(details.thresholdMs)) ?? "unknown"}`,
+            ]
+          : []),
+        ...(value(details.requestId)
+          ? [`request: ${value(details.requestId)}`]
+          : []),
+        ...(value(details.piSessionId)
+          ? [`session: ${value(details.piSessionId)}`]
+          : []),
+        ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
+        "",
+        "Inactivity is advisory only.",
+        "Inspect before intervening.",
+        "Do not close solely because of inactivity.",
+      ]
+    : [
+        statusLine(theme, "warning", "!", `${label} inactive · ${duration}`),
+        "  working · inactivity is not proof of a hang",
+      ];
+  return renderMessageBox(lines, theme, options.outputPad ?? 0);
 }
 
 const spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];

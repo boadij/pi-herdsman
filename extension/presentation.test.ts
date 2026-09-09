@@ -14,11 +14,8 @@ import {
   formatSupervisionNotification,
   SUPERVISION_CONTEXT_MAX_BYTES,
   formatAgentDefinitions,
-  formatExpandedToolResult,
   formatSkills,
-  formatToolCall,
   formatTools,
-  formatToolResultSummary,
   formatToolModelResult,
   compactModelToken,
   formatStatusCounts,
@@ -35,6 +32,10 @@ import {
   renderSupervisionLeads,
   retainSupervisionSelection,
   renderCompletionMessage,
+  renderAgentAskMessage,
+  renderAgentStaleMessage,
+  renderCoordinationCall,
+  renderCoordinationResult,
   renderAgentDefinitionsOverview,
   renderStopSummary,
   selectedModelToken,
@@ -918,162 +919,547 @@ test("display text is normalized and only ellipsized when needed", (t) => {
     assert.equal(collapseDisplayText(" \u0000 "), undefined);
   }
 
-  {
-    assert.equal(formatElapsed(0, 0), "0s");
-    for (const [args, expected] of [
-      [
-        {
-          action: "delegate",
-          definition: "reviewer",
-          label: "auth-review",
-          task: "check it",
-        },
-        "agent delegate · definition=reviewer · check it",
-      ],
-      [
-        { action: "delegate", definition: "reviewer" },
-        "agent delegate · definition=reviewer",
-      ],
-      [
-        { action: "delegate", session: "session-id", task: "check it" },
-        "agent delegate · session=session-id · check it",
-      ],
-      [
-        {
-          action: "delegate",
-          session: "session-id",
-          task: "continue",
-        },
-        "agent delegate · session=session-id · continue",
-      ],
-      [
-        { action: "steer", agent: "auth-review" },
-        "agent steer · agent=auth-review",
-      ],
-      [
-        { action: "reply", agent: "auth-review", message: "Use option B" },
-        "agent reply · agent=auth-review · Use option B",
-      ],
-      [
-        { action: "close", agent: "auth-review" },
-        "agent close · agent=auth-review",
-      ],
-    ] as const)
-      assert.equal(formatToolCall(args), expected);
-  }
+  assert.equal(formatElapsed(0, 0), "0s");
 });
 
-test("expanded delegate results show original task and files without changing compact calls", (t) => {
-  {
-    const args = {
+const presentationTheme = {
+  fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+};
+
+function renderedText(
+  component: { render(width: number): string[] },
+  width = 160,
+) {
+  return component
+    .render(width)
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+}
+
+test("coordination calls use semantic collapsed and exact expanded presentation", () => {
+  assert.match(
+    renderedText(
+      renderCoordinationCall(
+        "agent",
+        {
+          action: "delegate",
+          definition: "researcher",
+          label: "release-review",
+          task: "Find why the release PR is missing",
+        },
+        presentationTheme,
+        { argsComplete: true },
+      ),
+    ),
+    /^delegate  release-review\n  Find why the release PR is missing$/,
+  );
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "agent",
+        { action: "delegate", definition: "researcher", task: "Investigate" },
+        presentationTheme,
+      ),
+    ),
+    "delegate  researcher\n  Investigate",
+  );
+  assert.match(
+    renderedText(
+      renderCoordinationCall(
+        "agent",
+        {
+          action: "delegate",
+          session: "/tmp/session.jsonl",
+          task: "Apply the findings",
+        },
+        presentationTheme,
+      ),
+    ),
+    /^continue\n  Apply the findings$/,
+  );
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "agent",
+        { action: "delegate", definition: "researcher", task: "streaming" },
+        presentationTheme,
+        { isPartial: true, argsComplete: false },
+      ),
+    ),
+    "delegate  researcher…\n  streaming",
+  );
+  const expanded = renderedText(
+    renderCoordinationCall(
+      "agent",
+      {
+        action: "delegate",
+        definition: "researcher",
+        label: "release-review",
+        cwd: join(homedir(), "project"),
+        timeoutMs: 300000,
+        task: "Find why the release PR is missing",
+        files: ["investigation.md"],
+      },
+      presentationTheme,
+      { expanded: true },
+    ),
+  );
+  assert.match(expanded, /definition: researcher/);
+  assert.match(expanded, /label: release-review/);
+  assert.match(expanded, /cwd: ~\/project/);
+  assert.match(expanded, /timeout: 300000/);
+  assert.match(expanded, /task:\nFind why the release PR is missing/);
+  assert.match(expanded, /files:\n  investigation\.md/);
+});
+
+test("coordination results keep collapsed identity bounded and expose structured evidence when expanded", () => {
+  const session = "session-1234567890-full";
+  const request = "request-1234567890-full";
+  const pane = "pane-1234567890-full";
+  const task =
+    "A complete task that must remain available in the expanded view";
+  const files = ["one.md", "two.md"];
+  const args = {
+    action: "delegate",
+    definition: "researcher",
+    label: "release-review",
+    task,
+    files,
+  };
+  const result = {
+    content: [{ type: "text", text: "model-facing prose must not be parsed" }],
+    details: {
+      ok: true,
       action: "delegate",
-      definition: "reviewer",
-      task: "Review the approved change",
-      files: ["z/path", "a/path"],
-    };
-    const expanded = formatExpandedToolResult(args, "Agent delegate started.");
+      agent: "release-review",
+      definition: "researcher",
+      session_id: session,
+      request_id: request,
+      pane_id: pane,
+    },
+  };
+  const collapsed = renderedText(
+    renderCoordinationResult(
+      "agent",
+      result,
+      { expanded: false },
+      presentationTheme,
+      { args },
+    ),
+  );
+  assert.match(collapsed, /✓ release-review started/);
+  for (const hidden of [
+    session,
+    request,
+    pane,
+    task,
+    ...files,
+    "model-facing prose",
+  ])
+    assert.doesNotMatch(
+      collapsed,
+      new RegExp(hidden.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),
+    );
+  const expanded = renderedText(
+    renderCoordinationResult(
+      "agent",
+      result,
+      { expanded: true },
+      presentationTheme,
+      { args },
+    ),
+  );
+  const expandedCall = renderedText(
+    renderCoordinationCall("agent", args, presentationTheme, {
+      expanded: true,
+    }),
+  );
+  assert.ok(
+    expandedCall.includes(`task:\n${task}`) &&
+      expandedCall.includes("files:\n  one.md\n  two.md") &&
+      !expanded.includes(`task:\n${task}`) &&
+      !expanded.includes("files:\n"),
+  );
+  for (const visible of [session, request, pane])
     assert.match(
       expanded,
-      /Agent delegate started\.\n\ntask: Review the approved change/,
+      new RegExp(visible.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),
     );
-    assert.match(expanded, /files:\n  z\/path\n  a\/path/);
-    assert.equal(
-      formatToolCall(args),
-      "agent delegate · definition=reviewer · Review the approved change",
-    );
-    assert.equal(
-      formatToolCall({ action: "delegate", agent: "reviewer", task: "next" }),
-      "agent delegate · next",
-    );
+  assert.doesNotMatch(expanded, /model-facing prose/);
+});
+
+test("coordination observations, evidence, hierarchy, errors, and width safety are semantic", () => {
+  const list = renderedText(
+    renderCoordinationResult(
+      "agent",
+      {
+        details: {
+          ok: true,
+          agents: [
+            {
+              agent: "root",
+              state: "working",
+              available_actions: ["inspect", "steer", "close"],
+            },
+            {
+              agent: "child",
+              parent_label: "root",
+              state: "blocked",
+              available_actions: ["inspect", "reply", "close"],
+            },
+            {
+              agent: "grandchild",
+              parent_label: "child",
+              state: "working",
+              available_actions: ["inspect", "close"],
+            },
+            {
+              agent: "orphan",
+              parent_label: "missing",
+              state: "idle",
+              available_actions: ["inspect"],
+            },
+          ],
+        },
+      },
+      {},
+      presentationTheme,
+      { args: { action: "list" } },
+    ),
+  );
+  assert.equal(list, "agents 4 · 2 working · 1 blocked · 1 needs reply");
+  const hierarchy = renderedText(
+    renderCoordinationResult(
+      "agent",
+      {
+        details: {
+          ok: true,
+          agents: [
+            { agent: "root", state: "working", available_actions: ["inspect"] },
+            {
+              agent: "child",
+              parent_label: "root",
+              state: "blocked",
+              available_actions: ["reply"],
+              cleanup_error: "child cleanup warning",
+              result_error: { code: "write_failure", message: "result lost" },
+            },
+            {
+              agent: "grandchild",
+              parent_label: "child",
+              state: "working",
+              available_actions: [],
+            },
+            {
+              agent: "orphan",
+              parent_label: "missing",
+              state: "unknown",
+              available_actions: ["inspect"],
+              agent_definition: "reviewer",
+              pi_session_id: "orphan-session",
+              orphan: true,
+              stale: true,
+              inactive_ms: 120000,
+              diagnostic: "session identity unavailable",
+            },
+          ],
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "list" } },
+    ),
+  );
+  assert.ok(hierarchy.indexOf("root") < hierarchy.indexOf("  child"));
+  assert.ok(hierarchy.indexOf("  child") < hierarchy.indexOf("    grandchild"));
+  assert.match(
+    hierarchy,
+    /^orphan  unknown · definition: reviewer · can: inspect · orphan · stale · inactive 2m$/m,
+  );
+  assert.match(hierarchy, /definition: reviewer/);
+  assert.match(hierarchy, /  session: orphan-session/);
+  assert.match(hierarchy, /  parent: missing \(not present\)/);
+  assert.match(hierarchy, /  diagnostic: session identity unavailable/);
+  assert.match(hierarchy, /cleanup warning: child cleanup warning/);
+  assert.match(
+    hierarchy,
+    /result error: \{"code":"write_failure","message":"result lost"\}/,
+  );
+  const inspect = renderedText(
+    renderCoordinationResult(
+      "agent",
+      {
+        details: {
+          ok: true,
+          agent: "researcher",
+          process: { foreground_processes: [{ cmdline: "npm run check" }] },
+          recent_output: "first\n433 passed",
+          recent_output_truncated: true,
+        },
+      },
+      {},
+      presentationTheme,
+      { args: { action: "inspect", agent: "researcher" } },
+    ),
+  );
+  assert.match(
+    inspect,
+    /inspect  researcher\n  npm run check · 433 passed\n  output truncated · Ctrl\+O/,
+  );
+  const structuredError = renderedText(
+    renderCoordinationResult(
+      "agent",
+      {
+        details: {
+          ok: false,
+          error: {
+            category: "agent_busy",
+            message: "Agent is not accepting steering",
+            nextAction: "refresh agents",
+          },
+        },
+      },
+      {},
+      presentationTheme,
+      { args: { action: "steer", agent: "researcher" } },
+    ),
+  );
+  assert.match(
+    structuredError,
+    /✗ agent steer\n  Agent is not accepting steering\n  next: refresh agents/,
+  );
+  assert.doesNotMatch(structuredError, /agent_busy/);
+  const expandedError = renderedText(
+    renderCoordinationResult(
+      "agent",
+      {
+        details: {
+          ok: false,
+          error: {
+            category: "agent_busy",
+            message: "Agent is not accepting steering",
+            nextAction: "refresh agents",
+            ids: { agent: "researcher", session: "session-id" },
+            details: { stage: "validate" },
+            primary: { category: "agent_busy", message: "still busy" },
+            cleanup: { category: "cleanup_failed", message: "pane preserved" },
+          },
+          cleanup_errors: { researcher: "pane preserved" },
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "steer", agent: "researcher" } },
+    ),
+  );
+  assert.match(expandedError, /category: agent_busy/);
+  assert.match(expandedError, /identity: agent=researcher, session=session-id/);
+  assert.match(expandedError, /stage: validate/);
+  assert.match(
+    expandedError,
+    /primary: category=agent_busy, message=still busy/,
+  );
+  assert.match(
+    expandedError,
+    /cleanup: category=cleanup_failed, message=pane preserved/,
+  );
+  assert.match(expandedError, /cleanup errors:/);
+  assert.match(expandedError, /researcher/);
+  const plainError = renderedText(
+    renderCoordinationResult(
+      "chief",
+      {
+        content: [{ type: "text", text: "Chief lease is no longer active" }],
+        details: {},
+      },
+      {},
+      presentationTheme,
+      { args: { action: "message" }, isError: true },
+    ),
+  );
+  assert.match(plainError, /Chief lease is no longer active/);
+  const wideArgs = {
+    action: "delegate",
+    definition: "界".repeat(30),
+    task: "🙂".repeat(100),
+  };
+  for (const width of [1, 8, 16, 32, 80]) {
+    for (const rendered of [
+      renderCoordinationCall("agent", wideArgs, presentationTheme),
+      renderCoordinationResult(
+        "agent",
+        { details: { ok: true, agent: "界".repeat(30) } },
+        {},
+        presentationTheme,
+        { args: { action: "delegate" } },
+      ),
+    ])
+      assert.ok(
+        rendered.render(width).every((line) => visibleWidth(line) <= width),
+      );
   }
 });
 
-test("Expanded delegate results preserve details, failures, and width safety", (t) => {
-  {
-    const expanded = formatExpandedToolResult(
-      {
-        action: "delegate",
-        definition: "scout",
-        label: "quick-test",
-        task: "check it",
-      },
-      "Delegate agent quick-test.\nSession: session-id\nRequest: request-id",
-      { pane_id: "pane-id" },
-    );
-    assert.match(
-      expanded,
-      /^Delegate agent quick-test\.\nDefinition: scout\nSession: session-id\nRequest: request-id\n\ntask: check it$/,
-    );
-    assert.doesNotMatch(
-      formatExpandedToolResult(
-        { action: "delegate", session: "session-id" },
-        "Delegate agent quick-test.\nSession: session-id",
-        { pane_id: "pane-id" },
+test("chief and staff coordination renderers share semantic status language", () => {
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "chief",
+        { action: "message", message: "TASK-84 is complete" },
+        presentationTheme,
       ),
-      /Definition: scout/,
-    );
-    assert.doesNotMatch(
-      formatExpandedToolResult(
-        { action: "delegate", definition: "scout", label: "existing" },
-        "Delegate agent existing.\nSession: session-id\nRequest: request-id",
+    ),
+    "chief message\n  TASK-84 is complete",
+  );
+  assert.equal(
+    renderedText(
+      renderCoordinationResult(
+        "chief",
+        { details: { ok: true } },
         {},
+        presentationTheme,
+        { args: { action: "ask" } },
       ),
-      /Definition: scout/,
-    );
-  }
+    ),
+    "? waiting for Chief",
+  );
+  assert.equal(
+    renderedText(
+      renderCoordinationResult(
+        "staff",
+        {
+          details: {
+            ok: true,
+            leads: [{ runtime_state: "working", needs_you: true }],
+          },
+        },
+        {},
+        presentationTheme,
+        { args: { action: "list" } },
+      ),
+    ),
+    "staff 1 leads · 1 working · 1 needs you",
+  );
+  assert.match(
+    renderedText(
+      renderCoordinationResult(
+        "staff",
+        { details: { ok: true, display_name: "workspace/api" } },
+        {},
+        presentationTheme,
+        { args: { action: "message", lead: "lead-opaque" } },
+      ),
+    ),
+    /✓ sent to workspace\/api/,
+  );
 
-  {
-    assert.equal(
-      formatExpandedToolResult({ action: "delegate" }, "failed"),
-      "failed",
-    );
-    assert.equal(
-      formatExpandedToolResult(
-        { action: "delegate", definition: "scout" },
-        "failed",
-      ),
-      "failed",
-    );
-    assert.equal(
-      formatExpandedToolResult(
-        { action: "delegate", files: ["z/path", "a/path"] },
-        "files-only",
-      ),
-      "files-only\n\nfiles:\n  z/path\n  a/path",
-    );
-    assert.equal(
-      formatExpandedToolResult(
-        { action: "delegate", task: "Attempted task", files: ["/tmp/🧪 path"] },
-        "Agent delegate failed.\nMessage: denied",
-      ),
-      "Agent delegate failed.\nMessage: denied\n\ntask: Attempted task\n\nfiles:\n  /tmp/🧪 path",
-    );
-    assert.equal(
-      formatExpandedToolResult(
-        { action: "delegate", task: "partial" },
-        "partial",
-      ),
-      "partial\n\ntask: partial",
-    );
-  }
-
-  {
-    const path = "/tmp/long component with spaces/🙂/punctuation,[x].md";
-    const formatted = formatExpandedToolResult(
+  const chiefAsk = renderedText(
+    renderCoordinationResult(
+      "chief",
       {
-        action: "delegate",
-        task: "Keep this task",
-        files: ["z/path", path, "a/path"],
+        details: {
+          ok: true,
+          id: "record-ask",
+          askId: "ask-camel",
+          chiefSessionId: "chief-session",
+        },
       },
-      "Agent delegate started.",
-    );
-    assert.ok(formatted.indexOf("z/path") < formatted.indexOf(path));
-    assert.ok(formatted.indexOf(path) < formatted.indexOf("a/path"));
-    assert.match(formatted, /punctuation,\[x\]\.md/);
-    assert.doesNotMatch(formatted, /file contents/);
-    const rendered = new Text(formatted, 0, 0).render(32);
-    assert.ok(rendered.every((line) => visibleWidth(line) <= 32));
-  }
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "ask" } },
+    ),
+  );
+  assert.match(chiefAsk, /ask: ask-camel/);
+  assert.match(chiefAsk, /session: chief-session/);
+
+  const chiefMessage = renderedText(
+    renderCoordinationResult(
+      "chief",
+      {
+        details: {
+          ok: true,
+          id: "record-message",
+          chiefSessionId: "chief-session-message",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "message" } },
+    ),
+  );
+  assert.match(chiefMessage, /session: chief-session-message/);
+
+  const staffReplyArgs = {
+    action: "reply",
+    lead: "lead-opaque",
+    askId: "ask-for-lead",
+    message: "answer",
+  };
+  assert.match(
+    renderedText(
+      renderCoordinationCall("staff", staffReplyArgs, presentationTheme, {
+        expanded: true,
+      }),
+    ),
+    /lead: lead-opaque\n\nask: ask-for-lead/,
+  );
+  assert.match(
+    renderedText(
+      renderCoordinationResult(
+        "staff",
+        {
+          details: {
+            ok: true,
+            action: "reply",
+            display_name: "workspace\/api",
+          },
+        },
+        { expanded: true },
+        presentationTheme,
+        { args: staffReplyArgs },
+      ),
+    ),
+    /ask: ask-for-lead/,
+  );
+
+  const staffList = renderedText(
+    renderCoordinationResult(
+      "staff",
+      {
+        details: {
+          ok: true,
+          leads: [
+            {
+              lead: "lead-opaque",
+              display_name: "workspace/api",
+              runtime_state: "blocked",
+              needs_you: true,
+              pending_ask_id: "pending-ask",
+              pending_ask_question: "Which provider should I use?",
+              last_activity: 1735787045000,
+              agent_counts: { working: 2, blocked: 1, total: 3 },
+              agents: [{ label: "one" }, { label: "two" }, { label: "three" }],
+              available_actions: ["inspect", "reply"],
+            },
+          ],
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "list" } },
+    ),
+  );
+  for (const evidence of [
+    "needs you: yes",
+    "ask: pending-ask",
+    "question: Which provider should I use?",
+    "last activity: 1735787045000",
+    "agent counts: working=2 · blocked=1 · total=3",
+  ])
+    assert.ok(staffList.includes(evidence));
 });
 
 test("model selection reports provider and id for Pi model objects", (t) => {
@@ -1623,8 +2009,21 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
 test("tool and completion renderers retain structured action details", (t) => {
   {
     assert.equal(
-      formatToolResultSummary("list", { ok: true, agents: [1, 2] }),
-      "✓ 2 agents",
+      renderedText(
+        renderCoordinationResult(
+          "agent",
+          {
+            details: {
+              ok: true,
+              agents: [{ state: "working" }, { state: "blocked" }],
+            },
+          },
+          {},
+          presentationTheme,
+          { args: { action: "list" } },
+        ),
+      ),
+      "agents 2 · 1 working · 1 blocked",
     );
     assert.match(
       formatToolModelResult("close", {
@@ -1692,9 +2091,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
       );
       assert.match(
         rendered.render(160)[1],
-        new RegExp(
-          `^✓ reviewer:auth-review · session=session-id completed · ${expected} · ctx 72%`,
-        ),
+        new RegExp(`^✓ reviewer:auth-review completed · ${expected} · ctx 72%`),
       );
     }
   }
@@ -1725,10 +2122,8 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     );
     assert.ok(expanded instanceof Box);
     const expandedText = expanded.render(120).join("\n");
-    assert.match(
-      expandedText,
-      /\[success\]✓ agent · session=session-id completed/,
-    );
+    assert.match(expandedText, /agent completed/);
+    assert.doesNotMatch(expandedText, /session=session-id completed/);
     assert.match(expandedText, /session: session-id/);
     assert.match(expandedText, /request: req/);
     assert.match(expandedText, /elapsed: 1s/);
@@ -1849,6 +2244,54 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
       assert.match(rendered.render(160)[2], /completed/);
     }
   }
+});
+
+test("ask and stale custom messages preserve attention semantics and identity boundaries", () => {
+  const ask = {
+    details: {
+      agentLabel: "implementer",
+      question: "Should this preserve compatibility?",
+      askId: "ask-id",
+      requestId: "request-id",
+      piSessionId: "session-id",
+      paneId: "pane-id",
+    },
+  };
+  const collapsedAsk = renderedText(
+    renderAgentAskMessage(ask, { expanded: false }, presentationTheme),
+  );
+  assert.match(collapsedAsk, /\? implementer needs input/);
+  assert.match(collapsedAsk, /Should this preserve compatibility/);
+  assert.doesNotMatch(collapsedAsk, /ask-id|request-id|session-id|pane-id/);
+  const expandedAsk = renderedText(
+    renderAgentAskMessage(ask, { expanded: true }, presentationTheme),
+  );
+  assert.match(expandedAsk, /question:\nShould this preserve compatibility/);
+  assert.match(expandedAsk, /ask: ask-id/);
+  assert.match(expandedAsk, /session: session-id/);
+
+  const stale = {
+    details: {
+      agentLabel: "researcher",
+      inactiveMs: 617000,
+      thresholdMs: 600000,
+      requestId: "request-id",
+      piSessionId: "session-id",
+      paneId: "pane-id",
+    },
+  };
+  const collapsedStale = renderedText(
+    renderAgentStaleMessage(stale, { expanded: false }, presentationTheme),
+  );
+  assert.match(collapsedStale, /! researcher inactive · 10m 17s/);
+  assert.match(collapsedStale, /inactivity is not proof of a hang/);
+  assert.doesNotMatch(collapsedStale, /✗/);
+  const expandedStale = renderedText(
+    renderAgentStaleMessage(stale, { expanded: true }, presentationTheme),
+  );
+  assert.match(expandedStale, /threshold: 10m/);
+  assert.match(expandedStale, /Inactivity is advisory only/);
+  assert.match(expandedStale, /session: session-id/);
 });
 
 test("agent definition overview uses a compact human hierarchy", (t) => {
