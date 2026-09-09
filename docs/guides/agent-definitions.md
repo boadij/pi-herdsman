@@ -164,8 +164,8 @@ Coordinate the assigned analysis and integrate direct agent results.
 ```
 
 The effective roster is validated atomically. Every `agents` name must exist.
-Bundled role descriptions and bodies describe role behavior only; orchestration
-guidance comes from the active controller contract.
+Bundled role descriptions communicate each role's purpose and selection boundary;
+the active controller contract remains authoritative for delegation behavior.
 
 With a non-empty explicit `tools` allowlist, `agent` is inferred unless
 explicitly denied. See [Delegation](../concepts/delegation.md).

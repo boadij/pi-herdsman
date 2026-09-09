@@ -387,6 +387,28 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
     ["scout", ["read", "ls", "find", "grep"]],
     ["generalist", ["read", "bash", "edit", "write", "agent"]],
   ]);
+  const expectedDescriptions = new Map([
+    [
+      "scout",
+      "Read-only codebase reconnaissance for unfamiliar areas; use to find entry points, trace flows, dependencies, constraints, and risks before deciding or editing",
+    ],
+    [
+      "researcher",
+      "External research specialist for questions that require web, documentation, standards, vendor, or other authoritative evidence beyond the repository; use for current facts, API behavior, comparisons, and source-backed recommendations",
+    ],
+    [
+      "implementer",
+      "Focused implementation agent for a resolved change; use when the required behavior is already decided and the task is to edit, test, and report",
+    ],
+    [
+      "reviewer",
+      "Independent read-only reviewer for plans, diffs, implementations, and codebase health; use when work needs verification, missing-case analysis, or regression review rather than modification",
+    ],
+    [
+      "generalist",
+      "General-purpose execution agent for scoped tasks that do not fit scout, researcher, implementer, or reviewer",
+    ],
+  ]);
   const required = withPiAgentDir(
     root,
     () =>
@@ -399,6 +421,14 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   );
   assert.equal(required.size, 5);
   for (const definition of definitions) {
+    assert.equal(
+      definition.frontmatter.description,
+      expectedDescriptions.get(definition.name),
+    );
+    assert.equal(
+      agentDefinitionMetadata(definition).description,
+      expectedDescriptions.get(definition.name),
+    );
     assert.deepEqual(
       definition.frontmatter.tools,
       expectedTools.get(definition.name),

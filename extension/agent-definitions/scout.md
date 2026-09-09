@@ -1,6 +1,6 @@
 ---
 name: scout
-description: Fast read-only codebase reconnaissance for unfamiliar areas; returns verified entry points, dependencies, constraints, and risks for handoff, not implementation
+description: Read-only codebase reconnaissance for unfamiliar areas; use to find entry points, trace flows, dependencies, constraints, and risks before deciding or editing
 model: openai-codex/gpt-5.6-luna
 thinking: medium
 systemPromptMode: replace

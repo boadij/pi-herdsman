@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Independent read-only review specialist for diffs, plans, codebase health, and PR/issue validation
+description: Independent read-only reviewer for plans, diffs, implementations, and codebase health; use when work needs verification, missing-case analysis, or regression review rather than modification
 model: openai-codex/gpt-5.6-luna
 thinking: medium
 agents: ["scout", "researcher"]
