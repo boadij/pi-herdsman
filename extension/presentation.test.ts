@@ -942,6 +942,18 @@ function renderedText(
     .trim();
 }
 
+test("empty partial coordination calls do not duplicate the tool name", () => {
+  assert.equal(
+    renderedText(
+      renderCoordinationCall("agent", {}, presentationTheme, {
+        isPartial: true,
+        argsComplete: false,
+      }),
+    ),
+    "agent…",
+  );
+});
+
 test("coordination calls use semantic collapsed and expanded presentation", () => {
   assert.match(
     renderedText(
@@ -2198,6 +2210,7 @@ test("tool and completion renderers retain structured action details", (t) => {
         bgTokens.push(name);
         return text;
       },
+      bold: (text: string) => text,
     };
     const rendered = renderCompletionMessage(
       {
@@ -2224,6 +2237,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const theme = {
       fg: (_name: string, text: string) => text,
       bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
     };
     for (const [elapsedMs, expected] of [
       [5_000, "5s"],
@@ -2257,6 +2271,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const theme = {
       fg: (name: string, text: string) => `[${name}]${text}`,
       bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
     };
     const expanded = renderCompletionMessage(
       {
@@ -2338,6 +2353,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const theme = {
       fg: (_name: string, text: string) => text,
       bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
     };
     const message = {
       content:
@@ -2372,6 +2388,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const theme = {
       fg: (_name: string, text: string) => text,
       bg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
     };
     for (const elapsedMs of [
       undefined,

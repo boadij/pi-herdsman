@@ -153,7 +153,10 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.equal(typeof tool.renderResult, "function");
   const renderedStaffCall = tool.renderCall(
     { action: "message", lead: "lead-bbbbbbbbb", message: "Please continue" },
-    { fg: (_color: string, value: string) => value },
+    {
+      fg: (_color: string, value: string) => value,
+      bold: (text: string) => text,
+    },
     { argsComplete: true },
   );
   assert.equal(typeof renderedStaffCall.render, "function");
@@ -167,7 +170,10 @@ test("active chief describes authoritative remote ask projection", async () => {
       details: { ok: true, display_name: "workspace/api", action: "message" },
     },
     { expanded: false },
-    { fg: (_color: string, value: string) => value },
+    {
+      fg: (_color: string, value: string) => value,
+      bold: (text: string) => text,
+    },
     { args: { action: "message", lead: "lead-bbbbbbbbb" } },
   );
   assert.match(renderedStaffResult.text, /✓ sent to workspace\/api/);

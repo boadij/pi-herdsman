@@ -1576,7 +1576,8 @@ function coordinationHeader(
   target: string,
   theme: any,
 ): string {
-  return `${humanText(theme, "toolTitle", theme.bold?.(`${tool} ${verb}`) ?? `${tool} ${verb}`)}${target ? `  ${humanText(theme, "accent", target)}` : ""}`;
+  const title = [tool, verb].filter(Boolean).join(" ");
+  return `${humanText(theme, "toolTitle", theme.bold(title))}${target ? `  ${humanText(theme, "accent", target)}` : ""}`;
 }
 
 function renderExpandedCoordinationCall(
@@ -1646,7 +1647,7 @@ export function renderCoordinationCall(
   const a = (context?.args ?? args) as Record<string, unknown>;
   const action = value(a.action);
   const continuation = tool === "agent" && action === "delegate" && !!a.session;
-  const verb = continuation ? "continue" : action || tool;
+  const verb = continuation ? "continue" : action;
   let target = "";
   if (tool === "agent" && action === "delegate")
     target = value(a.label) || value(a.definition);
@@ -2315,7 +2316,7 @@ export function renderCompletionMessage(
     d?.agentDefinition && d.agentDefinition !== label
       ? ` · ${d.agentDefinition}`
       : "";
-  const heading = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${theme.bold?.(label) ?? label}${failed ? " failed" : " completed"}${definition ? humanText(theme, "muted", definition) : ""}`;
+  const heading = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${theme.bold(label)}${failed ? " failed" : " completed"}${definition ? humanText(theme, "muted", definition) : ""}`;
   const humanContent = (message.content ?? "")
     .replace(/^Agent result · [^\n]*\n\n/u, "")
     .replace(/^Result file: [^\n]*\n\n/u, "")
@@ -2377,7 +2378,7 @@ export function renderAgentAskMessage(
       : {};
   const label = value(details.agentLabel) || "agent";
   const question = value(details.question) || "Input is required.";
-  const heading = `${humanText(theme, "warning", "?")} ${theme.bold?.(label) ?? label} needs input`;
+  const heading = `${humanText(theme, "warning", "?")} ${theme.bold(label)} needs input`;
   const content = new Container();
   content.addChild(new Text(heading, 0, 0));
   if (options.expanded) {
