@@ -169,13 +169,12 @@ Choose the path that matches what you are doing:
 
 ## Repository validation
 
-```sh
-prettier . --write
-npm run check
-git diff --check
-```
+Complete focused tests, smoke testing, review, and all intermediate checks
+first. Then, before staging or committing, run `prettier . --write` once as the
+final pre-commit mutation, followed only by the read-only checks `npm run check`
+and `git diff --check`.
 
-See [Development validation](docs/development/validation.md) for the full gate.
+See [Development validation](docs/development/validation.md) for the detailed validation order.
 
 ## License
 

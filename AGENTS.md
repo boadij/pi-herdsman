@@ -70,14 +70,13 @@ Narrow further when useful:
 npm test -- --test-name-pattern="<pattern>" extension/<area>.test.ts
 ```
 
-Focused tests provide development feedback. Before handoff, run the
-authoritative final repository gate:
-
-```sh
-prettier . --write
-npm run check
-git diff --check
-```
+Focused tests provide development feedback. Focused tests, smoke testing,
+review, and all intermediate checks must happen before formatting. Do not
+format during those phases. Before handoff, follow the detailed validation
+order in [Development validation](docs/development/validation.md): run
+`prettier . --write` once as the final pre-commit mutation, then run only the
+read-only checks `npm run check` and `git diff --check` before staging or
+committing.
 
 ### Testing architecture
 
@@ -105,4 +104,4 @@ documentation.
 
 ## Validation
 
-- Run validation before completing changes: `prettier . --write; npm run check`
+- Follow the detailed validation order in [Development validation](docs/development/validation.md).

@@ -26,7 +26,10 @@ The supported repository contract requires:
 - herdr `>=0.8.0`
 - herdr Pi integration version `2` or newer
 
-Run the repository validation gate first.
+Run focused tests and other intermediate checks before this smoke suite. Do
+not format during smoke testing; complete smoke testing and review before the
+final formatting and read-only verification sequence in
+[Development validation](validation.md).
 
 ## Current mailbox contract
 

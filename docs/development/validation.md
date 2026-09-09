@@ -5,15 +5,23 @@
 Repository handoff is not complete until the current validation gates have been
 run or a concrete environment blocker is recorded.
 
-## Required gate
+## Validation order
 
-Run:
+Focused tests, smoke testing, review, and all intermediate checks happen first.
+Do not format during those phases. Once implementation and review are
+complete, run the following as the final pre-commit sequence:
 
 ```sh
+# Final pre-commit mutation; run once only.
 prettier . --write
+
+# Read-only verification before staging or committing.
 npm run check
 git diff --check
 ```
+
+Do not run formatting again between these verification commands and staging or
+committing.
 
 When reviewing staged work, also run as appropriate:
 
@@ -82,13 +90,15 @@ tracked separately in [Smoke testing](smoke-testing.md).
 File selection is the primary focusing mechanism. A name pattern narrows the
 tests within the selected file; it does not select which files Node loads.
 
-Before final acceptance, run the full repository gate:
+After focused tests, smoke testing, review, and intermediate checks are
+complete, run the final pre-commit sequence above. The full repository check is
+the read-only verification step:
 
 ```sh
 npm run check
 ```
 
-`npm run check` remains the bounded full gate, including process-group cleanup
+`npm run check` remains the bounded full check, including process-group cleanup
 when the test runner times out or leaks descendants.
 
 ## Dependency availability
