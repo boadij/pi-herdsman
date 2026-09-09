@@ -1172,8 +1172,8 @@ test("plain agents opens the native management menu", async () => {
   );
   assert.equal(prompts[1]?.label, "Layout");
   assert.deepEqual(prompts[1]?.options, [
-    "Lead agents tab (current)",
-    "Subtree tabs",
+    "Lead agents tab",
+    "Subtree tabs (current)",
     "Split from caller",
   ]);
   await pi.events.get("session_shutdown")?.[0]();

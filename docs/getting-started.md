@@ -100,9 +100,10 @@ expand the resolved definition instructions with Pi's native `Ctrl+O`
 behavior. These edits always write global overrides, never project files.
 
 Use `Layout` to choose the current placement for newly started lead-direct
-agents: `tab` for one lead-owned agents tab, `subtree` for one tab per
-lead-direct agent, or `split` to stay in the caller's tab. Nested delegation
-always splits inside the owner's current tab.
+agents: `subtree` is the default and gives each lead-direct agent one tab;
+`tab` uses one lead-owned agents tab; `split` stays in the caller's tab. Nested
+delegation always splits inside the owner's current tab. Placement changes
+affect future starts only.
 
 For complete configuration ownership, see:
 

@@ -14,7 +14,7 @@ Settings shape:
 ```json
 {
   "piHerdsman": {
-    "spawnPlacement": "tab"
+    "spawnPlacement": "subtree"
   }
 }
 ```
@@ -30,8 +30,11 @@ split
 Default:
 
 ```text
-tab
+subtree
 ```
+
+When no `spawnPlacement` value is configured, it resolves to `subtree`.
+Unrecognized values remain invalid and resolve to `tab`.
 
 `tab` places future direct agents owned by a lead in one dedicated agents tab.
 

@@ -364,6 +364,7 @@ export function hasTaskText(task: string | undefined): boolean {
   return task !== undefined && !!task.trim();
 }
 export function resolveSpawnPlacement(value: unknown): SpawnPlacement {
+  if (value === undefined) return "subtree";
   return isSpawnPlacement(value) ? value : "tab";
 }
 export function isSpawnPlacement(value: unknown): value is SpawnPlacement {

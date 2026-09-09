@@ -95,6 +95,7 @@ is sent.
 ## `/agents placement`
 
 Selecting Layout opens a native selector showing the effective setting.
+When unset, the effective setting is `subtree`.
 Explicit values continue to set directly:
 
 ```text

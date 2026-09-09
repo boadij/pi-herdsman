@@ -109,10 +109,11 @@ const {
   spawnPlacementFromMenuSelection,
 } = await import("./core.ts");
 
-test("resolves all supported placement modes and defaults invalid values", () => {
+test("resolves placement modes with subtree as the absent default", () => {
   assert.equal(resolveSpawnPlacement("tab"), "tab");
   assert.equal(resolveSpawnPlacement("subtree"), "subtree");
   assert.equal(resolveSpawnPlacement("split"), "split");
+  assert.equal(resolveSpawnPlacement(undefined), "subtree");
   assert.equal(resolveSpawnPlacement("invalid"), "tab");
   assert.deepEqual(
     spawnPlacementMenuOptions("subtree").map(({ label, value }) => ({
