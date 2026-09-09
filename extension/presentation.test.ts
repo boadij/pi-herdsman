@@ -2253,13 +2253,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     assert.equal(first.resultPath, second.resultPath);
     assert.equal(
       first.resultPath,
-      join(
-        tmpdir(),
-        "pi-herdsman",
-        String(process.getuid?.() ?? "user"),
-        "results",
-        options.requestId,
-      ),
+      join(herdsmanTempRoot(), "results", options.requestId),
     );
     assert.equal(readFileSync(first.resultPath!, "utf8"), text);
     assert.equal(first.truncated, true);
