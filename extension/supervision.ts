@@ -12,9 +12,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { acquireProcessLock, type ProcessLockClaim } from "./lock.ts";
+import { herdsmanTempRoot } from "./tmp.ts";
 
 export type LeadRole = "lead" | "chief";
 
@@ -913,14 +913,7 @@ function socketPath(): string {
 export function supervisionRuntime(socket = socketPath()): SupervisionRuntime {
   if (!socket) throw new Error("HERDR_SOCKET_PATH is required");
   const runtimeHash = createHash("sha256").update(socket).digest("hex");
-  const uid = typeof process.getuid === "function" ? process.getuid() : "user";
-  const root = join(
-    tmpdir(),
-    "pi-herdsman",
-    String(uid),
-    "supervision",
-    runtimeHash,
-  );
+  const root = join(herdsmanTempRoot(), "supervision", runtimeHash);
   return {
     root,
     lock: join(root, "chief.lock"),

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { Box } from "@earendil-works/pi-tui";
@@ -46,6 +47,7 @@ import {
   truncateModelText,
   visibleWidth,
 } from "./presentation.ts";
+import { herdsmanTempRoot } from "./tmp.ts";
 
 initTheme("dark");
 
@@ -991,11 +993,13 @@ function renderedText(
   component: { render(width: number): string[] },
   width = 160,
 ) {
-  return component
-    .render(width)
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .trim();
+  return stripVTControlCharacters(
+    component
+      .render(width)
+      .map((line) => line.trimEnd())
+      .join("\n")
+      .trim(),
+  );
 }
 
 test("herd run entries render only valid finished durations", () => {
@@ -2174,9 +2178,7 @@ test("tail truncation keeps the end and reuses its deterministic path", (t) => {
     assert.equal(
       first.fullOutputPath,
       join(
-        tmpdir(),
-        "pi-herdsman",
-        String(process.getuid?.() ?? "user"),
+        herdsmanTempRoot(),
         "output",
         createHash("sha256").update("stable").digest("hex"),
         `${createHash("sha256").update("same").digest("hex")}.txt`,
@@ -2197,9 +2199,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     const text = "Found three authentication problems.";
     const result = truncateModelText(text, options);
     const expected = join(
-      tmpdir(),
-      "pi-herdsman",
-      String(process.getuid?.() ?? "user"),
+      herdsmanTempRoot(),
       "results",
       options.requestId,
     );
@@ -2256,13 +2256,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     assert.equal(first.resultPath, second.resultPath);
     assert.equal(
       first.resultPath,
-      join(
-        tmpdir(),
-        "pi-herdsman",
-        String(process.getuid?.() ?? "user"),
-        "results",
-        options.requestId,
-      ),
+      join(herdsmanTempRoot(), "results", options.requestId),
     );
     assert.equal(readFileSync(first.resultPath!, "utf8"), text);
     assert.equal(first.truncated, true);

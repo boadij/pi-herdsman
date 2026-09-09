@@ -27,9 +27,10 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { SupervisionSnapshot } from "./supervision.ts";
+import { herdsmanTempRoot } from "./tmp.ts";
 
 export type AgentLifecycleState =
   "working" | "blocked" | "settling" | "starting" | "unknown";
@@ -2182,11 +2183,7 @@ function savePrivateOutput(
       )
     )
       throw new Error("invalid result request id");
-    const base = join(
-      tmpdir(),
-      "pi-herdsman",
-      String(process.getuid?.() ?? "user"),
-    );
+    const base = herdsmanTempRoot();
     const root =
       kind === "result"
         ? join(base, "results")
