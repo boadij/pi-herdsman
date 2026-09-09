@@ -7483,7 +7483,6 @@ export default function (pi: ExtensionAPI): void {
                   {
                     workspaceId: lead.workspaceId,
                     paneId: lead.paneId,
-                    tabId: lead.tabId,
                     piSessionId: lead.lead,
                   },
                   ctx.signal,
@@ -8489,7 +8488,6 @@ export default function (pi: ExtensionAPI): void {
               {
                 workspaceId: lead.workspaceId,
                 paneId: lead.paneId,
-                tabId: lead.tabId,
                 piSessionId: lead.lead,
               },
               signal,
