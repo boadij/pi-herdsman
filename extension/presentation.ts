@@ -113,6 +113,7 @@ export function formatElapsed(
 ): string | undefined {
   if (
     !Number.isFinite(startedAt) ||
+    !Number.isFinite(now) ||
     startedAt === undefined ||
     startedAt < 0 ||
     now < startedAt

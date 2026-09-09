@@ -1042,6 +1042,12 @@ test("herd run entries render only valid finished durations", () => {
       startedAt: 878_000,
       completedAt: 1_000,
     },
+    {
+      phase: "finished",
+      sessionId: "session",
+      startedAt: 1_000,
+      completedAt: Number.NaN,
+    },
   ])
     assert.equal(renderHerdRunEntry({ data }, presentationTheme), undefined);
 });
