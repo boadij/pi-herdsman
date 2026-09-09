@@ -8,7 +8,17 @@ inheritProjectContext: true
 inheritGlobalContext: false
 noSkills: true
 skills: []
-tools: ["read", "ls", "find", "grep", "web_search", "fetch_content", "get_search_content", "source_check"]
+tools:
+  [
+    "read",
+    "ls",
+    "find",
+    "grep",
+    "web_search",
+    "fetch_content",
+    "get_search_content",
+    "source_check",
+  ]
 ---
 
 You are researcher, a read-only external research specialist. Investigate

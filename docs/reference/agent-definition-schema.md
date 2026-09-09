@@ -19,8 +19,21 @@ tools: ["read", "bash"]
 Prompt body.
 ```
 
-Known string arrays use inline JSON arrays. YAML block sequences are not
-supported.
+Agent definitions use YAML frontmatter. Array fields accept normal YAML flow or
+block sequences.
+
+For example, block sequences are valid for array fields:
+
+```yaml
+---
+name: reviewer
+tools:
+  - read
+  - grep
+skills:
+  - "/absolute/path/to/code-review/SKILL.md"
+---
+```
 
 Unknown frontmatter fields fail validation.
 
@@ -69,14 +82,14 @@ available actions; disabling a definition does not mutate that assignment.
 | `bodyMode`              | `append` or `replace`                                                 | `replace` for non-empty matching overlay body                     | Valid only when overlaying an existing lower-precedence definition; consumed during body composition.  |
 | `noTools`               | boolean                                                               | Pi normal tool policy                                             | `true` emits `--no-tools`; managed `ask_owner` remains infrastructure.                                 |
 | `noBuiltinTools`        | boolean                                                               | Pi normal built-in tool policy                                    | `true` emits `--no-builtin-tools`.                                                                     |
-| `tools`                 | inline array of non-empty strings                                     | no explicit allowlist                                             | Passed to Pi as a source-agnostic tool-name allowlist; matching overlay replaces whole array.          |
-| `excludeTools`          | inline array of non-empty strings                                     | no explicit exclusions                                            | Passed to Pi as source-agnostic tool-name exclusions; matching override replaces whole array.          |
+| `tools`                 | array of non-empty strings                                            | no explicit allowlist                                             | Passed to Pi as a source-agnostic tool-name allowlist; matching overlay replaces whole array.          |
+| `excludeTools`          | array of non-empty strings                                            | no explicit exclusions                                            | Passed to Pi as source-agnostic tool-name exclusions; matching override replaces whole array.          |
 | `noSkills`              | boolean                                                               | skills disabled unless `inheritSkills: true`                      | Controls Pi native skill discovery; explicit `skills` values are still passed separately.              |
 | `inheritSkills`         | boolean                                                               | does not enable by itself unless `true`                           | `true` changes omitted `noSkills` default so native skills remain available. Explicit `noSkills` wins. |
-| `skills`                | inline array of non-empty strings                                     | no explicit skill arguments                                       | Each value is passed unchanged as a Pi skill path/resource.                                            |
+| `skills`                | array of non-empty strings                                            | no explicit skill arguments                                       | Each value is passed unchanged as a Pi skill path/resource.                                            |
 | `noExtensions`          | boolean                                                               | Pi normal extension policy                                        | `true` emits `--no-extensions`. Required herdr agent infrastructure remains injected by the launcher.  |
-| `extensions`            | inline array of non-empty strings                                     | no extra extension arguments                                      | Each value is passed unchanged to Pi.                                                                  |
-| `agents`                | inline array of unique non-empty definition names                     | no direct agents                                                  | Names direct definitions this agent may delegate to; every name must exist.                            |
+| `extensions`            | array of non-empty strings                                            | no extra extension arguments                                      | Each value is passed unchanged to Pi.                                                                  |
+| `agents`                | array of unique non-empty definition names                            | no direct agents                                                  | Names direct definitions this agent may delegate to; every name must exist.                            |
 | `inheritProjectContext` | boolean                                                               | `true` only for definition name `delegate`; otherwise `false`     | Controls project context-file inheritance.                                                             |
 | `inheritGlobalContext`  | boolean                                                               | follows effective `inheritProjectContext`                         | Controls global context-file inheritance.                                                              |
 
