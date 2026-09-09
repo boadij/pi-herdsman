@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { Box } from "@earendil-works/pi-tui";
@@ -992,11 +993,13 @@ function renderedText(
   component: { render(width: number): string[] },
   width = 160,
 ) {
-  return component
-    .render(width)
-    .map((line) => line.trimEnd())
-    .join("\n")
-    .trim();
+  return stripVTControlCharacters(
+    component
+      .render(width)
+      .map((line) => line.trimEnd())
+      .join("\n")
+      .trim(),
+  );
 }
 
 test("herd run entries render only valid finished durations", () => {
