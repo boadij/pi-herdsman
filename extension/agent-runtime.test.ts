@@ -2178,6 +2178,7 @@ test("owner ask delivery is branch-local and recovers on tree navigation", async
   assert.equal(pi.sent.length, 1);
   assert.deepEqual((pi.sent[0] as any).details, {
     askId: ask.askId,
+    question: ask.question,
     requestId,
     runId: ask.runId,
     agentLabel: label,

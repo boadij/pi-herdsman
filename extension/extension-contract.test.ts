@@ -38,6 +38,7 @@ import support, {
   managedState,
   nativeSessions,
   agentControllerExecutor,
+  leadExec,
   readAgentState,
   realFs,
   recoveryIdentity,
@@ -50,6 +51,7 @@ import support, {
   waitForTestCondition,
   agentMailboxPath,
   writeRequest,
+  writeAsk,
   writeAgentState,
 } from "./support.ts";
 
@@ -83,6 +85,21 @@ test("registered lead and unmanaged roles expose the correct surface", () => {
   assert.equal(
     lead.tools.find((tool) => tool.name === "agent")?.label,
     "agent",
+  );
+  const agentTool = lead.tools.find((tool) => tool.name === "agent");
+  const chiefTool = lead.tools.find((tool) => tool.name === "chief");
+  assert.equal(typeof agentTool?.renderCall, "function");
+  assert.equal(typeof agentTool?.renderResult, "function");
+  assert.equal(typeof chiefTool?.renderCall, "function");
+  assert.equal(typeof chiefTool?.renderResult, "function");
+  assert.deepEqual(
+    lead.messageRenderers.map(({ customType }) => customType).sort(),
+    [
+      "pi-herdsman-agent-ask",
+      "pi-herdsman-agent-result",
+      "pi-herdsman-agent-stale",
+      "pi-herdsman-stop-summary",
+    ],
   );
   assert.ok(lead.tools.every((tool) => tool.executionMode === "sequential"));
   assert.equal(lead.commands.includes("subagents"), false);
@@ -132,6 +149,24 @@ test("active chief describes authoritative remote ask projection", async () => {
   const tool = pi.tools.find((candidate) => candidate.name === "staff");
   assert.ok(tool);
   assert.equal(tool.label, "staff");
+  assert.equal(typeof tool.renderCall, "function");
+  assert.equal(typeof tool.renderResult, "function");
+  const renderedStaffCall = tool.renderCall(
+    { action: "message", lead: "lead-bbbbbbbbb", message: "Please continue" },
+    { fg: (_color: string, value: string) => value },
+    { argsComplete: true },
+  );
+  assert.match(renderedStaffCall.text, /^message  lead-bbbbbb…/);
+  const renderedStaffResult = tool.renderResult(
+    {
+      content: [{ type: "text", text: "model result" }],
+      details: { ok: true, display_name: "workspace/api", action: "message" },
+    },
+    { expanded: false },
+    { fg: (_color: string, value: string) => value },
+    { args: { action: "message", lead: "lead-bbbbbbbbb" } },
+  );
+  assert.match(renderedStaffResult.text, /✓ sent to workspace\/api/);
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
   const chiefPrompt = pi.events.get("before_agent_start")![0](
     { systemPromptOptions: { contextFiles: [] } },
@@ -1780,6 +1815,63 @@ test("agent input accepts only the v3 Herdr control marker", async () => {
     agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
     setLeadEnvironment();
+  }
+});
+
+test("delivered owner asks retain the question in visible message details", async () => {
+  setLeadEnvironment();
+  const label = "ask-details-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const ask: AskRecord = {
+    version: 4,
+    askId: "99999999-9999-4999-8999-999999999999",
+    requestId: REQUEST_ID,
+    runId: managedState(label, REQUEST_ID, identity).runId,
+    ownerSessionId: LEAD_SESSION_ID,
+    workspaceId: WORKSPACE,
+    agentLabel: label,
+    paneId: identity.paneId,
+    piSessionId: identity.piSessionId,
+    question: "Choose ALPHA or BETA",
+    createdAt: Date.now(),
+  };
+  writeAgentState(mailbox, {
+    ...managedState(label, REQUEST_ID, identity),
+    pendingAskId: ask.askId,
+  });
+  writeAsk(mailbox, ask);
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      undefined,
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  const branch: unknown[] = [];
+  try {
+    registerExtension!(pi.pi as never);
+    await pi.events.get("session_start")![0](
+      undefined,
+      fakeContext([], branch),
+    );
+    assert.deepEqual((pi.sent[0] as any)?.details, {
+      askId: ask.askId,
+      question: ask.question,
+      requestId: ask.requestId,
+      runId: ask.runId,
+      agentLabel: ask.agentLabel,
+      workspaceId: ask.workspaceId,
+      paneId: ask.paneId,
+      piSessionId: ask.piSessionId,
+    });
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
   }
 });
 

@@ -738,11 +738,18 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
       },
     },
   );
-  assert.match(rendered.text, /Primary:.*category=target_not_found/s);
-  assert.match(rendered.text, /Cleanup:.*operation=rollback/s);
+  assert.match(rendered.text, /category: rollback_failure/);
   assert.match(
     rendered.text,
-    /Next action: Inspect cleanup_errors before retrying cleanup/,
+    /message: Agent launch failed and rollback was incomplete\./,
+  );
+  assert.match(
+    rendered.text,
+    /identity: label=rollback-agent, paneId=pane-start, tabId=registered-tab/,
+  );
+  assert.match(
+    rendered.text,
+    /next: Inspect cleanup_errors before retrying cleanup/,
   );
   assert.equal(agentGetCount, 1);
   assert.equal(
@@ -1695,11 +1702,11 @@ test("controller reply submits the normal request and preserves the assignment",
   );
   assert.match(
     rendered.text,
-    new RegExp(`Request: ${result.details.request_id}`),
+    new RegExp(`request: ${result.details.request_id}`),
   );
-  assert.match(rendered.text, new RegExp(`Ask: ${waiting.pendingAskId}`));
-  assert.match(rendered.text, new RegExp(`Session: ${identity.piSessionId}`));
-  assert.match(rendered.text, /Assignment request: /);
+  assert.match(rendered.text, new RegExp(`ask: ${waiting.pendingAskId}`));
+  assert.match(rendered.text, new RegExp(`session: ${identity.piSessionId}`));
+  assert.match(rendered.text, /assignment request: /);
   assert.equal(readAgentState(mailbox)?.activeRequestId, REQUEST_ID);
   assert.equal(readAgentState(mailbox)?.pendingAskId, undefined);
   assert.equal(readRequest(mailbox, submitted!.requestId), undefined);
@@ -1872,10 +1879,7 @@ test("parent close cascades child-first and reports a structured child failure",
           { fg: (_color: string, text: string) => text },
           { args: { action: "close", agent: parent.agentLabel } },
         );
-        assert.match(
-          rendered.text,
-          new RegExp(`Close agent ${parent.agentLabel}\\.`),
-        );
+        assert.match(rendered.text, new RegExp(`${parent.agentLabel} closed`));
         assert.deepEqual(lifecycle.closeOrder, [
           child.agentLabel,
           parent.agentLabel,

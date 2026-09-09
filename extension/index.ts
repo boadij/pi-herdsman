@@ -161,17 +161,17 @@ import {
 
 import {
   collapseDisplayText,
-  formatExpandedToolResult,
   formatToolModelResult,
   formatAgentDefinitions,
-  formatToolResultSummary,
   renderAgentDefinitionsOverview,
   renderStopSummary,
   renderCompletionMessage,
+  renderAgentAskMessage,
+  renderAgentStaleMessage,
+  renderCoordinationCall,
+  renderCoordinationResult,
   selectedModelToken,
-  formatToolCall,
   truncateModelText,
-  WidthSafeText,
   createStatusWidget,
   compactModelToken,
   formatStatusCounts,
@@ -3391,6 +3391,7 @@ function deliverAskUnsafe(
       display: true,
       details: {
         askId: ask.askId,
+        question: ask.question,
         requestId: ask.requestId,
         runId: ask.runId,
         agentLabel: ask.agentLabel,
@@ -5518,6 +5519,20 @@ export default function (pi: ExtensionAPI): void {
   pi.registerMessageRenderer(
     "pi-herdsman-stop-summary",
     (message, _options, theme) => renderStopSummary(message, theme),
+  );
+  pi.registerMessageRenderer(
+    "pi-herdsman-agent-result",
+    (message, options, theme) =>
+      renderCompletionMessage(message, options, theme),
+  );
+  pi.registerMessageRenderer(
+    "pi-herdsman-agent-ask",
+    (message, options, theme) => renderAgentAskMessage(message, options, theme),
+  );
+  pi.registerMessageRenderer(
+    "pi-herdsman-agent-stale",
+    (message, options, theme) =>
+      renderAgentStaleMessage(message, options, theme),
   );
   const processRole = role();
   const allowedAgentDefinitions =
@@ -8024,6 +8039,10 @@ export default function (pi: ExtensionAPI): void {
           }
           throw new Error("Invalid chief action");
         },
+        renderCall: (args: unknown, theme: any, context: any) =>
+          renderCoordinationCall("chief", args, theme, context),
+        renderResult: (result: any, options: any, theme: any, context: any) =>
+          renderCoordinationResult("chief", result, options, theme, context),
       };
       const staffTool = {
         name: "staff",
@@ -8296,6 +8315,10 @@ export default function (pi: ExtensionAPI): void {
               "Lead activity returns asynchronously; continue only independent chief work, otherwise end the turn. Do not poll.",
           });
         },
+        renderCall: (args: unknown, theme: any, context: any) =>
+          renderCoordinationCall("staff", args, theme, context),
+        renderResult: (result: any, options: any, theme: any, context: any) =>
+          renderCoordinationResult("staff", result, options, theme, context),
       };
       registerSupervisionTool = () => {
         if (supervisionToolRegistered) return;
@@ -9144,57 +9167,10 @@ export default function (pi: ExtensionAPI): void {
         }
       },
       renderCall: (args: unknown, theme: any, context: any) =>
-        new WidthSafeText(
-          theme.fg("muted", formatToolCall(context?.args ?? args)),
-          0,
-          0,
-        ),
+        renderCoordinationCall("agent", args, theme, context),
       renderResult: (result: any, options: any, theme: any, context: any) =>
-        (() => {
-          const details =
-            result?.details && typeof result.details === "object"
-              ? result.details
-              : result?.result && typeof result.result === "object"
-                ? result.result
-                : {};
-          const action =
-            typeof context?.args?.action === "string"
-              ? context.args.action
-              : typeof details.action === "string"
-                ? details.action
-                : typeof result?.action === "string"
-                  ? result.action
-                  : "agent";
-          if (options?.isPartial) {
-            const preview = formatToolCall(
-              context?.args ?? result?.partialArgs ?? result?.args ?? result,
-            );
-            return new WidthSafeText(theme.fg("muted", `${preview}…`), 0, 0);
-          }
-          const content = Array.isArray(result?.content)
-            ? result.content
-                .filter((item: any) => item?.type === "text")
-                .map((item: any) => item.text ?? "")
-                .join("\n")
-            : typeof result?.content === "string"
-              ? result.content
-              : "";
-          return new WidthSafeText(
-            theme.fg(
-              details.ok === false ? "error" : "success",
-              options?.expanded || options?.isExpanded
-                ? formatExpandedToolResult(context?.args, content, details)
-                : formatToolResultSummary(action, details),
-            ),
-            0,
-            0,
-          );
-        })(),
+        renderCoordinationResult("agent", result, options, theme, context),
     });
-    pi.registerMessageRenderer(
-      "pi-herdsman-agent-result",
-      renderCompletionMessage as any,
-    );
     if (controllerScope.kind === "lead" && process.env.HERDR_PANE_ID)
       pi.registerTool(chiefTool);
   }
