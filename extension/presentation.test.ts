@@ -1072,7 +1072,18 @@ test("coordination results keep collapsed identity bounded and expose structured
       { args },
     ),
   );
-  for (const visible of [session, request, pane, task, ...files])
+  const expandedCall = renderedText(
+    renderCoordinationCall("agent", args, presentationTheme, {
+      expanded: true,
+    }),
+  );
+  assert.ok(
+    expandedCall.includes(`task:\n${task}`) &&
+      expandedCall.includes("files:\n  one.md\n  two.md") &&
+      !expanded.includes(`task:\n${task}`) &&
+      !expanded.includes("files:\n"),
+  );
+  for (const visible of [session, request, pane])
     assert.match(
       expanded,
       new RegExp(visible.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),

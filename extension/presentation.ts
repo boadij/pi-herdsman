@@ -1800,21 +1800,6 @@ function expandedResultLines(
   for (const [label, field] of fields)
     if (field !== undefined && field !== "")
       lines.push(`${label}: ${String(field)}`);
-  const body = value(args.task) || value(args.message) || value(args.question);
-  if (body)
-    lines.push(
-      "",
-      `${action === "ask" ? "question" : action === "delegate" ? "task" : "message"}:`,
-      body,
-    );
-  if (Array.isArray(args.files) && args.files.length)
-    lines.push(
-      "",
-      "files:",
-      ...args.files
-        .filter((file): file is string => typeof file === "string")
-        .map((file) => `  ${file}`),
-    );
   if (action === "list" && tool === "agent")
     lines.push(
       "",
