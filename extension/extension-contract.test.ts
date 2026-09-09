@@ -756,7 +756,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     await new Promise<void>((resolve) => setTimeout(resolve, 550));
     assert.ok(
       lead.sentMessageCalls.some((call) =>
-        /Included text file:/.test(String(call.message?.content ?? "")),
+        /<file name="/.test(String(call.message?.content ?? "")),
       ),
     );
     assert.deepEqual(
@@ -767,7 +767,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
       .map((call) => String(call.message?.content))
       .filter((content) => content.includes("From chief"));
     assert.equal(chiefMessages.length, 2);
-    assert.match(chiefMessages[0], /Included text file:.*Message:/su);
+    assert.match(chiefMessages[0], /<file name=.*Message:/su);
     assert.equal(
       chiefMessages[1],
       "From chief " +
@@ -820,7 +820,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     const state = readLeadCoordinationState(supervisionRuntime(), leadId);
     assert.equal(state?.pendingAsk?.askId, askId);
     assert.equal(state?.pendingAsk?.question, "Which credential should I use?");
-    assert.match(state?.pendingAsk?.text ?? "", /Included text file:/);
+    assert.match(state?.pendingAsk?.text ?? "", /<file name="/);
     const missingAskPath = listChiefMessagePaths(
       supervisionRuntime(),
       chiefId,
@@ -846,7 +846,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     await chief.events.get("agent_start")![0](undefined, chiefContext);
     await new Promise<void>((resolve) => setTimeout(resolve, 650));
     const repairedAskDeliveries = chief.sentMessageCalls.filter((call) =>
-      /From lead .*Included text file:.*Which credential should I use\?/su.test(
+      /From lead .*<file name=.*Which credential should I use\?/su.test(
         String(call.message?.content ?? ""),
       ),
     );
@@ -1823,7 +1823,7 @@ test("registered delegate embeds text and references binary evidence", async () 
     assert.match(
       submittedRequest?.text ?? "",
       new RegExp(
-        `Referenced file: ${JSON.stringify(realFs.realpathSync(binaryPath))} \\(3 bytes\\)`,
+        `<file name=${JSON.stringify(realFs.realpathSync(binaryPath))} bytes="3" />`,
       ),
     );
     assert.equal(prompted, submittedRequest?.text);
