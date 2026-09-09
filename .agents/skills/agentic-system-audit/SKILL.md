@@ -39,7 +39,7 @@ Use the existing bundled roles:
 - `scout`: fast local evidence gathering;
 - `researcher`: current upstream/API verification only when external truth materially affects a finding;
 - `implementer`: never during the audit itself;
-- `agent`: only as fallback when a required read-only role is unavailable.
+- `generalist`: only as fallback when a required read-only role is unavailable.
 
 Start with:
 
