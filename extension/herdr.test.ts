@@ -15,7 +15,7 @@ import {
   inspectHerdrAgent,
   paneIsAvailable,
   runHerdr,
-  safeShellProcessTransition,
+  sameShellProcessOwner,
   sameRunningProcessOwner,
   sameCwd,
   stopHerdrAgentPreservingPane,
@@ -871,17 +871,17 @@ test("start injects mandatory extensions before definition args and configures t
   )!;
   assert.match(
     markerRun[3]!,
-    /^printf '%s\\n' '__PI_HERDSMAN_READY_[0-9a-f]{12}__'$/,
+    /^echo __PI_HERDSMAN_READY_[0-9a-f-]{36}__$/,
   );
   const markerWait = calls.find(
     (args) => args[0] === "pane" && args[1] === "wait-output",
   )!;
   assert.match(
     markerWait[markerWait.indexOf("--regex") + 1]!,
-    /^\^__PI_HERDSMAN_READY_[0-9a-f]{12}__\$$/,
+    /^\^__PI_HERDSMAN_READY_[0-9a-f-]{36}__\$$/,
   );
   const marker = markerRun[3]!.match(
-    /'(__PI_HERDSMAN_READY_[0-9a-f]{12}__)'$/,
+    /(__PI_HERDSMAN_READY_[0-9a-f-]{36}__)$/,
   )![1];
   assert.equal(markerWait[markerWait.indexOf("--regex") + 1], `^${marker}$`);
   assert.ok(
@@ -1445,7 +1445,7 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
           (item) => item[0] === "pane" && item[1] === "run",
         )!;
         const marker = String(run[3]).match(
-          /'(__PI_HERDSMAN_READY_[0-9a-f]{12}__)'$/,
+          /(__PI_HERDSMAN_READY_[0-9a-f-]{36}__)$/,
         )![1];
         assert.equal(args[args.indexOf("--regex") + 1], `^${marker}$`);
         return response({});
@@ -1653,7 +1653,7 @@ async function startAgentCase(
             (item) => item[0] === "pane" && item[1] === "run",
           )!;
           const marker = String(run[3]).match(
-            /'(__PI_HERDSMAN_READY_[0-9a-f]{12}__)'$/,
+            /(__PI_HERDSMAN_READY_[0-9a-f-]{36}__)$/,
           )![1];
           const matchIndex = args.indexOf("--regex");
           assert.deepEqual(args.slice(matchIndex, matchIndex + 2), [
@@ -2342,6 +2342,8 @@ test("completed agent shell transition closes the pane without stop keys", async
         return response({
           process: processInfoCalls++ === 0 ? running : shell,
         });
+      if (key === "pane run" || key === "pane wait-output")
+        return response({});
       if (key === "pane close") {
         closed = true;
         return { code: 0, stdout: "", stderr: "" };
@@ -2371,6 +2373,10 @@ test("completed agent shell transition closes the pane without stop keys", async
   assert.equal(
     calls.some((args) => args[0] === "agent" && args[1] === "send-keys"),
     false,
+  );
+  assert.match(
+    calls.find((args) => args[0] === "pane" && args[1] === "run")?.[3] ?? "",
+    /^echo __PI_HERDSMAN_READY_[0-9a-f-]{36}__$/,
   );
   assert.equal(
     calls.filter((args) => args[0] === "pane" && args[1] === "close").length,
@@ -3157,38 +3163,35 @@ test("running ownership includes shell and foreground process group", () => {
   );
 });
 
-test("shell settlement is conservative", () => {
+test("shell ownership uses captured identity without a shell allowlist", () => {
+  const captured = {
+    ...process,
+    foreground_process_group_id: 12,
+    foreground_processes: [{ pid: 12, argv0: "pwsh.exe" }],
+  };
+  assert.equal(sameShellProcessOwner(captured, captured), true);
   assert.equal(
-    safeShellProcessTransition(
-      { ...process, foreground_process_group_id: 12 },
-      {
-        ...process,
-        foreground_process_group_id: 12,
-        foreground_processes: [{ pid: 12, argv0: "/bin/zsh" }],
-      },
+    sameShellProcessOwner(captured, {
+      ...captured,
+      foreground_processes: [{ pid: 12, argv0: "/bin/zsh" }],
+    }),
+    false,
+  );
+  assert.equal(
+    sameShellProcessOwner(
+      { ...process, foreground_process_group_id: 20 },
+      captured,
     ),
     true,
   );
   assert.equal(
-    safeShellProcessTransition(
-      { ...process, foreground_process_group_id: 12 },
-      {
-        ...process,
-        foreground_process_group_id: 12,
-        foreground_processes: [{ pid: 12, argv0: "-zsh" }],
-      },
-    ),
-    true,
-  );
-  assert.equal(
-    safeShellProcessTransition(
-      { ...process, foreground_process_group_id: 12 },
-      {
-        ...process,
-        foreground_process_group_id: 12,
-        foreground_processes: [{ pid: 12, argv0: "/usr/bin/pi" }],
-      },
-    ),
+    sameShellProcessOwner(captured, {
+      ...captured,
+      foreground_processes: [
+        { pid: 12, argv0: "pwsh.exe" },
+        { pid: 13, argv0: "child" },
+      ],
+    }),
     false,
   );
 });

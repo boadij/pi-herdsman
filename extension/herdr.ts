@@ -4,7 +4,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -84,7 +84,6 @@ const MAX_PROCESS_CMDLINE_BYTES = 4 * 1024;
 const POLL_INTERVAL = 75;
 const INITIAL_RATIO = 0.65;
 const AGENT_SPLIT_RATIO = 0.5;
-const SHELLS = new Set(["bash", "dash", "fish", "ksh", "sh", "tcsh", "zsh"]);
 const HERDR_AGENT_STATE_EXTENSION = join(
   getAgentDir(),
   "extensions",
@@ -378,7 +377,13 @@ export function sameCwd(observed: unknown, expected: string): boolean {
   if (typeof observed !== "string") return false;
   return canonicalCwd(observed) === canonicalCwd(expected);
 }
-export function safeShellProcessTransition(
+function capturedShellProcess(process: PaneProcess) {
+  return process.foreground_processes?.find(
+    (candidate) => candidate.pid === process.shell_pid,
+  );
+}
+
+export function sameShellProcessOwner(
   expected: PaneProcess,
   observed: PaneProcess,
 ): boolean {
@@ -388,16 +393,16 @@ export function safeShellProcessTransition(
   )
     return false;
   const processes = observed.foreground_processes;
+  if (processes?.length !== 1 || processes[0]?.pid !== expected.shell_pid)
+    return false;
+  const captured = capturedShellProcess(expected);
   return (
-    !!processes?.length &&
-    processes.some((p) => p.pid === expected.shell_pid) &&
-    processes.every(
-      (p) =>
-        typeof p.argv0 === "string" &&
-        SHELLS.has(p.argv0.split("/").pop()!.replace(/^-/, "")),
-    )
+    !captured ||
+    (typeof captured.argv0 === "string" &&
+      processes[0]?.argv0 === captured.argv0)
   );
 }
+
 export function sameRunningProcessOwner(
   expected: PaneProcess,
   observed: PaneProcess,
@@ -409,13 +414,6 @@ export function sameRunningProcessOwner(
       observed.foreground_process_group_id
   );
 }
-export function samePostStopPaneProcessIdentity(
-  expected: PaneProcess,
-  observed: PaneProcess,
-): boolean {
-  return safeShellProcessTransition(expected, observed);
-}
-
 async function lockLifecycle(
   ctx: ExtensionContext,
   signal?: AbortSignal,
@@ -943,15 +941,13 @@ export async function startHerdrAgent(
     };
     let started: any;
     stage = "pane_readiness";
-    const shell = await waitForOwnedShellReady(
+    const shell = await proveShellReady(
       pi,
       ctx,
-      workspaceId,
-      tab.tab_id,
       paneId,
-      cwd,
-      options.runId,
+      undefined,
       startupDeadline,
+      "start",
       options.signal,
     );
     stage = "ownership_capture";
@@ -1004,8 +1000,7 @@ export async function startHerdrAgent(
     if (
       !latest ||
       latest.pane_id !== paneId ||
-      latest.shell_pid !== shell.shell_pid ||
-      !safeShellProcessTransition(latest, latest)
+      !sameShellProcessOwner(shell, latest)
     )
       error("start", `pane ${paneId} shell identity changed before launch`);
     const remaining = startupCallTimeout(startupDeadline, childTimeout);
@@ -1190,33 +1185,29 @@ function normalizePaneProcess(
   });
 }
 
-async function waitForOwnedShellReady(
+async function proveShellReady(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  workspaceId: string,
-  tabId: string,
   paneId: string,
-  cwd: string,
-  runId: string,
+  expected: PaneProcess | undefined,
   deadline: number,
+  operation: "start" | "close" | "rollback",
   signal?: AbortSignal,
 ): Promise<PaneProcess> {
-  const digest = createHash("sha256")
-    .update(`${workspaceId}:${tabId}:${paneId}:${runId}`)
-    .digest("hex")
-    .slice(0, 12);
-  const marker = `__PI_HERDSMAN_READY_${digest}__`;
-  await runHerdr(
-    pi,
-    ctx,
-    ["pane", "run", paneId, `printf '%s\\n' '${marker}'`],
-    {
-      signal,
-      timeout: startupCallTimeout(deadline),
-      noResult: true,
-    },
-  );
-  const waitTimeout = startupCallTimeout(deadline);
+  const timeout = (): number => {
+    if (operation === "start") return startupCallTimeout(deadline);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0)
+      error(operation, `pane ${paneId} shell readiness deadline exhausted`);
+    return remaining;
+  };
+  const marker = `__PI_HERDSMAN_READY_${randomUUID()}__`;
+  await runHerdr(pi, ctx, ["pane", "run", paneId, `echo ${marker}`], {
+    signal,
+    timeout: timeout(),
+    noResult: true,
+  });
+  const waitTimeout = timeout();
   await runHerdr(
     pi,
     ctx,
@@ -1235,13 +1226,16 @@ async function waitForOwnedShellReady(
       noResult: true,
     },
   );
-  const shell = await paneProcess(pi, ctx, paneId, signal, deadline, true);
-  if (
-    !shell ||
-    shell.pane_id !== paneId ||
-    !safeShellProcessTransition(shell, shell)
-  )
-    error("start", `pane ${paneId} did not become an available shell`);
+  const result = await runHerdr(
+    pi,
+    ctx,
+    ["pane", "process-info", "--pane", paneId],
+    { signal, timeout: timeout() },
+  );
+  const value = result?.process ?? result?.process_info ?? result;
+  const shell = normalizePaneProcess(value, paneId, true);
+  if (!shell || !sameShellProcessOwner(expected ?? shell, shell))
+    error(operation, `pane ${paneId} did not become an available shell`);
   return shell;
 }
 
@@ -1286,8 +1280,20 @@ async function settlePreservedPane(
       )
         error(operation, `pane ${expected.paneId} ownership changed`);
       const observed = await paneProcess(pi, ctx, expected.paneId, signal);
-      if (observed && safeShellProcessTransition(processIdentity, observed)) {
-        if (safeObservation) return;
+      if (observed && sameShellProcessOwner(processIdentity, observed)) {
+        if (safeObservation) {
+          if (!capturedShellProcess(processIdentity))
+            await proveShellReady(
+              pi,
+              ctx,
+              expected.paneId,
+              processIdentity,
+              deadline,
+              operation,
+              signal,
+            );
+          return;
+        }
         safeObservation = true;
       } else {
         safeObservation = false;
@@ -1424,17 +1430,27 @@ async function proveExactRunningAgent(
     error(operation, `tab ${expected.tabId} ownership is unproven`);
 
   const observed = await paneProcess(pi, ctx, paneId, signal);
-  if (
-    !observed ||
-    observed.pane_id !== paneId ||
-    (processOwner !== undefined &&
-      !sameRunningProcessOwner(processOwner, observed) &&
-      !(
-        allowPostCompletionTransition &&
-        safeShellProcessTransition(processOwner, observed)
-      ))
-  )
+  if (!observed || observed.pane_id !== paneId)
     error(operation, `pane ${paneId} process ownership is unproven`);
+  if (
+    processOwner !== undefined &&
+    !sameRunningProcessOwner(processOwner, observed)
+  ) {
+    if (
+      !allowPostCompletionTransition ||
+      !sameShellProcessOwner(processOwner, observed)
+    )
+      error(operation, `pane ${paneId} process ownership is unproven`);
+    await proveShellReady(
+      pi,
+      ctx,
+      paneId,
+      processOwner,
+      Date.now() + SETTLE_TIMEOUT,
+      operation,
+      signal,
+    );
+  }
   return {
     paneId,
     tabId: expected.tabId,
@@ -1759,7 +1775,7 @@ export async function rollbackHerdrStart(
       )
         error("rollback", `pane ${paneId} ownership is unproven`);
       const observed = await paneProcess(pi, ctx, paneId, signal);
-      if (!observed || !samePostStopPaneProcessIdentity(expected, observed))
+      if (!observed || !sameShellProcessOwner(expected, observed))
         error("rollback", `pane ${paneId} process ownership is unproven`);
     }
     if (!managed) {
