@@ -2198,11 +2198,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     };
     const text = "Found three authentication problems.";
     const result = truncateModelText(text, options);
-    const expected = join(
-      herdsmanTempRoot(),
-      "results",
-      options.requestId,
-    );
+    const expected = join(herdsmanTempRoot(), "results", options.requestId);
     const oldPath = join(
       dirname(expected),
       createHash("sha256").update(options.sessionId).digest("hex"),
