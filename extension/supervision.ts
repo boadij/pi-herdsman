@@ -207,6 +207,7 @@ export function chiefMessagePath(
 }
 
 function fsyncDirectory(directory: string): void {
+  if (process.platform === "win32") return;
   const fd = openSync(directory, "r");
   try {
     fsyncSync(fd);
