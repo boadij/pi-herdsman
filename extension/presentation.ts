@@ -1380,6 +1380,9 @@ export function formatToolModelResult(
       ...(value(v.recent_output)
         ? ["Recent activity:", value(v.recent_output)]
         : []),
+      ...(v.recent_output_truncated === true
+        ? ["Recent output truncated: yes"]
+        : []),
     ].join("\n");
   }
   if (action === "list") {
@@ -2359,6 +2362,15 @@ export function renderCompletionMessage(
         : []),
       ...(d?.fullOutputPath ? [`full output: ${d.fullOutputPath}`] : []),
       ...(d?.resultPath ? [`result file: ${d.resultPath}`] : []),
+      ...(d?.resultPersistenceError
+        ? [
+            humanText(
+              theme,
+              "warning",
+              `result persistence error: ${d.resultPersistenceError}`,
+            ),
+          ]
+        : []),
       ...(d?.error ? [`error: ${d.error.code}: ${d.error.message}`] : []),
     ];
     if (metadata.length) {
@@ -2370,13 +2382,18 @@ export function renderCompletionMessage(
       content.addChild(new Markdown(humanContent, 0, 0, getMarkdownTheme()));
     }
   } else {
+    const notices = [
+      ...(d?.truncated === true ? ["output truncated"] : []),
+      ...(d?.resultPersistenceError ? ["result not saved"] : []),
+    ];
     content.addChild(
       new Text(
         heading +
           (elapsed ? ` · ${elapsed}` : "") +
           (d?.contextUsage?.percent != null
             ? ` · ctx ${Math.round(d.contextUsage.percent)}%`
-            : ""),
+            : "") +
+          (notices.length ? ` · ${notices.join(" · ")} · Ctrl+O` : ""),
         0,
         0,
       ),
