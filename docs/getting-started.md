@@ -99,8 +99,11 @@ global override. Definition Details shows the effective metadata and can
 expand the resolved definition instructions with Pi's native `Ctrl+O`
 behavior. These edits always write global overrides, never project files.
 
-Use `Layout` to choose the current `tab` or `split` placement for newly started
-agents.
+Use `Layout` to choose the current placement for newly started lead-direct
+agents: `subtree` is the default and gives each lead-direct agent one tab;
+`tab` uses one lead-owned agents tab; `split` stays in the caller's tab. Nested
+delegation always splits inside the owner's current tab. Placement changes
+affect future starts only.
 
 For complete configuration ownership, see:
 

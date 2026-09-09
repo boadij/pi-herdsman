@@ -104,7 +104,31 @@ const {
   steerAcceptanceAllowed,
   taskAcceptanceAllowed,
   updateSpawnPlacementJson,
+  resolveSpawnPlacement,
+  spawnPlacementMenuOptions,
+  spawnPlacementFromMenuSelection,
 } = await import("./core.ts");
+
+test("resolves placement modes with subtree as the absent default", () => {
+  assert.equal(resolveSpawnPlacement("tab"), "tab");
+  assert.equal(resolveSpawnPlacement("subtree"), "subtree");
+  assert.equal(resolveSpawnPlacement("split"), "split");
+  assert.equal(resolveSpawnPlacement(undefined), "subtree");
+  assert.equal(resolveSpawnPlacement("invalid"), "tab");
+  assert.deepEqual(
+    spawnPlacementMenuOptions("subtree").map(({ label, value }) => ({
+      label,
+      value,
+    })),
+    [
+      { label: "Lead agents tab", value: "tab" },
+      { label: "Subtree tabs (current)", value: "subtree" },
+      { label: "Split from caller", value: "split" },
+    ],
+  );
+  assert.equal(spawnPlacementFromMenuSelection("subtree"), "subtree");
+  assert.equal(spawnPlacementFromMenuSelection("invalid"), undefined);
+});
 
 test("projects lifecycle and assignment state into control states", () => {
   const cases: Array<

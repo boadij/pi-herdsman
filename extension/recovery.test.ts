@@ -873,6 +873,27 @@ test("assignment rollback retains primary failure and actionable cleanup details
           stderr: "",
           code: 0,
         };
+      if (args[0] === "tab" && args[1] === "create") {
+        splitCreated = true;
+        for (let i = 0; i < args.length - 1; i++) {
+          if (args[i] !== "--env") continue;
+          const assignment = args[i + 1]!;
+          if (assignment.startsWith("PI_HERDSMAN_RUN_ID="))
+            runId = assignment.slice(19);
+          if (assignment.startsWith("PI_HERDSMAN_OWNER_SESSION_ID="))
+            ownerSessionId = assignment.slice(29);
+        }
+        return {
+          stdout: JSON.stringify({
+            result: {
+              tab: { tab_id: "registered-tab" },
+              root_pane: { pane_id: "detail-pane" },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
       if (args[0] === "pane" && args[1] === "layout")
         return {
           stdout: JSON.stringify({
@@ -2489,6 +2510,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
               agent: {
                 name: runScopedHerdrAlias(WORKSPACE, label, AGENT_ID),
                 pane_id: identity.paneId,
+                tab_id: identity.tabId,
                 workspace_id: WORKSPACE,
                 cwd: "/tmp",
                 agent_session: {

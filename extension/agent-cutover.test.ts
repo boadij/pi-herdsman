@@ -71,7 +71,7 @@ test("legacy tool, command, selectors, grammar, and renderers stay absent", asyn
   const command = pi.commandOptions.get("agents");
   await command.handler("agents", context);
   assert.deepEqual(notices, [
-    "Usage: /agents definitions | placement [tab|split] | stop",
+    "Usage: /agents definitions | placement [tab|subtree|split] | stop",
   ]);
   pi.events.get("session_shutdown")?.[0]();
 });

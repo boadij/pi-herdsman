@@ -1,10 +1,14 @@
 import { strict as assert } from "node:assert";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { test } from "node:test";
 import {
   DEFAULT_BYTE_LIMIT,
   MAX_BYTE_LIMIT,
   MIN_BYTE_LIMIT,
   resolveEffectiveByteLimit,
+  updateSpawnPlacementFile,
   updatePiHerdsmanSettingJson,
   validByteLimit,
 } from "./settings.ts";
@@ -56,4 +60,18 @@ test("Pi Herdsman setting updates preserve unrelated settings and support reset"
     other: true,
     piHerdsman: { spawnAxis: "x" },
   });
+});
+
+test("spawn placement settings persist subtree", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-herdsman-settings-"));
+  const path = join(directory, "settings.json");
+  try {
+    updateSpawnPlacementFile(path, "subtree");
+    assert.equal(
+      JSON.parse(readFileSync(path, "utf8")).piHerdsman.spawnPlacement,
+      "subtree",
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

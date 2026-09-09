@@ -107,6 +107,10 @@ agent generation for the new assignment. The continuation uses the saved cwd
 and session history together with the current effective authorized definition
 configuration. Use `delegate.definition` with `fork` when a separate derived
 session is required.
+Session continuation does not retain the old Herdr tab. A still-live
+generation may be restored from its exact managed identity, while ordinary
+same-workspace tab movement remains presentation-only and does not change
+assignment ownership.
 
 ## Steering is different
 

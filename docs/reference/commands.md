@@ -13,7 +13,7 @@ Commands require a lead Pi session with UI.
 ```text
 /agents
 /agents definitions
-/agents placement [tab|split]
+/agents placement [tab|subtree|split]
 /agents stop
 ```
 
@@ -95,10 +95,12 @@ is sent.
 ## `/agents placement`
 
 Selecting Layout opens a native selector showing the effective setting.
+When unset, the effective setting is `subtree`.
 Explicit values continue to set directly:
 
 ```text
 /agents placement tab
+/agents placement subtree
 /agents placement split
 ```
 
