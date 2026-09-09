@@ -154,6 +154,23 @@ export type MessagePreparationOptions = {
   serializedBytes?: (text: string) => number;
 };
 
+function escapeMessageFileName(path: string): string {
+  return path.replace(/[&"<>\u0000-\u001f\u007f-\u009f]/g, (character) => {
+    if (character === "&") return "&amp;";
+    if (character === '"') return "&quot;";
+    if (character === "<") return "&lt;";
+    if (character === ">") return "&gt;";
+    return `&#x${character.charCodeAt(0).toString(16)};`;
+  });
+}
+
+function renderMessageFile(file: RegularFile, content?: string): string {
+  const name = escapeMessageFileName(file.canonicalPath);
+  if (content === undefined)
+    return `<file name="${name}" bytes="${file.bytes}" />`;
+  return `<file name="${name}" bytes="${file.bytes}">\n${content}\n</file>`;
+}
+
 export function prepareMessageInput(
   text: string,
   files: readonly string[],
@@ -185,12 +202,8 @@ export function prepareMessageInput(
     return { text, canonicalPaths: [] };
   }
   const regular = resolveRegularFiles(files, cwd, operation);
-  const separator = "\n\n---\n\n";
-  const sections = regular.map(
-    (file) =>
-      `Referenced file: ${JSON.stringify(file.canonicalPath)} (${file.bytes} bytes)`,
-  );
-  const rendered = () => [...sections, `${heading}:\n${text}`].join(separator);
+  const sections = regular.map((file) => renderMessageFile(file));
+  const rendered = () => [...sections, `${heading}:\n${text}`].join("\n\n");
   const fits =
     options.fits ??
     ((value: string) =>
@@ -209,7 +222,6 @@ export function prepareMessageInput(
   for (const file of regular) {
     const index = regular.indexOf(file);
     const prior = sections[index];
-    const inlinePrefix = `Included text file: ${JSON.stringify(file.canonicalPath)} (${file.bytes} bytes)\n\n`;
     // Probe with the minimum possible content representation. Every accepted
     // byte must occupy at least one UTF-8 byte, so this lower-bound probe can
     // skip only candidates that cannot fit; the exact decoded content decides
@@ -237,11 +249,11 @@ export function prepareMessageInput(
             sections
               .map((section, i) =>
                 i === index
-                  ? `${inlinePrefix}${"x".repeat(current.size)}`
+                  ? renderMessageFile(file, "x".repeat(current.size))
                   : section,
               )
               .concat(`${heading}:\n${text}`)
-              .join(separator),
+              .join("\n\n"),
           ))
       )
         continue;
@@ -278,7 +290,7 @@ export function prepareMessageInput(
     } catch {
       continue;
     }
-    sections[index] = `${inlinePrefix}${content}`;
+    sections[index] = renderMessageFile(file, content);
     if (!fits(rendered())) sections[index] = prior;
   }
   return {

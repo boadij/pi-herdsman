@@ -38,6 +38,26 @@ Example:
 }
 ```
 
+The model-facing representation follows Pi's native `@file` convention:
+
+```xml
+<file name="/absolute/canonical/path" bytes="123">
+contents
+</file>
+```
+
+A reference-only file uses a self-closing tag:
+
+```xml
+<file name="/absolute/canonical/path" bytes="123" />
+```
+
+`name` is the canonical absolute path and `bytes` is the observed file size.
+A body means the complete submission-time UTF-8 snapshot was embedded; a
+self-closing tag means only the path and size reference was supplied. File
+content remains raw text. This markup frames evidence for the model and is not
+a security boundary.
+
 `files` is supported by `delegate` with `definition`, `delegate` with `session`,
 `steer`, `reply`, and `ask_owner`. For
 controller actions, relative paths resolve from the calling controller's cwd;
