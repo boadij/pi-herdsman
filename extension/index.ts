@@ -1090,16 +1090,11 @@ async function prepareSupervisionText(
   }).text;
 }
 async function contextAgentDefinitions(ctx: ExtensionContext) {
-  const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
-    projectTrusted: ctx.isProjectTrusted(),
-  });
-  const enabled =
-    settings.isProjectTrusted() &&
-    piHerdsmanSettings(settings.getProjectSettings()).projectAgents === true;
+  const projectTrusted = ctx.isProjectTrusted();
   return {
-    projectAgentsEnabled: enabled,
+    projectTrusted,
     definitions: discoverAgentDefinitions(
-      enabled ? { projectRoot: ctx.cwd } : {},
+      projectTrusted ? { projectRoot: ctx.cwd } : {},
     ),
   };
 }
@@ -4864,6 +4859,10 @@ async function actionUnsafe(
       agentDefinitionDelegationEnabled(effectiveDefinition);
     const runId = assignment!.runId;
     const owner = assignment!.ownerSessionId;
+    const forwardingSession =
+      scope.kind === "managed-agent"
+        ? (process.env.PI_SUBAGENT_PARENT_SESSION ?? owner)
+        : owner;
     const configuredPlacement = (await placementSettings(ctx)).effective;
     const placement = await physicalPlacement(
       pi,
@@ -5059,6 +5058,7 @@ async function actionUnsafe(
         `PI_HERDSMAN_MAILBOX=${mailbox}`,
         `PI_HERDSMAN_RUN_ID=${runId}`,
         `PI_HERDSMAN_OWNER_SESSION_ID=${owner}`,
+        `PI_SUBAGENT_PARENT_SESSION=${forwardingSession}`,
         `PI_HERDSMAN_LABEL=${label}`,
         `PI_HERDSMAN_WORKSPACE_ID=${workspaceId}`,
         `PI_HERDSMAN_AGENT_DEFINITION=${agentDefinition}`,
@@ -5073,7 +5073,7 @@ async function actionUnsafe(
         cwd: agentCwd,
         managedAgent: true,
         approveProject:
-          agentContext.projectAgentsEnabled && sameCwd(agentCwd, ctx.cwd),
+          agentContext.projectTrusted && sameCwd(agentCwd, ctx.cwd),
       });
       started = await startHerdrAgent(pi, ctx, {
         label,

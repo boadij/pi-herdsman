@@ -57,8 +57,8 @@ Global definitions by default:
 A matching project or global name overlays the lower-precedence definition.
 
 An unmatched project or global definition is standalone. Project definitions
-are loaded from `<cwd>/.pi/agents/` only when trusted project settings set
-`piHerdsman.projectAgents` to `true`. Precedence is `bundled < project < global`.
+are loaded from `<cwd>/.pi/agents/` when Pi considers the project trusted.
+Precedence is `bundled < project < global`.
 
 All effective definitions are sorted and validated together, including every
 `agents` reference.
@@ -84,6 +84,7 @@ available actions; disabling a definition does not mutate that assignment.
 | `noBuiltinTools`        | boolean                                                               | Pi normal built-in tool policy                                    | `true` emits `--no-builtin-tools`.                                                                     |
 | `tools`                 | array of non-empty strings                                            | no explicit allowlist                                             | Passed to Pi as a source-agnostic tool-name allowlist; matching overlay replaces whole array.          |
 | `excludeTools`          | array of non-empty strings                                            | no explicit exclusions                                            | Passed to Pi as source-agnostic tool-name exclusions; matching override replaces whole array.          |
+| `permission`            | mapping                                                               | absent                                                            | Opaque interoperability policy for permission-aware extensions; Pi Herdsman does not evaluate it.      |
 | `noSkills`              | boolean                                                               | skills disabled unless `inheritSkills: true`                      | Controls Pi native skill discovery; explicit `skills` values are still passed separately.              |
 | `inheritSkills`         | boolean                                                               | does not enable by itself unless `true`                           | `true` changes omitted `noSkills` default so native skills remain available. Explicit `noSkills` wins. |
 | `skills`                | array of non-empty strings                                            | no explicit skill arguments                                       | Each value is passed unchanged as a Pi skill path/resource.                                            |
@@ -92,6 +93,10 @@ available actions; disabling a definition does not mutate that assignment.
 | `agents`                | array of unique non-empty definition names                            | no direct agents                                                  | Names direct definitions this agent may delegate to; every name must exist.                            |
 | `inheritProjectContext` | boolean                                                               | `true` only for definition name `delegate`; otherwise `false`     | Controls project context-file inheritance.                                                             |
 | `inheritGlobalContext`  | boolean                                                               | follows effective `inheritProjectContext`                         | Controls global context-file inheritance.                                                              |
+
+`permission` is reserved for compatible permission extensions. Pi Herdsman
+accepts and preserves the mapping but does not validate its internal policy
+schema or make authorization decisions from it.
 
 Arrays supplied by an override replace the complete inherited array, including
 an explicit `[]`.
@@ -230,10 +235,13 @@ Pi base system prompt
 selected project/global context-file additions
     ↓
 shared herdr agent guidance
+    ↓
+<active_agent name="<definition>"/>
 ```
 
 The final effective body and shared guidance are delivered through private
-temporary prompt snapshots.
+temporary prompt snapshots. The active-agent tag is appended directly as
+interoperability metadata for compatible Pi extensions.
 
 ## Complete override example
 

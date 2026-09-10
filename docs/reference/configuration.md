@@ -106,16 +106,7 @@ delegation policy in `piHerdsman`.
 
 Those belong in Markdown agent definitions.
 
-Trusted project-local definitions can be enabled with this project-only
-discovery gate in `<cwd>/.pi/settings.json`:
-
-```json
-{ "piHerdsman": { "projectAgents": true } }
-```
-
-The default is disabled, and a global `projectAgents` value has no effect.
-This setting enables discovery only; agent models, tools, bodies, extensions,
-and delegation remain in Markdown definitions.
+Trusted project-local definitions are discovered from `<cwd>/.pi/agents/`.
 
 See:
 

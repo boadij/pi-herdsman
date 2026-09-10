@@ -29,32 +29,58 @@ Project definitions are optional and live in the current project:
 <cwd>/.pi/agents/
 ```
 
-For example:
+Pi Herdsman discovers project definitions when Pi considers the project
+trusted. Precedence is:
+
+```text
+bundled < project < global
+```
+
+Global definitions remain final user policy. For example:
 
 ```text
 .pi/
-├── settings.json
 └── agents/
     └── reviewer.md
 ```
 
-with project settings:
-
-```json
-{ "piHerdsman": { "projectAgents": true } }
-```
-
-They are discovered only when the trusted project settings contain
-`piHerdsman.projectAgents: true`. Precedence is `bundled < project < global`;
-global definitions remain final user policy. Project definitions apply only to
-their project cwd, and the Definitions UI writes global overrides, never
-project files.
+Project definitions apply only to their project cwd, and the Definitions UI
+writes global overrides, never project files.
 
 When Pi uses a custom agent directory, the global definitions live under that
 agent directory's `agents/` subdirectory.
 
 A project or global definition whose `name` matches a lower-precedence
 definition overlays it. An unmatched definition is standalone.
+
+### Permission-aware extensions
+
+Agent definitions may include a `permission:` mapping for compatible
+permission-aware Pi extensions.
+
+[`pi-permission-system`](https://github.com/gotgenes/pi-packages/tree/main/packages/pi-permission-system)
+can consume the same global or trusted project-local agent definition as Pi
+Herdsman:
+
+```yaml
+---
+name: reviewer
+tools: ["read", "ls", "find", "grep"]
+permission:
+  "*": deny
+  read: allow
+  ls: allow
+  find: allow
+  grep: allow
+---
+```
+
+Pi Herdsman accepts and preserves `permission:` but does not evaluate its
+contents or make authorization decisions from it. Managed agents also publish
+the conventional active-agent identity and subagent lineage metadata used by
+compatible extensions. Permission policy is effective only when the
+compatible permission extension is loaded in that Pi session. The permission
+extension is optional; Pi Herdsman does not install or depend on it.
 
 ## Enable or disable a definition
 

@@ -70,6 +70,7 @@ const ARRAY_FIELDS = new Set([
 const SUPPORTED_FIELDS = new Set([
   "name",
   "description",
+  "permission",
   ...STRING_FIELDS,
   ...BOOLEAN_CAPABILITY_FIELDS,
   ...ARRAY_FIELDS,
@@ -86,6 +87,7 @@ export type Frontmatter = {
   model?: string;
   thinking?: string | false;
   bodyMode?: BodyMode;
+  permission?: { [key: string]: unknown };
   noTools?: boolean;
   noBuiltinTools?: boolean;
   tools?: string[];
@@ -202,6 +204,11 @@ function validateDefinition(
   for (const field of Object.keys(frontmatter))
     if (!SUPPORTED_FIELDS.has(field))
       invalid(field, "is not a supported agent-definition field");
+  if (
+    frontmatter.permission !== undefined &&
+    !isPlainObject(frontmatter.permission)
+  )
+    invalid("permission", "must be a mapping");
   if (typeof frontmatter.name !== "string" || !frontmatter.name)
     invalid("name", "must be a non-empty string");
   for (const field of BOOLEAN_CAPABILITY_FIELDS)
@@ -751,6 +758,8 @@ export function agentLaunchArgs(
     }
   }
   if (sharedPromptPath) args.push("--append-system-prompt", sharedPromptPath);
+  if (managedAgent)
+    args.push("--append-system-prompt", `<active_agent name="${agent.name}"/>`);
 
   if (frontmatter.noTools) args.push("--no-tools");
   if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");

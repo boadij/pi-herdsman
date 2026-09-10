@@ -82,10 +82,10 @@ Stop all…
 
 `Running` is the complete authoritative live-agent inventory and focuses the
 selected pane directly. `Definitions` manages the effective bundled, project,
-and global agent definitions. Project definitions participate only when the
-trusted project setting `piHerdsman.projectAgents` is `true`; effective precedence
-is bundled < project < global. `Layout` controls whether newly started agents
-use tabs or splits. `Stop all…` is destructive emergency control.
+and global agent definitions. Trusted projects contribute definitions from
+`.pi/agents/`; effective precedence is bundled < project < global. `Layout`
+controls whether newly started agents use tabs or splits. `Stop all…` is
+destructive emergency control.
 
 See [`/agents` commands](reference/commands.md) for exact behavior.
 

@@ -76,6 +76,8 @@ import {
 
 test("parent delegates two same-definition children with exact ownership", async () => {
   setAgentEnvironment("multiplicity-parent", ["child"]);
+  const previousForwardingSession = process.env.PI_SUBAGENT_PARENT_SESSION;
+  process.env.PI_SUBAGENT_PARENT_SESSION = LEAD_SESSION_ID;
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parent = managedState("multiplicity-parent");
   const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
@@ -130,6 +132,21 @@ test("parent delegates two same-definition children with exact ownership", async
       ).length,
       2,
     );
+    assert.equal(
+      lifecycle.environmentCommands.filter(
+        (command) =>
+          command ===
+          `PI_HERDSMAN_OWNER_SESSION_ID=${context.sessionManager.getSessionId()}`,
+      ).length,
+      2,
+    );
+    assert.equal(
+      lifecycle.environmentCommands.filter(
+        (command) =>
+          command === `PI_SUBAGENT_PARENT_SESSION=${LEAD_SESSION_ID}`,
+      ).length,
+      2,
+    );
     assert.equal(lifecycle.createdTabs(), 0);
     for (const label of labels) {
       const closed = await pi.tools[0].execute(
@@ -153,6 +170,9 @@ test("parent delegates two same-definition children with exact ownership", async
     );
     assert.deepEqual(lifecycle.closeOrder, labels);
   } finally {
+    if (previousForwardingSession === undefined)
+      delete process.env.PI_SUBAGENT_PARENT_SESSION;
+    else process.env.PI_SUBAGENT_PARENT_SESSION = previousForwardingSession;
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
     resetAgentMailbox(parentMailbox);
     for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
@@ -2406,9 +2426,9 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
       launched[0].args.filter(
         (arg) => arg === "--system-prompt" || arg === "--append-system-prompt",
       ),
-      ["--system-prompt", "--append-system-prompt"],
+      ["--system-prompt", "--append-system-prompt", "--append-system-prompt"],
     );
-    assert.equal(launched[0].contents.length, 2);
+    assert.equal(launched[0].contents.length, 3);
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[0]!, /automatic prompt snapshot/);
     assert.match(launched[0].contents[1]!, /ask_owner/);
@@ -2538,14 +2558,14 @@ test("caller assignment files suppress canonical-overlapping automatic prompts",
       fakeContext(),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.equal(launched[0].contents.length, 2);
+    assert.equal(launched[0].contents.length, 3);
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[1]!, /ask_owner/);
     assert.deepEqual(
       launched[0].args.filter(
         (arg) => arg === "--system-prompt" || arg === "--append-system-prompt",
       ),
-      ["--system-prompt", "--append-system-prompt"],
+      ["--system-prompt", "--append-system-prompt", "--append-system-prompt"],
     );
     assert.match(assignedText, /caller wins canonical overlap/);
   } finally {
@@ -2807,7 +2827,7 @@ test("session delegation starts a new agent generation with current prompt conte
       fakeContext(),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.equal(launched[0].contents.length, 2);
+    assert.equal(launched[0].contents.length, 3);
     assert.equal(result.details.session_id, session.id);
     assert.equal((result.details as any).reusable, undefined);
     assert.equal((result.details as any).keepAlive, undefined);

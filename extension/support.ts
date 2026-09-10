@@ -2480,8 +2480,14 @@ export function promptLaunchContents(args: string[]): string[] {
     if (
       args[index] === "--system-prompt" ||
       args[index] === "--append-system-prompt"
-    )
-      contents.push(readFileSync(args[index + 1]!, "utf8"));
+    ) {
+      const input = args[index + 1]!;
+      contents.push(
+        input.startsWith("<active_agent ")
+          ? input
+          : readFileSync(input, "utf8"),
+      );
+    }
   }
   return contents;
 }
