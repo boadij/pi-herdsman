@@ -80,8 +80,68 @@ test("Herdr version parsing accepts preview suffixes but rejects trailing text",
     "0.8.0 trailing",
     "0.8.0-preview.2026-06-02-abcdef123456 trailing",
     "0.8.0\n",
+    "00.8.0",
+    "0.08.0",
+    "0.8.00",
   ])
     assert.equal(parseHerdrVersion(version), undefined, version);
+});
+
+test("agent list matches canonical Herdr session paths", async () => {
+  setLeadEnvironment();
+  const label = `canonical-session-${randomUUID().slice(0, 8)}`;
+  const root = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-session-list-"));
+  const path = join(root, "agent-session.jsonl");
+  const alias = join(root, "alias-session.jsonl");
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: path,
+  };
+  const state = managedState(label, undefined, identity);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  realFs.writeFileSync(path, "{}");
+  realFs.symlinkSync(path, alias);
+  writeAgentState(mailbox, state);
+  const listedAgent = {
+    ...agentFromState(state),
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "path",
+      value: alias,
+    },
+  };
+  const baseExec = leadExec(label, "idle", state.piSessionId, undefined, null);
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (command === "herdr" && args[0] === "agent" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({ result: { agents: [listedAgent] } }),
+          stderr: "",
+          code: 0,
+        };
+      return baseExec(command, args, options);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const tool = pi.tools.find((candidate) => candidate.name === "agent");
+    assert.ok(tool);
+    const result = await tool.execute(
+      "canonical-session-list",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.agents.length, 1);
+    assert.equal(result.details.agents[0].agent, label);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(root, { recursive: true, force: true });
+    setLeadEnvironment();
+  }
 });
 
 test("registered lead and unmanaged roles expose the correct surface", () => {
@@ -1740,7 +1800,7 @@ test("registered agent inspect exposes process and recent activity evidence", as
         return {
           stdout: JSON.stringify({
             result: {
-              process: {
+              process_info: {
                 pane_id: identity.paneId,
                 shell_pid: 123,
                 foreground_process_group_id: 456,

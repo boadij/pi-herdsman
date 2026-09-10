@@ -1562,6 +1562,16 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
     ),
   );
   assert.match(plainError, /Chief lease is no longer active/);
+  const plainStringError = renderedText(
+    renderCoordinationResult(
+      "chief",
+      { content: "Chief lease is no longer active", details: {} },
+      {},
+      presentationTheme,
+      { args: { action: "message" }, isError: true },
+    ),
+  );
+  assert.match(plainStringError, /Chief lease is no longer active/);
   const wideArgs = {
     action: "delegate",
     definition: "界".repeat(30),

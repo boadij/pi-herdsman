@@ -1356,6 +1356,44 @@ test("session delegation rejects invalid and occupied explicit labels without st
   }
 });
 
+test("registered agent revalidates input mutated after tool_call", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext();
+  const input = {
+    action: "delegate",
+    definition: "agent",
+    task: "initially valid",
+  };
+  try {
+    const toolCall = pi.events.get("tool_call")?.[0];
+    assert.ok(toolCall);
+    assert.equal(
+      await toolCall({ toolName: "agent", input }, context),
+      undefined,
+    );
+    input.task = "";
+    const blocked = await toolCall({ toolName: "agent", input }, context);
+    assert.equal(blocked?.block, true);
+    assert.match(blocked?.reason ?? "", /\/[^ )]+/);
+    const result = await pi.tools[0].execute(
+      "id",
+      input,
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.error.category, "invalid_request");
+    assert.equal(result.details.error.message, "Invalid agent input");
+    assert.match(result.details.error.details.path, /^\/.+/);
+    assert.ok(result.details.error.details.message);
+    assert.equal(pi.calls.length, 0);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
 test("public assignment normalizes invalid and unknown session sources", async () => {
   setLeadEnvironment();
   nativeSessions.clear();

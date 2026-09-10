@@ -387,6 +387,16 @@ mock.module("@earendil-works/pi-tui", {
 });
 mock.module("@earendil-works/pi-ai", {
   namedExports: {
+    contentText: (
+      content: string | readonly { type: string; text: string }[],
+      separator = "\n",
+    ) =>
+      typeof content === "string"
+        ? content
+        : content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join(separator),
     StringEnum: (values: readonly string[]) => ({
       type: "string",
       enum: [...values],
@@ -1308,6 +1318,8 @@ export function delegatedLifecycleExecutor(
                     workspace_id: WORKSPACE,
                     cwd: state.cwd,
                     agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
                       kind: "id",
                       value: state.piSessionId,
                     },
@@ -1324,7 +1336,7 @@ export function delegatedLifecycleExecutor(
           return {
             stdout: JSON.stringify({
               result: {
-                process: currentStateForPane(args.at(-1)!)
+                process_info: currentStateForPane(args.at(-1)!)
                   ? {
                       pane_id: args.at(-1),
                       shell_pid: 123,
@@ -1520,6 +1532,8 @@ export function cascadeExecutor(
             const agent = agentFromState(state);
             if (state.agentLabel === options.mismatchSessionLabel)
               agent.agent_session = {
+                source: "herdr:pi",
+                agent: "pi",
                 kind: "id",
                 value: "22222222-2222-4222-8222-222222222222",
               };
@@ -1552,6 +1566,8 @@ export function cascadeExecutor(
         const agent = agentFromState(state);
         if (state.agentLabel === options.mismatchSessionLabel)
           agent.agent_session = {
+            source: "herdr:pi",
+            agent: "pi",
             kind: "id",
             value: "22222222-2222-4222-8222-222222222222",
           };
@@ -1612,6 +1628,8 @@ export function cascadeExecutor(
                     workspace_id: state.workspaceId,
                     cwd: state.cwd,
                     agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
                       kind: "id",
                       value: state.piSessionId,
                     },
@@ -1627,7 +1645,7 @@ export function cascadeExecutor(
         return {
           stdout: JSON.stringify({
             result: {
-              process: {
+              process_info: {
                 pane_id: args.at(-1),
                 shell_pid: 123,
                 foreground_process_group_id: 123,
@@ -1792,11 +1810,7 @@ export function createStagedAssignmentFixture(
         const result = await startup.exec(command, args, options);
         const payload = JSON.parse(result.stdout);
         const agents = payload.result?.agents ?? payload.agents ?? [];
-        if (
-          agents.some(
-            (agent: any) => (agent.agent_status ?? agent.status) === "working",
-          )
-        )
+        if (agents.some((agent: any) => agent.agent_status === "working"))
           workingObservations++;
         return result;
       }
@@ -2038,6 +2052,8 @@ export function startupExecutor(
                   workspace_id: WORKSPACE,
                   cwd: testCwd,
                   agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
                     kind: "id",
                     value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
                   },
@@ -2062,6 +2078,8 @@ export function startupExecutor(
                 ...(session
                   ? {
                       agent_session: {
+                        source: "herdr:pi",
+                        agent: "pi",
                         kind: "id",
                         value: session,
                       },
@@ -2168,7 +2186,7 @@ export function startupExecutor(
         return {
           stdout: JSON.stringify({
             result: {
-              process: {
+              process_info: {
                 pane_id: activePaneId,
                 shell_pid: 123,
                 foreground_process_group_id: 123,
@@ -2224,6 +2242,8 @@ export function startupExecutor(
                 workspace_id: WORKSPACE,
                 cwd: testCwd,
                 agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
                   kind: "id",
                   value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
                 },
@@ -2329,6 +2349,8 @@ export function startupExecutor(
         workspace_id: WORKSPACE,
         cwd: testCwd,
         agent_session: {
+          source: "herdr:pi",
+          agent: "pi",
           kind: "id",
           value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         },

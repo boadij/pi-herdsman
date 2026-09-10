@@ -464,7 +464,9 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
                 workspace_id: WORKSPACE,
                 cwd: "/tmp",
                 agent_session: {
+                  agent: "pi",
                   kind: "id",
+                  source: "herdr:pi",
                   value: validating
                     ? "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
                     : "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -566,7 +568,9 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
                   ? {}
                   : {
                       agent_session: {
+                        agent: "pi",
                         kind: "id",
+                        source: "herdr:pi",
                         value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
                       },
                     }),
@@ -580,7 +584,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
         return {
           stdout: JSON.stringify({
             result: {
-              process: {
+              process_info: {
                 pane_id: "pane-start",
                 shell_pid: 123,
                 foreground_process_group_id: !started || stopped ? 123 : 456,
@@ -668,7 +672,9 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
             workspace_id: WORKSPACE,
             cwd: "/tmp",
             agent_session: {
+              agent: "pi",
               kind: "id",
+              source: "herdr:pi",
               value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
             },
           },
@@ -825,7 +831,9 @@ test("assignment rollback retains primary failure and actionable cleanup details
                 workspace_id: WORKSPACE,
                 cwd: "/tmp",
                 agent_session: {
+                  agent: "pi",
                   kind: "id",
+                  source: "herdr:pi",
                   value:
                     args[2] === "detail-pane"
                       ? "wrong-session"
@@ -940,7 +948,9 @@ test("assignment rollback retains primary failure and actionable cleanup details
                 workspace_id: WORKSPACE,
                 cwd: "/tmp",
                 agent_session: {
+                  agent: "pi",
                   kind: "id",
+                  source: "herdr:pi",
                   value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
                 },
               },
@@ -953,7 +963,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
         return {
           stdout: JSON.stringify({
             result: {
-              process: {
+              process_info: {
                 pane_id: "detail-pane",
                 shell_pid: 123,
                 foreground_process_group_id: 123,
@@ -1031,7 +1041,9 @@ test("assignment rollback retains primary failure and actionable cleanup details
             workspace_id: WORKSPACE,
             cwd: "/tmp",
             agent_session: {
+              agent: "pi",
               kind: "id",
+              source: "herdr:pi",
               value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
             },
           },
@@ -2461,7 +2473,9 @@ test("automatic close invokes the exact lifecycle only after live identity proof
                 tab_id: identity.tabId,
                 cwd: "/tmp",
                 agent_session: {
+                  agent: "pi",
                   kind: "id",
+                  source: "herdr:pi",
                   value: identity.piSessionId,
                 },
               },
@@ -2478,7 +2492,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
         return {
           stdout: JSON.stringify({
             result: {
-              process: {
+              process_info: {
                 pane_id: identity.paneId,
                 shell_pid: 10,
                 foreground_process_group_id: 20,
@@ -2514,7 +2528,9 @@ test("automatic close invokes the exact lifecycle only after live identity proof
                 workspace_id: WORKSPACE,
                 cwd: "/tmp",
                 agent_session: {
+                  agent: "pi",
                   kind: "id",
+                  source: "herdr:pi",
                   value: identity.piSessionId,
                 },
               },

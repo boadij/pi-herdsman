@@ -2601,7 +2601,9 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
     agent: "pi",
     name: herdrAlias("sleep-smoke-a"),
     agent_session: {
+      agent: "pi",
       kind: "path",
+      source: "herdr:pi",
       value: identity.piSessionFile,
     },
     agent_status: "working",
@@ -2986,7 +2988,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
         args[1] === "process-info"
       )
         return {
-          stdout: JSON.stringify({ result: { process: processInfo } }),
+          stdout: JSON.stringify({ result: { process_info: processInfo } }),
           stderr: "",
           code: 0,
         };

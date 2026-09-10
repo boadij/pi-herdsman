@@ -3,6 +3,8 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  ModelSelectEvent,
+  ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, StringEnum } from "@earendil-works/pi-ai";
 import {
@@ -98,10 +100,10 @@ import {
   herdrAgentAlias,
   listHerdrAgents,
   listAllHerdrAgents,
-  matchesExpectedSession,
   rollbackHerdrStart,
   runHerdr,
   sessionIdentity,
+  sameObservedSessionPath,
   startHerdrAgent,
   sameCwd,
   inspectHerdrAgent,
@@ -176,7 +178,6 @@ import {
   renderAgentStaleMessage,
   renderCoordinationCall,
   renderCoordinationResult,
-  selectedModelToken,
   truncateModelText,
   createStatusWidget,
   compactModelToken,
@@ -487,58 +488,7 @@ type ParsedParams =
   | { action: "reply"; agent: string; message: string; files?: string[] }
   | { action: "close"; agent: string }
   | { action: "inspect"; agent: string };
-const STRING_FIELDS = [
-  "definition",
-  "agent",
-  "label",
-  "cwd",
-  "task",
-  "fork",
-  "message",
-  "session",
-] as const;
-function rejectBlankStrings(p: Params): void {
-  const invalid = STRING_FIELDS.filter((field) => {
-    const value = p[field];
-    return value !== undefined && (typeof value !== "string" || !value.trim());
-  });
-  if (!invalid.length) return;
-  fail(
-    "invalid_request",
-    `Fields must contain non-whitespace text when supplied: ${invalid.join(", ")}`,
-    p.action,
-  );
-}
-function validateRequestedLabel(
-  label: string | undefined,
-  operation: string,
-): void {
-  if (label === undefined || validAgentLabel(label)) return;
-  fail(
-    "invalid_request",
-    'Agent label must start with a lowercase letter, contain only lowercase letters, digits, "_" or "-", and be at most 32 characters',
-    operation,
-  );
-}
-function validateTimeout(timeoutMs: number | undefined): void {
-  if (
-    timeoutMs === undefined ||
-    (Number.isInteger(timeoutMs) &&
-      timeoutMs >= STARTUP_TIMEOUT_MIN &&
-      timeoutMs <= STARTUP_TIMEOUT_MAX)
-  )
-    return;
-  fail(
-    "invalid_request",
-    `timeoutMs must be an integer from ${STARTUP_TIMEOUT_MIN} through ${STARTUP_TIMEOUT_MAX}`,
-    "delegate",
-  );
-}
 function parseRequest(p: Params): ParsedParams {
-  rejectBlankStrings(p);
-  validateRequestedLabel(p.label, p.action);
-  validateRequestedLabel(p.agent, p.action);
-  validateTimeout(p.timeoutMs);
   if (p.action === "list") {
     return { action: "list" };
   }
@@ -548,8 +498,8 @@ function parseRequest(p: Params): ParsedParams {
       fail("invalid_request", "Steer requires a non-empty message", "steer");
     return {
       action: "steer",
-      agent: p.agent,
-      message: p.message,
+      agent: p.agent!,
+      message: p.message!,
       ...(p.files ? { files: p.files } : {}),
     };
   }
@@ -559,25 +509,29 @@ function parseRequest(p: Params): ParsedParams {
       fail("invalid_request", "Reply requires a non-empty message", "reply");
     return {
       action: "reply",
-      agent: p.agent,
-      message: p.message,
+      agent: p.agent!,
+      message: p.message!,
       ...(p.files ? { files: p.files } : {}),
     };
   }
   if (p.action === "close") {
     if (!p.agent) fail("invalid_request", "Close requires an agent", "close");
-    return { action: "close", agent: p.agent };
+    return { action: "close", agent: p.agent! };
   }
   if (p.action === "inspect") {
     if (!p.agent)
       fail("invalid_request", "Inspect requires an agent", "inspect");
-    return { action: "inspect", agent: p.agent };
+    return { action: "inspect", agent: p.agent! };
   }
   if (p.action === "delegate" && p.definition !== undefined) {
-    if (!p.definition)
+    if (
+      p.session !== undefined ||
+      p.agent !== undefined ||
+      p.message !== undefined
+    )
       fail(
         "invalid_request",
-        "Definition delegation requires a definition",
+        "Delegate requires exactly one of definition or session",
         "delegate",
       );
     if (!p.task)
@@ -589,7 +543,7 @@ function parseRequest(p: Params): ParsedParams {
     return {
       action: "delegate",
       definition: p.definition,
-      task: p.task,
+      task: p.task!,
       ...(p.label !== undefined ? { label: p.label } : {}),
       ...(p.cwd !== undefined ? { cwd: p.cwd } : {}),
       ...(p.files !== undefined ? { files: p.files } : {}),
@@ -598,10 +552,16 @@ function parseRequest(p: Params): ParsedParams {
     };
   }
   if (p.action === "delegate" && p.session !== undefined) {
-    if (!p.session)
+    if (
+      p.definition !== undefined ||
+      p.agent !== undefined ||
+      p.cwd !== undefined ||
+      p.fork !== undefined ||
+      p.message !== undefined
+    )
       fail(
         "invalid_request",
-        "Session delegation requires a session",
+        "Delegate requires exactly one of definition or session",
         "delegate",
       );
     if (!p.task)
@@ -613,7 +573,7 @@ function parseRequest(p: Params): ParsedParams {
     return {
       action: "delegate",
       session: p.session,
-      task: p.task,
+      task: p.task!,
       ...(p.label !== undefined ? { label: p.label } : {}),
       ...(p.files !== undefined ? { files: p.files } : {}),
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
@@ -626,6 +586,41 @@ function parseRequest(p: Params): ParsedParams {
     "Delegate requires exactly one of definition or session",
     "delegate",
   );
+}
+type CompiledRequestValidator = {
+  Check: (value: unknown) => boolean;
+  Errors: (value: unknown) => readonly {
+    instancePath: string;
+    message: string;
+    params: object;
+  }[];
+};
+function invalidRequestInput(
+  validator: CompiledRequestValidator,
+  input: unknown,
+  operation: string,
+  message: string,
+): OperationError {
+  const errors = validator.Errors(input);
+  const first =
+    [...errors].reverse().find(({ instancePath }) => instancePath) ?? errors[0];
+  const additionalProperty = (
+    first?.params as { additionalProperties?: unknown } | undefined
+  )?.additionalProperties;
+  const path =
+    first?.instancePath ||
+    (Array.isArray(additionalProperty) &&
+    typeof additionalProperty[0] === "string"
+      ? `/${additionalProperty[0]}`
+      : "/");
+  return new OperationError({
+    category: "invalid_request",
+    message,
+    operation,
+    rollbackOccurred: false,
+    retryAttempted: false,
+    ...(first ? { details: { path, message: first.message } } : {}),
+  });
 }
 type Runtime = {
   label: string;
@@ -1216,19 +1211,6 @@ function sameSessionPath(
   return canonicalSessionPath(left) === canonicalSessionPath(right);
 }
 
-function sameObservedSessionPath(left: string, right: string): boolean {
-  if (left === right) return true;
-  const canonicalRight = canonicalSessionPath(right);
-  try {
-    return realpathSync(left) === canonicalRight;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw new Error(
-      `could not canonicalize exact Pi session path ${left}: ${String(error)}`,
-    );
-  }
-}
-
 function samePersistedSessionPath(
   left: string | undefined,
   right: string | undefined,
@@ -1347,10 +1329,8 @@ function settingsPath(
     : join(ctx.cwd, CONFIG_DIR_NAME, "settings.json");
 }
 const HERDR_VERSION_PATTERN =
-  /^(\d+)\.(\d+)\.(\d+)(?:-preview(?:\.[0-9A-Za-z-]+)?)?$/;
-export function parseHerdrVersion(
-  value: string,
-): RegExpMatchArray | undefined {
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview(?:\.[0-9A-Za-z-]+)?)?$/;
+export function parseHerdrVersion(value: string): RegExpMatchArray | undefined {
   const match = value.match(HERDR_VERSION_PATTERN);
   return match?.[0] === value ? match : undefined;
 }
@@ -1395,17 +1375,8 @@ async function herdrVersion(
 function expectedSession(id?: string, path?: string): ExpectedSession {
   return { id, path };
 }
-function herdrSessionObservations(agent: any): unknown[] {
-  if (!agent || typeof agent !== "object") return [];
-  const observations: unknown[] = [];
-  if (agent.agent_session != null) observations.push(agent.agent_session);
-  return observations;
-}
 function isPiAgent(agent: any): boolean {
-  return (
-    agent?.agent_session?.agent === "pi" &&
-    agent.agent_session.source === "herdr:pi"
-  );
+  return sessionIdentity(agent?.agent_session) !== undefined;
 }
 async function workspacePresentationProvenance(
   pi: ExtensionAPI,
@@ -1497,41 +1468,44 @@ async function workspacePresentationProvenance(
   );
   return new Map(entries);
 }
-function sessionObservationMatchesExpected(
-  observation: unknown,
+function sessionIdentityMatchesExpected(
+  session: ReturnType<typeof sessionIdentity>,
   expected: ExpectedSession,
 ): boolean {
-  const session = sessionIdentity(observation);
-  if (session?.kind === "path" && expected.path !== undefined)
-    return sameObservedSessionPath(session.value, expected.path);
-  return matchesExpectedSession(observation, expected);
+  if (!session) return false;
+  if (session.kind === "path")
+    return (
+      typeof expected.path === "string" &&
+      expected.path.length > 0 &&
+      sameObservedSessionPath(session.value, expected.path)
+    );
+  return (
+    typeof expected.id === "string" &&
+    expected.id.length > 0 &&
+    session.value === expected.id
+  );
 }
 function herdrSessionsMatch(agent: any, expected: ExpectedSession): boolean {
-  const observations = herdrSessionObservations(agent);
+  const observation = sessionIdentity(agent?.agent_session);
   return (
-    observations.length > 0 &&
-    observations.every((observation) =>
-      sessionObservationMatchesExpected(observation, expected),
-    )
+    observation !== undefined &&
+    sessionIdentityMatchesExpected(observation, expected)
   );
 }
 function herdrSessionsMatchForContinuation(
   agent: any,
   expected: ExpectedSession,
 ): boolean {
-  const observations = herdrSessionObservations(agent);
-  let matches = false;
-  for (const observation of observations) {
-    if (sessionObservationMatchesExpected(observation, expected))
-      matches = true;
-  }
-  return matches;
+  const observation = sessionIdentity(agent?.agent_session);
+  return (
+    observation !== undefined &&
+    sessionIdentityMatchesExpected(observation, expected)
+  );
 }
-function sessionObservationMatchesId(
-  observation: unknown,
+function sessionIdentityMatchesId(
+  session: ReturnType<typeof sessionIdentity>,
   id: string,
 ): boolean {
-  const session = sessionIdentity(observation);
   if (!session) return false;
   if (session.kind === "id") return session.value === id;
   try {
@@ -1541,37 +1515,25 @@ function sessionObservationMatchesId(
   }
 }
 function herdrSessionsMatchId(agent: any, id: string): boolean {
-  const observations = herdrSessionObservations(agent);
-  return (
-    observations.length > 0 &&
-    observations.every((observation) =>
-      sessionObservationMatchesId(observation, id),
-    )
-  );
+  const observation = sessionIdentity(agent?.agent_session);
+  return observation !== undefined && sessionIdentityMatchesId(observation, id);
 }
 function herdrSessionId(agent: any): string | undefined {
-  const ids = herdrSessionObservations(agent).map((observation) => {
-    const session = sessionIdentity(observation);
-    if (!session) return undefined;
-    if (session.kind === "id") return session.value;
-    try {
-      const id = SessionManager.open(session.value).getSessionId();
-      return id || undefined;
-    } catch {
-      return undefined;
-    }
-  });
-  return ids.length > 0 && ids.every((id) => id !== undefined && id === ids[0])
-    ? ids[0]
-    : undefined;
+  const session = sessionIdentity(agent?.agent_session);
+  if (!session) return undefined;
+  if (session.kind === "id") return session.value;
+  try {
+    const id = SessionManager.open(session.value).getSessionId();
+    return id || undefined;
+  } catch {
+    return undefined;
+  }
 }
 function persistedSessionName(agent: any): string | undefined {
-  const path = herdrSessionObservations(agent)
-    .map(sessionIdentity)
-    .find((session) => session?.kind === "path")?.value;
-  if (!path) return undefined;
+  const session = sessionIdentity(agent?.agent_session);
+  if (session?.kind !== "path") return undefined;
   try {
-    const manager = SessionManager.open(path);
+    const manager = SessionManager.open(session.value);
     const name = manager.getSessionName();
     return typeof name === "string" && name.trim() ? name.trim() : undefined;
   } catch {
@@ -1647,8 +1609,8 @@ async function validateIntegration(
         "live Herdr agent identity mismatch",
         "integration",
       );
-    const observations = herdrSessionObservations(agent);
-    if (!observations.length) {
+    const observation = sessionIdentity(agent?.agent_session);
+    if (!observation) {
       if (
         options.waitForSession === true &&
         attempt < INTEGRATION_SESSION_RETRIES
@@ -1809,13 +1771,6 @@ function parsePresentationTokens(tokens: unknown): {
     ),
   };
 }
-function contextModelToken(ctx: ExtensionContext): string | undefined {
-  return selectedModelToken({ model: ctx.model });
-}
-function contextThinkingLevel(ctx: ExtensionContext): string | undefined {
-  const level = ctx.thinkingLevel;
-  return typeof level === "string" && level ? level : undefined;
-}
 function validateIdentity(
   runtime: Runtime,
   state: ManagedAgentState,
@@ -1851,9 +1806,11 @@ function validateIdentity(
       "identity",
     );
   if (agent) {
+    const observation = sessionIdentity(agent.agent_session);
+    const hasObservedSession =
+      agent.agent_session !== undefined && agent.agent_session !== null;
     const liveDifferences: [string, unknown, unknown][] = [
       ["workspaceId", agent.workspace_id, runtime.workspaceId],
-      ["agentLabel", agent.label, runtime.label],
       ["paneId", agent.pane_id, runtime.paneId],
     ].filter(([, expected, actual]) => expected !== actual);
     if (!sameCwd(agent.cwd, runtime.cwd))
@@ -1864,15 +1821,12 @@ function validateIdentity(
       runtime.piSessionId,
       runtime.piSessionFile,
     );
-    const observations = herdrSessionObservations(agent);
     if (
-      (observations.length === 0 && options.requireLiveSession) ||
-      (observations.length > 0 &&
-        !observations.every((observation) =>
-          sessionObservationMatchesExpected(observation, liveExpectedSession),
-        ))
+      (!observation && (options.requireLiveSession || hasObservedSession)) ||
+      (observation !== undefined &&
+        !sessionIdentityMatchesExpected(observation, liveExpectedSession))
     )
-      liveDifferences.push(["session", observations, liveExpectedSession]);
+      liveDifferences.push(["session", observation, liveExpectedSession]);
     if (liveDifferences.length)
       fail(
         "target_not_found",
@@ -2437,18 +2391,20 @@ async function managedAgentSnapshots(
         (value): value is string =>
           typeof value === "string" && value.length > 0,
       );
-      const sessionRelated = herdrSessionObservations(agent).some(
-        (observation) => {
-          try {
-            return sessionObservationMatchesExpected(
+      const sessionRelated = (() => {
+        const observation = sessionIdentity(agent?.agent_session);
+        try {
+          return (
+            observation !== undefined &&
+            sessionIdentityMatchesExpected(
               observation,
               expectedSession(state.piSessionId, state.piSessionFile),
-            );
-          } catch {
-            return false;
-          }
-        },
-      );
+            )
+          );
+        } catch {
+          return false;
+        }
+      })();
       return (
         agent?.pane_id === state.paneId ||
         aliases.includes(expectedAlias) ||
@@ -2512,23 +2468,19 @@ async function managedAgentSnapshots(
         lifecycleState,
         listed: {
           label: state.agentLabel,
-          kind: agent.agent_session?.agent,
+          kind: "pi",
           state: projectedState,
           steerable,
           workspace_id: state.workspaceId,
           pane_id: agent.pane_id,
           tab_id: agent.tab_id,
-          tab_label: agent.tab_label,
           cwd: agent.cwd,
           agent_session: agent.agent_session,
           pi_session_id: piSessionId,
           pi_session_path: piSessionPath,
-          display_agent: agent.display_agent,
           managed: true,
           owner_session_id: state.ownerSessionId,
           agent_definition: agentDefinition,
-          ...(agent.model ? { model: agent.model } : {}),
-          ...(agent.thinking ? { thinking: agent.thinking } : {}),
           active_request_id: state.activeRequestId,
           ...(state.resultError ? { result_error: state.resultError } : {}),
           ...(state.lastActivityAt !== undefined
@@ -2569,11 +2521,13 @@ async function managedAgentSnapshots(
           mailboxes.map(({ state }) => state.ownerSessionId),
         );
         for (const ownerSessionId of ownerSessionIds) {
-          const ownerAgents = live.agents.filter((agent: any) =>
-            herdrSessionObservations(agent).some((observation) =>
-              sessionObservationMatchesId(observation, ownerSessionId),
-            ),
-          );
+          const ownerAgents = live.agents.filter((agent: any) => {
+            const observation = sessionIdentity(agent?.agent_session);
+            return (
+              observation !== undefined &&
+              sessionIdentityMatchesId(observation, ownerSessionId)
+            );
+          });
           if (ownerAgents.length !== 1) continue;
           const ownerAgent = ownerAgents[0];
           if (
@@ -3042,13 +2996,9 @@ function liveAgentConflictsWithCompletedState(
   const aliases = [agent.name].filter(
     (value): value is string => typeof value === "string",
   );
-  const labels = [agent.label].filter(
-    (value): value is string => typeof value === "string",
-  );
   return (
     agent.pane_id === state.paneId ||
     aliases.includes(expectedAlias) ||
-    labels.includes(state.agentLabel) ||
     aliases.some((alias) =>
       alias.startsWith(`${state.agentLabel.slice(0, 15)}_`),
     )
@@ -3759,7 +3709,7 @@ function guardMailboxOccupancy(
       agent.workspace_id === workspaceId && agent.pane_id === state!.paneId,
   );
   if (!liveOnPane) return false;
-  if (!herdrSessionObservations(liveOnPane).length)
+  if (!sessionIdentity(liveOnPane?.agent_session))
     fail(
       "agent_label_exists",
       `Agent mailbox is occupied by a live agent without an official Pi session identity: ${label}`,
@@ -3905,8 +3855,6 @@ async function resolveRuntime(
     completedRequestId: state.completedRequestId,
     agentDefinition,
   });
-  if (agent.model !== undefined) runtime.model = agent.model;
-  if (agent.thinking !== undefined) runtime.thinking = agent.thinking;
   runtimes.set(runtime.label, runtime);
   validateIdentity(runtime, state, agent);
   await validateIntegration(pi, runtime, ctx, { signal });
@@ -3933,8 +3881,6 @@ function runtimeForListedAgent(
       activeRequestId: state.activeRequestId,
       completedRequestId: state.completedRequestId,
       agentDefinition: stateAgentDefinition(state),
-      model: agent.model,
-      thinking: agent.thinking,
     } satisfies Runtime);
   runtime.agentDefinition = stateAgentDefinition(state);
   return runtime;
@@ -5022,7 +4968,7 @@ async function actionUnsafe(
             )
           )
             representations.add(
-              `${agent.workspace_id ?? ""}\0${agent.label ?? agent.name ?? ""}\0${agent.pane_id ?? ""}`,
+              `${agent.workspace_id ?? ""}\0${agent.name ?? ""}\0${agent.pane_id ?? ""}`,
             );
         if (representations.size > 1)
           fail(
@@ -5767,12 +5713,16 @@ export default function (pi: ExtensionAPI): void {
           }),
         ),
         cwd: Type.Optional(
-          Type.String({ description: "Working directory for a fresh agent." }),
+          Type.String({
+            description: "Working directory for a fresh agent.",
+            pattern: "\\S",
+          }),
         ),
         fork: Type.Optional(
           Type.String({
             description:
               "Exact saved Pi session path or full UUID used as context for a fork.",
+            pattern: "\\S",
           }),
         ),
         timeoutMs: Type.Optional(
@@ -5784,7 +5734,10 @@ export default function (pi: ExtensionAPI): void {
         ),
         files: Type.Optional(
           Type.Array(
-            Type.String({ description: "Readable regular local file path." }),
+            Type.String({
+              description: "Readable regular local file path.",
+              minLength: 1,
+            }),
             {
               description:
                 "Supporting files for delegation, steering, replying, or ask_owner. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path and byte size. Files do not grant capabilities.",
@@ -5802,7 +5755,7 @@ export default function (pi: ExtensionAPI): void {
           Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
         ),
         task: Type.String({ pattern: "\\S" }),
-        files: Type.Optional(Type.Array(Type.String())),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
         timeoutMs: Type.Optional(
           Type.Integer({
             minimum: STARTUP_TIMEOUT_MIN,
@@ -5817,7 +5770,7 @@ export default function (pi: ExtensionAPI): void {
         action: StringEnum(["steer"] as const),
         agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
         message: Type.String({ pattern: "\\S" }),
-        files: Type.Optional(Type.Array(Type.String())),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
       },
       { additionalProperties: false },
     ),
@@ -5826,7 +5779,7 @@ export default function (pi: ExtensionAPI): void {
         action: StringEnum(["reply"] as const),
         agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
         message: Type.String({ pattern: "\\S" }),
-        files: Type.Optional(Type.Array(Type.String())),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
       },
       { additionalProperties: false },
     ),
@@ -7048,13 +7001,9 @@ export default function (pi: ExtensionAPI): void {
             tabId: agent.tab_id,
             workspaceCwd: agent.cwd,
             herdrName: agent.name,
-            tabLabel: agent.tab_label,
             ...(sessionName ? { sessionName } : {}),
             tokens: agent.tokens,
             runtimeState: normalizeHerdrLifecycleState(agent),
-            ...(typeof agent.last_activity_at === "number"
-              ? { lastActivity: agent.last_activity_at }
-              : {}),
           },
         ];
       });
@@ -7070,9 +7019,7 @@ export default function (pi: ExtensionAPI): void {
         ctx.signal,
       );
       const diagnostics = live.some(
-        (agent: any) =>
-          (agent?.agent === "pi" || agent?.agent_session?.agent === "pi") &&
-          herdrSessionId(agent) === undefined,
+        (agent: any) => agent?.agent_session !== undefined && !isPiAgent(agent),
       )
         ? [
             "Live Pi agents are present but their session identities are unresolvable",
@@ -7183,10 +7130,38 @@ export default function (pi: ExtensionAPI): void {
       });
     if (controllerScope)
       pi.on("tool_call", async (event: any, ctx: ExtensionContext) => {
-        if (event.toolName === "agent" && !agentValidator.Check(event.input))
-          return { block: true, reason: "Invalid agent input." };
-        if (event.toolName === "staff" && !staffValidator.Check(event.input))
-          return { block: true, reason: "Invalid staff input." };
+        if (event.toolName === "agent" && !agentValidator.Check(event.input)) {
+          const error = invalidRequestInput(
+            agentValidator,
+            event.input,
+            "agent",
+            "Invalid agent input",
+          );
+          return {
+            block: true,
+            reason: `${error.detail.message}${
+              error.detail.details?.path
+                ? ` (${error.detail.details.path}: ${error.detail.details.message})`
+                : ""
+            }`,
+          };
+        }
+        if (event.toolName === "staff" && !staffValidator.Check(event.input)) {
+          const error = invalidRequestInput(
+            staffValidator,
+            event.input,
+            "staff",
+            "Invalid staff action",
+          );
+          return {
+            block: true,
+            reason: `${error.detail.message}${
+              error.detail.details?.path
+                ? ` (${error.detail.details.path}: ${error.detail.details.message})`
+                : ""
+            }`,
+          };
+        }
         if (controllerScope.kind !== "lead") return;
         if (event.toolName === CHIEF_TOOLS[0] || !isCurrentChief(ctx)) return;
         return {
@@ -7669,11 +7644,9 @@ export default function (pi: ExtensionAPI): void {
             typeof agent.agent_definition === "string" &&
               agent.agent_definition.trim()
               ? agent.agent_definition
-              : typeof agent.display_agent === "string"
-                ? agent.display_agent
-                : typeof tokens.role === "string"
-                  ? tokens.role
-                  : undefined,
+              : typeof tokens.role === "string"
+                ? tokens.role
+                : undefined,
           ),
           paneId: agent.pane_id,
           sessionId: agent.pi_session_id,
@@ -7682,11 +7655,11 @@ export default function (pi: ExtensionAPI): void {
           model:
             presentation.model !== undefined
               ? presentation.model
-              : (runtime?.model ?? agent.model ?? undefined),
+              : runtime?.model,
           thinking:
             presentation.thinking !== undefined
               ? presentation.thinking
-              : (runtime?.thinking ?? agent.thinking ?? undefined),
+              : runtime?.thinking,
           contextPercent: presentation.contextPercent,
           ...(agent.stale
             ? {
@@ -8473,13 +8446,12 @@ export default function (pi: ExtensionAPI): void {
           if (!(await currentChiefAuthority(ctx)))
             throw new Error("Chief lease is no longer active");
           if (!staffValidator.Check(params))
-            throw new OperationError({
-              category: "invalid_request",
-              message: "Invalid staff action",
-              operation: "staff",
-              rollbackOccurred: false,
-              retryAttempted: false,
-            });
+            throw invalidRequestInput(
+              staffValidator,
+              params,
+              "staff",
+              "Invalid staff action",
+            );
           const refresh = async () => loadSupervisionSnapshot(ctx);
           const result = (value: Record<string, unknown>) => {
             const bounded = truncateModelText(JSON.stringify(value, null, 2), {
@@ -9345,16 +9317,14 @@ export default function (pi: ExtensionAPI): void {
       ) => {
         try {
           if (!agentValidator.Check(p))
-            throw new OperationError({
-              category: "invalid_request",
-              message: "Invalid agent input",
-              operation:
-                typeof (p as { action?: unknown })?.action === "string"
-                  ? (p as { action: string }).action
-                  : "agent",
-              rollbackOccurred: false,
-              retryAttempted: false,
-            });
+            throw invalidRequestInput(
+              agentValidator,
+              p,
+              typeof (p as { action?: unknown })?.action === "string"
+                ? (p as { action: string }).action
+                : "agent",
+              "Invalid agent input",
+            );
           const value = await action(
             pi,
             ctx,
@@ -9864,8 +9834,10 @@ export default function (pi: ExtensionAPI): void {
         );
         void refreshLeafStatus(ctx, generation);
       }
-      const model = contextModelToken(ctx);
-      const thinking = contextThinkingLevel(ctx);
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
+      const thinking = ctx.thinkingLevel;
       reportMetadata(
         pi,
         ctx,
@@ -10086,8 +10058,10 @@ export default function (pi: ExtensionAPI): void {
       }
       state = candidate;
       agentStartedAt = Date.now();
-      const model = contextModelToken(ctx);
-      const thinking = contextThinkingLevel(ctx);
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
+      const thinking = ctx.thinkingLevel;
       reportMetadata(pi, ctx, agentMetadataRuntime(state, ctx), {
         activity: {
           requestId: id,
@@ -10135,8 +10109,10 @@ export default function (pi: ExtensionAPI): void {
     const usage = normalizeContextUsage(ctx.getContextUsage());
     const percent =
       usage?.percent == null ? undefined : Math.round(usage.percent);
-    const model = contextModelToken(ctx);
-    const thinking = contextThinkingLevel(ctx);
+    const model = ctx.model
+      ? `${ctx.model.provider}/${ctx.model.id}`
+      : undefined;
+    const thinking = ctx.thinkingLevel;
     reportMetadata(pi, ctx, agentMetadataRuntime(state, ctx), {
       context: percent ?? null,
       ...(model ? { model } : {}),
@@ -10153,24 +10129,28 @@ export default function (pi: ExtensionAPI): void {
     "tool_execution_end",
   ])
     pi.on(event, () => touchActivity());
-  pi.on("model_select", (event: any, ctx: ExtensionContext) => {
+  pi.on("model_select", (event: ModelSelectEvent, ctx: ExtensionContext) => {
     if (!state) return;
-    const model = selectedModelToken(event);
-    if (typeof model !== "string") return;
-    const thinking = contextThinkingLevel(ctx);
+    const model = `${event.model.provider}/${event.model.id}`;
+    const thinking = ctx.thinkingLevel;
     reportMetadata(pi, ctx, agentMetadataRuntime(state, ctx), {
       model,
       ...(thinking ? { thinking } : {}),
     });
   });
-  pi.on("thinking_level_select", (event: any, ctx: ExtensionContext) => {
-    if (!state || typeof event?.level !== "string") return;
-    const model = contextModelToken(ctx);
-    reportMetadata(pi, ctx, agentMetadataRuntime(state, ctx), {
-      thinking: event.level,
-      ...(model ? { model } : {}),
-    });
-  });
+  pi.on(
+    "thinking_level_select",
+    (event: ThinkingLevelSelectEvent, ctx: ExtensionContext) => {
+      if (!state) return;
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
+      reportMetadata(pi, ctx, agentMetadataRuntime(state, ctx), {
+        thinking: event.level,
+        ...(model ? { model } : {}),
+      });
+    },
+  );
   const finalizeStateTransition = (ctx: ExtensionContext): void => {
     if (!state?.activeRequestId) return;
     pendingStateTransition = true;
@@ -10186,8 +10166,10 @@ export default function (pi: ExtensionAPI): void {
       writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, nextState);
       state = nextState;
       agentStartedAt = undefined;
-      const model = contextModelToken(ctx);
-      const thinking = contextThinkingLevel(ctx);
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
+      const thinking = ctx.thinkingLevel;
       pendingStateTransition = false;
       stateErrorReported = false;
       if (stateRetryTimer) clearInterval(stateRetryTimer);

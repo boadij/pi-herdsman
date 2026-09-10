@@ -1122,7 +1122,7 @@ async function paneProcess(
         : { timeout: startupCallTimeout(deadline) }),
     },
   );
-  const value = result?.process ?? result?.process_info;
+  const value = result?.process_info;
   const observed = normalizePaneProcess(value, paneId, required);
   if (required && !observed)
     error("start", `pane ${paneId} process ownership is unavailable`);
@@ -1250,7 +1250,7 @@ async function proveShellReady(
     ["pane", "process-info", "--pane", paneId],
     { signal, timeout: timeout() },
   );
-  const value = result?.process ?? result?.process_info;
+  const value = result?.process_info;
   const shell = normalizePaneProcess(value, paneId, true);
   if (!shell || !sameShellProcessOwner(expected ?? shell, shell))
     error(operation, `pane ${paneId} did not become an available shell`);
@@ -1345,13 +1345,39 @@ export function sessionIdentity(
   value: unknown,
 ): { kind: "id" | "path"; value: string } | undefined {
   if (!value || typeof value !== "object") return undefined;
-  const kind = (value as { kind?: unknown }).kind;
-  const sessionValue = (value as { value?: unknown }).value;
+  const session = value as {
+    source?: unknown;
+    agent?: unknown;
+    kind?: unknown;
+    value?: unknown;
+  };
+  const kind = session.kind;
+  const sessionValue = session.value;
+  if (session.source !== "herdr:pi" || session.agent !== "pi") return undefined;
   return (kind === "id" || kind === "path") &&
     typeof sessionValue === "string" &&
-    sessionValue
+    sessionValue.length > 0
     ? { kind, value: sessionValue }
     : undefined;
+}
+export function sameObservedSessionPath(left: string, right: string): boolean {
+  if (left === right) return true;
+  let canonicalRight: string;
+  try {
+    canonicalRight = realpathSync(right);
+  } catch (error) {
+    throw new Error(
+      `could not canonicalize exact Pi session path ${right}: ${String(error)}`,
+    );
+  }
+  try {
+    return realpathSync(left) === canonicalRight;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new Error(
+      `could not canonicalize exact Pi session path ${left}: ${String(error)}`,
+    );
+  }
 }
 export function matchesExpectedSession(
   observed: unknown,
@@ -1369,7 +1395,7 @@ export function matchesExpectedSession(
   return (
     typeof expected.path === "string" &&
     expected.path.length > 0 &&
-    resolve(session.value) === resolve(expected.path)
+    sameObservedSessionPath(session.value, expected.path)
   );
 }
 

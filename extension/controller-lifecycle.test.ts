@@ -1796,6 +1796,8 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
         );
         if (bad)
           bad.agent_session = {
+            source: "herdr:pi",
+            agent: "pi",
             kind: "id",
             value: "22222222-2222-4222-8222-222222222222",
           };
@@ -2133,7 +2135,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
         return {
           stdout: JSON.stringify({
             result: {
-              process: {
+              process_info: {
                 pane_id: "helper-pane",
                 shell_pid: 123,
                 foreground_process_group_id: 123,
@@ -3722,7 +3724,7 @@ test("empty early launch cleans exact resources and same-label retry creates one
         return {
           stdout: JSON.stringify({
             result: {
-              process: {
+              process_info: {
                 pane_id: args[3],
                 shell_pid: 123,
                 foreground_process_group_id: 123,

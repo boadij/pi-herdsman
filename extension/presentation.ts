@@ -7,7 +7,7 @@ import {
   truncateLine,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
-import * as PiAi from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai";
 import * as PiTui from "@earendil-works/pi-tui";
 import {
   Container,
@@ -96,18 +96,11 @@ export function collapseDisplayText(
     ? normalized
     : `${characters.slice(0, Math.max(0, maxCharacters - 1)).join("")}…`;
 }
-export function selectedModelToken(event: unknown): string | undefined {
-  const selected = (event as { model?: unknown } | undefined)?.model;
-  if (
-    selected &&
-    typeof selected === "object" &&
-    typeof (selected as { provider?: unknown }).provider === "string" &&
-    typeof (selected as { id?: unknown }).id === "string"
-  )
-    return `${(selected as { provider: string }).provider}/${(selected as { id: string }).id}`;
-  if (typeof selected === "string") return selected;
-  const id = (event as { id?: unknown } | undefined)?.id;
-  return typeof id === "string" ? id : undefined;
+export function selectedModelToken(event: {
+  model?: { provider: string; id: string };
+}): string | undefined {
+  const model = event.model;
+  return model ? `${model.provider}/${model.id}` : undefined;
 }
 export function formatElapsed(
   startedAt: number | undefined,
@@ -1511,13 +1504,7 @@ function resultContent(result: any): string {
   const content = result?.content;
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return (
-    PiAi.contentText?.(content) ??
-    content
-      .filter((part: any) => part?.type === "text")
-      .map((part: any) => (typeof part.text === "string" ? part.text : ""))
-      .join("\n")
-  );
+  return contentText(content);
 }
 
 function shortIdentity(input: unknown): string {
