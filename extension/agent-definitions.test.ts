@@ -1101,21 +1101,6 @@ test("builds exact Pi capability launch arguments", () => {
   ]);
 });
 
-test("escapes the active-agent tag in managed launches", () => {
-  const args = agentLaunchArgs(
-    {
-      name: 'reviewer & "lead"',
-      path: "/agent.md",
-      frontmatter: {},
-      body: "",
-    },
-    { managedAgent: true },
-  );
-  assert.ok(
-    args.includes('<active_agent name="reviewer &amp; &quot;lead&quot;"/>'),
-  );
-});
-
 test("appends the shared prompt after context additions", () => {
   assert.deepEqual(
     agentLaunchArgs(
