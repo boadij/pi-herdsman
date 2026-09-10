@@ -45,7 +45,8 @@
     "check": "node scripts/check.mjs",
     "build": "node scripts/build.mjs",
     "package:audit": "node scripts/package-audit.mjs",
-    "release:check": "npm run check && npm run build && npm run package:audit && npm publish --dry-run --ignore-scripts",
+    "validate": "npm run check && npm run build && npm run package:audit",
+    "release:check": "npm run validate && npm publish --dry-run --ignore-scripts",
     "prepack": "npm run build"
   },
   "peerDependencies": {
