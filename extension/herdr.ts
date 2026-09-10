@@ -124,7 +124,7 @@ function boundedInspectionOutput(value: string): {
   text: string;
   truncated: boolean;
 } {
-  // Pi's ExecOptions has no maxBuffer, and herdr 0.8.2's agent.read schema
+  // Pi's ExecOptions has no maxBuffer, and Herdr's agent.read schema
   // bounds lines but not bytes. This bounds returned evidence only; pi.exec
   // may still buffer a larger subprocess response before returning it.
   return boundedUtf8Tail(
@@ -137,6 +137,7 @@ export type AgentInspectionTarget = {
   workspaceId: string;
   paneId: string;
   piSessionId: string;
+  piSessionFile?: string;
 };
 export type AgentInspectionValidator = (
   agent: HerdrRecord,
@@ -149,30 +150,6 @@ export type AgentInspection = {
   recentOutput?: string;
   process?: PaneProcess;
 };
-
-function exactAgent(agent: any, target: AgentInspectionTarget): boolean {
-  const session = sessionIdentity(agent?.agent_session);
-  const sessionMatches =
-    session?.kind === "id"
-      ? session.value === target.piSessionId
-      : session?.kind === "path"
-        ? (() => {
-            try {
-              return (
-                SessionManager.open(session.value).getSessionId() ===
-                target.piSessionId
-              );
-            } catch {
-              return false;
-            }
-          })()
-        : false;
-  return (
-    agent?.workspace_id === target.workspaceId &&
-    agent?.pane_id === target.paneId &&
-    sessionMatches
-  );
-}
 
 export async function inspectHerdrAgent(
   pi: ExtensionAPI,
@@ -189,8 +166,16 @@ export async function inspectHerdrAgent(
       signal,
     },
   );
-  const before = beforeResult?.agent ?? beforeResult;
-  if (!exactAgent(before, target) || (validate && !(await validate(before))))
+  const before = beforeResult?.agent;
+  if (
+    before?.workspace_id !== target.workspaceId ||
+    before?.pane_id !== target.paneId ||
+    !matchesExpectedSession(before?.agent_session, {
+      id: target.piSessionId,
+      path: target.piSessionFile,
+    }) ||
+    (validate && !(await validate(before)))
+  )
     throw new Error("Inspection target identity did not match");
   // Pi's exec API exposes only signal, timeout, and cwd; it has no supported
   // stdout/stderr max-buffer option. Keep the Herdr read at 80 lines and
@@ -221,8 +206,16 @@ export async function inspectHerdrAgent(
   const afterResult = await runHerdr(pi, ctx, ["agent", "get", target.paneId], {
     signal,
   });
-  const after = afterResult?.agent ?? afterResult;
-  if (!exactAgent(after, target) || (validate && !(await validate(after))))
+  const after = afterResult?.agent;
+  if (
+    after?.workspace_id !== target.workspaceId ||
+    after?.pane_id !== target.paneId ||
+    !matchesExpectedSession(after?.agent_session, {
+      id: target.piSessionId,
+      path: target.piSessionFile,
+    }) ||
+    (validate && !(await validate(after)))
+  )
     throw new Error("Inspection target changed during capture");
   const raw = [outputResult.stdout, outputResult.stderr]
     .map((value) => String(value ?? ""))
@@ -275,10 +268,9 @@ export async function runHerdr(
   const stdout = String(result.stdout ?? "");
   const stderr = String(result.stderr ?? "");
   const stdoutJson = parseJson(stdout);
-  const stderrJson = parseJson(stderr);
-  const parsed = stdoutJson !== undefined ? stdoutJson : stderrJson;
   const operation = `herdr ${args.slice(0, 2).join(" ") || "command"}`;
   if (result.code !== 0) {
+    const stderrJson = parseJson(stderr);
     const value =
       structuredHerdrError(stdoutJson) ?? structuredHerdrError(stderrJson);
     error(
@@ -291,9 +283,7 @@ export async function runHerdr(
     );
   }
   if (options.noResult) return undefined;
-  if (parsed === undefined && args.length === 1 && args[0] === "--version")
-    return `${stdout}\n${stderr}`;
-  if (parsed === undefined) {
+  if (stdoutJson === undefined) {
     const classification =
       stdout.trim() || stderr.trim() ? "malformed" : "empty";
     const raw = {
@@ -309,7 +299,26 @@ export async function runHerdr(
       { result: raw },
     );
   }
-  return parsed?.result ?? parsed;
+  if (args.length === 2 && args[0] === "status" && args[1] === "--json")
+    return stdoutJson;
+  if (
+    stdoutJson === null ||
+    typeof stdoutJson !== "object" ||
+    !Object.prototype.hasOwnProperty.call(stdoutJson, "id") ||
+    !Object.prototype.hasOwnProperty.call(stdoutJson, "result")
+  )
+    error(
+      operation,
+      "Herdr returned successful JSON without a result envelope (own id and result are required)",
+      {
+        result: {
+          classification: "missing_result_envelope",
+          stdout: boundedDiagnostic(stdout),
+          stderr: boundedDiagnostic(stderr),
+        },
+      },
+    );
+  return stdoutJson.result;
 }
 
 function workspace(ctx: ExtensionContext): string {
@@ -322,6 +331,7 @@ export function structuredTopologyEnvironment(
   assignments: readonly string[],
 ): string[] {
   const reserved = new Set([
+    "HERDR_SOCKET_PATH",
     "HERDR_ENV",
     "HERDR_WORKSPACE_ID",
     "HERDR_TAB_ID",
@@ -333,8 +343,6 @@ export function structuredTopologyEnvironment(
       (assignment) =>
         !reserved.has(assignment.slice(0, assignment.indexOf("="))),
     ),
-    "HERDR_ENV=1",
-    `HERDR_WORKSPACE_ID=${workspaceId}`,
     `PI_HERDSMAN_WORKSPACE_ID=${workspaceId}`,
   ];
 }
@@ -458,7 +466,9 @@ export async function listAllHerdrAgents(
   signal?: AbortSignal,
 ): Promise<{ agents: any[] }> {
   const result = await runHerdr(pi, ctx, ["agent", "list"], { signal });
-  return { agents: result?.agents ?? [] };
+  if (!Array.isArray(result?.agents))
+    error("agent list", "agent list ownership proof is unavailable");
+  return { agents: result.agents };
 }
 
 export type LeadMetadata = {
@@ -1069,7 +1079,7 @@ export async function startHerdrAgent(
       throw failure;
     }
     stage = "agent_result";
-    const agent = started.agent ?? started;
+    const agent = started.agent;
     const session = sessionIdentity(agent.agent_session);
     const reference = session
       ? session.kind === "id"
@@ -1125,7 +1135,7 @@ async function paneProcess(
         : { timeout: startupCallTimeout(deadline) }),
     },
   );
-  const value = result?.process ?? result?.process_info ?? result;
+  const value = result?.process_info;
   const observed = normalizePaneProcess(value, paneId, required);
   if (required && !observed)
     error("start", `pane ${paneId} process ownership is unavailable`);
@@ -1253,7 +1263,7 @@ async function proveShellReady(
     ["pane", "process-info", "--pane", paneId],
     { signal, timeout: timeout() },
   );
-  const value = result?.process ?? result?.process_info ?? result;
+  const value = result?.process_info;
   const shell = normalizePaneProcess(value, paneId, true);
   if (!shell || !sameShellProcessOwner(expected ?? shell, shell))
     error(operation, `pane ${paneId} did not become an available shell`);
@@ -1348,13 +1358,39 @@ export function sessionIdentity(
   value: unknown,
 ): { kind: "id" | "path"; value: string } | undefined {
   if (!value || typeof value !== "object") return undefined;
-  const kind = (value as { kind?: unknown }).kind;
-  const sessionValue = (value as { value?: unknown }).value;
+  const session = value as {
+    source?: unknown;
+    agent?: unknown;
+    kind?: unknown;
+    value?: unknown;
+  };
+  const kind = session.kind;
+  const sessionValue = session.value;
+  if (session.source !== "herdr:pi" || session.agent !== "pi") return undefined;
   return (kind === "id" || kind === "path") &&
     typeof sessionValue === "string" &&
-    sessionValue
+    sessionValue.length > 0
     ? { kind, value: sessionValue }
     : undefined;
+}
+export function sameObservedSessionPath(left: string, right: string): boolean {
+  if (left === right) return true;
+  let canonicalRight: string;
+  try {
+    canonicalRight = realpathSync(right);
+  } catch (error) {
+    throw new Error(
+      `could not canonicalize exact Pi session path ${right}: ${String(error)}`,
+    );
+  }
+  try {
+    return realpathSync(left) === canonicalRight;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new Error(
+      `could not canonicalize exact Pi session path ${left}: ${String(error)}`,
+    );
+  }
 }
 export function matchesExpectedSession(
   observed: unknown,
@@ -1369,11 +1405,17 @@ export function matchesExpectedSession(
       expected.id.length > 0 &&
       session.value === expected.id
     );
-  return (
-    typeof expected.path === "string" &&
-    expected.path.length > 0 &&
-    resolve(session.value) === resolve(expected.path)
-  );
+  if (typeof expected.path === "string" && expected.path.length > 0)
+    return sameObservedSessionPath(session.value, expected.path);
+  if (typeof expected.id !== "string" || expected.id.length === 0) return false;
+  try {
+    return (
+      SessionManager.open(realpathSync(session.value)).getSessionId() ===
+      expected.id
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function proveExactRunningAgent(
@@ -1505,8 +1547,7 @@ async function verifyHerdrPaneClosed(
     if (!Array.isArray(panes?.panes))
       error(operation, "pane list disappearance proof is unavailable");
     const agentGone = !agents.agents.some(
-      (item: any) =>
-        item.name === herdrAgent || item.herdr_agent === herdrAgent,
+      (item: any) => item.name === herdrAgent,
     );
     const paneGone = !panes.panes.some((item: any) => item.pane_id === paneId);
     if (agentGone && paneGone) return;

@@ -15,16 +15,19 @@ Verify:
 ```sh
 node --version
 pi --version
-herdr --version
+herdr status --json
 herdr integration status
 ```
+
+The `herdr status --json` output is the Herdr 0.9 CLI protocol compatibility
+preflight. It must report a Herdr client version of `>=0.9.0`,
+`server.running` as `true`, and `server.compatible` as `true`.
 
 The supported repository contract requires:
 
 - Node `>=22.19.0`
 - Pi `>=0.84.2 <0.86.0`
-- herdr `>=0.8.0`
-- herdr Pi integration version `2` or newer
+- herdr `>=0.9.0`
 
 Run focused tests and other intermediate checks before this smoke suite. Do
 not format during smoke testing; complete smoke testing and review before the
@@ -249,7 +252,7 @@ substitutes for these checks.
 | Discover leads across multiple workspaces                                                                                            | NOT RUN |
 | Exclude managed agents and the active Chief from leads                                                                               | NOT RUN |
 | Agent exclusion uses the production validated snapshot and stale/ambiguous generations fail closed                                   | NOT RUN |
-| Herdr `agent_status ?? status` lifecycle normalization is reflected                                                                  | NOT RUN |
+| Herdr `agent_status` lifecycle normalization is reflected                                                                            | NOT RUN |
 | Nested agent aggregation attaches only to the proven lead                                                                            | NOT RUN |
 | A blocked agent does not mark its lead `needs you`                                                                                   | NOT RUN |
 | Duplicate live agents, coordination records, or agent evidence fail closed                                                           | NOT RUN |

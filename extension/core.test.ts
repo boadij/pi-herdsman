@@ -96,10 +96,8 @@ const {
   prepareMessageInput,
   snapshotTextFiles,
   agentControlState,
-  extractAssistantText,
   displayIdentity,
   hasTaskText,
-  normalizeContextUsage,
   resultStillPending,
   steerAcceptanceAllowed,
   taskAcceptanceAllowed,
@@ -678,19 +676,6 @@ test("agent display identity uses the definition and fallback", () => {
   assert.equal(resultStillPending(undefined, undefined, true), false);
   assert.equal(taskAcceptanceAllowed(true, undefined, true), false);
   assert.equal(steerAcceptanceAllowed(false, id, true), false);
-  assert.equal(
-    extractAssistantText([
-      { role: "user", content: "ignore" },
-      { role: "assistant", content: [{ type: "text", text: "answer" }] },
-      { role: "tool", content: "ignore" },
-    ]),
-    "answer",
-  );
-  assert.deepEqual(normalizeContextUsage({ tokens: 25, context_window: 100 }), {
-    tokens: 25,
-    contextWindow: 100,
-    percent: 25,
-  });
   assert.match(
     updateSpawnPlacementJson('{"other":true}', "split"),
     /"piHerdsman": \{\n    "spawnPlacement": "split"/,

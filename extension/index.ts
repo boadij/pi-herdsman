@@ -3,8 +3,14 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  ModelSelectEvent,
+  ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels, StringEnum } from "@earendil-works/pi-ai";
+import {
+  contentText,
+  getSupportedThinkingLevels,
+  StringEnum,
+} from "@earendil-works/pi-ai";
 import {
   CONFIG_DIR_NAME,
   DynamicBorder,
@@ -26,6 +32,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { herdsmanTempRoot } from "./tmp.ts";
 import { Type } from "typebox";
+import { Compile } from "typebox/compile";
 import {
   Container,
   Key,
@@ -69,8 +76,6 @@ import {
   chooseLabel,
   prepareMessageInput,
   displayIdentity,
-  extractAssistantText,
-  normalizeContextUsage,
   steerAcceptanceAllowed,
   taskAcceptanceAllowed,
   agentControlState,
@@ -97,10 +102,10 @@ import {
   herdrAgentAlias,
   listHerdrAgents,
   listAllHerdrAgents,
-  matchesExpectedSession,
   rollbackHerdrStart,
   runHerdr,
   sessionIdentity,
+  matchesExpectedSession,
   startHerdrAgent,
   sameCwd,
   inspectHerdrAgent,
@@ -175,7 +180,6 @@ import {
   renderAgentStaleMessage,
   renderCoordinationCall,
   renderCoordinationResult,
-  selectedModelToken,
   truncateModelText,
   createStatusWidget,
   compactModelToken,
@@ -486,153 +490,50 @@ type ParsedParams =
   | { action: "reply"; agent: string; message: string; files?: string[] }
   | { action: "close"; agent: string }
   | { action: "inspect"; agent: string };
-const PUBLIC_FIELDS = [
-  "action",
-  "definition",
-  "agent",
-  "label",
-  "cwd",
-  "task",
-  "files",
-  "fork",
-  "timeoutMs",
-  "message",
-  "session",
-] as const;
-type PublicField = (typeof PUBLIC_FIELDS)[number];
-const STRING_FIELDS = [
-  "definition",
-  "agent",
-  "label",
-  "cwd",
-  "task",
-  "fork",
-  "message",
-  "session",
-] as const;
-function rejectUnknownFields(p: Params): void {
-  const known = new Set<string>(PUBLIC_FIELDS);
-  const unknown = Object.keys(p).filter((field) => !known.has(field));
-  if (!unknown.length) return;
-  fail(
-    "invalid_request",
-    `Unsupported agent fields: ${unknown.join(", ")}`,
-    p.action,
-  );
-}
-function rejectBlankStrings(p: Params): void {
-  const invalid = STRING_FIELDS.filter((field) => {
-    const value = p[field];
-    return value !== undefined && (typeof value !== "string" || !value.trim());
-  });
-  if (!invalid.length) return;
-  fail(
-    "invalid_request",
-    `Fields must contain non-whitespace text when supplied: ${invalid.join(", ")}`,
-    p.action,
-  );
-}
-function rejectUnsupported(
-  p: Params,
-  mode: string,
-  allowed: readonly PublicField[],
-): void {
-  const allowedSet = new Set<PublicField>(allowed);
-  const invalid = PUBLIC_FIELDS.filter(
-    (field) => p[field] !== undefined && !allowedSet.has(field),
-  );
-  if (!invalid.length) return;
-  fail(
-    "invalid_request",
-    `${mode} does not support: ${invalid.join(", ")}. Allowed: ${allowed.join(", ")}`,
-    p.action,
-  );
-}
-function validateRequestedLabel(
-  label: string | undefined,
-  operation: string,
-): void {
-  if (label === undefined || validAgentLabel(label)) return;
-  fail(
-    "invalid_request",
-    'Agent label must start with a lowercase letter, contain only lowercase letters, digits, "_" or "-", and be at most 32 characters',
-    operation,
-  );
-}
-function validateTimeout(timeoutMs: number | undefined): void {
-  if (
-    timeoutMs === undefined ||
-    (Number.isInteger(timeoutMs) &&
-      timeoutMs >= STARTUP_TIMEOUT_MIN &&
-      timeoutMs <= STARTUP_TIMEOUT_MAX)
-  )
-    return;
-  fail(
-    "invalid_request",
-    `timeoutMs must be an integer from ${STARTUP_TIMEOUT_MIN} through ${STARTUP_TIMEOUT_MAX}`,
-    "delegate",
-  );
-}
 function parseRequest(p: Params): ParsedParams {
-  rejectUnknownFields(p);
-  rejectBlankStrings(p);
-  validateRequestedLabel(p.label, p.action);
-  validateRequestedLabel(p.agent, p.action);
-  validateTimeout(p.timeoutMs);
   if (p.action === "list") {
-    rejectUnsupported(p, "list", ["action"]);
     return { action: "list" };
   }
   if (p.action === "steer") {
-    rejectUnsupported(p, "steer", ["action", "agent", "message", "files"]);
     if (!p.agent) fail("invalid_request", "Steer requires an agent", "steer");
     if (!p.message)
       fail("invalid_request", "Steer requires a non-empty message", "steer");
     return {
       action: "steer",
-      agent: p.agent,
-      message: p.message,
+      agent: p.agent!,
+      message: p.message!,
       ...(p.files ? { files: p.files } : {}),
     };
   }
   if (p.action === "reply") {
-    rejectUnsupported(p, "reply", ["action", "agent", "message", "files"]);
     if (!p.agent) fail("invalid_request", "Reply requires an agent", "reply");
     if (!p.message)
       fail("invalid_request", "Reply requires a non-empty message", "reply");
     return {
       action: "reply",
-      agent: p.agent,
-      message: p.message,
+      agent: p.agent!,
+      message: p.message!,
       ...(p.files ? { files: p.files } : {}),
     };
   }
   if (p.action === "close") {
-    rejectUnsupported(p, "close", ["action", "agent"]);
     if (!p.agent) fail("invalid_request", "Close requires an agent", "close");
-    return { action: "close", agent: p.agent };
+    return { action: "close", agent: p.agent! };
   }
   if (p.action === "inspect") {
-    rejectUnsupported(p, "inspect", ["action", "agent"]);
     if (!p.agent)
       fail("invalid_request", "Inspect requires an agent", "inspect");
-    return { action: "inspect", agent: p.agent };
+    return { action: "inspect", agent: p.agent! };
   }
   if (p.action === "delegate" && p.definition !== undefined) {
-    rejectUnsupported(p, "Definition delegation", [
-      "action",
-      "definition",
-      "label",
-      "cwd",
-      "task",
-      "files",
-      "fork",
-      "timeoutMs",
-    ]);
-    if (!p.definition)
+    if (
+      p.session !== undefined ||
+      p.agent !== undefined ||
+      p.message !== undefined
+    )
       fail(
         "invalid_request",
-        "Definition delegation requires a definition",
+        "Delegate requires exactly one of definition or session",
         "delegate",
       );
     if (!p.task)
@@ -644,7 +545,7 @@ function parseRequest(p: Params): ParsedParams {
     return {
       action: "delegate",
       definition: p.definition,
-      task: p.task,
+      task: p.task!,
       ...(p.label !== undefined ? { label: p.label } : {}),
       ...(p.cwd !== undefined ? { cwd: p.cwd } : {}),
       ...(p.files !== undefined ? { files: p.files } : {}),
@@ -653,18 +554,16 @@ function parseRequest(p: Params): ParsedParams {
     };
   }
   if (p.action === "delegate" && p.session !== undefined) {
-    rejectUnsupported(p, "Session delegation", [
-      "action",
-      "session",
-      "label",
-      "task",
-      "files",
-      "timeoutMs",
-    ]);
-    if (!p.session)
+    if (
+      p.definition !== undefined ||
+      p.agent !== undefined ||
+      p.cwd !== undefined ||
+      p.fork !== undefined ||
+      p.message !== undefined
+    )
       fail(
         "invalid_request",
-        "Session delegation requires a session",
+        "Delegate requires exactly one of definition or session",
         "delegate",
       );
     if (!p.task)
@@ -676,7 +575,7 @@ function parseRequest(p: Params): ParsedParams {
     return {
       action: "delegate",
       session: p.session,
-      task: p.task,
+      task: p.task!,
       ...(p.label !== undefined ? { label: p.label } : {}),
       ...(p.files !== undefined ? { files: p.files } : {}),
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
@@ -689,6 +588,18 @@ function parseRequest(p: Params): ParsedParams {
     "Delegate requires exactly one of definition or session",
     "delegate",
   );
+}
+function invalidRequestInput(
+  operation: string,
+  message: string,
+): OperationError {
+  return new OperationError({
+    category: "invalid_request",
+    message,
+    operation,
+    rollbackOccurred: false,
+    retryAttempted: false,
+  });
 }
 type Runtime = {
   label: string;
@@ -946,8 +857,16 @@ function appendDurableError(
   try {
     pi.appendEntry(type, { error: String(error), timestamp: Date.now() });
   } catch {
-    ctx.ui?.notify?.(type, "error");
+    ctx.ui.notify(type, "error");
   }
+}
+function settingRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+function piHerdsmanSettings(value: unknown): Record<string, unknown> {
+  return settingRecord(settingRecord(value).piHerdsman);
 }
 function validHerdRunTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -991,11 +910,12 @@ async function placementSettings(
   const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
     projectTrusted: ctx.isProjectTrusted(),
   });
-  await settings.reload();
-  const globalValue = (settings.getGlobalSettings() as any)?.piHerdsman
-    ?.spawnPlacement;
-  const projectValue = (settings.getProjectSettings() as any)?.piHerdsman
-    ?.spawnPlacement;
+  const globalValue = piHerdsmanSettings(
+    settings.getGlobalSettings(),
+  ).spawnPlacement;
+  const projectValue = piHerdsmanSettings(
+    settings.getProjectSettings(),
+  ).spawnPlacement;
   const project = settings.isProjectTrusted() && isSpawnPlacement(projectValue);
   return {
     effective: resolveSpawnPlacement(project ? projectValue : globalValue),
@@ -1007,9 +927,7 @@ async function leadTabLabel(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
 ): Promise<string> {
-  const name =
-    (pi as any).getSessionName?.() ??
-    (ctx.sessionManager as any).getSessionName?.();
+  const name = pi.getSessionName() ?? ctx.sessionManager.getSessionName();
   const identity =
     typeof name === "string" && name.trim()
       ? name.trim()
@@ -1150,8 +1068,7 @@ async function messageLimits(
   const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
     projectTrusted: false,
   });
-  await settings.reload();
-  const global = (settings.getGlobalSettings() as any)?.piHerdsman ?? {};
+  const global = piHerdsmanSettings(settings.getGlobalSettings());
   return {
     inline: resolveEffectiveByteLimit(global.inlineAttachmentLimitBytes),
     mailbox: resolveEffectiveByteLimit(global.mailboxPayloadLimitBytes),
@@ -1176,10 +1093,9 @@ async function contextAgentDefinitions(ctx: ExtensionContext) {
   const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
     projectTrusted: ctx.isProjectTrusted(),
   });
-  await settings.reload();
   const enabled =
     settings.isProjectTrusted() &&
-    (settings.getProjectSettings() as any)?.piHerdsman?.projectAgents === true;
+    piHerdsmanSettings(settings.getProjectSettings()).projectAgents === true;
   return {
     projectAgentsEnabled: enabled,
     definitions: discoverAgentDefinitions(
@@ -1189,8 +1105,10 @@ async function contextAgentDefinitions(ctx: ExtensionContext) {
 }
 const AGENT_DEFINITION_ENTRY = "pi-herdsman-agent-definition";
 type AgentDefinitionEntry = { name: string };
-export function sessionAgentDefinition(entries: unknown[]): string | undefined {
-  const typed = entries as Array<{
+export function sessionAgentDefinition(
+  entries: readonly unknown[],
+): string | undefined {
+  const typed = entries as ReadonlyArray<{
     type?: unknown;
     customType?: unknown;
     data?: unknown;
@@ -1223,6 +1141,14 @@ function readAgentDefinition(
   return name;
 }
 function stateAgentDefinition(state: ManagedAgentState): string {
+  if (state.agentDefinition !== undefined) {
+    if (
+      typeof state.agentDefinition !== "string" ||
+      !state.agentDefinition.trim()
+    )
+      throw new Error("invalid managed agent definition");
+    return state.agentDefinition.trim();
+  }
   if (!state.piSessionFile)
     throw new Error("managed agent has no Pi session file");
   return readAgentDefinition(SessionManager.open(state.piSessionFile));
@@ -1232,11 +1158,7 @@ function ensureAgentDefinition(
   ctx: ExtensionContext,
   name: string,
 ): void {
-  const entries = ctx.sessionManager.getEntries() as Array<{
-    type?: unknown;
-    customType?: unknown;
-    data?: unknown;
-  }>;
+  const entries = ctx.sessionManager.getEntries();
   if (
     entries.some(
       (entry) =>
@@ -1274,19 +1196,6 @@ function sameSessionPath(
   if (left === right) return true;
   if (!left || !right) return false;
   return canonicalSessionPath(left) === canonicalSessionPath(right);
-}
-
-function sameObservedSessionPath(left: string, right: string): boolean {
-  if (left === right) return true;
-  const canonicalRight = canonicalSessionPath(right);
-  try {
-    return realpathSync(left) === canonicalRight;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw new Error(
-      `could not canonicalize exact Pi session path ${left}: ${String(error)}`,
-    );
-  }
 }
 
 function samePersistedSessionPath(
@@ -1406,45 +1315,49 @@ function settingsPath(
     ? join(getAgentDir(), "settings.json")
     : join(ctx.cwd, CONFIG_DIR_NAME, "settings.json");
 }
+const HERDR_VERSION_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview(?:\.[0-9A-Za-z-]+)?)?$/;
+export function parseHerdrVersion(value: string): RegExpMatchArray | undefined {
+  const match = value.match(HERDR_VERSION_PATTERN);
+  return match?.[0] === value ? match : undefined;
+}
 async function herdrVersion(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<void> {
-  const version = await runHerdr(pi, ctx, ["--version"], {
+  const status = await runHerdr(pi, ctx, ["status", "--json"], {
     signal,
     timeout: 10_000,
   });
-  const match = String(version).match(/(\d+)\.(\d+)\.(\d+)/);
+  const value = settingRecord(status);
+  const client = settingRecord(value.client);
+  const server = settingRecord(value.server);
+  const clientVersion =
+    typeof client.version === "string" ? client.version : undefined;
+  const clientMatch = clientVersion
+    ? parseHerdrVersion(clientVersion)
+    : undefined;
+  const supported = (match: RegExpMatchArray | undefined): boolean =>
+    !!match &&
+    (Number(match[1]) > 0 || (Number(match[1]) === 0 && Number(match[2]) >= 9));
   if (
-    !match ||
-    Number(match[1]) < 0 ||
-    (Number(match[1]) === 0 && Number(match[2]) < 8)
-  )
-    fail("invalid_request", "Herdr >=0.8.0 is required", "preflight");
+    !supported(clientMatch) ||
+    server.running !== true ||
+    server.compatible !== true
+  ) {
+    fail(
+      "invalid_request",
+      "Herdr status is unavailable or incompatible; Herdr >=0.9.0 with a running compatible server is required",
+      "preflight",
+    );
+  }
 }
 function expectedSession(id?: string, path?: string): ExpectedSession {
   return { id, path };
 }
-function herdrSessionObservations(agent: any): unknown[] {
-  if (!agent || typeof agent !== "object") return [];
-  const observations: unknown[] = [];
-  if (agent.agent_session != null) observations.push(agent.agent_session);
-  if (agent.session_id != null)
-    observations.push({ kind: "id", value: agent.session_id });
-  if (agent.pi_session_id != null)
-    observations.push({ kind: "id", value: agent.pi_session_id });
-  if (agent.session_path != null)
-    observations.push({ kind: "path", value: agent.session_path });
-  if (agent.pi_session_path != null)
-    observations.push({ kind: "path", value: agent.pi_session_path });
-  return observations;
-}
 function isPiAgent(agent: any): boolean {
-  return (
-    agent?.agent_session?.agent === "pi" &&
-    agent.agent_session.source === "herdr:pi"
-  );
+  return sessionIdentity(agent?.agent_session) !== undefined;
 }
 async function workspacePresentationProvenance(
   pi: ExtensionAPI,
@@ -1536,85 +1449,29 @@ async function workspacePresentationProvenance(
   );
   return new Map(entries);
 }
-function sessionObservationMatchesExpected(
-  observation: unknown,
-  expected: ExpectedSession,
-): boolean {
-  const session = sessionIdentity(observation);
-  if (session?.kind === "path" && expected.path !== undefined)
-    return sameObservedSessionPath(session.value, expected.path);
-  return matchesExpectedSession(observation, expected);
-}
-function herdrSessionsMatch(agent: any, expected: ExpectedSession): boolean {
-  const observations = herdrSessionObservations(agent);
-  return (
-    observations.length > 0 &&
-    observations.every((observation) =>
-      sessionObservationMatchesExpected(observation, expected),
-    )
-  );
-}
-function herdrSessionsMatchForContinuation(
+function herdrSessionsMatch(
   agent: any,
-  expected: ExpectedSession,
+  expected: ExpectedSession | undefined,
 ): boolean {
-  const observations = herdrSessionObservations(agent);
-  let matches = false;
-  for (const observation of observations) {
-    if (sessionObservationMatchesExpected(observation, expected))
-      matches = true;
-  }
-  return matches;
-}
-function sessionObservationMatchesId(
-  observation: unknown,
-  id: string,
-): boolean {
-  const session = sessionIdentity(observation);
-  if (!session) return false;
-  if (session.kind === "id") return session.value === id;
-  try {
-    return SessionManager.open(session.value).getSessionId() === id;
-  } catch {
-    return false;
-  }
-}
-function herdrSessionsMatchId(agent: any, id: string): boolean {
-  const observations = herdrSessionObservations(agent);
-  return (
-    observations.length > 0 &&
-    observations.every((observation) =>
-      sessionObservationMatchesId(observation, id),
-    )
-  );
+  return matchesExpectedSession(agent?.agent_session, expected);
 }
 function herdrSessionId(agent: any): string | undefined {
-  const ids = herdrSessionObservations(agent).map((observation) => {
-    const session = sessionIdentity(observation);
-    if (!session) return undefined;
-    if (session.kind === "id") return session.value;
-    try {
-      const id = SessionManager.open(session.value).getSessionId();
-      return id || undefined;
-    } catch {
-      return undefined;
-    }
-  });
-  return ids.length > 0 && ids.every((id) => id !== undefined && id === ids[0])
-    ? ids[0]
-    : undefined;
+  const session = sessionIdentity(agent?.agent_session);
+  if (!session) return undefined;
+  if (session.kind === "id") return session.value;
+  try {
+    const id = SessionManager.open(realpathSync(session.value)).getSessionId();
+    return id || undefined;
+  } catch {
+    return undefined;
+  }
 }
 function persistedSessionName(agent: any): string | undefined {
-  const path = herdrSessionObservations(agent)
-    .map(sessionIdentity)
-    .find((session) => session?.kind === "path")?.value;
-  if (!path) return undefined;
+  const session = sessionIdentity(agent?.agent_session);
+  if (session?.kind !== "path") return undefined;
   try {
-    const manager = SessionManager.open(path) as any;
-    const name =
-      typeof manager.getSessionName === "function"
-        ? manager.getSessionName()
-        : undefined;
+    const manager = SessionManager.open(session.value);
+    const name = manager.getSessionName();
     return typeof name === "string" && name.trim() ? name.trim() : undefined;
   } catch {
     return undefined;
@@ -1627,9 +1484,10 @@ function isLeadSessionBoundary(
 ): boolean {
   if (!isPiAgent(agent) || pane?.agent !== "pi") return false;
   const session = sessionIdentity(agent?.agent_session);
-  if (session?.kind !== "path" || !herdrSessionsMatchId(agent, ownerSessionId))
-    return false;
+  if (session?.kind !== "path") return false;
   try {
+    if (SessionManager.open(session.value).getSessionId() !== ownerSessionId)
+      return false;
     return !sessionAgentDefinition(
       SessionManager.open(session.value).getEntries(),
     );
@@ -1641,7 +1499,7 @@ function herdrAliasMatchesIfReported(
   agent: any,
   expectedAlias: string,
 ): boolean {
-  const aliases = [agent?.name, agent?.herdr_agent].filter(
+  const aliases = [agent?.name].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
 
@@ -1671,7 +1529,7 @@ async function validateIntegration(
         "integration",
       );
     }
-    agent = payload.agent ?? payload;
+    agent = payload.agent;
     if (!herdrAliasMatchesIfReported(agent, runtime.herdrAgent))
       fail(
         "target_not_found",
@@ -1689,8 +1547,8 @@ async function validateIntegration(
         "live Herdr agent identity mismatch",
         "integration",
       );
-    const observations = herdrSessionObservations(agent);
-    if (!observations.length) {
+    const observation = sessionIdentity(agent?.agent_session);
+    if (!observation) {
       if (
         options.waitForSession === true &&
         attempt < INTEGRATION_SESSION_RETRIES
@@ -1851,13 +1709,6 @@ function parsePresentationTokens(tokens: unknown): {
     ),
   };
 }
-function contextModelToken(ctx: ExtensionContext): string | undefined {
-  return selectedModelToken({ model: ctx.model });
-}
-function contextThinkingLevel(ctx: ExtensionContext): string | undefined {
-  const level = ctx.thinkingLevel;
-  return typeof level === "string" && level ? level : undefined;
-}
 function validateIdentity(
   runtime: Runtime,
   state: ManagedAgentState,
@@ -1893,9 +1744,11 @@ function validateIdentity(
       "identity",
     );
   if (agent) {
+    const observation = sessionIdentity(agent.agent_session);
+    const hasObservedSession =
+      agent.agent_session !== undefined && agent.agent_session !== null;
     const liveDifferences: [string, unknown, unknown][] = [
       ["workspaceId", agent.workspace_id, runtime.workspaceId],
-      ["agentLabel", agent.label, runtime.label],
       ["paneId", agent.pane_id, runtime.paneId],
     ].filter(([, expected, actual]) => expected !== actual);
     if (!sameCwd(agent.cwd, runtime.cwd))
@@ -1906,15 +1759,12 @@ function validateIdentity(
       runtime.piSessionId,
       runtime.piSessionFile,
     );
-    const observations = herdrSessionObservations(agent);
     if (
-      (observations.length === 0 && options.requireLiveSession) ||
-      (observations.length > 0 &&
-        !observations.every((observation) =>
-          sessionObservationMatchesExpected(observation, liveExpectedSession),
-        ))
+      (!observation && (options.requireLiveSession || hasObservedSession)) ||
+      (hasObservedSession &&
+        !matchesExpectedSession(agent.agent_session, liveExpectedSession))
     )
-      liveDifferences.push(["session", observations, liveExpectedSession]);
+      liveDifferences.push(["session", observation, liveExpectedSession]);
     if (liveDifferences.length)
       fail(
         "target_not_found",
@@ -2234,6 +2084,7 @@ function envManagedAgent(ctx: ExtensionContext): ManagedAgentState | undefined {
     paneId: e.HERDR_PANE_ID,
     piSessionId: ctx.sessionManager.getSessionId(),
     piSessionFile: ctx.sessionManager.getSessionFile(),
+    agentDefinition: e.PI_HERDSMAN_AGENT_DEFINITION,
     cwd: ctx.cwd,
     updatedAt: Date.now(),
   };
@@ -2475,22 +2326,20 @@ async function managedAgentSnapshots(
 
     const relatedLiveAgents = live.agents.filter((agent: any) => {
       if (agent?.workspace_id !== state.workspaceId) return false;
-      const aliases = [agent?.name, agent?.herdr_agent].filter(
+      const aliases = [agent?.name].filter(
         (value): value is string =>
           typeof value === "string" && value.length > 0,
       );
-      const sessionRelated = herdrSessionObservations(agent).some(
-        (observation) => {
-          try {
-            return sessionObservationMatchesExpected(
-              observation,
-              expectedSession(state.piSessionId, state.piSessionFile),
-            );
-          } catch {
-            return false;
-          }
-        },
-      );
+      const sessionRelated = (() => {
+        try {
+          return matchesExpectedSession(
+            agent?.agent_session,
+            expectedSession(state.piSessionId, state.piSessionFile),
+          );
+        } catch {
+          return false;
+        }
+      })();
       return (
         agent?.pane_id === state.paneId ||
         aliases.includes(expectedAlias) ||
@@ -2511,20 +2360,18 @@ async function managedAgentSnapshots(
 
     let agentDefinition: string;
     try {
-      agentDefinition = stateAgentDefinition(state);
+      agentDefinition = agentDefinitionForRuntime(
+        agent,
+        state,
+        runtimes.get(state.agentLabel),
+      );
     } catch {
       return [];
     }
 
     const session = sessionIdentity(agent.agent_session);
-    const piSessionId =
-      session?.kind === "id"
-        ? session.value
-        : (agent.session_id ?? agent.pi_session_id);
-    const piSessionPath =
-      session?.kind === "path"
-        ? session.value
-        : (agent.session_path ?? agent.pi_session_path);
+    const piSessionId = session?.kind === "id" ? session.value : undefined;
+    const piSessionPath = session?.kind === "path" ? session.value : undefined;
     const lifecycleState = normalizeHerdrLifecycleState(agent);
     const completionPending = pendingResultExists(
       path,
@@ -2560,26 +2407,19 @@ async function managedAgentSnapshots(
         lifecycleState,
         listed: {
           label: state.agentLabel,
-          kind: agent.agent_session?.agent,
+          kind: "pi",
           state: projectedState,
           steerable,
           workspace_id: state.workspaceId,
           pane_id: agent.pane_id,
           tab_id: agent.tab_id,
-          tab_label: agent.tab_label,
           cwd: agent.cwd,
+          agent_session: agent.agent_session,
           pi_session_id: piSessionId,
           pi_session_path: piSessionPath,
-          display_agent: agent.display_agent,
           managed: true,
           owner_session_id: state.ownerSessionId,
           agent_definition: agentDefinition,
-          ...((agent.model ?? agent.agent_model)
-            ? { model: agent.model ?? agent.agent_model }
-            : {}),
-          ...((agent.thinking ?? agent.agent_thinking)
-            ? { thinking: agent.thinking ?? agent.agent_thinking }
-            : {}),
           active_request_id: state.activeRequestId,
           ...(state.resultError ? { result_error: state.resultError } : {}),
           ...(state.lastActivityAt !== undefined
@@ -2621,14 +2461,13 @@ async function managedAgentSnapshots(
         );
         for (const ownerSessionId of ownerSessionIds) {
           const ownerAgents = live.agents.filter((agent: any) =>
-            herdrSessionObservations(agent).some((observation) =>
-              sessionObservationMatchesId(observation, ownerSessionId),
-            ),
+            matchesExpectedSession(agent?.agent_session, {
+              id: ownerSessionId,
+            }),
           );
           if (ownerAgents.length !== 1) continue;
           const ownerAgent = ownerAgents[0];
           if (
-            !herdrSessionsMatchId(ownerAgent, ownerSessionId) ||
             typeof ownerAgent.pane_id !== "string" ||
             !ownerAgent.pane_id.trim()
           )
@@ -2687,7 +2526,6 @@ async function assertParentAbsent(
         agent.workspace_id === parent.workspaceId &&
         (agent.pane_id === parent.paneId ||
           agent.name === expectedAlias ||
-          agent.herdr_agent === expectedAlias ||
           herdrSessionsMatch(agent, expected)),
     );
 
@@ -2867,7 +2705,12 @@ function listedAgentRecords(
     } else if (!listed.recovery_only && orphan && scope?.kind === "lead") {
       actions.push("close");
     }
-    const { label: _label, steerable: _steerable, ...publicAgent } = listed;
+    const {
+      label: _label,
+      steerable: _steerable,
+      agent_session: _agentSession,
+      ...publicAgent
+    } = listed;
     return {
       ...publicAgent,
       agent: listed.label,
@@ -3086,16 +2929,12 @@ function liveAgentConflictsWithCompletedState(
     state.agentLabel,
     state.runId,
   );
-  const aliases = [agent.herdr_agent, agent.name].filter(
-    (value): value is string => typeof value === "string",
-  );
-  const labels = [agent.label].filter(
+  const aliases = [agent.name].filter(
     (value): value is string => typeof value === "string",
   );
   return (
     agent.pane_id === state.paneId ||
     aliases.includes(expectedAlias) ||
-    labels.includes(state.agentLabel) ||
     aliases.some((alias) =>
       alias.startsWith(`${state.agentLabel.slice(0, 15)}_`),
     )
@@ -3121,7 +2960,7 @@ async function deliverResultUnsafe(
   )
     return;
   if (!controllerSessionActive) return;
-  const entries = (ctx.sessionManager as any).getEntries?.() ?? [];
+  const entries = ctx.sessionManager.getEntries();
   const evidenceKey = resultDeliveryEvidenceKey(runtime, result.requestId);
   const expectedDelivery = resultDeliveryExpectation(runtime, result.requestId);
   if (
@@ -3341,7 +3180,7 @@ async function finalizeDeliveredResult(
     !resultCleanupReady(
       runtime,
       result.requestId,
-      (ctx.sessionManager as any).getEntries?.() ?? [],
+      ctx.sessionManager.getEntries(),
     )
   )
     return false;
@@ -3400,7 +3239,7 @@ async function settlePersistedResults(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<void> {
-  const entries = (ctx.sessionManager as any).getEntries?.() ?? [];
+  const entries = ctx.sessionManager.getEntries();
   let ownerSessionId: string;
   try {
     ownerSessionId = ctx.sessionManager.getSessionId();
@@ -3773,6 +3612,16 @@ function runtimeIdentityMatches(
     sameCwd(runtime.cwd, agent.cwd)
   );
 }
+function agentDefinitionForRuntime(
+  agent: any,
+  state: ManagedAgentState,
+  cached?: Runtime,
+): string {
+  if (state.agentDefinition !== undefined) return stateAgentDefinition(state);
+  return cached && runtimeIdentityMatches(cached, state, agent)
+    ? cached.agentDefinition
+    : stateAgentDefinition(state);
+}
 function guardMailboxOccupancy(
   mailbox: string,
   label: string,
@@ -3806,7 +3655,7 @@ function guardMailboxOccupancy(
       agent.workspace_id === workspaceId && agent.pane_id === state!.paneId,
   );
   if (!liveOnPane) return false;
-  if (!herdrSessionObservations(liveOnPane).length)
+  if (!sessionIdentity(liveOnPane?.agent_session))
     fail(
       "agent_label_exists",
       `Agent mailbox is occupied by a live agent without an official Pi session identity: ${label}`,
@@ -3920,7 +3769,7 @@ async function resolveRuntime(
     cached.completedRequestId !== state.completedRequestId
   )
     stopResultWatcher(cached, cached.completedRequestId);
-  const agentDefinition = stateAgentDefinition(state);
+  const agentDefinition = agentDefinitionForRuntime(agent, state, cached);
   const runtime: Runtime = cached ?? {
     label: agent.label,
     herdrAgent: herdrAgentAlias(agent.workspace_id, agent.label, state.runId),
@@ -3952,8 +3801,6 @@ async function resolveRuntime(
     completedRequestId: state.completedRequestId,
     agentDefinition,
   });
-  if (agent.model !== undefined) runtime.model = agent.model;
-  if (agent.thinking !== undefined) runtime.thinking = agent.thinking;
   runtimes.set(runtime.label, runtime);
   validateIdentity(runtime, state, agent);
   await validateIntegration(pi, runtime, ctx, { signal });
@@ -3964,8 +3811,16 @@ function runtimeForListedAgent(
   state: ManagedAgentState,
   cached?: Runtime,
 ): Runtime {
+  const useCached =
+    cached !== undefined && runtimeIdentityMatches(cached, state, agent);
+  const agentDefinition =
+    state.agentDefinition !== undefined
+      ? stateAgentDefinition(state)
+      : useCached
+        ? cached!.agentDefinition
+        : stateAgentDefinition(state);
   const runtime =
-    cached ??
+    (useCached ? cached : undefined) ??
     ({
       label: agent.label,
       herdrAgent: herdrAgentAlias(agent.workspace_id, agent.label, state.runId),
@@ -3979,11 +3834,9 @@ function runtimeForListedAgent(
       piSessionFile: state.piSessionFile,
       activeRequestId: state.activeRequestId,
       completedRequestId: state.completedRequestId,
-      agentDefinition: stateAgentDefinition(state),
-      model: agent.model,
-      thinking: agent.thinking,
+      agentDefinition,
     } satisfies Runtime);
-  runtime.agentDefinition = stateAgentDefinition(state);
+  runtime.agentDefinition = agentDefinition;
   return runtime;
 }
 function runtimeForCompletedState(
@@ -4613,14 +4466,8 @@ async function rollbackUnknownStartedAgent(
     pane_id: live.pane_id,
     tab_id: live.tab_id,
     cwd: live.cwd,
-    pi_session_id:
-      session?.kind === "id"
-        ? session.value
-        : (live.session_id ?? live.pi_session_id),
-    pi_session_path:
-      session?.kind === "path"
-        ? session.value
-        : (live.session_path ?? live.pi_session_path),
+    pi_session_id: session?.kind === "id" ? session.value : undefined,
+    pi_session_path: session?.kind === "path" ? session.value : undefined,
     agent_session: live.agent_session,
     label,
   };
@@ -5066,7 +4913,7 @@ async function actionUnsafe(
         );
         for (const agent of snapshot.liveAgents)
           if (
-            herdrSessionsMatchForContinuation(
+            herdrSessionsMatch(
               agent,
               expectedSession(resumed.id, resumedSessionPath),
             ) &&
@@ -5075,7 +4922,7 @@ async function actionUnsafe(
             )
           )
             representations.add(
-              `${agent.workspace_id ?? ""}\0${agent.label ?? agent.name ?? ""}\0${agent.pane_id ?? ""}`,
+              `${agent.workspace_id ?? ""}\0${agent.name ?? ""}\0${agent.pane_id ?? ""}`,
             );
         if (representations.size > 1)
           fail(
@@ -5510,6 +5357,7 @@ async function actionUnsafe(
         workspaceId: runtime.workspaceId,
         paneId: runtime.paneId,
         piSessionId: runtime.piSessionId!,
+        piSessionFile: runtime.piSessionFile,
       },
       signal,
       (agent) => {
@@ -5793,6 +5641,157 @@ export default function (pi: ExtensionAPI): void {
             allowedAgentDefinitions: new Set(allowedAgentDefinitions),
           }
         : undefined;
+  const agentParameters = Type.Union([
+    Type.Object(
+      { action: StringEnum(["list"] as const) },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["delegate"] as const),
+        definition:
+          controllerScope?.kind === "managed-agent"
+            ? {
+                ...StringEnum([...controllerScope.allowedAgentDefinitions]),
+                description: "Allowed agent definition for delegation.",
+              }
+            : Type.String({
+                description: "Agent definition for a fresh agent.",
+                pattern: "\\S",
+              }),
+        task: Type.String({ description: "Non-empty task.", pattern: "\\S" }),
+        label: Type.Optional(
+          Type.String({
+            description:
+              "Optional logical agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
+            pattern: AGENT_LABEL_PATTERN.source,
+          }),
+        ),
+        cwd: Type.Optional(
+          Type.String({
+            description: "Working directory for a fresh agent.",
+            pattern: "\\S",
+          }),
+        ),
+        fork: Type.Optional(
+          Type.String({
+            description:
+              "Exact saved Pi session path or full UUID used as context for a fork.",
+            pattern: "\\S",
+          }),
+        ),
+        timeoutMs: Type.Optional(
+          Type.Integer({
+            minimum: STARTUP_TIMEOUT_MIN,
+            maximum: STARTUP_TIMEOUT_MAX,
+            description: "Total startup budget in milliseconds.",
+          }),
+        ),
+        files: Type.Optional(
+          Type.Array(
+            Type.String({
+              description: "Readable regular local file path.",
+              minLength: 1,
+            }),
+            {
+              description:
+                "Supporting files for delegation, steering, replying, or ask_owner. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path and byte size. Files do not grant capabilities.",
+            },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["delegate"] as const),
+        session: Type.String({ pattern: "\\S" }),
+        label: Type.Optional(
+          Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
+        ),
+        task: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        timeoutMs: Type.Optional(
+          Type.Integer({
+            minimum: STARTUP_TIMEOUT_MIN,
+            maximum: STARTUP_TIMEOUT_MAX,
+          }),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["steer"] as const),
+        agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
+        message: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["reply"] as const),
+        agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
+        message: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["close", "inspect"] as const),
+        agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
+      },
+      { additionalProperties: false },
+    ),
+  ]);
+  const agentValidator = Compile(agentParameters);
+  const staffParameters = Type.Union([
+    Type.Object(
+      { action: StringEnum(["list"] as const) },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["inspect"] as const),
+        lead: Type.String({
+          pattern: PI_SESSION_ID_PATTERN,
+          description:
+            "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
+        }),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["message"] as const),
+        lead: Type.String({
+          pattern: PI_SESSION_ID_PATTERN,
+          description:
+            "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
+        }),
+        message: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["reply"] as const),
+        lead: Type.String({
+          pattern: PI_SESSION_ID_PATTERN,
+          description:
+            "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
+        }),
+        askId: Type.String({ pattern: "\\S" }),
+        message: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: false },
+    ),
+  ]);
+  const staffValidator = Compile(staffParameters);
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
   let chiefMode: ChiefMode = "inactive";
@@ -6227,7 +6226,7 @@ export default function (pi: ExtensionAPI): void {
         ["agent", "get", descriptor.paneId],
         { signal: ctx.signal },
       );
-      const alias = result?.agent ?? result;
+      const alias = result?.agent;
       if (!isPiAgent(alias) || herdrSessionId(alias) !== descriptor.piSessionId)
         return undefined;
     } catch {
@@ -6722,7 +6721,7 @@ export default function (pi: ExtensionAPI): void {
     return "Chief mode active.";
   };
   const leaveChief = async (ctx?: ExtensionCommandContext): Promise<string> => {
-    if (ctx?.hasUI && ctx.ui?.confirm) {
+    if (ctx?.hasUI) {
       const pending = countSupervisedPendingAsks
         ? await countSupervisedPendingAsks(ctx)
         : undefined;
@@ -6957,13 +6956,9 @@ export default function (pi: ExtensionAPI): void {
             tabId: agent.tab_id,
             workspaceCwd: agent.cwd,
             herdrName: agent.name,
-            tabLabel: agent.tab_label,
             ...(sessionName ? { sessionName } : {}),
             tokens: agent.tokens,
             runtimeState: normalizeHerdrLifecycleState(agent),
-            ...(typeof agent.last_activity_at === "number"
-              ? { lastActivity: agent.last_activity_at }
-              : {}),
           },
         ];
       });
@@ -6981,7 +6976,7 @@ export default function (pi: ExtensionAPI): void {
       const diagnostics = live.some(
         (agent: any) =>
           (agent?.agent === "pi" || agent?.agent_session?.agent === "pi") &&
-          herdrSessionId(agent) === undefined,
+          !isPiAgent(agent),
       )
         ? [
             "Live Pi agents are present but their session identities are unresolvable",
@@ -7090,8 +7085,23 @@ export default function (pi: ExtensionAPI): void {
             `agent definitions after configuration changes.`,
         };
       });
-    if (controllerScope?.kind === "lead")
+    if (controllerScope)
       pi.on("tool_call", async (event: any, ctx: ExtensionContext) => {
+        if (event.toolName === "agent" && !agentValidator.Check(event.input)) {
+          const error = invalidRequestInput("agent", "Invalid agent input");
+          return {
+            block: true,
+            reason: error.detail.message,
+          };
+        }
+        if (event.toolName === "staff" && !staffValidator.Check(event.input)) {
+          const error = invalidRequestInput("staff", "Invalid staff action");
+          return {
+            block: true,
+            reason: error.detail.message,
+          };
+        }
+        if (controllerScope.kind !== "lead") return;
         if (event.toolName === CHIEF_TOOLS[0] || !isCurrentChief(ctx)) return;
         return {
           block: true,
@@ -7190,8 +7200,7 @@ export default function (pi: ExtensionAPI): void {
     clearNormalUI = () => {
       if (statusTimer) clearInterval(statusTimer);
       statusTimer = undefined;
-      if (statusWidget || statusContext)
-        (statusContext as any)?.ui?.setWidget?.("pi-herdsman", undefined);
+      if (statusContext) statusContext.ui.setWidget("pi-herdsman", undefined);
       statusWidget?.dispose();
       statusWidget = undefined;
       requestStatusRefresh = undefined;
@@ -7199,9 +7208,9 @@ export default function (pi: ExtensionAPI): void {
     startSupervisionUI = (ctx) => {
       clearNormalUI?.();
       clearSupervisionUI?.();
-      if (ctx.mode !== "tui" || !ctx.hasUI || !ctx.ui?.setWidget) return;
+      if (ctx.mode !== "tui" || !ctx.hasUI) return;
       try {
-        ctx.ui.setWidget("pi-herdsman-staff", (tui: any, _theme: any) => {
+        ctx.ui.setWidget("pi-herdsman-staff", (tui, _theme) => {
           requestSupervisionWidgetRender = () => tui.requestRender();
           return createSupervisionWidget(
             () => supervisionSnapshot.leads,
@@ -7223,7 +7232,7 @@ export default function (pi: ExtensionAPI): void {
       supervisionTimer = undefined;
       if (removeWidget) {
         try {
-          (leadContext as any)?.ui?.setWidget?.("pi-herdsman-staff", undefined);
+          leadContext?.ui.setWidget("pi-herdsman-staff", undefined);
         } catch {
           // Widget teardown is best-effort during UI failure or shutdown.
         }
@@ -7574,11 +7583,9 @@ export default function (pi: ExtensionAPI): void {
             typeof agent.agent_definition === "string" &&
               agent.agent_definition.trim()
               ? agent.agent_definition
-              : typeof agent.display_agent === "string"
-                ? agent.display_agent
-                : typeof tokens.role === "string"
-                  ? tokens.role
-                  : undefined,
+              : typeof tokens.role === "string"
+                ? tokens.role
+                : undefined,
           ),
           paneId: agent.pane_id,
           sessionId: agent.pi_session_id,
@@ -7587,11 +7594,11 @@ export default function (pi: ExtensionAPI): void {
           model:
             presentation.model !== undefined
               ? presentation.model
-              : (runtime?.model ?? agent.model ?? undefined),
+              : runtime?.model,
           thinking:
             presentation.thinking !== undefined
               ? presentation.thinking
-              : (runtime?.thinking ?? agent.thinking ?? undefined),
+              : runtime?.thinking,
           contextPercent: presentation.contextPercent,
           ...(agent.stale
             ? {
@@ -8365,50 +8372,7 @@ export default function (pi: ExtensionAPI): void {
           "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name. " +
           "Chief-only supervision coordination. The chief supervises leads and does not own their agent trees. A fresh supervision snapshot is automatically supplied at the start of each chief agent run; treat it as the default current coordination state. For general state questions and ordinary messages or replies, use a fresh snapshot directly; do not call staff list, inspect, or another read command first. The message and reply actions revalidate exact identity and state themselves. Use list when the automatic snapshot is stale or unavailable, an immediately refreshed exact roster is materially necessary, or you are diagnosing identity or supervision projection problems. Use inspect only when deeper lead evidence is needed. Use the lead field's exact full Pi session ID and only fresh available_actions, never infer from display state or metadata. Every exact-identity-verified lead accepts message; reply only with the exact pending ask ID and current chief lease. Messages are bounded and direction-aware, and temporary verification or delivery failures retain queued records. Metadata is presentation-only and never authority. Messages use follow-up delivery. Human conversation remains the dispatch surface.",
         executionMode: "sequential",
-        parameters: Type.Union([
-          Type.Object(
-            { action: StringEnum(["list"] as const) },
-            { additionalProperties: false },
-          ),
-          Type.Object(
-            {
-              action: StringEnum(["inspect"] as const),
-              lead: Type.String({
-                pattern: PI_SESSION_ID_PATTERN,
-                description:
-                  "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
-              }),
-            },
-            { additionalProperties: false },
-          ),
-          Type.Object(
-            {
-              action: StringEnum(["message"] as const),
-              lead: Type.String({
-                pattern: PI_SESSION_ID_PATTERN,
-                description:
-                  "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
-              }),
-              message: Type.String({ pattern: "\\S" }),
-              files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-            },
-            { additionalProperties: false },
-          ),
-          Type.Object(
-            {
-              action: StringEnum(["reply"] as const),
-              lead: Type.String({
-                pattern: PI_SESSION_ID_PATTERN,
-                description:
-                  "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
-              }),
-              askId: Type.String({ pattern: "\\S" }),
-              message: Type.String({ pattern: "\\S" }),
-              files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-            },
-            { additionalProperties: false },
-          ),
-        ]),
+        parameters: staffParameters,
         execute: async (
           _id: string,
           params: any,
@@ -8420,20 +8384,8 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Staff is available only to the active chief");
           if (!(await currentChiefAuthority(ctx)))
             throw new Error("Chief lease is no longer active");
-          const allowed: Record<string, string[]> = {
-            list: ["action"],
-            inspect: ["action", "lead"],
-            message: ["action", "lead", "message", "files"],
-            reply: ["action", "lead", "askId", "message", "files"],
-          };
-          if (
-            !params ||
-            !allowed[params.action] ||
-            Object.keys(params).some(
-              (key) => !allowed[params.action].includes(key),
-            )
-          )
-            throw new Error("Invalid staff action");
+          if (!staffValidator.Check(params))
+            throw invalidRequestInput("staff", "Invalid staff action");
           const refresh = async () => loadSupervisionSnapshot(ctx);
           const result = (value: Record<string, unknown>) => {
             const bounded = truncateModelText(JSON.stringify(value, null, 2), {
@@ -8713,7 +8665,7 @@ export default function (pi: ExtensionAPI): void {
       }
 
       const owner = ctx.sessionManager.getSessionId();
-      const entries = (ctx.sessionManager as any).getEntries?.() ?? [];
+      const entries = ctx.sessionManager.getEntries();
       const directStates = snapshot.mailboxes.filter(
         ({ state }) => state.ownerSessionId === owner,
       );
@@ -8983,10 +8935,10 @@ export default function (pi: ExtensionAPI): void {
       recoverAgentRuntimes = recoverControllerRuntimes;
     startAgentStaleScanner = startStaleScanner;
     startNormalUI = (ctx) => {
-      if (ctx.mode !== "tui" || !ctx.hasUI || !ctx.ui?.setWidget) return;
+      if (ctx.mode !== "tui" || !ctx.hasUI) return;
       const generation = ++statusGeneration;
       statusContext = ctx;
-      ctx.ui.setWidget("pi-herdsman", (tui: any, theme: any) => {
+      ctx.ui.setWidget("pi-herdsman", (tui, theme) => {
         const widget = createStatusWidget(() => tui.requestRender(), theme);
         if (controllerScope.kind === "managed-agent")
           widget.setSnapshot({
@@ -9044,7 +8996,7 @@ export default function (pi: ExtensionAPI): void {
         const sessionId = ctx.sessionManager.getSessionId();
         leadAgentStartedAt = undefined;
         herdRunStartedAt = restoreHerdRunStartedAt(
-          (ctx.sessionManager as any).getEntries?.() ?? [],
+          ctx.sessionManager.getEntries(),
           sessionId,
         );
         leadSettled = herdRunStartedAt === undefined;
@@ -9119,7 +9071,7 @@ export default function (pi: ExtensionAPI): void {
       statusRefresh = false;
       statusInFlight = false;
       if (statusWidget) {
-        (statusContext as any)?.ui?.setWidget?.("pi-herdsman", undefined);
+        statusContext?.ui.setWidget("pi-herdsman", undefined);
         statusWidget.dispose();
         statusWidget = undefined;
       }
@@ -9137,7 +9089,7 @@ export default function (pi: ExtensionAPI): void {
       ) {
         queueLeadMetadata(ctx, {
           paneId: process.env.HERDR_PANE_ID,
-          name: (pi as any).getSessionName?.(),
+          name: pi.getSessionName(),
           ...(pendingChiefAsk ? { pendingAskId: pendingChiefAsk.askId } : {}),
         });
       }
@@ -9190,7 +9142,7 @@ export default function (pi: ExtensionAPI): void {
         if (!process.env.HERDR_PANE_ID) return;
         queueLeadMetadata(ctx, {
           paneId: process.env.HERDR_PANE_ID,
-          name: event?.name ?? (pi as any).getSessionName?.(),
+          name: event?.name ?? pi.getSessionName(),
           ...(pendingChiefAsk ? { pendingAskId: pendingChiefAsk.askId } : {}),
         });
       });
@@ -9245,7 +9197,7 @@ export default function (pi: ExtensionAPI): void {
       statusRefresh = false;
       statusInFlight = false;
       if (statusWidget) {
-        (statusContext as any)?.ui?.setWidget?.("pi-herdsman", undefined);
+        statusContext?.ui.setWidget("pi-herdsman", undefined);
         statusWidget.dispose();
         statusWidget = undefined;
       }
@@ -9289,130 +9241,7 @@ export default function (pi: ExtensionAPI): void {
       label: "agent",
       description: controllerDescription(controllerScope),
       executionMode: "sequential",
-      parameters: Type.Union([
-        Type.Object(
-          { action: StringEnum(["list"] as const) },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["delegate"] as const),
-            definition:
-              controllerScope.kind === "managed-agent"
-                ? {
-                    ...StringEnum([...controllerScope.allowedAgentDefinitions]),
-                    description: "Allowed agent definition for delegation.",
-                  }
-                : Type.String({
-                    description: "Agent definition for a fresh agent.",
-                    pattern: "\\S",
-                  }),
-            task: Type.String({
-              description: "Non-empty task.",
-              pattern: "\\S",
-            }),
-            label: Type.Optional(
-              Type.String({
-                description:
-                  "Optional logical agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
-                pattern: AGENT_LABEL_PATTERN.source,
-              }),
-            ),
-            cwd: Type.Optional(
-              Type.String({
-                description: "Working directory for a fresh agent.",
-              }),
-            ),
-            fork: Type.Optional(
-              Type.String({
-                description:
-                  "Exact saved Pi session path or full UUID used as context for a fork.",
-              }),
-            ),
-            timeoutMs: Type.Optional(
-              Type.Integer({
-                minimum: STARTUP_TIMEOUT_MIN,
-                maximum: STARTUP_TIMEOUT_MAX,
-                description: "Total startup budget in milliseconds.",
-              }),
-            ),
-            files: Type.Optional(
-              Type.Array(
-                Type.String({
-                  description: "Readable regular local file path.",
-                }),
-                {
-                  description:
-                    "Supporting files for delegation, steering, replying, or ask_owner. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path and byte size. Files do not grant capabilities.",
-                },
-              ),
-            ),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["delegate"] as const),
-            session: Type.String({ pattern: "\\S" }),
-            label: Type.Optional(
-              Type.String({
-                description:
-                  "Optional logical agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
-                pattern: AGENT_LABEL_PATTERN.source,
-              }),
-            ),
-            task: Type.String({ pattern: "\\S" }),
-            files: Type.Optional(Type.Array(Type.String())),
-            timeoutMs: Type.Optional(
-              Type.Integer({
-                minimum: STARTUP_TIMEOUT_MIN,
-                maximum: STARTUP_TIMEOUT_MAX,
-              }),
-            ),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["steer"] as const),
-            agent: Type.String({
-              pattern: AGENT_LABEL_PATTERN.source,
-            }),
-            message: Type.String({ pattern: "\\S" }),
-            files: Type.Optional(Type.Array(Type.String())),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["reply"] as const),
-            agent: Type.String({
-              pattern: AGENT_LABEL_PATTERN.source,
-            }),
-            message: Type.String({ pattern: "\\S" }),
-            files: Type.Optional(Type.Array(Type.String())),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["close"] as const),
-            agent: Type.String({
-              pattern: AGENT_LABEL_PATTERN.source,
-            }),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["inspect"] as const),
-            agent: Type.String({
-              pattern: AGENT_LABEL_PATTERN.source,
-            }),
-          },
-          { additionalProperties: false },
-        ),
-      ]),
+      parameters: agentParameters,
       execute: async (
         _id: string,
         p: Params,
@@ -9421,6 +9250,13 @@ export default function (pi: ExtensionAPI): void {
         ctx: ExtensionContext,
       ) => {
         try {
+          if (!agentValidator.Check(p))
+            throw invalidRequestInput(
+              typeof (p as { action?: unknown })?.action === "string"
+                ? (p as { action: string }).action
+                : "agent",
+              "Invalid agent input",
+            );
           const value = await action(
             pi,
             ctx,
@@ -9564,7 +9400,7 @@ export default function (pi: ExtensionAPI): void {
     if (leafStatusTimer) clearInterval(leafStatusTimer);
     leafStatusTimer = undefined;
     if (leafStatusWidget) {
-      (leafStatusContext as any)?.ui?.setWidget?.("pi-herdsman", undefined);
+      leafStatusContext?.ui.setWidget("pi-herdsman", undefined);
       leafStatusWidget.dispose();
       leafStatusWidget = undefined;
     }
@@ -9664,10 +9500,7 @@ export default function (pi: ExtensionAPI): void {
       discardRequest(process.env.PI_HERDSMAN_MAILBOX!, requestId);
     } catch (error) {
       appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
-      ctx.ui?.notify?.(
-        "pi_herdsman_state_error: request cleanup failed",
-        "error",
-      );
+      ctx.ui.notify("pi_herdsman_state_error: request cleanup failed", "error");
     }
   };
   const acknowledgeAndDiscard = (
@@ -9900,15 +9733,10 @@ export default function (pi: ExtensionAPI): void {
       if (delegationEnabled)
         startAgentStaleScanner?.(ctx, metadataAbortController.signal);
       initialized = true;
-      if (
-        !delegationEnabled &&
-        (ctx as any).mode === "tui" &&
-        (ctx as any).hasUI &&
-        ctx.ui?.setWidget
-      ) {
+      if (!delegationEnabled && ctx.mode === "tui" && ctx.hasUI) {
         const generation = leafStatusGeneration;
         leafStatusContext = ctx;
-        (ctx.ui as any).setWidget("pi-herdsman", (tui: any, theme: any) => {
+        ctx.ui.setWidget("pi-herdsman", (tui, theme) => {
           const widget = createStatusWidget(() => tui.requestRender(), theme);
           widget.setSnapshot({
             agents: [],
@@ -9938,8 +9766,10 @@ export default function (pi: ExtensionAPI): void {
         );
         void refreshLeafStatus(ctx, generation);
       }
-      const model = contextModelToken(ctx);
-      const thinking = contextThinkingLevel(ctx);
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
+      const thinking = ctx.thinkingLevel;
       reportMetadata(
         pi,
         ctx,
@@ -9958,7 +9788,7 @@ export default function (pi: ExtensionAPI): void {
       state = undefined;
       if (delegationEnabled) clearAgentRuntimes();
       appendDurableError(pi, ctx, "pi_herdsman_state_error", e);
-      ctx.ui?.notify?.(`pi_herdsman_state_error: ${String(e)}`, "error");
+      ctx.ui.notify(`pi_herdsman_state_error: ${String(e)}`, "error");
     }
   });
   pi.on("input", (event: any, ctx: ExtensionContext) => {
@@ -10160,8 +9990,10 @@ export default function (pi: ExtensionAPI): void {
       }
       state = candidate;
       agentStartedAt = Date.now();
-      const model = contextModelToken(ctx);
-      const thinking = contextThinkingLevel(ctx);
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
+      const thinking = ctx.thinkingLevel;
       reportMetadata(pi, ctx, agentMetadataRuntime(state, ctx), {
         activity: {
           requestId: id,
@@ -10198,22 +10030,21 @@ export default function (pi: ExtensionAPI): void {
     if (message?.role !== "assistant") return;
     if (
       delegationEnabled &&
-      hasUndeliveredDirectChildWork(
-        state,
-        (ctx.sessionManager as any).getEntries?.() ?? [],
-      )
+      hasUndeliveredDirectChildWork(state, ctx.sessionManager.getEntries())
     )
       return;
-    latest = extractAssistantText([message]);
+    latest = contentText(message.content, "").trim();
   });
   pi.on("turn_end", (_event: unknown, ctx: ExtensionContext) => {
     touchActivity();
     if (!state?.activeRequestId) return;
-    const usage = normalizeContextUsage(ctx.getContextUsage?.());
+    const usage = ctx.getContextUsage();
     const percent =
       usage?.percent == null ? undefined : Math.round(usage.percent);
-    const model = contextModelToken(ctx);
-    const thinking = contextThinkingLevel(ctx);
+    const model = ctx.model
+      ? `${ctx.model.provider}/${ctx.model.id}`
+      : undefined;
+    const thinking = ctx.thinkingLevel;
     reportMetadata(pi, ctx, agentMetadataRuntime(state, ctx), {
       context: percent ?? null,
       ...(model ? { model } : {}),
@@ -10230,24 +10061,28 @@ export default function (pi: ExtensionAPI): void {
     "tool_execution_end",
   ])
     pi.on(event, () => touchActivity());
-  pi.on("model_select", (event: any, ctx: ExtensionContext) => {
+  pi.on("model_select", (event: ModelSelectEvent, ctx: ExtensionContext) => {
     if (!state) return;
-    const model = selectedModelToken(event);
-    if (typeof model !== "string") return;
-    const thinking = contextThinkingLevel(ctx);
+    const model = `${event.model.provider}/${event.model.id}`;
+    const thinking = ctx.thinkingLevel;
     reportMetadata(pi, ctx, agentMetadataRuntime(state, ctx), {
       model,
       ...(thinking ? { thinking } : {}),
     });
   });
-  pi.on("thinking_level_select", (event: any, ctx: ExtensionContext) => {
-    if (!state || typeof event?.level !== "string") return;
-    const model = contextModelToken(ctx);
-    reportMetadata(pi, ctx, agentMetadataRuntime(state, ctx), {
-      thinking: event.level,
-      ...(model ? { model } : {}),
-    });
-  });
+  pi.on(
+    "thinking_level_select",
+    (event: ThinkingLevelSelectEvent, ctx: ExtensionContext) => {
+      if (!state) return;
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
+      reportMetadata(pi, ctx, agentMetadataRuntime(state, ctx), {
+        thinking: event.level,
+        ...(model ? { model } : {}),
+      });
+    },
+  );
   const finalizeStateTransition = (ctx: ExtensionContext): void => {
     if (!state?.activeRequestId) return;
     pendingStateTransition = true;
@@ -10263,8 +10098,10 @@ export default function (pi: ExtensionAPI): void {
       writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, nextState);
       state = nextState;
       agentStartedAt = undefined;
-      const model = contextModelToken(ctx);
-      const thinking = contextThinkingLevel(ctx);
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
+      const thinking = ctx.thinkingLevel;
       pendingStateTransition = false;
       stateErrorReported = false;
       if (stateRetryTimer) clearInterval(stateRetryTimer);
@@ -10295,10 +10132,7 @@ export default function (pi: ExtensionAPI): void {
       return;
     if (
       delegationEnabled &&
-      hasUndeliveredDirectChildWork(
-        state,
-        (ctx.sessionManager as any).getEntries?.() ?? [],
-      )
+      hasUndeliveredDirectChildWork(state, ctx.sessionManager.getEntries())
     )
       return;
     const result: ResultRecord = {
@@ -10318,7 +10152,7 @@ export default function (pi: ExtensionAPI): void {
               message: "Agent produced no assistant text",
             },
           }),
-      contextUsage: normalizeContextUsage(ctx.getContextUsage?.()),
+      contextUsage: ctx.getContextUsage(),
       completedAt: Date.now(),
     };
     pendingResult = result;

@@ -422,7 +422,7 @@ test("Chief activation rejects owned work outside the current workspace", async 
     exec: (_command, args) =>
       isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents: [] } }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
             stderr: "",
             code: 0,
           }
@@ -541,13 +541,21 @@ test("Chief activation replaces the lead widget and overview selection is intera
     exec: (_command, args) => {
       if (isAgentList(args))
         return {
-          stdout: JSON.stringify({ result: { agents: [lead] } }),
+          stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [lead] } }),
           stderr: "",
           code: 0,
         };
       if (args[0] === "agent" && args[1] === "get")
-        return { stdout: JSON.stringify({ agent: lead }), stderr: "", code: 0 };
-      return { stdout: "{}", stderr: "", code: 0 };
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: { agent: lead } }),
+          stderr: "",
+          code: 0,
+        };
+      return {
+        stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+        stderr: "",
+        code: 0,
+      };
     },
   });
   const context = fakeContext(entries) as any;
@@ -760,7 +768,7 @@ async function openChiefOverview(
         throw new Error("supervision unavailable");
       return isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents } }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents } }),
             stderr: "",
             code: 0,
           }
@@ -999,7 +1007,7 @@ test("active chief shutdown clears its role before releasing the lease", async (
     exec: (_command, args) =>
       isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents: [] } }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
             stderr: "",
             code: 0,
           }
@@ -1094,7 +1102,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     exec: (_command, args) =>
       isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents: [] } }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
             stderr: "",
             code: 0,
           }
@@ -1165,6 +1173,7 @@ test("plain agents opens the native management menu", async () => {
       if (isAgentList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { workspace_id: WORKSPACE, agents: [] },
           }),
           stderr: "",
@@ -1172,7 +1181,7 @@ test("plain agents opens the native management menu", async () => {
         };
       if (isPaneList(args))
         return {
-          stdout: JSON.stringify({ result: { panes: [] } }),
+          stdout: JSON.stringify({ id: AGENT_ID, result: { panes: [] } }),
           stderr: "",
           code: 0,
         };
@@ -1317,18 +1326,24 @@ test("Running warns when the selected agent is replaced before focus", async () 
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
       if (isAgentList(args))
         return {
-          stdout: listResponse(
-            label,
-            "working",
-            currentIdentity.piSessionId,
-            currentIdentity,
-          ),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: JSON.parse(
+              listResponse(
+                label,
+                "working",
+                currentIdentity.piSessionId,
+                currentIdentity,
+              ),
+            ),
+          }),
           stderr: "",
           code: 0,
         };
       if (isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 {
@@ -1442,29 +1457,32 @@ test("Running keeps colliding display labels distinct and focuses the selected p
       if (isAgentList(args))
         return {
           stdout: JSON.stringify({
-            action: "list",
-            workspace_id: WORKSPACE,
-            tab: "",
-            tabs: [],
-            agents: states.map(({ label, identity }) => ({
-              herdr_agent: herdrAlias(label),
-              status: "working",
-              cwd: "/tmp",
+            id: AGENT_ID,
+            result: {
+              action: "list",
               workspace_id: WORKSPACE,
-              pane_id: identity.paneId,
-              tab_id: identity.tabId,
-              tab_label: "agents",
-              agent_session: {
-                source: "herdr:pi",
-                agent: "pi",
-                kind: "id",
-                value: identity.piSessionId,
-              },
-              session_id: identity.piSessionId,
-              session_path: identity.piSessionFile,
-            })),
-            available_panes: [],
-            agent_definitions: [],
+              tab: "",
+              tabs: [],
+              agents: states.map(({ label, identity }) => ({
+                herdr_agent: herdrAlias(label),
+                status: "working",
+                cwd: "/tmp",
+                workspace_id: WORKSPACE,
+                pane_id: identity.paneId,
+                tab_id: identity.tabId,
+                tab_label: "agents",
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: identity.piSessionId,
+                },
+                session_id: identity.piSessionId,
+                session_path: identity.piSessionFile,
+              })),
+              available_panes: [],
+              agent_definitions: [],
+            },
           }),
           stderr: "",
           code: 0,
@@ -1472,6 +1490,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
       if (isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: states.map(({ label, identity }) => ({
                 pane_id: identity.paneId,
@@ -2006,7 +2025,7 @@ test("lead agents stop reports an empty owned inventory safely", async () => {
     exec: (command, args) =>
       command === "herdr" && isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents: [] } }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
             stderr: "",
             code: 0,
           }
@@ -2331,6 +2350,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
       command === "herdr" && isAgentList(args)
         ? {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 agents: [
                   agentFromState(state),
@@ -2354,6 +2374,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
         : command === "herdr" && isPaneList(args)
           ? {
               stdout: JSON.stringify({
+                id: AGENT_ID,
                 result: {
                   panes: [
                     {
@@ -2482,6 +2503,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
         if (command === "herdr" && isPaneList(args))
           return {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 panes: [
                   {
@@ -2554,7 +2576,10 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     assert.equal(activeTimers.size, 1);
     for (const pending of pendingLists.splice(0, 2))
       pending.resolve({
-        stdout: listResponse("old-agent"),
+        stdout: JSON.stringify({
+          id: 1,
+          result: JSON.parse(listResponse("old-agent")),
+        }),
         stderr: "",
         code: 0,
       });
@@ -2563,7 +2588,10 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     assert.match(widgets[1].render(120)[0], /unavailable/);
     for (const pending of pendingLists.splice(0))
       pending.resolve({
-        stdout: listResponse("new-agent"),
+        stdout: JSON.stringify({
+          id: 1,
+          result: JSON.parse(listResponse("new-agent")),
+        }),
         stderr: "",
         code: 0,
       });
@@ -2585,7 +2613,12 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
 test("TUI status refresh consumes the supported Herdr agent list envelope", async (t) => {
   setLeadEnvironment();
   const label = "sleep-smoke-a";
-  const identity = recoveryIdentity(label);
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(tmpdir(), `pi-herdsman-${label}-${randomUUID()}.jsonl`),
+  };
+  realFs.writeFileSync(identity.piSessionFile, "{}", "utf8");
+  t.after(() => realFs.rmSync(identity.piSessionFile, { force: true }));
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
@@ -2601,7 +2634,9 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
     agent: "pi",
     name: herdrAlias("sleep-smoke-a"),
     agent_session: {
+      agent: "pi",
       kind: "path",
+      source: "herdr:pi",
       value: identity.piSessionFile,
     },
     agent_status: "working",
@@ -2625,6 +2660,7 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
       if (command === "herdr" && args[0] === "agent" && args[1] === "list")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agents: [
                 herdrAgent,
@@ -2649,6 +2685,7 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
       if (command === "herdr" && isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 {
@@ -2666,6 +2703,7 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
       if (command === "herdr" && args[0] === "agent" && args[1] === "get")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agent: {
                 name: herdrAlias("sleep-smoke-a"),
@@ -2753,7 +2791,12 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
 test("zero-runtime reconciliation requests one status refresh", async (t) => {
   setLeadEnvironment();
   const label = "fresh-widget-agent";
-  const identity = recoveryIdentity(label);
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(tmpdir(), `pi-herdsman-${label}-${randomUUID()}.jsonl`),
+  };
+  realFs.writeFileSync(identity.piSessionFile, "{}", "utf8");
+  t.after(() => realFs.rmSync(identity.piSessionFile, { force: true }));
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, managedState(label, undefined, identity));
@@ -2799,7 +2842,10 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
       }
       if (args[0] === "agent" && args[1] === "get")
         return {
-          stdout: JSON.stringify({ result: { agent: herdrAgent } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agent: herdrAgent },
+          }),
           stderr: "",
           code: 0,
         };
@@ -2857,6 +2903,11 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
 test("fresh assignment refreshes the widget after validation", async () => {
   setLeadEnvironment();
   const label = "fresh-start-widget-agent";
+  const sessionPath = join(
+    tmpdir(),
+    `pi-herdsman-${label}-${randomUUID()}.jsonl`,
+  );
+  realFs.writeFileSync(sessionPath, "{}", "utf8");
   const mailbox = agentMailboxPath(WORKSPACE, label);
   const agentsDir = PI_AGENTS_DIR;
   const definitionPath = `${agentsDir}/agent.md`;
@@ -2889,7 +2940,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       agent: "pi",
       kind: "path",
       source: "herdr:pi",
-      value: "/tmp/registered-agent.jsonl",
+      value: sessionPath,
     },
     agent_status: "working",
     cwd: requestedCwd,
@@ -2927,6 +2978,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       if (command === "herdr" && isTabList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tabs: [
                 {
@@ -2952,6 +3004,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
         herdrAgent.name = runScopedHerdrAlias(WORKSPACE, label, startedRunId);
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tab: { tab_id: "startup-tab" },
               root_pane: { pane_id: "startup-pane" },
@@ -2964,6 +3017,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       if (command === "herdr" && isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 {
@@ -2986,7 +3040,10 @@ test("fresh assignment refreshes the widget after validation", async () => {
         args[1] === "process-info"
       )
         return {
-          stdout: JSON.stringify({ result: { process: processInfo } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { process_info: processInfo },
+          }),
           stderr: "",
           code: 0,
         };
@@ -3002,6 +3059,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
         herdrAgent.name = runScopedHerdrAlias(WORKSPACE, label, startedRunId);
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { pane: { pane_id: "startup-pane" } },
           }),
           stderr: "",
@@ -3029,6 +3087,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
           live = false;
           return {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 agent: {
                   ...herdrAgent,
@@ -3044,7 +3103,10 @@ test("fresh assignment refreshes the widget after validation", async () => {
           };
         }
         const response = {
-          stdout: JSON.stringify({ result: { agent: herdrAgent } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agent: herdrAgent },
+          }),
           stderr: "",
           code: 0,
         };
@@ -3079,6 +3141,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       if (command === "herdr" && args[0] === "pane" && args[1] === "get")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               pane: {
                 pane_id: "startup-pane",
@@ -3101,20 +3164,23 @@ test("fresh assignment refreshes the widget after validation", async () => {
           agentLabel: label,
           paneId: "startup-pane",
           piSessionId: DEFAULT_PI_SESSION_ID,
-          piSessionFile: "/tmp/registered-agent.jsonl",
+          piSessionFile: sessionPath,
           cwd: requestedCwd,
           updatedAt: Date.now(),
         });
         return {
           stdout: JSON.stringify({
-            tab_id: "startup-tab",
-            tab_label: "agents",
-            pane_id: "startup-pane",
-            cwd: requestedCwd,
-            herdr_agent: herdrAlias(label),
-            created_tab: false,
-            created_pane: false,
-            agent: herdrAgent,
+            id: AGENT_ID,
+            result: {
+              tab_id: "startup-tab",
+              tab_label: "agents",
+              pane_id: "startup-pane",
+              cwd: requestedCwd,
+              herdr_agent: herdrAlias(label),
+              created_tab: false,
+              created_pane: false,
+              agent: herdrAgent,
+            },
           }),
           stderr: "",
           code: 0,
@@ -3166,7 +3232,11 @@ test("fresh assignment refreshes the widget after validation", async () => {
       "assignment did not reach integration validation",
     );
     assert.match(widget!.render(160).join("\n"), /herd/);
-    resolveIntegration!({ stdout: "{}", stderr: "", code: 0 });
+    resolveIntegration!({
+      stdout: JSON.stringify({ id: AGENT_ID, result: { agent: herdrAgent } }),
+      stderr: "",
+      code: 0,
+    });
     await waitForTestCondition(
       () => releaseInitialPrompt !== undefined,
       "assignment did not reach initial prompt",
@@ -3263,6 +3333,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
+    realFs.rmSync(sessionPath, { force: true });
     if (hadDefinition)
       realFs.writeFileSync(definitionPath, previousDefinition!);
     else if (!hadAgentsDir) {

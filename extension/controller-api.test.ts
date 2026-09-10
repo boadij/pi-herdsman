@@ -588,7 +588,7 @@ test("parent controller readiness, allowlist, and cwd preflight fail closed", as
       context,
     );
     assert.equal(unauthorized.details.error.category, "invalid_request");
-    assert.match(unauthorized.details.error.message, /not allowed/);
+    assert.equal(unauthorized.details.error.message, "Invalid agent input");
     const beforeLifecycle = pi.calls.length;
     const cwdMismatch = await tool.execute(
       "id",
@@ -993,7 +993,10 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
   const validLabel = "valid-list-agent";
   const invalidLabel = "invalid-list-agent";
   const valid = recoveryIdentity(validLabel);
-  const invalid = recoveryIdentity(invalidLabel);
+  const invalid = {
+    ...recoveryIdentity(invalidLabel),
+    piSessionId: "11111111-1111-4111-8111-111111111111",
+  };
   const validMailbox = agentMailboxPath(WORKSPACE, validLabel);
   const invalidMailbox = agentMailboxPath(WORKSPACE, invalidLabel);
   resetAgentMailbox(validMailbox);
@@ -1008,6 +1011,17 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
     path: invalid.piSessionFile,
     entries: [],
   });
+  nativeSessions.set(valid.piSessionId, {
+    id: valid.piSessionId,
+    path: valid.piSessionFile,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { name: "agent" },
+      },
+    ],
+  });
   const pi = fakePi({
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "--version")
@@ -1015,39 +1029,47 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
       if (command === "herdr" && args[0] === "agent" && args[1] === "list")
         return {
           stdout: JSON.stringify({
-            workspace_id: WORKSPACE,
-            agents: [
-              {
-                herdr_kind: "pi",
-                herdr_agent: "unmanaged-agent",
-                status: "idle",
-                workspace_id: WORKSPACE,
-                pane_id: "unmanaged-pane",
-                cwd: "/tmp",
-              },
-              {
-                herdr_kind: "pi",
-                herdr_agent: herdrAlias(invalidLabel),
-                status: "idle",
-                workspace_id: WORKSPACE,
-                pane_id: invalid.paneId,
-                cwd: "/tmp",
-                session_id: invalid.piSessionId,
-                session_path: invalid.piSessionFile,
-              },
-              {
-                herdr_kind: "pi",
-                herdr_agent: herdrAlias(validLabel),
-                status: "idle",
-                workspace_id: WORKSPACE,
-                pane_id: valid.paneId,
-                cwd: "/tmp",
-                session_id: valid.piSessionId,
-                session_path: valid.piSessionFile,
-                agent_definition: "wrong-herdr-definition",
-              },
-            ],
-            agent_definitions: [],
+            id: AGENT_ID,
+            result: {
+              workspace_id: WORKSPACE,
+              agents: [
+                {
+                  name: "unmanaged-agent",
+                  agent_status: "idle",
+                  workspace_id: WORKSPACE,
+                  pane_id: "unmanaged-pane",
+                  cwd: "/tmp",
+                },
+                {
+                  name: herdrAlias(invalidLabel),
+                  agent_status: "idle",
+                  workspace_id: WORKSPACE,
+                  pane_id: invalid.paneId,
+                  cwd: "/tmp",
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: invalid.piSessionId,
+                  },
+                },
+                {
+                  name: herdrAlias(validLabel),
+                  agent_status: "idle",
+                  workspace_id: WORKSPACE,
+                  pane_id: valid.paneId,
+                  cwd: "/tmp",
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: valid.piSessionId,
+                  },
+                  agent_definition: "wrong-herdr-definition",
+                },
+              ],
+              agent_definitions: [],
+            },
           }),
           stderr: "",
           code: 0,
@@ -1055,6 +1077,7 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
       if (command === "herdr" && isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 {
@@ -1106,6 +1129,7 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
     assert.equal(agents[0].managed, true);
   } finally {
     nativeSessions.delete(invalid.piSessionId);
+    nativeSessions.delete(valid.piSessionId);
     resetAgentMailbox(validMailbox);
     resetAgentMailbox(invalidMailbox);
   }
@@ -1116,7 +1140,16 @@ test("list projects an unreadable current mailbox as non-actionable unknown", as
   const mailbox = agentMailboxPath(WORKSPACE, "unreadable-list-agent");
   realFs.mkdirSync(mailbox, { recursive: true });
   realFs.writeFileSync(join(mailbox, "state.json"), "x".repeat(70 * 1024));
-  const pi = fakePi();
+  const pi = fakePi({
+    exec: (_command, args) =>
+      isAgentList(args)
+        ? {
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
   registerExtension!(pi.pi as never);
   try {
     const result = await pi.tools[0].execute(
@@ -1333,6 +1366,44 @@ test("session delegation rejects invalid and occupied explicit labels without st
     nativeSessions.clear();
     resetAgentMailbox(mailbox);
     realFs.rmSync(source.path, { force: true });
+  }
+});
+
+test("registered agent revalidates input mutated after tool_call", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext();
+  const input = {
+    action: "delegate",
+    definition: "agent",
+    task: "initially valid",
+  };
+  try {
+    const toolCall = pi.events.get("tool_call")?.[0];
+    assert.ok(toolCall);
+    assert.equal(
+      await toolCall({ toolName: "agent", input }, context),
+      undefined,
+    );
+    input.task = "";
+    const blocked = await toolCall({ toolName: "agent", input }, context);
+    assert.equal(blocked?.block, true);
+    assert.equal(blocked?.reason, "Invalid agent input");
+    const result = await pi.tools[0].execute(
+      "id",
+      input,
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.error.category, "invalid_request");
+    assert.equal(result.details.error.message, "Invalid agent input");
+    assert.equal(result.details.error.operation, "delegate");
+    assert.equal(result.details.error.details, undefined);
+    assert.equal(pi.calls.length, 0);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
   }
 });
 
@@ -1657,6 +1728,7 @@ test("session assignment fails closed on duplicate live representations", async 
       if (command === "herdr" && isAgentList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agents: [agentFromState(first), agentFromState(second)],
             },
@@ -1753,10 +1825,7 @@ test("registered delegate validates duplicate agents, selectors, and timeout bef
     context,
   );
   assert.equal(invalidTimeout.details.error.category, "invalid_request");
-  assert.equal(
-    invalidTimeout.details.error.message,
-    "timeoutMs must be an integer from 5001 through 300000",
-  );
+  assert.equal(invalidTimeout.details.error.message, "Invalid agent input");
   const missingAgentTask = await tool.execute(
     "id",
     { action: "delegate", agent: "session-agent" },
@@ -1782,7 +1851,7 @@ test("registered delegate validates duplicate agents, selectors, and timeout bef
       context,
     );
     assert.equal(result.details.error.category, "invalid_request");
-    assert.equal(result.details.error.message, "Unsupported agent action");
+    assert.equal(result.details.error.message, "Invalid agent input");
   }
   const substitutedResume = await tool.execute(
     "id",
@@ -2018,7 +2087,11 @@ test("assignment retains its request when acknowledgement never arrives", async 
     exec: (command, args, options) => {
       if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
         setTimeout(() => controller.abort(), 10);
-        return { stdout: "{}", stderr: "", code: 0 };
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+          stderr: "",
+          code: 0,
+        };
       }
       return startup.exec(command, args, options);
     },
@@ -2190,13 +2263,18 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
           lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
           updatedAt: Date.now(),
         });
-        return { stdout: "{}", stderr: "", code: 0 };
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+          stderr: "",
+          code: 0,
+        };
       }
       if (command === "herdr" && isAgentList(args)) {
         const liveParent = readAgentState(parentMailbox) ?? observedParent;
         const liveChild = readAgentState(childMailbox) ?? child;
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agents: [
                 agentFromState(liveParent, parentStatus),
@@ -2219,6 +2297,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       )
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agent: {
                 ...agentFromState(observedParent, parentStatus),
@@ -2547,6 +2626,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
         )
           return {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 agent: {
                   ...agentFromState(observedParent, parentStatus),

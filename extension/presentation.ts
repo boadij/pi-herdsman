@@ -7,6 +7,7 @@ import {
   truncateLine,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
+import { contentText } from "@earendil-works/pi-ai";
 import * as PiTui from "@earendil-works/pi-tui";
 import {
   Container,
@@ -94,19 +95,6 @@ export function collapseDisplayText(
   return characters.length <= maxCharacters
     ? normalized
     : `${characters.slice(0, Math.max(0, maxCharacters - 1)).join("")}…`;
-}
-export function selectedModelToken(event: unknown): string | undefined {
-  const selected = (event as { model?: unknown } | undefined)?.model;
-  if (
-    selected &&
-    typeof selected === "object" &&
-    typeof (selected as { provider?: unknown }).provider === "string" &&
-    typeof (selected as { id?: unknown }).id === "string"
-  )
-    return `${(selected as { provider: string }).provider}/${(selected as { id: string }).id}`;
-  if (typeof selected === "string") return selected;
-  const id = (event as { id?: unknown } | undefined)?.id;
-  return typeof id === "string" ? id : undefined;
 }
 export function formatElapsed(
   startedAt: number | undefined,
@@ -1518,12 +1506,10 @@ function resultDetails(result: any): Record<string, unknown> {
 }
 
 function resultContent(result: any): string {
-  if (Array.isArray(result?.content))
-    return result.content
-      .filter((part: any) => part?.type === "text")
-      .map((part: any) => (typeof part.text === "string" ? part.text : ""))
-      .join("\n");
-  return typeof result?.content === "string" ? result.content : "";
+  const content = result?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return contentText(content);
 }
 
 function shortIdentity(input: unknown): string {

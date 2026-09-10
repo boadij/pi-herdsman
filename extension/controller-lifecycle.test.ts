@@ -12,6 +12,7 @@ import type {
   ManagedAgentState,
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
+import support from "./support.ts";
 import {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -63,6 +64,7 @@ import {
   setAgentEnvironment,
   skillBlock,
   startupExecutor,
+  watchedResultPaths,
   waitForTestCondition,
   agentMailboxPath,
   writeAsk,
@@ -961,6 +963,123 @@ test("staged fresh assignment bridges pending start through working", async () =
   }
 });
 
+test("fresh path sessions remain controllable after controller cache loss", async () => {
+  setLeadEnvironment();
+  const label = `fresh-path-${randomUUID().slice(0, 8)}`;
+  const sessionPath = "/tmp/registered-agent.jsonl";
+  realFs.rmSync(sessionPath, { force: true });
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+  );
+  const pathSession = (result: { stdout: string; [key: string]: unknown }) => {
+    const payload = JSON.parse(result.stdout);
+    const agents = [payload.result?.agent, ...(payload.result?.agents ?? [])];
+    for (const agent of agents)
+      if (agent?.agent_session)
+        agent.agent_session = {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "path",
+          value: sessionPath,
+        };
+    return { ...result, stdout: JSON.stringify(payload) };
+  };
+  const pi = fakePi({
+    exec: async (command, args, options) => {
+      const result = await startup.exec(command, args, options);
+      return command === "herdr" && args[0] === "agent"
+        ? pathSession(result)
+        : result;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext();
+  for (const handler of pi.events.get("session_start") ?? [])
+    await handler(undefined, context);
+  try {
+    const delegated = await pi.tools[0].execute(
+      "id",
+      { action: "delegate", definition: "agent", label, task: "fresh path" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(delegated.details.ok, true, JSON.stringify(delegated.details));
+    assert.equal(
+      pi.calls.some(
+        (args) =>
+          args[0] === "agent" && args[1] === "start" && args.includes("--fork"),
+      ),
+      false,
+    );
+    assert.equal(readAgentState(startup.mailbox)?.lastAck?.accepted, true);
+    assert.equal(readAgentState(startup.mailbox)?.agentDefinition, "agent");
+    assert.equal(realFs.existsSync(sessionPath), false);
+
+    support.sessionOpenError = new Error("child session is not materialized");
+    for (const handler of pi.events.get("session_shutdown") ?? [])
+      await handler(undefined, context);
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const recovered = readAgentState(startup.mailbox)!;
+    assert.ok(recovered.activeRequestId);
+    assert.ok(
+      watchedResultPaths.has(
+        `${startup.mailbox}/result-${recovered.activeRequestId}.json`,
+      ),
+    );
+    const listed = await pi.tools[0].execute(
+      "list",
+      { action: "list" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(
+      listed.details.agents[0]?.agent,
+      label,
+      JSON.stringify(listed.details),
+    );
+
+    const inspected = await pi.tools[0].execute(
+      "inspect",
+      { action: "inspect", agent: label },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(inspected.details.ok, true, JSON.stringify(inspected.details));
+
+    const closed = await pi.tools[0].execute(
+      "close",
+      { action: "close", agent: label },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
+    assert.equal(readAgentState(startup.mailbox), undefined);
+    assert.equal(realFs.existsSync(startup.mailbox), false);
+    assert.ok(
+      pi.calls.some((args) => isPaneClose(args) && args[2] === "startup-pane"),
+    );
+  } finally {
+    support.sessionOpenError = undefined;
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(sessionPath, { force: true });
+  }
+});
+
 test("staged fresh assignment removes a fast completion without observing working", async () => {
   const fixture = createStagedAssignmentFixture(
     "staged-fast-completion-agent",
@@ -1796,6 +1915,8 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
         );
         if (bad)
           bad.agent_session = {
+            source: "herdr:pi",
+            agent: "pi",
             kind: "id",
             value: "22222222-2222-4222-8222-222222222222",
           };
@@ -2078,6 +2199,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       if (isTabList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tabs: [],
             },
@@ -2098,6 +2220,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       if (args[0] === "tab" && args[1] === "create")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tab: {
                 tab_id: "producer-tab",
@@ -2113,6 +2236,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       if (isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 {
@@ -2132,8 +2256,9 @@ test("session assignment reports a pane mismatch from the agent state producer",
       if (args[0] === "pane" && args[1] === "process-info")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
-              process: {
+              process_info: {
                 pane_id: "helper-pane",
                 shell_pid: 123,
                 foreground_process_group_id: 123,
@@ -2157,7 +2282,10 @@ test("session assignment reports a pane mismatch from the agent state producer",
       }
       if (isAgentList(args))
         return {
-          stdout: listResponse(label, "idle", null),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: JSON.parse(listResponse(label, "idle", null)),
+          }),
           stderr: "",
           code: 0,
         };
@@ -2171,17 +2299,26 @@ test("session assignment reports a pane mismatch from the agent state producer",
       Object.assign(process.env, previous);
       return {
         stdout: JSON.stringify({
-          tab_id: "producer-tab",
-          tab_label: "agents",
-          pane_id: "helper-pane",
-          cwd: "/tmp",
-          herdr_agent: runScopedHerdrAlias(
-            WORKSPACE,
-            label,
-            paneEnvironment.PI_HERDSMAN_RUN_ID ?? AGENT_ID,
-          ),
-          created_tab: true,
-          created_pane: true,
+          id: AGENT_ID,
+          result: {
+            agent: {
+              name: runScopedHerdrAlias(
+                WORKSPACE,
+                label,
+                paneEnvironment.PI_HERDSMAN_RUN_ID ?? AGENT_ID,
+              ),
+              pane_id: "agent-pane",
+              tab_id: "producer-tab",
+              workspace_id: WORKSPACE,
+              cwd: "/tmp",
+              agent_session: {
+                source: "herdr:pi",
+                agent: "pi",
+                kind: "id",
+                value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              },
+            },
+          },
           runtime_identity: {
             herdr_agent: runScopedHerdrAlias(
               WORKSPACE,
@@ -2579,7 +2716,7 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
       command === "herdr" && args[0] === "--version"
         ? { stdout: "0.8.0", stderr: "", code: 0 }
         : {
-            stdout: JSON.stringify({ result: { agents: [] } }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
             stderr: "",
             code: 0,
           },
@@ -2748,7 +2885,10 @@ test("session delegation ignores an unrelated missing live session path", async 
     exec: (command, args, options) => {
       if (command === "herdr" && isAgentList(args) && !started)
         return {
-          stdout: JSON.stringify({ result: { agents: [staleAgent] } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [staleAgent] },
+          }),
           stderr: "",
           code: 0,
         };
@@ -2831,7 +2971,10 @@ test("session delegation keeps an exact live ID busy despite a missing path obse
     exec: (command, args, options) => {
       if (command === "herdr" && isAgentList(args))
         return {
-          stdout: JSON.stringify({ result: { agents: [staleAgent] } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [staleAgent] },
+          }),
           stderr: "",
           code: 0,
         };
@@ -2915,7 +3058,10 @@ test("session delegation keeps an exact live ID busy despite contradictory live 
     exec: (command, args, options) => {
       if (command === "herdr" && isAgentList(args))
         return {
-          stdout: JSON.stringify({ result: { agents: [staleAgent] } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [staleAgent] },
+          }),
           stderr: "",
           code: 0,
         };
@@ -2954,7 +3100,7 @@ test("session delegation keeps an exact live ID busy despite contradictory live 
   }
 });
 
-test("session delegation fails closed on an exact live ID with a non-ENOENT secondary path error", async () => {
+test("session delegation ignores removed secondary session fields", async () => {
   setLeadEnvironment();
   const name = `error-live-resume-${randomUUID().slice(0, 8)}`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
@@ -3007,7 +3153,10 @@ test("session delegation fails closed on an exact live ID with a non-ENOENT seco
     exec: (command, args, options) => {
       if (command === "herdr" && isAgentList(args) && !started)
         return {
-          stdout: JSON.stringify({ result: { agents: [staleAgent] } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [staleAgent] },
+          }),
           stderr: "",
           code: 0,
         };
@@ -3018,25 +3167,16 @@ test("session delegation fails closed on an exact live ID with a non-ENOENT seco
   });
   registerExtension!(pi.pi as never);
   try {
-    await assert.rejects(
-      pi.tools[0].execute(
-        "id",
-        { action: "delegate", session: sessionPath, task: "must fail" },
-        undefined,
-        undefined,
-        fakeContext(),
-      ),
-      (error: unknown) => {
-        assert.match(String(error), /could not canonicalize/);
-        assert.match(String(error), /ENOTDIR/);
-        return true;
-      },
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "delegate", session: sessionPath, task: "must wait" },
+      undefined,
+      undefined,
+      fakeContext(),
     );
+    assert.equal(result.details.error.category, "agent_busy");
     assert.equal(
-      pi.calls.some(
-        (args) =>
-          args[0] === "agent" && ["start", "prompt"].includes(args[1] ?? ""),
-      ),
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
       false,
     );
   } finally {
@@ -3341,8 +3481,7 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     {
       label: `${prefix}-whitespace-agent`,
       params: { action: "delegate", definition: " \t", task: " \t" },
-      message:
-        "Fields must contain non-whitespace text when supplied: definition, task",
+      message: "Invalid agent input",
     },
     {
       label: `${prefix}-missing-task`,
@@ -3352,7 +3491,7 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     {
       label: `${prefix}-whitespace-task`,
       params: { action: "delegate", definition: "agent", task: " \t" },
-      message: "Fields must contain non-whitespace text when supplied: task",
+      message: "Invalid agent input",
     },
   ];
 
@@ -3420,7 +3559,7 @@ test("enforces the agent label grammar before assignment lifecycle mutation", as
     assert.equal(result.details.error.category, "invalid_request");
     assert.equal(result.details.error.operation, "delegate");
     assert.equal(result.details.error.rollbackOccurred, false);
-    assert.match(result.details.error.message, /Agent label must start/);
+    assert.equal(result.details.error.message, "Invalid agent input");
     assert.deepEqual(invalidPi.calls, []);
     assert.equal(realFs.existsSync(agentMailboxPath(WORKSPACE, label)), false);
   }
@@ -3438,7 +3577,7 @@ test("enforces the agent label grammar before assignment lifecycle mutation", as
       fakeContext(),
     );
     assert.equal(result.details.error.category, "invalid_request");
-    assert.match(result.details.error.message, /Agent label must start/);
+    assert.equal(result.details.error.message, "Invalid agent input");
     assert.deepEqual(invalidPi.calls, []);
   }
   invalidPi.events.get("session_shutdown")?.[0]();
@@ -3461,7 +3600,10 @@ test("rejects an invalid generated collision label after releasing its claim", a
         return { stdout: "0.8.0", stderr: "", code: 0 };
       if (command === "herdr" && args[0] === "agent" && args[1] === "list")
         return {
-          stdout: listResponse("other-agent"),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: JSON.parse(listResponse("other-agent")),
+          }),
           stderr: "",
           code: 0,
         };
@@ -3579,14 +3721,7 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
     fakeContext(),
   );
   assert.equal(aggregate.details.error.category, "invalid_request");
-  assert.match(
-    aggregate.details.error.message,
-    /Session delegation does not support: fork, message/,
-  );
-  assert.match(
-    aggregate.details.error.message,
-    /Allowed: action, session, label, task, files, timeoutMs/,
-  );
+  assert.equal(aggregate.details.error.message, "Invalid agent input");
   assert.deepEqual(pi.calls, []);
   const legacy = await pi.tools[0].execute(
     "id",
@@ -3596,7 +3731,7 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
     fakeContext(),
   );
   assert.equal(legacy.details.error.category, "invalid_request");
-  assert.match(legacy.details.error.message, /close does not support: label/);
+  assert.equal(legacy.details.error.message, "Invalid agent input");
   assert.deepEqual(pi.calls, []);
 });
 
@@ -3673,6 +3808,7 @@ test("empty early launch cleans exact resources and same-label retry creates one
           closeProvedByList = true;
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 ...(panePresent
@@ -3719,7 +3855,7 @@ test("empty early launch cleans exact resources and same-label retry creates one
       }
       if (command === "herdr" && isTabList(args) && tabCloses > 0)
         return {
-          stdout: JSON.stringify({ result: { tabs: [] } }),
+          stdout: JSON.stringify({ id: AGENT_ID, result: { tabs: [] } }),
           stderr: "",
           code: 0,
         };
@@ -3730,8 +3866,9 @@ test("empty early launch cleans exact resources and same-label retry creates one
       )
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
-              process: {
+              process_info: {
                 pane_id: args[3],
                 shell_pid: 123,
                 foreground_process_group_id: 123,

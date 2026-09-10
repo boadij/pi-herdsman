@@ -131,9 +131,6 @@ herdr integration install pi
 herdr integration status
 ```
 
-Pi Herdsman requires integration version `2` or newer for supported native session
-identity/restore behavior.
-
 ## See also
 
 - [`/agents` commands](commands.md)

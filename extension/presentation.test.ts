@@ -41,7 +41,6 @@ import {
   renderAgentDefinitionsOverview,
   renderHerdRunEntry,
   renderStopSummary,
-  selectedModelToken,
   StatusWidget,
   Text,
   truncateModelText,
@@ -1562,6 +1561,16 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
     ),
   );
   assert.match(plainError, /Chief lease is no longer active/);
+  const plainStringError = renderedText(
+    renderCoordinationResult(
+      "chief",
+      { content: "Chief lease is no longer active", details: {} },
+      {},
+      presentationTheme,
+      { args: { action: "message" }, isError: true },
+    ),
+  );
+  assert.match(plainStringError, /Chief lease is no longer active/);
   const wideArgs = {
     action: "delegate",
     definition: "界".repeat(30),
@@ -1743,20 +1752,6 @@ test("chief and staff coordination renderers share semantic status language", ()
     "agent counts: working=2 · blocked=1 · total=3",
   ])
     assert.ok(staffList.includes(evidence));
-});
-
-test("model selection reports provider and id for Pi model objects", (t) => {
-  {
-    assert.equal(
-      selectedModelToken({ model: { provider: "openai", id: "gpt-5" } }),
-      "openai/gpt-5",
-    );
-    assert.equal(
-      selectedModelToken({ model: { provider: "anthropic", id: "claude" } }),
-      "anthropic/claude",
-    );
-    assert.equal(selectedModelToken({ model: undefined }), undefined);
-  }
 });
 
 test("widget never exceeds its width", (t) => {

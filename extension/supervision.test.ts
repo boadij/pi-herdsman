@@ -1022,7 +1022,7 @@ test("both directions identify the actual sender and target in bounded content",
 test("lifecycle normalization uses current Herdr fields and fails closed", () => {
   for (const [fields, expected] of [
     [{ agent_status: "working", status: "idle" }, "working"],
-    [{ status: "blocked" }, "blocked"],
+    [{ status: "blocked" }, "unknown"],
     [{ state: "working" }, "unknown"],
   ] as const) {
     assert.equal(normalizeHerdrLifecycleState(fields), expected);

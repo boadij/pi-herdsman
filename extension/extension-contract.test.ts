@@ -28,6 +28,7 @@ import support, {
   PI_AGENTS_DIR,
   REQUEST_ID,
   LEAD_SESSION_ID,
+  AGENT_ID,
   WORKSPACE,
   agentFromState,
   controlMarker,
@@ -67,6 +68,84 @@ function assertToolResult(result: any): asserts result is {
     ),
   );
 }
+
+test("Herdr version parsing accepts preview suffixes but rejects trailing text", async () => {
+  const { parseHerdrVersion } = await import("./index.ts");
+  for (const version of [
+    "0.9.0",
+    "0.9.0-preview",
+    "0.9.0-preview.2026-06-02-abcdef123456",
+  ])
+    assert.ok(parseHerdrVersion(version), version);
+  for (const version of [
+    "0.9.0 trailing",
+    "0.9.0-preview.2026-06-02-abcdef123456 trailing",
+    "0.9.0\n",
+    "00.9.0",
+    "0.09.0",
+    "0.9.00",
+  ])
+    assert.equal(parseHerdrVersion(version), undefined, version);
+});
+
+test("Herdr preflight gates server compatibility, not private server version", async () => {
+  const run = async (server: Record<string, unknown>) => {
+    setLeadEnvironment();
+    const label = `preflight-${randomUUID().slice(0, 8)}`;
+    const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+    const pi = fakePi({
+      exec: startup.exec,
+      status: {
+        code: 0,
+        stdout: JSON.stringify({
+          client: { version: "0.9.0" },
+          server,
+        }),
+        stderr: "",
+      },
+    });
+    registerExtension!(pi.pi as never);
+    try {
+      return await pi.tools[0].execute(
+        "preflight",
+        {
+          action: "delegate",
+          definition: "agent",
+          label,
+          task: "preflight",
+        },
+        undefined,
+        undefined,
+        fakeContext(),
+      );
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(startup.mailbox);
+    }
+  };
+
+  const incompatible = await run({ running: true, compatible: false });
+  assert.equal(incompatible.details.error.category, "invalid_request");
+  assert.match(incompatible.details.error.message, /compatible server/);
+
+  const staleServer = await run({
+    running: true,
+    version: "0.8.0",
+    compatible: true,
+  });
+  assert.equal(
+    staleServer.details.ok,
+    true,
+    JSON.stringify(staleServer.details),
+  );
+
+  const missingServerVersion = await run({ running: true, compatible: true });
+  assert.equal(
+    missingServerVersion.details.ok,
+    true,
+    JSON.stringify(missingServerVersion.details),
+  );
+});
 
 test("registered lead and unmanaged roles expose the correct surface", () => {
   setLeadEnvironment();
@@ -288,6 +367,7 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
       if (isAgentList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { agents: [mismatchedInventoryAgent] },
           }),
           stderr: "",
@@ -295,7 +375,10 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
         };
       if (args[0] === "agent" && args[1] === "get")
         return {
-          stdout: JSON.stringify({ result: { agent: descriptorAgent } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agent: descriptorAgent },
+          }),
           stderr: "",
           code: 0,
         };
@@ -373,7 +456,10 @@ test("a replacement chief never falls back to the previous session supervision",
         throw new Error("supervision unavailable");
       return isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents: [leadAgent] } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { agents: [leadAgent] },
+            }),
             stderr: "",
             code: 0,
           }
@@ -455,7 +541,10 @@ test("an obsolete background supervision refresh cannot publish after chief tran
         return new Promise((resolve) => {
           releaseBlocked = () =>
             resolve({
-              stdout: JSON.stringify({ result: { agents: [leadAgent] } }),
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: { agents: [leadAgent] },
+              }),
               stderr: "",
               code: 0,
             });
@@ -465,7 +554,10 @@ test("an obsolete background supervision refresh cannot publish after chief tran
         throw new Error("supervision unavailable");
       return isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents: [leadAgent] } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { agents: [leadAgent] },
+            }),
             stderr: "",
             code: 0,
           }
@@ -517,9 +609,14 @@ test("registered lead and replacement chief exchange messages and asks", async (
   const leadId = LEAD_SESSION_ID;
   const chiefId = `chief-${randomUUID()}`;
   const replacementId = `replacement-${randomUUID()}`;
-  const leadPath = "/tmp/contract-lead.jsonl";
-  const chiefPath = "/tmp/contract-chief.jsonl";
-  const replacementPath = "/tmp/contract-replacement.jsonl";
+  const sessionRoot = realFs.realpathSync(
+    realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-contract-sessions-")),
+  );
+  const leadPath = join(sessionRoot, "lead.jsonl");
+  const chiefPath = join(sessionRoot, "chief.jsonl");
+  const replacementPath = join(sessionRoot, "replacement.jsonl");
+  for (const path of [leadPath, chiefPath, replacementPath])
+    writeFileSync(path, "{}", "utf8");
   nativeSessions.set(leadPath, { id: leadId, path: leadPath, entries: [] });
   nativeSessions.set(chiefPath, {
     id: chiefId,
@@ -573,6 +670,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     descendantAgent.agentLabel,
   );
   let duplicateChief = false;
+  let nonPiIntegration = false;
   let unresolvableIdentity = false;
   let aliasAgent: any | undefined;
   let failChiefAliasLookup = false;
@@ -584,6 +682,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
           })()
         : {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 agent:
                   args[2] === leadAgent.pane_id
@@ -597,6 +696,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
       : isAgentList(args)
         ? {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 agents: [
                   leadAgent,
@@ -606,11 +706,22 @@ test("registered lead and replacement chief exchange messages and asks", async (
                   ...(unresolvableIdentity
                     ? [
                         {
-                          agent_session: {
-                            source: "herdr:pi",
-                            agent: "pi",
-                          },
+                          agent: "pi",
                           pane_id: "unknown-pane",
+                        },
+                      ]
+                    : []),
+                  ...(nonPiIntegration
+                    ? [
+                        {
+                          agent: "codex",
+                          agent_session: {
+                            source: "herdr:codex",
+                            agent: "codex",
+                            kind: "id",
+                            value: "codex-session",
+                          },
+                          pane_id: "codex-pane",
                         },
                       ]
                     : []),
@@ -711,7 +822,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         chiefContext,
       ),
-      /lead set to the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name/,
+      /Invalid staff action/,
     );
     const inspected = await chiefTool.execute(
       "inspect",
@@ -733,7 +844,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     const chiefDescriptorPath = supervisionRuntime().descriptor;
     const chiefDescriptor = readFileSync(chiefDescriptorPath, "utf8");
     support.settingsAccessHook = (access) => {
-      if (access === "reload")
+      if (access === "global")
         writeFileSync(
           chiefDescriptorPath,
           JSON.stringify({
@@ -1055,6 +1166,17 @@ test("registered lead and replacement chief exchange messages and asks", async (
       /No active chief/,
     );
     duplicateChief = false;
+    nonPiIntegration = true;
+    const nonPiDiagnosticList = await replacementTool.execute(
+      "list",
+      { action: "list" },
+      undefined,
+      undefined,
+      replacementContext,
+    );
+    assertToolResult(nonPiDiagnosticList);
+    assert.equal(nonPiDiagnosticList.details?.diagnostics, undefined);
+    nonPiIntegration = false;
     unresolvableIdentity = true;
     const diagnosticList = await replacementTool.execute(
       "list",
@@ -1138,6 +1260,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     nativeSessions.delete(leadPath);
     nativeSessions.delete(chiefPath);
     nativeSessions.delete(replacementPath);
+    realFs.rmSync(sessionRoot, { recursive: true, force: true });
     resetAgentMailbox(directAgentMailbox);
     resetAgentMailbox(descendantAgentMailbox);
   }
@@ -1337,7 +1460,16 @@ test("chief guidance carries the lead coordination contract", () => {
 test("definition roster matches live list and rejects stale sessions", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
-  const pi = fakePi();
+  const pi = fakePi({
+    exec: (_command, args) =>
+      isAgentList(args)
+        ? {
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
   let sessionId = context.sessionManager.getSessionId();
@@ -1605,6 +1737,7 @@ test("list ignores an unrelated unnamed Herdr agent", async () => {
       if (command === "herdr" && isAgentList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agents: [
                 {
@@ -1705,6 +1838,7 @@ test("registered agent inspect exposes process and recent activity evidence", as
       if (command === "herdr" && args[0] === "agent" && args[1] === "get")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { agent: agentFromState(state) },
           }),
           stderr: "",
@@ -1723,8 +1857,9 @@ test("registered agent inspect exposes process and recent activity evidence", as
       )
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
-              process: {
+              process_info: {
                 pane_id: identity.paneId,
                 shell_pid: 123,
                 foreground_process_group_id: 456,

@@ -33,7 +33,7 @@ export let failNextResultRemoval = false;
 export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
 export let settingsAccessHook:
-  ((access: "reload" | "project") => void) | undefined;
+  ((access: "global" | "project" | "reload") => void) | undefined;
 
 export type WidgetComponent = {
   render(width: number): string[];
@@ -226,7 +226,10 @@ mock.module("@earendil-works/pi-coding-agent", {
     SettingsManager: {
       create: (cwd: string, agentDir: string, options: any) => ({
         reload: async () => settingsAccessHook?.("reload"),
-        getGlobalSettings: () => testSettings(join(agentDir, "settings.json")),
+        getGlobalSettings: () => {
+          settingsAccessHook?.("global");
+          return testSettings(join(agentDir, "settings.json"));
+        },
         getProjectSettings: () => {
           settingsAccessHook?.("project");
           return testSettings(join(cwd, ".pi", "settings.json"));
@@ -384,6 +387,16 @@ mock.module("@earendil-works/pi-tui", {
 });
 mock.module("@earendil-works/pi-ai", {
   namedExports: {
+    contentText: (
+      content: string | readonly { type: string; text: string }[],
+      separator = "\n",
+    ) =>
+      typeof content === "string"
+        ? content
+        : content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join(separator),
     StringEnum: (values: readonly string[]) => ({
       type: "string",
       enum: [...values],
@@ -546,10 +559,11 @@ export function fakeContext(
     abort: () => undefined,
     isProjectTrusted: () => true,
     isIdle: () => true,
-    getContextUsage: () => ({ tokens: 2, contextWindow: 10 }),
+    getContextUsage: () => ({ tokens: 2, contextWindow: 10, percent: null }),
     sessionManager: {
       getSessionId: () => LEAD_SESSION_ID,
       getSessionFile: () => "/tmp/root.jsonl",
+      getSessionName: () => undefined,
       getEntries: () => entries,
       getBranch: () => branch,
     },
@@ -588,6 +602,14 @@ export type ExecHandler = (
   options?: { timeout?: number; signal?: AbortSignal },
 ) => ExecResult | Promise<ExecResult>;
 
+const HERDR_STATUS_RESPONSE = JSON.stringify({
+  client: { version: "0.9.0" },
+  server: { running: true, compatible: true },
+});
+function herdrStatusResult(): ExecResult {
+  return { stdout: HERDR_STATUS_RESPONSE, stderr: "", code: 0 };
+}
+
 export function fakePi(
   options: {
     exec?: ExecHandler;
@@ -597,6 +619,7 @@ export function fakePi(
     autoActivateRegisteredTools?: boolean;
     persistMessages?: boolean;
     sessionName?: string;
+    status?: ExecResult;
   } = {},
 ) {
   const events = new Map<string, ((event: any, ctx: Context) => unknown)[]>();
@@ -658,13 +681,21 @@ export function fakePi(
     ) {
       calls.push(args);
       execOptions.push(execOptionsValue);
+      if (command === "herdr" && args[0] === "status" && args[1] === "--json") {
+        const result = options.status ?? herdrStatusResult();
+        callResults.push({ args, succeeded: true, code: result.code });
+        return result;
+      }
       try {
         const result = await (options.exec?.(
           command,
           args,
           execOptionsValue,
         ) ?? {
-          stdout: "{}",
+          stdout:
+            command === "herdr" && isAgentList(args)
+              ? JSON.stringify({ id: AGENT_ID, result: { agents: [] } })
+              : "{}",
           stderr: "",
           code: 0,
         });
@@ -844,10 +875,9 @@ export function listResponse(
   runId = AGENT_ID,
 ): string {
   const agent = {
-    herdr_agent: runScopedHerdrAlias(WORKSPACE, label, runId),
-    ...(useAgentStatus
-      ? { agent_status: agentStatus, interactive_ready: agentStatus === "done" }
-      : { status }),
+    name: runScopedHerdrAlias(WORKSPACE, label, runId),
+    agent_status: useAgentStatus ? agentStatus : status,
+    ...(useAgentStatus ? { interactive_ready: agentStatus === "done" } : {}),
     cwd: "/tmp",
     workspace_id: WORKSPACE,
     pane_id: identity.paneId,
@@ -909,22 +939,30 @@ export function leadExec(
   agentStatus: unknown = status,
 ): ExecHandler {
   return (command, args) => {
+    if (command === "herdr" && args[0] === "status" && args[1] === "--json")
+      return herdrStatusResult();
     if (command === "herdr" && args[0] === "agent" && args[1] === "list")
       return {
-        stdout: listResponse(
-          label,
-          status,
-          listSession,
-          identity,
-          useAgentStatus,
-          agentStatus,
-        ),
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: JSON.parse(
+            listResponse(
+              label,
+              status,
+              listSession,
+              identity,
+              useAgentStatus,
+              agentStatus,
+            ),
+          ),
+        }),
         stderr: "",
         code: 0,
       };
     if (command === "herdr" && isPaneList(args))
       return {
         stdout: JSON.stringify({
+          id: AGENT_ID,
           result: {
             panes: [
               {
@@ -945,6 +983,7 @@ export function leadExec(
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
       return {
         stdout: JSON.stringify({
+          id: AGENT_ID,
           result: {
             agent: {
               name: herdrAlias(label),
@@ -971,7 +1010,11 @@ export function leadExec(
       };
     if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
       onPrompt?.(agentMailboxPath(WORKSPACE, label), args.at(-1) ?? "");
-      return { stdout: "{}", stderr: "", code: 0 };
+      return {
+        stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+        stderr: "",
+        code: 0,
+      };
     }
     return { stdout: "{}", stderr: "", code: 0 };
   };
@@ -988,8 +1031,7 @@ export function agentFromState(
   );
   return {
     name: alias,
-    herdr_agent: alias,
-    status,
+    agent_status: status,
     cwd: state.cwd,
     workspace_id: state.workspaceId,
     pane_id: state.paneId,
@@ -1010,11 +1052,14 @@ export function agentControllerExecutor(
 ): ExecHandler {
   return (command, args) => {
     if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+    if (args[0] === "status" && args[1] === "--json")
+      return herdrStatusResult();
     if (args[0] === "--version")
       return { stdout: "0.8.0", stderr: "", code: 0 };
     if (isAgentList(args))
       return {
         stdout: JSON.stringify({
+          id: AGENT_ID,
           result: {
             agents: [parent, ...children].map((state) =>
               agentFromState(state, state.activeRequestId ? "working" : "idle"),
@@ -1027,6 +1072,7 @@ export function agentControllerExecutor(
     if (isPaneList(args))
       return {
         stdout: JSON.stringify({
+          id: AGENT_ID,
           result: {
             panes: [parent, ...children].map((state) => ({
               pane_id: state.paneId,
@@ -1058,6 +1104,7 @@ export function agentControllerExecutor(
       if (state)
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agent: agentFromState(
                 state,
@@ -1095,7 +1142,11 @@ export function agentControllerExecutor(
           updatedAt: Date.now(),
         });
       }
-      return { stdout: "{}", stderr: "", code: 0 };
+      return {
+        stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+        stderr: "",
+        code: 0,
+      };
     }
     return { stdout: "{}", stderr: "", code: 0 };
   };
@@ -1200,6 +1251,7 @@ export function delegatedLifecycleExecutor(
       if (isAgentList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { agents: [...live.values()].map(agentForState) },
           }),
           stderr: "",
@@ -1219,6 +1271,7 @@ export function delegatedLifecycleExecutor(
           );
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { agent: state ? agentForState(state) : null },
           }),
           stderr: "",
@@ -1228,6 +1281,7 @@ export function delegatedLifecycleExecutor(
       if (isTabList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tabs: [...tabLabels].map(([tab_id, label]) => ({
                 tab_id,
@@ -1260,6 +1314,7 @@ export function delegatedLifecycleExecutor(
         tabByPane.set(rootPane, createdTabId);
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tab: { tab_id: createdTabId },
               root_pane: { pane_id: rootPane },
@@ -1271,7 +1326,7 @@ export function delegatedLifecycleExecutor(
       }
       if (isPaneList(args))
         return {
-          stdout: JSON.stringify({ result: { panes: panes() } }),
+          stdout: JSON.stringify({ id: AGENT_ID, result: { panes: panes() } }),
           stderr: "",
           code: 0,
         };
@@ -1279,6 +1334,7 @@ export function delegatedLifecycleExecutor(
         const state = currentStateForPane(args[2]!);
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               pane: state
                 ? {
@@ -1287,6 +1343,8 @@ export function delegatedLifecycleExecutor(
                     workspace_id: WORKSPACE,
                     cwd: state.cwd,
                     agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
                       kind: "id",
                       value: state.piSessionId,
                     },
@@ -1302,8 +1360,9 @@ export function delegatedLifecycleExecutor(
         return (() => {
           return {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
-                process: currentStateForPane(args.at(-1)!)
+                process_info: currentStateForPane(args.at(-1)!)
                   ? {
                       pane_id: args.at(-1),
                       shell_pid: 123,
@@ -1327,6 +1386,7 @@ export function delegatedLifecycleExecutor(
       if (args[0] === "pane" && args[1] === "layout")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               layout: {
                 workspace_id: WORKSPACE,
@@ -1373,6 +1433,7 @@ export function delegatedLifecycleExecutor(
         tabByPane.set(paneId, tabByPane.get(anchor ?? "") ?? "delegated-tab");
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { pane: { pane_id: paneId } },
           }),
           stderr: "",
@@ -1404,6 +1465,7 @@ export function delegatedLifecycleExecutor(
         const agent = agentForState(state);
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agent,
               tab_id: tabForPane,
@@ -1447,7 +1509,11 @@ export function delegatedLifecycleExecutor(
           live.set(state.agentLabel, next);
           writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), next);
         }
-        return { stdout: "{}", stderr: "", code: 0 };
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+          stderr: "",
+          code: 0,
+        };
       }
       if (args[0] === "pane" && args[1] === "close") {
         const state = currentStateForPane(args[2]!);
@@ -1488,6 +1554,8 @@ export function cascadeExecutor(
     live,
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] === "status" && args[1] === "--json")
+        return herdrStatusResult();
       if (args[0] === "--version")
         return { stdout: "0.8.0", stderr: "", code: 0 };
       if (isAgentList(args)) {
@@ -1497,13 +1565,15 @@ export function cascadeExecutor(
             const agent = agentFromState(state);
             if (state.agentLabel === options.mismatchSessionLabel)
               agent.agent_session = {
+                source: "herdr:pi",
+                agent: "pi",
                 kind: "id",
                 value: "22222222-2222-4222-8222-222222222222",
               };
             return agent;
           });
         return {
-          stdout: JSON.stringify({ result: { agents } }),
+          stdout: JSON.stringify({ id: AGENT_ID, result: { agents } }),
           stderr: "",
           code: 0,
         };
@@ -1522,18 +1592,20 @@ export function cascadeExecutor(
           ) ?? undefined;
         if (!state)
           return {
-            stdout: JSON.stringify({ result: { agent: null } }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agent: null } }),
             stderr: "",
             code: 0,
           };
         const agent = agentFromState(state);
         if (state.agentLabel === options.mismatchSessionLabel)
           agent.agent_session = {
+            source: "herdr:pi",
+            agent: "pi",
             kind: "id",
             value: "22222222-2222-4222-8222-222222222222",
           };
         return {
-          stdout: JSON.stringify({ result: { agent } }),
+          stdout: JSON.stringify({ id: AGENT_ID, result: { agent } }),
           stderr: "",
           code: 0,
         };
@@ -1541,6 +1613,7 @@ export function cascadeExecutor(
       if (isTabList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tabs: [...live.values()].map((state) => ({
                 tab_id: `${state.agentLabel}-tab`,
@@ -1554,6 +1627,7 @@ export function cascadeExecutor(
       if (isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 ...[...live.values()]
@@ -1581,6 +1655,7 @@ export function cascadeExecutor(
         const state = paneFor(args[2]!);
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               pane: state
                 ? {
@@ -1589,6 +1664,8 @@ export function cascadeExecutor(
                     workspace_id: state.workspaceId,
                     cwd: state.cwd,
                     agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
                       kind: "id",
                       value: state.piSessionId,
                     },
@@ -1603,8 +1680,9 @@ export function cascadeExecutor(
       if (args[0] === "pane" && args[1] === "process-info")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
-              process: {
+              process_info: {
                 pane_id: args.at(-1),
                 shell_pid: 123,
                 foreground_process_group_id: 123,
@@ -1769,11 +1847,7 @@ export function createStagedAssignmentFixture(
         const result = await startup.exec(command, args, options);
         const payload = JSON.parse(result.stdout);
         const agents = payload.result?.agents ?? payload.agents ?? [];
-        if (
-          agents.some(
-            (agent: any) => (agent.agent_status ?? agent.status) === "working",
-          )
-        )
+        if (agents.some((agent: any) => agent.agent_status === "working"))
           workingObservations++;
         return result;
       }
@@ -1992,12 +2066,14 @@ export function startupExecutor(
   const emptyList = () => {
     const value = JSON.parse(listResponse(label));
     value.agents = [];
-    return JSON.stringify(value);
+    return JSON.stringify({ id: AGENT_ID, result: value });
   };
   return {
     mailbox,
     getCount: () => getCount,
     exec: (command, args) => {
+      if (command === "herdr" && args[0] === "status" && args[1] === "--json")
+        return herdrStatusResult();
       if (command === "herdr" && args[0] === "--version")
         return { stdout: "0.8.0", stderr: "", code: 0 };
       if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
@@ -2005,6 +2081,7 @@ export function startupExecutor(
         if (args[2] !== "startup-pane")
           return {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 agent: {
                   name: args[2],
@@ -2013,6 +2090,8 @@ export function startupExecutor(
                   workspace_id: WORKSPACE,
                   cwd: testCwd,
                   agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
                     kind: "id",
                     value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
                   },
@@ -2027,6 +2106,7 @@ export function startupExecutor(
         const session = sessionForGet(getCount);
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agent: {
                 name: runScopedHerdrAlias(WORKSPACE, label, runId || AGENT_ID),
@@ -2037,6 +2117,8 @@ export function startupExecutor(
                 ...(session
                   ? {
                       agent_session: {
+                        source: "herdr:pi",
+                        agent: "pi",
                         kind: "id",
                         value: session,
                       },
@@ -2066,12 +2148,17 @@ export function startupExecutor(
           lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
           updatedAt: Date.now(),
         });
-        return { stdout: "{}", stderr: "", code: 0 };
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+          stderr: "",
+          code: 0,
+        };
       }
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
       if (isTabList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tabs:
                 closePaneOnClose && tabClosed
@@ -2103,6 +2190,7 @@ export function startupExecutor(
           }
           return {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 tab: { tab_id: "startup-tab" },
                 root_pane: { pane_id: "startup-pane" },
@@ -2115,6 +2203,7 @@ export function startupExecutor(
       if (isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes:
                 closePaneOnClose && (paneClosed || tabClosed)
@@ -2142,8 +2231,9 @@ export function startupExecutor(
       if (args[0] === "pane" && args[1] === "process-info")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
-              process: {
+              process_info: {
                 pane_id: activePaneId,
                 shell_pid: 123,
                 foreground_process_group_id: 123,
@@ -2157,6 +2247,7 @@ export function startupExecutor(
       if (args[0] === "pane" && args[1] === "layout")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               layout: {
                 workspace_id: WORKSPACE,
@@ -2183,6 +2274,7 @@ export function startupExecutor(
         }
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { pane: { pane_id: activePaneId } },
           }),
           stderr: "",
@@ -2192,6 +2284,7 @@ export function startupExecutor(
       if (args[0] === "pane" && args[1] === "get")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               pane: {
                 pane_id: "startup-pane",
@@ -2199,6 +2292,8 @@ export function startupExecutor(
                 workspace_id: WORKSPACE,
                 cwd: testCwd,
                 agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
                   kind: "id",
                   value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
                 },
@@ -2211,6 +2306,7 @@ export function startupExecutor(
       if (args[0] === "pane" && args[1] === "layout")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 { pane_id: "startup-pane", rect: { width: 1, height: 1 } },
@@ -2236,6 +2332,7 @@ export function startupExecutor(
         }
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { pane: { pane_id: "startup-pane" } },
           }),
           stderr: "",
@@ -2270,7 +2367,7 @@ export function startupExecutor(
                   value.agents[0].pane_id = "startup-pane";
                   value.agents[0].tab_id = "startup-tab";
                   if (reportNullSession) value.agents[0].agent_session = null;
-                  return JSON.stringify(value);
+                  return JSON.stringify({ id: AGENT_ID, result: value });
                 })()
               : emptyList(),
           stderr: "",
@@ -2304,6 +2401,8 @@ export function startupExecutor(
         workspace_id: WORKSPACE,
         cwd: testCwd,
         agent_session: {
+          source: "herdr:pi",
+          agent: "pi",
           kind: "id",
           value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         },
@@ -2317,34 +2416,41 @@ export function startupExecutor(
         paneId: activePaneId,
         piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         piSessionFile: "/tmp/registered-agent.jsonl",
+        agentDefinition: "agent",
         cwd: testCwd,
         updatedAt: Date.now(),
       });
       return {
         stdout: JSON.stringify({
-          ...(includeResult ? { result: { agent: startedAgent } } : {}),
-          tab_id: "startup-tab",
-          tab_label: "agents",
-          pane_id: activePaneId,
-          cwd: testCwd,
-          herdr_agent: runScopedHerdrAlias(WORKSPACE, label, runId || AGENT_ID),
-          created_tab: false,
-          created_pane: true,
-          agent: startedAgent,
-          runtime_identity: {
+          id: AGENT_ID,
+          result: {
+            tab_id: "startup-tab",
+            tab_label: "agents",
+            pane_id: activePaneId,
+            cwd: testCwd,
             herdr_agent: runScopedHerdrAlias(
               WORKSPACE,
               label,
               runId || AGENT_ID,
             ),
-            herdr_kind: "pi",
-            agent_definition: null,
-            model: null,
-            thinking: null,
-            cwd: testCwd,
-            resumed: false,
-            session_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-            session_name: null,
+            created_tab: false,
+            created_pane: true,
+            agent: startedAgent,
+            runtime_identity: {
+              herdr_agent: runScopedHerdrAlias(
+                WORKSPACE,
+                label,
+                runId || AGENT_ID,
+              ),
+              herdr_kind: "pi",
+              agent_definition: null,
+              model: null,
+              thinking: null,
+              cwd: testCwd,
+              resumed: false,
+              session_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              session_name: null,
+            },
           },
         }),
         stderr: "",

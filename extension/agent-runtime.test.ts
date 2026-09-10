@@ -519,7 +519,7 @@ test("message limits are global-only and do not consult project trust", async ()
       undefined,
       context,
     );
-    assert.deepEqual(accesses, ["reload"]);
+    assert.deepEqual(accesses, ["global"]);
   } finally {
     support.settingsAccessHook = undefined;
     agent.events.get("session_shutdown")?.[0]();
@@ -1479,22 +1479,14 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
   assert.ok(
     agent.calls
       .slice(callsBeforeSettlement)
-      .some(
-        (args) =>
-          args.includes("--clear-token") &&
-          args.includes("task") &&
-          args.includes("ctx"),
-      ),
+      .some((args) => args.includes("--clear-token") && args.includes("task")),
   );
   const completionFailure =
     callsBeforeSettlement +
     agent.calls
       .slice(callsBeforeSettlement)
       .findIndex(
-        (args) =>
-          args.includes("--clear-token") &&
-          args.includes("task") &&
-          args.includes("ctx"),
+        (args) => args.includes("--clear-token") && args.includes("task"),
       );
   assert.ok(completionFailure >= 0);
   agent.events.get("model_select")![0](
@@ -1525,8 +1517,7 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
       args.includes("--clear-token") &&
       args.includes("request") &&
       args.includes("task") &&
-      args.includes("started") &&
-      args.includes("ctx"),
+      args.includes("started"),
   );
   assert.equal(
     completionClears.filter(({ succeeded }) => !succeeded).length,
@@ -1560,7 +1551,7 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     completionClears[2].args.filter(
       (arg) =>
         arg.startsWith("--clear-token") ||
-        ["request", "task", "started", "ctx"].includes(arg),
+        ["request", "task", "started"].includes(arg),
     ),
     [
       "--clear-token",
@@ -1569,8 +1560,6 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
       "task",
       "--clear-token",
       "started",
-      "--clear-token",
-      "ctx",
     ],
   );
   assert.equal(
@@ -1917,6 +1906,7 @@ test("metadata outage retains one latest desired snapshot", async () => {
     (context as any).getContextUsage = () => ({
       tokens: i + 1,
       contextWindow: 100,
+      percent: i + 1,
     });
     agent.events.get("turn_end")![0](undefined, context);
   }

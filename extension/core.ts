@@ -306,60 +306,6 @@ export function displayIdentity(
 }
 export type SpawnPlacement = "tab" | "subtree" | "split";
 export type SpawnPlacementScope = "global" | "project";
-export interface ContextUsageSnapshot {
-  tokens: number | null;
-  contextWindow: number;
-  percent: number | null;
-}
-
-export function normalizeContextUsage(
-  value: unknown,
-): ContextUsageSnapshot | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const v = value as Record<string, unknown>;
-  const contextWindow =
-    typeof v.contextWindow === "number"
-      ? v.contextWindow
-      : typeof v.context_window === "number"
-        ? v.context_window
-        : 0;
-  if (!contextWindow) return undefined;
-  const tokens = typeof v.tokens === "number" ? v.tokens : null;
-  const percent =
-    typeof v.percent === "number"
-      ? v.percent
-      : tokens === null
-        ? null
-        : Math.min(100, (tokens / contextWindow) * 100);
-  return { tokens, contextWindow, percent };
-}
-export function extractAssistantText(messages: unknown[]): string {
-  return messages
-    .filter(
-      (m) =>
-        m &&
-        typeof m === "object" &&
-        (m as { role?: unknown }).role === "assistant",
-    )
-    .map((m) => {
-      const content = (m as { content?: unknown }).content;
-      return Array.isArray(content)
-        ? content
-            .filter(
-              (x) =>
-                x &&
-                typeof x === "object" &&
-                (x as { type?: unknown }).type === "text",
-            )
-            .map((x) => String((x as { text?: unknown }).text ?? ""))
-            .join("")
-        : typeof content === "string"
-          ? content
-          : "";
-    })
-    .join("\n")
-    .trim();
-}
 export function hasTaskText(task: string | undefined): boolean {
   return task !== undefined && !!task.trim();
 }
