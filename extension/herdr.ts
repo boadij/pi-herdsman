@@ -332,7 +332,9 @@ export function structuredTopologyEnvironment(
 ): string[] {
   const validated = validateEnvironment(assignments);
   const owner = validated
-    .find((assignment) => assignment.startsWith("PI_HERDSMAN_OWNER_SESSION_ID="))
+    .find((assignment) =>
+      assignment.startsWith("PI_HERDSMAN_OWNER_SESSION_ID="),
+    )
     ?.slice("PI_HERDSMAN_OWNER_SESSION_ID=".length);
   const reserved = new Set([
     "HERDR_SOCKET_PATH",

@@ -51,6 +51,18 @@ test("nested topology keeps the Herdr workspace authoritative", () => {
       "PI_HERDSMAN_WORKSPACE_ID=live-workspace",
     ],
   );
+
+  const env = structuredTopologyEnvironment("workspace", [
+    "PI_HERDSMAN_OWNER_SESSION_ID=parent-session",
+    "PI_SUBAGENT_CHILD=stale",
+    "PI_SUBAGENT_PARENT_SESSION=stale-parent",
+    "EXTRA=value",
+  ]);
+  assert.ok(env.includes("PI_SUBAGENT_CHILD=1"));
+  assert.ok(env.includes("PI_SUBAGENT_PARENT_SESSION=parent-session"));
+  assert.ok(!env.includes("PI_SUBAGENT_CHILD=stale"));
+  assert.ok(!env.includes("PI_SUBAGENT_PARENT_SESSION=stale-parent"));
+  assert.ok(env.includes("EXTRA=value"));
 });
 
 test("lists all Herdr agents without changing the current-workspace view", async () => {

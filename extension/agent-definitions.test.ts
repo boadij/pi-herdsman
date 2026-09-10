@@ -177,6 +177,26 @@ test("requires a YAML mapping as the frontmatter root", () => {
   );
 });
 
+test("preserves opaque permission mappings", () => {
+  const definition = discoverAgentDefinitionsWithContents(
+    `---
+name: custom
+permission:
+  "*": deny
+  read: allow
+  bash:
+    "*": deny
+    "git status": allow
+---
+`,
+  ).find(({ name }) => name === "custom")!;
+  assert.deepEqual(definition.frontmatter.permission, {
+    "*": "deny",
+    read: "allow",
+    bash: { "*": "deny", "git status": "allow" },
+  });
+});
+
 test("resolves whole-line body file references from their definition", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-body-files-"));
   const agents = join(root, "agents");
@@ -296,6 +316,7 @@ test("rejects malformed capability fields", () => {
     ["enabled", "yes", /must be a boolean/],
     ["enabled", "1", /must be a boolean/],
     ["enabled", "null", /must be a boolean/],
+    ["permission", "allow", /must be a mapping/],
     ["inheritGlobalContext", '"false"', /must be a boolean/],
     ["inheritGlobalContext", "1", /must be a boolean/],
     ["inheritGlobalContext", "yes", /must be a boolean/],
@@ -1078,6 +1099,21 @@ test("builds exact Pi capability launch arguments", () => {
     "--extension",
     "/extensions/shared.ts",
   ]);
+});
+
+test("escapes the active-agent tag in managed launches", () => {
+  const args = agentLaunchArgs(
+    {
+      name: 'reviewer & "lead"',
+      path: "/agent.md",
+      frontmatter: {},
+      body: "",
+    },
+    { managedAgent: true },
+  );
+  assert.ok(
+    args.includes('<active_agent name="reviewer &amp; &quot;lead&quot;"/>'),
+  );
 });
 
 test("appends the shared prompt after context additions", () => {

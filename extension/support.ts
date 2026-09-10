@@ -1218,7 +1218,7 @@ export function delegatedLifecycleExecutor(
     ...[...live.values()].map((state) => ({
       pane_id: state.paneId,
       tab_id: tabByPane.get(state.paneId),
-      workspace_id: state.workspaceId,
+      workspace_id: WORKSPACE,
       cwd: state.cwd,
       foreground_cwd: state.cwd,
       agent: state.agentLabel,
