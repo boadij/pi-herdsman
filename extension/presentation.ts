@@ -1224,6 +1224,8 @@ export function renderAgentDefinitionsOverview(
     if (tools) lines.push(humanRow(theme, "tools", tools));
     const skills = humanSkills(definition);
     if (skills) lines.push(humanRow(theme, "skills", skills));
+    if (options.expanded === true)
+      lines.push(humanRow(theme, "extensions", humanExtensions(definition)));
     const delegates = names(definition.agents);
     if (delegates.length)
       lines.push(humanRow(theme, "delegates", delegates.join(", ")));
@@ -1244,9 +1246,6 @@ export function renderAgentDefinitionsOverview(
           "dim",
         ),
       );
-
-    if (options.expanded === true)
-      lines.push(humanRow(theme, "extensions", humanExtensions(definition)));
   });
   if (typeof options.instructions === "string" && options.expanded !== true) {
     const characters = Array.from(options.instructions).length;
