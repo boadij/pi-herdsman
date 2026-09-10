@@ -476,6 +476,12 @@ export function agentDefinitionMetadata(
       ? {}
       : { inheritSkills: frontmatter.inheritSkills }),
     ...(frontmatter.skills === undefined ? {} : { skills: frontmatter.skills }),
+    ...(frontmatter.noExtensions === undefined
+      ? {}
+      : { noExtensions: frontmatter.noExtensions }),
+    ...(frontmatter.extensions === undefined
+      ? {}
+      : { extensions: frontmatter.extensions }),
     ...(frontmatter.agents === undefined ? {} : { agents: frontmatter.agents }),
   };
 }
