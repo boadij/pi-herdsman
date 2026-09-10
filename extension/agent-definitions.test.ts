@@ -1289,6 +1289,15 @@ test("preserves current definition metadata", () => {
     }),
     { name: "agent" },
   );
+  assert.deepEqual(
+    agentDefinitionMetadata({
+      name: "agent",
+      path: "/agents/agent.md",
+      frontmatter: { noExtensions: false, extensions: [] },
+      body: "",
+    }),
+    { name: "agent", noExtensions: false, extensions: [] },
+  );
   const capabilityAgent = {
     name: "reviewer",
     path: "/agents/reviewer.md",
@@ -1302,6 +1311,8 @@ test("preserves current definition metadata", () => {
       noSkills: false,
       inheritSkills: true,
       skills: ["./skills/review.md"],
+      noExtensions: true,
+      extensions: ["./extensions/local.ts", "/extensions/shared.ts"],
     },
     body: "",
   };
@@ -1315,6 +1326,8 @@ test("preserves current definition metadata", () => {
     noSkills: false,
     inheritSkills: true,
     skills: ["./skills/review.md"],
+    noExtensions: true,
+    extensions: ["./extensions/local.ts", "/extensions/shared.ts"],
   });
   assert.deepEqual(
     agentDefinitionMetadata({
@@ -1439,6 +1452,8 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
       agents: ["scout"],
       tools: ["read,agent", "bash"],
       excludeTools: ["write"],
+      noExtensions: true,
+      extensions: ["./review.ts"],
     },
     body: "",
   });
@@ -1449,6 +1464,8 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     name: "parent",
     tools: ["read", "bash"],
     excludeTools: ["write"],
+    noExtensions: true,
+    extensions: ["./review.ts"],
   });
   assert.deepEqual(
     agentLaunchArgs(leaf, { managedAgent: true }).filter(

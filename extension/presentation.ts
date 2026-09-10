@@ -1111,6 +1111,15 @@ function humanSkills(definition: Record<string, unknown>): string | undefined {
     : formatted;
 }
 
+function humanExtensions(definition: Record<string, unknown>): string {
+  const extensions = names(definition.extensions).map(displayHomePath);
+  if (!extensions.length)
+    return definition.noExtensions === true ? "none" : "default";
+  return definition.noExtensions === true
+    ? extensions.join(", ")
+    : `default + ${extensions.join(", ")}`;
+}
+
 function humanRow(
   theme: ThemeLike,
   label: string,
@@ -1203,6 +1212,8 @@ export function renderAgentDefinitionsOverview(
     if (tools) lines.push(humanRow(theme, "tools", tools));
     const skills = humanSkills(definition);
     if (skills) lines.push(humanRow(theme, "skills", skills));
+    if (options.expanded === true)
+      lines.push(humanRow(theme, "extensions", humanExtensions(definition)));
     const delegates = names(definition.agents);
     if (delegates.length)
       lines.push(humanRow(theme, "delegates", delegates.join(", ")));
@@ -1223,30 +1234,30 @@ export function renderAgentDefinitionsOverview(
           "dim",
         ),
       );
-
-    if (typeof options.instructions === "string") {
-      const characters = Array.from(options.instructions).length;
-      if (options.expanded === true) {
-        lines.push(
-          "",
-          theme.bold(theme.fg("customMessageLabel", "Instructions")),
-          options.instructions || "(empty)",
-        );
-      } else {
-        lines.push(
-          humanRow(
-            theme,
-            "instructions",
-            `${characters} chars · Ctrl+O to expand`,
-          ),
-        );
-      }
-    }
   });
+  if (typeof options.instructions === "string" && options.expanded !== true) {
+    const characters = Array.from(options.instructions).length;
+    lines.push(
+      humanRow(theme, "instructions", `${characters} chars · Ctrl+O to expand`),
+    );
+  }
   const box = createWidthSafeBox(1, 1, (line) =>
     theme.bg("customMessageBg", line),
   );
   box.addChild(new WidthSafeText(lines.join("\n"), 0, 0));
+  if (typeof options.instructions === "string" && options.expanded === true) {
+    box.addChild(new Spacer(1));
+    box.addChild(
+      new Text(
+        theme.bold(theme.fg("customMessageLabel", "Instructions")),
+        0,
+        0,
+      ),
+    );
+    box.addChild(
+      new Markdown(options.instructions || "(empty)", 0, 0, getMarkdownTheme()),
+    );
+  }
   return box;
 }
 

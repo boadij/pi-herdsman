@@ -1,6 +1,6 @@
 {
   "name": "pi-herdsman",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "type": "module",
   "description": "Asynchronous Pi agent orchestration with nested delegation, parallel execution, and supervision in herdr.",
   "license": "Apache-2.0",
@@ -38,7 +38,7 @@
     "skills": [
       "."
     ],
-    "image": "https://raw.githubusercontent.com/boadij/pi-herdsman/main/docs/assets/banner.webp"
+    "image": "https://raw.githubusercontent.com/boadij/pi-herdsman/main/docs/assets/thumbnail.webp"
   },
   "scripts": {
     "test": "node --experimental-test-module-mocks --test --test-timeout=10000",
