@@ -45,6 +45,7 @@ import support, {
   writeRequest,
   writeResult,
   writeAgentState,
+  waitForTestCondition,
 } from "./support.ts";
 
 test("managed agents cancel native session replacement", () => {
@@ -60,6 +61,176 @@ test("managed agents cancel native session replacement", () => {
     { cancel: true },
   );
   agent.events.get("session_shutdown")?.[0]();
+});
+
+test("managed requests pump through Pi semantic input", async () => {
+  const mailbox = setAgentEnvironment("pump-agent");
+  let context: ReturnType<typeof fakeAgentContext>;
+  let transformed: unknown;
+  const agent = fakePi({
+    sendUserMessage(content) {
+      transformed = agent.events.get("input")![0]({ text: content }, context);
+    },
+  });
+  registerExtension!(agent.pi as never);
+  context = fakeAgentContext();
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const request: RequestRecord = {
+      version: 4,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "pump this task",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, request);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (readRequest(mailbox, request.requestId) === undefined) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (attempt === 99)
+        assert.fail("mailbox pump did not accept the request");
+    }
+    assert.deepEqual(transformed, { action: "transform", text: request.text });
+    assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      request.requestId,
+    );
+    assert.equal(
+      agent.calls.some((args) => args[0] === "agent" && args[1] === "prompt"),
+      false,
+    );
+    assert.deepEqual(agent.sentUsers, [controlMarker(request.requestId)]);
+    (context as any).isIdle = () => false;
+    const steer: RequestRecord = {
+      ...request,
+      requestId: randomUUID(),
+      kind: "steer",
+      text: "pump this steer",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, steer);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (readRequest(mailbox, steer.requestId) === undefined) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (attempt === 99) assert.fail("mailbox pump did not accept steering");
+    }
+    assert.deepEqual(transformed, {
+      action: "transform",
+      text: steer.text,
+    });
+    assert.deepEqual(agent.sentUserCalls, [
+      { content: controlMarker(request.requestId), options: undefined },
+      {
+        content: controlMarker(steer.requestId),
+        options: { deliverAs: "steer" },
+      },
+    ]);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("managed session start immediately recovers a durable request", async () => {
+  const mailbox = setAgentEnvironment("pump-recovery-agent");
+  const persisted = managedState("pump-recovery-agent");
+  writeAgentState(mailbox, persisted);
+  const request: RequestRecord = {
+    version: 4,
+    runId: persisted.runId,
+    requestId: randomUUID(),
+    ownerSessionId: persisted.ownerSessionId,
+    workspaceId: persisted.workspaceId,
+    agentLabel: persisted.agentLabel,
+    paneId: persisted.paneId,
+    kind: "task",
+    text: "recover this task",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, request);
+  let context: ReturnType<typeof fakeAgentContext>;
+  const agent = fakePi({
+    sendUserMessage(content) {
+      agent.events.get("input")![0]({ text: content }, context);
+    },
+  });
+  registerExtension!(agent.pi as never);
+  context = fakeAgentContext();
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (readRequest(mailbox, request.requestId) === undefined) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (attempt === 99)
+        assert.fail("session-start recovery did not consume the request");
+    }
+    assert.deepEqual(agent.sentUsers, [controlMarker(request.requestId)]);
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      request.requestId,
+    );
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("managed pump retries a request after acknowledgement persistence fails", async () => {
+  const mailbox = setAgentEnvironment("pump-retry-agent");
+  let context: ReturnType<typeof fakeContext>;
+  const agent = fakePi({
+    sendUserMessage(content) {
+      agent.events.get("input")![0]({ text: content }, context);
+    },
+  });
+  registerExtension!(agent.pi as never);
+  context = fakeContext();
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const request: RequestRecord = {
+      version: 4,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "retry this task",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, request);
+    support.failNextMailboxWrite = true;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (agent.sentUsers.length >= 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (attempt === 99) assert.fail("mailbox pump did not submit request");
+    }
+    assert.ok(readRequest(mailbox, request.requestId));
+    assert.equal(readAgentState(mailbox)?.lastAck, undefined);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (readRequest(mailbox, request.requestId) === undefined) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (attempt === 99) assert.fail("mailbox pump did not retry the request");
+    }
+    assert.equal(agent.sentUsers.length, 2);
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      request.requestId,
+    );
+  } finally {
+    support.failNextMailboxWrite = false;
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
 });
 
 test("registered agent writes state, handles input, and settles one result", async () => {
@@ -316,7 +487,15 @@ test("agent rejects task replay while result persistence recovery is present", (
 
 test("agent ask_owner blocks settlement and reply resumes the same assignment", async () => {
   const mailbox = setAgentEnvironment();
-  const agent = fakePi();
+  let context: ReturnType<typeof fakeAgentContext>;
+  let pumpReply = false;
+  let transformed: unknown;
+  const agent = fakePi({
+    sendUserMessage(content) {
+      if (pumpReply)
+        transformed = agent.events.get("input")![0]({ text: content }, context);
+    },
+  });
   registerExtension!(agent.pi as never);
   const askTool = agent.tools.find((tool) => tool.name === "ask_owner");
   assert.ok(askTool);
@@ -329,7 +508,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
       },
     },
   ];
-  const context = fakeAgentContext([], branch);
+  context = fakeAgentContext([], branch);
   await agent.events.get("session_start")![0](undefined, context);
   const assignment: RequestRecord = {
     version: 4,
@@ -446,17 +625,17 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     text: "Use ALPHA.",
     createdAt: Date.now(),
   };
+  pumpReply = true;
   writeRequest(mailbox, reply);
-  assert.deepEqual(
-    agent.events.get("input")![0](
-      { text: controlMarker(reply.requestId) },
-      context,
-    ),
-    {
-      action: "transform",
-      text: "Owner reply:\n\nUse ALPHA.\n\nContinue the original assignment using this answer.",
-    },
-  );
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (readRequest(mailbox, reply.requestId) === undefined) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    if (attempt === 99) assert.fail("mailbox pump did not deliver the reply");
+  }
+  assert.deepEqual(transformed, {
+    action: "transform",
+    text: "Owner reply:\n\nUse ALPHA.\n\nContinue the original assignment using this answer.",
+  });
   const resumed = readAgentState(mailbox);
   assert.equal(resumed?.activeRequestId, assignment.requestId);
   assert.equal(resumed?.pendingAskId, undefined);
@@ -756,16 +935,12 @@ test("idle parent steers through its current input turn while agent work is pend
     assert.deepEqual(
       input()({ text: controlMarker(activeSteer.requestId) }, context),
       {
-        action: "handled",
+        action: "transform",
+        text: activeSteer.text,
       },
     );
-    assert.equal(agent.sentUsers.length, 1);
-    assert.deepEqual(agent.sentUserCalls, [
-      {
-        content: activeSteer.text,
-        options: { deliverAs: "steer" },
-      },
-    ]);
+    assert.equal(agent.sentUsers.length, 0);
+    assert.deepEqual(agent.sentUserCalls, []);
   } finally {
     agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(parentMailbox);

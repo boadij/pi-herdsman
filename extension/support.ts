@@ -156,6 +156,7 @@ export const {
   controlMarker,
   listAgentStates,
   readPendingAsk,
+  readUnacknowledgedRequest,
   readRequest,
   readResult,
   readAgentState,
@@ -614,6 +615,7 @@ export function fakePi(
   options: {
     exec?: ExecHandler;
     sendMessage?: (message: unknown) => void | Promise<void>;
+    sendUserMessage?: (content: unknown, options?: unknown) => void;
     entries?: unknown[];
     activeTools?: string[] | (() => string[]);
     autoActivateRegisteredTools?: boolean;
@@ -719,9 +721,10 @@ export function fakePi(
       if (options.persistMessages) entries.push(message);
       return options.sendMessage?.(message);
     },
-    sendUserMessage(content: unknown, options?: unknown) {
+    sendUserMessage(content: unknown, sendOptions?: unknown) {
       sentUsers.push(content);
-      sentUserCalls.push({ content, options });
+      sentUserCalls.push({ content, options: sendOptions });
+      options.sendUserMessage?.(content, sendOptions);
     },
   };
   return {
@@ -932,12 +935,17 @@ export function leadExec(
   label: string,
   status: "idle" | "working" | "done",
   session: string,
-  onPrompt?: (mailbox: string, marker: string) => void,
+  onRequest?: (mailbox: string, marker: string) => void,
   listSession: string | null = DEFAULT_PI_SESSION_ID,
   identity: FixtureIdentity = defaultFixtureIdentity,
   useAgentStatus = false,
   agentStatus: unknown = status,
 ): ExecHandler {
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  consumeMailboxRequest(mailbox, (request) => {
+    if (onRequest) onRequest(mailbox, controlMarker(request.requestId));
+    else acceptMailboxRequest(mailbox, request);
+  });
   return (command, args) => {
     if (command === "herdr" && args[0] === "status" && args[1] === "--json")
       return herdrStatusResult();
@@ -1008,14 +1016,6 @@ export function leadExec(
         stderr: "",
         code: 0,
       };
-    if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
-      onPrompt?.(agentMailboxPath(WORKSPACE, label), args.at(-1) ?? "");
-      return {
-        stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
-        stderr: "",
-        code: 0,
-      };
-    }
     return { stdout: "{}", stderr: "", code: 0 };
   };
 }
@@ -1050,6 +1050,15 @@ export function agentControllerExecutor(
   parent: ManagedAgentState,
   children: ManagedAgentState[] = [],
 ): ExecHandler {
+  for (const child of [parent, ...children])
+    consumeMailboxRequest(
+      agentMailboxPath(child.workspaceId, child.agentLabel),
+      (request) =>
+        acceptMailboxRequest(
+          agentMailboxPath(child.workspaceId, child.agentLabel),
+          request,
+        ),
+    );
   return (command, args) => {
     if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
     if (args[0] === "status" && args[1] === "--json")
@@ -1115,38 +1124,6 @@ export function agentControllerExecutor(
           stderr: "",
           code: 0,
         };
-    }
-    if (args[0] === "agent" && args[1] === "prompt") {
-      const state = children.find((candidate) => candidate.paneId === args[2]);
-      const marker = args.at(-1) ?? "";
-      const requestId = marker.startsWith("__PI_HERDSMAN_AGENT_V4__:")
-        ? marker.slice("__PI_HERDSMAN_AGENT_V4__:".length)
-        : "";
-      const request = state
-        ? readRequest(agentMailboxPath(WORKSPACE, state.agentLabel), requestId)
-        : undefined;
-      if (state && request) {
-        writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), {
-          ...state,
-          ...(request.kind === "task"
-            ? {
-                activeRequestId: requestId,
-                completedRequestId: undefined,
-              }
-            : {}),
-          lastAck: {
-            requestId,
-            accepted: true,
-            acknowledgedAt: Date.now(),
-          },
-          updatedAt: Date.now(),
-        });
-      }
-      return {
-        stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
-        stderr: "",
-        code: 0,
-      };
     }
     return { stdout: "{}", stderr: "", code: 0 };
   };
@@ -1462,6 +1439,9 @@ export function delegatedLifecycleExecutor(
         live.set(label, state);
         tabByPane.set(paneId, tabForPane);
         writeAgentState(agentMailboxPath(workspaceId, label), state);
+        consumeMailboxRequest(agentMailboxPath(workspaceId, label), (request) =>
+          acceptMailboxRequest(agentMailboxPath(workspaceId, label), request),
+        );
         const agent = agentForState(state);
         return {
           stdout: JSON.stringify({
@@ -1477,40 +1457,6 @@ export function delegatedLifecycleExecutor(
               created_pane: true,
             },
           }),
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (args[0] === "agent" && args[1] === "prompt") {
-        const state = currentStateForPane(args[2]!);
-        const requestId = (args.at(-1) ?? "").replace(
-          "__PI_HERDSMAN_AGENT_V4__:",
-          "",
-        );
-        const request = state
-          ? readRequest(
-              agentMailboxPath(WORKSPACE, state.agentLabel),
-              requestId,
-            )
-          : undefined;
-        if (state && request) {
-          const next = {
-            ...state,
-            ...(request.kind === "task"
-              ? { activeRequestId: requestId, completedRequestId: undefined }
-              : {}),
-            lastAck: {
-              requestId,
-              accepted: true,
-              acknowledgedAt: Date.now(),
-            },
-            updatedAt: Date.now(),
-          };
-          live.set(state.agentLabel, next);
-          writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), next);
-        }
-        return {
-          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
           stderr: "",
           code: 0,
         };
@@ -1804,9 +1750,58 @@ export async function waitForTestCondition(
 ): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (condition()) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
   }
   assert.fail(message);
+}
+
+export function consumeMailboxRequest(
+  mailbox: string,
+  onRequest: (request: RequestRecord) => void | Promise<void>,
+): () => void {
+  let seen: string | undefined;
+  let stopped = false;
+  let mailboxInitialized = false;
+  const poll = () => {
+    if (stopped) return;
+    try {
+      if (readAgentState(mailbox)) mailboxInitialized = true;
+      else if (mailboxInitialized) {
+        stopped = true;
+        clearInterval(timer);
+        return;
+      }
+      const request = readUnacknowledgedRequest(mailbox);
+      if (!request || request.requestId === seen) return;
+      seen = request.requestId;
+      void onRequest(request);
+    } catch {
+      // Controller tests retain malformed requests just like a live child.
+    }
+  };
+  const timer = setInterval(poll, 10);
+  timer.unref?.();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+function acceptMailboxRequest(mailbox: string, request: RequestRecord): void {
+  const state = readAgentState(mailbox);
+  if (!state) return;
+  writeAgentState(mailbox, {
+    ...state,
+    ...(request.kind === "task"
+      ? { activeRequestId: request.requestId, completedRequestId: undefined }
+      : {}),
+    lastAck: {
+      requestId: request.requestId,
+      accepted: true,
+      acknowledgedAt: Date.now(),
+    },
+    updatedAt: Date.now(),
+  });
 }
 
 export function createStagedAssignmentFixture(
@@ -1814,21 +1809,42 @@ export function createStagedAssignmentFixture(
   fastCompletion = false,
 ) {
   setLeadEnvironment();
-  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const startupMailbox = agentMailboxPath(WORKSPACE, label);
   const initialStatus = testGate<ExecResult>();
   const start = testGate<void>();
   const preSubmitValidation = testGate<void>();
-  const prompt = testGate<void>();
+  const handoff = testGate<void>();
   let holdInitialStatus = true;
   let holdStart = true;
   let holdPreSubmitValidation = true;
-  let holdPrompt = true;
+  let holdHandoff = true;
   let started = false;
   let paneClosed = false;
-  let promptRequestId: string | undefined;
+  let requestId: string | undefined;
   let preSubmitValidationReady = false;
   let acceptedRequestIdWritten: string | undefined;
   let workingObservations = 0;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    async (_text, request) => {
+      requestId = request?.requestId;
+      if (holdHandoff) {
+        holdHandoff = false;
+        await handoff.promise;
+      }
+      const state = readAgentState(startupMailbox);
+      assert.ok(state, "staged request must retain mailbox state");
+      acceptedRequestIdWritten = state.activeRequestId;
+      writeAgentState(startupMailbox, {
+        ...state,
+        activeRequestId: undefined,
+        completedRequestId: undefined,
+        updatedAt: Date.now(),
+      });
+    },
+  );
 
   const pi = fakePi({
     persistMessages: true,
@@ -1872,26 +1888,6 @@ export function createStagedAssignmentFixture(
           updatedAt: Date.now(),
         });
         started = true;
-        return result;
-      }
-      if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
-        promptRequestId = (args.at(-1) ?? "").slice(
-          "__PI_HERDSMAN_AGENT_V4__:".length,
-        );
-        if (holdPrompt) {
-          holdPrompt = false;
-          await prompt.promise;
-        }
-        const result = await startup.exec(command, args, options);
-        const state = readAgentState(startup.mailbox);
-        assert.ok(state, "staged prompt must retain mailbox state");
-        acceptedRequestIdWritten = state.activeRequestId;
-        writeAgentState(startup.mailbox, {
-          ...state,
-          activeRequestId: undefined,
-          completedRequestId: undefined,
-          updatedAt: Date.now(),
-        });
         return result;
       }
       if (command === "herdr" && isPaneClose(args)) {
@@ -1942,12 +1938,12 @@ export function createStagedAssignmentFixture(
       assert.ok(widget, "staged fixture did not create a status widget");
       return widget;
     },
-    get promptRequestId(): string {
-      assert.ok(promptRequestId, "staged fixture did not reach prompt");
-      return promptRequestId;
+    get requestId(): string {
+      assert.ok(requestId, "staged fixture did not observe a request");
+      return requestId;
     },
-    get promptRequested(): boolean {
-      return promptRequestId !== undefined;
+    get requestObserved(): boolean {
+      return requestId !== undefined;
     },
     get preSubmitValidationReady(): boolean {
       return preSubmitValidationReady;
@@ -1965,7 +1961,7 @@ export function createStagedAssignmentFixture(
     releaseInitialStatus: () => initialStatus.resolve(emptyStatus()),
     releaseStart: () => start.resolve(),
     releasePreSubmitValidation: () => preSubmitValidation.resolve(),
-    releasePrompt: () => prompt.resolve(),
+    releaseAcknowledgement: () => handoff.resolve(),
     async list() {
       return pi.tools[0].execute(
         "id",
@@ -2045,7 +2041,7 @@ export function startupExecutor(
   label: string,
   sessionForGet: (count: number) => string | null,
   onGet?: (count: number) => void,
-  onPrompt?: (text: string, request?: RequestRecord) => void,
+  onRequest?: (text: string, request?: RequestRecord) => void | Promise<void>,
   reportNullSession = false,
   onStart?: (args: string[]) => void,
   testCwd = "/tmp",
@@ -2053,7 +2049,12 @@ export function startupExecutor(
   includeResult = false,
   closePaneOnClose = false,
   countStartup = false,
-): { exec: ExecHandler; mailbox: string; getCount: () => number } {
+): {
+  exec: ExecHandler;
+  mailbox: string;
+  getCount: () => number;
+  stopMailboxConsumer: () => void;
+} {
   const mailbox = agentMailboxPath(WORKSPACE, label);
   let getCount = 0;
   let runId = testRunId;
@@ -2068,9 +2069,27 @@ export function startupExecutor(
     value.agents = [];
     return JSON.stringify({ id: AGENT_ID, result: value });
   };
+  const stopMailboxConsumer = consumeMailboxRequest(mailbox, (request) => {
+    const state = readAgentState(mailbox);
+    if (!state) return;
+    writeAgentState(mailbox, {
+      ...state,
+      ...(request.kind === "task"
+        ? { activeRequestId: request.requestId, completedRequestId: undefined }
+        : {}),
+      lastAck: {
+        requestId: request.requestId,
+        accepted: true,
+        acknowledgedAt: Date.now(),
+      },
+      updatedAt: Date.now(),
+    });
+    onRequest?.(request.text, request);
+  });
   return {
     mailbox,
     getCount: () => getCount,
+    stopMailboxConsumer,
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "status" && args[1] === "--json")
         return herdrStatusResult();
@@ -2129,27 +2148,6 @@ export function startupExecutor(
               },
             },
           }),
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
-        const requestId = args
-          .at(-1)!
-          .slice("__PI_HERDSMAN_AGENT_V4__:".length);
-        const request = readRequest(mailbox, requestId);
-        onPrompt?.(request?.text ?? "", request);
-        const state = readAgentState(mailbox)!;
-        writeAgentState(mailbox, {
-          ...state,
-          ...(request?.kind === "task"
-            ? { activeRequestId: requestId, completedRequestId: undefined }
-            : {}),
-          lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
-          updatedAt: Date.now(),
-        });
-        return {
-          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
           stderr: "",
           code: 0,
         };

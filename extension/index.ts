@@ -46,6 +46,7 @@ import {
   claimAgentMailbox,
   MailboxClaimOccupiedError,
   parseControlMarker,
+  readUnacknowledgedRequest,
   readRequest,
   readPendingAsk,
   readResult,
@@ -2170,12 +2171,6 @@ async function submit(
   let acknowledgementObserved = false;
   requestStatusRefresh?.();
   try {
-    await runHerdr(
-      pi,
-      ctx,
-      ["agent", "prompt", runtime.paneId, controlMarker(requestId)],
-      { signal },
-    );
     const state = await waitForState(
       runtime.mailboxPath,
       (s) => s.lastAck?.requestId === requestId,
@@ -9362,6 +9357,10 @@ export default function (pi: ExtensionAPI): void {
   let resultWriteAttempts = 0;
   let retryTimer: ReturnType<typeof setInterval> | undefined;
   let stateRetryTimer: ReturnType<typeof setInterval> | undefined;
+  let requestPumpTimer: ReturnType<typeof setInterval> | undefined;
+  let requestPumpRequestId: string | undefined;
+  let requestPumpSubmittedAt = 0;
+  let requestPumpErrorReported = false;
   let pendingStateTransition = false;
   let stateErrorReported = false;
   let resultErrorReported = false;
@@ -9513,6 +9512,47 @@ export default function (pi: ExtensionAPI): void {
     if (!acknowledge(requestId, accepted, code, message)) return;
     discardAgentRequest(requestId, ctx);
   };
+  const pumpRequest = (ctx: ExtensionContext): void => {
+    if (!initialized || !state) return;
+    try {
+      const request = readUnacknowledgedRequest(
+        process.env.PI_HERDSMAN_MAILBOX!,
+        state,
+      );
+      if (!request) {
+        requestPumpErrorReported = false;
+        requestPumpRequestId = undefined;
+        requestPumpSubmittedAt = 0;
+        return;
+      }
+      if (
+        request.requestId === requestPumpRequestId &&
+        Date.now() - requestPumpSubmittedAt < 250
+      )
+        return;
+      pi.sendUserMessage(
+        controlMarker(request.requestId),
+        ctx.isIdle() ? undefined : { deliverAs: "steer" },
+      );
+      requestPumpErrorReported = false;
+      requestPumpRequestId = request.requestId;
+      requestPumpSubmittedAt = Date.now();
+    } catch (error) {
+      requestPumpRequestId = undefined;
+      requestPumpSubmittedAt = 0;
+      if (!requestPumpErrorReported) {
+        requestPumpErrorReported = true;
+        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+      }
+    }
+  };
+  const resetRequestPump = (): void => {
+    if (requestPumpTimer) clearInterval(requestPumpTimer);
+    requestPumpTimer = undefined;
+    requestPumpRequestId = undefined;
+    requestPumpSubmittedAt = 0;
+    requestPumpErrorReported = false;
+  };
   const askAllowed = (): boolean =>
     !!state?.activeRequestId &&
     !state.pendingAskId &&
@@ -9643,6 +9683,7 @@ export default function (pi: ExtensionAPI): void {
   pi.on("session_before_switch", () => ({ cancel: true }));
   pi.on("session_before_fork", () => ({ cancel: true }));
   pi.on("session_start", async (_e: unknown, ctx: ExtensionContext) => {
+    resetRequestPump();
     resetLeafStatus();
     ownTools = undefined;
     if (delegationEnabled) clearAgentRuntimes();
@@ -9733,6 +9774,9 @@ export default function (pi: ExtensionAPI): void {
       if (delegationEnabled)
         startAgentStaleScanner?.(ctx, metadataAbortController.signal);
       initialized = true;
+      pumpRequest(ctx);
+      requestPumpTimer = setInterval(() => pumpRequest(ctx), 250);
+      requestPumpTimer.unref?.();
       if (!delegationEnabled && ctx.mode === "tui" && ctx.hasUI) {
         const generation = leafStatusGeneration;
         leafStatusContext = ctx;
@@ -9893,6 +9937,7 @@ export default function (pi: ExtensionAPI): void {
       } catch (error) {
         appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
       }
+      discardAgentRequest(id, ctx);
       latest = "";
       return {
         action: "transform",
@@ -10007,18 +10052,9 @@ export default function (pi: ExtensionAPI): void {
       discardAgentRequest(id, ctx);
     }
     if (request.kind === "steer") {
-      if (isIdle) {
-        acknowledgeAndDiscard(id, true, ctx);
-        latest = "";
-        return { action: "transform", text: request.text };
-      }
-      try {
-        pi.sendUserMessage(request.text, { deliverAs: "steer" });
-        acknowledgeAndDiscard(id, true, ctx);
-      } catch (error) {
-        acknowledgeAndDiscard(id, false, ctx, "delivery", String(error));
-      }
-      return { action: "handled" };
+      acknowledgeAndDiscard(id, true, ctx);
+      latest = "";
+      return { action: "transform", text: request.text };
     }
     latest = "";
     return { action: "transform", text: request.text };
@@ -10264,6 +10300,7 @@ export default function (pi: ExtensionAPI): void {
     metadataAbortController = undefined;
     invalidateMetadataSession();
     initialized = false;
+    resetRequestPump();
     agentControllerReady = false;
     state = undefined;
     if (delegationEnabled) clearAgentRuntimes();
