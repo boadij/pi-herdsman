@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.4.0](https://github.com/boadij/pi-herdsman/compare/v0.3.2...v0.4.0) (2026-09-10)
+
+
+### Features
+
+* adopt Pi subagent interoperability conventions ([#34](https://github.com/boadij/pi-herdsman/issues/34)) ([9782cc9](https://github.com/boadij/pi-herdsman/commit/9782cc9d25dc8689c1c2d945da2a5d5527048339))
+
+
+### Fixes
+
+* improve agent definition details ([#32](https://github.com/boadij/pi-herdsman/issues/32)) ([e08579f](https://github.com/boadij/pi-herdsman/commit/e08579f781cc1762a79c7ce1031e35ebe832b299))
+
+
+### Refactoring
+
+* consolidate on native Pi and Herdr contracts ([#30](https://github.com/boadij/pi-herdsman/issues/30)) ([7af0d4a](https://github.com/boadij/pi-herdsman/commit/7af0d4a714c94290e7846676eaa83cc45b0738cb))
+
+
+### Documentation
+
+* **assets:** update banner and thumbnail images ([8fa1625](https://github.com/boadij/pi-herdsman/commit/8fa1625463ad743bea33ce9b1506d4d424271bd3))
+
+
+### CI
+
+* validate pull requests ([#35](https://github.com/boadij/pi-herdsman/issues/35)) ([fc5afb8](https://github.com/boadij/pi-herdsman/commit/fc5afb8b08660c70e470c79f0f2584850c36fcd3))
+
 ## [0.3.2](https://github.com/boadij/pi-herdsman/compare/v0.3.1...v0.3.2) (2026-09-10)
 
 
