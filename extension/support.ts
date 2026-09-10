@@ -1218,7 +1218,7 @@ export function delegatedLifecycleExecutor(
     ...[...live.values()].map((state) => ({
       pane_id: state.paneId,
       tab_id: tabByPane.get(state.paneId),
-      workspace_id: WORKSPACE,
+      workspace_id: state.workspaceId,
       cwd: state.cwd,
       foreground_cwd: state.cwd,
       agent: state.agentLabel,
@@ -1396,7 +1396,8 @@ export function delegatedLifecycleExecutor(
                   rect: { width: 100 - index, height: 40 },
                 })),
               },
-            }),
+            },
+          }),
           stderr: "",
           code: 0,
         };
