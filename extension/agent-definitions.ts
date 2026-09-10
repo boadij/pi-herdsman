@@ -70,6 +70,7 @@ const ARRAY_FIELDS = new Set([
 const SUPPORTED_FIELDS = new Set([
   "name",
   "description",
+  "permission",
   ...STRING_FIELDS,
   ...BOOLEAN_CAPABILITY_FIELDS,
   ...ARRAY_FIELDS,
@@ -687,6 +688,15 @@ export type AgentLaunchOptions = {
   approveProject?: boolean;
 };
 
+function activeAgentTag(name: string): string {
+  const escaped = name
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+  return `<active_agent name="${escaped}"/>`;
+}
+
 export function agentLaunchArgs(
   agent: AgentDefinition,
   options: AgentLaunchOptions,
@@ -751,6 +761,8 @@ export function agentLaunchArgs(
     }
   }
   if (sharedPromptPath) args.push("--append-system-prompt", sharedPromptPath);
+  if (managedAgent)
+    args.push("--append-system-prompt", activeAgentTag(agent.name));
 
   if (frontmatter.noTools) args.push("--no-tools");
   if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");
