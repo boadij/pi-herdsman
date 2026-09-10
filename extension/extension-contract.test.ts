@@ -88,7 +88,7 @@ test("Herdr version parsing accepts preview suffixes but rejects trailing text",
     assert.equal(parseHerdrVersion(version), undefined, version);
 });
 
-test("Herdr preflight gates endpoint compatibility, not private server version", async () => {
+test("Herdr preflight gates server compatibility, not private server version", async () => {
   const run = async (server: Record<string, unknown>) => {
     setLeadEnvironment();
     const label = `preflight-${randomUUID().slice(0, 8)}`;
@@ -124,20 +124,26 @@ test("Herdr preflight gates endpoint compatibility, not private server version",
     }
   };
 
-  const incompatible = await run({ running: true, endpoint_compatible: false });
+  const incompatible = await run({ running: true, compatible: false });
   assert.equal(incompatible.details.error.category, "invalid_request");
-  assert.match(incompatible.details.error.message, /endpoint-compatible/);
+  assert.match(incompatible.details.error.message, /compatible server/);
 
   const staleServer = await run({
     running: true,
-    endpoint_compatible: true,
     version: "0.8.0",
-    compatible: false,
+    compatible: true,
   });
   assert.equal(
     staleServer.details.ok,
     true,
     JSON.stringify(staleServer.details),
+  );
+
+  const missingServerVersion = await run({ running: true, compatible: true });
+  assert.equal(
+    missingServerVersion.details.ok,
+    true,
+    JSON.stringify(missingServerVersion.details),
   );
 });
 

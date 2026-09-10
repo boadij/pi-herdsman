@@ -1369,6 +1369,7 @@ export function sessionIdentity(
     : undefined;
 }
 export function sameObservedSessionPath(left: string, right: string): boolean {
+  if (left === right) return true;
   let canonicalRight: string;
   try {
     canonicalRight = realpathSync(right);

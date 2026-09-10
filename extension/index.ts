@@ -1336,11 +1336,11 @@ async function herdrVersion(
   if (
     !supported(clientMatch) ||
     server.running !== true ||
-    server.endpoint_compatible !== true
+    server.compatible !== true
   ) {
     fail(
       "invalid_request",
-      "Herdr status is unavailable or incompatible; Herdr >=0.9.0 with a running endpoint-compatible server is required",
+      "Herdr status is unavailable or incompatible; Herdr >=0.9.0 with a running compatible server is required",
       "preflight",
     );
   }

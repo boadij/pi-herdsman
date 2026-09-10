@@ -2469,10 +2469,7 @@ test("session matching keeps id and canonical path observations kind-aware", () 
     );
     assert.equal(sameObservedSessionPath(alias, path), true);
     assert.equal(sameObservedSessionPath(missing, path), false);
-    assert.throws(
-      () => sameObservedSessionPath(missing, missing),
-      /could not canonicalize exact Pi session path/,
-    );
+    assert.equal(sameObservedSessionPath(missing, missing), true);
     assert.throws(
       () => sameObservedSessionPath(path, missing),
       /could not canonicalize exact Pi session path/,
@@ -2501,6 +2498,18 @@ test("session matching keeps id and canonical path observations kind-aware", () 
         { id: "agent-session", path },
       ),
       false,
+    );
+    assert.equal(
+      matchesExpectedSession(
+        {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "path",
+          value: missing,
+        },
+        { id: "different-id", path: missing },
+      ),
+      true,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -3033,11 +3042,13 @@ test("rollback proves the boundary before keys and resources before close", asyn
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-rollback-session-"));
+  const sessionPath = join(root, "missing-session.jsonl");
   const session = {
     source: "herdr:pi" as const,
     agent: "pi" as const,
-    kind: "id" as const,
-    value: "session-1",
+    kind: "path" as const,
+    value: sessionPath,
   };
   const running = {
     pane_id: "pane-1",
@@ -3119,7 +3130,7 @@ test("rollback proves the boundary before keys and resources before close", asyn
     cwd: "/tmp",
     createdTab: false,
     createdPane: true,
-    sessionReference: { id: session.value },
+    sessionReference: { path: sessionPath },
     paneOwnership: { "pane-1": shell },
     tabPaneOwnership: {},
   };
@@ -3144,6 +3155,7 @@ test("rollback proves the boundary before keys and resources before close", asyn
   } finally {
     if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
     else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+    rmSync(root, { recursive: true, force: true });
   }
 
   assert.deepEqual(

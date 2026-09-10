@@ -604,7 +604,7 @@ export type ExecHandler = (
 
 const HERDR_STATUS_RESPONSE = JSON.stringify({
   client: { version: "0.9.0" },
-  server: { running: true, endpoint_compatible: true },
+  server: { running: true, compatible: true },
 });
 function herdrStatusResult(): ExecResult {
   return { stdout: HERDR_STATUS_RESPONSE, stderr: "", code: 0 };

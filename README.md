@@ -138,7 +138,6 @@ tools, extensions, skills, and instructions.
 
 - [herdr](https://github.com/herdrdev/herdr) `>=0.9.0`
 - Pi `>=0.84.2 <0.86.0` (the version range tested for this release)
-- herdr Pi integration version `2` or newer
 - Node `>=22.19.0`
 
 Install or refresh the herdr Pi integration:
