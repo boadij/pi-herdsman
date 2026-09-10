@@ -2894,7 +2894,88 @@ test("agent definition instructions are durable, expandable, and complete", (t) 
       .join("\n");
     assert.equal(collapsedAgain, collapsed);
     assert.doesNotMatch(collapsedAgain, /TAIL INSTRUCTIONS MARKER/);
+
+    const markdown = renderedText(
+      renderAgentDefinitionsOverview(definition, theme, {
+        expanded: true,
+        instructions: `## Review policy
+
+Use **strict review** for \`controller.ts\`.
+
+- Check correctness
+- Check cleanup`,
+      }),
+    );
+    assert.match(markdown, /Review policy/);
+    assert.match(markdown, /strict review/);
+    assert.match(markdown, /controller\.ts/);
+    assert.match(markdown, /Check correctness/);
+    assert.match(markdown, /Check cleanup/);
+    assert.doesNotMatch(
+      markdown,
+      /## Review policy|\*\*strict review\*\*|`controller\.ts`/,
+    );
+
+    const multiDefinition = renderedText(
+      renderAgentDefinitionsOverview(
+        [{ name: "reviewer" }, { name: "scout" }],
+        theme,
+        {
+          expanded: true,
+          instructions: "Use **strict review**.",
+        },
+      ),
+    );
+    assert.equal((multiDefinition.match(/Instructions/g) ?? []).length, 1);
+    assert.equal((multiDefinition.match(/strict review/g) ?? []).length, 1);
   }
+});
+
+test("expanded agent definitions show their effective extension policy", () => {
+  const policies = [
+    [{ name: "default" }, "default"],
+    [{ name: "none", noExtensions: true }, "none"],
+    [
+      { name: "default-explicit", extensions: ["./foo.ts"] },
+      "default + ./foo.ts",
+    ],
+    [
+      { name: "explicit", noExtensions: true, extensions: ["./foo.ts"] },
+      "./foo.ts",
+    ],
+  ] as const;
+  for (const [definition, expected] of policies) {
+    const output = renderedText(
+      renderAgentDefinitionsOverview([definition], presentationTheme, {
+        expanded: true,
+      }),
+    );
+    assert.match(
+      output,
+      new RegExp(`extensions\\s+${expected.replace("+", "\\+")}`),
+    );
+  }
+
+  const homeExtension = `${homedir()}/.pi/agent/npm/node_modules/package/dist/index.js`;
+  assert.match(
+    renderedText(
+      renderAgentDefinitionsOverview(
+        [{ name: "home", extensions: [homeExtension] }],
+        presentationTheme,
+        { expanded: true },
+      ),
+    ),
+    /extensions\s+default \+ ~\/\.pi\/agent\/npm\/node_modules\/package\/dist\/index\.js/,
+  );
+  assert.doesNotMatch(
+    renderedText(
+      renderAgentDefinitionsOverview(
+        [{ name: "collapsed", extensions: ["./foo.ts"] }],
+        presentationTheme,
+      ),
+    ),
+    /extensions\s+default/,
+  );
 });
 
 test("stop summary renderer is width-safe and keeps its transcript text", (t) => {
