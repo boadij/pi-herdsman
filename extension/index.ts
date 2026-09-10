@@ -587,39 +587,16 @@ function parseRequest(p: Params): ParsedParams {
     "delegate",
   );
 }
-type CompiledRequestValidator = {
-  Check: (value: unknown) => boolean;
-  Errors: (value: unknown) => readonly {
-    instancePath: string;
-    message: string;
-    params: object;
-  }[];
-};
 function invalidRequestInput(
-  validator: CompiledRequestValidator,
-  input: unknown,
   operation: string,
   message: string,
 ): OperationError {
-  const errors = validator.Errors(input);
-  const first =
-    [...errors].reverse().find(({ instancePath }) => instancePath) ?? errors[0];
-  const additionalProperty = (
-    first?.params as { additionalProperties?: unknown } | undefined
-  )?.additionalProperties;
-  const path =
-    first?.instancePath ||
-    (Array.isArray(additionalProperty) &&
-    typeof additionalProperty[0] === "string"
-      ? `/${additionalProperty[0]}`
-      : "/");
   return new OperationError({
     category: "invalid_request",
     message,
     operation,
     rollbackOccurred: false,
     retryAttempted: false,
-    ...(first ? { details: { path, message: first.message } } : {}),
   });
 }
 type Runtime = {
@@ -7019,7 +6996,9 @@ export default function (pi: ExtensionAPI): void {
         ctx.signal,
       );
       const diagnostics = live.some(
-        (agent: any) => agent?.agent_session !== undefined && !isPiAgent(agent),
+        (agent: any) =>
+          (agent?.agent === "pi" || agent?.agent_session?.agent === "pi") &&
+          !isPiAgent(agent),
       )
         ? [
             "Live Pi agents are present but their session identities are unresolvable",
@@ -7131,35 +7110,17 @@ export default function (pi: ExtensionAPI): void {
     if (controllerScope)
       pi.on("tool_call", async (event: any, ctx: ExtensionContext) => {
         if (event.toolName === "agent" && !agentValidator.Check(event.input)) {
-          const error = invalidRequestInput(
-            agentValidator,
-            event.input,
-            "agent",
-            "Invalid agent input",
-          );
+          const error = invalidRequestInput("agent", "Invalid agent input");
           return {
             block: true,
-            reason: `${error.detail.message}${
-              error.detail.details?.path
-                ? ` (${error.detail.details.path}: ${error.detail.details.message})`
-                : ""
-            }`,
+            reason: error.detail.message,
           };
         }
         if (event.toolName === "staff" && !staffValidator.Check(event.input)) {
-          const error = invalidRequestInput(
-            staffValidator,
-            event.input,
-            "staff",
-            "Invalid staff action",
-          );
+          const error = invalidRequestInput("staff", "Invalid staff action");
           return {
             block: true,
-            reason: `${error.detail.message}${
-              error.detail.details?.path
-                ? ` (${error.detail.details.path}: ${error.detail.details.message})`
-                : ""
-            }`,
+            reason: error.detail.message,
           };
         }
         if (controllerScope.kind !== "lead") return;
@@ -8446,12 +8407,7 @@ export default function (pi: ExtensionAPI): void {
           if (!(await currentChiefAuthority(ctx)))
             throw new Error("Chief lease is no longer active");
           if (!staffValidator.Check(params))
-            throw invalidRequestInput(
-              staffValidator,
-              params,
-              "staff",
-              "Invalid staff action",
-            );
+            throw invalidRequestInput("staff", "Invalid staff action");
           const refresh = async () => loadSupervisionSnapshot(ctx);
           const result = (value: Record<string, unknown>) => {
             const bounded = truncateModelText(JSON.stringify(value, null, 2), {
@@ -9318,8 +9274,6 @@ export default function (pi: ExtensionAPI): void {
         try {
           if (!agentValidator.Check(p))
             throw invalidRequestInput(
-              agentValidator,
-              p,
               typeof (p as { action?: unknown })?.action === "string"
                 ? (p as { action: string }).action
                 : "agent",

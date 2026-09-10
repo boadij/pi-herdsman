@@ -1376,7 +1376,7 @@ test("registered agent revalidates input mutated after tool_call", async () => {
     input.task = "";
     const blocked = await toolCall({ toolName: "agent", input }, context);
     assert.equal(blocked?.block, true);
-    assert.match(blocked?.reason ?? "", /\/[^ )]+/);
+    assert.equal(blocked?.reason, "Invalid agent input");
     const result = await pi.tools[0].execute(
       "id",
       input,
@@ -1386,8 +1386,8 @@ test("registered agent revalidates input mutated after tool_call", async () => {
     );
     assert.equal(result.details.error.category, "invalid_request");
     assert.equal(result.details.error.message, "Invalid agent input");
-    assert.match(result.details.error.details.path, /^\/.+/);
-    assert.ok(result.details.error.details.message);
+    assert.equal(result.details.error.operation, "delegate");
+    assert.equal(result.details.error.details, undefined);
     assert.equal(pi.calls.length, 0);
   } finally {
     pi.events.get("session_shutdown")?.[0]();

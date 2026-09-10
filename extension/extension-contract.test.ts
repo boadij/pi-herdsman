@@ -649,6 +649,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     descendantAgent.agentLabel,
   );
   let duplicateChief = false;
+  let nonPiIntegration = false;
   let unresolvableIdentity = false;
   let aliasAgent: any | undefined;
   let failChiefAliasLookup = false;
@@ -682,11 +683,22 @@ test("registered lead and replacement chief exchange messages and asks", async (
                   ...(unresolvableIdentity
                     ? [
                         {
-                          agent_session: {
-                            source: "herdr:pi",
-                            agent: "pi",
-                          },
+                          agent: "pi",
                           pane_id: "unknown-pane",
+                        },
+                      ]
+                    : []),
+                  ...(nonPiIntegration
+                    ? [
+                        {
+                          agent: "codex",
+                          agent_session: {
+                            source: "herdr:codex",
+                            agent: "codex",
+                            kind: "id",
+                            value: "codex-session",
+                          },
+                          pane_id: "codex-pane",
                         },
                       ]
                     : []),
@@ -1131,6 +1143,17 @@ test("registered lead and replacement chief exchange messages and asks", async (
       /No active chief/,
     );
     duplicateChief = false;
+    nonPiIntegration = true;
+    const nonPiDiagnosticList = await replacementTool.execute(
+      "list",
+      { action: "list" },
+      undefined,
+      undefined,
+      replacementContext,
+    );
+    assertToolResult(nonPiDiagnosticList);
+    assert.equal(nonPiDiagnosticList.details?.diagnostics, undefined);
+    nonPiIntegration = false;
     unresolvableIdentity = true;
     const diagnosticList = await replacementTool.execute(
       "list",
