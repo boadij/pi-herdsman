@@ -9,6 +9,7 @@ const GROUP_POLL_MS = 25;
 const repoRoot = resolve(fileURLToPath(import.meta.url), "..", "..");
 const testRunnerArgs = [
   "--experimental-test-module-mocks",
+  "--import=./scripts/test-env.mjs",
   "--test",
   "--test-timeout=10000",
 ];
