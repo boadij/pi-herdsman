@@ -6,7 +6,11 @@ import type {
   ModelSelectEvent,
   ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels, StringEnum } from "@earendil-works/pi-ai";
+import {
+  contentText,
+  getSupportedThinkingLevels,
+  StringEnum,
+} from "@earendil-works/pi-ai";
 import {
   CONFIG_DIR_NAME,
   DynamicBorder,
@@ -72,8 +76,6 @@ import {
   chooseLabel,
   prepareMessageInput,
   displayIdentity,
-  extractAssistantText,
-  normalizeContextUsage,
   steerAcceptanceAllowed,
   taskAcceptanceAllowed,
   agentControlState,
@@ -103,7 +105,7 @@ import {
   rollbackHerdrStart,
   runHerdr,
   sessionIdentity,
-  sameObservedSessionPath,
+  matchesExpectedSession,
   startHerdrAgent,
   sameCwd,
   inspectHerdrAgent,
@@ -1325,26 +1327,20 @@ async function herdrVersion(
   const server = settingRecord(value.server);
   const clientVersion =
     typeof client.version === "string" ? client.version : undefined;
-  const serverVersion =
-    typeof server.version === "string" ? server.version : undefined;
   const clientMatch = clientVersion
     ? parseHerdrVersion(clientVersion)
     : undefined;
-  const serverMatch = serverVersion
-    ? parseHerdrVersion(serverVersion)
-    : undefined;
   const supported = (match: RegExpMatchArray | undefined): boolean =>
     !!match &&
-    (Number(match[1]) > 0 || (Number(match[1]) === 0 && Number(match[2]) >= 8));
+    (Number(match[1]) > 0 || (Number(match[1]) === 0 && Number(match[2]) >= 9));
   if (
     !supported(clientMatch) ||
-    !supported(serverMatch) ||
     server.running !== true ||
-    server.compatible !== true
+    server.endpoint_compatible !== true
   ) {
     fail(
       "invalid_request",
-      "Herdr status is unavailable or incompatible; Herdr >=0.8.0 with a running compatible server is required",
+      "Herdr status is unavailable or incompatible; Herdr >=0.9.0 with a running endpoint-compatible server is required",
       "preflight",
     );
   }
@@ -1445,55 +1441,11 @@ async function workspacePresentationProvenance(
   );
   return new Map(entries);
 }
-function sessionIdentityMatchesExpected(
-  session: ReturnType<typeof sessionIdentity>,
-  expected: ExpectedSession,
-): boolean {
-  if (!session) return false;
-  if (session.kind === "path")
-    return (
-      typeof expected.path === "string" &&
-      expected.path.length > 0 &&
-      sameObservedSessionPath(session.value, expected.path)
-    );
-  return (
-    typeof expected.id === "string" &&
-    expected.id.length > 0 &&
-    session.value === expected.id
-  );
-}
-function herdrSessionsMatch(agent: any, expected: ExpectedSession): boolean {
-  const observation = sessionIdentity(agent?.agent_session);
-  return (
-    observation !== undefined &&
-    sessionIdentityMatchesExpected(observation, expected)
-  );
-}
-function herdrSessionsMatchForContinuation(
+function herdrSessionsMatch(
   agent: any,
-  expected: ExpectedSession,
+  expected: ExpectedSession | undefined,
 ): boolean {
-  const observation = sessionIdentity(agent?.agent_session);
-  return (
-    observation !== undefined &&
-    sessionIdentityMatchesExpected(observation, expected)
-  );
-}
-function sessionIdentityMatchesId(
-  session: ReturnType<typeof sessionIdentity>,
-  id: string,
-): boolean {
-  if (!session) return false;
-  if (session.kind === "id") return session.value === id;
-  try {
-    return SessionManager.open(session.value).getSessionId() === id;
-  } catch {
-    return false;
-  }
-}
-function herdrSessionsMatchId(agent: any, id: string): boolean {
-  const observation = sessionIdentity(agent?.agent_session);
-  return observation !== undefined && sessionIdentityMatchesId(observation, id);
+  return matchesExpectedSession(agent?.agent_session, expected);
 }
 function herdrSessionId(agent: any): string | undefined {
   const session = sessionIdentity(agent?.agent_session);
@@ -1524,9 +1476,10 @@ function isLeadSessionBoundary(
 ): boolean {
   if (!isPiAgent(agent) || pane?.agent !== "pi") return false;
   const session = sessionIdentity(agent?.agent_session);
-  if (session?.kind !== "path" || !herdrSessionsMatchId(agent, ownerSessionId))
-    return false;
+  if (session?.kind !== "path") return false;
   try {
+    if (SessionManager.open(session.value).getSessionId() !== ownerSessionId)
+      return false;
     return !sessionAgentDefinition(
       SessionManager.open(session.value).getEntries(),
     );
@@ -1800,8 +1753,8 @@ function validateIdentity(
     );
     if (
       (!observation && (options.requireLiveSession || hasObservedSession)) ||
-      (observation !== undefined &&
-        !sessionIdentityMatchesExpected(observation, liveExpectedSession))
+      (hasObservedSession &&
+        !matchesExpectedSession(agent.agent_session, liveExpectedSession))
     )
       liveDifferences.push(["session", observation, liveExpectedSession]);
     if (liveDifferences.length)
@@ -2369,14 +2322,10 @@ async function managedAgentSnapshots(
           typeof value === "string" && value.length > 0,
       );
       const sessionRelated = (() => {
-        const observation = sessionIdentity(agent?.agent_session);
         try {
-          return (
-            observation !== undefined &&
-            sessionIdentityMatchesExpected(
-              observation,
-              expectedSession(state.piSessionId, state.piSessionFile),
-            )
+          return matchesExpectedSession(
+            agent?.agent_session,
+            expectedSession(state.piSessionId, state.piSessionFile),
           );
         } catch {
           return false;
@@ -2498,17 +2447,14 @@ async function managedAgentSnapshots(
           mailboxes.map(({ state }) => state.ownerSessionId),
         );
         for (const ownerSessionId of ownerSessionIds) {
-          const ownerAgents = live.agents.filter((agent: any) => {
-            const observation = sessionIdentity(agent?.agent_session);
-            return (
-              observation !== undefined &&
-              sessionIdentityMatchesId(observation, ownerSessionId)
-            );
-          });
+          const ownerAgents = live.agents.filter((agent: any) =>
+            matchesExpectedSession(agent?.agent_session, {
+              id: ownerSessionId,
+            }),
+          );
           if (ownerAgents.length !== 1) continue;
           const ownerAgent = ownerAgents[0];
           if (
-            !herdrSessionsMatchId(ownerAgent, ownerSessionId) ||
             typeof ownerAgent.pane_id !== "string" ||
             !ownerAgent.pane_id.trim()
           )
@@ -4936,7 +4882,7 @@ async function actionUnsafe(
         );
         for (const agent of snapshot.liveAgents)
           if (
-            herdrSessionsMatchForContinuation(
+            herdrSessionsMatch(
               agent,
               expectedSession(resumed.id, resumedSessionPath),
             ) &&
@@ -10055,12 +10001,12 @@ export default function (pi: ExtensionAPI): void {
       hasUndeliveredDirectChildWork(state, ctx.sessionManager.getEntries())
     )
       return;
-    latest = extractAssistantText([message]);
+    latest = contentText(message.content, "").trim();
   });
   pi.on("turn_end", (_event: unknown, ctx: ExtensionContext) => {
     touchActivity();
     if (!state?.activeRequestId) return;
-    const usage = normalizeContextUsage(ctx.getContextUsage());
+    const usage = ctx.getContextUsage();
     const percent =
       usage?.percent == null ? undefined : Math.round(usage.percent);
     const model = ctx.model
@@ -10174,7 +10120,7 @@ export default function (pi: ExtensionAPI): void {
               message: "Agent produced no assistant text",
             },
           }),
-      contextUsage: normalizeContextUsage(ctx.getContextUsage()),
+      contextUsage: ctx.getContextUsage(),
       completedAt: Date.now(),
     };
     pendingResult = result;

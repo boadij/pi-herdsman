@@ -2,7 +2,6 @@ import { strict as assert } from "node:assert";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 const realFs = await import("node:fs");
 const { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } =
@@ -97,10 +96,8 @@ const {
   prepareMessageInput,
   snapshotTextFiles,
   agentControlState,
-  extractAssistantText,
   displayIdentity,
   hasTaskText,
-  normalizeContextUsage,
   resultStillPending,
   steerAcceptanceAllowed,
   taskAcceptanceAllowed,
@@ -679,35 +676,6 @@ test("agent display identity uses the definition and fallback", () => {
   assert.equal(resultStillPending(undefined, undefined, true), false);
   assert.equal(taskAcceptanceAllowed(true, undefined, true), false);
   assert.equal(steerAcceptanceAllowed(false, id, true), false);
-  assert.equal(
-    extractAssistantText([
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "ignore" },
-          { type: "text", text: " answer" },
-        ],
-      } as AssistantMessage,
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "next " }],
-      } as AssistantMessage,
-    ]),
-    "answer\nnext",
-  );
-  assert.deepEqual(
-    normalizeContextUsage({ tokens: 25, contextWindow: 100, percent: 25 }),
-    {
-      tokens: 25,
-      contextWindow: 100,
-      percent: 25,
-    },
-  );
-  assert.equal(normalizeContextUsage(undefined), undefined);
-  assert.equal(
-    normalizeContextUsage({ tokens: 25, contextWindow: 0, percent: 0 }),
-    undefined,
-  );
   assert.match(
     updateSpawnPlacementJson('{"other":true}', "split"),
     /"piHerdsman": \{\n    "spawnPlacement": "split"/,

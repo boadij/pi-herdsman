@@ -124,7 +124,7 @@ function boundedInspectionOutput(value: string): {
   text: string;
   truncated: boolean;
 } {
-  // Pi's ExecOptions has no maxBuffer, and herdr 0.8.2's agent.read schema
+  // Pi's ExecOptions has no maxBuffer, and Herdr's agent.read schema
   // bounds lines but not bytes. This bounds returned evidence only; pi.exec
   // may still buffer a larger subprocess response before returning it.
   return boundedUtf8Tail(
@@ -150,30 +150,6 @@ export type AgentInspection = {
   process?: PaneProcess;
 };
 
-function exactAgent(agent: any, target: AgentInspectionTarget): boolean {
-  const session = sessionIdentity(agent?.agent_session);
-  const sessionMatches =
-    session?.kind === "id"
-      ? session.value === target.piSessionId
-      : session?.kind === "path"
-        ? (() => {
-            try {
-              return (
-                SessionManager.open(session.value).getSessionId() ===
-                target.piSessionId
-              );
-            } catch {
-              return false;
-            }
-          })()
-        : false;
-  return (
-    agent?.workspace_id === target.workspaceId &&
-    agent?.pane_id === target.paneId &&
-    sessionMatches
-  );
-}
-
 export async function inspectHerdrAgent(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -190,7 +166,14 @@ export async function inspectHerdrAgent(
     },
   );
   const before = beforeResult?.agent;
-  if (!exactAgent(before, target) || (validate && !(await validate(before))))
+  if (
+    before?.workspace_id !== target.workspaceId ||
+    before?.pane_id !== target.paneId ||
+    !matchesExpectedSession(before?.agent_session, {
+      id: target.piSessionId,
+    }) ||
+    (validate && !(await validate(before)))
+  )
     throw new Error("Inspection target identity did not match");
   // Pi's exec API exposes only signal, timeout, and cwd; it has no supported
   // stdout/stderr max-buffer option. Keep the Herdr read at 80 lines and
@@ -222,7 +205,12 @@ export async function inspectHerdrAgent(
     signal,
   });
   const after = afterResult?.agent;
-  if (!exactAgent(after, target) || (validate && !(await validate(after))))
+  if (
+    after?.workspace_id !== target.workspaceId ||
+    after?.pane_id !== target.paneId ||
+    !matchesExpectedSession(after?.agent_session, { id: target.piSessionId }) ||
+    (validate && !(await validate(after)))
+  )
     throw new Error("Inspection target changed during capture");
   const raw = [outputResult.stdout, outputResult.stderr]
     .map((value) => String(value ?? ""))
@@ -455,7 +443,9 @@ export async function listAllHerdrAgents(
   signal?: AbortSignal,
 ): Promise<{ agents: any[] }> {
   const result = await runHerdr(pi, ctx, ["agent", "list"], { signal });
-  return { agents: result?.agents ?? [] };
+  if (!Array.isArray(result?.agents))
+    error("agent list", "agent list ownership proof is unavailable");
+  return { agents: result.agents };
 }
 
 export type LeadMetadata = {
@@ -1361,7 +1351,6 @@ export function sessionIdentity(
     : undefined;
 }
 export function sameObservedSessionPath(left: string, right: string): boolean {
-  if (left === right) return true;
   let canonicalRight: string;
   try {
     canonicalRight = realpathSync(right);
@@ -1392,11 +1381,17 @@ export function matchesExpectedSession(
       expected.id.length > 0 &&
       session.value === expected.id
     );
-  return (
-    typeof expected.path === "string" &&
-    expected.path.length > 0 &&
-    sameObservedSessionPath(session.value, expected.path)
-  );
+  if (typeof expected.path === "string" && expected.path.length > 0)
+    return sameObservedSessionPath(session.value, expected.path);
+  if (typeof expected.id !== "string" || expected.id.length === 0) return false;
+  try {
+    return (
+      SessionManager.open(realpathSync(session.value)).getSessionId() ===
+      expected.id
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function proveExactRunningAgent(

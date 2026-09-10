@@ -1136,7 +1136,16 @@ test("list projects an unreadable current mailbox as non-actionable unknown", as
   const mailbox = agentMailboxPath(WORKSPACE, "unreadable-list-agent");
   realFs.mkdirSync(mailbox, { recursive: true });
   realFs.writeFileSync(join(mailbox, "state.json"), "x".repeat(70 * 1024));
-  const pi = fakePi();
+  const pi = fakePi({
+    exec: (_command, args) =>
+      isAgentList(args)
+        ? {
+            stdout: JSON.stringify({ result: { agents: [] } }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
   registerExtension!(pi.pi as never);
   try {
     const result = await pi.tools[0].execute(

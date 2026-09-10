@@ -2585,7 +2585,12 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
 test("TUI status refresh consumes the supported Herdr agent list envelope", async (t) => {
   setLeadEnvironment();
   const label = "sleep-smoke-a";
-  const identity = recoveryIdentity(label);
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(tmpdir(), `pi-herdsman-${label}-${randomUUID()}.jsonl`),
+  };
+  realFs.writeFileSync(identity.piSessionFile, "{}", "utf8");
+  t.after(() => realFs.rmSync(identity.piSessionFile, { force: true }));
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
@@ -2755,7 +2760,12 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
 test("zero-runtime reconciliation requests one status refresh", async (t) => {
   setLeadEnvironment();
   const label = "fresh-widget-agent";
-  const identity = recoveryIdentity(label);
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(tmpdir(), `pi-herdsman-${label}-${randomUUID()}.jsonl`),
+  };
+  realFs.writeFileSync(identity.piSessionFile, "{}", "utf8");
+  t.after(() => realFs.rmSync(identity.piSessionFile, { force: true }));
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, managedState(label, undefined, identity));
@@ -2859,6 +2869,11 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
 test("fresh assignment refreshes the widget after validation", async () => {
   setLeadEnvironment();
   const label = "fresh-start-widget-agent";
+  const sessionPath = join(
+    tmpdir(),
+    `pi-herdsman-${label}-${randomUUID()}.jsonl`,
+  );
+  realFs.writeFileSync(sessionPath, "{}", "utf8");
   const mailbox = agentMailboxPath(WORKSPACE, label);
   const agentsDir = PI_AGENTS_DIR;
   const definitionPath = `${agentsDir}/agent.md`;
@@ -2891,7 +2906,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       agent: "pi",
       kind: "path",
       source: "herdr:pi",
-      value: "/tmp/registered-agent.jsonl",
+      value: sessionPath,
     },
     agent_status: "working",
     cwd: requestedCwd,
@@ -3103,7 +3118,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
           agentLabel: label,
           paneId: "startup-pane",
           piSessionId: DEFAULT_PI_SESSION_ID,
-          piSessionFile: "/tmp/registered-agent.jsonl",
+          piSessionFile: sessionPath,
           cwd: requestedCwd,
           updatedAt: Date.now(),
         });
@@ -3265,6 +3280,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
+    realFs.rmSync(sessionPath, { force: true });
     if (hadDefinition)
       realFs.writeFileSync(definitionPath, previousDefinition!);
     else if (!hadAgentsDir) {

@@ -19,11 +19,14 @@ herdr status --json
 herdr integration status
 ```
 
+The JSON status must report a Herdr client version of `>=0.9.0`,
+`server.running` as `true`, and `server.endpoint_compatible` as `true`.
+
 The supported repository contract requires:
 
 - Node `>=22.19.0`
 - Pi `>=0.84.2 <0.86.0`
-- herdr `>=0.8.0`
+- herdr `>=0.9.0`
 - herdr Pi integration version `2` or newer
 
 Run focused tests and other intermediate checks before this smoke suite. Do

@@ -559,7 +559,7 @@ export function fakeContext(
     abort: () => undefined,
     isProjectTrusted: () => true,
     isIdle: () => true,
-    getContextUsage: () => ({ tokens: 2, contextWindow: 10 }),
+    getContextUsage: () => ({ tokens: 2, contextWindow: 10, percent: null }),
     sessionManager: {
       getSessionId: () => LEAD_SESSION_ID,
       getSessionFile: () => "/tmp/root.jsonl",
@@ -603,10 +603,8 @@ export type ExecHandler = (
 ) => ExecResult | Promise<ExecResult>;
 
 const HERDR_STATUS_RESPONSE = JSON.stringify({
-  result: {
-    client: { version: "0.8.0" },
-    server: { running: true, version: "0.8.0", compatible: true },
-  },
+  client: { version: "0.9.0" },
+  server: { running: true, endpoint_compatible: true },
 });
 function herdrStatusResult(): ExecResult {
   return { stdout: HERDR_STATUS_RESPONSE, stderr: "", code: 0 };
@@ -621,6 +619,7 @@ export function fakePi(
     autoActivateRegisteredTools?: boolean;
     persistMessages?: boolean;
     sessionName?: string;
+    status?: ExecResult;
   } = {},
 ) {
   const events = new Map<string, ((event: any, ctx: Context) => unknown)[]>();
@@ -683,7 +682,7 @@ export function fakePi(
       calls.push(args);
       execOptions.push(execOptionsValue);
       if (command === "herdr" && args[0] === "status" && args[1] === "--json") {
-        const result = herdrStatusResult();
+        const result = options.status ?? herdrStatusResult();
         callResults.push({ args, succeeded: true, code: result.code });
         return result;
       }
@@ -693,7 +692,10 @@ export function fakePi(
           args,
           execOptionsValue,
         ) ?? {
-          stdout: "{}",
+          stdout:
+            command === "herdr" && isAgentList(args)
+              ? JSON.stringify({ result: { agents: [] } })
+              : "{}",
           stderr: "",
           code: 0,
         });

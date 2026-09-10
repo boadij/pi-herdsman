@@ -71,77 +71,73 @@ function assertToolResult(result: any): asserts result is {
 test("Herdr version parsing accepts preview suffixes but rejects trailing text", async () => {
   const { parseHerdrVersion } = await import("./index.ts");
   for (const version of [
-    "0.8.0",
-    "0.8.0-preview",
-    "0.8.0-preview.2026-06-02-abcdef123456",
+    "0.9.0",
+    "0.9.0-preview",
+    "0.9.0-preview.2026-06-02-abcdef123456",
   ])
     assert.ok(parseHerdrVersion(version), version);
   for (const version of [
-    "0.8.0 trailing",
-    "0.8.0-preview.2026-06-02-abcdef123456 trailing",
-    "0.8.0\n",
-    "00.8.0",
-    "0.08.0",
-    "0.8.00",
+    "0.9.0 trailing",
+    "0.9.0-preview.2026-06-02-abcdef123456 trailing",
+    "0.9.0\n",
+    "00.9.0",
+    "0.09.0",
+    "0.9.00",
   ])
     assert.equal(parseHerdrVersion(version), undefined, version);
 });
 
-test("agent list matches canonical Herdr session paths", async () => {
-  setLeadEnvironment();
-  const label = `canonical-session-${randomUUID().slice(0, 8)}`;
-  const root = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-session-list-"));
-  const path = join(root, "agent-session.jsonl");
-  const alias = join(root, "alias-session.jsonl");
-  const identity = {
-    ...recoveryIdentity(label),
-    piSessionFile: path,
-  };
-  const state = managedState(label, undefined, identity);
-  const mailbox = agentMailboxPath(WORKSPACE, label);
-  realFs.writeFileSync(path, "{}");
-  realFs.symlinkSync(path, alias);
-  writeAgentState(mailbox, state);
-  const listedAgent = {
-    ...agentFromState(state),
-    agent_session: {
-      source: "herdr:pi",
-      agent: "pi",
-      kind: "path",
-      value: alias,
-    },
-  };
-  const baseExec = leadExec(label, "idle", state.piSessionId, undefined, null);
-  const pi = fakePi({
-    exec: (command, args, options) => {
-      if (command === "herdr" && args[0] === "agent" && args[1] === "list")
-        return {
-          stdout: JSON.stringify({ result: { agents: [listedAgent] } }),
-          stderr: "",
-          code: 0,
-        };
-      return baseExec(command, args, options);
-    },
-  });
-  registerExtension!(pi.pi as never);
-  try {
-    const tool = pi.tools.find((candidate) => candidate.name === "agent");
-    assert.ok(tool);
-    const result = await tool.execute(
-      "canonical-session-list",
-      { action: "list" },
-      undefined,
-      undefined,
-      fakeContext(),
-    );
-    assert.equal(result.details.agents.length, 1);
-    assert.equal(result.details.agents[0].agent, label);
-  } finally {
-    pi.events.get("session_shutdown")?.[0]();
-    resetAgentMailbox(mailbox);
-    realFs.rmSync(root, { recursive: true, force: true });
+test("Herdr preflight gates endpoint compatibility, not private server version", async () => {
+  const run = async (server: Record<string, unknown>) => {
     setLeadEnvironment();
-  }
+    const label = `preflight-${randomUUID().slice(0, 8)}`;
+    const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+    const pi = fakePi({
+      exec: startup.exec,
+      status: {
+        code: 0,
+        stdout: JSON.stringify({
+          client: { version: "0.9.0" },
+          server,
+        }),
+        stderr: "",
+      },
+    });
+    registerExtension!(pi.pi as never);
+    try {
+      return await pi.tools[0].execute(
+        "preflight",
+        {
+          action: "delegate",
+          definition: "agent",
+          label,
+          task: "preflight",
+        },
+        undefined,
+        undefined,
+        fakeContext(),
+      );
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(startup.mailbox);
+    }
+  };
+
+  const incompatible = await run({ running: true, endpoint_compatible: false });
+  assert.equal(incompatible.details.error.category, "invalid_request");
+  assert.match(incompatible.details.error.message, /endpoint-compatible/);
+
+  const staleServer = await run({
+    running: true,
+    endpoint_compatible: true,
+    version: "0.8.0",
+    compatible: false,
+  });
+  assert.equal(
+    staleServer.details.ok,
+    true,
+    JSON.stringify(staleServer.details),
+  );
 });
 
 test("registered lead and unmanaged roles expose the correct surface", () => {
@@ -593,9 +589,14 @@ test("registered lead and replacement chief exchange messages and asks", async (
   const leadId = LEAD_SESSION_ID;
   const chiefId = `chief-${randomUUID()}`;
   const replacementId = `replacement-${randomUUID()}`;
-  const leadPath = "/tmp/contract-lead.jsonl";
-  const chiefPath = "/tmp/contract-chief.jsonl";
-  const replacementPath = "/tmp/contract-replacement.jsonl";
+  const sessionRoot = realFs.realpathSync(
+    realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-contract-sessions-")),
+  );
+  const leadPath = join(sessionRoot, "lead.jsonl");
+  const chiefPath = join(sessionRoot, "chief.jsonl");
+  const replacementPath = join(sessionRoot, "replacement.jsonl");
+  for (const path of [leadPath, chiefPath, replacementPath])
+    writeFileSync(path, "{}", "utf8");
   nativeSessions.set(leadPath, { id: leadId, path: leadPath, entries: [] });
   nativeSessions.set(chiefPath, {
     id: chiefId,
@@ -1237,6 +1238,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     nativeSessions.delete(leadPath);
     nativeSessions.delete(chiefPath);
     nativeSessions.delete(replacementPath);
+    realFs.rmSync(sessionRoot, { recursive: true, force: true });
     resetAgentMailbox(directAgentMailbox);
     resetAgentMailbox(descendantAgentMailbox);
   }
@@ -1436,7 +1438,16 @@ test("chief guidance carries the lead coordination contract", () => {
 test("definition roster matches live list and rejects stale sessions", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
-  const pi = fakePi();
+  const pi = fakePi({
+    exec: (_command, args) =>
+      isAgentList(args)
+        ? {
+            stdout: JSON.stringify({ result: { agents: [] } }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
   let sessionId = context.sessionManager.getSessionId();

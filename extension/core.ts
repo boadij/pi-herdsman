@@ -1,6 +1,5 @@
 import { fail, OperationError } from "./errors.ts";
 import { MAILBOX_PROTOCOL_LIMIT_BYTES } from "./mailbox.ts";
-import { contentText, type AssistantMessage } from "@earendil-works/pi-ai";
 import {
   closeSync,
   constants,
@@ -307,32 +306,6 @@ export function displayIdentity(
 }
 export type SpawnPlacement = "tab" | "subtree" | "split";
 export type SpawnPlacementScope = "global" | "project";
-export interface ContextUsageSnapshot {
-  tokens: number | null;
-  contextWindow: number;
-  percent: number | null;
-}
-
-export function normalizeContextUsage(
-  value: unknown,
-): ContextUsageSnapshot | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const v = value as Record<string, unknown>;
-  const contextWindow =
-    typeof v.contextWindow === "number" ? v.contextWindow : 0;
-  if (!contextWindow) return undefined;
-  const tokens = typeof v.tokens === "number" ? v.tokens : null;
-  const percent = typeof v.percent === "number" ? v.percent : null;
-  return { tokens, contextWindow, percent };
-}
-export function extractAssistantText(
-  messages: readonly AssistantMessage[],
-): string {
-  return messages
-    .map((message) => contentText(message.content, ""))
-    .join("\n")
-    .trim();
-}
 export function hasTaskText(task: string | undefined): boolean {
   return task !== undefined && !!task.trim();
 }

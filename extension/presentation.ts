@@ -96,12 +96,6 @@ export function collapseDisplayText(
     ? normalized
     : `${characters.slice(0, Math.max(0, maxCharacters - 1)).join("")}…`;
 }
-export function selectedModelToken(event: {
-  model?: { provider: string; id: string };
-}): string | undefined {
-  const model = event.model;
-  return model ? `${model.provider}/${model.id}` : undefined;
-}
 export function formatElapsed(
   startedAt: number | undefined,
   now: number,
