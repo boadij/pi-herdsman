@@ -62,7 +62,7 @@ test("legacy tool, command, selectors, grammar, and renderers stay absent", asyn
     fakeContext(),
   );
   assert.equal(legacySelector.details.error.category, "invalid_request");
-  assert.match(legacySelector.details.error.message, /worker/);
+  assert.equal(legacySelector.details.error.message, "Invalid agent input");
 
   const notices: string[] = [];
   const context = fakeContext([]) as any;

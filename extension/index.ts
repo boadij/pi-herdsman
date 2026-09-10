@@ -26,6 +26,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { herdsmanTempRoot } from "./tmp.ts";
 import { Type } from "typebox";
+import { Compile } from "typebox/compile";
 import {
   Container,
   Key,
@@ -486,20 +487,6 @@ type ParsedParams =
   | { action: "reply"; agent: string; message: string; files?: string[] }
   | { action: "close"; agent: string }
   | { action: "inspect"; agent: string };
-const PUBLIC_FIELDS = [
-  "action",
-  "definition",
-  "agent",
-  "label",
-  "cwd",
-  "task",
-  "files",
-  "fork",
-  "timeoutMs",
-  "message",
-  "session",
-] as const;
-type PublicField = (typeof PUBLIC_FIELDS)[number];
 const STRING_FIELDS = [
   "definition",
   "agent",
@@ -510,16 +497,6 @@ const STRING_FIELDS = [
   "message",
   "session",
 ] as const;
-function rejectUnknownFields(p: Params): void {
-  const known = new Set<string>(PUBLIC_FIELDS);
-  const unknown = Object.keys(p).filter((field) => !known.has(field));
-  if (!unknown.length) return;
-  fail(
-    "invalid_request",
-    `Unsupported agent fields: ${unknown.join(", ")}`,
-    p.action,
-  );
-}
 function rejectBlankStrings(p: Params): void {
   const invalid = STRING_FIELDS.filter((field) => {
     const value = p[field];
@@ -529,22 +506,6 @@ function rejectBlankStrings(p: Params): void {
   fail(
     "invalid_request",
     `Fields must contain non-whitespace text when supplied: ${invalid.join(", ")}`,
-    p.action,
-  );
-}
-function rejectUnsupported(
-  p: Params,
-  mode: string,
-  allowed: readonly PublicField[],
-): void {
-  const allowedSet = new Set<PublicField>(allowed);
-  const invalid = PUBLIC_FIELDS.filter(
-    (field) => p[field] !== undefined && !allowedSet.has(field),
-  );
-  if (!invalid.length) return;
-  fail(
-    "invalid_request",
-    `${mode} does not support: ${invalid.join(", ")}. Allowed: ${allowed.join(", ")}`,
     p.action,
   );
 }
@@ -574,17 +535,14 @@ function validateTimeout(timeoutMs: number | undefined): void {
   );
 }
 function parseRequest(p: Params): ParsedParams {
-  rejectUnknownFields(p);
   rejectBlankStrings(p);
   validateRequestedLabel(p.label, p.action);
   validateRequestedLabel(p.agent, p.action);
   validateTimeout(p.timeoutMs);
   if (p.action === "list") {
-    rejectUnsupported(p, "list", ["action"]);
     return { action: "list" };
   }
   if (p.action === "steer") {
-    rejectUnsupported(p, "steer", ["action", "agent", "message", "files"]);
     if (!p.agent) fail("invalid_request", "Steer requires an agent", "steer");
     if (!p.message)
       fail("invalid_request", "Steer requires a non-empty message", "steer");
@@ -596,7 +554,6 @@ function parseRequest(p: Params): ParsedParams {
     };
   }
   if (p.action === "reply") {
-    rejectUnsupported(p, "reply", ["action", "agent", "message", "files"]);
     if (!p.agent) fail("invalid_request", "Reply requires an agent", "reply");
     if (!p.message)
       fail("invalid_request", "Reply requires a non-empty message", "reply");
@@ -608,27 +565,15 @@ function parseRequest(p: Params): ParsedParams {
     };
   }
   if (p.action === "close") {
-    rejectUnsupported(p, "close", ["action", "agent"]);
     if (!p.agent) fail("invalid_request", "Close requires an agent", "close");
     return { action: "close", agent: p.agent };
   }
   if (p.action === "inspect") {
-    rejectUnsupported(p, "inspect", ["action", "agent"]);
     if (!p.agent)
       fail("invalid_request", "Inspect requires an agent", "inspect");
     return { action: "inspect", agent: p.agent };
   }
   if (p.action === "delegate" && p.definition !== undefined) {
-    rejectUnsupported(p, "Definition delegation", [
-      "action",
-      "definition",
-      "label",
-      "cwd",
-      "task",
-      "files",
-      "fork",
-      "timeoutMs",
-    ]);
     if (!p.definition)
       fail(
         "invalid_request",
@@ -653,14 +598,6 @@ function parseRequest(p: Params): ParsedParams {
     };
   }
   if (p.action === "delegate" && p.session !== undefined) {
-    rejectUnsupported(p, "Session delegation", [
-      "action",
-      "session",
-      "label",
-      "task",
-      "files",
-      "timeoutMs",
-    ]);
     if (!p.session)
       fail(
         "invalid_request",
@@ -946,8 +883,16 @@ function appendDurableError(
   try {
     pi.appendEntry(type, { error: String(error), timestamp: Date.now() });
   } catch {
-    ctx.ui?.notify?.(type, "error");
+    ctx.ui.notify(type, "error");
   }
+}
+function settingRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+function piHerdsmanSettings(value: unknown): Record<string, unknown> {
+  return settingRecord(settingRecord(value).piHerdsman);
 }
 function validHerdRunTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -991,11 +936,12 @@ async function placementSettings(
   const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
     projectTrusted: ctx.isProjectTrusted(),
   });
-  await settings.reload();
-  const globalValue = (settings.getGlobalSettings() as any)?.piHerdsman
-    ?.spawnPlacement;
-  const projectValue = (settings.getProjectSettings() as any)?.piHerdsman
-    ?.spawnPlacement;
+  const globalValue = piHerdsmanSettings(
+    settings.getGlobalSettings(),
+  ).spawnPlacement;
+  const projectValue = piHerdsmanSettings(
+    settings.getProjectSettings(),
+  ).spawnPlacement;
   const project = settings.isProjectTrusted() && isSpawnPlacement(projectValue);
   return {
     effective: resolveSpawnPlacement(project ? projectValue : globalValue),
@@ -1007,9 +953,7 @@ async function leadTabLabel(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
 ): Promise<string> {
-  const name =
-    (pi as any).getSessionName?.() ??
-    (ctx.sessionManager as any).getSessionName?.();
+  const name = pi.getSessionName() ?? ctx.sessionManager.getSessionName();
   const identity =
     typeof name === "string" && name.trim()
       ? name.trim()
@@ -1150,8 +1094,7 @@ async function messageLimits(
   const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
     projectTrusted: false,
   });
-  await settings.reload();
-  const global = (settings.getGlobalSettings() as any)?.piHerdsman ?? {};
+  const global = piHerdsmanSettings(settings.getGlobalSettings());
   return {
     inline: resolveEffectiveByteLimit(global.inlineAttachmentLimitBytes),
     mailbox: resolveEffectiveByteLimit(global.mailboxPayloadLimitBytes),
@@ -1176,10 +1119,9 @@ async function contextAgentDefinitions(ctx: ExtensionContext) {
   const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
     projectTrusted: ctx.isProjectTrusted(),
   });
-  await settings.reload();
   const enabled =
     settings.isProjectTrusted() &&
-    (settings.getProjectSettings() as any)?.piHerdsman?.projectAgents === true;
+    piHerdsmanSettings(settings.getProjectSettings()).projectAgents === true;
   return {
     projectAgentsEnabled: enabled,
     definitions: discoverAgentDefinitions(
@@ -1189,8 +1131,10 @@ async function contextAgentDefinitions(ctx: ExtensionContext) {
 }
 const AGENT_DEFINITION_ENTRY = "pi-herdsman-agent-definition";
 type AgentDefinitionEntry = { name: string };
-export function sessionAgentDefinition(entries: unknown[]): string | undefined {
-  const typed = entries as Array<{
+export function sessionAgentDefinition(
+  entries: readonly unknown[],
+): string | undefined {
+  const typed = entries as ReadonlyArray<{
     type?: unknown;
     customType?: unknown;
     data?: unknown;
@@ -1232,11 +1176,7 @@ function ensureAgentDefinition(
   ctx: ExtensionContext,
   name: string,
 ): void {
-  const entries = ctx.sessionManager.getEntries() as Array<{
-    type?: unknown;
-    customType?: unknown;
-    data?: unknown;
-  }>;
+  const entries = ctx.sessionManager.getEntries();
   if (
     entries.some(
       (entry) =>
@@ -1406,22 +1346,51 @@ function settingsPath(
     ? join(getAgentDir(), "settings.json")
     : join(ctx.cwd, CONFIG_DIR_NAME, "settings.json");
 }
+const HERDR_VERSION_PATTERN =
+  /^(\d+)\.(\d+)\.(\d+)(?:-preview(?:\.[0-9A-Za-z-]+)?)?$/;
+export function parseHerdrVersion(
+  value: string,
+): RegExpMatchArray | undefined {
+  const match = value.match(HERDR_VERSION_PATTERN);
+  return match?.[0] === value ? match : undefined;
+}
 async function herdrVersion(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<void> {
-  const version = await runHerdr(pi, ctx, ["--version"], {
+  const status = await runHerdr(pi, ctx, ["status", "--json"], {
     signal,
     timeout: 10_000,
   });
-  const match = String(version).match(/(\d+)\.(\d+)\.(\d+)/);
+  const value = settingRecord(status);
+  const client = settingRecord(value.client);
+  const server = settingRecord(value.server);
+  const clientVersion =
+    typeof client.version === "string" ? client.version : undefined;
+  const serverVersion =
+    typeof server.version === "string" ? server.version : undefined;
+  const clientMatch = clientVersion
+    ? parseHerdrVersion(clientVersion)
+    : undefined;
+  const serverMatch = serverVersion
+    ? parseHerdrVersion(serverVersion)
+    : undefined;
+  const supported = (match: RegExpMatchArray | undefined): boolean =>
+    !!match &&
+    (Number(match[1]) > 0 || (Number(match[1]) === 0 && Number(match[2]) >= 8));
   if (
-    !match ||
-    Number(match[1]) < 0 ||
-    (Number(match[1]) === 0 && Number(match[2]) < 8)
-  )
-    fail("invalid_request", "Herdr >=0.8.0 is required", "preflight");
+    !supported(clientMatch) ||
+    !supported(serverMatch) ||
+    server.running !== true ||
+    server.compatible !== true
+  ) {
+    fail(
+      "invalid_request",
+      "Herdr status is unavailable or incompatible; Herdr >=0.8.0 with a running compatible server is required",
+      "preflight",
+    );
+  }
 }
 function expectedSession(id?: string, path?: string): ExpectedSession {
   return { id, path };
@@ -1430,14 +1399,6 @@ function herdrSessionObservations(agent: any): unknown[] {
   if (!agent || typeof agent !== "object") return [];
   const observations: unknown[] = [];
   if (agent.agent_session != null) observations.push(agent.agent_session);
-  if (agent.session_id != null)
-    observations.push({ kind: "id", value: agent.session_id });
-  if (agent.pi_session_id != null)
-    observations.push({ kind: "id", value: agent.pi_session_id });
-  if (agent.session_path != null)
-    observations.push({ kind: "path", value: agent.session_path });
-  if (agent.pi_session_path != null)
-    observations.push({ kind: "path", value: agent.pi_session_path });
   return observations;
 }
 function isPiAgent(agent: any): boolean {
@@ -1610,11 +1571,8 @@ function persistedSessionName(agent: any): string | undefined {
     .find((session) => session?.kind === "path")?.value;
   if (!path) return undefined;
   try {
-    const manager = SessionManager.open(path) as any;
-    const name =
-      typeof manager.getSessionName === "function"
-        ? manager.getSessionName()
-        : undefined;
+    const manager = SessionManager.open(path);
+    const name = manager.getSessionName();
     return typeof name === "string" && name.trim() ? name.trim() : undefined;
   } catch {
     return undefined;
@@ -1641,7 +1599,7 @@ function herdrAliasMatchesIfReported(
   agent: any,
   expectedAlias: string,
 ): boolean {
-  const aliases = [agent?.name, agent?.herdr_agent].filter(
+  const aliases = [agent?.name].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
 
@@ -1671,7 +1629,7 @@ async function validateIntegration(
         "integration",
       );
     }
-    agent = payload.agent ?? payload;
+    agent = payload.agent;
     if (!herdrAliasMatchesIfReported(agent, runtime.herdrAgent))
       fail(
         "target_not_found",
@@ -2475,7 +2433,7 @@ async function managedAgentSnapshots(
 
     const relatedLiveAgents = live.agents.filter((agent: any) => {
       if (agent?.workspace_id !== state.workspaceId) return false;
-      const aliases = [agent?.name, agent?.herdr_agent].filter(
+      const aliases = [agent?.name].filter(
         (value): value is string =>
           typeof value === "string" && value.length > 0,
       );
@@ -2517,14 +2475,8 @@ async function managedAgentSnapshots(
     }
 
     const session = sessionIdentity(agent.agent_session);
-    const piSessionId =
-      session?.kind === "id"
-        ? session.value
-        : (agent.session_id ?? agent.pi_session_id);
-    const piSessionPath =
-      session?.kind === "path"
-        ? session.value
-        : (agent.session_path ?? agent.pi_session_path);
+    const piSessionId = session?.kind === "id" ? session.value : undefined;
+    const piSessionPath = session?.kind === "path" ? session.value : undefined;
     const lifecycleState = normalizeHerdrLifecycleState(agent);
     const completionPending = pendingResultExists(
       path,
@@ -2568,18 +2520,15 @@ async function managedAgentSnapshots(
           tab_id: agent.tab_id,
           tab_label: agent.tab_label,
           cwd: agent.cwd,
+          agent_session: agent.agent_session,
           pi_session_id: piSessionId,
           pi_session_path: piSessionPath,
           display_agent: agent.display_agent,
           managed: true,
           owner_session_id: state.ownerSessionId,
           agent_definition: agentDefinition,
-          ...((agent.model ?? agent.agent_model)
-            ? { model: agent.model ?? agent.agent_model }
-            : {}),
-          ...((agent.thinking ?? agent.agent_thinking)
-            ? { thinking: agent.thinking ?? agent.agent_thinking }
-            : {}),
+          ...(agent.model ? { model: agent.model } : {}),
+          ...(agent.thinking ? { thinking: agent.thinking } : {}),
           active_request_id: state.activeRequestId,
           ...(state.resultError ? { result_error: state.resultError } : {}),
           ...(state.lastActivityAt !== undefined
@@ -2687,7 +2636,6 @@ async function assertParentAbsent(
         agent.workspace_id === parent.workspaceId &&
         (agent.pane_id === parent.paneId ||
           agent.name === expectedAlias ||
-          agent.herdr_agent === expectedAlias ||
           herdrSessionsMatch(agent, expected)),
     );
 
@@ -2867,7 +2815,12 @@ function listedAgentRecords(
     } else if (!listed.recovery_only && orphan && scope?.kind === "lead") {
       actions.push("close");
     }
-    const { label: _label, steerable: _steerable, ...publicAgent } = listed;
+    const {
+      label: _label,
+      steerable: _steerable,
+      agent_session: _agentSession,
+      ...publicAgent
+    } = listed;
     return {
       ...publicAgent,
       agent: listed.label,
@@ -3086,7 +3039,7 @@ function liveAgentConflictsWithCompletedState(
     state.agentLabel,
     state.runId,
   );
-  const aliases = [agent.herdr_agent, agent.name].filter(
+  const aliases = [agent.name].filter(
     (value): value is string => typeof value === "string",
   );
   const labels = [agent.label].filter(
@@ -3121,7 +3074,7 @@ async function deliverResultUnsafe(
   )
     return;
   if (!controllerSessionActive) return;
-  const entries = (ctx.sessionManager as any).getEntries?.() ?? [];
+  const entries = ctx.sessionManager.getEntries();
   const evidenceKey = resultDeliveryEvidenceKey(runtime, result.requestId);
   const expectedDelivery = resultDeliveryExpectation(runtime, result.requestId);
   if (
@@ -3341,7 +3294,7 @@ async function finalizeDeliveredResult(
     !resultCleanupReady(
       runtime,
       result.requestId,
-      (ctx.sessionManager as any).getEntries?.() ?? [],
+      ctx.sessionManager.getEntries(),
     )
   )
     return false;
@@ -3400,7 +3353,7 @@ async function settlePersistedResults(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<void> {
-  const entries = (ctx.sessionManager as any).getEntries?.() ?? [];
+  const entries = ctx.sessionManager.getEntries();
   let ownerSessionId: string;
   try {
     ownerSessionId = ctx.sessionManager.getSessionId();
@@ -4613,14 +4566,8 @@ async function rollbackUnknownStartedAgent(
     pane_id: live.pane_id,
     tab_id: live.tab_id,
     cwd: live.cwd,
-    pi_session_id:
-      session?.kind === "id"
-        ? session.value
-        : (live.session_id ?? live.pi_session_id),
-    pi_session_path:
-      session?.kind === "path"
-        ? session.value
-        : (live.session_path ?? live.pi_session_path),
+    pi_session_id: session?.kind === "id" ? session.value : undefined,
+    pi_session_path: session?.kind === "path" ? session.value : undefined,
     agent_session: live.agent_session,
     label,
   };
@@ -5793,6 +5740,150 @@ export default function (pi: ExtensionAPI): void {
             allowedAgentDefinitions: new Set(allowedAgentDefinitions),
           }
         : undefined;
+  const agentParameters = Type.Union([
+    Type.Object(
+      { action: StringEnum(["list"] as const) },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["delegate"] as const),
+        definition:
+          controllerScope?.kind === "managed-agent"
+            ? {
+                ...StringEnum([...controllerScope.allowedAgentDefinitions]),
+                description: "Allowed agent definition for delegation.",
+              }
+            : Type.String({
+                description: "Agent definition for a fresh agent.",
+                pattern: "\\S",
+              }),
+        task: Type.String({ description: "Non-empty task.", pattern: "\\S" }),
+        label: Type.Optional(
+          Type.String({
+            description:
+              "Optional logical agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
+            pattern: AGENT_LABEL_PATTERN.source,
+          }),
+        ),
+        cwd: Type.Optional(
+          Type.String({ description: "Working directory for a fresh agent." }),
+        ),
+        fork: Type.Optional(
+          Type.String({
+            description:
+              "Exact saved Pi session path or full UUID used as context for a fork.",
+          }),
+        ),
+        timeoutMs: Type.Optional(
+          Type.Integer({
+            minimum: STARTUP_TIMEOUT_MIN,
+            maximum: STARTUP_TIMEOUT_MAX,
+            description: "Total startup budget in milliseconds.",
+          }),
+        ),
+        files: Type.Optional(
+          Type.Array(
+            Type.String({ description: "Readable regular local file path." }),
+            {
+              description:
+                "Supporting files for delegation, steering, replying, or ask_owner. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path and byte size. Files do not grant capabilities.",
+            },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["delegate"] as const),
+        session: Type.String({ pattern: "\\S" }),
+        label: Type.Optional(
+          Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
+        ),
+        task: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String())),
+        timeoutMs: Type.Optional(
+          Type.Integer({
+            minimum: STARTUP_TIMEOUT_MIN,
+            maximum: STARTUP_TIMEOUT_MAX,
+          }),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["steer"] as const),
+        agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
+        message: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String())),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["reply"] as const),
+        agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
+        message: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String())),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["close", "inspect"] as const),
+        agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
+      },
+      { additionalProperties: false },
+    ),
+  ]);
+  const agentValidator = Compile(agentParameters);
+  const staffParameters = Type.Union([
+    Type.Object(
+      { action: StringEnum(["list"] as const) },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["inspect"] as const),
+        lead: Type.String({
+          pattern: PI_SESSION_ID_PATTERN,
+          description:
+            "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
+        }),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["message"] as const),
+        lead: Type.String({
+          pattern: PI_SESSION_ID_PATTERN,
+          description:
+            "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
+        }),
+        message: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["reply"] as const),
+        lead: Type.String({
+          pattern: PI_SESSION_ID_PATTERN,
+          description:
+            "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
+        }),
+        askId: Type.String({ pattern: "\\S" }),
+        message: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: false },
+    ),
+  ]);
+  const staffValidator = Compile(staffParameters);
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
   let chiefMode: ChiefMode = "inactive";
@@ -6227,7 +6318,7 @@ export default function (pi: ExtensionAPI): void {
         ["agent", "get", descriptor.paneId],
         { signal: ctx.signal },
       );
-      const alias = result?.agent ?? result;
+      const alias = result?.agent;
       if (!isPiAgent(alias) || herdrSessionId(alias) !== descriptor.piSessionId)
         return undefined;
     } catch {
@@ -6722,7 +6813,7 @@ export default function (pi: ExtensionAPI): void {
     return "Chief mode active.";
   };
   const leaveChief = async (ctx?: ExtensionCommandContext): Promise<string> => {
-    if (ctx?.hasUI && ctx.ui?.confirm) {
+    if (ctx?.hasUI) {
       const pending = countSupervisedPendingAsks
         ? await countSupervisedPendingAsks(ctx)
         : undefined;
@@ -7090,8 +7181,13 @@ export default function (pi: ExtensionAPI): void {
             `agent definitions after configuration changes.`,
         };
       });
-    if (controllerScope?.kind === "lead")
+    if (controllerScope)
       pi.on("tool_call", async (event: any, ctx: ExtensionContext) => {
+        if (event.toolName === "agent" && !agentValidator.Check(event.input))
+          return { block: true, reason: "Invalid agent input." };
+        if (event.toolName === "staff" && !staffValidator.Check(event.input))
+          return { block: true, reason: "Invalid staff input." };
+        if (controllerScope.kind !== "lead") return;
         if (event.toolName === CHIEF_TOOLS[0] || !isCurrentChief(ctx)) return;
         return {
           block: true,
@@ -7190,8 +7286,7 @@ export default function (pi: ExtensionAPI): void {
     clearNormalUI = () => {
       if (statusTimer) clearInterval(statusTimer);
       statusTimer = undefined;
-      if (statusWidget || statusContext)
-        (statusContext as any)?.ui?.setWidget?.("pi-herdsman", undefined);
+      if (statusContext) statusContext.ui.setWidget("pi-herdsman", undefined);
       statusWidget?.dispose();
       statusWidget = undefined;
       requestStatusRefresh = undefined;
@@ -7199,9 +7294,9 @@ export default function (pi: ExtensionAPI): void {
     startSupervisionUI = (ctx) => {
       clearNormalUI?.();
       clearSupervisionUI?.();
-      if (ctx.mode !== "tui" || !ctx.hasUI || !ctx.ui?.setWidget) return;
+      if (ctx.mode !== "tui" || !ctx.hasUI) return;
       try {
-        ctx.ui.setWidget("pi-herdsman-staff", (tui: any, _theme: any) => {
+        ctx.ui.setWidget("pi-herdsman-staff", (tui, _theme) => {
           requestSupervisionWidgetRender = () => tui.requestRender();
           return createSupervisionWidget(
             () => supervisionSnapshot.leads,
@@ -7223,7 +7318,7 @@ export default function (pi: ExtensionAPI): void {
       supervisionTimer = undefined;
       if (removeWidget) {
         try {
-          (leadContext as any)?.ui?.setWidget?.("pi-herdsman-staff", undefined);
+          leadContext?.ui.setWidget("pi-herdsman-staff", undefined);
         } catch {
           // Widget teardown is best-effort during UI failure or shutdown.
         }
@@ -8365,50 +8460,7 @@ export default function (pi: ExtensionAPI): void {
           "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name. " +
           "Chief-only supervision coordination. The chief supervises leads and does not own their agent trees. A fresh supervision snapshot is automatically supplied at the start of each chief agent run; treat it as the default current coordination state. For general state questions and ordinary messages or replies, use a fresh snapshot directly; do not call staff list, inspect, or another read command first. The message and reply actions revalidate exact identity and state themselves. Use list when the automatic snapshot is stale or unavailable, an immediately refreshed exact roster is materially necessary, or you are diagnosing identity or supervision projection problems. Use inspect only when deeper lead evidence is needed. Use the lead field's exact full Pi session ID and only fresh available_actions, never infer from display state or metadata. Every exact-identity-verified lead accepts message; reply only with the exact pending ask ID and current chief lease. Messages are bounded and direction-aware, and temporary verification or delivery failures retain queued records. Metadata is presentation-only and never authority. Messages use follow-up delivery. Human conversation remains the dispatch surface.",
         executionMode: "sequential",
-        parameters: Type.Union([
-          Type.Object(
-            { action: StringEnum(["list"] as const) },
-            { additionalProperties: false },
-          ),
-          Type.Object(
-            {
-              action: StringEnum(["inspect"] as const),
-              lead: Type.String({
-                pattern: PI_SESSION_ID_PATTERN,
-                description:
-                  "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
-              }),
-            },
-            { additionalProperties: false },
-          ),
-          Type.Object(
-            {
-              action: StringEnum(["message"] as const),
-              lead: Type.String({
-                pattern: PI_SESSION_ID_PATTERN,
-                description:
-                  "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
-              }),
-              message: Type.String({ pattern: "\\S" }),
-              files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-            },
-            { additionalProperties: false },
-          ),
-          Type.Object(
-            {
-              action: StringEnum(["reply"] as const),
-              lead: Type.String({
-                pattern: PI_SESSION_ID_PATTERN,
-                description:
-                  "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
-              }),
-              askId: Type.String({ pattern: "\\S" }),
-              message: Type.String({ pattern: "\\S" }),
-              files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-            },
-            { additionalProperties: false },
-          ),
-        ]),
+        parameters: staffParameters,
         execute: async (
           _id: string,
           params: any,
@@ -8420,20 +8472,14 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Staff is available only to the active chief");
           if (!(await currentChiefAuthority(ctx)))
             throw new Error("Chief lease is no longer active");
-          const allowed: Record<string, string[]> = {
-            list: ["action"],
-            inspect: ["action", "lead"],
-            message: ["action", "lead", "message", "files"],
-            reply: ["action", "lead", "askId", "message", "files"],
-          };
-          if (
-            !params ||
-            !allowed[params.action] ||
-            Object.keys(params).some(
-              (key) => !allowed[params.action].includes(key),
-            )
-          )
-            throw new Error("Invalid staff action");
+          if (!staffValidator.Check(params))
+            throw new OperationError({
+              category: "invalid_request",
+              message: "Invalid staff action",
+              operation: "staff",
+              rollbackOccurred: false,
+              retryAttempted: false,
+            });
           const refresh = async () => loadSupervisionSnapshot(ctx);
           const result = (value: Record<string, unknown>) => {
             const bounded = truncateModelText(JSON.stringify(value, null, 2), {
@@ -8713,7 +8759,7 @@ export default function (pi: ExtensionAPI): void {
       }
 
       const owner = ctx.sessionManager.getSessionId();
-      const entries = (ctx.sessionManager as any).getEntries?.() ?? [];
+      const entries = ctx.sessionManager.getEntries();
       const directStates = snapshot.mailboxes.filter(
         ({ state }) => state.ownerSessionId === owner,
       );
@@ -8983,10 +9029,10 @@ export default function (pi: ExtensionAPI): void {
       recoverAgentRuntimes = recoverControllerRuntimes;
     startAgentStaleScanner = startStaleScanner;
     startNormalUI = (ctx) => {
-      if (ctx.mode !== "tui" || !ctx.hasUI || !ctx.ui?.setWidget) return;
+      if (ctx.mode !== "tui" || !ctx.hasUI) return;
       const generation = ++statusGeneration;
       statusContext = ctx;
-      ctx.ui.setWidget("pi-herdsman", (tui: any, theme: any) => {
+      ctx.ui.setWidget("pi-herdsman", (tui, theme) => {
         const widget = createStatusWidget(() => tui.requestRender(), theme);
         if (controllerScope.kind === "managed-agent")
           widget.setSnapshot({
@@ -9044,7 +9090,7 @@ export default function (pi: ExtensionAPI): void {
         const sessionId = ctx.sessionManager.getSessionId();
         leadAgentStartedAt = undefined;
         herdRunStartedAt = restoreHerdRunStartedAt(
-          (ctx.sessionManager as any).getEntries?.() ?? [],
+          ctx.sessionManager.getEntries(),
           sessionId,
         );
         leadSettled = herdRunStartedAt === undefined;
@@ -9119,7 +9165,7 @@ export default function (pi: ExtensionAPI): void {
       statusRefresh = false;
       statusInFlight = false;
       if (statusWidget) {
-        (statusContext as any)?.ui?.setWidget?.("pi-herdsman", undefined);
+        statusContext?.ui.setWidget("pi-herdsman", undefined);
         statusWidget.dispose();
         statusWidget = undefined;
       }
@@ -9137,7 +9183,7 @@ export default function (pi: ExtensionAPI): void {
       ) {
         queueLeadMetadata(ctx, {
           paneId: process.env.HERDR_PANE_ID,
-          name: (pi as any).getSessionName?.(),
+          name: pi.getSessionName(),
           ...(pendingChiefAsk ? { pendingAskId: pendingChiefAsk.askId } : {}),
         });
       }
@@ -9190,7 +9236,7 @@ export default function (pi: ExtensionAPI): void {
         if (!process.env.HERDR_PANE_ID) return;
         queueLeadMetadata(ctx, {
           paneId: process.env.HERDR_PANE_ID,
-          name: event?.name ?? (pi as any).getSessionName?.(),
+          name: event?.name ?? pi.getSessionName(),
           ...(pendingChiefAsk ? { pendingAskId: pendingChiefAsk.askId } : {}),
         });
       });
@@ -9245,7 +9291,7 @@ export default function (pi: ExtensionAPI): void {
       statusRefresh = false;
       statusInFlight = false;
       if (statusWidget) {
-        (statusContext as any)?.ui?.setWidget?.("pi-herdsman", undefined);
+        statusContext?.ui.setWidget("pi-herdsman", undefined);
         statusWidget.dispose();
         statusWidget = undefined;
       }
@@ -9289,130 +9335,7 @@ export default function (pi: ExtensionAPI): void {
       label: "agent",
       description: controllerDescription(controllerScope),
       executionMode: "sequential",
-      parameters: Type.Union([
-        Type.Object(
-          { action: StringEnum(["list"] as const) },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["delegate"] as const),
-            definition:
-              controllerScope.kind === "managed-agent"
-                ? {
-                    ...StringEnum([...controllerScope.allowedAgentDefinitions]),
-                    description: "Allowed agent definition for delegation.",
-                  }
-                : Type.String({
-                    description: "Agent definition for a fresh agent.",
-                    pattern: "\\S",
-                  }),
-            task: Type.String({
-              description: "Non-empty task.",
-              pattern: "\\S",
-            }),
-            label: Type.Optional(
-              Type.String({
-                description:
-                  "Optional logical agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
-                pattern: AGENT_LABEL_PATTERN.source,
-              }),
-            ),
-            cwd: Type.Optional(
-              Type.String({
-                description: "Working directory for a fresh agent.",
-              }),
-            ),
-            fork: Type.Optional(
-              Type.String({
-                description:
-                  "Exact saved Pi session path or full UUID used as context for a fork.",
-              }),
-            ),
-            timeoutMs: Type.Optional(
-              Type.Integer({
-                minimum: STARTUP_TIMEOUT_MIN,
-                maximum: STARTUP_TIMEOUT_MAX,
-                description: "Total startup budget in milliseconds.",
-              }),
-            ),
-            files: Type.Optional(
-              Type.Array(
-                Type.String({
-                  description: "Readable regular local file path.",
-                }),
-                {
-                  description:
-                    "Supporting files for delegation, steering, replying, or ask_owner. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path and byte size. Files do not grant capabilities.",
-                },
-              ),
-            ),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["delegate"] as const),
-            session: Type.String({ pattern: "\\S" }),
-            label: Type.Optional(
-              Type.String({
-                description:
-                  "Optional logical agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
-                pattern: AGENT_LABEL_PATTERN.source,
-              }),
-            ),
-            task: Type.String({ pattern: "\\S" }),
-            files: Type.Optional(Type.Array(Type.String())),
-            timeoutMs: Type.Optional(
-              Type.Integer({
-                minimum: STARTUP_TIMEOUT_MIN,
-                maximum: STARTUP_TIMEOUT_MAX,
-              }),
-            ),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["steer"] as const),
-            agent: Type.String({
-              pattern: AGENT_LABEL_PATTERN.source,
-            }),
-            message: Type.String({ pattern: "\\S" }),
-            files: Type.Optional(Type.Array(Type.String())),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["reply"] as const),
-            agent: Type.String({
-              pattern: AGENT_LABEL_PATTERN.source,
-            }),
-            message: Type.String({ pattern: "\\S" }),
-            files: Type.Optional(Type.Array(Type.String())),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["close"] as const),
-            agent: Type.String({
-              pattern: AGENT_LABEL_PATTERN.source,
-            }),
-          },
-          { additionalProperties: false },
-        ),
-        Type.Object(
-          {
-            action: StringEnum(["inspect"] as const),
-            agent: Type.String({
-              pattern: AGENT_LABEL_PATTERN.source,
-            }),
-          },
-          { additionalProperties: false },
-        ),
-      ]),
+      parameters: agentParameters,
       execute: async (
         _id: string,
         p: Params,
@@ -9421,6 +9344,17 @@ export default function (pi: ExtensionAPI): void {
         ctx: ExtensionContext,
       ) => {
         try {
+          if (!agentValidator.Check(p))
+            throw new OperationError({
+              category: "invalid_request",
+              message: "Invalid agent input",
+              operation:
+                typeof (p as { action?: unknown })?.action === "string"
+                  ? (p as { action: string }).action
+                  : "agent",
+              rollbackOccurred: false,
+              retryAttempted: false,
+            });
           const value = await action(
             pi,
             ctx,
@@ -9564,7 +9498,7 @@ export default function (pi: ExtensionAPI): void {
     if (leafStatusTimer) clearInterval(leafStatusTimer);
     leafStatusTimer = undefined;
     if (leafStatusWidget) {
-      (leafStatusContext as any)?.ui?.setWidget?.("pi-herdsman", undefined);
+      leafStatusContext?.ui.setWidget("pi-herdsman", undefined);
       leafStatusWidget.dispose();
       leafStatusWidget = undefined;
     }
@@ -9664,10 +9598,7 @@ export default function (pi: ExtensionAPI): void {
       discardRequest(process.env.PI_HERDSMAN_MAILBOX!, requestId);
     } catch (error) {
       appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
-      ctx.ui?.notify?.(
-        "pi_herdsman_state_error: request cleanup failed",
-        "error",
-      );
+      ctx.ui.notify("pi_herdsman_state_error: request cleanup failed", "error");
     }
   };
   const acknowledgeAndDiscard = (
@@ -9900,15 +9831,10 @@ export default function (pi: ExtensionAPI): void {
       if (delegationEnabled)
         startAgentStaleScanner?.(ctx, metadataAbortController.signal);
       initialized = true;
-      if (
-        !delegationEnabled &&
-        (ctx as any).mode === "tui" &&
-        (ctx as any).hasUI &&
-        ctx.ui?.setWidget
-      ) {
+      if (!delegationEnabled && ctx.mode === "tui" && ctx.hasUI) {
         const generation = leafStatusGeneration;
         leafStatusContext = ctx;
-        (ctx.ui as any).setWidget("pi-herdsman", (tui: any, theme: any) => {
+        ctx.ui.setWidget("pi-herdsman", (tui, theme) => {
           const widget = createStatusWidget(() => tui.requestRender(), theme);
           widget.setSnapshot({
             agents: [],
@@ -9958,7 +9884,7 @@ export default function (pi: ExtensionAPI): void {
       state = undefined;
       if (delegationEnabled) clearAgentRuntimes();
       appendDurableError(pi, ctx, "pi_herdsman_state_error", e);
-      ctx.ui?.notify?.(`pi_herdsman_state_error: ${String(e)}`, "error");
+      ctx.ui.notify(`pi_herdsman_state_error: ${String(e)}`, "error");
     }
   });
   pi.on("input", (event: any, ctx: ExtensionContext) => {
@@ -10198,10 +10124,7 @@ export default function (pi: ExtensionAPI): void {
     if (message?.role !== "assistant") return;
     if (
       delegationEnabled &&
-      hasUndeliveredDirectChildWork(
-        state,
-        (ctx.sessionManager as any).getEntries?.() ?? [],
-      )
+      hasUndeliveredDirectChildWork(state, ctx.sessionManager.getEntries())
     )
       return;
     latest = extractAssistantText([message]);
@@ -10209,7 +10132,7 @@ export default function (pi: ExtensionAPI): void {
   pi.on("turn_end", (_event: unknown, ctx: ExtensionContext) => {
     touchActivity();
     if (!state?.activeRequestId) return;
-    const usage = normalizeContextUsage(ctx.getContextUsage?.());
+    const usage = normalizeContextUsage(ctx.getContextUsage());
     const percent =
       usage?.percent == null ? undefined : Math.round(usage.percent);
     const model = contextModelToken(ctx);
@@ -10295,10 +10218,7 @@ export default function (pi: ExtensionAPI): void {
       return;
     if (
       delegationEnabled &&
-      hasUndeliveredDirectChildWork(
-        state,
-        (ctx.sessionManager as any).getEntries?.() ?? [],
-      )
+      hasUndeliveredDirectChildWork(state, ctx.sessionManager.getEntries())
     )
       return;
     const result: ResultRecord = {
@@ -10318,7 +10238,7 @@ export default function (pi: ExtensionAPI): void {
               message: "Agent produced no assistant text",
             },
           }),
-      contextUsage: normalizeContextUsage(ctx.getContextUsage?.()),
+      contextUsage: normalizeContextUsage(ctx.getContextUsage()),
       completedAt: Date.now(),
     };
     pendingResult = result;

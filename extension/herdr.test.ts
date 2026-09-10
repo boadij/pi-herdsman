@@ -37,14 +37,15 @@ test("nested topology keeps the Herdr workspace authoritative", () => {
   assert.deepEqual(
     structuredTopologyEnvironment("live-workspace", [
       "PI_HERDSMAN_WORKSPACE_ID=stale-workspace",
+      "HERDR_SOCKET_PATH=stale-socket",
+      "HERDR_ENV=stale-env",
       "HERDR_WORKSPACE_ID=stale-herdr-workspace",
       "HERDR_TAB_ID=stale-tab",
+      "HERDR_PANE_ID=stale-pane",
       "PI_HERDSMAN_LABEL=task20_nested",
     ]),
     [
       "PI_HERDSMAN_LABEL=task20_nested",
-      "HERDR_ENV=1",
-      "HERDR_WORKSPACE_ID=live-workspace",
       "PI_HERDSMAN_WORKSPACE_ID=live-workspace",
     ],
   );
@@ -528,6 +529,20 @@ test("runHerdr preserves structured and plain diagnostics without empty suffixes
     ),
     null,
   );
+  await assert.rejects(
+    runHerdr(
+      {
+        exec: async () => ({
+          code: 0,
+          stdout: "herdr 0.8.0\n",
+          stderr: "",
+        }),
+      } as any,
+      ctx,
+      ["--version"],
+    ),
+    /malformed JSON/,
+  );
   assert.deepEqual(
     await runHerdr(
       {
@@ -839,14 +854,12 @@ test("start injects mandatory extensions before definition args and configures t
     tabCreate
       .flatMap((arg, index) => (arg === "--env" ? [tabCreate[index + 1]!] : []))
       .filter((arg) =>
-        /^(PI_HERDSMAN_(MAILBOX|RUN_ID|OWNER_SESSION_ID|LABEL|WORKSPACE_ID|AGENT_DEFINITION)|PI_OFFLINE|HERDR_ENV|HERDR_WORKSPACE_ID|PI_HERDSMAN_WORKSPACE_ID)=/.test(
+        /^(PI_HERDSMAN_(MAILBOX|RUN_ID|OWNER_SESSION_ID|LABEL|WORKSPACE_ID|AGENT_DEFINITION)|PI_OFFLINE)=/.test(
           arg,
         ),
       ),
     [
       ...contract.filter((arg) => !arg.startsWith("PI_HERDSMAN_WORKSPACE_ID=")),
-      "HERDR_ENV=1",
-      "HERDR_WORKSPACE_ID=root-workspace",
       "PI_HERDSMAN_WORKSPACE_ID=root-workspace",
     ],
   );
@@ -1455,8 +1468,8 @@ test("readiness failure keeps one pane attempt and never starts a replacement ag
   )!;
   assert.equal(splitCall.includes("--env"), true);
   assert.equal(splitCall.includes("PI_HERDSMAN_MAILBOX=/tmp/mailbox"), true);
-  assert.equal(splitCall.includes("HERDR_ENV=1"), true);
-  assert.equal(splitCall.includes("HERDR_WORKSPACE_ID=root-workspace"), true);
+  assert.equal(splitCall.includes("HERDR_ENV=1"), false);
+  assert.equal(splitCall.includes("HERDR_WORKSPACE_ID=root-workspace"), false);
   assert.equal(
     splitCall.includes("PI_HERDSMAN_WORKSPACE_ID=root-workspace"),
     true,
@@ -2970,7 +2983,7 @@ test("rollback closes an exactly owned exited created tab", async () => {
   assert.equal(panePresent, false);
 });
 
-test("rollback rejects zero-exit closes without exact disappearance", async () => {
+test("rollback ignores legacy agent identity in disappearance proof", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "workspace-1";
@@ -2988,6 +3001,7 @@ test("rollback rejects zero-exit closes without exact disappearance", async () =
   try {
     for (const scenario of [
       { createdTab: false, proof: "present" },
+      { createdTab: false, proof: "legacy-agent" },
       { createdTab: true, proof: "present" },
       { createdTab: true, proof: "missing-tabs" },
       { createdTab: true, proof: "nonarray-panes" },
@@ -2998,7 +3012,13 @@ test("rollback rejects zero-exit closes without exact disappearance", async () =
       const pi = {
         exec: async (_command: string, args: string[]) => {
           const key = args.slice(0, 2).join(" ");
-          if (key === "agent list") return response({ agents: [] });
+          if (key === "agent list")
+            return response({
+              agents:
+                closed && scenario.proof === "legacy-agent"
+                  ? [{ herdr_agent: "agent-1" }]
+                  : [],
+            });
           if (key === "tab list")
             return closed && scenario.proof === "missing-tabs"
               ? response({})
@@ -3035,21 +3055,24 @@ test("rollback rejects zero-exit closes without exact disappearance", async () =
           throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
         },
       } as any;
-      await assert.rejects(
-        rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
-          herdrAgent: "agent-1",
-          workspaceId: "workspace-1",
-          tabId: "tab-1",
-          paneId: "pane-1",
-          cwd: "/tmp",
-          createdTab: scenario.createdTab,
-          createdPane: true,
-          sessionReference: { id: "session-1" },
-          paneOwnership: { "pane-1": shell },
-          tabPaneOwnership: scenario.createdTab ? { "pane-1": shell } : {},
-        }),
-        /did not disappear after close|list disappearance proof is unavailable/,
-      );
+      const rollback = rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
+        herdrAgent: "agent-1",
+        workspaceId: "workspace-1",
+        tabId: "tab-1",
+        paneId: "pane-1",
+        cwd: "/tmp",
+        createdTab: scenario.createdTab,
+        createdPane: true,
+        sessionReference: { id: "session-1" },
+        paneOwnership: { "pane-1": shell },
+        tabPaneOwnership: scenario.createdTab ? { "pane-1": shell } : {},
+      });
+      if (scenario.proof === "legacy-agent") await rollback;
+      else
+        await assert.rejects(
+          rollback,
+          /did not disappear after close|list disappearance proof is unavailable/,
+        );
       assert.equal(closes, 1);
     }
   } finally {

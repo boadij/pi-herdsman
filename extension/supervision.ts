@@ -1047,6 +1047,7 @@ function writeDescriptor(path: string, descriptor: ChiefDescriptor): void {
     chmodSync(temporary, 0o600);
     renameSync(temporary, path);
     chmodSync(path, 0o600);
+    fsyncDirectory(dirname(path));
   } finally {
     if (fd !== undefined) closeSync(fd);
     try {
@@ -1331,7 +1332,7 @@ export function invalidateLeadCoordinationState(
 }
 
 export function normalizeHerdrLifecycleState(agent: any): RuntimeState {
-  const state = agent?.agent_status ?? agent?.status;
+  const state = agent?.agent_status;
   return state === "idle" ||
     state === "working" ||
     state === "blocked" ||

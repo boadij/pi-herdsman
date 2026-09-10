@@ -189,7 +189,7 @@ export async function inspectHerdrAgent(
       signal,
     },
   );
-  const before = beforeResult?.agent ?? beforeResult;
+  const before = beforeResult?.agent;
   if (!exactAgent(before, target) || (validate && !(await validate(before))))
     throw new Error("Inspection target identity did not match");
   // Pi's exec API exposes only signal, timeout, and cwd; it has no supported
@@ -221,7 +221,7 @@ export async function inspectHerdrAgent(
   const afterResult = await runHerdr(pi, ctx, ["agent", "get", target.paneId], {
     signal,
   });
-  const after = afterResult?.agent ?? afterResult;
+  const after = afterResult?.agent;
   if (!exactAgent(after, target) || (validate && !(await validate(after))))
     throw new Error("Inspection target changed during capture");
   const raw = [outputResult.stdout, outputResult.stderr]
@@ -291,8 +291,6 @@ export async function runHerdr(
     );
   }
   if (options.noResult) return undefined;
-  if (parsed === undefined && args.length === 1 && args[0] === "--version")
-    return `${stdout}\n${stderr}`;
   if (parsed === undefined) {
     const classification =
       stdout.trim() || stderr.trim() ? "malformed" : "empty";
@@ -322,6 +320,7 @@ export function structuredTopologyEnvironment(
   assignments: readonly string[],
 ): string[] {
   const reserved = new Set([
+    "HERDR_SOCKET_PATH",
     "HERDR_ENV",
     "HERDR_WORKSPACE_ID",
     "HERDR_TAB_ID",
@@ -333,8 +332,6 @@ export function structuredTopologyEnvironment(
       (assignment) =>
         !reserved.has(assignment.slice(0, assignment.indexOf("="))),
     ),
-    "HERDR_ENV=1",
-    `HERDR_WORKSPACE_ID=${workspaceId}`,
     `PI_HERDSMAN_WORKSPACE_ID=${workspaceId}`,
   ];
 }
@@ -1069,7 +1066,7 @@ export async function startHerdrAgent(
       throw failure;
     }
     stage = "agent_result";
-    const agent = started.agent ?? started;
+    const agent = started.agent;
     const session = sessionIdentity(agent.agent_session);
     const reference = session
       ? session.kind === "id"
@@ -1125,7 +1122,7 @@ async function paneProcess(
         : { timeout: startupCallTimeout(deadline) }),
     },
   );
-  const value = result?.process ?? result?.process_info ?? result;
+  const value = result?.process ?? result?.process_info;
   const observed = normalizePaneProcess(value, paneId, required);
   if (required && !observed)
     error("start", `pane ${paneId} process ownership is unavailable`);
@@ -1253,7 +1250,7 @@ async function proveShellReady(
     ["pane", "process-info", "--pane", paneId],
     { signal, timeout: timeout() },
   );
-  const value = result?.process ?? result?.process_info ?? result;
+  const value = result?.process ?? result?.process_info;
   const shell = normalizePaneProcess(value, paneId, true);
   if (!shell || !sameShellProcessOwner(expected ?? shell, shell))
     error(operation, `pane ${paneId} did not become an available shell`);
@@ -1505,8 +1502,7 @@ async function verifyHerdrPaneClosed(
     if (!Array.isArray(panes?.panes))
       error(operation, "pane list disappearance proof is unavailable");
     const agentGone = !agents.agents.some(
-      (item: any) =>
-        item.name === herdrAgent || item.herdr_agent === herdrAgent,
+      (item: any) => item.name === herdrAgent,
     );
     const paneGone = !panes.panes.some((item: any) => item.pane_id === paneId);
     if (agentGone && paneGone) return;

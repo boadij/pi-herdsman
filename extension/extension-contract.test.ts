@@ -68,6 +68,22 @@ function assertToolResult(result: any): asserts result is {
   );
 }
 
+test("Herdr version parsing accepts preview suffixes but rejects trailing text", async () => {
+  const { parseHerdrVersion } = await import("./index.ts");
+  for (const version of [
+    "0.8.0",
+    "0.8.0-preview",
+    "0.8.0-preview.2026-06-02-abcdef123456",
+  ])
+    assert.ok(parseHerdrVersion(version), version);
+  for (const version of [
+    "0.8.0 trailing",
+    "0.8.0-preview.2026-06-02-abcdef123456 trailing",
+    "0.8.0\n",
+  ])
+    assert.equal(parseHerdrVersion(version), undefined, version);
+});
+
 test("registered lead and unmanaged roles expose the correct surface", () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
@@ -711,7 +727,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         chiefContext,
       ),
-      /lead set to the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name/,
+      /Invalid staff action/,
     );
     const inspected = await chiefTool.execute(
       "inspect",
@@ -733,7 +749,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     const chiefDescriptorPath = supervisionRuntime().descriptor;
     const chiefDescriptor = readFileSync(chiefDescriptorPath, "utf8");
     support.settingsAccessHook = (access) => {
-      if (access === "reload")
+      if (access === "global")
         writeFileSync(
           chiefDescriptorPath,
           JSON.stringify({

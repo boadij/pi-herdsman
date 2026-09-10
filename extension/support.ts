@@ -33,7 +33,7 @@ export let failNextResultRemoval = false;
 export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
 export let settingsAccessHook:
-  ((access: "reload" | "project") => void) | undefined;
+  ((access: "global" | "project" | "reload") => void) | undefined;
 
 export type WidgetComponent = {
   render(width: number): string[];
@@ -226,7 +226,10 @@ mock.module("@earendil-works/pi-coding-agent", {
     SettingsManager: {
       create: (cwd: string, agentDir: string, options: any) => ({
         reload: async () => settingsAccessHook?.("reload"),
-        getGlobalSettings: () => testSettings(join(agentDir, "settings.json")),
+        getGlobalSettings: () => {
+          settingsAccessHook?.("global");
+          return testSettings(join(agentDir, "settings.json"));
+        },
         getProjectSettings: () => {
           settingsAccessHook?.("project");
           return testSettings(join(cwd, ".pi", "settings.json"));
@@ -550,6 +553,7 @@ export function fakeContext(
     sessionManager: {
       getSessionId: () => LEAD_SESSION_ID,
       getSessionFile: () => "/tmp/root.jsonl",
+      getSessionName: () => undefined,
       getEntries: () => entries,
       getBranch: () => branch,
     },
@@ -587,6 +591,16 @@ export type ExecHandler = (
   args: string[],
   options?: { timeout?: number; signal?: AbortSignal },
 ) => ExecResult | Promise<ExecResult>;
+
+const HERDR_STATUS_RESPONSE = JSON.stringify({
+  result: {
+    client: { version: "0.8.0" },
+    server: { running: true, version: "0.8.0", compatible: true },
+  },
+});
+function herdrStatusResult(): ExecResult {
+  return { stdout: HERDR_STATUS_RESPONSE, stderr: "", code: 0 };
+}
 
 export function fakePi(
   options: {
@@ -658,6 +672,11 @@ export function fakePi(
     ) {
       calls.push(args);
       execOptions.push(execOptionsValue);
+      if (command === "herdr" && args[0] === "status" && args[1] === "--json") {
+        const result = herdrStatusResult();
+        callResults.push({ args, succeeded: true, code: result.code });
+        return result;
+      }
       try {
         const result = await (options.exec?.(
           command,
@@ -844,10 +863,9 @@ export function listResponse(
   runId = AGENT_ID,
 ): string {
   const agent = {
-    herdr_agent: runScopedHerdrAlias(WORKSPACE, label, runId),
-    ...(useAgentStatus
-      ? { agent_status: agentStatus, interactive_ready: agentStatus === "done" }
-      : { status }),
+    name: runScopedHerdrAlias(WORKSPACE, label, runId),
+    agent_status: useAgentStatus ? agentStatus : status,
+    ...(useAgentStatus ? { interactive_ready: agentStatus === "done" } : {}),
     cwd: "/tmp",
     workspace_id: WORKSPACE,
     pane_id: identity.paneId,
@@ -909,6 +927,8 @@ export function leadExec(
   agentStatus: unknown = status,
 ): ExecHandler {
   return (command, args) => {
+    if (command === "herdr" && args[0] === "status" && args[1] === "--json")
+      return herdrStatusResult();
     if (command === "herdr" && args[0] === "agent" && args[1] === "list")
       return {
         stdout: listResponse(
@@ -988,8 +1008,7 @@ export function agentFromState(
   );
   return {
     name: alias,
-    herdr_agent: alias,
-    status,
+    agent_status: status,
     cwd: state.cwd,
     workspace_id: state.workspaceId,
     pane_id: state.paneId,
@@ -1010,6 +1029,8 @@ export function agentControllerExecutor(
 ): ExecHandler {
   return (command, args) => {
     if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+    if (args[0] === "status" && args[1] === "--json")
+      return herdrStatusResult();
     if (args[0] === "--version")
       return { stdout: "0.8.0", stderr: "", code: 0 };
     if (isAgentList(args))
@@ -1488,6 +1509,8 @@ export function cascadeExecutor(
     live,
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] === "status" && args[1] === "--json")
+        return herdrStatusResult();
       if (args[0] === "--version")
         return { stdout: "0.8.0", stderr: "", code: 0 };
       if (isAgentList(args)) {
@@ -1998,6 +2021,8 @@ export function startupExecutor(
     mailbox,
     getCount: () => getCount,
     exec: (command, args) => {
+      if (command === "herdr" && args[0] === "status" && args[1] === "--json")
+        return herdrStatusResult();
       if (command === "herdr" && args[0] === "--version")
         return { stdout: "0.8.0", stderr: "", code: 0 };
       if (command === "herdr" && args[0] === "agent" && args[1] === "get") {

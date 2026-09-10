@@ -7,6 +7,7 @@ import {
   truncateLine,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
+import * as PiAi from "@earendil-works/pi-ai";
 import * as PiTui from "@earendil-works/pi-tui";
 import {
   Container,
@@ -1507,12 +1508,16 @@ function resultDetails(result: any): Record<string, unknown> {
 }
 
 function resultContent(result: any): string {
-  if (Array.isArray(result?.content))
-    return result.content
+  const content = result?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return (
+    PiAi.contentText?.(content) ??
+    content
       .filter((part: any) => part?.type === "text")
       .map((part: any) => (typeof part.text === "string" ? part.text : ""))
-      .join("\n");
-  return typeof result?.content === "string" ? result.content : "";
+      .join("\n")
+  );
 }
 
 function shortIdentity(input: unknown): string {

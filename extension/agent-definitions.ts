@@ -276,6 +276,13 @@ function overrideBodyMode(definition: AgentDefinition): BodyMode {
   return definition.frontmatter.bodyMode ?? "replace";
 }
 
+function normalizedToolNames(tools: readonly string[] | undefined): string[] {
+  return (tools ?? [])
+    .flatMap((tool) => tool.split(","))
+    .map((tool) => tool.trim())
+    .filter(Boolean);
+}
+
 function readOptionalAgentDefinitions(root: string): AgentDefinition[] {
   const stats = statSync(root, { throwIfNoEntry: false });
   if (!stats) return [];
@@ -407,10 +414,9 @@ function withoutDelegationCapability(
       ...definition,
       frontmatter,
     };
-  const projectedTools = tools
-    .flatMap((tool) => tool.split(","))
-    .map((tool) => tool.trim())
-    .filter((tool) => tool && tool !== "agent");
+  const projectedTools = normalizedToolNames(tools).filter(
+    (tool) => tool !== "agent",
+  );
   return {
     ...definition,
     frontmatter: {
@@ -635,15 +641,9 @@ export function inferAgentDefinitionTools(
 ): AgentDefinition {
   const allowedAgentDefinitions = definition.frontmatter.agents ?? [];
   if (allowedAgentDefinitions.length === 0) return definition;
-  const tools = (definition.frontmatter.tools ?? [])
-    .flatMap((tool) => tool.split(","))
-    .map((tool) => tool.trim())
-    .filter(Boolean);
+  const tools = normalizedToolNames(definition.frontmatter.tools);
   const excluded = new Set(
-    (definition.frontmatter.excludeTools ?? [])
-      .flatMap((tool) => tool.split(","))
-      .map((tool) => tool.trim())
-      .filter(Boolean),
+    normalizedToolNames(definition.frontmatter.excludeTools),
   );
   if (
     excluded.has("agent") ||
@@ -665,14 +665,8 @@ export function agentDefinitionDelegationEnabled(
   definition: AgentDefinition,
 ): boolean {
   if ((definition.frontmatter.agents?.length ?? 0) === 0) return false;
-  const tools = (definition.frontmatter.tools ?? [])
-    .flatMap((tool) => tool.split(","))
-    .map((tool) => tool.trim())
-    .filter(Boolean);
-  const excluded = (definition.frontmatter.excludeTools ?? [])
-    .flatMap((tool) => tool.split(","))
-    .map((tool) => tool.trim())
-    .filter(Boolean);
+  const tools = normalizedToolNames(definition.frontmatter.tools);
+  const excluded = normalizedToolNames(definition.frontmatter.excludeTools);
   if (excluded.includes("agent")) return false;
   if (definition.frontmatter.noTools === true && !tools.includes("agent"))
     return false;
@@ -756,17 +750,14 @@ export function agentLaunchArgs(
   if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");
   if (managedAgent) {
     if (frontmatter.noTools || frontmatter.tools?.length) {
-      const tools = [...(frontmatter.tools ?? []), "ask_owner"]
-        .flatMap((tool) => tool.split(","))
-        .map((tool) => tool.trim())
-        .filter((tool) => tool.length > 0)
-        .filter((tool, index, all) => all.indexOf(tool) === index);
+      const tools = normalizedToolNames([
+        ...(frontmatter.tools ?? []),
+        "ask_owner",
+      ]).filter((tool, index, all) => all.indexOf(tool) === index);
       args.push("--tools", tools.join(","));
     }
-    const excluded = (frontmatter.excludeTools ?? [])
-      .flatMap((tool) => tool.split(","))
-      .map((tool) => tool.trim())
-      .filter((tool) => tool.length > 0 && tool !== "ask_owner")
+    const excluded = normalizedToolNames(frontmatter.excludeTools)
+      .filter((tool) => tool !== "ask_owner")
       .filter((tool, index, all) => all.indexOf(tool) === index);
     if (excluded.length) args.push("--exclude-tools", excluded.join(","));
   } else {

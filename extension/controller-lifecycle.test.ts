@@ -2171,17 +2171,25 @@ test("session assignment reports a pane mismatch from the agent state producer",
       Object.assign(process.env, previous);
       return {
         stdout: JSON.stringify({
-          tab_id: "producer-tab",
-          tab_label: "agents",
-          pane_id: "helper-pane",
-          cwd: "/tmp",
-          herdr_agent: runScopedHerdrAlias(
-            WORKSPACE,
-            label,
-            paneEnvironment.PI_HERDSMAN_RUN_ID ?? AGENT_ID,
-          ),
-          created_tab: true,
-          created_pane: true,
+          result: {
+            agent: {
+              name: runScopedHerdrAlias(
+                WORKSPACE,
+                label,
+                paneEnvironment.PI_HERDSMAN_RUN_ID ?? AGENT_ID,
+              ),
+              pane_id: "agent-pane",
+              tab_id: "producer-tab",
+              workspace_id: WORKSPACE,
+              cwd: "/tmp",
+              agent_session: {
+                source: "herdr:pi",
+                agent: "pi",
+                kind: "id",
+                value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              },
+            },
+          },
           runtime_identity: {
             herdr_agent: runScopedHerdrAlias(
               WORKSPACE,
@@ -2954,7 +2962,7 @@ test("session delegation keeps an exact live ID busy despite contradictory live 
   }
 });
 
-test("session delegation fails closed on an exact live ID with a non-ENOENT secondary path error", async () => {
+test("session delegation ignores removed secondary session fields", async () => {
   setLeadEnvironment();
   const name = `error-live-resume-${randomUUID().slice(0, 8)}`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
@@ -3018,25 +3026,16 @@ test("session delegation fails closed on an exact live ID with a non-ENOENT seco
   });
   registerExtension!(pi.pi as never);
   try {
-    await assert.rejects(
-      pi.tools[0].execute(
-        "id",
-        { action: "delegate", session: sessionPath, task: "must fail" },
-        undefined,
-        undefined,
-        fakeContext(),
-      ),
-      (error: unknown) => {
-        assert.match(String(error), /could not canonicalize/);
-        assert.match(String(error), /ENOTDIR/);
-        return true;
-      },
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "delegate", session: sessionPath, task: "must wait" },
+      undefined,
+      undefined,
+      fakeContext(),
     );
+    assert.equal(result.details.error.category, "agent_busy");
     assert.equal(
-      pi.calls.some(
-        (args) =>
-          args[0] === "agent" && ["start", "prompt"].includes(args[1] ?? ""),
-      ),
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
       false,
     );
   } finally {
@@ -3341,8 +3340,7 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     {
       label: `${prefix}-whitespace-agent`,
       params: { action: "delegate", definition: " \t", task: " \t" },
-      message:
-        "Fields must contain non-whitespace text when supplied: definition, task",
+      message: "Invalid agent input",
     },
     {
       label: `${prefix}-missing-task`,
@@ -3352,7 +3350,7 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     {
       label: `${prefix}-whitespace-task`,
       params: { action: "delegate", definition: "agent", task: " \t" },
-      message: "Fields must contain non-whitespace text when supplied: task",
+      message: "Invalid agent input",
     },
   ];
 
@@ -3420,7 +3418,7 @@ test("enforces the agent label grammar before assignment lifecycle mutation", as
     assert.equal(result.details.error.category, "invalid_request");
     assert.equal(result.details.error.operation, "delegate");
     assert.equal(result.details.error.rollbackOccurred, false);
-    assert.match(result.details.error.message, /Agent label must start/);
+    assert.equal(result.details.error.message, "Invalid agent input");
     assert.deepEqual(invalidPi.calls, []);
     assert.equal(realFs.existsSync(agentMailboxPath(WORKSPACE, label)), false);
   }
@@ -3438,7 +3436,7 @@ test("enforces the agent label grammar before assignment lifecycle mutation", as
       fakeContext(),
     );
     assert.equal(result.details.error.category, "invalid_request");
-    assert.match(result.details.error.message, /Agent label must start/);
+    assert.equal(result.details.error.message, "Invalid agent input");
     assert.deepEqual(invalidPi.calls, []);
   }
   invalidPi.events.get("session_shutdown")?.[0]();
@@ -3579,14 +3577,7 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
     fakeContext(),
   );
   assert.equal(aggregate.details.error.category, "invalid_request");
-  assert.match(
-    aggregate.details.error.message,
-    /Session delegation does not support: fork, message/,
-  );
-  assert.match(
-    aggregate.details.error.message,
-    /Allowed: action, session, label, task, files, timeoutMs/,
-  );
+  assert.equal(aggregate.details.error.message, "Invalid agent input");
   assert.deepEqual(pi.calls, []);
   const legacy = await pi.tools[0].execute(
     "id",
@@ -3596,7 +3587,7 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
     fakeContext(),
   );
   assert.equal(legacy.details.error.category, "invalid_request");
-  assert.match(legacy.details.error.message, /close does not support: label/);
+  assert.equal(legacy.details.error.message, "Invalid agent input");
   assert.deepEqual(pi.calls, []);
 });
 

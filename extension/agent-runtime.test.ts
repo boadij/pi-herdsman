@@ -519,7 +519,7 @@ test("message limits are global-only and do not consult project trust", async ()
       undefined,
       context,
     );
-    assert.deepEqual(accesses, ["reload"]);
+    assert.deepEqual(accesses, ["global"]);
   } finally {
     support.settingsAccessHook = undefined;
     agent.events.get("session_shutdown")?.[0]();

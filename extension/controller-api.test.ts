@@ -588,7 +588,7 @@ test("parent controller readiness, allowlist, and cwd preflight fail closed", as
       context,
     );
     assert.equal(unauthorized.details.error.category, "invalid_request");
-    assert.match(unauthorized.details.error.message, /not allowed/);
+    assert.equal(unauthorized.details.error.message, "Invalid agent input");
     const beforeLifecycle = pi.calls.length;
     const cwdMismatch = await tool.execute(
       "id",
@@ -993,7 +993,10 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
   const validLabel = "valid-list-agent";
   const invalidLabel = "invalid-list-agent";
   const valid = recoveryIdentity(validLabel);
-  const invalid = recoveryIdentity(invalidLabel);
+  const invalid = {
+    ...recoveryIdentity(invalidLabel),
+    piSessionId: "11111111-1111-4111-8111-111111111111",
+  };
   const validMailbox = agentMailboxPath(WORKSPACE, validLabel);
   const invalidMailbox = agentMailboxPath(WORKSPACE, invalidLabel);
   resetAgentMailbox(validMailbox);
@@ -1008,6 +1011,17 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
     path: invalid.piSessionFile,
     entries: [],
   });
+  nativeSessions.set(valid.piSessionId, {
+    id: valid.piSessionId,
+    path: valid.piSessionFile,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { name: "agent" },
+      },
+    ],
+  });
   const pi = fakePi({
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "--version")
@@ -1018,32 +1032,37 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
             workspace_id: WORKSPACE,
             agents: [
               {
-                herdr_kind: "pi",
-                herdr_agent: "unmanaged-agent",
-                status: "idle",
+                name: "unmanaged-agent",
+                agent_status: "idle",
                 workspace_id: WORKSPACE,
                 pane_id: "unmanaged-pane",
                 cwd: "/tmp",
               },
               {
-                herdr_kind: "pi",
-                herdr_agent: herdrAlias(invalidLabel),
-                status: "idle",
+                name: herdrAlias(invalidLabel),
+                agent_status: "idle",
                 workspace_id: WORKSPACE,
                 pane_id: invalid.paneId,
                 cwd: "/tmp",
-                session_id: invalid.piSessionId,
-                session_path: invalid.piSessionFile,
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: invalid.piSessionId,
+                },
               },
               {
-                herdr_kind: "pi",
-                herdr_agent: herdrAlias(validLabel),
-                status: "idle",
+                name: herdrAlias(validLabel),
+                agent_status: "idle",
                 workspace_id: WORKSPACE,
                 pane_id: valid.paneId,
                 cwd: "/tmp",
-                session_id: valid.piSessionId,
-                session_path: valid.piSessionFile,
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: valid.piSessionId,
+                },
                 agent_definition: "wrong-herdr-definition",
               },
             ],
@@ -1106,6 +1125,7 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
     assert.equal(agents[0].managed, true);
   } finally {
     nativeSessions.delete(invalid.piSessionId);
+    nativeSessions.delete(valid.piSessionId);
     resetAgentMailbox(validMailbox);
     resetAgentMailbox(invalidMailbox);
   }
@@ -1753,10 +1773,7 @@ test("registered delegate validates duplicate agents, selectors, and timeout bef
     context,
   );
   assert.equal(invalidTimeout.details.error.category, "invalid_request");
-  assert.equal(
-    invalidTimeout.details.error.message,
-    "timeoutMs must be an integer from 5001 through 300000",
-  );
+  assert.equal(invalidTimeout.details.error.message, "Invalid agent input");
   const missingAgentTask = await tool.execute(
     "id",
     { action: "delegate", agent: "session-agent" },
@@ -1782,7 +1799,7 @@ test("registered delegate validates duplicate agents, selectors, and timeout bef
       context,
     );
     assert.equal(result.details.error.category, "invalid_request");
-    assert.equal(result.details.error.message, "Unsupported agent action");
+    assert.equal(result.details.error.message, "Invalid agent input");
   }
   const substitutedResume = await tool.execute(
     "id",

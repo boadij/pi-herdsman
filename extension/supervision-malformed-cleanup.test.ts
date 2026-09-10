@@ -97,6 +97,7 @@ mock.module("node:fs", {
 
 const {
   chiefMessagePath,
+  claimChiefLease,
   drainChiefInbox,
   supervisionRuntime,
   quarantineChiefMessage,
@@ -113,6 +114,32 @@ function malformedInbox() {
   realFs.writeFileSync(path, "{ truncated", "utf8");
   return { runtime, path };
 }
+
+test(
+  "Chief descriptor publication fsyncs its containing directory",
+  { concurrency: false },
+  () => {
+    const previousSocket = process.env.HERDR_SOCKET_PATH;
+    process.env.HERDR_SOCKET_PATH = socket();
+    const runtime = supervisionRuntime();
+    directoryFsyncCount = 0;
+    failureDirectory = runtime.root;
+    try {
+      const lease = claimChiefLease({
+        piSessionId: randomUUID(),
+        paneId: "pane",
+        workspaceId: "workspace",
+      });
+      assert.equal(directoryFsyncCount, 1);
+      lease.release();
+    } finally {
+      directoryFsyncCount = 0;
+      failureDirectory = undefined;
+      if (previousSocket === undefined) delete process.env.HERDR_SOCKET_PATH;
+      else process.env.HERDR_SOCKET_PATH = previousSocket;
+    }
+  },
+);
 
 function assertCleanupError(
   error: unknown,

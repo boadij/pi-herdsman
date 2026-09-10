@@ -15,7 +15,7 @@ Verify:
 ```sh
 node --version
 pi --version
-herdr --version
+herdr status --json
 herdr integration status
 ```
 
@@ -249,7 +249,7 @@ substitutes for these checks.
 | Discover leads across multiple workspaces                                                                                            | NOT RUN |
 | Exclude managed agents and the active Chief from leads                                                                               | NOT RUN |
 | Agent exclusion uses the production validated snapshot and stale/ambiguous generations fail closed                                   | NOT RUN |
-| Herdr `agent_status ?? status` lifecycle normalization is reflected                                                                  | NOT RUN |
+| Herdr `agent_status` lifecycle normalization is reflected                                                                            | NOT RUN |
 | Nested agent aggregation attaches only to the proven lead                                                                            | NOT RUN |
 | A blocked agent does not mark its lead `needs you`                                                                                   | NOT RUN |
 | Duplicate live agents, coordination records, or agent evidence fail closed                                                           | NOT RUN |
