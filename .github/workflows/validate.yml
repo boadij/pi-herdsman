@@ -13,4 +13,4 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - run: npm ci
-      - run: npm run release:check
+      - run: npm run validate
