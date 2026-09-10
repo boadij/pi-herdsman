@@ -53,16 +53,30 @@ test("nested topology keeps the Herdr workspace authoritative", () => {
   );
 
   const env = structuredTopologyEnvironment("workspace", [
-    "PI_HERDSMAN_OWNER_SESSION_ID=parent-session",
+    "PI_HERDSMAN_OWNER_SESSION_ID=implementer-session",
     "PI_SUBAGENT_CHILD=stale",
+    "PI_SUBAGENT_PARENT_SESSION=lead-session",
     "PI_SUBAGENT_PARENT_SESSION=stale-parent",
     "EXTRA=value",
   ]);
   assert.ok(env.includes("PI_SUBAGENT_CHILD=1"));
-  assert.ok(env.includes("PI_SUBAGENT_PARENT_SESSION=parent-session"));
+  assert.ok(env.includes("PI_SUBAGENT_PARENT_SESSION=lead-session"));
   assert.ok(!env.includes("PI_SUBAGENT_CHILD=stale"));
   assert.ok(!env.includes("PI_SUBAGENT_PARENT_SESSION=stale-parent"));
   assert.ok(env.includes("EXTRA=value"));
+  assert.ok(env.includes("PI_HERDSMAN_OWNER_SESSION_ID=implementer-session"));
+
+  assert.deepEqual(
+    structuredTopologyEnvironment("workspace", [
+      "PI_HERDSMAN_OWNER_SESSION_ID=owner-session",
+    ]),
+    [
+      "PI_HERDSMAN_OWNER_SESSION_ID=owner-session",
+      "PI_SUBAGENT_CHILD=1",
+      "PI_SUBAGENT_PARENT_SESSION=owner-session",
+      "PI_HERDSMAN_WORKSPACE_ID=workspace",
+    ],
+  );
 });
 
 test("lists all Herdr agents without changing the current-workspace view", async () => {
@@ -873,6 +887,7 @@ test("start injects mandatory extensions before definition args and configures t
     "PI_HERDSMAN_MAILBOX=/tmp/mailbox with $dollar 'quote' `backtick`",
     "PI_HERDSMAN_RUN_ID=run-id",
     "PI_HERDSMAN_OWNER_SESSION_ID=owner-session",
+    "PI_SUBAGENT_PARENT_SESSION=lead-session",
     "PI_HERDSMAN_LABEL=agent",
     "PI_HERDSMAN_WORKSPACE_ID=agent-workspace",
     "PI_HERDSMAN_AGENT_DEFINITION=agent",
@@ -994,12 +1009,17 @@ test("start injects mandatory extensions before definition args and configures t
     tabCreate
       .flatMap((arg, index) => (arg === "--env" ? [tabCreate[index + 1]!] : []))
       .filter((arg) =>
-        /^(PI_HERDSMAN_(MAILBOX|RUN_ID|OWNER_SESSION_ID|LABEL|WORKSPACE_ID|AGENT_DEFINITION)|PI_OFFLINE)=/.test(
+        /^(PI_HERDSMAN_(MAILBOX|RUN_ID|OWNER_SESSION_ID|LABEL|WORKSPACE_ID|AGENT_DEFINITION)|PI_SUBAGENT_PARENT_SESSION|PI_OFFLINE)=/.test(
           arg,
         ),
       ),
     [
-      ...contract.filter((arg) => !arg.startsWith("PI_HERDSMAN_WORKSPACE_ID=")),
+      ...contract.filter(
+        (arg) =>
+          !arg.startsWith("PI_HERDSMAN_WORKSPACE_ID=") &&
+          !arg.startsWith("PI_SUBAGENT_PARENT_SESSION="),
+      ),
+      "PI_SUBAGENT_PARENT_SESSION=lead-session",
       "PI_HERDSMAN_WORKSPACE_ID=root-workspace",
     ],
   );

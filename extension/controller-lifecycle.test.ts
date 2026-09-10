@@ -76,6 +76,8 @@ import {
 
 test("parent delegates two same-definition children with exact ownership", async () => {
   setAgentEnvironment("multiplicity-parent", ["child"]);
+  const previousForwardingSession = process.env.PI_SUBAGENT_PARENT_SESSION;
+  process.env.PI_SUBAGENT_PARENT_SESSION = LEAD_SESSION_ID;
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parent = managedState("multiplicity-parent");
   const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
@@ -130,6 +132,21 @@ test("parent delegates two same-definition children with exact ownership", async
       ).length,
       2,
     );
+    assert.equal(
+      lifecycle.environmentCommands.filter(
+        (command) =>
+          command ===
+          `PI_HERDSMAN_OWNER_SESSION_ID=${context.sessionManager.getSessionId()}`,
+      ).length,
+      2,
+    );
+    assert.equal(
+      lifecycle.environmentCommands.filter(
+        (command) =>
+          command === `PI_SUBAGENT_PARENT_SESSION=${LEAD_SESSION_ID}`,
+      ).length,
+      2,
+    );
     assert.equal(lifecycle.createdTabs(), 0);
     for (const label of labels) {
       const closed = await pi.tools[0].execute(
@@ -153,6 +170,9 @@ test("parent delegates two same-definition children with exact ownership", async
     );
     assert.deepEqual(lifecycle.closeOrder, labels);
   } finally {
+    if (previousForwardingSession === undefined)
+      delete process.env.PI_SUBAGENT_PARENT_SESSION;
+    else process.env.PI_SUBAGENT_PARENT_SESSION = previousForwardingSession;
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
     resetAgentMailbox(parentMailbox);
     for (const mailbox of mailboxes) resetAgentMailbox(mailbox);

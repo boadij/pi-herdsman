@@ -336,6 +336,12 @@ export function structuredTopologyEnvironment(
       assignment.startsWith("PI_HERDSMAN_OWNER_SESSION_ID="),
     )
     ?.slice("PI_HERDSMAN_OWNER_SESSION_ID=".length);
+  const forwardingSession =
+    validated
+      .find((assignment) =>
+        assignment.startsWith("PI_SUBAGENT_PARENT_SESSION="),
+      )
+      ?.slice("PI_SUBAGENT_PARENT_SESSION=".length) ?? owner;
   const reserved = new Set([
     "HERDR_SOCKET_PATH",
     "HERDR_ENV",
@@ -351,8 +357,11 @@ export function structuredTopologyEnvironment(
       (assignment) =>
         !reserved.has(assignment.slice(0, assignment.indexOf("="))),
     ),
-    ...(owner
-      ? ["PI_SUBAGENT_CHILD=1", `PI_SUBAGENT_PARENT_SESSION=${owner}`]
+    ...(forwardingSession
+      ? [
+          "PI_SUBAGENT_CHILD=1",
+          `PI_SUBAGENT_PARENT_SESSION=${forwardingSession}`,
+        ]
       : []),
     `PI_HERDSMAN_WORKSPACE_ID=${workspaceId}`,
   ];

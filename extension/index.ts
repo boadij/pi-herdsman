@@ -4859,6 +4859,10 @@ async function actionUnsafe(
       agentDefinitionDelegationEnabled(effectiveDefinition);
     const runId = assignment!.runId;
     const owner = assignment!.ownerSessionId;
+    const forwardingSession =
+      scope.kind === "managed-agent"
+        ? (process.env.PI_SUBAGENT_PARENT_SESSION ?? owner)
+        : owner;
     const configuredPlacement = (await placementSettings(ctx)).effective;
     const placement = await physicalPlacement(
       pi,
@@ -5054,6 +5058,7 @@ async function actionUnsafe(
         `PI_HERDSMAN_MAILBOX=${mailbox}`,
         `PI_HERDSMAN_RUN_ID=${runId}`,
         `PI_HERDSMAN_OWNER_SESSION_ID=${owner}`,
+        `PI_SUBAGENT_PARENT_SESSION=${forwardingSession}`,
         `PI_HERDSMAN_LABEL=${label}`,
         `PI_HERDSMAN_WORKSPACE_ID=${workspaceId}`,
         `PI_HERDSMAN_AGENT_DEFINITION=${agentDefinition}`,
