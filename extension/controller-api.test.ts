@@ -63,7 +63,7 @@ import support, {
   writeAgentState,
 } from "./support.ts";
 
-test("project agent discovery is gated by trusted project settings", async () => {
+test("project agent discovery is gated by Pi project trust", async () => {
   setLeadEnvironment();
   const project = realFs.mkdtempSync(
     join(tmpdir(), "pi-herdsman-project-gate-"),
@@ -87,32 +87,9 @@ test("project agent discovery is gated by trusted project settings", async () =>
       selections.push(options);
       return undefined;
     };
-    realFs.writeFileSync(
-      join(PI_AGENT_ROOT, "settings.json"),
-      JSON.stringify({ piHerd: { projectAgents: true } }),
-    );
     await command.handler("definitions", context);
     assert.equal(
       selections.at(-1)?.some((value) => value.includes("project-only")),
-      false,
-    );
-    realFs.writeFileSync(
-      join(PI_AGENT_ROOT, "settings.json"),
-      JSON.stringify({ piHerdsman: { projectAgents: true } }),
-    );
-    await command.handler("definitions", context);
-    assert.equal(
-      selections.flat().some((value) => value.includes("project-only")),
-      false,
-    );
-    realFs.mkdirSync(join(project, ".pi"), { recursive: true });
-    realFs.writeFileSync(
-      join(project, ".pi", "settings.json"),
-      JSON.stringify({ piHerdsman: { projectAgents: true } }),
-    );
-    await command.handler("definitions", context);
-    assert.equal(
-      selections.flat().some((value) => value.includes("project-only")),
       true,
     );
     realFs.writeFileSync(
@@ -139,20 +116,7 @@ test("project agent discovery is gated by trusted project settings", async () =>
       false,
     );
     realFs.rmSync(join(PI_AGENTS_DIR, "project-only.md"), { force: true });
-    realFs.writeFileSync(
-      join(project, ".pi", "settings.json"),
-      JSON.stringify({ piHerdsman: { projectAgents: false } }),
-    );
-    await command.handler("definitions", context);
-    assert.equal(
-      selections.at(-1)?.some((value) => value.includes("project-only")),
-      false,
-    );
     context.isProjectTrusted = () => false;
-    realFs.writeFileSync(
-      join(project, ".pi", "settings.json"),
-      JSON.stringify({ piHerdsman: { projectAgents: true } }),
-    );
     await command.handler("definitions", context);
     assert.equal(
       selections.at(-1)?.some((value) => value.includes("project-only")),
@@ -161,7 +125,6 @@ test("project agent discovery is gated by trusted project settings", async () =>
   } finally {
     pi?.events.get("session_shutdown")?.[0]();
     realFs.rmSync(project, { recursive: true, force: true });
-    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
     for (const name of ["project-only.md", "standalone-global.md", "scout.md"])
       realFs.rmSync(join(PI_AGENTS_DIR, name), { force: true });
     setLeadEnvironment();
@@ -174,10 +137,6 @@ test("managed agent validates project definitions before publishing state", asyn
     join(tmpdir(), "pi-herdsman-agent-project-"),
   );
   realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
-  realFs.writeFileSync(
-    join(project, ".pi", "settings.json"),
-    JSON.stringify({ piHerdsman: { projectAgents: true } }),
-  );
   realFs.writeFileSync(
     join(project, ".pi", "agents", "broken.md"),
     '---\nname: broken-parent\nagents: ["missing-child"]\n---\nbroken',
@@ -208,10 +167,6 @@ test("project agents reject cross-cwd assignment before agent startup", async ()
     join(tmpdir(), "pi-herdsman-assign-project-"),
   );
   realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
-  realFs.writeFileSync(
-    join(project, ".pi", "settings.json"),
-    JSON.stringify({ piHerdsman: { projectAgents: true } }),
-  );
   realFs.writeFileSync(
     join(project, ".pi", "agents", "project-only.md"),
     "---\nname: project-only\n---\nproject",
@@ -256,10 +211,6 @@ test("trusted same-cwd project assignment launches with native approval", async 
     join(tmpdir(), "pi-herdsman-assign-same-cwd-"),
   );
   realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
-  realFs.writeFileSync(
-    join(project, ".pi", "settings.json"),
-    JSON.stringify({ piHerdsman: { projectAgents: true } }),
-  );
   realFs.writeFileSync(
     join(project, ".pi", "agents", "project-only.md"),
     "---\nname: project-only\n---\nproject",
@@ -307,10 +258,6 @@ test("trusted same-cwd project assignment launches with native approval", async 
     const projectLink = `${project}-link`;
     realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
     realFs.writeFileSync(
-      join(project, ".pi", "settings.json"),
-      JSON.stringify({ piHerdsman: { projectAgents: true } }),
-    );
-    realFs.writeFileSync(
       join(project, ".pi", "agents", "project-only.md"),
       "---\nname: project-only\n---\nproject",
     );
@@ -354,20 +301,16 @@ test("trusted same-cwd project assignment launches with native approval", async 
   })();
 });
 
-test("inactive and cross-cwd non-project assignments omit feature approval", async () => {
+test("untrusted and cross-cwd assignments omit feature approval", async () => {
   for (const scenario of [
-    { name: "inactive", projectAgents: false, cwd: undefined },
-    { name: "cross-cwd", projectAgents: true, cwd: "/other" },
+    { name: "untrusted", projectTrusted: false, cwd: undefined },
+    { name: "cross-cwd", projectTrusted: true, cwd: "/other" },
   ]) {
     setLeadEnvironment();
     const project = realFs.mkdtempSync(
       join(tmpdir(), `pi-herdsman-approval-${scenario.name}-`),
     );
     realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
-    realFs.writeFileSync(
-      join(project, ".pi", "settings.json"),
-      JSON.stringify({ piHerdsman: { projectAgents: scenario.projectAgents } }),
-    );
     const startArgs: string[][] = [];
     const startup = startupExecutor(
       "agent",
@@ -383,6 +326,7 @@ test("inactive and cross-cwd non-project assignments omit feature approval", asy
     registerExtension!(pi.pi as never);
     const context = fakeContext() as any;
     context.cwd = project;
+    context.isProjectTrusted = () => scenario.projectTrusted;
     try {
       const result = await pi.tools[0].execute(
         "id",
@@ -414,10 +358,6 @@ test("project-only Definitions edits create a global override", async () => {
   const projectPath = join(project, ".pi", "agents", "project-only.md");
   const original = "---\nname: project-only\n---\nproject policy\n";
   realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
-  realFs.writeFileSync(
-    join(project, ".pi", "settings.json"),
-    JSON.stringify({ piHerdsman: { projectAgents: true } }),
-  );
   realFs.writeFileSync(projectPath, original);
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -469,10 +409,6 @@ test("same-cwd managed parents resolve project children", async () => {
     join(tmpdir(), "pi-herdsman-parent-project-"),
   );
   realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
-  realFs.writeFileSync(
-    join(project, ".pi", "settings.json"),
-    JSON.stringify({ piHerdsman: { projectAgents: true } }),
-  );
   realFs.writeFileSync(
     join(project, ".pi", "agents", "project-parent.md"),
     '---\nname: project-parent\nagents: ["project-child"]\n---\nparent',

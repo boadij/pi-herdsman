@@ -220,12 +220,12 @@ test("resolves whole-line body file references from their definition", () => {
 test("normalizes home-relative references in project and global definitions", () => {
   const project = mkdtempSync(join(tmpdir(), "pi-herdsman-project-agents-"));
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-global-agents-"));
-  const projectAgents = join(project, ".pi", "agents");
+  const projectAgentDir = join(project, ".pi", "agents");
   const globalAgents = join(global, "agents");
-  mkdirSync(projectAgents, { recursive: true });
+  mkdirSync(projectAgentDir, { recursive: true });
   mkdirSync(globalAgents);
   writeFileSync(
-    join(projectAgents, "project.md"),
+    join(projectAgentDir, "project.md"),
     "---\nname: project\n---\n@~/project.md",
   );
   writeFileSync(
@@ -700,12 +700,12 @@ test("composes matching bundled bodies with bodyMode", () => {
   );
 });
 
-test("discovers trusted project definitions and gives global overlays final precedence", () => {
+test("discovers project definitions and gives global overlays final precedence", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-project-agents-"));
-  const projectAgents = join(root, ".pi", "agents");
-  mkdirSync(projectAgents, { recursive: true });
+  const projectAgentDir = join(root, ".pi", "agents");
+  mkdirSync(projectAgentDir, { recursive: true });
   writeFileSync(
-    join(projectAgents, "project.md"),
+    join(projectAgentDir, "project.md"),
     "---\nname: project-only\nmodel: project-model\n---\nProject policy",
   );
   const globalRoot = mkdtempSync(join(tmpdir(), "pi-herdsman-project-global-"));
@@ -719,7 +719,7 @@ test("discovers trusted project definitions and gives global overlays final prec
     discoverAgent("project-only", { projectRoot: root }),
   );
   assert.equal(definition.frontmatter.model, "global-model");
-  assert.equal(definition.projectSource, join(projectAgents, "project.md"));
+  assert.equal(definition.projectSource, join(projectAgentDir, "project.md"));
   assert.equal(definition.overrideSource, join(globalAgents, "project.md"));
   assert.equal(definition.body, "Global policy");
 });
@@ -753,13 +753,13 @@ test("project approval is emitted only when requested", () => {
 
 test("composes all definition layers with provenance and whole-array replacement", () => {
   const project = mkdtempSync(join(tmpdir(), "pi-herdsman-layered-project-"));
-  const projectAgents = join(project, ".pi", "agents");
+  const projectAgentDir = join(project, ".pi", "agents");
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-layered-global-"));
   const globalAgents = join(global, "agents");
-  mkdirSync(projectAgents, { recursive: true });
+  mkdirSync(projectAgentDir, { recursive: true });
   mkdirSync(globalAgents);
   const bundled = withPiAgentDir(global, () => discoverAgent("reviewer"));
-  const projectPath = join(projectAgents, "reviewer.md");
+  const projectPath = join(projectAgentDir, "reviewer.md");
   const globalPath = join(globalAgents, "reviewer.md");
   writeFileSync(
     projectPath,
@@ -788,13 +788,13 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   const project = mkdtempSync(
     join(tmpdir(), "pi-herdsman-project-validation-"),
   );
-  const projectAgents = join(project, ".pi", "agents");
+  const projectAgentDir = join(project, ".pi", "agents");
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-global-validation-"));
   const globalAgents = join(global, "agents");
-  mkdirSync(projectAgents, { recursive: true });
+  mkdirSync(projectAgentDir, { recursive: true });
   mkdirSync(globalAgents);
 
-  const standalone = join(projectAgents, "standalone.md");
+  const standalone = join(projectAgentDir, "standalone.md");
   writeFileSync(
     standalone,
     "---\nname: standalone\nbodyMode: append\n---\nbody",
@@ -808,18 +808,18 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   unlinkSync(standalone);
 
   writeFileSync(
-    join(projectAgents, "child.md"),
+    join(projectAgentDir, "child.md"),
     "---\nname: child\n---\nchild",
   );
   writeFileSync(
-    join(projectAgents, "parent.md"),
+    join(projectAgentDir, "parent.md"),
     '---\nname: parent\nagents: ["child"]\n---\nparent',
   );
   writeFileSync(
-    join(projectAgents, "body.md"),
+    join(projectAgentDir, "body.md"),
     "---\nname: scout\nbodyMode: append\n---\n@./policy.txt",
   );
-  writeFileSync(join(projectAgents, "policy.txt"), "project policy");
+  writeFileSync(join(projectAgentDir, "policy.txt"), "project policy");
   writeFileSync(
     join(globalAgents, "body.md"),
     "---\nname: scout\nbodyMode: append\n---\n@./policy.txt",
@@ -832,7 +832,7 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   assert.match(
     body.body,
     new RegExp(
-      join(projectAgents, "policy.txt").replaceAll(
+      join(projectAgentDir, "policy.txt").replaceAll(
         /[.*+?^${}()|[\\]\\]/g,
         "\\\\$&",
       ),
@@ -860,10 +860,10 @@ test("project body modes, duplicate names, body-file provenance, and child valid
         tools: ["read"],
       },
     }).projectSource,
-    join(projectAgents, "parent.md"),
+    join(projectAgentDir, "parent.md"),
   );
 
-  const duplicate = join(projectAgents, "nested");
+  const duplicate = join(projectAgentDir, "nested");
   mkdirSync(duplicate);
   writeFileSync(
     join(duplicate, "child.md"),

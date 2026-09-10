@@ -192,9 +192,9 @@ Verify the native Definitions selector shows:
 Structured `agent list` should still retain exact deterministic metadata.
 
 Select a disposable bundled, project, or global definition and change its
-model, thinking, and enabled state. Confirm that project discovery requires a
-trusted project's `piHerdsman.projectAgents: true` setting and that these edits
-write global overrides only, not project files.
+model, thinking, and enabled state. Confirm that project discovery requires Pi
+project trust and that these edits write global overrides only, not project
+files.
 
 Verify unrelated frontmatter and body remain unchanged, `Use default` removes
 only the selected field, fresh definition delegations and session continuations

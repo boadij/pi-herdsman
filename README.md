@@ -150,6 +150,19 @@ herdr integration status
 The package manifest loads the bundled extension and exposes the optional
 `agents` skill.
 
+## Compatible extensions
+
+Pi Herdsman interoperates with optional Pi extensions without depending on
+them:
+
+- [pi-web-access](https://github.com/nicobailon/pi-web-access) — the bundled
+  `researcher` recognizes its standard web-research tools.
+- [pi-permission-system](https://github.com/gotgenes/pi-packages/tree/main/packages/pi-permission-system)
+  — shared agent frontmatter, active-agent identity, and subagent lineage
+  conventions support per-agent permission policy.
+
+Neither extension is required or installed by Pi Herdsman.
+
 ## Documentation
 
 Choose the path that matches what you are doing:

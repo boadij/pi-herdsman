@@ -1090,16 +1090,11 @@ async function prepareSupervisionText(
   }).text;
 }
 async function contextAgentDefinitions(ctx: ExtensionContext) {
-  const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
-    projectTrusted: ctx.isProjectTrusted(),
-  });
-  const enabled =
-    settings.isProjectTrusted() &&
-    piHerdsmanSettings(settings.getProjectSettings()).projectAgents === true;
+  const projectTrusted = ctx.isProjectTrusted();
   return {
-    projectAgentsEnabled: enabled,
+    projectTrusted,
     definitions: discoverAgentDefinitions(
-      enabled ? { projectRoot: ctx.cwd } : {},
+      projectTrusted ? { projectRoot: ctx.cwd } : {},
     ),
   };
 }
@@ -5073,7 +5068,7 @@ async function actionUnsafe(
         cwd: agentCwd,
         managedAgent: true,
         approveProject:
-          agentContext.projectAgentsEnabled && sameCwd(agentCwd, ctx.cwd),
+          agentContext.projectTrusted && sameCwd(agentCwd, ctx.cwd),
       });
       started = await startHerdrAgent(pi, ctx, {
         label,

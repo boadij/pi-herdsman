@@ -57,8 +57,8 @@ Global definitions by default:
 A matching project or global name overlays the lower-precedence definition.
 
 An unmatched project or global definition is standalone. Project definitions
-are loaded from `<cwd>/.pi/agents/` only when trusted project settings set
-`piHerdsman.projectAgents` to `true`. Precedence is `bundled < project < global`.
+are loaded from `<cwd>/.pi/agents/` when Pi considers the project trusted.
+Precedence is `bundled < project < global`.
 
 All effective definitions are sorted and validated together, including every
 `agents` reference.

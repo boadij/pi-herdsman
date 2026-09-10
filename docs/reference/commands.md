@@ -27,10 +27,10 @@ token. The enforced limits are bytes, not tokens.
 ## `/agents definitions`
 
 Opens the native Definitions menu for the effective bundled, project, and
-global roster. Project definitions are included only when the trusted project
-setting `piHerdsman.projectAgents` is `true`. Project participation is marked
-`[project]`; a global override adds `*` (so `[project] *` means both layers
-contribute). Edits write global overrides only.
+global roster. Project definitions are included when Pi considers the project
+trusted. Project participation is marked `[project]`; a global override adds
+`*` (so `[project] *` means both layers contribute). Edits write global
+overrides only.
 
 The details view can show:
 
