@@ -137,6 +137,7 @@ export type AgentInspectionTarget = {
   workspaceId: string;
   paneId: string;
   piSessionId: string;
+  piSessionFile?: string;
 };
 export type AgentInspectionValidator = (
   agent: HerdrRecord,
@@ -171,6 +172,7 @@ export async function inspectHerdrAgent(
     before?.pane_id !== target.paneId ||
     !matchesExpectedSession(before?.agent_session, {
       id: target.piSessionId,
+      path: target.piSessionFile,
     }) ||
     (validate && !(await validate(before)))
   )
@@ -208,7 +210,10 @@ export async function inspectHerdrAgent(
   if (
     after?.workspace_id !== target.workspaceId ||
     after?.pane_id !== target.paneId ||
-    !matchesExpectedSession(after?.agent_session, { id: target.piSessionId }) ||
+    !matchesExpectedSession(after?.agent_session, {
+      id: target.piSessionId,
+      path: target.piSessionFile,
+    }) ||
     (validate && !(await validate(after)))
   )
     throw new Error("Inspection target changed during capture");

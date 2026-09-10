@@ -2580,6 +2580,7 @@ test("inspection matches canonical native path identities and rejects missing pa
       workspaceId: "workspace",
       paneId: "pane",
       piSessionId: "session",
+      piSessionFile: path,
     });
     assert.equal(snapshot.recentOutput, "recent output");
     assert.equal(reads, 1);

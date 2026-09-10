@@ -1452,7 +1452,7 @@ function herdrSessionId(agent: any): string | undefined {
   if (!session) return undefined;
   if (session.kind === "id") return session.value;
   try {
-    const id = SessionManager.open(session.value).getSessionId();
+    const id = SessionManager.open(realpathSync(session.value)).getSessionId();
     return id || undefined;
   } catch {
     return undefined;
@@ -2351,7 +2351,11 @@ async function managedAgentSnapshots(
 
     let agentDefinition: string;
     try {
-      agentDefinition = stateAgentDefinition(state);
+      agentDefinition = agentDefinitionForRuntime(
+        agent,
+        state,
+        runtimes.get(state.agentLabel),
+      );
     } catch {
       return [];
     }
@@ -3599,6 +3603,15 @@ function runtimeIdentityMatches(
     sameCwd(runtime.cwd, agent.cwd)
   );
 }
+function agentDefinitionForRuntime(
+  agent: any,
+  state: ManagedAgentState,
+  cached?: Runtime,
+): string {
+  return cached && runtimeIdentityMatches(cached, state, agent)
+    ? cached.agentDefinition
+    : stateAgentDefinition(state);
+}
 function guardMailboxOccupancy(
   mailbox: string,
   label: string,
@@ -3746,7 +3759,7 @@ async function resolveRuntime(
     cached.completedRequestId !== state.completedRequestId
   )
     stopResultWatcher(cached, cached.completedRequestId);
-  const agentDefinition = stateAgentDefinition(state);
+  const agentDefinition = agentDefinitionForRuntime(agent, state, cached);
   const runtime: Runtime = cached ?? {
     label: agent.label,
     herdrAgent: herdrAgentAlias(agent.workspace_id, agent.label, state.runId),
@@ -3788,8 +3801,13 @@ function runtimeForListedAgent(
   state: ManagedAgentState,
   cached?: Runtime,
 ): Runtime {
+  const useCached =
+    cached !== undefined && runtimeIdentityMatches(cached, state, agent);
+  const agentDefinition = useCached
+    ? cached!.agentDefinition
+    : stateAgentDefinition(state);
   const runtime =
-    cached ??
+    (useCached ? cached : undefined) ??
     ({
       label: agent.label,
       herdrAgent: herdrAgentAlias(agent.workspace_id, agent.label, state.runId),
@@ -3803,9 +3821,9 @@ function runtimeForListedAgent(
       piSessionFile: state.piSessionFile,
       activeRequestId: state.activeRequestId,
       completedRequestId: state.completedRequestId,
-      agentDefinition: stateAgentDefinition(state),
+      agentDefinition,
     } satisfies Runtime);
-  runtime.agentDefinition = stateAgentDefinition(state);
+  runtime.agentDefinition = agentDefinition;
   return runtime;
 }
 function runtimeForCompletedState(
@@ -5326,6 +5344,7 @@ async function actionUnsafe(
         workspaceId: runtime.workspaceId,
         paneId: runtime.paneId,
         piSessionId: runtime.piSessionId!,
+        piSessionFile: runtime.piSessionFile,
       },
       signal,
       (agent) => {

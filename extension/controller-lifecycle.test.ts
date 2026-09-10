@@ -12,6 +12,7 @@ import type {
   ManagedAgentState,
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
+import support from "./support.ts";
 import {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -958,6 +959,111 @@ test("staged fresh assignment bridges pending start through working", async () =
     assert.doesNotMatch(fixture.widgetValue.render(160).join("\n"), /ready/);
   } finally {
     fixture.shutdown();
+  }
+});
+
+test("fresh path sessions remain controllable from the authoritative runtime cache", async () => {
+  setLeadEnvironment();
+  const label = `fresh-path-${randomUUID().slice(0, 8)}`;
+  const sessionPath = "/tmp/registered-agent.jsonl";
+  realFs.rmSync(sessionPath, { force: true });
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+  );
+  const pathSession = (result: { stdout: string; [key: string]: unknown }) => {
+    const payload = JSON.parse(result.stdout);
+    const agents = [payload.result?.agent, ...(payload.result?.agents ?? [])];
+    for (const agent of agents)
+      if (agent?.agent_session)
+        agent.agent_session = {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "path",
+          value: sessionPath,
+        };
+    return { ...result, stdout: JSON.stringify(payload) };
+  };
+  const pi = fakePi({
+    exec: async (command, args, options) => {
+      const result = await startup.exec(command, args, options);
+      return command === "herdr" && args[0] === "agent"
+        ? pathSession(result)
+        : result;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext();
+  for (const handler of pi.events.get("session_start") ?? [])
+    await handler(undefined, context);
+  try {
+    const delegated = await pi.tools[0].execute(
+      "id",
+      { action: "delegate", definition: "agent", label, task: "fresh path" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(delegated.details.ok, true, JSON.stringify(delegated.details));
+    assert.equal(
+      pi.calls.some(
+        (args) =>
+          args[0] === "agent" && args[1] === "start" && args.includes("--fork"),
+      ),
+      false,
+    );
+    assert.equal(readAgentState(startup.mailbox)?.lastAck?.accepted, true);
+    assert.equal(realFs.existsSync(sessionPath), false);
+
+    support.sessionOpenError = new Error("child session is not materialized");
+    const listed = await pi.tools[0].execute(
+      "list",
+      { action: "list" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(
+      listed.details.agents[0]?.agent,
+      label,
+      JSON.stringify(listed.details),
+    );
+
+    const inspected = await pi.tools[0].execute(
+      "inspect",
+      { action: "inspect", agent: label },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(inspected.details.ok, true, JSON.stringify(inspected.details));
+
+    const closed = await pi.tools[0].execute(
+      "close",
+      { action: "close", agent: label },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
+    assert.equal(readAgentState(startup.mailbox), undefined);
+    assert.equal(realFs.existsSync(startup.mailbox), false);
+    assert.ok(
+      pi.calls.some((args) => isPaneClose(args) && args[2] === "startup-pane"),
+    );
+  } finally {
+    support.sessionOpenError = undefined;
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(sessionPath, { force: true });
   }
 });
 
