@@ -54,6 +54,7 @@ import support, {
   runScopedHerdrAlias,
   setLeadEnvironment,
   setAgentEnvironment,
+  startupExecutor,
   truncateModelText,
   agentMailboxPath,
   writeAsk,
@@ -443,7 +444,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   const emptyList = () => {
     const value = JSON.parse(listResponse(label));
     value.agents = [];
-    return JSON.stringify(value);
+    return JSON.stringify({ id: AGENT_ID, result: value });
   };
   const pi = fakePi({
     exec: (command, args) => {
@@ -454,6 +455,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
         if (validating) agentGetCount++;
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agent: {
                 name: validating
@@ -482,6 +484,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
       if (isTabList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tabs: tabPresent
                 ? [
@@ -512,6 +515,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
         tabPresent = panePresent = true;
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tab: {
                 tab_id: "registered-tab",
@@ -529,13 +533,14 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
         if (malformedPostClosePaneList) {
           malformedPostClosePaneList = false;
           return {
-            stdout: JSON.stringify({ result: {} }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
             stderr: "",
             code: 0,
           };
         }
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: panePresent
                 ? [
@@ -558,6 +563,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
       if (args[0] === "pane" && args[1] === "get")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               pane: {
                 pane_id: "pane-start",
@@ -583,6 +589,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
       if (args[0] === "pane" && args[1] === "process-info")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               process_info: {
                 pane_id: "pane-start",
@@ -622,7 +629,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
                   value.agents[0].name = alias;
                   value.agents[0].pane_id = "pane-start";
                   value.agents[0].tab_id = "registered-tab";
-                  return JSON.stringify(value);
+                  return JSON.stringify({ id: AGENT_ID, result: value });
                 })()
               : emptyList(),
           stderr: "",
@@ -658,36 +665,39 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
       });
       return {
         stdout: JSON.stringify({
-          tab_id: "registered-tab",
-          tab_label: "agents",
-          pane_id: "pane-start",
-          cwd: "/tmp",
-          herdr_agent: herdrAlias(label),
-          created_tab: false,
-          created_pane: true,
-          agent: {
-            name: args[2],
-            pane_id: "pane-start",
+          id: AGENT_ID,
+          result: {
             tab_id: "registered-tab",
-            workspace_id: WORKSPACE,
+            tab_label: "agents",
+            pane_id: "pane-start",
             cwd: "/tmp",
-            agent_session: {
-              agent: "pi",
-              kind: "id",
-              source: "herdr:pi",
-              value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-            },
-          },
-          runtime_identity: {
             herdr_agent: herdrAlias(label),
-            herdr_kind: "pi",
-            agent_definition: null,
-            model: null,
-            thinking: null,
-            cwd: "/tmp",
-            resumed: false,
-            session_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-            session_name: null,
+            created_tab: false,
+            created_pane: true,
+            agent: {
+              name: args[2],
+              pane_id: "pane-start",
+              tab_id: "registered-tab",
+              workspace_id: WORKSPACE,
+              cwd: "/tmp",
+              agent_session: {
+                agent: "pi",
+                kind: "id",
+                source: "herdr:pi",
+                value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              },
+            },
+            runtime_identity: {
+              herdr_agent: herdrAlias(label),
+              herdr_kind: "pi",
+              agent_definition: null,
+              model: null,
+              thinking: null,
+              cwd: "/tmp",
+              resumed: false,
+              session_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              session_name: null,
+            },
           },
         }),
         stderr: "",
@@ -800,6 +810,79 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   resetAgentMailbox(mailbox);
 });
 
+test("rollback requires disappearance proof after a successful close", async () => {
+  setLeadEnvironment();
+  const label = "persistent-close-agent";
+  const startup = startupExecutor(
+    label,
+    (count) =>
+      count === 1
+        ? "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+        : DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+  );
+  let closeSucceeded = false;
+  let paneRemainsAfterClose = false;
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      const result = startup.exec(command, args, options);
+      if (command === "herdr" && isTabClose(args)) {
+        assert.equal(result.code, 0);
+        closeSucceeded = true;
+      }
+      if (command === "herdr" && isPaneList(args) && closeSucceeded) {
+        const payload = JSON.parse(result.stdout);
+        paneRemainsAfterClose = payload.result.panes.some(
+          (pane: { pane_id?: string }) => pane.pane_id === "startup-pane",
+        );
+      }
+      return result;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      {
+        action: "delegate",
+        definition: "agent",
+        label,
+        task: "leave cleanup evidence",
+      },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.error.category, "rollback_failure");
+    assert.equal(result.details.error.primary.category, "target_not_found");
+    assert.equal(result.details.error.cleanup.category, "internal_failure");
+    assert.match(
+      result.details.error.cleanup.message,
+      /tab startup-tab did not disappear after close/,
+    );
+    assert.equal(result.details.error.ids.label, label);
+    assert.equal(result.details.error.ids.paneId, "startup-pane");
+    assert.equal(result.details.error.ids.tabId, "startup-tab");
+    assert.equal(closeSucceeded, true);
+    assert.equal(paneRemainsAfterClose, true);
+    assert.equal(readAgentState(startup.mailbox)?.agentLabel, label);
+    assert.equal(
+      pi.entries.some(
+        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+      ),
+      true,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+  }
+});
+
 test("assignment rollback retains primary failure and actionable cleanup details", async () => {
   setLeadEnvironment();
   const label = "rollback-detail-agent";
@@ -811,7 +894,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
   const emptyList = () => {
     const value = JSON.parse(listResponse(label));
     value.agents = [];
-    return JSON.stringify(value);
+    return JSON.stringify({ id: AGENT_ID, result: value });
   };
   const pi = fakePi({
     exec: (command, args) => {
@@ -820,6 +903,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
       if (command === "herdr" && args[0] === "agent" && args[1] === "get")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agent: {
                 name:
@@ -849,6 +933,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
       if (isTabList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tabs: [
                 {
@@ -865,6 +950,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
       if (isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 {
@@ -893,6 +979,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
         }
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tab: { tab_id: "registered-tab" },
               root_pane: { pane_id: "detail-pane" },
@@ -905,6 +992,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
       if (args[0] === "pane" && args[1] === "layout")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               layout: {
                 workspace_id: WORKSPACE,
@@ -932,6 +1020,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
         }
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { pane: { pane_id: "detail-pane" } },
           }),
           stderr: "",
@@ -941,6 +1030,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
       if (args[0] === "pane" && args[1] === "get")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               pane: {
                 pane_id: "detail-pane",
@@ -962,6 +1052,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
       if (args[0] === "pane" && args[1] === "process-info")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               process_info: {
                 pane_id: "detail-pane",
@@ -1002,7 +1093,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
               pane_id: "unmanaged-root-pane",
               cwd: "/tmp",
             });
-            return JSON.stringify(value);
+            return JSON.stringify({ id: AGENT_ID, result: value });
           })(),
           stderr: "",
           code: 0,
@@ -1027,36 +1118,39 @@ test("assignment rollback retains primary failure and actionable cleanup details
       });
       return {
         stdout: JSON.stringify({
-          tab_id: "registered-tab",
-          tab_label: "agents",
-          pane_id: "detail-pane",
-          cwd: "/tmp",
-          herdr_agent: herdrAlias(label),
-          created_tab: false,
-          created_pane: true,
-          agent: {
-            name: args[2],
-            pane_id: "detail-pane",
+          id: AGENT_ID,
+          result: {
             tab_id: "registered-tab",
-            workspace_id: WORKSPACE,
+            tab_label: "agents",
+            pane_id: "detail-pane",
             cwd: "/tmp",
-            agent_session: {
-              agent: "pi",
-              kind: "id",
-              source: "herdr:pi",
-              value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-            },
-          },
-          runtime_identity: {
             herdr_agent: herdrAlias(label),
-            herdr_kind: "pi",
-            agent_definition: null,
-            model: null,
-            thinking: null,
-            cwd: "/tmp",
-            resumed: false,
-            session_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-            session_name: null,
+            created_tab: false,
+            created_pane: true,
+            agent: {
+              name: args[2],
+              pane_id: "detail-pane",
+              tab_id: "registered-tab",
+              workspace_id: WORKSPACE,
+              cwd: "/tmp",
+              agent_session: {
+                agent: "pi",
+                kind: "id",
+                source: "herdr:pi",
+                value: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              },
+            },
+            runtime_identity: {
+              herdr_agent: herdrAlias(label),
+              herdr_kind: "pi",
+              agent_definition: null,
+              model: null,
+              thinking: null,
+              cwd: "/tmp",
+              resumed: false,
+              session_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              session_name: null,
+            },
           },
         }),
         stderr: "",
@@ -1788,7 +1882,10 @@ test("lead recovery integration validation aborts with session shutdown", async 
     exec: async (command, args, options) => {
       if (command === "herdr" && args[0] === "agent" && args[1] === "list")
         return {
-          stdout: listResponse(label, "working"),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: JSON.parse(listResponse(label, "working")),
+          }),
           stderr: "",
           code: 0,
         };
@@ -1812,6 +1909,7 @@ test("lead recovery integration validation aborts with session shutdown", async 
       }
       return {
         stdout: JSON.stringify({
+          id: AGENT_ID,
           result: {
             agent: {
               name: herdrAlias(label),
@@ -2436,7 +2534,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
       listResponse(label, "working", identity.piSessionId, identity),
     );
     value.agents = [];
-    return JSON.stringify(value);
+    return JSON.stringify({ id: AGENT_ID, result: value });
   };
   const pi = fakePi({
     entries,
@@ -2444,6 +2542,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
       if (command === "herdr" && args[0] === "tab" && args[1] === "list")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tabs: [{ tab_id: identity.tabId, workspace_id: WORKSPACE }],
             },
@@ -2454,6 +2553,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
       if (command === "herdr" && args[0] === "pane" && args[1] === "list")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: live
                 ? [{ pane_id: identity.paneId, workspace_id: WORKSPACE }]
@@ -2466,6 +2566,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
       if (command === "herdr" && args[0] === "pane" && args[1] === "get")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               pane: {
                 pane_id: identity.paneId,
@@ -2491,6 +2592,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
       )
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               process_info: {
                 pane_id: identity.paneId,
@@ -2512,7 +2614,17 @@ test("automatic close invokes the exact lifecycle only after live identity proof
       if (command === "herdr" && args[0] === "agent" && args[1] === "list")
         return {
           stdout: live
-            ? listResponse(label, "working", identity.piSessionId, identity)
+            ? JSON.stringify({
+                id: AGENT_ID,
+                result: JSON.parse(
+                  listResponse(
+                    label,
+                    "working",
+                    identity.piSessionId,
+                    identity,
+                  ),
+                ),
+              })
             : emptyList(),
           stderr: "",
           code: 0,
@@ -2520,6 +2632,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
       if (command === "herdr" && args[0] === "agent" && args[1] === "get")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agent: {
                 name: runScopedHerdrAlias(WORKSPACE, label, AGENT_ID),
@@ -2747,7 +2860,10 @@ test("stale scanner skips completion or identity changes before publication", as
       if (command === "herdr" && args[0] === "agent" && args[1] === "list") {
         await listPending;
         return {
-          stdout: listResponse(label, "working"),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: JSON.parse(listResponse(label, "working")),
+          }),
           stderr: "",
           code: 0,
         };
@@ -2797,7 +2913,10 @@ test("stale scanner skips every replaced identity field before publication", asy
         if (command === "herdr" && args[0] === "agent" && args[1] === "list") {
           await pending;
           return {
-            stdout: listResponse(label, "working"),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: JSON.parse(listResponse(label, "working")),
+            }),
             stderr: "",
             code: 0,
           };
@@ -2970,19 +3089,22 @@ test("stale scanner never notifies non-working candidates", async () => {
       if (command === "herdr" && args[0] === "agent" && args[1] === "list")
         return {
           stdout: JSON.stringify({
-            agents: states.map((state, index) =>
-              JSON.parse(
-                listResponse(
-                  state.agentLabel,
-                  "working",
-                  DEFAULT_PI_SESSION_ID,
-                  state,
-                  true,
-                  cases[index],
+            id: AGENT_ID,
+            result: {
+              agents: states.map((state, index) =>
+                JSON.parse(
+                  listResponse(
+                    state.agentLabel,
+                    "working",
+                    DEFAULT_PI_SESSION_ID,
+                    state,
+                    true,
+                    cases[index],
+                  ),
                 ),
               ),
-            ),
-            workspace_id: WORKSPACE,
+              workspace_id: WORKSPACE,
+            },
           }),
           stderr: "",
           code: 0,
@@ -3026,7 +3148,10 @@ test("stale scanner keeps one inventory in flight and retries rejection", async 
         if (first) {
           first = false;
           return {
-            stdout: listResponse(state.agentLabel, "working"),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: JSON.parse(listResponse(state.agentLabel, "working")),
+            }),
             stderr: "",
             code: 0,
           };
@@ -3037,7 +3162,10 @@ test("stale scanner keeps one inventory in flight and retries rejection", async 
         }
         await pending;
         return {
-          stdout: listResponse(state.agentLabel, "working"),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: JSON.parse(listResponse(state.agentLabel, "working")),
+          }),
           stderr: "",
           code: 0,
         };
@@ -3102,13 +3230,19 @@ test("stale scanner shutdown invalidates old inventory generation", async (t) =>
         if (listCalls === 2) {
           await oldInventory;
           return {
-            stdout: listResponse(state.agentLabel, "working"),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: JSON.parse(listResponse(state.agentLabel, "working")),
+            }),
             stderr: "",
             code: 0,
           };
         }
         return {
-          stdout: listResponse(state.agentLabel, "working"),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: JSON.parse(listResponse(state.agentLabel, "working")),
+          }),
           stderr: "",
           code: 0,
         };
@@ -3158,10 +3292,15 @@ test("list derives inactivity without changing public state", async () => {
       if (command === "herdr" && args[0] === "agent" && args[1] === "list")
         return {
           stdout: JSON.stringify({
-            agents: cases
-              .map((item) => JSON.parse(listResponse(item.label, item.status)))
-              .flatMap((item) => item.agents),
-            workspace_id: WORKSPACE,
+            id: AGENT_ID,
+            result: {
+              agents: cases
+                .map((item) =>
+                  JSON.parse(listResponse(item.label, item.status)),
+                )
+                .flatMap((item) => item.agents),
+              workspace_id: WORKSPACE,
+            },
           }),
           stderr: "",
           code: 0,

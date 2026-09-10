@@ -2080,6 +2080,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       if (isTabList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tabs: [],
             },
@@ -2100,6 +2101,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       if (args[0] === "tab" && args[1] === "create")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               tab: {
                 tab_id: "producer-tab",
@@ -2115,6 +2117,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       if (isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 {
@@ -2134,6 +2137,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       if (args[0] === "pane" && args[1] === "process-info")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               process_info: {
                 pane_id: "helper-pane",
@@ -2159,7 +2163,10 @@ test("session assignment reports a pane mismatch from the agent state producer",
       }
       if (isAgentList(args))
         return {
-          stdout: listResponse(label, "idle", null),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: JSON.parse(listResponse(label, "idle", null)),
+          }),
           stderr: "",
           code: 0,
         };
@@ -2173,6 +2180,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       Object.assign(process.env, previous);
       return {
         stdout: JSON.stringify({
+          id: AGENT_ID,
           result: {
             agent: {
               name: runScopedHerdrAlias(
@@ -2589,7 +2597,7 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
       command === "herdr" && args[0] === "--version"
         ? { stdout: "0.8.0", stderr: "", code: 0 }
         : {
-            stdout: JSON.stringify({ result: { agents: [] } }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
             stderr: "",
             code: 0,
           },
@@ -2758,7 +2766,10 @@ test("session delegation ignores an unrelated missing live session path", async 
     exec: (command, args, options) => {
       if (command === "herdr" && isAgentList(args) && !started)
         return {
-          stdout: JSON.stringify({ result: { agents: [staleAgent] } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [staleAgent] },
+          }),
           stderr: "",
           code: 0,
         };
@@ -2841,7 +2852,10 @@ test("session delegation keeps an exact live ID busy despite a missing path obse
     exec: (command, args, options) => {
       if (command === "herdr" && isAgentList(args))
         return {
-          stdout: JSON.stringify({ result: { agents: [staleAgent] } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [staleAgent] },
+          }),
           stderr: "",
           code: 0,
         };
@@ -2925,7 +2939,10 @@ test("session delegation keeps an exact live ID busy despite contradictory live 
     exec: (command, args, options) => {
       if (command === "herdr" && isAgentList(args))
         return {
-          stdout: JSON.stringify({ result: { agents: [staleAgent] } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [staleAgent] },
+          }),
           stderr: "",
           code: 0,
         };
@@ -3017,7 +3034,10 @@ test("session delegation ignores removed secondary session fields", async () => 
     exec: (command, args, options) => {
       if (command === "herdr" && isAgentList(args) && !started)
         return {
-          stdout: JSON.stringify({ result: { agents: [staleAgent] } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [staleAgent] },
+          }),
           stderr: "",
           code: 0,
         };
@@ -3461,7 +3481,10 @@ test("rejects an invalid generated collision label after releasing its claim", a
         return { stdout: "0.8.0", stderr: "", code: 0 };
       if (command === "herdr" && args[0] === "agent" && args[1] === "list")
         return {
-          stdout: listResponse("other-agent"),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: JSON.parse(listResponse("other-agent")),
+          }),
           stderr: "",
           code: 0,
         };
@@ -3666,6 +3689,7 @@ test("empty early launch cleans exact resources and same-label retry creates one
           closeProvedByList = true;
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 ...(panePresent
@@ -3712,7 +3736,7 @@ test("empty early launch cleans exact resources and same-label retry creates one
       }
       if (command === "herdr" && isTabList(args) && tabCloses > 0)
         return {
-          stdout: JSON.stringify({ result: { tabs: [] } }),
+          stdout: JSON.stringify({ id: AGENT_ID, result: { tabs: [] } }),
           stderr: "",
           code: 0,
         };
@@ -3723,6 +3747,7 @@ test("empty early launch cleans exact resources and same-label retry creates one
       )
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               process_info: {
                 pane_id: args[3],

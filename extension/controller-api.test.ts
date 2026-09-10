@@ -1029,44 +1029,47 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
       if (command === "herdr" && args[0] === "agent" && args[1] === "list")
         return {
           stdout: JSON.stringify({
-            workspace_id: WORKSPACE,
-            agents: [
-              {
-                name: "unmanaged-agent",
-                agent_status: "idle",
-                workspace_id: WORKSPACE,
-                pane_id: "unmanaged-pane",
-                cwd: "/tmp",
-              },
-              {
-                name: herdrAlias(invalidLabel),
-                agent_status: "idle",
-                workspace_id: WORKSPACE,
-                pane_id: invalid.paneId,
-                cwd: "/tmp",
-                agent_session: {
-                  source: "herdr:pi",
-                  agent: "pi",
-                  kind: "id",
-                  value: invalid.piSessionId,
+            id: AGENT_ID,
+            result: {
+              workspace_id: WORKSPACE,
+              agents: [
+                {
+                  name: "unmanaged-agent",
+                  agent_status: "idle",
+                  workspace_id: WORKSPACE,
+                  pane_id: "unmanaged-pane",
+                  cwd: "/tmp",
                 },
-              },
-              {
-                name: herdrAlias(validLabel),
-                agent_status: "idle",
-                workspace_id: WORKSPACE,
-                pane_id: valid.paneId,
-                cwd: "/tmp",
-                agent_session: {
-                  source: "herdr:pi",
-                  agent: "pi",
-                  kind: "id",
-                  value: valid.piSessionId,
+                {
+                  name: herdrAlias(invalidLabel),
+                  agent_status: "idle",
+                  workspace_id: WORKSPACE,
+                  pane_id: invalid.paneId,
+                  cwd: "/tmp",
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: invalid.piSessionId,
+                  },
                 },
-                agent_definition: "wrong-herdr-definition",
-              },
-            ],
-            agent_definitions: [],
+                {
+                  name: herdrAlias(validLabel),
+                  agent_status: "idle",
+                  workspace_id: WORKSPACE,
+                  pane_id: valid.paneId,
+                  cwd: "/tmp",
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: valid.piSessionId,
+                  },
+                  agent_definition: "wrong-herdr-definition",
+                },
+              ],
+              agent_definitions: [],
+            },
           }),
           stderr: "",
           code: 0,
@@ -1074,6 +1077,7 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
       if (command === "herdr" && isPaneList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               panes: [
                 {
@@ -1140,7 +1144,7 @@ test("list projects an unreadable current mailbox as non-actionable unknown", as
     exec: (_command, args) =>
       isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents: [] } }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
             stderr: "",
             code: 0,
           }
@@ -1724,6 +1728,7 @@ test("session assignment fails closed on duplicate live representations", async 
       if (command === "herdr" && isAgentList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agents: [agentFromState(first), agentFromState(second)],
             },
@@ -2082,7 +2087,11 @@ test("assignment retains its request when acknowledgement never arrives", async 
     exec: (command, args, options) => {
       if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
         setTimeout(() => controller.abort(), 10);
-        return { stdout: "{}", stderr: "", code: 0 };
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+          stderr: "",
+          code: 0,
+        };
       }
       return startup.exec(command, args, options);
     },
@@ -2254,13 +2263,18 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
           lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
           updatedAt: Date.now(),
         });
-        return { stdout: "{}", stderr: "", code: 0 };
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+          stderr: "",
+          code: 0,
+        };
       }
       if (command === "herdr" && isAgentList(args)) {
         const liveParent = readAgentState(parentMailbox) ?? observedParent;
         const liveChild = readAgentState(childMailbox) ?? child;
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agents: [
                 agentFromState(liveParent, parentStatus),
@@ -2283,6 +2297,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       )
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agent: {
                 ...agentFromState(observedParent, parentStatus),
@@ -2611,6 +2626,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
         )
           return {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 agent: {
                   ...agentFromState(observedParent, parentStatus),

@@ -28,6 +28,7 @@ import support, {
   PI_AGENTS_DIR,
   REQUEST_ID,
   LEAD_SESSION_ID,
+  AGENT_ID,
   WORKSPACE,
   agentFromState,
   controlMarker,
@@ -360,6 +361,7 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
       if (isAgentList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { agents: [mismatchedInventoryAgent] },
           }),
           stderr: "",
@@ -367,7 +369,10 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
         };
       if (args[0] === "agent" && args[1] === "get")
         return {
-          stdout: JSON.stringify({ result: { agent: descriptorAgent } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agent: descriptorAgent },
+          }),
           stderr: "",
           code: 0,
         };
@@ -445,7 +450,10 @@ test("a replacement chief never falls back to the previous session supervision",
         throw new Error("supervision unavailable");
       return isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents: [leadAgent] } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { agents: [leadAgent] },
+            }),
             stderr: "",
             code: 0,
           }
@@ -527,7 +535,10 @@ test("an obsolete background supervision refresh cannot publish after chief tran
         return new Promise((resolve) => {
           releaseBlocked = () =>
             resolve({
-              stdout: JSON.stringify({ result: { agents: [leadAgent] } }),
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: { agents: [leadAgent] },
+              }),
               stderr: "",
               code: 0,
             });
@@ -537,7 +548,10 @@ test("an obsolete background supervision refresh cannot publish after chief tran
         throw new Error("supervision unavailable");
       return isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents: [leadAgent] } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { agents: [leadAgent] },
+            }),
             stderr: "",
             code: 0,
           }
@@ -662,6 +676,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
           })()
         : {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 agent:
                   args[2] === leadAgent.pane_id
@@ -675,6 +690,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
       : isAgentList(args)
         ? {
             stdout: JSON.stringify({
+              id: AGENT_ID,
               result: {
                 agents: [
                   leadAgent,
@@ -1442,7 +1458,7 @@ test("definition roster matches live list and rejects stale sessions", async () 
     exec: (_command, args) =>
       isAgentList(args)
         ? {
-            stdout: JSON.stringify({ result: { agents: [] } }),
+            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
             stderr: "",
             code: 0,
           }
@@ -1715,6 +1731,7 @@ test("list ignores an unrelated unnamed Herdr agent", async () => {
       if (command === "herdr" && isAgentList(args))
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               agents: [
                 {
@@ -1815,6 +1832,7 @@ test("registered agent inspect exposes process and recent activity evidence", as
       if (command === "herdr" && args[0] === "agent" && args[1] === "get")
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: { agent: agentFromState(state) },
           }),
           stderr: "",
@@ -1833,6 +1851,7 @@ test("registered agent inspect exposes process and recent activity evidence", as
       )
         return {
           stdout: JSON.stringify({
+            id: AGENT_ID,
             result: {
               process_info: {
                 pane_id: identity.paneId,

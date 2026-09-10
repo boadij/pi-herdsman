@@ -263,10 +263,9 @@ export async function runHerdr(
   const stdout = String(result.stdout ?? "");
   const stderr = String(result.stderr ?? "");
   const stdoutJson = parseJson(stdout);
-  const stderrJson = parseJson(stderr);
-  const parsed = stdoutJson !== undefined ? stdoutJson : stderrJson;
   const operation = `herdr ${args.slice(0, 2).join(" ") || "command"}`;
   if (result.code !== 0) {
+    const stderrJson = parseJson(stderr);
     const value =
       structuredHerdrError(stdoutJson) ?? structuredHerdrError(stderrJson);
     error(
@@ -279,7 +278,7 @@ export async function runHerdr(
     );
   }
   if (options.noResult) return undefined;
-  if (parsed === undefined) {
+  if (stdoutJson === undefined) {
     const classification =
       stdout.trim() || stderr.trim() ? "malformed" : "empty";
     const raw = {
@@ -295,7 +294,26 @@ export async function runHerdr(
       { result: raw },
     );
   }
-  return parsed?.result ?? parsed;
+  if (args.length === 2 && args[0] === "status" && args[1] === "--json")
+    return stdoutJson;
+  if (
+    stdoutJson === null ||
+    typeof stdoutJson !== "object" ||
+    !Object.prototype.hasOwnProperty.call(stdoutJson, "id") ||
+    !Object.prototype.hasOwnProperty.call(stdoutJson, "result")
+  )
+    error(
+      operation,
+      "Herdr returned successful JSON without a result envelope (own id and result are required)",
+      {
+        result: {
+          classification: "missing_result_envelope",
+          stdout: boundedDiagnostic(stdout),
+          stderr: boundedDiagnostic(stderr),
+        },
+      },
+    );
+  return stdoutJson.result;
 }
 
 function workspace(ctx: ExtensionContext): string {

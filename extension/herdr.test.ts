@@ -58,6 +58,7 @@ test("lists all Herdr agents without changing the current-workspace view", async
     exec: async () => ({
       code: 0,
       stdout: JSON.stringify({
+        id: 1,
         result: {
           agents: [
             { pane_id: "one", workspace_id: "workspace-one" },
@@ -89,7 +90,7 @@ test("agent list fails closed when the native agents array is absent", async () 
     const pi = {
       exec: async () => ({
         code: 0,
-        stdout: JSON.stringify({ result }),
+        stdout: JSON.stringify({ id: 1, result }),
         stderr: "",
       }),
     } as any;
@@ -163,6 +164,7 @@ test("inspection reads raw bounded text and tolerates unavailable process eviden
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: 1,
             result: {
               agent: {
                 workspace_id: "workspace",
@@ -233,6 +235,7 @@ test("inspection keeps partial process evidence when pane identity is absent or 
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: 1,
             result: {
               agent: {
                 workspace_id: "workspace",
@@ -254,7 +257,10 @@ test("inspection keeps partial process evidence when pane identity is absent or 
       if (args[0] === "pane" && args[1] === "process-info")
         return {
           code: 0,
-          stdout: JSON.stringify({ result: { process_info: processInfo } }),
+          stdout: JSON.stringify({
+            id: 1,
+            result: { process_info: processInfo },
+          }),
           stderr: "",
         };
       throw new Error(`unexpected command: ${args.join(" ")}`);
@@ -295,6 +301,7 @@ test("inspection omits malformed process entries without exposing extra fields",
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: 1,
             result: {
               agent: {
                 workspace_id: "workspace",
@@ -316,6 +323,7 @@ test("inspection omits malformed process entries without exposing extra fields",
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: 1,
             result: {
               process_info: {
                 pane_id: "pane",
@@ -359,6 +367,7 @@ test("inspection preserves bounded terminal output", async () => {
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: 1,
             result: {
               agent: {
                 workspace_id: "workspace",
@@ -406,6 +415,7 @@ test("inspection preserves bounded terminal output", async () => {
           return {
             code: 0,
             stdout: JSON.stringify({
+              id: 1,
               result: {
                 agent: {
                   workspace_id: "workspace",
@@ -457,6 +467,7 @@ test("inspection fails closed when the caller's exact ownership generation chang
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: 1,
             result: {
               agent: {
                 workspace_id: "workspace",
@@ -538,7 +549,7 @@ test("startup timeout budget reserves the full bounded diagnostic window", () =>
   );
 });
 
-test("runHerdr preserves structured and plain diagnostics without empty suffixes", async () => {
+test("runHerdr enforces stdout success envelopes and preserves diagnostics", async () => {
   const ctx = { cwd: "/tmp" } as any;
   assert.equal(
     await runHerdr(
@@ -554,7 +565,7 @@ test("runHerdr preserves structured and plain diagnostics without empty suffixes
       {
         exec: async () => ({
           code: 0,
-          stdout: JSON.stringify({ result: { source: "stdout" } }),
+          stdout: JSON.stringify({ id: 1, result: { source: "stdout" } }),
           stderr: JSON.stringify({ result: { source: "stderr" } }),
         }),
       } as any,
@@ -568,7 +579,7 @@ test("runHerdr preserves structured and plain diagnostics without empty suffixes
       {
         exec: async () => ({
           code: 0,
-          stdout: "null",
+          stdout: JSON.stringify({ id: "null-1", result: null }),
           stderr: JSON.stringify({ result: { source: "stderr" } }),
         }),
       } as any,
@@ -582,15 +593,68 @@ test("runHerdr preserves structured and plain diagnostics without empty suffixes
       {
         exec: async () => ({
           code: 0,
-          stdout: "malformed",
+          stdout: JSON.stringify({
+            id: "status-1",
+            result: { source: "stdout" },
+          }),
           stderr: JSON.stringify({ result: { source: "stderr" } }),
         }),
       } as any,
       ctx,
       ["agent", "list"],
     ),
-    { source: "stderr" },
+    { source: "stdout" },
   );
+  assert.deepEqual(
+    await runHerdr(
+      {
+        exec: async () => ({
+          code: 0,
+          stdout: JSON.stringify({ client: { version: "0.9.0" } }),
+          stderr: "",
+        }),
+      } as any,
+      ctx,
+      ["status", "--json"],
+    ),
+    { client: { version: "0.9.0" } },
+  );
+  for (const [args, stdout] of [
+    [["agent", "list"], { agents: [] }],
+    [["agent", "get", "pane-1"], { agent: {} }],
+    [["pane", "process-info"], { process_info: {} }],
+  ] as const) {
+    await assert.rejects(
+      runHerdr(
+        {
+          exec: async () => ({
+            code: 0,
+            stdout: JSON.stringify(stdout),
+            stderr: "",
+          }),
+        } as any,
+        ctx,
+        args,
+      ),
+      /without a result envelope/,
+    );
+  }
+  for (const stdout of ["malformed", ""]) {
+    await assert.rejects(
+      runHerdr(
+        {
+          exec: async () => ({
+            code: 0,
+            stdout,
+            stderr: JSON.stringify({ result: { source: "stderr" } }),
+          }),
+        } as any,
+        ctx,
+        ["agent", "list"],
+      ),
+      /malformed JSON/,
+    );
+  }
   for (const [result, expected] of [
     [
       {
@@ -645,6 +709,23 @@ test("runHerdr preserves structured and plain diagnostics without empty suffixes
   }
 });
 
+test("runHerdr rejects a successful result-only envelope", async () => {
+  await assert.rejects(
+    runHerdr(
+      {
+        exec: async () => ({
+          code: 0,
+          stdout: JSON.stringify({ result: { agents: [] } }),
+          stderr: "",
+        }),
+      } as any,
+      { cwd: "/tmp" } as any,
+      ["agent", "list"],
+    ),
+    /without a result envelope/,
+  );
+});
+
 test("lists agents with the supported Herdr command", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
@@ -656,6 +737,7 @@ test("lists agents with the supported Herdr command", async () => {
       return {
         code: 0,
         stdout: JSON.stringify({
+          id: 1,
           result: {
             agents: [
               { name: "same", workspace_id: "workspace-list-test" },
@@ -707,7 +789,7 @@ test("serializes lifecycle mutations across managed and concrete tab identities"
       if (args[0] === "agent" && args[1] === "get")
         return {
           code: 0,
-          stdout: JSON.stringify({ result: { agent: {} } }),
+          stdout: JSON.stringify({ id: 1, result: { agent: {} } }),
           stderr: "",
         };
       return { code: 0, stdout: "", stderr: "" };
@@ -739,7 +821,7 @@ test("serializes lifecycle mutations across managed and concrete tab identities"
     startAbort.abort(new Error("release start"));
     releaseTabList({
       code: 0,
-      stdout: JSON.stringify({ result: { tabs: [] } }),
+      stdout: JSON.stringify({ id: 1, result: { tabs: [] } }),
       stderr: "",
     });
     await assert.rejects(starting);
@@ -797,6 +879,7 @@ test("start injects mandatory extensions before definition args and configures t
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: 1,
             result: { tabs: [] },
           }),
           stderr: "",
@@ -805,6 +888,7 @@ test("start injects mandatory extensions before definition args and configures t
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: 1,
             result: {
               panes: [
                 {
@@ -822,19 +906,23 @@ test("start injects mandatory extensions before definition args and configures t
       if (key === "pane process-info")
         return {
           code: 0,
-          stdout: JSON.stringify({ result: { process_info: processInfo } }),
+          stdout: JSON.stringify({
+            id: 1,
+            result: { process_info: processInfo },
+          }),
           stderr: "",
         };
       if (key === "pane wait-output")
         return {
           code: 0,
-          stdout: JSON.stringify({ result: {} }),
+          stdout: JSON.stringify({ id: 1, result: {} }),
           stderr: "",
         };
       if (key === "tab create")
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: 1,
             result: {
               tab: { tab_id: "tab-1", label: "agents" },
               root_pane: { pane_id: "pane-1" },
@@ -846,6 +934,7 @@ test("start injects mandatory extensions before definition args and configures t
         return {
           code: 0,
           stdout: JSON.stringify({
+            id: 1,
             result: {
               agent: {
                 name: "agent-run",
@@ -969,7 +1058,7 @@ async function executeFailedStart(
   const response = (value: unknown) => ({
     code: 0,
     killed: false,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const processInfo = {
@@ -1429,7 +1518,7 @@ test("readiness failure keeps one pane attempt and never starts a replacement ag
   let paneSplit = false;
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -1530,7 +1619,7 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
   const beganAt = Date.now();
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const processInfo = {
@@ -1650,7 +1739,7 @@ test("startup does not launch while the exact readiness marker is pending", asyn
   };
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -1762,7 +1851,7 @@ async function startAgentCase(
   let processInfoCalls = 0;
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const processInfo = () => ({
@@ -1971,7 +2060,7 @@ test("split rejects a stale caller before topology mutation", async () => {
   const calls: string[][] = [];
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -2043,7 +2132,7 @@ async function placementCalls(config: {
   const calls: string[][] = [];
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -2243,7 +2332,7 @@ test("preserving stop refuses a process takeover at the destructive boundary", a
   let processInfoCalls = 0;
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -2311,7 +2400,7 @@ test("preserving stop rejects malformed session identity observations", async ()
   const calls: string[][] = [];
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -2448,7 +2537,7 @@ test("inspection matches canonical native path identities and rejects missing pa
   symlinkSync(path, alias);
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   let reads = 0;
@@ -2567,7 +2656,7 @@ test("close accepts a same-workspace tab move without historical tab identity", 
   let closed = false;
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -2657,7 +2746,7 @@ test("completed agent shell transition closes the pane without stop keys", async
   let closed = false;
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -2760,7 +2849,7 @@ test("strict close rejects a completed agent shell transition", async () => {
   let processInfoCalls = 0;
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -2839,7 +2928,7 @@ test("rollback refuses malformed or taken-over process ownership before cleanup"
   let processObservations: unknown[] = [];
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -2975,7 +3064,7 @@ test("rollback proves the boundary before keys and resources before close", asyn
   let malformedSettlement = true;
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -3102,7 +3191,7 @@ test("rollback cleans an exited created pane and preserves an exited reused pane
     let panePresent = true;
     const response = (value: unknown) => ({
       code: 0,
-      stdout: JSON.stringify({ result: value }),
+      stdout: JSON.stringify({ id: 1, result: value }),
       stderr: "",
     });
     const pi = {
@@ -3182,7 +3271,7 @@ test("rollback closes an exactly owned exited created tab", async () => {
   let panePresent = true;
   const response = (value: unknown) => ({
     code: 0,
-    stdout: JSON.stringify({ result: value }),
+    stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
   const pi = {
@@ -3269,7 +3358,7 @@ test("exited-start rollback refuses agent, process, and tab ownership changes", 
     let agentLists = 0;
     const response = (value: unknown) => ({
       code: 0,
-      stdout: JSON.stringify({ result: value }),
+      stdout: JSON.stringify({ id: 1, result: value }),
       stderr: "",
     });
     const pi = {
