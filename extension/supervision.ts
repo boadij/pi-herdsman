@@ -14,7 +14,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { acquireProcessLock, type ProcessLockClaim } from "./lock.ts";
-import { herdsmanTempRoot } from "./tmp.ts";
+import { herdsmanDataRoot } from "./tmp.ts";
 
 export type LeadRole = "lead" | "chief";
 
@@ -914,7 +914,12 @@ function socketPath(): string {
 export function supervisionRuntime(socket = socketPath()): SupervisionRuntime {
   if (!socket) throw new Error("HERDR_SOCKET_PATH is required");
   const runtimeHash = createHash("sha256").update(socket).digest("hex");
-  const root = join(herdsmanTempRoot(), "supervision", runtimeHash);
+  const root = join(
+    herdsmanDataRoot(),
+    "runtime",
+    "supervision",
+    runtimeHash,
+  );
   return {
     root,
     lock: join(root, "chief.lock"),

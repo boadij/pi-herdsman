@@ -31,7 +31,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { SupervisionSnapshot } from "./supervision.ts";
-import { herdsmanTempRoot } from "./tmp.ts";
+import { herdsmanDataRoot, herdsmanTempRoot } from "./tmp.ts";
 
 export type AgentLifecycleState =
   "working" | "blocked" | "settling" | "starting" | "unknown";
@@ -620,7 +620,7 @@ function safeLine(text: string, width: number): string {
 
 /** Renders the bounded ambient lead rows. */
 export function renderSupervisionLeads(
-  leads: readonly SupervisedLeadSnapshot[],
+  leads: readonly SupervisedLeadDisplay[],
   width: number,
   options: {
     status?: SupervisionContextStatus;
@@ -2180,11 +2180,10 @@ function savePrivateOutput(
       )
     )
       throw new Error("invalid result request id");
-    const base = herdsmanTempRoot();
     const root =
       kind === "result"
-        ? join(base, "results")
-        : join(base, "output", hash(sessionId));
+        ? join(herdsmanDataRoot(), "results")
+        : join(herdsmanTempRoot(), "output", hash(sessionId));
     mkdirSync(root, { recursive: true, mode: 0o700 });
     chmodSync(root, 0o700);
     const path = join(root, kind === "result" ? key : `${hash(key)}.txt`);

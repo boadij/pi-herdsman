@@ -34,7 +34,7 @@ Example:
   "action": "delegate",
   "definition": "reviewer",
   "task": "Review the implementation against the approved plan.",
-  "files": [".pi-herdsman/plan.md", "/tmp/implementation-result"]
+  "files": [".pi-herdsman/plan.md", "/exact/resultPath"]
 }
 ```
 
@@ -200,6 +200,10 @@ copying a large result manually:
 
 Successful agent completions persist their complete output at the canonical
 `resultPath`; they do not receive a separate completion overflow path.
+Completion results live under Pi's agent data directory
+(`~/.pi/agent/pi-herdsman/results` by default, respecting Pi's configured agent
+directory) rather than the OS temporary directory, so result handoffs are not
+subject to temporary-directory cleanup.
 Oversized non-completion registered-tool output may additionally expose
 `full_output_path` when overflow persistence succeeds. Model-visible content
 remains bounded in both cases.
