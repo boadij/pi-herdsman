@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/boadij/pi-herdsman/compare/v0.3.1...v0.3.2) (2026-09-10)
+
+
+### Documentation
+
+* **assets:** replace banner image with thumbnail in package manifest ([95b89c3](https://github.com/boadij/pi-herdsman/commit/95b89c32f223382758863cb1c1d8c262a5a3a185))
+
 ## [0.3.1](https://github.com/boadij/pi-herdsman/compare/v0.3.0...v0.3.1) (2026-09-09)
 
 
