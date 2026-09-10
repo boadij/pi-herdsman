@@ -1662,7 +1662,7 @@ test("agent assignment uses only an explicit exact fork source", async () => {
     )!;
     assert.equal(start[start.indexOf("--fork") + 1], source.path);
     assert.equal(start.includes("--session"), false);
-    assert.equal(launched[0].contents.length, 2);
+    assert.equal(launched[0].contents.length, 3);
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[0]!, /current fork prompt/);
     assert.match(launched[0].contents[1]!, /ask_owner/);
@@ -1670,7 +1670,7 @@ test("agent assignment uses only an explicit exact fork source", async () => {
       start.filter(
         (arg) => arg === "--system-prompt" || arg === "--append-system-prompt",
       ),
-      ["--system-prompt", "--append-system-prompt"],
+      ["--system-prompt", "--append-system-prompt", "--append-system-prompt"],
     );
     for (const path of promptLaunchPaths(launched[0].args))
       assert.equal(realFs.existsSync(path), false, `prompt leaked: ${path}`);
