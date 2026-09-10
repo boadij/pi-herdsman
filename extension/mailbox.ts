@@ -26,6 +26,7 @@ export interface ManagedAgentState {
   paneId: string;
   piSessionId: string;
   piSessionFile?: string;
+  agentDefinition?: string;
   cwd: string;
   activeRequestId?: string;
   pendingAskId?: string;
@@ -247,6 +248,7 @@ function validate(
           "paneId",
           "piSessionId",
           "piSessionFile",
+          "agentDefinition",
           "cwd",
           "activeRequestId",
           "pendingAskId",
@@ -431,6 +433,11 @@ function validate(
       (typeof v.piSessionFile !== "string" || !v.piSessionFile.trim())
     )
       throw new Error("Invalid piSessionFile");
+    if (
+      v.agentDefinition !== undefined &&
+      (typeof v.agentDefinition !== "string" || !v.agentDefinition.trim())
+    )
+      throw new Error("Invalid agentDefinition");
     if (v.lastAck !== undefined) {
       const ack = v.lastAck as Record<string, unknown>;
       const ackKeys = [

@@ -2416,6 +2416,7 @@ export function startupExecutor(
         paneId: activePaneId,
         piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         piSessionFile: "/tmp/registered-agent.jsonl",
+        agentDefinition: "agent",
         cwd: testCwd,
         updatedAt: Date.now(),
       });

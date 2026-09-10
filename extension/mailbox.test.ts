@@ -237,6 +237,13 @@ test("rejects malformed state records", () => {
     );
     assert.throws(() => readAgentState(path), /lastActivityAt/);
   }
+  for (const value of ["", "   ", 1, null]) {
+    writeFileSync(
+      join(path, "state.json"),
+      JSON.stringify({ ...state, agentDefinition: value }),
+    );
+    assert.throws(() => readAgentState(path), /agentDefinition/);
+  }
   writeFileSync(
     join(path, "state.json"),
     JSON.stringify({ ...state, workerLabel: "legacy" }),

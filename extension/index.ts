@@ -1141,6 +1141,14 @@ function readAgentDefinition(
   return name;
 }
 function stateAgentDefinition(state: ManagedAgentState): string {
+  if (state.agentDefinition !== undefined) {
+    if (
+      typeof state.agentDefinition !== "string" ||
+      !state.agentDefinition.trim()
+    )
+      throw new Error("invalid managed agent definition");
+    return state.agentDefinition.trim();
+  }
   if (!state.piSessionFile)
     throw new Error("managed agent has no Pi session file");
   return readAgentDefinition(SessionManager.open(state.piSessionFile));
@@ -2076,6 +2084,7 @@ function envManagedAgent(ctx: ExtensionContext): ManagedAgentState | undefined {
     paneId: e.HERDR_PANE_ID,
     piSessionId: ctx.sessionManager.getSessionId(),
     piSessionFile: ctx.sessionManager.getSessionFile(),
+    agentDefinition: e.PI_HERDSMAN_AGENT_DEFINITION,
     cwd: ctx.cwd,
     updatedAt: Date.now(),
   };
@@ -3608,6 +3617,7 @@ function agentDefinitionForRuntime(
   state: ManagedAgentState,
   cached?: Runtime,
 ): string {
+  if (state.agentDefinition !== undefined) return stateAgentDefinition(state);
   return cached && runtimeIdentityMatches(cached, state, agent)
     ? cached.agentDefinition
     : stateAgentDefinition(state);
@@ -3803,9 +3813,12 @@ function runtimeForListedAgent(
 ): Runtime {
   const useCached =
     cached !== undefined && runtimeIdentityMatches(cached, state, agent);
-  const agentDefinition = useCached
-    ? cached!.agentDefinition
-    : stateAgentDefinition(state);
+  const agentDefinition =
+    state.agentDefinition !== undefined
+      ? stateAgentDefinition(state)
+      : useCached
+        ? cached!.agentDefinition
+        : stateAgentDefinition(state);
   const runtime =
     (useCached ? cached : undefined) ??
     ({

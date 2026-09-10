@@ -64,6 +64,7 @@ import {
   setAgentEnvironment,
   skillBlock,
   startupExecutor,
+  watchedResultPaths,
   waitForTestCondition,
   agentMailboxPath,
   writeAsk,
@@ -962,7 +963,7 @@ test("staged fresh assignment bridges pending start through working", async () =
   }
 });
 
-test("fresh path sessions remain controllable from the authoritative runtime cache", async () => {
+test("fresh path sessions remain controllable after controller cache loss", async () => {
   setLeadEnvironment();
   const label = `fresh-path-${randomUUID().slice(0, 8)}`;
   const sessionPath = "/tmp/registered-agent.jsonl";
@@ -1021,9 +1022,21 @@ test("fresh path sessions remain controllable from the authoritative runtime cac
       false,
     );
     assert.equal(readAgentState(startup.mailbox)?.lastAck?.accepted, true);
+    assert.equal(readAgentState(startup.mailbox)?.agentDefinition, "agent");
     assert.equal(realFs.existsSync(sessionPath), false);
 
     support.sessionOpenError = new Error("child session is not materialized");
+    for (const handler of pi.events.get("session_shutdown") ?? [])
+      await handler(undefined, context);
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    const recovered = readAgentState(startup.mailbox)!;
+    assert.ok(recovered.activeRequestId);
+    assert.ok(
+      watchedResultPaths.has(
+        `${startup.mailbox}/result-${recovered.activeRequestId}.json`,
+      ),
+    );
     const listed = await pi.tools[0].execute(
       "list",
       { action: "list" },
