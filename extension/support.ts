@@ -1396,8 +1396,7 @@ export function delegatedLifecycleExecutor(
                   rect: { width: 100 - index, height: 40 },
                 })),
               },
-            },
-          }),
+            }),
           stderr: "",
           code: 0,
         };
@@ -2474,28 +2473,25 @@ export function skillBlock(skill: string, name: string): string {
     .replaceAll(/\s+/g, " ");
 }
 
-export function promptLaunchContents(args: string[]): string[] {
-  const contents: string[] = [];
-  for (let index = 0; index < args.length; index++) {
+function promptLaunchInputs(args: string[]): string[] {
+  const inputs: string[] = [];
+  for (let index = 0; index < args.length; index++)
     if (
       args[index] === "--system-prompt" ||
       args[index] === "--append-system-prompt"
     )
-      contents.push(readFileSync(args[index + 1]!, "utf8"));
-  }
-  return contents;
+      inputs.push(args[index + 1]!);
+  return inputs;
+}
+
+export function promptLaunchContents(args: string[]): string[] {
+  return promptLaunchInputs(args).map((input) =>
+    realFs.existsSync(input) ? readFileSync(input, "utf8") : input,
+  );
 }
 
 export function promptLaunchPaths(args: string[]): string[] {
-  const paths: string[] = [];
-  for (let index = 0; index < args.length; index++) {
-    if (
-      args[index] === "--system-prompt" ||
-      args[index] === "--append-system-prompt"
-    )
-      paths.push(args[index + 1]!);
-  }
-  return paths;
+  return promptLaunchInputs(args).filter((input) => realFs.existsSync(input));
 }
 
 export function writePromptDefinition(
