@@ -9358,8 +9358,17 @@ export default function (pi: ExtensionAPI): void {
           };
         }
       },
-      renderCall: (args: unknown, theme: any, context: any) =>
-        renderCoordinationCall("agent", args, theme, context),
+      renderCall: (args: unknown, theme: any, context: any) => {
+        const call = (context?.args ?? args ?? {}) as Record<string, unknown>;
+        const agentDefinition =
+          call.action !== "delegate" && typeof call.agent === "string"
+            ? runtimes.get(call.agent)?.agentDefinition
+            : undefined;
+        return renderCoordinationCall("agent", args, theme, {
+          ...context,
+          agentDefinition,
+        });
+      },
       renderResult: (result: any, options: any, theme: any, context: any) =>
         renderCoordinationResult("agent", result, options, theme, context),
     });

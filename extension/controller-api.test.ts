@@ -217,7 +217,7 @@ test("trusted same-cwd project assignment launches with native approval", async 
   );
   const startArgs: string[][] = [];
   const startup = startupExecutor(
-    "project-only",
+    "release-review",
     () => DEFAULT_PI_SESSION_ID,
     undefined,
     undefined,
@@ -234,7 +234,12 @@ test("trusted same-cwd project assignment launches with native approval", async 
   try {
     const result = await pi.tools[0].execute(
       "id",
-      { action: "delegate", definition: "project-only", task: "same cwd" },
+      {
+        action: "delegate",
+        definition: "project-only",
+        label: "release-review",
+        task: "same cwd",
+      },
       undefined,
       undefined,
       context,
@@ -245,6 +250,19 @@ test("trusted same-cwd project assignment launches with native approval", async 
       JSON.stringify({ result: result.details, entries: pi.entries }),
     );
     assert.ok(startArgs[0]?.includes("--approve"));
+    const tool = pi.tools.find((candidate) => candidate.name === "agent");
+    const rendered = tool.renderCall(
+      { action: "steer", agent: "release-review", message: "Continue." },
+      {
+        fg: (_color: string, value: string) => value,
+        bold: (text: string) => text,
+      },
+      { argsComplete: true },
+    );
+    assert.match(
+      rendered.render(160).join("\n"),
+      /release-review · project-only/,
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);

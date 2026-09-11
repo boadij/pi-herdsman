@@ -934,6 +934,11 @@ function value(v: unknown): string {
   return typeof v === "string" && v.trim() ? v : "";
 }
 
+function agentDefinitionSuffix(label: string, definition: unknown): string {
+  const name = value(definition);
+  return name && name !== label ? ` · ${name}` : "";
+}
+
 function tailTruncate(value: string, width: number): string {
   if (width <= 0) return "";
   if (visibleWidth(value) <= width) return value;
@@ -1670,7 +1675,7 @@ export function renderCoordinationCall(
   theme: any,
   context: any = {},
 ): Component {
-  const a = (context?.args ?? args) as Record<string, unknown>;
+  const a = (context?.args ?? args ?? {}) as Record<string, unknown>;
   const action = value(a.action);
   const continuation = tool === "agent" && action === "delegate" && !!a.session;
   const verb = continuation ? "continue" : action;
@@ -1680,11 +1685,27 @@ export function renderCoordinationCall(
   else if (tool === "agent") target = value(a.agent);
   else if (tool === "staff")
     target = action === "list" ? "" : shortIdentity(a.lead);
+  const definition =
+    tool === "agent"
+      ? action === "delegate"
+        ? a.definition
+        : context?.agentDefinition
+      : undefined;
   const header = coordinationHeader(tool, verb, target, theme);
   const partial = context?.isPartial || context?.argsComplete === false;
-  const partialHeader = partial ? `${header}…` : header;
   if (humanExpanded(context, undefined))
-    return renderExpandedCoordinationCall(tool, a, theme, partialHeader);
+    return renderExpandedCoordinationCall(
+      tool,
+      a,
+      theme,
+      partial ? `${header}…` : header,
+    );
+  const compactHeader =
+    header +
+    (target
+      ? humanText(theme, "muted", agentDefinitionSuffix(target, definition))
+      : "");
+  const partialHeader = partial ? `${compactHeader}…` : compactHeader;
   const content = new Container();
   content.addChild(new Text(partialHeader, 0, 0));
   const body = coordinationBody(a);
@@ -2333,10 +2354,7 @@ export function renderCompletionMessage(
       ? formatElapsed(0, d.elapsedMs)
       : undefined;
   const label = d?.agentLabel ?? "agent";
-  const definition =
-    d?.agentDefinition && d.agentDefinition !== label
-      ? ` · ${d.agentDefinition}`
-      : "";
+  const definition = agentDefinitionSuffix(label, d?.agentDefinition);
   const heading = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${theme.bold(label)}${failed ? " failed" : " completed"}${definition ? humanText(theme, "muted", definition) : ""}`;
   const humanContent = (message.content ?? "")
     .replace(/^Agent result · [^\n]*\n\n/u, "")

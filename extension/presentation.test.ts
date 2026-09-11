@@ -1080,7 +1080,7 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
         { argsComplete: true },
       ),
     ),
-    /^agent delegate  release-review\n  Find why the release PR is missing$/,
+    /^agent delegate  release-review · researcher\n  Find why the release PR is missing$/,
   );
   assert.equal(
     renderedText(
@@ -1141,6 +1141,67 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
   assert.match(expanded, /files:\n  investigation\.md/);
 });
 
+test("compact coordination calls show available agent definitions", () => {
+  for (const [action, expected] of [
+    ["steer", "agent steer  release-review · researcher"],
+    ["reply", "agent reply  release-review · researcher"],
+    ["inspect", "agent inspect  release-review · researcher"],
+    ["close", "agent close  release-review · researcher"],
+  ] as const) {
+    assert.equal(
+      renderedText(
+        renderCoordinationCall(
+          "agent",
+          { action, agent: "release-review" },
+          presentationTheme,
+          { agentDefinition: "researcher" },
+        ),
+      ).split("\n")[0],
+      expected,
+    );
+  }
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "agent",
+        { action: "delegate", definition: "researcher" },
+        presentationTheme,
+      ),
+    ).split("\n")[0],
+    "agent delegate  researcher",
+  );
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "agent",
+        { action: "steer", agent: "researcher" },
+        presentationTheme,
+        { agentDefinition: "researcher" },
+      ),
+    ).split("\n")[0],
+    "agent steer  researcher",
+  );
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "agent",
+        { action: "steer", agent: "release-review" },
+        presentationTheme,
+      ),
+    ).split("\n")[0],
+    "agent steer  release-review",
+  );
+  assert.equal(
+    renderedText(
+      renderCoordinationCall("agent", {}, presentationTheme, {
+        isPartial: true,
+        argsComplete: false,
+      }),
+    ),
+    "agent…",
+  );
+});
+
 test("coordination headers use semantic typography without ANSI-specific assertions", () => {
   const tokens: string[] = [];
   const styleProbeTheme = {
@@ -1157,15 +1218,20 @@ test("coordination headers use semantic typography without ANSI-specific asserti
   const rendered = renderedText(
     renderCoordinationCall(
       "agent",
-      { action: "close", agent: "researcher" },
+      { action: "close", agent: "release-review" },
       styleProbeTheme,
+      { agentDefinition: "researcher" },
     ),
   );
   assert.match(rendered, /<toolTitle><bold>agent close<\/bold><\/toolTitle>/);
-  assert.match(rendered, /<accent>researcher<\/accent>/);
+  assert.match(
+    rendered,
+    /<accent>release-review<\/accent><muted> · researcher<\/muted>/,
+  );
   assert.ok(tokens.includes("bold:agent close"));
   assert.ok(tokens.includes("toolTitle:<bold>agent close</bold>"));
-  assert.ok(tokens.includes("accent:researcher"));
+  assert.ok(tokens.includes("accent:release-review"));
+  assert.ok(tokens.includes("muted: · researcher"));
 });
 
 test("human coordination prose renders Markdown in compact and expanded calls", () => {
@@ -1576,9 +1642,17 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
       3,
     ),
   };
+  const wideIdentityArgs = {
+    action: "steer",
+    agent: "label-界".repeat(20),
+    message: "Continue.",
+  };
   for (const width of [1, 8, 16, 32, 80]) {
     for (const rendered of [
       renderCoordinationCall("agent", wideArgs, presentationTheme),
+      renderCoordinationCall("agent", wideIdentityArgs, presentationTheme, {
+        agentDefinition: "定义".repeat(20),
+      }),
       renderCoordinationResult(
         "agent",
         { details: { ok: true, agent: "界".repeat(30) } },
