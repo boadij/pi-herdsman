@@ -3305,16 +3305,18 @@ function scheduleResultCleanupRetry(
   result: ResultRecord,
   ctx: ExtensionContext,
   signal: AbortSignal | undefined,
-  error: unknown = new Error("agent state is not durably completed"),
+  error?: unknown,
 ): void {
-  markRetryAttempted(error);
+  if (error !== undefined) {
+    markRetryAttempted(error);
+    if (!cleanupErrors.has(runtime.label))
+      cleanupErrors.set(
+        runtime.label,
+        `Result cleanup failed; retrying: ${String(error)}`,
+      );
+  }
   const key = `${runtime.mailboxPath}:${result.requestId}`;
   if (resultCleanupRetries.has(key)) return;
-  if (!cleanupErrors.has(runtime.label))
-    cleanupErrors.set(
-      runtime.label,
-      `Result cleanup failed; retrying: ${String(error)}`,
-    );
   const timer = setTimeout(async () => {
     resultCleanupRetries.delete(key);
     if (!controllerSessionActive || runtimes.get(runtime.label) !== runtime)
