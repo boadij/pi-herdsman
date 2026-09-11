@@ -1111,14 +1111,17 @@ export function sessionAgentIdentity(
     if (entry.type !== "custom" || entry.customType !== AGENT_DEFINITION_ENTRY)
       continue;
     const data = entry.data;
+    if (!data || typeof data !== "object") continue;
+    const candidateSessionId = (data as { sessionId?: unknown }).sessionId;
     if (
-      !data ||
-      typeof data !== "object" ||
+      typeof candidateSessionId !== "string" ||
+      candidateSessionId.trim() !== sessionId
+    )
+      continue;
+    if (
       Object.keys(data).length !== 3 ||
-      typeof (data as { sessionId?: unknown }).sessionId !== "string" ||
       typeof (data as { definition?: unknown }).definition !== "string" ||
       typeof (data as { label?: unknown }).label !== "string" ||
-      !(data as { sessionId: string }).sessionId.trim() ||
       !(data as { definition: string }).definition.trim() ||
       !(data as { label: string }).label.trim()
     )

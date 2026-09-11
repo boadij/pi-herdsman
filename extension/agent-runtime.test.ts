@@ -2386,19 +2386,18 @@ test("session agent identity reads the session-wide entry array", () => {
     },
   );
   assert.equal(sessionAgentIdentity([], "current-session"), undefined);
-  assert.throws(
-    () =>
-      sessionAgentIdentity(
-        [
-          {
-            type: "custom",
-            customType: "pi-herdsman-agent-definition",
-            data: { name: "reviewer" },
-          },
-        ],
-        "current-session",
-      ),
-    /invalid pi-herdsman-agent-definition entry/,
+  assert.equal(
+    sessionAgentIdentity(
+      [
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: { name: "reviewer" },
+        },
+      ],
+      "current-session",
+    ),
+    undefined,
   );
   assert.throws(
     () =>
@@ -2539,13 +2538,19 @@ test("a forked session establishes identity for its own Pi session", async () =>
       label: "source-agent",
     },
   };
-  const agent = fakePi({ entries: [copiedIdentity] });
+  const copiedLegacyIdentity = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { name: "old-agent" },
+  };
+  const agent = fakePi({ entries: [copiedIdentity, copiedLegacyIdentity] });
   registerExtension!(agent.pi as never);
   const context = fakeAgentContext(agent.entries);
   try {
     await agent.events.get("session_start")![0](undefined, context);
     assert.deepEqual(agent.entries, [
       copiedIdentity,
+      copiedLegacyIdentity,
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
