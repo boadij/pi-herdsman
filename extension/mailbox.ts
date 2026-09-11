@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
-import { herdsmanTempRoot } from "./tmp.ts";
+import { herdsmanDataRoot } from "./tmp.ts";
 
 export interface ManagedAgentState {
   version: 4;
@@ -123,7 +123,7 @@ const LIMITS = {
   ask: MAILBOX_PROTOCOL_LIMIT_BYTES,
   result: 4 * 1024 * 1024,
 };
-const root = join(herdsmanTempRoot(), "mailboxes-v4");
+const root = join(herdsmanDataRoot(), "runtime", "mailboxes-v4");
 
 export function agentMailboxPath(
   workspaceId: string,
