@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.2](https://github.com/boadij/pi-herdsman/compare/v0.5.1...v0.5.2) (2026-09-11)
+
+
+### Fixes
+
+* harden runtime contracts ([#50](https://github.com/boadij/pi-herdsman/issues/50)) ([6d54d6f](https://github.com/boadij/pi-herdsman/commit/6d54d6f7d902f27f8ee8d12c34eb60971d6b7778))
+
+
+### Documentation
+
+* improve agent fleet discoverability ([#49](https://github.com/boadij/pi-herdsman/issues/49)) ([5613e14](https://github.com/boadij/pi-herdsman/commit/5613e14adad17c3384b9f59c372c959e99a77e4a))
+
 ## [0.5.1](https://github.com/boadij/pi-herdsman/compare/v0.5.0...v0.5.1) (2026-09-11)
 
 
