@@ -1472,7 +1472,7 @@ test("public assignment normalizes invalid and unknown session sources", async (
       const result = await pi.tools[0].execute(
         "id",
         {
-          action: "delegate",
+          action: field === "session" ? "continue" : "delegate",
           task: "resolve the source",
           ...(field === "session"
             ? { session: value }
@@ -1484,6 +1484,8 @@ test("public assignment normalizes invalid and unknown session sources", async (
       );
       assert.equal(result.details.ok, false, JSON.stringify(result.details));
       assert.equal(result.details.error.category, "invalid_request");
+      if (field === "session")
+        assert.equal(result.details.error.operation, "continue");
       assert.match(result.details.error.message, diagnostic);
     }
   } finally {
@@ -1520,12 +1522,13 @@ test("session assignment rejects the controller's active session", async () => {
   try {
     const result = await pi.tools[0].execute(
       "id",
-      { action: "delegate", session: session.path, task: "same session" },
+      { action: "continue", session: session.path, task: "same session" },
       undefined,
       undefined,
       fakeContext(),
     );
     assert.equal(result.details.error.category, "invalid_request");
+    assert.equal(result.details.error.operation, "continue");
     assert.match(result.details.error.message, /currently active Pi session/);
     assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),

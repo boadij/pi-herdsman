@@ -514,15 +514,11 @@ function parseRequest(p: Params): Params {
     if ("session" in p || "agent" in p || "message" in p)
       fail(
         "invalid_request",
-        "Delegate requires exactly one of definition or session",
+        "Delegate does not accept session, agent, or message",
         "delegate",
       );
     if (!p.task)
-      fail(
-        "invalid_request",
-        "Definition delegation requires a non-empty task",
-        "delegate",
-      );
+      fail("invalid_request", "Delegate requires a non-empty task", "delegate");
     return {
       action: "delegate",
       definition: p.definition,
@@ -548,11 +544,7 @@ function parseRequest(p: Params): Params {
         "continue",
       );
     if (!p.task)
-      fail(
-        "invalid_request",
-        "Continue requires a non-empty task",
-        "continue",
-      );
+      fail("invalid_request", "Continue requires a non-empty task", "continue");
     return {
       action: "continue",
       session: p.session,
@@ -563,11 +555,7 @@ function parseRequest(p: Params): Params {
   }
   if (p.action !== "delegate")
     fail("invalid_request", "Unsupported agent action", p.action);
-  fail(
-    "invalid_request",
-    "Delegate requires exactly one of definition or session",
-    "delegate",
-  );
+  fail("invalid_request", "Delegate requires a definition", "delegate");
 }
 function invalidRequestInput(
   operation: string,
@@ -4715,13 +4703,10 @@ async function actionUnsafe(
           )
         : undefined;
     await herdrVersion(pi, ctx, signal);
-    const agentDefinition = resumed
-      ? resumed.definition
-      : p.definition;
-    const agentCwd = resumed
-      ? resumed.cwd
-      : (p.cwd ?? ctx.cwd);
-    const requestedLabel = resumed?.label ?? (p.action === "delegate" ? p.label : undefined);
+    const agentDefinition = resumed ? resumed.definition : p.definition;
+    const agentCwd = resumed ? resumed.cwd : (p.cwd ?? ctx.cwd);
+    const requestedLabel =
+      resumed?.label ?? (p.action === "delegate" ? p.label : undefined);
     const agentContext = await contextAgentDefinitions(ctx);
     const definition = agentContext.definitions.find(
       (candidate) => candidate.name === agentDefinition,

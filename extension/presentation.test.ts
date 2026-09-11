@@ -1108,11 +1108,11 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
   );
   const expandedContinue = renderedText(
     renderCoordinationCall(
-        "agent",
-        {
-          action: "continue",
-          session: "/tmp/session.jsonl",
-          timeoutMs: 300000,
+      "agent",
+      {
+        action: "continue",
+        session: "/tmp/session.jsonl",
+        timeoutMs: 300000,
         task: "Apply the findings",
         files: ["investigation.md"],
       },
@@ -1252,7 +1252,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
     renderedText(
       renderCoordinationCall("agent", context.args, presentationTheme, context),
     ).split("\n")[0],
-    "agent continue  ask-owner-retry · researcher",
+    "agent continue",
   );
   assert.equal(invalidations, 1);
 

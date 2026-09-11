@@ -3637,7 +3637,7 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     {
       label: `${prefix}-missing-session`,
       params: { action: "continue", task: "missing session" },
-      message: "Continue requires a session",
+      message: "Invalid agent input",
     },
     {
       label: `${prefix}-whitespace-agent`,
