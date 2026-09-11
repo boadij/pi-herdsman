@@ -1263,7 +1263,6 @@ async function resolveAssignmentSessionOrFail<T>(
 export async function resolveAssignmentSession(
   ctx: ExtensionContext,
   raw: string,
-  operation: "delegate" | "continue" = "delegate",
 ): Promise<{
   path: string;
   id: string;
@@ -1278,7 +1277,7 @@ export async function resolveAssignmentSession(
     fail(
       "invalid_request",
       `Saved assignment session has no non-empty cwd in its session header: ${session.path}`,
-      operation,
+      "continue",
     );
   let identity: AgentSessionIdentity;
   try {
@@ -1287,7 +1286,7 @@ export async function resolveAssignmentSession(
     fail(
       "invalid_request",
       error instanceof Error ? error.message : String(error),
-      operation,
+      "continue",
     );
   }
   const cwd = manager.getCwd();
@@ -4699,7 +4698,7 @@ async function actionUnsafe(
     const resumed =
       p.action === "continue"
         ? await resolveAssignmentSessionOrFail("continue", () =>
-            resolveAssignmentSession(ctx, p.session, "continue"),
+            resolveAssignmentSession(ctx, p.session),
           )
         : undefined;
     await herdrVersion(pi, ctx, signal);

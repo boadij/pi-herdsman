@@ -32,8 +32,9 @@ my-review
 
 Use the exact `agent` value from `agent list` only for
 `steer.agent`, `reply.agent`, or `close.agent` while those actions are listed
-in `available_actions`. An agent label is the live execution identity for one
-assignment, not a continuation handle.
+in `available_actions`. An agent label is the stable logical name across
+sequential generations of one managed session, not a continuation selector.
+It is a control target only for the currently live generation.
 
 Labels must begin with a lowercase letter, contain only lowercase letters,
 digits, `_`, or `-`, and be at most 32 characters.
@@ -113,7 +114,7 @@ The identities are therefore:
 ```text
 agent definition → configuration for new work
 Pi session       → durable conversational context and continuation identity
-agent label     → live control identity for one assignment
+agent label     → stable logical name across sequential generations; live control target only for the current generation
 ```
 
 ## See also

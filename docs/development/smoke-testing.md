@@ -68,6 +68,7 @@ Verify:
 
 - the same Pi session and session file are used;
 - a new agent generation, run ID, request ID, and pane are created;
+- the saved logical label is reused exactly (there is no continuation label override);
 - the saved conversation context is available;
 - the current effective definition configuration is used;
 - exactly one result reaches the owner;
@@ -86,6 +87,7 @@ Use an exact saved session path or full UUID.
 Verify:
 
 - saved definition and cwd are respected;
+- the saved logical label is reused exactly;
 - session continuation uses the saved cwd;
 - current effective agent override values are used for the new agent
   generation;
