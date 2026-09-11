@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -588,7 +589,9 @@ test("stale recovery cannot remove a replacement owner", () => {
     () =>
       claimAgentMailbox(path, {
         afterStaleOwnerRemoved: () => {
-          staleObserved = !readdirSync(claimDir).includes("999999-stale");
+          assert.equal(existsSync(claimDir), false);
+          staleObserved = true;
+          mkdirSync(claimDir);
           writeFileSync(
             join(claimDir, freshOwner),
             JSON.stringify(freshPayload),

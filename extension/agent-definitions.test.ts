@@ -1180,6 +1180,7 @@ test("managed launch policy always includes ask_owner", () => {
       { noTools: true, tools: ["read"] },
       ["--no-tools", "--tools", "read,ask_owner"],
     ],
+    [{ tools: [] }, ["--no-tools", "--tools", "ask_owner"]],
     [
       { noBuiltinTools: true, excludeTools: ["write", "ask_owner"] },
       ["--no-builtin-tools", "--exclude-tools", "write"],
@@ -1212,6 +1213,20 @@ test("managed launch policy always includes ask_owner", () => {
       .filter((arg) => arg === "ask_owner").length,
     1,
   );
+});
+
+test("keeps omitted tools default and closes an explicit empty allowlist", () => {
+  const launch = (frontmatter: Record<string, unknown>) =>
+    agentLaunchArgs(
+      { name: "agent", path: "/agent.md", frontmatter, body: "" },
+      { bodyPromptPath: "/prompt" },
+    );
+  assert.deepEqual(launch({}), ["--no-context-files", "--no-skills"]);
+  assert.deepEqual(launch({ tools: [] }), [
+    "--no-context-files",
+    "--no-tools",
+    "--no-skills",
+  ]);
 });
 
 test("applies explicit noSkills before inheritSkills defaults", () => {

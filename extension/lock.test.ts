@@ -19,7 +19,7 @@ function temporaryPath(): string {
   return join(mkdtempSync(join(tmpdir(), "pi-herdsman-lock-")), "lock");
 }
 
-test("generic locks retain directory publication and exact release", () => {
+test("claim wrapper publishes a complete claim and releases exactly", () => {
   const path = temporaryPath();
   try {
     const release = claimProcessLock(path);
@@ -32,7 +32,7 @@ test("generic locks retain directory publication and exact release", () => {
   }
 });
 
-test("Chief locks publish an exact claim without changing generic callers", () => {
+test("acquireProcessLock returns an exact claim", () => {
   const path = temporaryPath();
   try {
     const lease = acquireProcessLock(path);
@@ -44,7 +44,7 @@ test("Chief locks publish an exact claim without changing generic callers", () =
   }
 });
 
-test("Chief stale recovery remains claimable after a crash before publication", () => {
+test("claim wrapper retains atomic stale recovery after a crash", () => {
   const path = temporaryPath();
   try {
     mkdirSync(path, 0o700);
@@ -54,7 +54,7 @@ test("Chief stale recovery remains claimable after a crash before publication", 
     );
     throws(
       () =>
-        acquireProcessLock(path, {
+        claimProcessLock(path, {
           afterStaleOwnerRemoved: () => {
             throw new Error("simulated crash");
           },
@@ -63,15 +63,15 @@ test("Chief stale recovery remains claimable after a crash before publication", 
     );
     throws(() => readdirSync(path), { code: "ENOENT" });
 
-    const lease = acquireProcessLock(path);
+    const release = claimProcessLock(path);
     assertOccupied(path);
-    lease.release();
+    release();
   } finally {
     rmSync(path, { recursive: true, force: true });
   }
 });
 
-test("empty generic lock directories fail closed", () => {
+test("empty lock directories fail closed", () => {
   const path = temporaryPath();
   try {
     mkdirSync(path, 0o700);

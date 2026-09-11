@@ -22,9 +22,8 @@ function publishClaim(
   owner: string,
   payload: string,
 ): void {
-  // All callers retain the same claim/release contract; publishing the
-  // owner record before the canonical rename also makes the shared lock safe
-  // for chief descriptor consumers without event-loop waiting.
+  // Publish the owner record before the canonical rename so observers never
+  // see an empty canonical lock.
   const temporary = join(parent, `.${basename(claimDir)}.${randomUUID()}.tmp`);
   fs.mkdirSync(temporary, 0o700);
   const temporaryOwner = join(temporary, owner);
@@ -70,8 +69,7 @@ export function acquireProcessLock(
   const payload = JSON.stringify({ pid: process.pid, id });
   const ownerPath = join(claimDir, `${process.pid}-${id}`);
 
-  // An empty canonical directory is ambiguous (it may be a crashed legacy
-  // publication), and must not be replaced by rename.
+  // An empty canonical directory is ambiguous and must not be replaced.
   try {
     if (fs.readdirSync(claimDir).length === 0) throw new Error(verifyMessage);
   } catch (error) {
@@ -127,9 +125,8 @@ export function acquireProcessLock(
     }
     if (alive) throw new ProcessLockOccupiedError(occupiedMessage);
     // Move the complete, verified stale claim out of the canonical name in one
-    // operation.  In particular, never unlink the owner while leaving an
-    // empty canonical directory behind: a crash at that point used to make
-    // every later chief claimant fail closed forever.
+    // operation. Never unlink the owner while leaving an empty canonical
+    // directory behind.
     const quarantine = join(
       parent,
       `.${basename(claimDir)}.${randomUUID()}.stale`,
@@ -210,92 +207,7 @@ export function claimProcessLock(
   path: string,
   options: ProcessLockOptions = {},
 ): () => void {
-  return acquireGenericProcessLock(path, options).release;
-}
-
-// Generic locks predate chief descriptors and intentionally retain their
-// directory publication contract.  An observer that catches the brief empty
-// directory fails closed; it must never guess that the lock is available.
-function acquireGenericProcessLock(
-  path: string,
-  options: ProcessLockOptions,
-): ProcessLockLease {
-  const name = options.name ?? "process lock";
-  const verifyMessage = `Unable to verify ${name}`;
-  const occupiedMessage =
-    options.occupiedMessage ??
-    `${name[0].toUpperCase()}${name.slice(1)} is in progress`;
-  const recoverMessage = `Unable to recover ${name}`;
-  const parent = dirname(path);
-  fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
-  fs.chmodSync(parent, 0o700);
-  const id = randomUUID();
-  const owner = `${process.pid}-${id}`;
-  const ownerPath = join(path, owner);
-  try {
-    fs.mkdirSync(path, 0o700);
-    fs.chmodSync(path, 0o700);
-    fs.writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, id }), {
-      flag: "wx",
-      mode: 0o600,
-    });
-    return {
-      claim: { pid: process.pid, id },
-      release: () => releaseProcessLock(path, ownerPath, process.pid, id, name),
-    };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(path);
-  } catch {
-    throw new Error(verifyMessage);
-  }
-  if (entries.length !== 1) throw new Error(verifyMessage);
-  const observedOwner = entries[0];
-  const observedPath = join(path, observedOwner);
-  let claim: { pid?: unknown; id?: unknown };
-  try {
-    claim = JSON.parse(fs.readFileSync(observedPath, "utf8")) as {
-      pid?: unknown;
-      id?: unknown;
-    };
-  } catch {
-    throw new Error(verifyMessage);
-  }
-  if (
-    !claim ||
-    typeof claim.pid !== "number" ||
-    !Number.isInteger(claim.pid) ||
-    claim.pid <= 0 ||
-    typeof claim.id !== "string" ||
-    !claim.id ||
-    observedOwner !== `${claim.pid}-${claim.id}`
-  )
-    throw new Error(verifyMessage);
-  try {
-    process.kill(claim.pid, 0);
-    throw new ProcessLockOccupiedError(occupiedMessage);
-  } catch (probeError) {
-    const code = (probeError as NodeJS.ErrnoException).code;
-    if (code !== "ESRCH") {
-      if (probeError instanceof ProcessLockOccupiedError) throw probeError;
-      throw new Error(verifyMessage, { cause: probeError });
-    }
-  }
-  try {
-    fs.unlinkSync(observedPath);
-    options.afterStaleOwnerRemoved?.();
-    fs.rmdirSync(path);
-  } catch (removeError) {
-    const code = (removeError as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTEMPTY" || code === "EEXIST")
-      throw new ProcessLockOccupiedError(occupiedMessage);
-    throw new Error(recoverMessage, { cause: removeError });
-  }
-  return acquireGenericProcessLock(path, options);
+  return acquireProcessLock(path, options).release;
 }
 
 function releaseProcessLock(

@@ -66,8 +66,9 @@ label is occupied, continuation fails with `agent_label_exists`.
 
 Successful `delegate` results use `action: "delegate"`; successful `continue`
 results use `action: "continue"`. Both include `agent`, `definition`, request,
-session, and startup evidence where available. Both return after durable
-acceptance, not completion. A terminal result makes the exact session identity
+session, and startup evidence where available. Both return after atomic
+recording for controller restart recovery, not completion. A terminal result
+makes the exact session identity
 prominent for a later `continue` call.
 
 ## `list`

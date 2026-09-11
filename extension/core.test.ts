@@ -259,11 +259,63 @@ test("reads the canonical target for symlinked snapshots", () => {
   assert.equal(snapshot.text, "canonical bytes");
 });
 
+test("does not read a replacement with a different file identity", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-snapshot-identity-"));
+  const path = join(cwd, "candidate");
+  writeFileSync(path, "validated");
+  const initial = realFs.statSync(path);
+  candidateReadPath = realpathSync(path);
+  candidateReadFd = undefined;
+  candidateReadDev = initial.dev + 1;
+  candidateReadIno = initial.ino + 1;
+  messageReadCount = 0;
+  countMessageReads = true;
+  try {
+    assert.throws(
+      () => snapshotTextFiles([path], cwd, "assign"),
+      /Cannot read text file .*candidate: file changed during validation/,
+    );
+    assert.equal(messageReadCount, 0);
+  } finally {
+    candidateReadPath = undefined;
+    candidateReadFd = undefined;
+    candidateReadDev = undefined;
+    candidateReadIno = undefined;
+    candidateReadOpenCount = 0;
+    countMessageReads = false;
+  }
+});
+
+test("rejects a non-regular replacement without reading it", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-snapshot-replaced-"));
+  const path = join(cwd, "candidate");
+  writeFileSync(path, "candidate");
+  candidateReadPath = realpathSync(path);
+  candidateReadFd = undefined;
+  candidateReadIsFile = false;
+  messageReadCount = 0;
+  countMessageReads = true;
+  try {
+    assert.throws(
+      () => snapshotTextFiles([path], cwd, "assign"),
+      /Cannot read text file .*candidate: not a regular file/,
+    );
+    assert.equal(messageReadCount, 0);
+  } finally {
+    candidateReadPath = undefined;
+    candidateReadFd = undefined;
+    candidateReadOpenCount = 0;
+    candidateReadIsFile = true;
+    countMessageReads = false;
+  }
+});
+
 test("snapshots reject NUL, invalid UTF-8, and byte limits", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-snapshot-"));
   writeFileSync(join(cwd, "nul.txt"), Buffer.from("a\0b"));
   writeFileSync(join(cwd, "utf8.txt"), Buffer.from([0xff]));
-  writeFileSync(join(cwd, "large.txt"), "1234");
+  writeFileSync(join(cwd, "at-limit.txt"), "123");
+  writeFileSync(join(cwd, "over-limit.txt"), "1234");
   assert.throws(
     () => snapshotTextFiles(["nul.txt"], cwd, "assign"),
     /Cannot read text file nul\.txt: binary content/,
@@ -273,8 +325,12 @@ test("snapshots reject NUL, invalid UTF-8, and byte limits", () => {
     /Cannot read text file utf8\.txt/,
   );
   assert.throws(
-    () => snapshotTextFiles(["large.txt"], cwd, "assign", { maxBytes: 3 }),
+    () => snapshotTextFiles(["over-limit.txt"], cwd, "assign", { maxBytes: 3 }),
     /Request exceeds the mailbox size limit/,
+  );
+  assert.equal(
+    snapshotTextFiles(["at-limit.txt"], cwd, "assign", { maxBytes: 3 })[0].text,
+    "123",
   );
 });
 
