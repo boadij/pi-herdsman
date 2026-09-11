@@ -153,8 +153,8 @@ when the exact message limit permits. Otherwise they remain canonical references
 
 `timeoutMs` is valid on definition and session delegation and must be an integer
 from `5001` through `300000`. The startup budget reserves one bounded diagnostic
-window. Current message limits are governed by global/default
-settings and the fixed mailbox protocol ceiling. Managed mailbox records use
+window. Current message limits are governed by the Herdsman config file and its
+defaults, plus the fixed mailbox protocol ceiling. Managed mailbox records use
 protocol V4 in the `mailboxes-v4` namespace, and control requests use the marker prefix
 `__PI_HERDSMAN_AGENT_V4__:`.
 

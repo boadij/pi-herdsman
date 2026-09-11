@@ -186,9 +186,10 @@ test("parent delegates two same-definition children with exact ownership", async
 });
 
 function writePlacementSetting(placement: "tab" | "subtree" | "split") {
+  realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman"), { recursive: true });
   realFs.writeFileSync(
-    join(PI_AGENT_ROOT, "settings.json"),
-    JSON.stringify({ piHerdsman: { spawnPlacement: placement } }),
+    join(PI_AGENT_ROOT, "pi-herdsman", "config.json"),
+    JSON.stringify({ spawnPlacement: placement }),
   );
 }
 
@@ -308,7 +309,9 @@ test("lead direct placement modes use real controller delegation", async () => {
       for (const childMailbox of childMailboxes)
         resetAgentMailbox(childMailbox);
       nativeSessions.delete(parent.piSessionId);
-      realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+      realFs.rmSync(join(PI_AGENT_ROOT, "pi-herdsman", "config.json"), {
+        force: true,
+      });
     }
   }
 });
@@ -357,7 +360,9 @@ test("lead split-to-tab placement creates a dedicated agents tab", async () => {
     resetAgentMailbox(parentMailbox);
     for (const mailbox of childMailboxes) resetAgentMailbox(mailbox);
     nativeSessions.delete(parent.piSessionId);
-    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+    realFs.rmSync(join(PI_AGENT_ROOT, "pi-herdsman", "config.json"), {
+      force: true,
+    });
   }
 });
 
@@ -427,7 +432,9 @@ test("lead tab placement vetoes an ambiguous current-lead direct root", async ()
       resetAgentMailbox(mailbox);
     nativeSessions.delete(parent.piSessionId);
     nativeSessions.delete(direct.piSessionId);
-    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+    realFs.rmSync(join(PI_AGENT_ROOT, "pi-herdsman", "config.json"), {
+      force: true,
+    });
   }
 });
 
@@ -498,7 +505,9 @@ test("lead tab placement vetoes ambiguous foreign-herd evidence", async () => {
       resetAgentMailbox(mailbox);
     nativeSessions.delete(parent.piSessionId);
     nativeSessions.delete(foreign.piSessionId);
-    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+    realFs.rmSync(join(PI_AGENT_ROOT, "pi-herdsman", "config.json"), {
+      force: true,
+    });
   }
 });
 
@@ -566,7 +575,9 @@ test("lead tab placement rejects old shared tabs and only changes future starts"
     for (const childMailbox of childMailboxes) resetAgentMailbox(childMailbox);
     nativeSessions.delete(parent.piSessionId);
     nativeSessions.delete(sibling.piSessionId);
-    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+    realFs.rmSync(join(PI_AGENT_ROOT, "pi-herdsman", "config.json"), {
+      force: true,
+    });
   }
 });
 
@@ -644,7 +655,9 @@ test("lead tab revalidation rejects a newly contaminated candidate under the loc
     resetAgentMailbox(childMailbox);
     nativeSessions.delete(parent.piSessionId);
     nativeSessions.delete(sibling.piSessionId);
-    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+    realFs.rmSync(join(PI_AGENT_ROOT, "pi-herdsman", "config.json"), {
+      force: true,
+    });
   }
 });
 
@@ -720,7 +733,9 @@ test("managed-agent delegation always splits in its current pane for every lead 
       pi.events.get("session_shutdown")?.[0]();
       resetAgentMailbox(parentMailbox);
       resetAgentMailbox(childMailbox);
-      realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+      realFs.rmSync(join(PI_AGENT_ROOT, "pi-herdsman", "config.json"), {
+        force: true,
+      });
     }
   }
 });
@@ -3432,9 +3447,10 @@ test("rejects known generated-label envelope overflow before startup", async () 
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   realFs.rmSync(startup.mailbox, { recursive: true, force: true });
   const mailboxLimit = 64 * 1024;
+  realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman"), { recursive: true });
   realFs.writeFileSync(
-    join(PI_AGENT_ROOT, "settings.json"),
-    JSON.stringify({ piHerdsman: { mailboxPayloadLimitBytes: mailboxLimit } }),
+    join(PI_AGENT_ROOT, "pi-herdsman", "config.json"),
+    JSON.stringify({ mailboxPayloadLimitBytes: mailboxLimit }),
   );
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
@@ -3464,7 +3480,9 @@ test("rejects known generated-label envelope overflow before startup", async () 
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
-    realFs.rmSync(join(PI_AGENT_ROOT, "settings.json"), { force: true });
+    realFs.rmSync(join(PI_AGENT_ROOT, "pi-herdsman", "config.json"), {
+      force: true,
+    });
   }
 });
 

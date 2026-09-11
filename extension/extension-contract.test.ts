@@ -25,6 +25,7 @@ import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
   PARENT_SESSION_ID,
+  PI_AGENT_ROOT,
   PI_AGENTS_DIR,
   REQUEST_ID,
   LEAD_SESSION_ID,
@@ -843,16 +844,17 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     const chiefDescriptorPath = supervisionRuntime().descriptor;
     const chiefDescriptor = readFileSync(chiefDescriptorPath, "utf8");
-    support.settingsAccessHook = (access) => {
-      if (access === "global")
-        writeFileSync(
-          chiefDescriptorPath,
-          JSON.stringify({
-            ...JSON.parse(chiefDescriptor),
-            leaseId: randomUUID(),
-          }),
-        );
-    };
+    realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman"), { recursive: true });
+    const configPath = join(PI_AGENT_ROOT, "pi-herdsman", "config.json");
+    writeFileSync(configPath, "{}", "utf8");
+    support.configReadHook = () =>
+      writeFileSync(
+        chiefDescriptorPath,
+        JSON.stringify({
+          ...JSON.parse(chiefDescriptor),
+          leaseId: randomUUID(),
+        }),
+      );
     try {
       await assert.rejects(
         chiefTool.execute(
@@ -870,8 +872,9 @@ test("registered lead and replacement chief exchange messages and asks", async (
         /Lead or Chief changed before the message was queued/,
       );
     } finally {
-      support.settingsAccessHook = undefined;
+      support.configReadHook = undefined;
       writeFileSync(chiefDescriptorPath, chiefDescriptor);
+      realFs.rmSync(configPath, { force: true });
     }
     assert.deepEqual(
       listChiefMessagePaths(supervisionRuntime(), leadId),

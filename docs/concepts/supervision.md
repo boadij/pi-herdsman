@@ -60,7 +60,7 @@ correlated `staff reply`; a reply clears the pending ask only after accepted
 follow-up delivery. A replacement chief can answer an existing ask using its
 current lease and unchanged ask ID. Chief and staff message actions accept
 files; their text is prepared with the same canonical attachment renderer and
-configured global byte limits as agent messages, while durable supervision
+configured Herdsman byte limits as agent messages, while durable supervision
 records remain text-only.
 
 ## Supervision state

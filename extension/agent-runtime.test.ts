@@ -759,7 +759,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   realFs.rmSync(askFile, { force: true });
 });
 
-test("message limits are global-only and do not consult project trust", async () => {
+test("message limits do not consult project trust", async () => {
   const mailbox = setAgentEnvironment();
   const agent = fakePi();
   registerExtension!(agent.pi as never);
@@ -785,7 +785,6 @@ test("message limits are global-only and do not consult project trust", async ()
     text: "choose",
     createdAt: Date.now(),
   };
-  const accesses: string[] = [];
   try {
     await agent.events.get("session_start")![0](undefined, context);
     writeRequest(mailbox, assignment);
@@ -799,7 +798,6 @@ test("message limits are global-only and do not consult project trust", async ()
     context.isProjectTrusted = () => {
       throw new Error("message limits must not consult project trust");
     };
-    support.settingsAccessHook = (access) => accesses.push(access);
     const askTool = agent.tools.find((tool) => tool.name === "ask_owner");
     assert.ok(askTool);
     await askTool.execute(
@@ -809,9 +807,7 @@ test("message limits are global-only and do not consult project trust", async ()
       undefined,
       context,
     );
-    assert.deepEqual(accesses, ["global"]);
   } finally {
-    support.settingsAccessHook = undefined;
     agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
   }
