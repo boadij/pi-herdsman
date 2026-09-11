@@ -1935,8 +1935,18 @@ test("controller cleanup barrier blocks newer work until stale acknowledgement c
     );
     assert.equal(blocked.details.error.category, "internal_failure");
     assert.equal(realFs.existsSync(stalePath), true);
+    const failedList = await pi.tools[0].execute(
+      "list-after-cleanup-failure",
+      { action: "list" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.match(
+      failedList.details.agents[0].cleanup_error,
+      /Acknowledged request could not be removed/,
+    );
 
-    realFs.rmSync(stalePath, { recursive: true, force: true });
     const result = await pi.tools[0].execute(
       "id",
       { action: "steer", agent: label, message: "proceed now" },
@@ -1946,6 +1956,15 @@ test("controller cleanup barrier blocks newer work until stale acknowledgement c
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(submitted?.kind, "steer");
+    assert.equal(realFs.existsSync(stalePath), false);
+    const recoveredList = await pi.tools[0].execute(
+      "list-after-cleanup-recovery",
+      { action: "list" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(recoveredList.details.agents[0].cleanup_error, undefined);
   } finally {
     support.failNextRequestRemoval = false;
     pi.events.get("session_shutdown")?.[0]();

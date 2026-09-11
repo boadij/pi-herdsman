@@ -984,6 +984,51 @@ test("staged fresh assignment bridges pending start through working", async () =
   }
 });
 
+test("fixture mailbox consumer retries a failed acknowledgement callback", async () => {
+  const mailbox = setAgentEnvironment("fixture-retry-agent");
+  const state = managedState("fixture-retry-agent");
+  writeAgentState(mailbox, state);
+  const request: RequestRecord = {
+    version: 4,
+    runId: state.runId,
+    requestId: randomUUID(),
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    kind: "task",
+    text: "retry fixture acknowledgement",
+    createdAt: Date.now(),
+  };
+  let attempts = 0;
+  const stop = consumeMailboxRequest(mailbox, (observed) => {
+    attempts++;
+    if (attempts === 1) throw new Error("injected fixture callback failure");
+    const current = readAgentState(mailbox)!;
+    writeAgentState(mailbox, {
+      ...current,
+      activeRequestId: observed.requestId,
+      lastAck: {
+        requestId: observed.requestId,
+        accepted: true,
+        acknowledgedAt: Date.now(),
+      },
+      updatedAt: Date.now(),
+    });
+  });
+  try {
+    writeRequest(mailbox, request);
+    await waitForTestCondition(
+      () => readAgentState(mailbox)?.lastAck?.requestId === request.requestId,
+      "fixture mailbox consumer did not retry acknowledgement",
+    );
+    assert.equal(attempts, 2);
+  } finally {
+    stop();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("fresh path sessions remain controllable after controller cache loss", async () => {
   setLeadEnvironment();
   const label = `fresh-path-${randomUUID().slice(0, 8)}`;

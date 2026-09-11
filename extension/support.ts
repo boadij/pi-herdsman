@@ -1779,9 +1779,12 @@ export function consumeMailboxRequest(
       }
       const request = readUnacknowledgedRequest(mailbox);
       if (!request || request.requestId === seen) return;
-      seen = request.requestId;
       processing = true;
-      Promise.resolve(onRequest(request))
+      Promise.resolve()
+        .then(() => onRequest(request))
+        .then(() => {
+          seen = request.requestId;
+        })
         .catch(() => {})
         .finally(() => {
           processing = false;

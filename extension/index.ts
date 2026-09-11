@@ -695,8 +695,14 @@ let metadataDirty = false;
 let metadataFlushActive = false;
 let metadataAbortController: AbortController | undefined;
 const cleanupErrors = new Map<string, string>();
+const REQUEST_CLEANUP_ERROR_PREFIX =
+  "Acknowledged request could not be removed:";
 function clearCleanupError(label: string): void {
   cleanupErrors.delete(label);
+}
+function clearRequestCleanupError(label: string): void {
+  if (cleanupErrors.get(label)?.startsWith(REQUEST_CLEANUP_ERROR_PREFIX))
+    cleanupErrors.delete(label);
 }
 function clearAskDeliveryError(label: string): void {
   if (cleanupErrors.get(label)?.startsWith("Ask delivery failed"))
@@ -2159,8 +2165,9 @@ async function submit(
   if (preflightState.lastAck) {
     try {
       removeRequest(runtime.mailboxPath, preflightState.lastAck.requestId);
+      clearRequestCleanupError(runtime.label);
     } catch (error) {
-      const message = `Acknowledged request could not be removed: ${String(error)}`;
+      const message = `${REQUEST_CLEANUP_ERROR_PREFIX} ${String(error)}`;
       cleanupErrors.set(runtime.label, message);
       appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
       fail("internal_failure", message, operation);
@@ -2230,8 +2237,9 @@ async function submit(
     if (acknowledgementObserved) {
       try {
         removeRequest(runtime.mailboxPath, requestId);
+        clearRequestCleanupError(runtime.label);
       } catch (error) {
-        const message = `Acknowledged request could not be removed: ${String(error)}`;
+        const message = `${REQUEST_CLEANUP_ERROR_PREFIX} ${String(error)}`;
         cleanupErrors.set(runtime.label, message);
         appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
       }
