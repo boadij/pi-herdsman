@@ -61,6 +61,10 @@ They are not public alternatives to the `agent` identity.
 
 ## Ownership
 
+A lead and its recursively owned agent hierarchy form a **herd**—generically,
+an agent fleet. “Fleet” is explanatory discoverability terminology; the
+canonical hierarchy terms remain herd, lead, and agent.
+
 Each agent has one exact direct owner Pi session.
 
 A lead Pi session owns its direct agents.

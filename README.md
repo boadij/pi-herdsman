@@ -1,17 +1,16 @@
 # Pi Herdsman 🐏
 
-![Pi Herdsman: asynchronous subagents and multi-agent orchestration for Pi](docs/assets/banner.webp)
+![Pi Herdsman: asynchronous Pi subagents and agent fleet orchestration](docs/assets/banner.webp)
 
-**Asynchronous subagents and multi-agent orchestration for [Pi](https://github.com/earendil-works/pi) in [herdr](https://github.com/herdrdev/herdr).**
+**Asynchronous [Pi](https://github.com/earendil-works/pi) subagents and agent fleet orchestration with nested delegation, parallel execution, and supervision in [herdr](https://github.com/herdrdev/herdr).**
 
 Keep the conversation. Delegate the work.
 
-Pi Herdsman is a Pi extension for asynchronous subagents (sub-agents).
-Delegate coding tasks to managed background agents running in independent Pi
-sessions while the lead conversation stays interactive. Run agents in
-parallel, nest delegation, steer active agents, route questions and results
-back to their owning agent, and supervise multiple leads through one
-coordinated hierarchy.
+Pi Herdsman is a Pi extension for asynchronous subagents. Delegate coding
+tasks to managed background agents running in independent Pi sessions while
+the lead conversation stays interactive. Run agents in parallel, nest
+delegation, steer active agents, route questions and results back to their
+owning agent, and supervise multiple leads through one coordinated hierarchy.
 
 Pi Herdsman calls its managed subagents **agents**.
 
@@ -21,6 +20,9 @@ You ↔ lead
       │  └─ agent
       └─ agent
 ```
+
+A lead and its nested agent hierarchy form a herd, Herdsman's model of an
+agent fleet.
 
 Pi Herdsman is opinionated about coordination, not workflow. A lead owns its
 agents, and a delegation-enabled agent may own permitted agents of its own.
