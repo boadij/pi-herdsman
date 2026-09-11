@@ -2671,6 +2671,7 @@ test("owner ask resolved while busy is not delivered after settlement", async ()
     assert.equal(pi.sent.length, 0);
     writeAgentState(mailbox, { ...waiting, pendingAskId: undefined });
     removeAsk(mailbox, waiting.pendingAskId!);
+    (context as any).isIdle = () => true;
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler(undefined, context);
     assert.equal(pi.sent.length, 0);

@@ -3584,8 +3584,7 @@ function settlePendingAsks(
     return;
   }
   for (const runtime of [...runtimes.values()]) {
-    if (runtime.ownerSessionId !== ownerSessionId || !runtime.activeRequestId)
-      continue;
+    if (runtime.ownerSessionId !== ownerSessionId) continue;
     try {
       deliverPendingAsk(pi, runtime, ctx, signal);
     } catch (error) {
