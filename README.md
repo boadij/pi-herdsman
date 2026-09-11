@@ -99,7 +99,7 @@ For the complete walkthrough, see [Getting started](docs/getting-started.md).
   questions return when they need attention.
 - **One assignment per agent.** Each managed agent generation handles one
   bounded assignment, delivers its terminal result, and is cleaned up. Continue
-  completed context by delegating to the exact returned Pi session.
+  completed context with the explicit `continue` action and exact returned Pi session.
 - **Nested multi-agent orchestration.** Delegation-enabled agents can own and manage
   permitted agents themselves. Identity, ownership, steering, clarification,
   results, and cleanup share the same lifecycle across the hierarchy.

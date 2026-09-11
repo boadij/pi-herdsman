@@ -1111,6 +1111,7 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
       context,
     );
     assert.equal(delegated.details.ok, true, JSON.stringify(delegated.details));
+    assert.equal(delegated.details.action, "delegate");
     assert.equal(
       pi.calls.some(
         (args) =>
@@ -2142,7 +2143,7 @@ test("historical session with its inherited label rejects an active managed repr
     const ownSession = await pi.tools[0].execute(
       "controller-session",
       {
-        action: "delegate",
+        action: "continue",
         session: session.id,
         task: "must not self-delegate",
       },
@@ -2154,7 +2155,7 @@ test("historical session with its inherited label rejects an active managed repr
     const before = pi.calls.length;
     const result = await pi.tools[0].execute(
       "id",
-      { action: "delegate", session: session.path, task: "must wait" },
+      { action: "continue", session: session.path, task: "must wait" },
       undefined,
       undefined,
       fakeContext(),
@@ -2222,7 +2223,7 @@ test("exact requested session IDs remain busy when persisted paths are stale", a
   try {
     const result = await pi.tools[0].execute(
       "id",
-      { action: "delegate", session: sessionPath, task: "must wait" },
+      { action: "continue", session: sessionPath, task: "must wait" },
       undefined,
       undefined,
       fakeContext(),
@@ -2289,7 +2290,7 @@ test("concurrent session activation permits one generation", async () => {
   try {
     const first = pi.tools[0].execute(
       "first",
-      { action: "delegate", session: session.path, task: "first assignment" },
+      { action: "continue", session: session.path, task: "first assignment" },
       undefined,
       undefined,
       fakeContext(),
@@ -2297,7 +2298,7 @@ test("concurrent session activation permits one generation", async () => {
     await entered;
     const second = await pi.tools[0].execute(
       "second",
-      { action: "delegate", session: session.id, task: "duplicate assignment" },
+      { action: "continue", session: session.id, task: "duplicate assignment" },
       undefined,
       undefined,
       fakeContext(),
@@ -2489,7 +2490,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
     const result = await lead.tools[0].execute(
       "id",
       {
-        action: "delegate",
+        action: "continue",
         session: "/tmp/producer-mismatch.jsonl",
         task: "continue the mismatched session",
       },
@@ -2828,7 +2829,7 @@ test("fresh and non-live historical assignments reject disabled definitions", as
     const result = await historicalPi.tools[0].execute(
       "id",
       {
-        action: "delegate",
+        action: "continue",
         session: session.path,
         task: "must remain disabled",
       },
@@ -2899,7 +2900,7 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
   }
 });
 
-test("session delegation starts a new agent generation with current prompt contents", async () => {
+test("session continuation starts a new agent generation with current prompt contents", async () => {
   setLeadEnvironment();
   const name = `prompt-resume-${randomUUID().slice(0, 8)}`;
   const label = name;
@@ -2950,7 +2951,7 @@ test("session delegation starts a new agent generation with current prompt conte
     const result = await pi.tools[0].execute(
       "id",
       {
-        action: "delegate",
+        action: "continue",
         session: session.path,
         task: "resume current prompt",
       },
@@ -2987,7 +2988,7 @@ test("session delegation starts a new agent generation with current prompt conte
   }
 });
 
-test("session delegation ignores an unrelated missing live session path", async () => {
+test("session continuation ignores an unrelated missing live session path", async () => {
   setLeadEnvironment();
   const name = `stale-live-resume-${randomUUID().slice(0, 8)}`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
@@ -3057,7 +3058,7 @@ test("session delegation ignores an unrelated missing live session path", async 
   try {
     const result = await pi.tools[0].execute(
       "id",
-      { action: "delegate", session: sessionPath, task: "continue" },
+      { action: "continue", session: sessionPath, task: "continue" },
       undefined,
       undefined,
       fakeContext(),
@@ -3079,7 +3080,7 @@ test("session delegation ignores an unrelated missing live session path", async 
   }
 });
 
-test("session delegation keeps an exact live ID busy despite a missing path observation", async () => {
+test("session continuation keeps an exact live ID busy despite a missing path observation", async () => {
   setLeadEnvironment();
   const name = `stale-secondary-resume-${randomUUID().slice(0, 8)}`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
@@ -3145,7 +3146,7 @@ test("session delegation keeps an exact live ID busy despite a missing path obse
   try {
     const result = await pi.tools[0].execute(
       "id",
-      { action: "delegate", session: sessionPath, task: "must wait" },
+      { action: "continue", session: sessionPath, task: "must wait" },
       undefined,
       undefined,
       fakeContext(),
@@ -3168,7 +3169,7 @@ test("session delegation keeps an exact live ID busy despite a missing path obse
   }
 });
 
-test("session delegation keeps an exact live ID busy despite contradictory live observations", async () => {
+test("session continuation keeps an exact live ID busy despite contradictory live observations", async () => {
   setLeadEnvironment();
   const name = `contradictory-${randomUUID().slice(0, 8)}`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
@@ -3236,7 +3237,7 @@ test("session delegation keeps an exact live ID busy despite contradictory live 
   try {
     const result = await pi.tools[0].execute(
       "id",
-      { action: "delegate", session: sessionPath, task: "must wait" },
+      { action: "continue", session: sessionPath, task: "must wait" },
       undefined,
       undefined,
       fakeContext(),
@@ -3264,7 +3265,7 @@ test("session delegation keeps an exact live ID busy despite contradictory live 
   }
 });
 
-test("session delegation ignores removed secondary session fields", async () => {
+test("session continuation ignores removed secondary session fields", async () => {
   setLeadEnvironment();
   const name = `error-live-resume-${randomUUID().slice(0, 8)}`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
@@ -3337,7 +3338,7 @@ test("session delegation ignores removed secondary session fields", async () => 
   try {
     const result = await pi.tools[0].execute(
       "id",
-      { action: "delegate", session: sessionPath, task: "must wait" },
+      { action: "continue", session: sessionPath, task: "must wait" },
       undefined,
       undefined,
       fakeContext(),
@@ -3359,7 +3360,7 @@ test("session delegation ignores removed secondary session fields", async () => 
   }
 });
 
-test("session delegation fails closed on persisted session path errors", async () => {
+test("session continuation fails closed on persisted session path errors", async () => {
   setLeadEnvironment();
   const name = `error-resume-${randomUUID().slice(0, 8)}`;
   const label = `${name}-agent`;
@@ -3412,7 +3413,7 @@ test("session delegation fails closed on persisted session path errors", async (
     await assert.rejects(
       pi.tools[0].execute(
         "id",
-        { action: "delegate", session: sessionPath, task: "must fail closed" },
+        { action: "continue", session: sessionPath, task: "must fail closed" },
         undefined,
         undefined,
         fakeContext(),
@@ -3631,7 +3632,12 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     {
       label: `${prefix}-missing-agent`,
       params: { action: "delegate" },
-      message: "Delegate requires exactly one of definition or session",
+      message: "Delegate requires a definition",
+    },
+    {
+      label: `${prefix}-missing-session`,
+      params: { action: "continue", task: "missing session" },
+      message: "Continue requires a session",
     },
     {
       label: `${prefix}-whitespace-agent`,
@@ -3641,7 +3647,7 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     {
       label: `${prefix}-missing-task`,
       params: { action: "delegate", definition: "agent" },
-      message: "Definition delegation requires a non-empty task",
+      message: "Delegate requires a non-empty task",
     },
     {
       label: `${prefix}-whitespace-task`,
@@ -3811,6 +3817,11 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
     { action: "delegate", task: "work" },
     {
       action: "delegate",
+      session: "/tmp/session.jsonl",
+      task: "work",
+    },
+    {
+      action: "delegate",
       definition: "agent",
       session: "/tmp/session.jsonl",
       task: "work",
@@ -3829,19 +3840,19 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
       task: "work",
     },
     {
-      action: "delegate",
+      action: "continue",
       session: "/tmp/session.jsonl",
       cwd: "/tmp",
       task: "work",
     },
     {
-      action: "delegate",
+      action: "continue",
       session: "/tmp/session.jsonl",
       fork: "/tmp/source.jsonl",
       task: "work",
     },
     {
-      action: "delegate",
+      action: "continue",
       session: "/tmp/session.jsonl",
       fork: "/tmp/source.jsonl",
       message: "wrong",
@@ -3865,7 +3876,7 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
   const aggregate = await pi.tools[0].execute(
     "id",
     {
-      action: "delegate",
+      action: "continue",
       session: "/tmp/session.jsonl",
       fork: "/tmp/fork.jsonl",
       message: "wrong",

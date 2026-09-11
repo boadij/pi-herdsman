@@ -226,9 +226,8 @@ The session-start instructions include the current agent-definition roster.
 Use list for live agent state, ownership, or a refreshed definition roster
 after configuration changes.
 
-Use delegate to give one bounded assignment to an agent while retaining ownership:
-- definition creates a new agent from an agent definition;
-- session continues one exact historical Pi context in a new agent generation.
+Use delegate to start one bounded assignment from an agent definition.
+Use continue to start one bounded assignment from an exact historical Pi session.
 
 Each managed agent exists for one assignment only. After its terminal result is
 delivered, Pi Herdsman cleans up that agent automatically. To continue completed
@@ -263,8 +262,7 @@ file inspection, large logs or command output, and dataset analysis. Keep small,
 tightly coupled work local.
 If several tightly coupled phases are already known, put them in one bounded
 assignment when practical. If genuinely new follow-up work emerges after
-completion and previous context is valuable, continue the returned session with
-\`delegate.session\`.
+completion and previous context is valuable, continue the exact returned session.
 Never continue work that depends on an active agent. Continue useful
 independent work when available; otherwise end the turn normally. Agent
 completion or attention resumes the owning controller automatically. Do not
@@ -274,7 +272,7 @@ If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before
 starting another assignment; follow the stored recovery nextAction.
 
-Before delegate, steer, or reply, make the message self-contained.
+Before delegate, continue, steer, or reply, make the message self-contained.
 
 Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md,
 GEMINI.md, or equivalents merely because they exist. Rely on normal project or
@@ -467,7 +465,7 @@ type Params =
       timeoutMs?: number;
     }
   | {
-      action: "delegate";
+      action: "continue";
       session: string;
       task: string;
       files?: string[];
@@ -536,7 +534,7 @@ function parseRequest(p: Params): Params {
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
     };
   }
-  if (p.action === "delegate" && "session" in p) {
+  if (p.action === "continue") {
     if (
       "definition" in p ||
       "agent" in p ||
@@ -546,17 +544,17 @@ function parseRequest(p: Params): Params {
     )
       fail(
         "invalid_request",
-        "Delegate requires exactly one of definition or session",
-        "delegate",
+        "Continue does not accept definition, agent, cwd, fork, or message",
+        "continue",
       );
     if (!p.task)
       fail(
         "invalid_request",
-        "Session delegation requires a non-empty task",
-        "delegate",
+        "Continue requires a non-empty task",
+        "continue",
       );
     return {
-      action: "delegate",
+      action: "continue",
       session: p.session,
       task: p.task!,
       ...(p.files !== undefined ? { files: p.files } : {}),
@@ -1264,7 +1262,7 @@ export async function resolveManagedSession(
   return { path: manager.getSessionFile() ?? path, id };
 }
 async function resolveAssignmentSessionOrFail<T>(
-  operation: "delegate",
+  operation: "delegate" | "continue",
   resolver: () => Promise<T>,
 ): Promise<T> {
   try {
@@ -1277,7 +1275,7 @@ async function resolveAssignmentSessionOrFail<T>(
 export async function resolveAssignmentSession(
   ctx: ExtensionContext,
   raw: string,
-  operation: "delegate" = "delegate",
+  operation: "delegate" | "continue" = "delegate",
 ): Promise<{
   path: string;
   id: string;
@@ -4693,7 +4691,7 @@ async function actionUnsafe(
   }
   const limits = await messageLimits(ctx);
   const assignment =
-    p.action === "delegate"
+    p.action === "delegate" || p.action === "continue"
       ? {
           createdAt: Date.now(),
           requestId: randomUUID(),
@@ -4703,37 +4701,27 @@ async function actionUnsafe(
         }
       : undefined;
   let assignmentInput: ReturnType<typeof prepareMessageInput> | undefined;
-  if (p.action === "delegate") {
+  if (p.action === "delegate" || p.action === "continue") {
     if (!scope)
       fail(
         "not_running_inside_herdr",
-        "Only a Herdr controller may delegate agents",
+        "Only a Herdr controller may start agent assignments",
         p.action,
       );
     const resumed =
-      "session" in p
-        ? await resolveAssignmentSessionOrFail("delegate", () =>
-            resolveAssignmentSession(ctx, p.session, "delegate"),
+      p.action === "continue"
+        ? await resolveAssignmentSessionOrFail("continue", () =>
+            resolveAssignmentSession(ctx, p.session, "continue"),
           )
         : undefined;
     await herdrVersion(pi, ctx, signal);
     const agentDefinition = resumed
       ? resumed.definition
-      : "definition" in p
-        ? p.definition
-        : undefined;
+      : p.definition;
     const agentCwd = resumed
       ? resumed.cwd
-      : "definition" in p
-        ? (p.cwd ?? ctx.cwd)
-        : ctx.cwd;
-    if (!agentDefinition)
-      fail(
-        "invalid_request",
-        "Delegation requires a definition or session",
-        "delegate",
-      );
-    const requestedLabel = resumed?.label ?? p.label;
+      : (p.cwd ?? ctx.cwd);
+    const requestedLabel = resumed?.label ?? (p.action === "delegate" ? p.label : undefined);
     const agentContext = await contextAgentDefinitions(ctx);
     const definition = agentContext.definitions.find(
       (candidate) => candidate.name === agentDefinition,
@@ -4749,7 +4737,7 @@ async function actionUnsafe(
         p.action,
       );
     const forkSource =
-      "definition" in p && p.fork
+      p.action === "delegate" && p.fork
         ? (
             await resolveAssignmentSessionOrFail("delegate", () =>
               resolveManagedSession(ctx, p.fork!),
@@ -4771,7 +4759,7 @@ async function actionUnsafe(
     if (resumed && resumed.id === ctx.sessionManager.getSessionId())
       fail(
         "invalid_request",
-        "Cannot delegate the controller's currently active Pi session. Use delegate.definition with fork=<session> for a separate derived context.",
+        "Cannot continue the controller's currently active Pi session. Use delegate with fork=<session> for a separate derived context.",
         p.action,
       );
     const resumedSessionPath = resumed
@@ -4782,7 +4770,7 @@ async function actionUnsafe(
             fail(
               "invalid_request",
               error instanceof Error ? error.message : String(error),
-              "delegate",
+              p.action,
             );
           }
         })()
@@ -5717,10 +5705,29 @@ export default function (pi: ExtensionAPI): void {
     ),
     Type.Object(
       {
-        action: StringEnum(["delegate"] as const),
-        session: Type.String({ pattern: "\\S" }),
-        task: Type.String({ pattern: "\\S" }),
-        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        action: StringEnum(["continue"] as const),
+        session: Type.String({
+          description:
+            "Exact saved Pi session path or full UUID used to continue historical context.",
+          pattern: "\\S",
+        }),
+        task: Type.String({
+          description: "Non-empty task for the historical session.",
+          pattern: "\\S",
+        }),
+        files: Type.Optional(
+          Type.Array(
+            Type.String({
+              description:
+                "Readable regular local file path or result:<request-id>.",
+              minLength: 1,
+            }),
+            {
+              description:
+                "Supporting files for the continuation assignment. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path, result:<request-id>, and byte size. Files do not grant capabilities.",
+            },
+          ),
+        ),
         timeoutMs: Type.Optional(
           Type.Integer({
             minimum: STARTUP_TIMEOUT_MIN,
@@ -9272,12 +9279,12 @@ export default function (pi: ExtensionAPI): void {
           requestStatusRefresh?.();
           if (
             controllerScope.kind === "lead" &&
-            p.action === "delegate" &&
+            (p.action === "delegate" || p.action === "continue") &&
             value.ok === true
           )
             beginHerdRun(ctx);
           if (
-            p.action === "delegate" &&
+            (p.action === "delegate" || p.action === "continue") &&
             value.ok === true &&
             !assignGuidanceSent
           ) {

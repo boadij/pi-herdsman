@@ -194,7 +194,7 @@ test("current error codes replace the legacy label and busy codes", async () => 
   }
 });
 
-test("agent schemas expose the new selector and reject the old one", () => {
+test("agent schemas expose explicit assignment actions and reject cross-fields", () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -218,7 +218,23 @@ test("agent schemas expose the new selector and reject the old one", () => {
   );
   assert.equal(
     Value.Check(schema, {
+      action: "continue",
+      session: "/tmp/session.jsonl",
+      task: "continued work",
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(schema, {
       action: "delegate",
+      session: "/tmp/session.jsonl",
+      task: "continued work",
+    }),
+    false,
+  );
+  assert.equal(
+    Value.Check(schema, {
+      action: "continue",
       session: "/tmp/session.jsonl",
       label: "renamed-agent",
       task: "continued work",

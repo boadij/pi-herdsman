@@ -229,7 +229,7 @@ Enable and disable write the scalar `enabled` field in the same global override.
 Removing that field inherits the bundled value, or `true` when no source
 declares it.
 
-Changes affect future definition delegations and session continuations, whose
+Changes affect future `delegate` assignments and `continue` assignments, whose
 runtime configuration comes from the current effective definition. They do not
 mutate an already-running agent or the lead Pi session.
 

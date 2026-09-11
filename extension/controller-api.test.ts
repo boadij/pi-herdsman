@@ -948,7 +948,7 @@ test("parent controls only direct children and enforces session allowlists", asy
     const resumed = await pi.tools[0].execute(
       "resume",
       {
-        action: "delegate",
+        action: "continue",
         session: resumePath,
         task: "wrong definition",
       },
@@ -1236,7 +1236,7 @@ test("assignment session resolution accepts exact paths and UUIDs only", async (
   nativeSessions.clear();
 });
 
-test("session delegation inherits the saved label without an override", async () => {
+test("session continuation inherits the saved label without an override", async () => {
   const label = "resume-stable";
   const run = async () => {
     setLeadEnvironment();
@@ -1263,7 +1263,7 @@ test("session delegation inherits the saved label without an override", async ()
       const result = await pi.tools[0].execute(
         "id",
         {
-          action: "delegate",
+          action: "continue",
           session: source.path,
           task: "continue with the saved label",
         },
@@ -1301,14 +1301,14 @@ test("session delegation inherits the saved label without an override", async ()
   assert.equal(reused.details.agent, label);
 });
 
-test("session delegation rejects label overrides and occupied inherited labels", async () => {
+test("session continuation rejects label overrides and occupied inherited labels", async () => {
   setLeadEnvironment();
   nativeSessions.clear();
   const invalidPi = fakePi();
   registerExtension!(invalidPi.pi as never);
   try {
     const invalidRequest = {
-      action: "delegate",
+      action: "continue",
       session: "/tmp/session.jsonl",
       label: "Invalid_Label",
       task: "reject the label",
@@ -1388,7 +1388,7 @@ test("session delegation rejects label overrides and occupied inherited labels",
     const result = await pi.tools[0].execute(
       "id",
       {
-        action: "delegate",
+        action: "continue",
         session: source.path,
         task: "must not fall back to another label",
       },
@@ -1561,7 +1561,7 @@ test("public assignment preserves session source open failures", async () => {
     const structured = await pi.tools[0].execute(
       "id",
       {
-        action: "delegate",
+        action: "continue",
         session: session.path,
         task: "continue the saved session",
       },
@@ -1577,7 +1577,7 @@ test("public assignment preserves session source open failures", async () => {
       pi.tools[0].execute(
         "id",
         {
-          action: "delegate",
+          action: "continue",
           session: session.path,
           task: "continue the saved session",
         },
@@ -1615,7 +1615,7 @@ test("assignment session rejects unusable saved cwd headers without mutation", a
     const result = await pi.tools[0].execute(
       "id",
       {
-        action: "delegate",
+        action: "continue",
         session: path,
         task: "continue the saved session",
       },
@@ -1792,7 +1792,7 @@ test("session assignment fails closed on duplicate live representations", async 
     const result = await pi.tools[0].execute(
       "id",
       {
-        action: "delegate",
+        action: "continue",
         session: session.path,
         task: "continue the ambiguous session",
       },

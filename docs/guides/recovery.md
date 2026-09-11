@@ -65,7 +65,7 @@ Do not close solely because of inactivity.
 
 ## Startup failure
 
-Fresh and historical-session delegation startup is bounded.
+Fresh delegation and historical-session continuation startup is bounded.
 
 When herdr returns a structured failure, Pi Herdsman preserves it. When startup
 returns empty or malformed output and no better structured error is available,
@@ -116,17 +116,16 @@ not the normal model orchestration interface.
 
 ## Historical session failure
 
-A `delegate` with `session` requires an exact session path or full UUID.
+A `continue` requires an exact session path or full UUID.
 
 The saved session header must contain a non-empty working directory. Session
-delegation uses that saved cwd and does not accept a caller-supplied `cwd`.
+continuation uses that saved cwd and does not accept a caller-supplied `cwd`.
 
-The saved agent-definition name and logical label are restored from the managed
-session identity. If the definition no longer exists, session delegation fails
-instead of guessing a replacement; a missing or malformed session identity also
-fails closed. The definition must also be enabled and authorized for the current
+The saved agent-definition name is resolved against the current effective
+definition roster. If it no longer exists, continuation fails instead of guessing a
+replacement. The definition must also be enabled and authorized for the current
 controller, and its current effective configuration is used for the new agent
-generation. A continuation cannot override or regenerate its saved label.
+generation.
 
 An exact session that is already represented by active or unresolved managed
 work cannot be activated concurrently. The session-start exclusion applies to
