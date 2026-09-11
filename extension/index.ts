@@ -3421,6 +3421,7 @@ function deliverAskUnsafe(
   state: ManagedAgentState,
   ask: AskRecord,
 ): boolean {
+  if (!ctx.isIdle()) return false;
   if (runtimes.get(runtime.label) !== runtime || !controllerSessionActive)
     return false;
   if (
@@ -3458,7 +3459,7 @@ function deliverAskUnsafe(
         piSessionId: ask.piSessionId,
       },
     },
-    { triggerTurn: true, deliverAs: "followUp" },
+    { triggerTurn: true },
   );
   return true;
 }
@@ -3509,12 +3510,7 @@ function scheduleAskDeliveryRetry(
     if (!controllerSessionActive || runtimes.get(runtime.label) !== runtime)
       return;
     try {
-      const currentState = readAgentState(runtime.mailboxPath);
-      const currentAsk = currentState
-        ? readPendingAsk(runtime.mailboxPath, currentState)
-        : undefined;
-      if (currentState?.pendingAskId && currentAsk)
-        deliverAsk(pi, runtime, ctx, currentState, currentAsk, signal);
+      deliverPendingAsk(pi, runtime, ctx, signal);
     } catch (readError) {
       scheduleAskDeliveryRetry(pi, runtime, ctx, state, ask, signal, readError);
     }
@@ -3524,6 +3520,17 @@ function scheduleAskDeliveryRetry(
     runtime.label,
     `Ask delivery failed; retrying: ${String(error)}`,
   );
+}
+function deliverPendingAsk(
+  pi: ExtensionAPI,
+  runtime: Runtime,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): void {
+  const state = readAgentState(runtime.mailboxPath);
+  if (!state?.pendingAskId) return;
+  const ask = readPendingAsk(runtime.mailboxPath, state);
+  if (ask) deliverAsk(pi, runtime, ctx, state, ask, signal);
 }
 function watchAsk(
   pi: ExtensionAPI,
@@ -3535,10 +3542,7 @@ function watchAsk(
   stopAskWatcher(runtime);
   const check = () => {
     try {
-      const state = readAgentState(runtime.mailboxPath);
-      if (!state?.pendingAskId) return;
-      const ask = readPendingAsk(runtime.mailboxPath, state);
-      if (ask) deliverAsk(pi, runtime, ctx, state, ask, signal);
+      deliverPendingAsk(pi, runtime, ctx, signal);
     } catch (error) {
       appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
       if (!askWatchRetryTimers.has(path)) {
@@ -3567,6 +3571,27 @@ function watchAsk(
     },
     (error) => appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error),
   );
+}
+function settlePendingAsks(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): void {
+  let ownerSessionId: string;
+  try {
+    ownerSessionId = ctx.sessionManager.getSessionId();
+  } catch {
+    return;
+  }
+  for (const runtime of [...runtimes.values()]) {
+    if (runtime.ownerSessionId !== ownerSessionId || !runtime.activeRequestId)
+      continue;
+    try {
+      deliverPendingAsk(pi, runtime, ctx, signal);
+    } catch (error) {
+      appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
+    }
+  }
 }
 function invalidateCachedRuntime(label: string): void {
   const runtime = runtimes.get(label);
@@ -8796,6 +8821,7 @@ export default function (pi: ExtensionAPI): void {
     };
     if (processRole !== "managed-agent")
       pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
+        settlePendingAsks(pi, ctx, controllerAbortController?.signal);
         if (controllerScope.kind === "lead") {
           leadSettled = true;
           maybeFinishHerdRun(ctx);
