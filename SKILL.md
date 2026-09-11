@@ -28,11 +28,8 @@ The session-start instructions include the current agent-definition roster.
 Use list for live agent state, ownership, or a refreshed definition roster
 after configuration changes.
 
-Use delegate to give one bounded assignment to an agent while retaining
-ownership:
-
-- definition creates a new agent from an agent definition;
-- session continues one exact historical Pi context in a new agent generation.
+Use delegate to start one bounded assignment from an agent definition.
+Use continue to start one bounded assignment from an exact historical Pi session.
 
 Each managed agent exists for one assignment only. After its terminal result is
 delivered, Pi Herdsman cleans up that agent automatically. To continue completed
@@ -67,8 +64,7 @@ file inspection, large logs or command output, and dataset analysis. Keep small,
 tightly coupled work local.
 If several tightly coupled phases are already known, put them in one bounded
 assignment when practical. If genuinely new follow-up work emerges after
-completion and previous context is valuable, continue the returned session with
-`delegate.session`.
+completion and previous context is valuable, continue the exact returned session.
 Never continue work that depends on an active agent. Continue useful
 independent work when available; otherwise end the turn normally. Agent
 completion or attention resumes the owning controller automatically. Do not
@@ -78,7 +74,7 @@ If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before
 starting another assignment; follow the stored recovery nextAction.
 
-Before delegate, steer, or reply, make the message self-contained.
+Before delegate, continue, steer, or reply, make the message self-contained.
 
 Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md,
 GEMINI.md, or equivalents merely because they exist. Rely on normal project or

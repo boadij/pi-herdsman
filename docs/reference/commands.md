@@ -78,7 +78,7 @@ Details re-resolves the selected definition when opened, so it reflects current
 overlays and body references even if the menu remained open while configuration
 changed.
 
-Changes apply to future definition delegations and session continuations, not
+Changes apply to future `delegate` assignments and `continue` assignments, not
 already-running agents or the lead Pi session.
 
 Standalone global definitions are editable too. Removing a field from one uses

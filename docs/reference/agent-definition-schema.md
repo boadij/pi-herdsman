@@ -65,7 +65,7 @@ All effective definitions are sorted and validated together, including every
 
 `enabled` controls definition availability. A disabled definition remains in the
 lead roster so it can be enabled again, but owner-visible definition lists omit
-it. Definition and session delegations reject a disabled definition. An already
+it. `delegate` and `continue` reject a disabled definition. An already
 active agent may finish and remains controllable according to its current
 available actions; disabling a definition does not mutate that assignment.
 
@@ -74,7 +74,7 @@ available actions; disabling a definition does not mutate that assignment.
 | Field                   | Accepted value                                                        | Omitted/default behavior                                          | Runtime/composition behavior                                                                           |
 | ----------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `name`                  | non-empty string                                                      | required                                                          | Effective definition identity.                                                                         |
-| `enabled`               | boolean                                                               | `true`                                                            | `false` makes definition and session delegation unavailable; it does not mutate an active agent.       |
+| `enabled`               | boolean                                                               | `true`                                                            | `false` makes `delegate` and `continue` unavailable; it does not mutate an active agent.               |
 | `description`           | string                                                                | absent                                                            | Display/selection description.                                                                         |
 | `model`                 | non-empty string                                                      | Pi default/current launch behavior                                | Passed as Pi model selection.                                                                          |
 | `thinking`              | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `false` | Pi default/current launch behavior                                | `false` launches as `off`.                                                                             |

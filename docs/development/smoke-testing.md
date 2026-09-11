@@ -58,7 +58,7 @@ Use the exact returned session ID or path for a follow-up assignment:
 
 ```json
 {
-  "action": "delegate",
+  "action": "continue",
   "session": "<exact session>",
   "task": "Continue the investigation with one short follow-up."
 }
@@ -74,13 +74,13 @@ Verify:
 - exactly one result reaches the owner;
 - cleanup removes the second agent, pane, mailbox, and runtime.
 
-While the continuation assignment is active, submit another
-`delegate.session` request for the same exact session. Verify it fails with
+While the continuation assignment is active, submit another `continue` request
+for the same exact session. Verify it fails with
 `agent_busy`, creates no duplicate agent or pane, and leaves the active
 assignment unchanged. After both assignments finish, `agent list` must show
 no completed idle agent.
 
-## Historical session delegation
+## Historical session continuation
 
 Use an exact saved session path or full UUID.
 
@@ -88,7 +88,7 @@ Verify:
 
 - saved definition and cwd are respected;
 - the saved logical label is reused exactly;
-- session delegation uses the saved cwd;
+- session continuation uses the saved cwd;
 - current effective agent override values are used for the new agent
   generation;
 - the exact session continues.

@@ -102,7 +102,7 @@ referencing a disabled definition can remain discoverable, but is rejected durin
 assignment or fresh agent startup with an explicit disabled-definition reason
 rather than silently dropping that definition.
 
-Definition and session delegations reject disabled definitions with an
+`delegate` and `continue` reject disabled definitions with an
 actionable error. An already active agent may finish and remains controllable
 according to its current available actions; disabling a definition does not
 mutate that assignment.

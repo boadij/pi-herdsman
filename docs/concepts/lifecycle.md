@@ -102,11 +102,11 @@ exactly-once delivery for both completed and failed terminal results.
 ## Session continuation
 
 Agent cleanup does not delete the Pi session. To continue completed context,
-use the exact returned session with `delegate.session`; Pi Herdsman starts a new
-agent generation for the new assignment. The continuation uses the saved cwd,
-session history, definition, and logical label together with the current
-effective authorized definition configuration. Use `delegate.definition` with
-`fork` when a separate derived session is required.
+use the exact returned session with `continue`; Pi Herdsman starts a new agent
+generation for the new assignment. The continuation uses the saved cwd, session
+history, definition, and logical label together with the current effective
+authorized definition configuration. The caller cannot rename the continued
+session. Use `delegate` with `fork` when a separate derived session is required.
 Session continuation does not retain the old Herdr tab. A still-live
 generation may be restored from its exact managed identity, while ordinary
 same-workspace tab movement remains presentation-only and does not change

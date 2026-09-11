@@ -32,8 +32,9 @@ my-review
 
 Use the exact `agent` value from `agent list` only for
 `steer.agent`, `reply.agent`, or `close.agent` while those actions are listed
-in `available_actions`. An agent label is the stable logical name for one
-session's sequential assignments, not a continuation handle.
+in `available_actions`. An agent label is the stable logical name across
+sequential generations of one managed session, not a continuation selector.
+It is a control target only for the currently live generation.
 
 Labels must begin with a lowercase letter, contain only lowercase letters,
 digits, `_`, or `-`, and be at most 32 characters.
@@ -43,11 +44,11 @@ digits, `_`, or `-`, and be at most 32 characters.
 Every managed agent has an exact Pi session. The list may expose the session
 ID and path for correlation.
 
-A session path or full UUID can be supplied as `delegate.session` to continue
-historical work. Session delegation creates a new agent generation for one new
-assignment and uses the saved session's cwd, historical context, definition,
-and logical label. A continuation cannot choose or change its label. The Pi
-session remains the continuation selector, not a live-control identity. An
+A session path or full UUID can be supplied to the `continue` action to continue
+historical work. Continuation creates a new agent generation for one new
+assignment and uses the saved session's cwd, definition, logical label, and
+historical context. The caller cannot rename the continued session. The Pi
+session remains the continuation identity, not a live-control identity. An
 exact active or unresolved managed representation blocks concurrent activation
 of that session.
 
@@ -103,19 +104,17 @@ and runtime state are cleaned up. Failed assignments follow the same terminal
 cleanup path.
 
 The Pi session remains available after agent cleanup. To continue the same
-conversational context, delegate a new assignment with the exact session ID or
-session path returned with the result. This creates a new agent generation,
-which uses the current effective authorized configuration for the saved agent
-definition. To derive a separate context instead, use `fork` on a definition
-delegation.
+conversational context, use `continue` with the exact session ID or session path
+returned with the result. This creates a new agent generation, which uses the
+current effective authorized configuration for the saved agent definition. To
+derive a separate context instead, use `fork` on a `delegate` action.
 
 The identities are therefore:
 
 ```text
 agent definition → configuration for new work
-Pi session       → durable conversational context and continuation selector
-agent label     → stable logical name across sequential generations
-run/pane/mailbox → concrete live execution generation
+Pi session       → durable conversational context and continuation identity
+agent label     → stable logical name across sequential generations; live control target only for the current generation
 ```
 
 ## See also

@@ -1611,7 +1611,11 @@ function coordinationBody(
 ): CoordinationBody | undefined {
   const action = value(args.action);
   const label =
-    action === "delegate" ? "task" : action === "ask" ? "question" : "message";
+    action === "delegate" || action === "continue"
+      ? "task"
+      : action === "ask"
+        ? "question"
+        : "message";
   const text = args[label];
   return typeof text === "string" && text.trim() ? { label, text } : undefined;
 }
@@ -1637,12 +1641,14 @@ function renderExpandedCoordinationCall(
   const fields: Array<[string, unknown]> = [];
   if (tool === "agent") {
     if (action === "delegate") {
-      if (args.session) fields.push(["session", args.session]);
       if (args.definition) fields.push(["definition", args.definition]);
       if (args.label) fields.push(["label", args.label]);
       if (args.cwd) fields.push(["cwd", displayHomePath(String(args.cwd))]);
       if (args.timeoutMs) fields.push(["timeout", args.timeoutMs]);
       if (args.fork) fields.push(["fork", args.fork]);
+    } else if (action === "continue") {
+      if (args.session) fields.push(["session", args.session]);
+      if (args.timeoutMs) fields.push(["timeout", args.timeoutMs]);
     } else if (args.agent) fields.push(["agent", args.agent]);
   } else if (tool === "staff") {
     if (args.lead) fields.push(["lead", args.lead]);
@@ -1692,8 +1698,7 @@ export function renderCoordinationCall(
 ): Component {
   const a = (context?.args ?? args ?? {}) as Record<string, unknown>;
   const action = value(a.action);
-  const continuation = tool === "agent" && action === "delegate" && !!a.session;
-  const verb = continuation ? "continue" : action;
+  const verb = action;
   let target = "";
   if (tool === "agent" && action === "delegate")
     target = value(a.label) || value(a.definition);
@@ -1911,7 +1916,7 @@ function expandedResultLines(
         : "agents"
       : action === "inspect"
         ? `inspect ${display}`
-        : action === "delegate"
+        : action === "delegate" || action === "continue"
           ? `${display} started`
           : tool === "chief"
             ? action === "ask"
@@ -2121,7 +2126,7 @@ export function renderCoordinationResult(
       value(args.definition) ||
       "agent";
     const message =
-      action === "delegate"
+      action === "delegate" || action === "continue"
         ? `${label} started`
         : action === "steer"
           ? "steering sent"

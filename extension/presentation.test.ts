@@ -1097,7 +1097,7 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
       renderCoordinationCall(
         "agent",
         {
-          action: "delegate",
+          action: "continue",
           session: "/tmp/session.jsonl",
           task: "Apply the findings",
         },
@@ -1106,6 +1106,24 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
     ),
     /^agent continue\n  Apply the findings$/,
   );
+  const expandedContinue = renderedText(
+    renderCoordinationCall(
+      "agent",
+      {
+        action: "continue",
+        session: "/tmp/session.jsonl",
+        timeoutMs: 300000,
+        task: "Apply the findings",
+        files: ["investigation.md"],
+      },
+      presentationTheme,
+      { expanded: true },
+    ),
+  );
+  assert.match(expandedContinue, /session: \/tmp\/session\.jsonl/);
+  assert.match(expandedContinue, /timeout: 300000/);
+  assert.match(expandedContinue, /task:\nApply the findings/);
+  assert.doesNotMatch(expandedContinue, /cwd:|fork:/);
   assert.equal(
     renderedText(
       renderCoordinationCall(
@@ -1207,9 +1225,8 @@ test("coordination result definitions keep compact calls transcript-stable", asy
   let invalidations = 0;
   const context = {
     args: {
-      action: "delegate",
+      action: "continue",
       session: "/tmp/ask-owner-retry.jsonl",
-      label: "ask-owner-retry",
       task: "Try once more.",
     },
     state,
@@ -1220,7 +1237,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
     {
       details: {
         ok: true,
-        action: "delegate",
+        action: "continue",
         agent: "ask-owner-retry",
         definition: "researcher",
       },
@@ -1235,7 +1252,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
     renderedText(
       renderCoordinationCall("agent", context.args, presentationTheme, context),
     ).split("\n")[0],
-    "agent continue  ask-owner-retry · researcher",
+    "agent continue",
   );
   assert.equal(invalidations, 1);
 
@@ -1244,7 +1261,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
     {
       details: {
         ok: true,
-        action: "delegate",
+        action: "continue",
         agent: "ask-owner-retry",
         definition: "researcher",
       },

@@ -4,7 +4,7 @@
 
 Pi Herdsman has two text-file mechanisms with different purposes:
 
-- `files` supplies evidence to delegate (definition or session), steer, reply,
+- `files` supplies evidence to delegate, continue, steer, reply,
   or ask_owner.
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
@@ -14,7 +14,7 @@ canonical local references and are not copied or snapshotted.
 
 ## Message `files`
 
-For `delegate` with `definition`, `delegate` with `session`, `steer`, and
+For `delegate`, `continue`, `steer`, and
 `reply`, make the message self-contained. Do not attach or mention agent
 instruction files such as `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or equivalents
 merely because they exist; rely on normal project or runtime discovery.
@@ -78,7 +78,7 @@ size; for a result reference, it carries the logical result name, the physical
 path attribute, and observed byte size. File content remains raw text. This
 markup frames evidence for the model and is not a security boundary.
 
-`files` is supported by `delegate` with `definition`, `delegate` with `session`,
+`files` is supported by `delegate`, `continue`,
 `steer`, `reply`, and `ask_owner`. For
 controller actions, relative paths resolve from the calling controller's cwd;
 for `ask_owner`, they resolve from the managed agent's cwd. Accepted ordinary

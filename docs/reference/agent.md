@@ -2,11 +2,12 @@
 
 [Documentation index](../README.md) · [supervision reference](supervision.md)
 
-`agent` is the structured model-facing API for managed agents. It has exactly six actions:
+`agent` is the structured model-facing API for managed agents. It has seven actions:
 
 ```text
 list
 delegate
+continue
 steer
 reply
 close
@@ -18,12 +19,6 @@ The tool is registered only for the lead controller and authorized delegating ag
 controllers.
 
 ## `delegate`
-
-Delegation has exactly two strict variants. The required field (`definition` or
-`session`) selects the variant; there is no target discriminator.
-Every variant rejects additional properties.
-
-### Definition
 
 ```json
 {
@@ -42,39 +37,38 @@ the source for a new derived context; otherwise a new Pi session is launched.
 Each accepted definition delegation creates one agent generation for one
 assignment. The terminal result is delivered once and the agent is cleaned up.
 
-### Session
+## `continue`
 
 ```json
 {
-  "action": "delegate",
+  "action": "continue",
   "session": "<exact .jsonl path or full UUID>",
   "task": "Continue the investigation"
 }
 ```
 
 Allowed fields are `action`, `session`, `task`, optional `files`, and
-`timeoutMs`. The exact saved session supplies its cwd, definition identity,
-logical label, and historical Pi context. Session delegation always creates a
-new agent generation for one assignment; it never assigns work to an existing
-agent and cannot rename the continued session. The saved definition must
-currently resolve to an enabled, authorized effective definition, whose current
-configuration is used for the new generation.
+`timeoutMs`. The exact saved session path or full UUID supplies its cwd,
+definition identity, and historical Pi context. Continuation always creates a new agent generation
+for one assignment with a live label; it never assigns work to an existing
+agent. `continue` does not accept `cwd` or `fork`; the cwd comes from the saved
+session. The saved definition is resolved again from current configuration and
+must currently be enabled and authorized; its current effective configuration
+is used for the new generation.
 Concurrent or otherwise conflicting managed representations of the exact
-session fail closed. The controller's own active Pi session cannot be delegated
-to itself; use definition delegation with `fork` when a separate derived
-context is required.
+session fail closed. The controller's own active Pi session cannot be continued
+to itself; use `delegate` with `fork` when a separate derived context is
+required.
 
-`label` is optional only on definition delegation and identifies the stable
-logical name for new work. When omitted there, Herdsman chooses a fresh
-available label derived from the effective agent definition. Session delegation
-inherits the saved label exactly; if it is occupied, delegation fails with
-`agent_label_exists`.
+The saved session's logical label is inherited exactly for the continued
+generation. A caller cannot provide a continuation label; if the inherited
+label is occupied, continuation fails with `agent_label_exists`.
 
-All successful delegation results use `action: "delegate"` and include
-`agent`, `definition`, request, session, and startup evidence where available.
-Delegation returns after durable acceptance, not completion. A terminal result
-also makes the exact session identity prominent so it can be used with a later
-`delegate.session` call.
+Successful `delegate` results use `action: "delegate"`; successful `continue`
+results use `action: "continue"`. Both include `agent`, `definition`, request,
+session, and startup evidence where available. Both return after durable
+acceptance, not completion. A terminal result makes the exact session identity
+prominent for a later `continue` call.
 
 ## `list`
 
@@ -105,8 +99,9 @@ Each actionable live agent record includes:
 `available_actions` is authoritative model guidance for the current snapshot.
 Do not infer eligibility from `state`. Active work may list `steer`; a valid
 correlated pending `ask_owner` may list `reply`; exact direct ownership may list
-`close`. `available_actions` never lists `delegate`: an agent cannot receive a
-second assignment. Descendant visibility does not grant control. Lead orphan
+`close`. `available_actions` never lists `delegate` or `continue`: these are
+controller operations, not controls on an already-live agent. An agent cannot
+receive a second assignment. Descendant visibility does not grant control. Lead orphan
 recovery may expose only `close`. Unknown and recovery-only records are
 non-actionable. Every operation rechecks identity, ownership, mailbox state, and
 lifecycle immediately before mutation.
@@ -146,12 +141,12 @@ mailbox records, lifecycle, or available controls.
 
 ## `files` and `timeoutMs`
 
-`files` is valid on all `delegate` variants and on `steer` and `reply`; it is not
+`files` is valid on `delegate` and `continue`, and on `steer` and `reply`; it is not
 valid on `list` or `close`. Paths are resolved from the controller cwd, checked
 as readable regular files, canonicalized with `realpath`, and embedded only
 when the exact message limit permits. Otherwise they remain canonical references.
 
-`timeoutMs` is valid on definition and session delegation and must be an integer
+`timeoutMs` is valid on `delegate` and `continue` and must be an integer
 from `5001` through `300000`. The startup budget reserves one bounded diagnostic
 window. Current message limits are governed by the Herdsman config file and its
 defaults, plus the fixed mailbox protocol ceiling. Managed mailbox records use
