@@ -2590,7 +2590,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
   }
 });
 
-test("acknowledgement state-write failures retain requests for terminal retry", () => {
+test("acknowledgement state-write failures retain requests for durable retry", () => {
   const cases = [
     {
       name: "busy rejection",
@@ -2663,9 +2663,7 @@ test("acknowledgement state-write failures retain requests for terminal retry", 
     const input = agent.events.get("input")![0];
     assert.deepEqual(
       input({ text: controlMarker(request.requestId) }, context),
-      scenario.expected.accepted
-        ? { action: "transform", text: request.text }
-        : { action: "handled" },
+      { action: "handled" },
     );
     assert.equal(readAgentState(mailbox)?.lastAck, undefined);
     assert.ok(readRequest(mailbox, request.requestId));
@@ -2682,7 +2680,9 @@ test("acknowledgement state-write failures retain requests for terminal retry", 
     assert.equal(acknowledged?.accepted, scenario.expected.accepted);
     assert.equal(acknowledged?.code, scenario.expected.code);
     assert.equal(acknowledged?.message, scenario.expected.message);
-    assert.equal(readRequest(mailbox, request.requestId), undefined);
+    if (scenario.expected.accepted)
+      assert.ok(readRequest(mailbox, request.requestId));
+    else assert.equal(readRequest(mailbox, request.requestId), undefined);
     assert.equal(agent.sentUsers.length, 0);
     agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);

@@ -29,6 +29,7 @@ export const nativeSessions = new Map<
 >();
 export let sessionOpenError: unknown;
 export let failNextMailboxWrite = false;
+export let failNextRequestRemoval = false;
 export let failNextResultRemoval = false;
 export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
@@ -126,6 +127,10 @@ mock.module("node:fs", {
     rmdirSync: realFs.rmdirSync,
     statSync: realFs.statSync,
     unlinkSync: (path: string) => {
+      if (failNextRequestRemoval && path.includes("/request-")) {
+        failNextRequestRemoval = false;
+        throw new Error("injected request removal failure");
+      }
       if (failNextResultRemoval && path.includes("/result-")) {
         resultRemovalAttempts++;
         failNextResultRemoval = false;
@@ -1762,8 +1767,9 @@ export function consumeMailboxRequest(
   let seen: string | undefined;
   let stopped = false;
   let mailboxInitialized = false;
+  let processing = false;
   const poll = () => {
-    if (stopped) return;
+    if (stopped || processing) return;
     try {
       if (readAgentState(mailbox)) mailboxInitialized = true;
       else if (mailboxInitialized) {
@@ -1774,7 +1780,12 @@ export function consumeMailboxRequest(
       const request = readUnacknowledgedRequest(mailbox);
       if (!request || request.requestId === seen) return;
       seen = request.requestId;
-      void onRequest(request);
+      processing = true;
+      Promise.resolve(onRequest(request))
+        .catch(() => {})
+        .finally(() => {
+          processing = false;
+        });
     } catch {
       // Controller tests retain malformed requests just like a live child.
     }
@@ -1834,6 +1845,15 @@ export function createStagedAssignmentFixture(
         holdHandoff = false;
         await handoff.promise;
       }
+    },
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    false,
+    false,
+    (request) => {
       const state = readAgentState(startupMailbox);
       assert.ok(state, "staged request must retain mailbox state");
       acceptedRequestIdWritten = state.activeRequestId;
@@ -2049,6 +2069,7 @@ export function startupExecutor(
   includeResult = false,
   closePaneOnClose = false,
   countStartup = false,
+  onAccepted?: (request: RequestRecord) => void | Promise<void>,
 ): {
   exec: ExecHandler;
   mailbox: string;
@@ -2069,23 +2090,15 @@ export function startupExecutor(
     value.agents = [];
     return JSON.stringify({ id: AGENT_ID, result: value });
   };
-  const stopMailboxConsumer = consumeMailboxRequest(mailbox, (request) => {
-    const state = readAgentState(mailbox);
-    if (!state) return;
-    writeAgentState(mailbox, {
-      ...state,
-      ...(request.kind === "task"
-        ? { activeRequestId: request.requestId, completedRequestId: undefined }
-        : {}),
-      lastAck: {
-        requestId: request.requestId,
-        accepted: true,
-        acknowledgedAt: Date.now(),
-      },
-      updatedAt: Date.now(),
-    });
-    onRequest?.(request.text, request);
-  });
+  const stopMailboxConsumer = consumeMailboxRequest(
+    mailbox,
+    async (request) => {
+      if (!readAgentState(mailbox)) return;
+      await onRequest?.(request.text, request);
+      acceptMailboxRequest(mailbox, request);
+      await onAccepted?.(request);
+    },
+  );
   return {
     mailbox,
     getCount: () => getCount,
@@ -2525,6 +2538,12 @@ export default {
   },
   set failNextMailboxWrite(value: boolean) {
     failNextMailboxWrite = value;
+  },
+  get failNextRequestRemoval() {
+    return failNextRequestRemoval;
+  },
+  set failNextRequestRemoval(value: boolean) {
+    failNextRequestRemoval = value;
   },
   get failNextResultRemoval() {
     return failNextResultRemoval;

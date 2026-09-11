@@ -31,6 +31,7 @@ import support, {
   realFs,
   recoveryIdentity,
   registerExtension,
+  removeRequest,
   removeResult,
   resetAgentMailbox,
   resultEntryDetails,
@@ -91,7 +92,8 @@ test("managed requests pump through Pi semantic input", async () => {
     };
     writeRequest(mailbox, request);
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (readRequest(mailbox, request.requestId) === undefined) break;
+      if (readAgentState(mailbox)?.lastAck?.requestId === request.requestId)
+        break;
       await new Promise((resolve) => setTimeout(resolve, 5));
       if (attempt === 99)
         assert.fail("mailbox pump did not accept the request");
@@ -107,6 +109,9 @@ test("managed requests pump through Pi semantic input", async () => {
       false,
     );
     assert.deepEqual(agent.sentUsers, [controlMarker(request.requestId)]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepEqual(agent.sentUsers, [controlMarker(request.requestId)]);
+    removeRequest(mailbox, request.requestId);
     (context as any).isIdle = () => false;
     const steer: RequestRecord = {
       ...request,
@@ -117,7 +122,8 @@ test("managed requests pump through Pi semantic input", async () => {
     };
     writeRequest(mailbox, steer);
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (readRequest(mailbox, steer.requestId) === undefined) break;
+      if (readAgentState(mailbox)?.lastAck?.requestId === steer.requestId)
+        break;
       await new Promise((resolve) => setTimeout(resolve, 5));
       if (attempt === 99) assert.fail("mailbox pump did not accept steering");
     }
@@ -126,7 +132,10 @@ test("managed requests pump through Pi semantic input", async () => {
       text: steer.text,
     });
     assert.deepEqual(agent.sentUserCalls, [
-      { content: controlMarker(request.requestId), options: undefined },
+      {
+        content: controlMarker(request.requestId),
+        options: { deliverAs: "steer" },
+      },
       {
         content: controlMarker(steer.requestId),
         options: { deliverAs: "steer" },
@@ -166,7 +175,8 @@ test("managed session start immediately recovers a durable request", async () =>
   try {
     await agent.events.get("session_start")![0](undefined, context);
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (readRequest(mailbox, request.requestId) === undefined) break;
+      if (readAgentState(mailbox)?.lastAck?.requestId === request.requestId)
+        break;
       await new Promise((resolve) => setTimeout(resolve, 5));
       if (attempt === 99)
         assert.fail("session-start recovery did not consume the request");
@@ -182,11 +192,103 @@ test("managed session start immediately recovers a durable request", async () =>
   }
 });
 
+test("managed input handles duplicate markers before and after cleanup idempotently", async () => {
+  const mailbox = setAgentEnvironment("duplicate-marker-agent");
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext();
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const request: RequestRecord = {
+      version: 4,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "accept once",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, request);
+    const input = agent.events.get("input")![0];
+    assert.deepEqual(
+      input({ text: controlMarker(request.requestId) }, context),
+      {
+        action: "transform",
+        text: request.text,
+      },
+    );
+    const accepted = readAgentState(mailbox)!;
+    assert.equal(accepted.lastAck?.requestId, request.requestId);
+    assert.deepEqual(
+      input({ text: controlMarker(request.requestId) }, context),
+      {
+        action: "handled",
+      },
+    );
+    assert.deepEqual(readAgentState(mailbox)?.lastAck, accepted.lastAck);
+    removeRequest(mailbox, request.requestId);
+    assert.deepEqual(
+      input({ text: controlMarker(request.requestId) }, context),
+      {
+        action: "handled",
+      },
+    );
+    assert.deepEqual(readAgentState(mailbox)?.lastAck, accepted.lastAck);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("managed pump retransmits an unacknowledged marker", async () => {
+  const mailbox = setAgentEnvironment("pump-in-flight-agent");
+  const agent = fakePi({ sendUserMessage: () => undefined });
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext();
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const request: RequestRecord = {
+      version: 4,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "retry this marker",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, request);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.ok(agent.sentUsers.length >= 2);
+    assert.ok(
+      agent.sentUsers.every(
+        (marker) => marker === controlMarker(request.requestId),
+      ),
+    );
+    assert.ok(readRequest(mailbox, request.requestId));
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("managed pump retries a request after acknowledgement persistence fails", async () => {
   const mailbox = setAgentEnvironment("pump-retry-agent");
   let context: ReturnType<typeof fakeContext>;
+  let forcedFailures = 0;
   const agent = fakePi({
     sendUserMessage(content) {
+      if (forcedFailures < 3) {
+        forcedFailures++;
+        support.failNextMailboxWrite = true;
+      }
       agent.events.get("input")![0]({ text: content }, context);
     },
   });
@@ -208,7 +310,6 @@ test("managed pump retries a request after acknowledgement persistence fails", a
       createdAt: Date.now(),
     };
     writeRequest(mailbox, request);
-    support.failNextMailboxWrite = true;
     for (let attempt = 0; attempt < 100; attempt++) {
       if (agent.sentUsers.length >= 1) break;
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -216,16 +317,25 @@ test("managed pump retries a request after acknowledgement persistence fails", a
     }
     assert.ok(readRequest(mailbox, request.requestId));
     assert.equal(readAgentState(mailbox)?.lastAck, undefined);
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (readRequest(mailbox, request.requestId) === undefined) break;
+    for (let attempt = 0; attempt < 250; attempt++) {
+      if (readAgentState(mailbox)?.lastAck?.requestId === request.requestId)
+        break;
       await new Promise((resolve) => setTimeout(resolve, 5));
-      if (attempt === 99) assert.fail("mailbox pump did not retry the request");
+      if (attempt === 249)
+        assert.fail("mailbox pump did not retry the request");
     }
-    assert.equal(agent.sentUsers.length, 2);
+    assert.ok(agent.sentUsers.length >= 2);
+    assert.equal(
+      agent.entries.filter(
+        (entry: any) => entry.customType === "pi_herdsman_state_error",
+      ).length,
+      1,
+    );
     assert.equal(
       readAgentState(mailbox)?.lastAck?.requestId,
       request.requestId,
     );
+    removeRequest(mailbox, request.requestId);
   } finally {
     support.failNextMailboxWrite = false;
     agent.events.get("session_shutdown")?.[0]();
@@ -530,6 +640,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     ),
     { action: "transform", text: assignment.text },
   );
+  removeRequest(mailbox, assignment.requestId);
   branch[0] = {
     type: "message",
     message: {
@@ -628,7 +739,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   pumpReply = true;
   writeRequest(mailbox, reply);
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (readRequest(mailbox, reply.requestId) === undefined) break;
+    if (readAgentState(mailbox)?.lastAck?.requestId === reply.requestId) break;
     await new Promise((resolve) => setTimeout(resolve, 5));
     if (attempt === 99) assert.fail("mailbox pump did not deliver the reply");
   }

@@ -1701,6 +1701,12 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     );
     leadAgent.events.get("session_shutdown")?.[0]();
 
+    const parentReady = readAgentState(parentMailbox)!;
+    writeAgentState(parentMailbox, {
+      ...parentReady,
+      lastAck: undefined,
+      updatedAt: Date.now(),
+    });
     setNestedAgentEnv(parentLabel, LEAD_SESSION_ID, "agent", ["child"]);
     parentAgent = fakePi({ exec: parentBase });
     registerExtension!(parentAgent.pi as never);

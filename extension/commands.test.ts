@@ -2929,9 +2929,9 @@ test("fresh assignment refreshes the widget after validation", async () => {
   let listCount = 0;
   let resolveInitialStatus: ((value: ExecResult) => void) | undefined;
   let resolveIntegration: ((value: ExecResult) => void) | undefined;
-  let releaseInitialPrompt: (() => void) | undefined;
+  let releaseInitialHandoff: (() => void) | undefined;
   const initialHandoff = testGate<void>();
-  let holdInitialPrompt = true;
+  let holdInitialHandoff = true;
   let integrationGetCount = 0;
   let failValidation = false;
   const herdrAgent = {
@@ -2957,9 +2957,9 @@ test("fresh assignment refreshes the widget after validation", async () => {
     label,
     () => DEFAULT_PI_SESSION_ID,
     undefined,
-    async (_text, request) => {
-      if (!holdInitialPrompt) return;
-      holdInitialPrompt = false;
+    async () => {
+      if (!holdInitialHandoff) return;
+      holdInitialHandoff = false;
       const state = readAgentState(mailbox);
       if (state)
         writeAgentState(mailbox, {
@@ -2967,15 +2967,8 @@ test("fresh assignment refreshes the widget after validation", async () => {
           activeRequestId: undefined,
           updatedAt: Date.now(),
         });
-      releaseInitialPrompt = () => initialHandoff.resolve();
+      releaseInitialHandoff = () => initialHandoff.resolve();
       await initialHandoff.promise;
-      const accepted = readAgentState(mailbox);
-      if (accepted && request)
-        writeAgentState(mailbox, {
-          ...accepted,
-          activeRequestId: request.requestId,
-          updatedAt: Date.now(),
-        });
     },
   );
   const processInfo = {
@@ -3249,8 +3242,8 @@ test("fresh assignment refreshes the widget after validation", async () => {
       code: 0,
     });
     await waitForTestCondition(
-      () => releaseInitialPrompt !== undefined,
-      "assignment did not reach initial prompt",
+      () => releaseInitialHandoff !== undefined,
+      "assignment did not reach initial request handoff",
     );
     const pendingList = await pi.tools[0].execute(
       "id",
@@ -3259,10 +3252,8 @@ test("fresh assignment refreshes the widget after validation", async () => {
       undefined,
       context,
     );
-    assert.ok(
-      ["settling", "unknown"].includes(pendingList.details.agents[0].state),
-    );
-    releaseInitialPrompt!();
+    assert.equal(pendingList.details.agents[0].state, "settling");
+    releaseInitialHandoff!();
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(pi.sentMessageCalls.length, 1);

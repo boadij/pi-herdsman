@@ -2156,6 +2156,16 @@ async function submit(
   if (!preflightState)
     fail("target_not_found", "Agent mailbox state is unavailable", operation);
   validateIdentity(runtime, preflightState);
+  if (preflightState.lastAck) {
+    try {
+      removeRequest(runtime.mailboxPath, preflightState.lastAck.requestId);
+    } catch (error) {
+      const message = `Acknowledged request could not be removed: ${String(error)}`;
+      cleanupErrors.set(runtime.label, message);
+      appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
+      fail("internal_failure", message, operation);
+    }
+  }
   await validateIntegration(pi, runtime, ctx, { signal });
   try {
     writeRequest(runtime.mailboxPath, request);
@@ -9358,9 +9368,8 @@ export default function (pi: ExtensionAPI): void {
   let retryTimer: ReturnType<typeof setInterval> | undefined;
   let stateRetryTimer: ReturnType<typeof setInterval> | undefined;
   let requestPumpTimer: ReturnType<typeof setInterval> | undefined;
-  let requestPumpRequestId: string | undefined;
-  let requestPumpSubmittedAt = 0;
   let requestPumpErrorReported = false;
+  let acknowledgementErrorReported = false;
   let pendingStateTransition = false;
   let stateErrorReported = false;
   let resultErrorReported = false;
@@ -9373,6 +9382,14 @@ export default function (pi: ExtensionAPI): void {
   let leafStatusGeneration = 0;
   let leafStatusInFlight = false;
   let ownTools: string[] | undefined;
+  const reportAcknowledgementFailure = (
+    ctx: ExtensionContext,
+    error: unknown,
+  ): void => {
+    if (!acknowledgementErrorReported)
+      appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+    acknowledgementErrorReported = true;
+  };
   const ownToolsSnapshot = (): { ownTools?: string[] } =>
     ownTools ? { ownTools } : {};
   const touchActivity = (now = Date.now(), force = false): void => {
@@ -9487,10 +9504,10 @@ export default function (pi: ExtensionAPI): void {
     try {
       writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, candidate);
       state = candidate;
+      acknowledgementErrorReported = false;
       return true;
     } catch (error) {
-      if (agentContext)
-        appendDurableError(pi, agentContext, "pi_herdsman_state_error", error);
+      if (agentContext) reportAcknowledgementFailure(agentContext, error);
       return false;
     }
   };
@@ -9521,25 +9538,13 @@ export default function (pi: ExtensionAPI): void {
       );
       if (!request) {
         requestPumpErrorReported = false;
-        requestPumpRequestId = undefined;
-        requestPumpSubmittedAt = 0;
+        acknowledgementErrorReported = false;
         return;
       }
-      if (
-        request.requestId === requestPumpRequestId &&
-        Date.now() - requestPumpSubmittedAt < 250
-      )
-        return;
-      pi.sendUserMessage(
-        controlMarker(request.requestId),
-        ctx.isIdle() ? undefined : { deliverAs: "steer" },
-      );
-      requestPumpErrorReported = false;
-      requestPumpRequestId = request.requestId;
-      requestPumpSubmittedAt = Date.now();
+      pi.sendUserMessage(controlMarker(request.requestId), {
+        deliverAs: "steer",
+      });
     } catch (error) {
-      requestPumpRequestId = undefined;
-      requestPumpSubmittedAt = 0;
       if (!requestPumpErrorReported) {
         requestPumpErrorReported = true;
         appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
@@ -9549,9 +9554,8 @@ export default function (pi: ExtensionAPI): void {
   const resetRequestPump = (): void => {
     if (requestPumpTimer) clearInterval(requestPumpTimer);
     requestPumpTimer = undefined;
-    requestPumpRequestId = undefined;
-    requestPumpSubmittedAt = 0;
     requestPumpErrorReported = false;
+    acknowledgementErrorReported = false;
   };
   const askAllowed = (): boolean =>
     !!state?.activeRequestId &&
@@ -9855,12 +9859,12 @@ export default function (pi: ExtensionAPI): void {
       return { action: "handled" };
     }
     if (!request) {
-      acknowledgeAndDiscard(id, false, ctx, "invalid", "Request was not found");
       return { action: "handled" };
     }
     if (!initialized || !state) {
       return { action: "handled" };
     }
+    if (state.lastAck?.requestId === id) return { action: "handled" };
     if (
       request.runId !== state.runId ||
       request.ownerSessionId !== state.ownerSessionId ||
@@ -9928,16 +9932,16 @@ export default function (pi: ExtensionAPI): void {
       try {
         writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, candidate);
       } catch (error) {
-        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        reportAcknowledgementFailure(ctx, error);
         return { action: "handled" };
       }
       state = candidate;
+      acknowledgementErrorReported = false;
       try {
         removeAsk(process.env.PI_HERDSMAN_MAILBOX!);
       } catch (error) {
         appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
       }
-      discardAgentRequest(id, ctx);
       latest = "";
       return {
         action: "transform",
@@ -10029,11 +10033,12 @@ export default function (pi: ExtensionAPI): void {
       try {
         writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, candidate);
       } catch (error) {
-        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        reportAcknowledgementFailure(ctx, error);
         // Retain the request. A repeated exact marker can retry this durable boundary.
         return { action: "handled" };
       }
       state = candidate;
+      acknowledgementErrorReported = false;
       agentStartedAt = Date.now();
       const model = ctx.model
         ? `${ctx.model.provider}/${ctx.model.id}`
@@ -10049,10 +10054,9 @@ export default function (pi: ExtensionAPI): void {
         ...(model ? { model } : {}),
         ...(thinking ? { thinking } : {}),
       });
-      discardAgentRequest(id, ctx);
     }
     if (request.kind === "steer") {
-      acknowledgeAndDiscard(id, true, ctx);
+      if (!acknowledge(id, true)) return { action: "handled" };
       latest = "";
       return { action: "transform", text: request.text };
     }
