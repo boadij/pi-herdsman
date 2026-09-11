@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.5.0](https://github.com/boadij/pi-herdsman/compare/v0.4.0...v0.5.0) (2026-09-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* delegate no longer accepts session; use continue with session for historical context. The legacy resume, start, and assign actions and continuation cross-fields are rejected.
+* agent delegate with session no longer accepts label; continuations inherit the label persisted in the saved managed-agent session.
+* Pi Herdsman configuration now lives exclusively under <Pi agent dir>/pi-herdsman/config.json. Existing piHerdsman values in Pi global or project settings are no longer read, and project-scoped Herdsman configuration has been removed. No migration or compatibility fallback is provided; missing config uses defaults.
+
+### Features
+
+* split agent continuation from delegation ([#43](https://github.com/boadij/pi-herdsman/issues/43)) ([5088af9](https://github.com/boadij/pi-herdsman/commit/5088af9b0306f701da767ba0fa28ddc3f267a46f))
+
+
+### Fixes
+
+* decouple agent messaging from Pi keybindings ([#37](https://github.com/boadij/pi-herdsman/issues/37)) ([85dc7fa](https://github.com/boadij/pi-herdsman/commit/85dc7fa35081c5c82bd083b33adb3d4fbbf02dd0))
+* **handoff:** replace result paths with stable references ([#40](https://github.com/boadij/pi-herdsman/issues/40)) ([d7c6e4e](https://github.com/boadij/pi-herdsman/commit/d7c6e4ed50f01207bfc0eb0d104e82010d543357))
+* show agent definitions in compact calls ([#39](https://github.com/boadij/pi-herdsman/issues/39)) ([9b5ec55](https://github.com/boadij/pi-herdsman/commit/9b5ec55652396dcb2688f0fb76a2dc9d4400c385))
+* **storage:** persist herdsman coordination state ([#36](https://github.com/boadij/pi-herdsman/issues/36)) ([ad91a9c](https://github.com/boadij/pi-herdsman/commit/ad91a9ce33551720dfdb1b1a8f2983a4b1a43ab8))
+
+
+### Refactoring
+
+* consolidate Herdsman persistent state ([#41](https://github.com/boadij/pi-herdsman/issues/41)) ([86e2133](https://github.com/boadij/pi-herdsman/commit/86e21335d350091a3deb2f20adee3eb0cefb0944))
+* inherit agent labels on session continuation ([#42](https://github.com/boadij/pi-herdsman/issues/42)) ([a946d6f](https://github.com/boadij/pi-herdsman/commit/a946d6f98d4a901ad082f96e83143ffff21be2f9))
+
 ## [0.4.0](https://github.com/boadij/pi-herdsman/compare/v0.3.2...v0.4.0) (2026-09-10)
 
 
