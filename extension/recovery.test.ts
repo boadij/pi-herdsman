@@ -12,6 +12,7 @@ import type {
   ManagedAgentState,
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
+import { resultPath } from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -1212,8 +1213,8 @@ test("recovery requires the official session and retries one failed delivery", a
     requestId: REQUEST_ID,
     persist: "completion",
   });
-  assert.ok(scoutPresentation.resultPath);
-  assert.equal(readFileSync(scoutPresentation.resultPath, "utf8"), scoutText);
+  assert.equal(scoutPresentation.resultRef, `result:${REQUEST_ID}`);
+  assert.equal(readFileSync(resultPath(REQUEST_ID), "utf8"), scoutText);
   const result: ResultRecord = {
     version: 4,
     runId: AGENT_ID,
@@ -1298,10 +1299,7 @@ test("recovery requires the official session and retries one failed delivery", a
   for (let index = 0; index < 5; index++)
     await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(recovering.sentUsers.length, 0);
-  assert.match(
-    delivered,
-    new RegExp(`Result file: ${scoutPresentation.resultPath}`),
-  );
+  assert.match(delivered, new RegExp(`Result ref: result:${REQUEST_ID}`));
   assert.match(
     delivered,
     new RegExp(

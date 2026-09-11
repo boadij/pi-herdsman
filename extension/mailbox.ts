@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
-import { herdsmanDataRoot } from "./tmp.ts";
+import { herdsmanDataRoot } from "./storage.ts";
 
 export interface ManagedAgentState {
   version: 4;

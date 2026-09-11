@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { resolve } from "node:path";
 import { TextDecoder } from "node:util";
+import { resolveResultRef } from "./storage.ts";
 
 export type TextFileSnapshot = {
   input: string;
@@ -44,9 +45,10 @@ function resolveRegularFiles(
   const skipped = new Set(skipCanonicalPaths);
   const seen = new Set<string>();
   return inputs.flatMap((input) => {
-    const path = resolve(cwd, input);
+    let path: string;
     let canonicalPath: string;
     try {
+      path = resolveResultRef(input) ?? resolve(cwd, input);
       canonicalPath = realpathSync(path);
       if (skipped.has(canonicalPath) || seen.has(canonicalPath)) return [];
       const beforeOpen = statSync(canonicalPath);
@@ -165,9 +167,15 @@ function escapeMessageFileName(path: string): string {
 }
 
 function renderMessageFile(file: RegularFile, content?: string): string {
-  const name = escapeMessageFileName(file.canonicalPath);
+  const result = file.input.startsWith("result:");
+  const name = escapeMessageFileName(
+    result ? file.input : file.canonicalPath,
+  );
+  const path = result
+    ? ` path="${escapeMessageFileName(file.canonicalPath)}"`
+    : "";
   if (content === undefined)
-    return `<file name="${name}" bytes="${file.bytes}" />`;
+    return `<file name="${name}"${path} bytes="${file.bytes}" />`;
   return `<file name="${name}" bytes="${file.bytes}">\n${content}\n</file>`;
 }
 
