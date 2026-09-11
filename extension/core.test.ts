@@ -319,7 +319,35 @@ test("resolves result references through shared message file preparation", () =>
       { inlineLimitBytes: 1 },
     );
     assert.deepEqual(prepared.canonicalPaths, [realpathSync(path)]);
-    assert.match(prepared.text, new RegExp(realpathSync(path)));
+    assert.ok(prepared.text.includes(resultRef(requestId)));
+    assert.ok(prepared.text.includes(realpathSync(path)));
+    assert.ok(
+      prepared.text.includes(
+        `<file name="${resultRef(requestId)}" path="${realpathSync(path)}"`,
+      ),
+    );
+
+    const embedded = prepareMessageInput(
+      "Inspect the result again",
+      [resultRef(requestId)],
+      mkdtempSync(join(tmpdir(), "pi-herdsman-result-reference-nested-")),
+      "assign",
+      "Task",
+    );
+    assert.ok(embedded.text.includes(`<file name="${resultRef(requestId)}"`));
+    assert.equal(embedded.text.includes(realpathSync(path)), false);
+
+    const forwardedRef = embedded.text.match(/name="(result:[^"]+)"/)?.[1];
+    assert.equal(forwardedRef, resultRef(requestId));
+    const forwarded = prepareMessageInput(
+      "Inspect the result a third time",
+      [forwardedRef!],
+      mkdtempSync(join(tmpdir(), "pi-herdsman-result-reference-forwarded-")),
+      "assign",
+      "Task",
+    );
+    assert.ok(forwarded.text.includes(`<file name="${resultRef(requestId)}"`));
+    assert.equal(forwarded.text.includes(realpathSync(path)), false);
   } finally {
     rmSync(path, { force: true });
   }

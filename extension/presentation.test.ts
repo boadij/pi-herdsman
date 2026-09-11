@@ -2204,7 +2204,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
       result.content,
       new RegExp(`^Result ref: ${result.resultRef}`),
     );
-    assert.doesNotMatch(result.content, new RegExp(herdsmanDataRoot()));
+    assert.equal(result.content.includes(herdsmanDataRoot()), false);
     const retry = truncateModelText(text, {
       ...options,
       sessionId: "different-completion-session",

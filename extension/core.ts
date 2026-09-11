@@ -167,9 +167,15 @@ function escapeMessageFileName(path: string): string {
 }
 
 function renderMessageFile(file: RegularFile, content?: string): string {
-  const name = escapeMessageFileName(file.canonicalPath);
+  const result = file.input.startsWith("result:");
+  const name = escapeMessageFileName(
+    result ? file.input : file.canonicalPath,
+  );
+  const path = result
+    ? ` path="${escapeMessageFileName(file.canonicalPath)}"`
+    : "";
   if (content === undefined)
-    return `<file name="${name}" bytes="${file.bytes}" />`;
+    return `<file name="${name}"${path} bytes="${file.bytes}" />`;
   return `<file name="${name}" bytes="${file.bytes}">\n${content}\n</file>`;
 }
 

@@ -55,17 +55,35 @@ A reference-only file uses a self-closing tag:
 <file name="/absolute/canonical/path" bytes="123" />
 ```
 
-`name` is the canonical absolute path and `bytes` is the observed file size.
-A body means the complete submission-time UTF-8 snapshot was embedded; a
-self-closing tag means only the path and size reference was supplied. File
-content remains raw text. This markup frames evidence for the model and is not
-a security boundary.
+For an ordinary file, `name` is the canonical absolute path and `bytes` is the
+observed file size. For a result reference, an embedded file uses the exact
+`result:<request-id>` as `name`:
+
+```xml
+<file name="result:550e8400-e29b-41d4-a716-446655440000" bytes="123">
+contents
+</file>
+```
+
+A result that is supplied by reference keeps both identities in its
+self-closing envelope:
+
+```xml
+<file name="result:550e8400-e29b-41d4-a716-446655440000" path="/absolute/canonical/path" bytes="123" />
+```
+
+A body means the complete submission-time UTF-8 snapshot was embedded. For an
+ordinary file, a self-closing tag carries its canonical path and observed byte
+size; for a result reference, it carries the logical result name, the physical
+path attribute, and observed byte size. File content remains raw text. This
+markup frames evidence for the model and is not a security boundary.
 
 `files` is supported by `delegate` with `definition`, `delegate` with `session`,
 `steer`, `reply`, and `ask_owner`. For
 controller actions, relative paths resolve from the calling controller's cwd;
-for `ask_owner`, they resolve from the managed agent's cwd. Every accepted
-path is displayed using its canonical absolute path.
+for `ask_owner`, they resolve from the managed agent's cwd. Accepted ordinary
+filesystem paths retain canonical absolute-path names; `result:<request-id>`
+inputs retain the logical result reference as the model-facing name.
 
 Supplied paths must resolve to readable regular files. Missing, broken,
 unreadable, and non-regular paths reject the whole operation. Canonical
@@ -82,8 +100,10 @@ For each regular file:
 
 - complete strict UTF-8 text without NUL bytes is embedded when the complete
   message fits the effective configured `mailboxPayloadLimitBytes` boundary;
-- invalid UTF-8, NUL-containing, binary, and non-fitting files are represented
-  only by a canonical local path and observed byte size.
+- invalid UTF-8, NUL-containing, binary, and non-fitting ordinary files are
+  represented only by their canonical local path and observed byte size;
+  result references retain their logical name and carry the physical path and
+  observed byte size.
 
 The fixed 1 MiB mailbox protocol safety ceiling is a separate read limit for
 mailbox records; it does not replace the configured admission limit for new
@@ -95,7 +115,10 @@ or disappear after submission, and the recipient must already have local
 filesystem/tool access to inspect them. `files` supplies evidence and does not
 grant runtime capabilities.
 
-Files are read through their canonical `realpath` target.
+Files are read through their canonical `realpath` target. Ordinary file inputs
+are rendered with that canonical path; result references retain the
+`result:<request-id>` name so recipients can pass the same reference through
+`files` again.
 
 ## Canonical deduplication
 
