@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import * as realFs from "node:fs";
+import { basename, dirname } from "node:path";
 import { mock, test } from "node:test";
 
 let deleteBeforeRead = false;
 let failConfigRename = false;
+let configPath: string | undefined;
+const testAgentDir =
+  process.env.PI_CODING_AGENT_DIR ?? "/tmp/pi-herdsman-config-test";
 mock.module("@earendil-works/pi-coding-agent", {
   namedExports: {
-    getAgentDir: () =>
-      process.env.PI_CODING_AGENT_DIR ?? "/tmp/pi-herdsman-config-test",
+    getAgentDir: () => testAgentDir,
   },
 });
 mock.module("node:fs", {
@@ -15,26 +18,27 @@ mock.module("node:fs", {
     chmodSync: realFs.chmodSync,
     closeSync: realFs.closeSync,
     constants: realFs.constants,
-    existsSync: (path: string) => {
-      if (deleteBeforeRead && path.endsWith("/pi-herdsman/config.json")) {
-        deleteBeforeRead = false;
-        realFs.unlinkSync(path);
-        return true;
-      }
-      return realFs.existsSync(path);
-    },
+    existsSync: realFs.existsSync,
     fsyncSync: realFs.fsyncSync,
     fstatSync: realFs.fstatSync,
     mkdirSync: realFs.mkdirSync,
     openSync: realFs.openSync,
-    readFileSync: realFs.readFileSync,
+    readFileSync: (path: string, encoding: BufferEncoding) => {
+      if (deleteBeforeRead && configPath !== undefined && path === configPath) {
+        deleteBeforeRead = false;
+        realFs.unlinkSync(path);
+      }
+      return realFs.readFileSync(path, encoding);
+    },
     readSync: realFs.readSync,
     realpathSync: realFs.realpathSync,
     renameSync: (from: string, to: string) => {
       if (
         failConfigRename &&
-        from.includes("/.config.json.") &&
-        !from.includes(".config.json.lock.")
+        configPath !== undefined &&
+        dirname(from) === dirname(configPath) &&
+        basename(from).startsWith(`.${basename(configPath)}.`) &&
+        !basename(from).startsWith(`.${basename(configPath)}.lock.`)
       ) {
         failConfigRename = false;
         const error = new Error(
@@ -64,6 +68,7 @@ const {
 } = await import("./config.ts");
 const { herdsmanConfigPath, herdsmanDataRoot } = await import("./storage.ts");
 const { claimProcessLock } = await import("./lock.ts");
+configPath = herdsmanConfigPath();
 
 function resetConfig(): void {
   realFs.rmSync(herdsmanDataRoot(), { recursive: true, force: true });

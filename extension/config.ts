@@ -1,9 +1,7 @@
 import {
   closeSync,
   chmodSync,
-  existsSync,
   fsyncSync,
-  mkdirSync,
   openSync,
   readFileSync,
   renameSync,
@@ -83,7 +81,6 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
 
 function readRawConfig(): Partial<HerdsmanConfig> {
   const path = herdsmanConfigPath();
-  if (!existsSync(path)) return {};
   try {
     return parseRawConfig(readFileSync(path, "utf8"));
   } catch (error) {
@@ -113,7 +110,11 @@ function writeConfigAtomically(path: string, content: string): void {
     renameSync(temporaryPath, path);
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
-    if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+    try {
+      unlinkSync(temporaryPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
 }
 
@@ -134,10 +135,15 @@ export function updateConfig<K extends ConfigKey>(
         throw new Error(`Invalid Pi Herdsman config field ${key}`);
       current[key] = value;
     } else delete current[key];
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     if (Object.keys(current).length)
       writeConfigAtomically(path, `${JSON.stringify(current, null, 2)}\n`);
-    else if (existsSync(path)) unlinkSync(path);
+    else {
+      try {
+        unlinkSync(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
   } finally {
     release();
   }

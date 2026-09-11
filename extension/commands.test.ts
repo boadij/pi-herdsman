@@ -508,6 +508,10 @@ test("/agents placement subtree writes flat config outside project settings", as
     );
   } finally {
     realFs.rmSync(projectRoot, { recursive: true, force: true });
+    realFs.rmSync(join(PI_AGENT_ROOT, "pi-herdsman"), {
+      recursive: true,
+      force: true,
+    });
   }
 });
 

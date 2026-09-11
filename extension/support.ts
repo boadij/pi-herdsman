@@ -105,6 +105,8 @@ mock.module("node:fs", {
       return realFs.openSync(...args);
     },
     readFileSync: (...args: any[]) => {
+      if (args[0] === join(PI_AGENT_ROOT, "pi-herdsman", "config.json"))
+        configReadHook?.();
       if (
         typeof args[0] === "string" &&
         args[0].startsWith(`${PI_AGENTS_DIR}/`)

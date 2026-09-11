@@ -57,17 +57,19 @@ current tab.
 ## Reset
 
 Stop active Pi and Herdsman processes first; running processes may recreate
-runtime state. Then remove the complete Herdsman directory:
+runtime state. Then delete the complete Herdsman directory at this canonical
+location:
 
-```sh
-rm -rf ~/.pi/agent/pi-herdsman
+```text
+<resolved Pi agent directory>/pi-herdsman/
 ```
 
-With a custom `PI_CODING_AGENT_DIR`, remove:
-
-```sh
-rm -rf "$PI_CODING_AGENT_DIR/pi-herdsman"
-```
+`<resolved Pi agent directory>` means the result of Pi's native
+`getAgentDir()`. With a custom `PI_CODING_AGENT_DIR`, Pi resolves that value
+(including values such as `~`) before appending `pi-herdsman`; do not construct
+the path by concatenating the raw environment variable yourself. Use the
+native file-management operation for the current platform to delete that
+directory.
 
 The next process starts with the defaults and recreates only the runtime state
 it needs.

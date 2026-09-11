@@ -25,6 +25,7 @@ import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
   PARENT_SESSION_ID,
+  PI_AGENT_ROOT,
   PI_AGENTS_DIR,
   REQUEST_ID,
   LEAD_SESSION_ID,
@@ -843,6 +844,9 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     const chiefDescriptorPath = supervisionRuntime().descriptor;
     const chiefDescriptor = readFileSync(chiefDescriptorPath, "utf8");
+    realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman"), { recursive: true });
+    const configPath = join(PI_AGENT_ROOT, "pi-herdsman", "config.json");
+    writeFileSync(configPath, "{}", "utf8");
     support.configReadHook = () =>
       writeFileSync(
         chiefDescriptorPath,
@@ -870,6 +874,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     } finally {
       support.configReadHook = undefined;
       writeFileSync(chiefDescriptorPath, chiefDescriptor);
+      realFs.rmSync(configPath, { force: true });
     }
     assert.deepEqual(
       listChiefMessagePaths(supervisionRuntime(), leadId),
