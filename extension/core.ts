@@ -36,6 +36,14 @@ type RegularFile = {
   ino: number;
 };
 
+function failUnknownResultRef(input: string, operation: string): never {
+  fail(
+    "invalid_request",
+    `Unknown result ref: ${input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
+    operation,
+  );
+}
+
 function resolveRegularFiles(
   inputs: readonly string[],
   cwd: string,
@@ -83,11 +91,7 @@ function resolveRegularFiles(
         resolvedResultPath &&
         (error as NodeJS.ErrnoException).code === "ENOENT"
       )
-        fail(
-          "invalid_request",
-          `Unknown result ref: ${input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
-          operation,
-        );
+        failUnknownResultRef(input, operation);
       fail(
         "invalid_request",
         `Cannot read file ${input}: ${error instanceof Error ? error.message : String(error)}`,
@@ -298,11 +302,7 @@ export function prepareMessageInput(
         resolvedResultPath &&
         (error as NodeJS.ErrnoException).code === "ENOENT"
       )
-        fail(
-          "invalid_request",
-          `Unknown result ref: ${file.input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
-          operation,
-        );
+        failUnknownResultRef(file.input, operation);
       fail(
         "invalid_request",
         `Cannot read file ${file.input}: ${error instanceof Error ? error.message : String(error)}`,
