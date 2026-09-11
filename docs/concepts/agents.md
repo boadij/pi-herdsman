@@ -61,6 +61,8 @@ They are not public alternatives to the `agent` identity.
 
 ## Ownership
 
+A lead and its recursively owned agent hierarchy form a **herd**, Herdsman's term for an agent fleet.
+
 Each agent has one exact direct owner Pi session.
 
 A lead Pi session owns its direct agents.
