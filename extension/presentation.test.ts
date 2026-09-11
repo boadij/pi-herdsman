@@ -1229,6 +1229,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
     presentationTheme,
     context,
   );
+  assert.equal(invalidations, 0);
   await Promise.resolve();
   assert.equal(
     renderedText(
@@ -1252,6 +1253,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
     presentationTheme,
     context,
   );
+  assert.equal(invalidations, 1);
   await Promise.resolve();
   assert.equal(invalidations, 1);
 
@@ -1281,6 +1283,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
     presentationTheme,
     historicalContext,
   );
+  assert.equal(historicalInvalidations, 0);
   await Promise.resolve();
   assert.equal(
     renderedText(
