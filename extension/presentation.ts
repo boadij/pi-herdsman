@@ -31,7 +31,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { SupervisionSnapshot } from "./supervision.ts";
-import { herdsmanDataRoot, herdsmanTempRoot } from "./tmp.ts";
+import { herdsmanTempRoot, resultPath, resultRef } from "./storage.ts";
 
 export type AgentLifecycleState =
   "working" | "blocked" | "settling" | "starting" | "unknown";
@@ -75,7 +75,7 @@ export interface CompletionMessageDetails {
     percent: number | null;
   };
   truncated: boolean;
-  resultPath?: string;
+  resultRef?: string;
   fullOutputPath?: string;
   resultPersistenceError?: string;
   error?: { code: string; message: string };
@@ -2210,20 +2210,18 @@ function savePrivateOutput(
   let temp: string | undefined;
   let created = false;
   try {
-    if (
-      kind === "result" &&
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        key,
-      )
-    )
-      throw new Error("invalid result request id");
-    const root =
+    const path =
       kind === "result"
-        ? join(herdsmanDataRoot(), "results")
-        : join(herdsmanTempRoot(), "output", hash(sessionId));
+        ? resultPath(key)
+        : join(
+            herdsmanTempRoot(),
+            "output",
+            hash(sessionId),
+            `${hash(key)}.txt`,
+          );
+    const root = dirname(path);
     mkdirSync(root, { recursive: true, mode: 0o700 });
     chmodSync(root, 0o700);
-    const path = join(root, kind === "result" ? key : `${hash(key)}.txt`);
     temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
     const fd = openSync(temp, "wx", 0o600);
     created = true;
@@ -2264,9 +2262,10 @@ export function truncateModelText(
         "result",
       )
     : undefined;
+  const ref = path ? resultRef(options.requestId ?? options.key) : undefined;
   const persistenceError = completion && !path;
   const displayText = completion
-    ? `${path ? `Result file: ${path}` : "Result file could not be saved."}\n\n${text}`
+    ? `${ref ? `Result ref: ${ref}` : "Result file could not be saved."}\n\n${text}`
     : text;
   const truncate = options.keep === "tail" ? truncateTail : truncateHead;
   let result = truncate(displayText, {
@@ -2277,7 +2276,7 @@ export function truncateModelText(
     return {
       content: displayText,
       truncated: false,
-      ...(path ? { resultPath: path } : {}),
+      ...(ref ? { resultRef: ref } : {}),
       ...(persistenceError
         ? { persistenceError: "Result file could not be saved." }
         : {}),
@@ -2328,7 +2327,7 @@ export function truncateModelText(
     content: `${result.content}\n${suffix}`,
     truncated: true,
     ...(overflowPath ? { fullOutputPath: overflowPath } : {}),
-    ...(path ? { resultPath: path } : {}),
+    ...(ref ? { resultRef: ref } : {}),
     ...(persistenceError
       ? { persistenceError: "Result file could not be saved." }
       : {}),
@@ -2374,7 +2373,7 @@ export function renderCompletionMessage(
   const heading = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${theme.bold(label)}${failed ? " failed" : " completed"}${definition ? humanText(theme, "muted", definition) : ""}`;
   const humanContent = (message.content ?? "")
     .replace(/^Agent result · [^\n]*\n\n/u, "")
-    .replace(/^Result file: [^\n]*\n\n/u, "")
+    .replace(/^Result ref: [^\n]*\n\n/u, "")
     .replace(/^Result file could not be saved\.\n\n/u, "");
   const content = new Container();
   if (options.expanded) {
@@ -2388,7 +2387,7 @@ export function renderCompletionMessage(
         ? [`context: ${Math.round(d.contextUsage.percent)}%`]
         : []),
       ...(d?.fullOutputPath ? [`full output: ${d.fullOutputPath}`] : []),
-      ...(d?.resultPath ? [`result file: ${d.resultPath}`] : []),
+      ...(d?.resultRef ? [`result ref: ${d.resultRef}`] : []),
       ...(d?.resultPersistenceError
         ? [
             humanText(

@@ -46,7 +46,7 @@ import {
   truncateModelText,
   visibleWidth,
 } from "./presentation.ts";
-import { herdsmanDataRoot, herdsmanTempRoot } from "./tmp.ts";
+import { herdsmanDataRoot, herdsmanTempRoot, resultPath } from "./storage.ts";
 
 initTheme("dark");
 
@@ -2356,34 +2356,33 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     };
     const text = "Found three authentication problems.";
     const result = truncateModelText(text, options);
-    const expected = join(herdsmanDataRoot(), "results", options.requestId);
+    const expected = resultPath(options.requestId);
     assert.equal(result.truncated, false);
-    assert.equal(result.resultPath, expected);
-    assert.equal(basename(result.resultPath), options.requestId);
-    assert.equal(extname(basename(result.resultPath)), "");
-    assert.equal(readFileSync(result.resultPath, "utf8"), text);
-    assert.equal(statSync(result.resultPath).mode & 0o777, 0o600);
-    assert.equal(
-      statSync(result.resultPath.replace(/\/[^/]+$/, "")).mode & 0o777,
-      0o700,
-    );
+    assert.equal(result.resultRef, `result:${options.requestId}`);
+    assert.equal("resultPath" in result, false);
+    assert.equal(basename(expected), options.requestId);
+    assert.equal(extname(basename(expected)), "");
+    assert.equal(readFileSync(expected, "utf8"), text);
+    assert.equal(statSync(expected).mode & 0o777, 0o600);
+    assert.equal(statSync(dirname(expected)).mode & 0o777, 0o700);
     assert.match(
       result.content,
-      new RegExp(`^Result file: ${result.resultPath}`),
+      new RegExp(`^Result ref: ${result.resultRef}`),
     );
+    assert.equal(result.content.includes(herdsmanDataRoot()), false);
     const retry = truncateModelText(text, {
       ...options,
       sessionId: "different-completion-session",
     });
-    assert.equal(retry.resultPath, result.resultPath);
+    assert.equal(retry.resultRef, result.resultRef);
     const other = truncateModelText(text, {
       ...options,
       key: "123e4567-e89b-12d3-a456-426614174002",
       requestId: "123e4567-e89b-12d3-a456-426614174002",
     });
-    assert.notEqual(other.resultPath, result.resultPath);
+    assert.notEqual(other.resultRef, result.resultRef);
     assert.deepEqual(
-      readdirSync(dirname(result.resultPath)).filter((name) =>
+      readdirSync(dirname(expected)).filter((name) =>
         name.startsWith(`${options.requestId}.`),
       ),
       [],
@@ -2401,16 +2400,13 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     const text = "completed line\n".repeat(3000);
     const first = truncateModelText(text, options);
     const second = truncateModelText(text, options);
-    assert.equal(first.resultPath, second.resultPath);
-    assert.equal(
-      first.resultPath,
-      join(herdsmanDataRoot(), "results", options.requestId),
-    );
-    assert.equal(readFileSync(first.resultPath!, "utf8"), text);
+    assert.equal(first.resultRef, second.resultRef);
+    assert.equal(first.resultRef, `result:${options.requestId}`);
+    assert.equal(readFileSync(resultPath(options.requestId), "utf8"), text);
     assert.equal(first.truncated, true);
     assert.ok(Buffer.byteLength(first.content) <= 50 * 1024);
     assert.ok(first.content.split("\n").length <= 2000);
-    assert.match(first.content, new RegExp(`Result file: ${first.resultPath}`));
+    assert.match(first.content, new RegExp(`Result ref: ${first.resultRef}`));
   }
 
   {
@@ -2421,7 +2417,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
       persist: "completion",
       requestId: "../outside",
     });
-    assert.equal(result.resultPath, undefined);
+    assert.equal(result.resultRef, undefined);
     assert.equal(result.persistenceError, "Result file could not be saved.");
     assert.match(result.content, /Result file could not be saved/);
   }
@@ -2528,7 +2524,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const expanded = renderCompletionMessage(
       {
         content:
-          "Agent result · agent=agent · definition=reviewer · request=req · status=completed\n\nResult file: /tmp/result\n\nOutput truncated after 2000 lines.",
+          "Agent result · agent=agent · definition=reviewer · request=req · status=completed\n\nResult ref: result:550e8400-e29b-41d4-a716-446655440000\n\nOutput truncated after 2000 lines.",
         details: {
           requestId: "req",
           agentLabel: "agent",
@@ -2537,7 +2533,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
           elapsedMs: 1_000,
           contextUsage: { tokens: 42, contextWindow: 100, percent: 42 },
           fullOutputPath: "/tmp/full-output",
-          resultPath: "/tmp/result",
+          resultRef: "result:550e8400-e29b-41d4-a716-446655440000",
           truncated: true,
         },
       },
@@ -2553,9 +2549,16 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     assert.match(expandedText, /elapsed: 1s/);
     assert.match(expandedText, /context: 42%/);
     assert.match(expandedText, /full output: \/tmp\/full-output/);
-    assert.match(expandedText, /result file: \/tmp\/result/);
+    assert.match(
+      expandedText,
+      /result ref: result:550e8400-e29b-41d4-a716-446655440000/,
+    );
     assert.match(expandedText, /Output truncated after 2000 lines/);
-    assert.equal(expandedText.match(/\/tmp\/result/g)?.length, 1);
+    assert.equal(
+      expandedText.match(/result:550e8400-e29b-41d4-a716-446655440000/g)
+        ?.length,
+      1,
+    );
 
     const failed = renderCompletionMessage(
       {
@@ -2617,7 +2620,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
         elapsedMs: 123_000,
         contextUsage: { tokens: 72, contextWindow: 100, percent: 72 },
         fullOutputPath: "/tmp/pi-herdsman/very-long-full-output-path",
-        resultPath: "/tmp/pi-herdsman/very-long-result-path",
+        resultRef: "result:550e8400-e29b-41d4-a716-446655440000",
         truncated: false,
       },
     };
@@ -2650,13 +2653,14 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     ]) {
       const rendered = renderCompletionMessage(
         {
-          content: "Result file: /private/result.md\n\ncompleted",
+          content:
+            "Result ref: result:550e8400-e29b-41d4-a716-446655440000\n\ncompleted",
           details: {
             requestId: "req",
             agentLabel: "reviewer:auth-review",
             status: "completed",
             ...(elapsedMs === undefined ? {} : { elapsedMs }),
-            resultPath: "/private/result.md",
+            resultRef: "result:550e8400-e29b-41d4-a716-446655440000",
             truncated: false,
           },
         },

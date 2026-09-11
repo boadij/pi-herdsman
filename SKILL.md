@@ -110,8 +110,10 @@ later dependent assignments when approved scope or decisions change because
 embedded text is snapshotted at submission time while referenced files are not
 copied.
 
-For dependent work, prefer passing an existing resultPath or coordination
-artifact through files instead of copying large results into a task. ask_owner
+Agent completions may return a resultRef such as result:<request-id>. Pass that
+exact resultRef through files for dependent work; do not reconstruct or guess
+the underlying filesystem path. Prefer passing it or a coordination artifact
+through files instead of copying large results into a task. ask_owner
 may also include files when the owner needs supporting evidence. files does not
 add runtime capability.
 
@@ -166,8 +168,8 @@ message evidence. Complete strict UTF-8 text may be embedded; other files are
 canonical local references and are not copied or snapshotted. Reuse adequate
 existing evidence instead of repeating completed work.
 Do not overlap writers in a worktree or file-ownership boundary. For dependent
-work, use and preserve files and resultPath handoffs rather than copying large
-results into assignments.
+work, copy resultRef values exactly through files rather than reconstructing
+physical result paths or copying large results into assignments.
 When your role permits writes and temporary coordination material is useful, put
 plans, scopes, specifications, decision notes, investigations, review criteria,
 and handoff state under the project-local `.pi-herdsman/` directory. Reuse and
@@ -239,8 +241,9 @@ escalation.
 
 ## Handoffs
 
-Prefer `files: [resultPath]` for a dependent agent instead of copying a large
-completion into a new task.
+Prefer `files: [result:<request-id>]` for a dependent agent instead of copying
+a large completion into a new task. Copy the exact resultRef returned by the
+completion; do not reconstruct its physical path.
 
 A concise handoff should include:
 

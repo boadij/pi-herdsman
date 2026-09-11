@@ -2499,7 +2499,7 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
     );
     assert.match(
       launched[0].contents[1]!,
-      /use and preserve files and resultPath handoffs/,
+      /copy resultRef values exactly through files/,
     );
     assert.match(assignedText, /fresh task/);
     assert.equal(realFs.existsSync(mailbox), true);

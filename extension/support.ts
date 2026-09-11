@@ -13,7 +13,7 @@ import type {
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
 import { OperationError } from "./errors.ts";
-import { herdsmanTempRoot } from "./tmp.ts";
+import { herdsmanTempRoot } from "./storage.ts";
 
 export const watchedResultPaths = new Map<string, Function>();
 export const projectContextCwds: string[] = [];

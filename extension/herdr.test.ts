@@ -33,7 +33,7 @@ import {
   type HerdrStartPlacement,
 } from "./herdr.ts";
 import { claimProcessLock } from "./lock.ts";
-import { herdsmanTempRoot } from "./tmp.ts";
+import { herdsmanTempRoot } from "./storage.ts";
 
 test("nested topology keeps the Herdr workspace authoritative", () => {
   assert.deepEqual(

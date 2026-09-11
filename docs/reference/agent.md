@@ -216,7 +216,7 @@ and has one correlated final result. Delivery goes to the exact owning Pi
 session and occurs exactly once. Model-visible completion wording uses
 `agent=<agent>`, `definition=<definition>`, `session=<id>`,
 `request=<id>`, and status. Details retain durable `agentLabel`,
-`agentDefinition`, `piSessionId`, `piSessionFile`, result paths, elapsed time,
+`agentDefinition`, `piSessionId`, `piSessionFile`, result references, elapsed time,
 context usage, truncation, and persistence-error evidence. The agent is cleaned
 up after the terminal result is delivered; the Pi session remains available for
 continuation.
