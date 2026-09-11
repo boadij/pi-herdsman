@@ -369,9 +369,9 @@ test("missing result ref returns the actionable result-ref error", () => {
         "assign",
         "Task",
       ),
-    new RegExp(
-      `Unknown result ref: ${input}\\. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion\\.`,
-    ),
+    {
+      message: `Unknown result ref: ${input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
+    },
   );
 });
 
