@@ -46,9 +46,11 @@ function resolveRegularFiles(
   const seen = new Set<string>();
   return inputs.flatMap((input) => {
     let path: string;
+    let resolvedResultPath: string | undefined;
     let canonicalPath: string;
     try {
-      path = resolveResultRef(input) ?? resolve(cwd, input);
+      resolvedResultPath = resolveResultRef(input);
+      path = resolvedResultPath ?? resolve(cwd, input);
       canonicalPath = realpathSync(path);
       if (skipped.has(canonicalPath) || seen.has(canonicalPath)) return [];
       const beforeOpen = statSync(canonicalPath);
@@ -77,6 +79,15 @@ function resolveRegularFiles(
         closeSync(fd);
       }
     } catch (error) {
+      if (
+        resolvedResultPath &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      )
+        fail(
+          "invalid_request",
+          `Unknown result ref: ${input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
+          operation,
+        );
       fail(
         "invalid_request",
         `Cannot read file ${input}: ${error instanceof Error ? error.message : String(error)}`,

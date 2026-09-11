@@ -354,6 +354,27 @@ test("resolves result references through shared message file preparation", () =>
   }
 });
 
+test("missing result ref returns the actionable result-ref error", () => {
+  const requestId = "650e8400-e29b-41d4-a716-446655440000";
+  const input = resultRef(requestId);
+  const path = resultPath(requestId);
+  rmSync(path, { force: true });
+
+  assert.throws(
+    () =>
+      prepareMessageInput(
+        "Inspect the missing result",
+        [input],
+        mkdtempSync(join(tmpdir(), "pi-herdsman-missing-result-reference-")),
+        "assign",
+        "Task",
+      ),
+    new RegExp(
+      `Unknown result ref: ${input}\\. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion\\.`,
+    ),
+  );
+});
+
 test("escapes canonical paths in message structure", () => {
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-message-path-"));
   const path = join(
