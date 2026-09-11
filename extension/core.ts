@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { resolve } from "node:path";
 import { TextDecoder } from "node:util";
+import { resolveResultRef } from "./storage.ts";
 
 export type TextFileSnapshot = {
   input: string;
@@ -44,9 +45,10 @@ function resolveRegularFiles(
   const skipped = new Set(skipCanonicalPaths);
   const seen = new Set<string>();
   return inputs.flatMap((input) => {
-    const path = resolve(cwd, input);
+    let path: string;
     let canonicalPath: string;
     try {
+      path = resolveResultRef(input) ?? resolve(cwd, input);
       canonicalPath = realpathSync(path);
       if (skipped.has(canonicalPath) || seen.has(canonicalPath)) return [];
       const beforeOpen = statSync(canonicalPath);

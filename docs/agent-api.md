@@ -78,7 +78,7 @@ question.
 
 ## Pass evidence through handoffs
 
-Read [Handoffs and files](guides/handoffs.md) for `files`, result paths, body
+Read [Handoffs and files](guides/handoffs.md) for `files`, result references, body
 references, and coordination artifacts. That guide owns the evidence-transfer
 workflow; the `agent` reference owns the accepted request fields.
 

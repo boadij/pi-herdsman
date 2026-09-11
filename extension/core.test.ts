@@ -1,11 +1,17 @@
 import { strict as assert } from "node:assert";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { mock, test } from "node:test";
 
 const realFs = await import("node:fs");
-const { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } =
-  realFs;
+const {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} = realFs;
 let expectedCanonicalOpenPath: string | undefined;
 let openCallCount = 0;
 let messageReadCount = 0;
@@ -106,6 +112,7 @@ const {
   spawnPlacementMenuOptions,
   spawnPlacementFromMenuSelection,
 } = await import("./core.ts");
+const { resultPath, resultRef } = await import("./storage.ts");
 
 test("resolves placement modes with subtree as the absent default", () => {
   assert.equal(resolveSpawnPlacement("tab"), "tab");
@@ -295,6 +302,27 @@ test("prepares mixed message files as complete text or references", () => {
     ].join("\n"),
   );
   assert.doesNotMatch(prepared.text, /\0/);
+});
+
+test("resolves result references through shared message file preparation", () => {
+  const requestId = "550e8400-e29b-41d4-a716-446655440000";
+  const path = resultPath(requestId);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, "durable result evidence");
+  try {
+    const prepared = prepareMessageInput(
+      "Inspect the result",
+      [resultRef(requestId), path],
+      mkdtempSync(join(tmpdir(), "pi-herdsman-result-reference-")),
+      "assign",
+      "Task",
+      { inlineLimitBytes: 1 },
+    );
+    assert.deepEqual(prepared.canonicalPaths, [realpathSync(path)]);
+    assert.match(prepared.text, new RegExp(realpathSync(path)));
+  } finally {
+    rmSync(path, { force: true });
+  }
 });
 
 test("escapes canonical paths in message structure", () => {

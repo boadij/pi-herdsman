@@ -10,7 +10,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { OperationError } from "./errors.ts";
-import { herdsmanTempRoot } from "./tmp.ts";
+import { herdsmanTempRoot } from "./storage.ts";
 
 export type HerdrRecord = Record<string, any>;
 export type HerdrContext = {

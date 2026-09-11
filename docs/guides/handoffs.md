@@ -34,7 +34,10 @@ Example:
   "action": "delegate",
   "definition": "reviewer",
   "task": "Review the implementation against the approved plan.",
-  "files": [".pi-herdsman/plan.md", "/exact/resultPath"]
+  "files": [
+    ".pi-herdsman/plan.md",
+    "result:550e8400-e29b-41d4-a716-446655440000"
+  ]
 }
 ```
 
@@ -184,22 +187,26 @@ definition configuration while preserving the saved Pi session context.
 
 ## Result handoff
 
-Successful agent completion may expose a private `resultPath`.
+Successful agent completion exposes a canonical `resultRef` such as
+`result:550e8400-e29b-41d4-a716-446655440000`.
 
-For dependent work, pass the exact result path through `files` rather than
-copying a large result manually:
+Pass the exact result reference directly through `files` rather than copying a
+large result or reconstructing its physical path:
 
 ```json
 {
   "action": "delegate",
   "definition": "reviewer",
   "task": "Review the implementation described in the supplied result.",
-  "files": ["/exact/resultPath"]
+  "files": ["result:550e8400-e29b-41d4-a716-446655440000"]
 }
 ```
 
-Successful agent completions persist their complete output at the canonical
-`resultPath`; they do not receive a separate completion overflow path.
+`files` accepts ordinary readable regular local file paths and result
+references. A result reference resolves internally to the normal private
+result file under Pi Herdsman's durable data directory; it is still validated,
+canonicalized, and deduplicated like any other file. Copy the exact reference
+returned by completion. Do not guess or reconstruct the underlying path.
 Completion results live under Pi's agent data directory
 (`~/.pi/agent/pi-herdsman/results` by default, respecting Pi's configured agent
 directory) rather than the OS temporary directory, so result handoffs are not

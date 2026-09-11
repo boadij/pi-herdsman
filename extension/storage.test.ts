@@ -4,7 +4,12 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { agentMailboxPath } from "./mailbox.ts";
 import { supervisionRuntime } from "./supervision.ts";
-import { herdsmanDataRoot } from "./tmp.ts";
+import {
+  herdsmanDataRoot,
+  resolveResultRef,
+  resultPath,
+  resultRef,
+} from "./storage.ts";
 
 test("recoverable Herdsman state lives under Pi agent data", () => {
   const root = join(getAgentDir(), "pi-herdsman");
@@ -17,4 +22,21 @@ test("recoverable Herdsman state lives under Pi agent data", () => {
     dirname(supervisionRuntime("socket with spaces").root),
     join(root, "runtime", "supervision"),
   );
+});
+
+test("result references use canonical request UUIDs", () => {
+  const requestId = "550e8400-e29b-41d4-a716-446655440000";
+  const ref = resultRef(requestId);
+  assert.equal(ref, `result:${requestId}`);
+  assert.equal(resolveResultRef(ref), resultPath(requestId));
+  for (const input of [
+    "result:",
+    "result:not-a-uuid",
+    "result:../../file",
+    "result:550e8400-e29b-41d4-a716-44665544000",
+    "result:550E8400-e29b-41d4-a716-446655440000",
+  ]) {
+    assert.throws(() => resolveResultRef(input));
+  }
+  assert.equal(resolveResultRef("ordinary.txt"), undefined);
 });

@@ -30,7 +30,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { herdsmanTempRoot } from "./tmp.ts";
+import { herdsmanTempRoot } from "./storage.ts";
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import {
@@ -311,8 +311,10 @@ later dependent assignments when approved scope or decisions change because
 embedded text is snapshotted at submission time while referenced files are not
 copied.
 
-For dependent work, prefer passing an existing resultPath or coordination
-artifact through files instead of copying large results into a task. ask_owner
+Agent completions may return a resultRef such as result:<request-id>. Pass that
+exact resultRef through files for dependent work; do not reconstruct or guess
+the underlying filesystem path. Prefer passing it or a coordination artifact
+through files instead of copying large results into a task. ask_owner
 may also include files when the owner needs supporting evidence. files does not
 add runtime capability.
 
@@ -389,8 +391,8 @@ evidence. Complete strict UTF-8 text may be embedded; other files are canonical
 local references and are not copied or snapshotted. Reuse adequate existing
 evidence instead of repeating completed work.
 Do not overlap writers in a worktree or file-ownership boundary. For dependent
-work, use and preserve files and resultPath handoffs rather than copying large
-results into assignments.
+work, copy resultRef values exactly through files rather than reconstructing
+physical result paths or copying large results into assignments.
 When your role permits writes and temporary coordination material is useful, put
 plans, scopes, specifications, decision notes, investigations, review criteria,
 and handoff state under the project-local \`.pi-herdsman/\` directory. Reuse and update
@@ -3040,9 +3042,7 @@ async function deliverResultUnsafe(
           ...(elapsedMs !== undefined ? { elapsedMs } : {}),
           contextUsage: result.contextUsage,
           truncated: completion.truncated,
-          ...(completion.resultPath
-            ? { resultPath: completion.resultPath }
-            : {}),
+          ...(completion.resultRef ? { resultRef: completion.resultRef } : {}),
           ...(completion.fullOutputPath
             ? { fullOutputPath: completion.fullOutputPath }
             : {}),
@@ -5703,12 +5703,13 @@ export default function (pi: ExtensionAPI): void {
         files: Type.Optional(
           Type.Array(
             Type.String({
-              description: "Readable regular local file path.",
+              description:
+                "Readable regular local file path or result:<request-id>.",
               minLength: 1,
             }),
             {
               description:
-                "Supporting files for delegation, steering, replying, or ask_owner. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path and byte size. Files do not grant capabilities.",
+                "Supporting files for delegation, steering, replying, or ask_owner. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path, result:<request-id>, and byte size. Files do not grant capabilities.",
             },
           ),
         ),
@@ -9599,10 +9600,13 @@ export default function (pi: ExtensionAPI): void {
         }),
         files: Type.Optional(
           Type.Array(
-            Type.String({ description: "Readable regular local file path." }),
+            Type.String({
+              description:
+                "Readable regular local file path or result:<request-id>.",
+            }),
             {
               description:
-                "Supporting files. Complete strict UTF-8 text may be embedded when it fits; other files are canonical local references. Files do not grant capabilities.",
+                "Supporting files, including result:<request-id>. Complete strict UTF-8 text may be embedded when it fits; other files are canonical local references. Files do not grant capabilities.",
             },
           ),
         ),

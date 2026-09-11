@@ -19,7 +19,7 @@ import {
   parseFrontmatter as parsePiFrontmatter,
 } from "@earendil-works/pi-coding-agent";
 import { snapshotTextFiles } from "./core.ts";
-import { herdsmanTempRoot } from "./tmp.ts";
+import { herdsmanTempRoot } from "./storage.ts";
 
 const THINKING_LEVELS = new Set([
   "off",

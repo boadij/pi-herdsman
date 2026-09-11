@@ -14,7 +14,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { acquireProcessLock, type ProcessLockClaim } from "./lock.ts";
-import { herdsmanDataRoot } from "./tmp.ts";
+import { herdsmanDataRoot } from "./storage.ts";
 
 export type LeadRole = "lead" | "chief";
 
