@@ -148,6 +148,7 @@ test("managed agent validates project definitions before publishing state", asyn
       type: "custom",
       customType: "pi-herdsman-agent-definition",
       data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         definition: "project-parent",
         label: process.env.PI_HERDSMAN_LABEL ?? "project-parent",
       },
@@ -451,6 +452,7 @@ test("same-cwd managed parents resolve project children", async () => {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
       data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         definition: "project-parent",
         label: process.env.PI_HERDSMAN_LABEL ?? "project-parent",
       },
@@ -511,6 +513,7 @@ test("parent controller readiness, allowlist, and cwd preflight fail closed", as
       type: "custom",
       customType: "pi-herdsman-agent-definition",
       data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         definition: "parent",
         label: process.env.PI_HERDSMAN_LABEL ?? "parent",
       },
@@ -597,6 +600,7 @@ test("parent controller readiness, allowlist, and cwd preflight fail closed", as
       type: "custom",
       customType: "pi-herdsman-agent-definition",
       data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         definition: "parent",
         label: process.env.PI_HERDSMAN_LABEL ?? "parent",
       },
@@ -713,6 +717,7 @@ test("parent list omits unrelated unknown mailbox diagnostics", async () => {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
       data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         definition: "parent",
         label: process.env.PI_HERDSMAN_LABEL ?? "parent",
       },
@@ -865,6 +870,7 @@ test("parent controls only direct children and enforces session allowlists", asy
       type: "custom",
       customType: "pi-herdsman-agent-definition",
       data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         definition: "parent",
         label: process.env.PI_HERDSMAN_LABEL ?? "parent",
       },
@@ -884,7 +890,11 @@ test("parent controls only direct children and enforces session allowlists", asy
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { definition: "other", label: "other" },
+        data: {
+          sessionId: "33333333-3333-4333-8333-333333333333",
+          definition: "other",
+          label: "other",
+        },
       },
     ],
   });
@@ -990,7 +1000,11 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { definition: "agent", label: "agent" },
+        data: {
+          sessionId: valid.piSessionId,
+          definition: "agent",
+          label: "agent",
+        },
       },
     ],
   });
@@ -1168,7 +1182,11 @@ test("assignment session resolution accepts exact paths and UUIDs only", async (
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { definition: "reviewer", label: "review-fix" },
+        data: {
+          sessionId: "018f2f2e-7b13-7abc-8def-0123456789ab",
+          definition: "reviewer",
+          label: "review-fix",
+        },
       },
     ],
   };
@@ -1223,15 +1241,16 @@ test("session delegation inherits the saved label without an override", async ()
   const run = async () => {
     setLeadEnvironment();
     nativeSessions.clear();
+    const sourceId = randomUUID();
     const source = {
-      id: randomUUID(),
+      id: sourceId,
       path: join(tmpdir(), `session-delegate-${randomUUID()}.jsonl`),
       cwd: "/tmp",
       entries: [
         {
           type: "custom",
           customType: "pi-herdsman-agent-definition",
-          data: { definition: "agent", label },
+          data: { sessionId: sourceId, definition: "agent", label },
         },
       ],
     };
@@ -1316,6 +1335,21 @@ test("session delegation rejects label overrides and occupied inherited labels",
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, managedState(label));
+  nativeSessions.set(DEFAULT_PI_SESSION_ID, {
+    id: DEFAULT_PI_SESSION_ID,
+    path: "/tmp/registered-agent.jsonl",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: {
+          sessionId: DEFAULT_PI_SESSION_ID,
+          definition: "agent",
+          label,
+        },
+      },
+    ],
+  });
   const source = {
     id: randomUUID(),
     path: join(tmpdir(), `session-occupied-${randomUUID()}.jsonl`),
@@ -1328,12 +1362,26 @@ test("session delegation rejects label overrides and occupied inherited labels",
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { definition: "agent", label },
+        data: { sessionId: source.id, definition: "agent", label },
       },
     ],
   });
+  const baseExec = leadExec(label, "idle", DEFAULT_PI_SESSION_ID);
   const pi = fakePi({
-    exec: leadExec(label, "idle", DEFAULT_PI_SESSION_ID),
+    exec: (command, args, options) =>
+      command === "herdr" && args[0] === "tab" && args[1] === "create"
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                tab: { tab_id: "occupied-test-tab" },
+                root_pane: { pane_id: "occupied-test-pane" },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : baseExec(command, args, options),
   });
   registerExtension!(pi.pi as never);
   try {
@@ -1455,7 +1503,11 @@ test("session assignment rejects the controller's active session", async () => {
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { definition: "agent", label: "agent" },
+        data: {
+          sessionId: LEAD_SESSION_ID,
+          definition: "agent",
+          label: "agent",
+        },
       },
     ],
   };
@@ -1685,7 +1737,11 @@ test("session assignment fails closed on duplicate live representations", async 
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { definition: "agent", label: "session-conflict-label" },
+        data: {
+          sessionId: "018f2f2e-7b13-7abc-8def-0123456789ae",
+          definition: "agent",
+          label: "session-conflict-label",
+        },
       },
     ],
   };

@@ -1093,11 +1093,13 @@ async function contextAgentDefinitions(ctx: ExtensionContext) {
 }
 const AGENT_DEFINITION_ENTRY = "pi-herdsman-agent-definition";
 export type AgentSessionIdentity = {
+  sessionId: string;
   definition: string;
   label: string;
 };
 export function sessionAgentIdentity(
   entries: readonly unknown[],
+  sessionId: string,
 ): AgentSessionIdentity | undefined {
   const typed = entries as ReadonlyArray<{
     type?: unknown;
@@ -1112,20 +1114,25 @@ export function sessionAgentIdentity(
     if (
       !data ||
       typeof data !== "object" ||
-      Object.keys(data).length !== 2 ||
+      Object.keys(data).length !== 3 ||
+      typeof (data as { sessionId?: unknown }).sessionId !== "string" ||
       typeof (data as { definition?: unknown }).definition !== "string" ||
       typeof (data as { label?: unknown }).label !== "string" ||
+      !(data as { sessionId: string }).sessionId.trim() ||
       !(data as { definition: string }).definition.trim() ||
       !(data as { label: string }).label.trim()
     )
       throw new Error("invalid pi-herdsman-agent-definition entry");
     const candidate = {
+      sessionId: (data as { sessionId: string }).sessionId.trim(),
       definition: (data as { definition: string }).definition.trim(),
       label: (data as { label: string }).label.trim(),
     };
+    if (candidate.sessionId !== sessionId) continue;
     if (
       identity !== undefined &&
-      (identity.definition !== candidate.definition ||
+      (identity.sessionId !== candidate.sessionId ||
+        identity.definition !== candidate.definition ||
         identity.label !== candidate.label)
     )
       throw new Error("conflicting pi-herdsman-agent-definition entries");
@@ -1134,9 +1141,12 @@ export function sessionAgentIdentity(
   return identity;
 }
 function readAgentIdentity(
-  manager: Pick<SessionManager, "getEntries">,
+  manager: Pick<SessionManager, "getEntries" | "getSessionId">,
 ): AgentSessionIdentity {
-  const identity = sessionAgentIdentity(manager.getEntries());
+  const identity = sessionAgentIdentity(
+    manager.getEntries(),
+    manager.getSessionId(),
+  );
   if (!identity) throw new Error("missing pi-herdsman-agent-definition entry");
   return identity;
 }
@@ -1159,13 +1169,20 @@ function ensureAgentIdentity(
   definition: string,
   label: string,
 ): void {
-  const identity = sessionAgentIdentity(ctx.sessionManager.getEntries());
+  const identity = sessionAgentIdentity(
+    ctx.sessionManager.getEntries(),
+    ctx.sessionManager.getSessionId(),
+  );
   if (identity) {
     if (identity.definition !== definition || identity.label !== label)
       throw new Error("agent session identity does not match environment");
     return;
   }
-  pi.appendEntry(AGENT_DEFINITION_ENTRY, { definition, label });
+  pi.appendEntry(AGENT_DEFINITION_ENTRY, {
+    sessionId: ctx.sessionManager.getSessionId(),
+    definition,
+    label,
+  });
 }
 type ManagedSession = {
   path: string;
@@ -1499,9 +1516,8 @@ function isLeadSessionBoundary(
   try {
     if (SessionManager.open(session.value).getSessionId() !== ownerSessionId)
       return false;
-    return !sessionAgentIdentity(
-      SessionManager.open(session.value).getEntries(),
-    );
+    const manager = SessionManager.open(session.value);
+    return !sessionAgentIdentity(manager.getEntries(), manager.getSessionId());
   } catch {
     return false;
   }
@@ -4830,6 +4846,65 @@ async function actionUnsafe(
         .map((agent) => agent.label)
         .filter((agent): agent is string => typeof agent === "string"),
     );
+    if (resumed) {
+      releaseSessionActivation = claimSessionActivationLock(
+        resumedSessionPath!,
+      );
+      try {
+        const snapshot = await managedAgentSnapshots(pi, ctx, signal);
+        const states = listAgentStates().filter(
+          ({ state }) =>
+            state.piSessionId === resumed.id ||
+            (state.piSessionFile !== undefined &&
+              samePersistedSessionPath(
+                state.piSessionFile,
+                resumedSessionPath,
+              )),
+        );
+        const representations = new Set(
+          states.map(
+            ({ state }) =>
+              `${state.workspaceId}\0${state.agentLabel}\0${state.runId}\0${state.paneId}`,
+          ),
+        );
+        const statePanes = new Set(
+          states.map(({ state }) => `${state.workspaceId}\0${state.paneId}`),
+        );
+        for (const agent of snapshot.liveAgents)
+          if (
+            herdrSessionsMatch(
+              agent,
+              expectedSession(resumed.id, resumedSessionPath),
+            ) &&
+            !statePanes.has(
+              `${agent.workspace_id ?? ""}\0${agent.pane_id ?? ""}`,
+            )
+          )
+            representations.add(
+              `${agent.workspace_id ?? ""}\0${agent.name ?? ""}\0${agent.pane_id ?? ""}`,
+            );
+        if (representations.size > 1)
+          fail(
+            "target_ambiguous",
+            "The assignment session matched multiple managed agents",
+            p.action,
+          );
+        if (representations.size === 1)
+          fail(
+            "agent_busy",
+            "The exact Pi session is already represented by active managed work",
+            p.action,
+            {
+              nextAction:
+                "Let that assignment finish, or close its exact agent if abandoning it, then retry.",
+            },
+          );
+      } catch (error) {
+        releaseSessionActivation();
+        releaseSessionActivation = undefined;
+        throw error;
+      }
+    }
     if (requestedLabel && labels.has(requestedLabel))
       fail(
         "agent_label_exists",
@@ -4907,65 +4982,6 @@ async function actionUnsafe(
             };
           }
         : undefined;
-    if (resumed) {
-      releaseSessionActivation = claimSessionActivationLock(
-        resumedSessionPath!,
-      );
-      try {
-        const snapshot = await managedAgentSnapshots(pi, ctx, signal);
-        const states = listAgentStates().filter(
-          ({ state }) =>
-            state.piSessionId === resumed.id ||
-            (state.piSessionFile !== undefined &&
-              samePersistedSessionPath(
-                state.piSessionFile,
-                resumedSessionPath,
-              )),
-        );
-        const representations = new Set(
-          states.map(
-            ({ state }) =>
-              `${state.workspaceId}\0${state.agentLabel}\0${state.runId}\0${state.paneId}`,
-          ),
-        );
-        const statePanes = new Set(
-          states.map(({ state }) => `${state.workspaceId}\0${state.paneId}`),
-        );
-        for (const agent of snapshot.liveAgents)
-          if (
-            herdrSessionsMatch(
-              agent,
-              expectedSession(resumed.id, resumedSessionPath),
-            ) &&
-            !statePanes.has(
-              `${agent.workspace_id ?? ""}\0${agent.pane_id ?? ""}`,
-            )
-          )
-            representations.add(
-              `${agent.workspace_id ?? ""}\0${agent.name ?? ""}\0${agent.pane_id ?? ""}`,
-            );
-        if (representations.size > 1)
-          fail(
-            "target_ambiguous",
-            "The assignment session matched multiple managed agents",
-            p.action,
-          );
-        if (representations.size === 1)
-          fail(
-            "agent_busy",
-            "The exact Pi session is already represented by active managed work",
-            p.action,
-            {
-              nextAction:
-                "Let that assignment finish, or close its exact agent if abandoning it, then retry.",
-            },
-          );
-      } catch (error) {
-        releaseSessionActivation();
-        releaseSessionActivation = undefined;
-        throw error;
-      }
-    }
     let mailbox = agentMailboxPath(workspaceId, label);
     let releaseClaim: (() => void) | undefined;
     while (true) {

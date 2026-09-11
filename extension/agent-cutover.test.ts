@@ -105,13 +105,16 @@ test("legacy V3 marker and definition metadata are not accepted", () => {
   );
   assert.equal(parseControlMarker(controlMarker(id)), id);
   assert.equal(
-    sessionAgentIdentity([
-      {
-        type: "custom",
-        customType: "pi-herdsman-worker-definition",
-        data: { name: "legacy" },
-      },
-    ]),
+    sessionAgentIdentity(
+      [
+        {
+          type: "custom",
+          customType: "pi-herdsman-worker-definition",
+          data: { name: "legacy" },
+        },
+      ],
+      "current-session",
+    ),
     undefined,
   );
 });

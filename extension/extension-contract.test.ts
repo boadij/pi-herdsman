@@ -1524,6 +1524,7 @@ test("delegating agents receive only their allowed definition roster", async () 
       type: "custom",
       customType: "pi-herdsman-agent-definition",
       data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         definition: "agent",
         label: process.env.PI_HERDSMAN_LABEL ?? "agent",
       },
