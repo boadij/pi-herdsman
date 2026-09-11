@@ -12,10 +12,8 @@ import {
   StringEnum,
 } from "@earendil-works/pi-ai";
 import {
-  CONFIG_DIR_NAME,
   DynamicBorder,
   getAgentDir,
-  SettingsManager,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
@@ -81,7 +79,6 @@ import {
   taskAcceptanceAllowed,
   agentControlState,
   isSpawnPlacement,
-  resolveSpawnPlacement,
   type SpawnPlacement,
 } from "./core.ts";
 import {
@@ -161,14 +158,12 @@ import {
   type ErrorCategory,
 } from "./errors.ts";
 import {
-  updateSpawnPlacementFile,
-  resolveEffectiveByteLimit,
-  updatePiHerdsmanSettingFile,
-  validByteLimit,
-  MIN_BYTE_LIMIT,
   MAX_BYTE_LIMIT,
-  type EffectiveByteLimit,
-} from "./settings.ts";
+  MIN_BYTE_LIMIT,
+  readConfig,
+  updateConfig,
+  validByteLimit,
+} from "./config.ts";
 
 import {
   collapseDisplayText,
@@ -874,9 +869,6 @@ function settingRecord(value: unknown): Record<string, unknown> {
     ? (value as Record<string, unknown>)
     : {};
 }
-function piHerdsmanSettings(value: unknown): Record<string, unknown> {
-  return settingRecord(settingRecord(value).piHerdsman);
-}
 function validHerdRunTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
@@ -914,22 +906,9 @@ function restoreHerdRunStartedAt(
   return active;
 }
 async function placementSettings(
-  ctx: ExtensionContext,
-): Promise<{ effective: SpawnPlacement; scope: "global" | "project" }> {
-  const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
-    projectTrusted: ctx.isProjectTrusted(),
-  });
-  const globalValue = piHerdsmanSettings(
-    settings.getGlobalSettings(),
-  ).spawnPlacement;
-  const projectValue = piHerdsmanSettings(
-    settings.getProjectSettings(),
-  ).spawnPlacement;
-  const project = settings.isProjectTrusted() && isSpawnPlacement(projectValue);
-  return {
-    effective: resolveSpawnPlacement(project ? projectValue : globalValue),
-    scope: project ? "project" : "global",
-  };
+  _ctx: ExtensionContext,
+): Promise<{ effective: SpawnPlacement }> {
+  return { effective: readConfig().spawnPlacement };
 }
 
 async function leadTabLabel(
@@ -1072,15 +1051,12 @@ async function physicalPlacement(
   };
 }
 async function messageLimits(
-  ctx: ExtensionContext,
-): Promise<{ inline: EffectiveByteLimit; mailbox: EffectiveByteLimit }> {
-  const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
-    projectTrusted: false,
-  });
-  const global = piHerdsmanSettings(settings.getGlobalSettings());
+  _ctx: ExtensionContext,
+): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }> {
+  const config = readConfig();
   return {
-    inline: resolveEffectiveByteLimit(global.inlineAttachmentLimitBytes),
-    mailbox: resolveEffectiveByteLimit(global.mailboxPayloadLimitBytes),
+    inline: { bytes: config.inlineAttachmentLimitBytes },
+    mailbox: { bytes: config.mailboxPayloadLimitBytes },
   };
 }
 async function prepareSupervisionText(
@@ -1311,14 +1287,6 @@ export async function resolveAssignmentSession(
   };
 }
 
-function settingsPath(
-  ctx: ExtensionContext,
-  scope: "global" | "project",
-): string {
-  return scope === "global"
-    ? join(getAgentDir(), "settings.json")
-    : join(ctx.cwd, CONFIG_DIR_NAME, "settings.json");
-}
 const HERDR_VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview(?:\.[0-9A-Za-z-]+)?)?$/;
 export function parseHerdrVersion(value: string): RegExpMatchArray | undefined {
@@ -8000,13 +7968,13 @@ export default function (pi: ExtensionAPI): void {
         : selected.startsWith("Subtree")
           ? "subtree"
           : "split";
-      updateSpawnPlacementFile(settingsPath(ctx, current.scope), placement);
+      updateConfig("spawnPlacement", placement);
       const verified = await placementSettings(ctx);
       if (verified.effective !== placement)
         throw new Error(
           `Agent placement did not become effective: ${verified.effective}`,
         );
-      ctx.ui.notify(`placement: ${verified.effective} (${verified.scope})`);
+      ctx.ui.notify(`placement: ${verified.effective}`);
     };
     const presentStopSummary = (summary: string): void => {
       pi.sendMessage(
@@ -8073,8 +8041,8 @@ export default function (pi: ExtensionAPI): void {
             bytes: kib * 1024,
           }));
           const setting = await ctx.ui.select("Message limits", [
-            `Inline attachments   ${formatMessageLimit(limits.inline.bytes)} · ${limits.inline.source}${limits.inline.invalidSource ? ` (invalid ${limits.inline.invalidSource} override ignored)` : ""}`,
-            `Mailbox payload      ${formatMessageLimit(limits.mailbox.bytes)} · ${limits.mailbox.source}${limits.mailbox.invalidSource ? ` (invalid ${limits.mailbox.invalidSource} override ignored)` : ""}`,
+            `Inline attachments   ${formatMessageLimit(limits.inline.bytes)}`,
+            `Mailbox payload      ${formatMessageLimit(limits.mailbox.bytes)}`,
           ]);
           if (!setting) continue;
           const key = setting.startsWith("Inline")
@@ -8103,7 +8071,7 @@ export default function (pi: ExtensionAPI): void {
           } else value = presets.find(({ label }) => label === choice)?.bytes;
           if (choice !== "Reset" && choice !== "Custom…" && value === undefined)
             continue;
-          updatePiHerdsmanSettingFile(settingsPath(ctx, "global"), key, value);
+          updateConfig(key, value);
           ctx.ui.notify(
             `${key}: ${value === undefined ? "reset" : formatMessageLimit(value)}`,
           );
@@ -8554,7 +8522,7 @@ export default function (pi: ExtensionAPI): void {
               createdAt,
             }),
           );
-          // Attachment preparation can reload settings and read files. Recheck
+          // Attachment preparation can reread Herdsman configuration and files. Recheck
           // every identity and authority field immediately before transport.
           const writeChief = await currentChiefAuthority(ctx);
           const writeLead = (await loadSupervisionSnapshot(ctx)).leads.find(
@@ -8645,19 +8613,13 @@ export default function (pi: ExtensionAPI): void {
               if (args.length > 2 || (args[1] && !isSpawnPlacement(args[1])))
                 return ctx.ui.notify(placementUsage, "error");
               if (args.length === 1) return void (await openPlacementMenu(ctx));
-              const current = await placementSettings(ctx);
-              updateSpawnPlacementFile(
-                settingsPath(ctx, current.scope),
-                args[1] as SpawnPlacement,
-              );
+              updateConfig("spawnPlacement", args[1] as SpawnPlacement);
               const verified = await placementSettings(ctx);
               if (verified.effective !== args[1])
                 throw new Error(
                   `Agent placement did not become effective: ${verified.effective}`,
                 );
-              return void ctx.ui.notify(
-                `placement: ${verified.effective} (${verified.scope})`,
-              );
+              return void ctx.ui.notify(`placement: ${verified.effective}`);
             }
             if (args[0] === "stop" && args.length === 1)
               return void (await confirmAndStopAll(ctx));

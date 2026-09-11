@@ -121,7 +121,7 @@ registry, or another synchronization subsystem.
 - One H1 per file.
 - Short descriptive headings.
 - Current behavior only.
-- Spell the visible product name `Pi Herdsman`, the package and repository identifier `pi-herdsman`, the local coordination directory `.pi-herdsman`, the settings namespace `piHerdsman`, and the upstream dependency `herdr`.
+- Spell the visible product name `Pi Herdsman`, the package and repository identifier `pi-herdsman`, the local coordination directory `.pi-herdsman`, the configuration file `config.json`, and the upstream dependency `herdr`.
 - No backlog task numbers in product docs.
 - Keep canonical user and reference pages focused on current behavior.
 - Examples must match current accepted schemas.

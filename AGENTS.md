@@ -43,7 +43,7 @@ or depend on the skill.
 - `extension/errors.ts`: Structured extension error categories.
 - `extension/lock.ts`: Process-lock ownership.
 - `extension/presentation.ts`: Model, TUI, and status presentation.
-- `extension/settings.ts`: Persistent Pi Herdsman settings.
+- `extension/config.ts`: Flat Pi Herdsman configuration.
 - `extension/supervision.ts`: Chief lease, supervision projection, lead transport, and staff tool contracts.
 - `extension/support.ts`: Shared extension integration-test mocks and fixtures.
 - `extension/extension-contract.test.ts`: Extension and model contract behavior.

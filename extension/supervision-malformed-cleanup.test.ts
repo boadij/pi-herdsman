@@ -13,8 +13,16 @@ let failDirectoryFsyncAt: number | undefined;
 let directoryFsyncCount = 0;
 let lastDirectoryFsyncError: Error | undefined;
 const directoryFsyncFds = new Set<number>();
+mock.module("@earendil-works/pi-coding-agent", {
+  namedExports: {
+    getAgentDir: () => process.env.PI_CODING_AGENT_DIR ?? tmpdir(),
+  },
+});
 mock.module("node:fs", {
   namedExports: {
+    accessSync: realFs.accessSync,
+    constants: realFs.constants,
+    existsSync: realFs.existsSync,
     chmodSync: realFs.chmodSync,
     closeSync: (fd: number) => {
       directoryFsyncFds.delete(fd);
@@ -46,6 +54,7 @@ mock.module("node:fs", {
       return fd;
     },
     readFileSync: realFs.readFileSync,
+    realpathSync: realFs.realpathSync,
     readdirSync: realFs.readdirSync,
     renameSync: (...args: Parameters<typeof realFs.renameSync>) => {
       if (

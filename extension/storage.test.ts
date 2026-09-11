@@ -6,6 +6,8 @@ import { agentMailboxPath } from "./mailbox.ts";
 import { supervisionRuntime } from "./supervision.ts";
 import {
   herdsmanDataRoot,
+  herdsmanConfigPath,
+  herdsmanTempRoot,
   resolveResultRef,
   resultPath,
   resultRef,
@@ -14,6 +16,11 @@ import {
 test("recoverable Herdsman state lives under Pi agent data", () => {
   const root = join(getAgentDir(), "pi-herdsman");
   assert.equal(herdsmanDataRoot(), root);
+  assert.equal(herdsmanConfigPath(), join(root, "config.json"));
+  assert.equal(
+    dirname(resultPath("550e8400-e29b-41d4-a716-446655440000")),
+    join(root, "results"),
+  );
   assert.equal(
     dirname(agentMailboxPath("workspace", "agent")),
     join(root, "runtime", "mailboxes-v4"),
@@ -22,6 +29,7 @@ test("recoverable Herdsman state lives under Pi agent data", () => {
     dirname(supervisionRuntime("socket with spaces").root),
     join(root, "runtime", "supervision"),
   );
+  assert.notEqual(herdsmanTempRoot().startsWith(root), true);
 });
 
 test("result references use canonical request UUIDs", () => {

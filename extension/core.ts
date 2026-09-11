@@ -168,9 +168,7 @@ function escapeMessageFileName(path: string): string {
 
 function renderMessageFile(file: RegularFile, content?: string): string {
   const result = file.input.startsWith("result:");
-  const name = escapeMessageFileName(
-    result ? file.input : file.canonicalPath,
-  );
+  const name = escapeMessageFileName(result ? file.input : file.canonicalPath);
   const path = result
     ? ` path="${escapeMessageFileName(file.canonicalPath)}"`
     : "";
@@ -313,21 +311,11 @@ export function displayIdentity(
   return `${agentDefinition}:${label}`;
 }
 export type SpawnPlacement = "tab" | "subtree" | "split";
-export type SpawnPlacementScope = "global" | "project";
 export function hasTaskText(task: string | undefined): boolean {
   return task !== undefined && !!task.trim();
 }
-export function resolveSpawnPlacement(value: unknown): SpawnPlacement {
-  if (value === undefined) return "subtree";
-  return isSpawnPlacement(value) ? value : "tab";
-}
 export function isSpawnPlacement(value: unknown): value is SpawnPlacement {
   return value === "tab" || value === "subtree" || value === "split";
-}
-export function resolveSpawnPlacementScope(
-  project: string | undefined,
-): SpawnPlacementScope {
-  return project ? "project" : "global";
 }
 export function spawnPlacementMenuOptions(
   current: SpawnPlacement,
@@ -346,17 +334,6 @@ export function spawnPlacementFromMenuSelection(
   value: unknown,
 ): SpawnPlacement | undefined {
   return isSpawnPlacement(value) ? value : undefined;
-}
-export function updateSpawnPlacementJson(
-  content: string | undefined,
-  placement: SpawnPlacement,
-): string {
-  const parsed = content ? JSON.parse(content) : {};
-  parsed.piHerdsman = {
-    ...(parsed.piHerdsman ?? {}),
-    spawnPlacement: placement,
-  };
-  return `${JSON.stringify(parsed, null, 2)}\n`;
 }
 export function chooseLabel(base: string, labels: Set<string>): string {
   if (!labels.has(base)) return base;
