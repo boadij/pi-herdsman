@@ -139,8 +139,10 @@ tools, extensions, skills, and instructions.
 ## Requirements
 
 - [herdr](https://github.com/herdrdev/herdr) `>=0.9.0`
-- Pi `>=0.84.2 <0.86.0` (the version range tested for this release)
+- Pi `>=0.84.2 <0.86.0` (supported)
 - Node `>=22.19.0`
+
+CI validates Node 22.19.0 with the locked dependency set.
 
 Install or refresh the herdr Pi integration:
 

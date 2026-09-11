@@ -914,12 +914,7 @@ function socketPath(): string {
 export function supervisionRuntime(socket = socketPath()): SupervisionRuntime {
   if (!socket) throw new Error("HERDR_SOCKET_PATH is required");
   const runtimeHash = createHash("sha256").update(socket).digest("hex");
-  const root = join(
-    herdsmanDataRoot(),
-    "runtime",
-    "supervision",
-    runtimeHash,
-  );
+  const root = join(herdsmanDataRoot(), "runtime", "supervision", runtimeHash);
   return {
     root,
     lock: join(root, "chief.lock"),

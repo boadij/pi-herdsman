@@ -11,7 +11,6 @@ const testRunnerArgs = [
   "--experimental-test-module-mocks",
   "--import=./scripts/test-env.mjs",
   "--test",
-  "--test-timeout=10000",
 ];
 
 function groupExists(pid) {

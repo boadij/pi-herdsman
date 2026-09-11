@@ -41,7 +41,6 @@ The test runner uses:
 ```text
 --experimental-test-module-mocks
 --test
---test-timeout=10000
 ```
 
 ## Process containment

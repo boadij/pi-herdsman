@@ -761,10 +761,13 @@ export function agentLaunchArgs(
   if (managedAgent)
     args.push("--append-system-prompt", `<active_agent name="${agent.name}"/>`);
 
-  if (frontmatter.noTools) args.push("--no-tools");
+  const explicitTools = frontmatter.tools !== undefined;
+  const noTools =
+    frontmatter.noTools || (explicitTools && frontmatter.tools.length === 0);
+  if (noTools) args.push("--no-tools");
   if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");
   if (managedAgent) {
-    if (frontmatter.noTools || frontmatter.tools?.length) {
+    if (noTools || explicitTools) {
       const tools = normalizedToolNames([
         ...(frontmatter.tools ?? []),
         "ask_owner",

@@ -64,9 +64,10 @@ control until convergence is complete.
 
 Delegation does not suspend the owning controller until an agent finishes.
 
-`delegate` returns after the task has been durably accepted. The agent then runs
-independently in its managed Pi session while the owner remains available for
-other useful work and, for a lead Pi session, continued user interaction.
+`delegate` returns after the task has been atomically recorded for controller
+restart recovery. The agent then runs independently in its managed Pi session
+while the owner remains available for other useful work and, for a lead Pi
+session, continued user interaction.
 
 The owner must not poll for completion. It may continue with work that does not
 depend on the result or end its turn normally. Agent completion or an
@@ -118,8 +119,8 @@ assignment ownership.
 result.
 
 Steering is at-least-once at the agent boundary: an agent can apply a steer
-before its acknowledgement write becomes durable. If that acknowledgement
-write fails, retrying the same request may apply the steer again.
+before its acknowledgement write is recorded. If that acknowledgement write
+fails, retrying the same request may apply the steer again.
 
 Use `steer` only when `agent list` reports `steer` in `available_actions`.
 
@@ -137,9 +138,9 @@ The delegating agent's own state projection remains authoritative.
 
 ## Restart and recovery
 
-Durable mailbox state allows exact managed agents to be reconstructed after a
+Atomic mailbox state allows exact managed agents to be reconstructed after a
 controller restart. Live metadata can be rebuilt only when exact herdr and Pi
-identity still match.
+identity still match; this does not claim explicit power-loss durability.
 
 Unknown evidence remains `unknown`; recovery never rebinds stale metadata to a
 different agent generation.

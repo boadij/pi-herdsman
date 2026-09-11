@@ -116,20 +116,22 @@ export function snapshotTextFiles(
   );
   const snapshots: TextFileSnapshot[] = [];
   let totalBytes = 0;
-  for (const { input, path, canonicalPath } of files) {
+  for (const { input, path, canonicalPath, dev, ino } of files) {
     let fd: number | undefined;
     try {
-      fd = openSync(canonicalPath, "r");
+      fd = openSync(canonicalPath, constants.O_RDONLY | constants.O_NONBLOCK);
       const stat = fstatSync(fd);
       if (!stat.isFile()) throw new Error("not a regular file");
-      if (stat.size + totalBytes >= maxBytes)
+      if (stat.dev !== dev || stat.ino !== ino)
+        throw new Error("file changed during validation");
+      if (stat.size + totalBytes > maxBytes)
         fail(
           "invalid_request",
           "Request exceeds the mailbox size limit",
           operation,
         );
       const bytes = readFileSync(fd);
-      if (bytes.length + totalBytes >= maxBytes)
+      if (bytes.length + totalBytes > maxBytes)
         fail(
           "invalid_request",
           "Request exceeds the mailbox size limit",
