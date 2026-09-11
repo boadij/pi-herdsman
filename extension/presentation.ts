@@ -934,6 +934,11 @@ function value(v: unknown): string {
   return typeof v === "string" && v.trim() ? v : "";
 }
 
+function agentDefinitionSuffix(label: string, definition: unknown): string {
+  const name = value(definition);
+  return name && name !== label ? ` · ${name}` : "";
+}
+
 function tailTruncate(value: string, width: number): string {
   if (width <= 0) return "";
   if (visibleWidth(value) <= width) return value;
@@ -1512,6 +1517,21 @@ function resultContent(result: any): string {
   return contentText(content);
 }
 
+function hydrateCoordinationDefinition(
+  details: Record<string, unknown>,
+  context: any,
+): void {
+  const definition =
+    value(details.presentation_agent_definition) ||
+    value(details.definition) ||
+    value(details.agent_definition);
+  if (!definition || !context?.state || typeof context.state !== "object")
+    return;
+  if (context.state.agentDefinition === definition) return;
+  context.state.agentDefinition = definition;
+  queueMicrotask(() => context.invalidate?.());
+}
+
 function shortIdentity(input: unknown): string {
   const text = value(input);
   return text.length > 12 ? `${Array.from(text).slice(0, 11).join("")}…` : text;
@@ -1670,7 +1690,7 @@ export function renderCoordinationCall(
   theme: any,
   context: any = {},
 ): Component {
-  const a = (context?.args ?? args) as Record<string, unknown>;
+  const a = (context?.args ?? args ?? {}) as Record<string, unknown>;
   const action = value(a.action);
   const continuation = tool === "agent" && action === "delegate" && !!a.session;
   const verb = continuation ? "continue" : action;
@@ -1680,11 +1700,27 @@ export function renderCoordinationCall(
   else if (tool === "agent") target = value(a.agent);
   else if (tool === "staff")
     target = action === "list" ? "" : shortIdentity(a.lead);
+  const definition =
+    tool === "agent"
+      ? value(a.definition) ||
+        value(context?.state?.agentDefinition) ||
+        context?.agentDefinition
+      : undefined;
   const header = coordinationHeader(tool, verb, target, theme);
   const partial = context?.isPartial || context?.argsComplete === false;
-  const partialHeader = partial ? `${header}…` : header;
   if (humanExpanded(context, undefined))
-    return renderExpandedCoordinationCall(tool, a, theme, partialHeader);
+    return renderExpandedCoordinationCall(
+      tool,
+      a,
+      theme,
+      partial ? `${header}…` : header,
+    );
+  const compactHeader =
+    header +
+    (target
+      ? humanText(theme, "muted", agentDefinitionSuffix(target, definition))
+      : "");
+  const partialHeader = partial ? `${compactHeader}…` : compactHeader;
   const content = new Container();
   content.addChild(new Text(partialHeader, 0, 0));
   const body = coordinationBody(a);
@@ -2026,6 +2062,7 @@ export function renderCoordinationResult(
 ): WidthSafeText {
   const details = resultDetails(result);
   const args = (context?.args ?? {}) as Record<string, unknown>;
+  hydrateCoordinationDefinition(details, context);
   const action = value(args.action) || value(details.action) || "agent";
   const expanded = humanExpanded(context, options);
   const failed = details.ok === false || context?.isError === true;
@@ -2332,10 +2369,7 @@ export function renderCompletionMessage(
       ? formatElapsed(0, d.elapsedMs)
       : undefined;
   const label = d?.agentLabel ?? "agent";
-  const definition =
-    d?.agentDefinition && d.agentDefinition !== label
-      ? ` · ${d.agentDefinition}`
-      : "";
+  const definition = agentDefinitionSuffix(label, d?.agentDefinition);
   const heading = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${theme.bold(label)}${failed ? " failed" : " completed"}${definition ? humanText(theme, "muted", definition) : ""}`;
   const humanContent = (message.content ?? "")
     .replace(/^Agent result · [^\n]*\n\n/u, "")
