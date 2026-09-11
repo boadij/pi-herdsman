@@ -26,11 +26,18 @@ let candidateReadIno: number | undefined;
 let candidateReadContents: Buffer | undefined;
 let candidateReadOpenCount = 0;
 let candidateReadIsFile = true;
+mock.module("@earendil-works/pi-coding-agent", {
+  namedExports: {
+    getAgentDir: () => process.env.PI_CODING_AGENT_DIR ?? tmpdir(),
+  },
+});
 mock.module("node:fs", {
   namedExports: {
+    accessSync: realFs.accessSync,
+    constants: realFs.constants,
     chmodSync: realFs.chmodSync,
     closeSync: realFs.closeSync,
-    constants: realFs.constants,
+    createWriteStream: realFs.createWriteStream,
     existsSync: realFs.existsSync,
     fstatSync: (...args: any[]) => {
       if (candidateReadFd !== undefined && args[0] === candidateReadFd) {
@@ -95,6 +102,7 @@ mock.module("node:fs", {
     statSync: realFs.statSync,
     unlinkSync: realFs.unlinkSync,
     writeSync: realFs.writeSync,
+    watch: realFs.watch,
   },
 });
 
@@ -107,19 +115,12 @@ const {
   resultStillPending,
   steerAcceptanceAllowed,
   taskAcceptanceAllowed,
-  updateSpawnPlacementJson,
-  resolveSpawnPlacement,
   spawnPlacementMenuOptions,
   spawnPlacementFromMenuSelection,
 } = await import("./core.ts");
 const { resultPath, resultRef } = await import("./storage.ts");
 
-test("resolves placement modes with subtree as the absent default", () => {
-  assert.equal(resolveSpawnPlacement("tab"), "tab");
-  assert.equal(resolveSpawnPlacement("subtree"), "subtree");
-  assert.equal(resolveSpawnPlacement("split"), "split");
-  assert.equal(resolveSpawnPlacement(undefined), "subtree");
-  assert.equal(resolveSpawnPlacement("invalid"), "tab");
+test("exposes placement modes and menu options", () => {
   assert.deepEqual(
     spawnPlacementMenuOptions("subtree").map(({ label, value }) => ({
       label,
@@ -732,10 +733,6 @@ test("agent display identity uses the definition and fallback", () => {
   assert.equal(resultStillPending(undefined, undefined, true), false);
   assert.equal(taskAcceptanceAllowed(true, undefined, true), false);
   assert.equal(steerAcceptanceAllowed(false, id, true), false);
-  assert.match(
-    updateSpawnPlacementJson('{"other":true}', "split"),
-    /"piHerdsman": \{\n    "spawnPlacement": "split"/,
-  );
   for (const [task, expected] of [
     [undefined, false],
     ["", false],

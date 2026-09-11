@@ -486,15 +486,11 @@ test("lead agents command uses native completion and exact human grammar", async
   assert.equal(pi.calls.length, 2);
 });
 
-test("/agents placement subtree writes and rereads trusted project settings", async () => {
+test("/agents placement subtree writes flat config outside project settings", async () => {
   setLeadEnvironment();
   const projectRoot = join(PI_AGENT_ROOT, "placement-project");
-  const projectSettings = join(projectRoot, ".pi", "settings.json");
+  const configPath = join(PI_AGENT_ROOT, "pi-herdsman", "config.json");
   realFs.mkdirSync(join(projectRoot, ".pi"), { recursive: true });
-  realFs.writeFileSync(
-    projectSettings,
-    JSON.stringify({ piHerdsman: { spawnPlacement: "tab" } }),
-  );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
@@ -503,9 +499,12 @@ test("/agents placement subtree writes and rereads trusted project settings", as
   try {
     await pi.commandOptions.get("agents").handler("placement subtree", context);
     assert.equal(
-      JSON.parse(realFs.readFileSync(projectSettings, "utf8")).piHerdsman
-        .spawnPlacement,
+      JSON.parse(realFs.readFileSync(configPath, "utf8")).spawnPlacement,
       "subtree",
+    );
+    assert.equal(
+      realFs.existsSync(join(projectRoot, ".pi", "settings.json")),
+      false,
     );
   } finally {
     realFs.rmSync(projectRoot, { recursive: true, force: true });
@@ -1215,7 +1214,7 @@ test("plain agents opens the native management menu", async () => {
   await pi.events.get("session_shutdown")?.[0]();
 });
 
-test("message limits use global byte settings and one rough token formatter", async () => {
+test("message limits use flat config and one rough token formatter", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);

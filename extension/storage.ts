@@ -1,21 +1,17 @@
-import { homedir, tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { tmpdir } from "node:os";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
 
 const RESULT_PREFIX = "result:";
 const RESULT_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-function piAgentDir(): string {
-  const configured = process.env.PI_CODING_AGENT_DIR;
-  if (!configured) return join(homedir(), ".pi", "agent");
-  if (configured === "~") return homedir();
-  if (configured.startsWith("~/") || configured.startsWith(`~${sep}`))
-    return join(homedir(), configured.slice(2));
-  return configured;
+export function herdsmanDataRoot(): string {
+  return join(getAgentDir(), "pi-herdsman");
 }
 
-export function herdsmanDataRoot(): string {
-  return join(piAgentDir(), "pi-herdsman");
+export function herdsmanConfigPath(): string {
+  return join(herdsmanDataRoot(), "config.json");
 }
 
 export function herdsmanTempRoot(): string {

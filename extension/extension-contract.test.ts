@@ -843,16 +843,14 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     const chiefDescriptorPath = supervisionRuntime().descriptor;
     const chiefDescriptor = readFileSync(chiefDescriptorPath, "utf8");
-    support.settingsAccessHook = (access) => {
-      if (access === "global")
-        writeFileSync(
-          chiefDescriptorPath,
-          JSON.stringify({
-            ...JSON.parse(chiefDescriptor),
-            leaseId: randomUUID(),
-          }),
-        );
-    };
+    support.configReadHook = () =>
+      writeFileSync(
+        chiefDescriptorPath,
+        JSON.stringify({
+          ...JSON.parse(chiefDescriptor),
+          leaseId: randomUUID(),
+        }),
+      );
     try {
       await assert.rejects(
         chiefTool.execute(
@@ -870,7 +868,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         /Lead or Chief changed before the message was queued/,
       );
     } finally {
-      support.settingsAccessHook = undefined;
+      support.configReadHook = undefined;
       writeFileSync(chiefDescriptorPath, chiefDescriptor);
     }
     assert.deepEqual(

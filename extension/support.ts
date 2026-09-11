@@ -33,8 +33,7 @@ export let failNextRequestRemoval = false;
 export let failNextResultRemoval = false;
 export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
-export let settingsAccessHook:
-  ((access: "global" | "project" | "reload") => void) | undefined;
+export let configReadHook: (() => void) | undefined;
 
 export type WidgetComponent = {
   render(width: number): string[];
@@ -78,6 +77,7 @@ export { tuiVisibleWidth };
 export const PI_AGENT_ROOT = realFs.mkdtempSync(
   join(tmpdir(), "pi-herdsman-pi-agent-"),
 );
+process.env.PI_CODING_AGENT_DIR = PI_AGENT_ROOT;
 export const PI_AGENTS_DIR = join(PI_AGENT_ROOT, "agents");
 realFs.mkdirSync(PI_AGENTS_DIR);
 realFs.writeFileSync(
@@ -86,23 +86,18 @@ realFs.writeFileSync(
 );
 const { parseFrontmatter: nativeParseFrontmatter } =
   await import("@earendil-works/pi-coding-agent");
-function testSettings(path: string): Record<string, unknown> {
-  try {
-    return JSON.parse(realFs.readFileSync(path, "utf8")) as Record<
-      string,
-      unknown
-    >;
-  } catch {
-    return {};
-  }
-}
 after(() => realFs.rmSync(testTmpRoot, { recursive: true, force: true }));
 mock.module("node:fs", {
   namedExports: {
+    accessSync: realFs.accessSync,
+    constants: realFs.constants,
     closeSync: realFs.closeSync,
     chmodSync: realFs.chmodSync,
-    constants: realFs.constants,
-    existsSync: realFs.existsSync,
+    existsSync: (path: string) => {
+      if (path === join(PI_AGENT_ROOT, "pi-herdsman", "config.json"))
+        configReadHook?.();
+      return realFs.existsSync(path);
+    },
     fstatSync: realFs.fstatSync,
     fsyncSync: realFs.fsyncSync,
     mkdirSync: realFs.mkdirSync,
@@ -147,6 +142,7 @@ mock.module("node:fs", {
       }
       return realFs.writeSync(...args);
     },
+    watch: realFs.watch,
     watchFile: (path: string, _options: unknown, listener: Function) => {
       watchedResultPaths.set(path, listener);
     },
@@ -228,20 +224,6 @@ mock.module("@earendil-works/pi-coding-agent", {
     loadProjectContextFiles: ({ cwd }: { cwd: string }) => {
       projectContextCwds.push(cwd);
       return [];
-    },
-    SettingsManager: {
-      create: (cwd: string, agentDir: string, options: any) => ({
-        reload: async () => settingsAccessHook?.("reload"),
-        getGlobalSettings: () => {
-          settingsAccessHook?.("global");
-          return testSettings(join(agentDir, "settings.json"));
-        },
-        getProjectSettings: () => {
-          settingsAccessHook?.("project");
-          return testSettings(join(cwd, ".pi", "settings.json"));
-        },
-        isProjectTrusted: () => options?.projectTrusted === true,
-      }),
     },
     SessionManager: {
       listAll: async () => [...nativeSessions.values()],
@@ -2566,10 +2548,10 @@ export default {
   set agentDefinitionReadCount(value: number) {
     agentDefinitionReadCount = value;
   },
-  get settingsAccessHook() {
-    return settingsAccessHook;
+  get configReadHook() {
+    return configReadHook;
   },
-  set settingsAccessHook(value: typeof settingsAccessHook) {
-    settingsAccessHook = value;
+  set configReadHook(value: typeof configReadHook) {
+    configReadHook = value;
   },
 };

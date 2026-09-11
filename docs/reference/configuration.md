@@ -2,125 +2,75 @@
 
 [Documentation index](../README.md)
 
-Pi Herdsman intentionally has very little settings state.
+Pi Herdsman keeps its configuration in one flat, user-wide file:
 
-Agent behavior lives in Markdown definitions. The extension settings currently
-own agent placement.
+```text
+<Pi agent directory>/pi-herdsman/config.json
+```
 
-## Agent placement
+The default location is `~/.pi/agent/pi-herdsman/config.json`. Pi's native
+`getAgentDir()` determines the agent directory, so setting
+`PI_CODING_AGENT_DIR` relocates the file to
+`$PI_CODING_AGENT_DIR/pi-herdsman/config.json`.
 
-Settings shape:
+Project trust and project settings do not affect Herdsman configuration.
+Agent definitions remain a separate feature and continue to use the bundled,
+project-local, and user agent-definition locations described in the
+[agent-definition guide](../guides/agent-definitions.md).
+
+## Schema and defaults
+
+The file contains only explicitly configured overrides. The accepted flat
+schema is:
 
 ```json
 {
-  "piHerdsman": {
-    "spawnPlacement": "subtree"
-  }
+  "spawnPlacement": "subtree",
+  "inlineAttachmentLimitBytes": 131072,
+  "mailboxPayloadLimitBytes": 131072
 }
 ```
 
-Supported values:
+An absent file means these defaults:
 
-```text
-tab
-subtree
-split
-```
+| Field                        |            Default | Allowed values                                    |
+| ---------------------------- | -----------------: | ------------------------------------------------- |
+| `spawnPlacement`             |          `subtree` | `tab`, `subtree`, `split`                         |
+| `inlineAttachmentLimitBytes` | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB) |
+| `mailboxPayloadLimitBytes`   | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB) |
 
-Default:
+Malformed JSON, a non-object root, unknown fields, and invalid known values
+are errors. Reads do not create the directory or file. Configuration changes
+through `/agents` update this single file atomically.
 
-```text
-subtree
-```
+`inlineAttachmentLimitBytes` applies per file. Eligible complete strict UTF-8
+files are embedded only when the exact serialized mailbox record fits; other
+files remain canonical references. `mailboxPayloadLimitBytes` limits the exact
+serialized request, ask, or chief message record. Chief messages also retain
+their fixed 8 KiB protocol ceiling.
 
-When no `spawnPlacement` value is configured, it resolves to `subtree`.
-Unrecognized values remain invalid and resolve to `tab`.
+Placement affects future starts, not existing agents. `tab` uses one lead-owned
+agents tab, `subtree` gives each lead-direct agent its own tab, and `split`
+splits from the caller's pane. Nested delegation always splits in its owner's
+current tab.
 
-`tab` places future direct agents owned by a lead in one dedicated agents tab.
+## Reset
 
-`subtree` gives each future lead-direct agent its own tab. Descendants always
-split inside their owner's current tab.
-
-`split` places future lead-direct agents by splitting from the caller's current
-pane. Descendants always split inside their owner's current tab.
-
-This affects future starts, not existing agents.
-
-## Message limits
-
-Pi Herdsman uses two independent byte settings:
-
-```json
-{
-  "piHerdsman": {
-    "inlineAttachmentLimitBytes": 131072,
-    "mailboxPayloadLimitBytes": 131072
-  }
-}
-```
-
-Each accepts an integer from 1024 bytes (1 KiB) through 1048576 bytes (1 MiB)
-and defaults to 131072 bytes (128 KiB). The inline limit applies per file;
-eligible complete strict UTF-8 files are embedded in caller order only when
-the exact serialized mailbox record fits. Other files remain canonical
-references. The mailbox limit is the exact serialized `RequestRecord`,
-`AskRecord`, or text-only chief supervision record admission size. Chief
-supervision also has an existing fixed 8 KiB record ceiling, so its effective
-admission limit is the smaller of the configured mailbox limit and 8 KiB.
-
-Only valid global values affect runtime behavior. Invalid global values are
-ignored rather than clamped, and project-local values for these two keys are
-inert. Configure the global values through `/agents` → `Message limits`; the
-fixed 1 MiB protocol safety ceiling remains in force for reading existing
-mailbox records.
-
-## Settings scope
-
-Pi Herdsman reads Pi settings through Pi's settings manager.
-
-Global settings are stored in the Pi agent directory's `settings.json`
-(default `~/.pi/agent/settings.json`).
-
-Project settings are stored in:
-
-```text
-<project>/.pi/settings.json
-```
-
-A project placement value is effective only when:
-
-- the project is trusted by Pi; and
-- the project setting is `tab`, `subtree`, or `split`.
-
-If no valid trusted project placement is active, the global value is used.
-
-`/agents placement` opens a native selector showing the effective value and
-offering `tab`, `subtree`, or `split`. Selecting a value writes to the current effective
-scope and verifies the value after writing; the confirmation reports whether
-that scope is `project` or `global`.
-
-## Agent definitions are not extension settings
-
-Do not put per-agent model, thinking, tool, skill, extension, body, or
-delegation policy in `piHerdsman`.
-
-Those belong in Markdown agent definitions.
-
-Trusted project-local definitions are discovered from `<cwd>/.pi/agents/`.
-
-See:
-
-- [Agent definitions](../guides/agent-definitions.md)
-- [Agent-definition schema](agent-definition-schema.md)
-
-## herdr integration
-
-The required Pi integration is installed separately:
+Stop active Pi and Herdsman processes first; running processes may recreate
+runtime state. Then remove the complete Herdsman directory:
 
 ```sh
-herdr integration install pi
-herdr integration status
+rm -rf ~/.pi/agent/pi-herdsman
 ```
+
+With a custom `PI_CODING_AGENT_DIR`, remove:
+
+```sh
+rm -rf "$PI_CODING_AGENT_DIR/pi-herdsman"
+```
+
+The next process starts with the defaults and recreates only the runtime state
+it needs.
 
 ## See also
 
