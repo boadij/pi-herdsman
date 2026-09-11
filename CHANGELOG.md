@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1](https://github.com/boadij/pi-herdsman/compare/v0.5.0...v0.5.1) (2026-09-11)
+
+
+### Fixes
+
+* clarify missing result references ([#48](https://github.com/boadij/pi-herdsman/issues/48)) ([df98d22](https://github.com/boadij/pi-herdsman/commit/df98d2275cd69f2b72963e41fe4325964e89ca2a))
+* prevent stale owner ask notifications ([#46](https://github.com/boadij/pi-herdsman/issues/46)) ([b5b3e7c](https://github.com/boadij/pi-herdsman/commit/b5b3e7c9b212abd53bd0dce800e9c098366c4f44))
+* render continued agent identity ([#44](https://github.com/boadij/pi-herdsman/issues/44)) ([e8fa53d](https://github.com/boadij/pi-herdsman/commit/e8fa53de2009a211d638c979d99a809da6f22ffc))
+* silence transient result cleanup retries ([#47](https://github.com/boadij/pi-herdsman/issues/47)) ([e7222c8](https://github.com/boadij/pi-herdsman/commit/e7222c8ba38934a1cb7c5a68f8de1e371d9c0e74))
+
 ## [0.5.0](https://github.com/boadij/pi-herdsman/compare/v0.4.0...v0.5.0) (2026-09-11)
 
 
