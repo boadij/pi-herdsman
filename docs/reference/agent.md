@@ -52,23 +52,23 @@ assignment. The terminal result is delivered once and the agent is cleaned up.
 }
 ```
 
-Allowed fields are `action`, `session`, `task`, optional `label`, `files`, and
-`timeoutMs`. The exact saved session supplies its cwd, definition identity, and
-historical Pi context. Session delegation always creates a new agent generation
-for one assignment with a live label; it never assigns work to an existing
-agent. The saved definition must currently resolve to an enabled, authorized
-effective definition, whose current configuration is used for the new
-generation.
+Allowed fields are `action`, `session`, `task`, optional `files`, and
+`timeoutMs`. The exact saved session supplies its cwd, definition identity,
+logical label, and historical Pi context. Session delegation always creates a
+new agent generation for one assignment; it never assigns work to an existing
+agent and cannot rename the continued session. The saved definition must
+currently resolve to an enabled, authorized effective definition, whose current
+configuration is used for the new generation.
 Concurrent or otherwise conflicting managed representations of the exact
 session fail closed. The controller's own active Pi session cannot be delegated
 to itself; use definition delegation with `fork` when a separate derived
 context is required.
 
-`label` is optional on both delegation variants and identifies the live
-generation, not the continuation session. When omitted, Herdsman chooses a
-fresh available label derived from the effective agent definition. An explicit
-label is used exactly as the live label; if that label is occupied, delegation
-fails with `agent_label_exists`.
+`label` is optional only on definition delegation and identifies the stable
+logical name for new work. When omitted there, Herdsman chooses a fresh
+available label derived from the effective agent definition. Session delegation
+inherits the saved label exactly; if it is occupied, delegation fails with
+`agent_label_exists`.
 
 All successful delegation results use `action: "delegate"` and include
 `agent`, `definition`, request, session, and startup evidence where available.

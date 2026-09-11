@@ -36,7 +36,7 @@ import support, {
   resetAgentMailbox,
   resultEntryDetails,
   leadExec,
-  sessionAgentDefinition,
+  sessionAgentIdentity,
   setLeadEnvironment,
   setAgentEnvironment,
   watchedResultPaths,
@@ -971,7 +971,11 @@ test("idle parent steers through its current input turn while agent work is pend
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "parent" },
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "parent",
+      },
     },
   ]);
   const input = () => agent.events.get("input")![0];
@@ -1123,7 +1127,11 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "parent" },
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "parent",
+      },
     },
   ];
   const pi = fakePi({
@@ -2342,53 +2350,129 @@ test("a stray agent variable does not suppress lead registration", () => {
 });
 
 test("session agent identity reads the session-wide entry array", () => {
-  assert.equal(
-    sessionAgentDefinition([
-      {
-        type: "custom",
-        customType: "pi-herdsman-agent-definition",
-        data: { name: "reviewer" },
-      },
-      { type: "message" },
-      {
-        type: "custom",
-        customType: "pi-herdsman-agent-definition",
-        data: { name: "reviewer" },
-      },
-    ]),
-    "reviewer",
-  );
-  assert.equal(sessionAgentDefinition([]), undefined);
-  assert.throws(
-    () =>
-      sessionAgentDefinition([
+  assert.deepEqual(
+    sessionAgentIdentity(
+      [
         {
           type: "custom",
           customType: "pi-herdsman-agent-definition",
-          data: { name: 42 },
+          data: {
+            sessionId: "current-session",
+            definition: "reviewer",
+            label: "reviewer",
+          },
         },
-      ]),
-    /invalid pi-herdsman-agent-definition entry/,
+        { type: "message" },
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: {
+            sessionId: "current-session",
+            definition: "reviewer",
+            label: "reviewer",
+          },
+        },
+      ],
+      "current-session",
+    ),
+    {
+      sessionId: "current-session",
+      definition: "reviewer",
+      label: "reviewer",
+    },
   );
-  assert.throws(
-    () =>
-      sessionAgentDefinition([
+  assert.equal(sessionAgentIdentity([], "current-session"), undefined);
+  assert.equal(
+    sessionAgentIdentity(
+      [
         {
           type: "custom",
           customType: "pi-herdsman-agent-definition",
           data: { name: "reviewer" },
         },
+      ],
+      "current-session",
+    ),
+    undefined,
+  );
+  assert.throws(
+    () =>
+      sessionAgentIdentity(
+        [
+          {
+            type: "custom",
+            customType: "pi-herdsman-agent-definition",
+            data: {
+              sessionId: "current-session",
+              definition: 42,
+              label: "reviewer",
+            },
+          },
+        ],
+        "current-session",
+      ),
+    /invalid pi-herdsman-agent-definition entry/,
+  );
+  assert.throws(
+    () =>
+      sessionAgentIdentity(
+        [
+          {
+            type: "custom",
+            customType: "pi-herdsman-agent-definition",
+            data: {
+              sessionId: "current-session",
+              definition: "reviewer",
+              label: "reviewer",
+            },
+          },
+          {
+            type: "custom",
+            customType: "pi-herdsman-agent-definition",
+            data: {
+              sessionId: "current-session",
+              definition: "implementer",
+              label: "reviewer",
+            },
+          },
+        ],
+        "current-session",
+      ),
+    /conflicting pi-herdsman-agent-definition entries/,
+  );
+  assert.deepEqual(
+    sessionAgentIdentity(
+      [
         {
           type: "custom",
           customType: "pi-herdsman-agent-definition",
-          data: { name: "implementer" },
+          data: {
+            sessionId: "current-session",
+            definition: "reviewer",
+            label: "reviewer",
+          },
         },
-      ]),
-    /conflicting pi-herdsman-agent-definition entries/,
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: {
+            sessionId: "other-session",
+            definition: "reviewer",
+            label: "other",
+          },
+        },
+      ],
+      "current-session",
+    ),
+    {
+      sessionId: "current-session",
+      definition: "reviewer",
+      label: "reviewer",
+    },
   );
 });
 
-test("agent persists one definition entry before mailbox initialization", async () => {
+test("agent persists one identity entry before mailbox initialization", async () => {
   const mailbox = setAgentEnvironment();
   const agent = fakePi();
   registerExtension!(agent.pi as never);
@@ -2400,11 +2484,83 @@ test("agent persists one definition entry before mailbox initialization", async 
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "agent" },
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "agent",
+        label: "registered-agent",
+      },
     },
   ]);
   assert.ok(readAgentState(mailbox));
   agent.events.get("session_shutdown")?.[0]();
+});
+
+test("agent rejects a conflicting persisted session identity", async () => {
+  const mailbox = setAgentEnvironment("registered-agent");
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "agent",
+        label: "other-agent",
+      },
+    },
+  ];
+  const agent = fakePi({ entries });
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(entries);
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  await agent.events.get("session_start")![0](undefined, context);
+  assert.ok(
+    notices.some((message) =>
+      message.includes("session identity does not match environment"),
+    ),
+  );
+  agent.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("a forked session establishes identity for its own Pi session", async () => {
+  const mailbox = setAgentEnvironment("forked-agent");
+  const copiedIdentity = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: {
+      sessionId: "source-session",
+      definition: "agent",
+      label: "source-agent",
+    },
+  };
+  const copiedLegacyIdentity = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { name: "old-agent" },
+  };
+  const agent = fakePi({ entries: [copiedIdentity, copiedLegacyIdentity] });
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(agent.entries, [
+      copiedIdentity,
+      copiedLegacyIdentity,
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: {
+          sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          definition: "agent",
+          label: "forked-agent",
+        },
+      },
+    ]);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
 });
 
 test("owner ask delivery is branch-local and recovers on tree navigation", async () => {

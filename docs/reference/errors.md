@@ -38,7 +38,7 @@ must not be presented as exhausted cleanup.
 | Category                   | Meaning                                                                             |
 | -------------------------- | ----------------------------------------------------------------------------------- |
 | `not_running_inside_herdr` | Required herdr environment is missing.                                              |
-| `agent_label_exists`       | Requested/generated live label conflicts with an existing agent.                    |
+| `agent_label_exists`       | Requested, inherited, or generated live label conflicts with an existing agent.     |
 | `pane_not_ready`           | Agent pane/startup did not reach the required readiness boundary.                   |
 | `target_not_found`         | Exact requested identity or ownership evidence was not found.                       |
 | `target_ambiguous`         | More than one live candidate matched an identity that must be exact.                |

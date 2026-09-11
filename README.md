@@ -126,9 +126,9 @@ The model-facing tools are `agent`, `chief`, `staff`, and `ask_owner`.
 `staff` lets the chief supervise leads, and `ask_owner` lets an agent ask its
 exact owner. Leads use `chief.message` and `chief.ask`; the active chief uses
 `staff.message` and `staff.reply` with exact lead session IDs. Agent labels are
-not continuation handles: exact Pi session IDs are the continuation identity.
-Exact herdr identifiers are validation evidence behind live agent and lead
-identity.
+not continuation handles: exact Pi session IDs are the continuation selector.
+A continued session reuses its saved logical label. Exact herdr identifiers are
+validation evidence behind live agent and lead identity.
 
 Bundled definitions are portable defaults, not required workflow stages. Global
 definitions can override them or add new roles with your preferred models,

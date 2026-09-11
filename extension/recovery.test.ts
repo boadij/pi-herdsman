@@ -133,7 +133,11 @@ test("combined status reports a completed agent as pending, not active", async (
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "parent" },
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "parent",
+      },
     },
   ];
   const pi = fakePi({
@@ -233,7 +237,11 @@ test("conflicting same-request entries do not suppress an exact combined result"
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "agent" },
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "agent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "agent",
+      },
     },
     {
       customType: "pi-herdsman-agent-result",
@@ -2817,7 +2825,11 @@ test("managed child automatic cleanup respects the parent delegation lock", asyn
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "parent" },
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "parent",
+      },
     },
   ];
   const lifecycle = delegatedLifecycleExecutor(parent, [child]);
@@ -3081,7 +3093,11 @@ test("delegation parent notifies only its direct stale child", async () => {
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "parent" },
+        data: {
+          sessionId: parent.piSessionId,
+          definition: "parent",
+          label: parent.agentLabel,
+        },
       },
     ],
   });
@@ -3092,7 +3108,11 @@ test("delegation parent notifies only its direct stale child", async () => {
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "agent" },
+        data: {
+          sessionId: child.piSessionId,
+          definition: "agent",
+          label: child.agentLabel,
+        },
       },
     ],
   });
@@ -3103,7 +3123,11 @@ test("delegation parent notifies only its direct stale child", async () => {
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "agent" },
+        data: {
+          sessionId: unrelated.piSessionId,
+          definition: "agent",
+          label: unrelated.agentLabel,
+        },
       },
     ],
   });
@@ -3120,7 +3144,11 @@ test("delegation parent notifies only its direct stale child", async () => {
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "parent" },
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "parent",
+      },
     },
   ]);
   for (const handler of parentPi.events.get("session_start") ?? [])

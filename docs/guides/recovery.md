@@ -121,11 +121,12 @@ A `delegate` with `session` requires an exact session path or full UUID.
 The saved session header must contain a non-empty working directory. Session
 delegation uses that saved cwd and does not accept a caller-supplied `cwd`.
 
-The saved agent-definition name is resolved against the current effective
-definition roster. If it no longer exists, session delegation fails instead of guessing a
-replacement. The definition must also be enabled and authorized for the current
+The saved agent-definition name and logical label are restored from the managed
+session identity. If the definition no longer exists, session delegation fails
+instead of guessing a replacement; a missing or malformed session identity also
+fails closed. The definition must also be enabled and authorized for the current
 controller, and its current effective configuration is used for the new agent
-generation.
+generation. A continuation cannot override or regenerate its saved label.
 
 An exact session that is already represented by active or unresolved managed
 work cannot be activated concurrently. The session-start exclusion applies to

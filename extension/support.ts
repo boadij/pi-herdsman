@@ -235,7 +235,7 @@ mock.module("@earendil-works/pi-coding-agent", {
           (item) => item.path === path,
         );
         return {
-          getSessionId: () => session?.id ?? "",
+          getSessionId: () => session?.id ?? DEFAULT_PI_SESSION_ID,
           getSessionFile: () => session?.path,
           getHeader: () => (session ? { cwd: session.cwd } : null),
           getCwd: () => resolve(session?.cwd || process.cwd()),
@@ -245,7 +245,11 @@ mock.module("@earendil-works/pi-coding-agent", {
               {
                 type: "custom",
                 customType: "pi-herdsman-agent-definition",
-                data: { name: "agent" },
+                data: {
+                  sessionId: session?.id ?? DEFAULT_PI_SESSION_ID,
+                  definition: "agent",
+                  label: "agent",
+                },
               },
             ],
         };
@@ -421,7 +425,7 @@ mock.module("typebox", {
 const extension = await import("./index.ts");
 export const registerExtension = extension.default;
 export const {
-  sessionAgentDefinition,
+  sessionAgentIdentity,
   resolveManagedSession,
   resolveAssignmentSession,
 } = extension;

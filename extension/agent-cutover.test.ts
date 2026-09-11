@@ -11,7 +11,7 @@ import {
   recoveryIdentity,
   registerExtension,
   resetAgentMailbox,
-  sessionAgentDefinition,
+  sessionAgentIdentity,
   setAgentEnvironment,
   setLeadEnvironment,
   WORKSPACE,
@@ -105,13 +105,16 @@ test("legacy V3 marker and definition metadata are not accepted", () => {
   );
   assert.equal(parseControlMarker(controlMarker(id)), id);
   assert.equal(
-    sessionAgentDefinition([
-      {
-        type: "custom",
-        customType: "pi-herdsman-worker-definition",
-        data: { name: "legacy" },
-      },
-    ]),
+    sessionAgentIdentity(
+      [
+        {
+          type: "custom",
+          customType: "pi-herdsman-worker-definition",
+          data: { name: "legacy" },
+        },
+      ],
+      "current-session",
+    ),
     undefined,
   );
 });
@@ -202,6 +205,24 @@ test("agent schemas expose the new selector and reject the old one", () => {
   );
   assert.equal(
     Value.Check(schema, { action: "inspect", worker: "target" }),
+    false,
+  );
+  assert.equal(
+    Value.Check(schema, {
+      action: "delegate",
+      definition: "agent",
+      label: "named-agent",
+      task: "fresh work",
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(schema, {
+      action: "delegate",
+      session: "/tmp/session.jsonl",
+      label: "renamed-agent",
+      task: "continued work",
+    }),
     false,
   );
   pi.events.get("session_shutdown")?.[0]();
