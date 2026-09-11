@@ -1529,7 +1529,7 @@ function hydrateCoordinationDefinition(
     return;
   if (context.state.agentDefinition === definition) return;
   context.state.agentDefinition = definition;
-  context.invalidate?.();
+  queueMicrotask(() => context.invalidate?.());
 }
 
 function shortIdentity(input: unknown): string {

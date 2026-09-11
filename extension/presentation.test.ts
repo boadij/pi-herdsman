@@ -1202,7 +1202,7 @@ test("compact coordination calls show available agent definitions", () => {
   );
 });
 
-test("coordination result definitions keep compact calls transcript-stable", () => {
+test("coordination result definitions keep compact calls transcript-stable", async () => {
   const state: Record<string, unknown> = {};
   let invalidations = 0;
   const context = {
@@ -1229,6 +1229,7 @@ test("coordination result definitions keep compact calls transcript-stable", () 
     presentationTheme,
     context,
   );
+  await Promise.resolve();
   assert.equal(
     renderedText(
       renderCoordinationCall("agent", context.args, presentationTheme, context),
@@ -1251,6 +1252,7 @@ test("coordination result definitions keep compact calls transcript-stable", () 
     presentationTheme,
     context,
   );
+  await Promise.resolve();
   assert.equal(invalidations, 1);
 
   const historicalState: Record<string, unknown> = {};
@@ -1279,6 +1281,7 @@ test("coordination result definitions keep compact calls transcript-stable", () 
     presentationTheme,
     historicalContext,
   );
+  await Promise.resolve();
   assert.equal(
     renderedText(
       renderCoordinationCall(
