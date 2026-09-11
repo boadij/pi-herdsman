@@ -36,6 +36,14 @@ type RegularFile = {
   ino: number;
 };
 
+function failUnknownResultRef(input: string, operation: string): never {
+  fail(
+    "invalid_request",
+    `Unknown result ref: ${input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
+    operation,
+  );
+}
+
 function resolveRegularFiles(
   inputs: readonly string[],
   cwd: string,
@@ -46,9 +54,11 @@ function resolveRegularFiles(
   const seen = new Set<string>();
   return inputs.flatMap((input) => {
     let path: string;
+    let resolvedResultPath: string | undefined;
     let canonicalPath: string;
     try {
-      path = resolveResultRef(input) ?? resolve(cwd, input);
+      resolvedResultPath = resolveResultRef(input);
+      path = resolvedResultPath ?? resolve(cwd, input);
       canonicalPath = realpathSync(path);
       if (skipped.has(canonicalPath) || seen.has(canonicalPath)) return [];
       const beforeOpen = statSync(canonicalPath);
@@ -77,6 +87,11 @@ function resolveRegularFiles(
         closeSync(fd);
       }
     } catch (error) {
+      if (
+        resolvedResultPath &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      )
+        failUnknownResultRef(input, operation);
       fail(
         "invalid_request",
         `Cannot read file ${input}: ${error instanceof Error ? error.message : String(error)}`,
@@ -233,8 +248,10 @@ export function prepareMessageInput(
     // skip only candidates that cannot fit; the exact decoded content decides
     // whether a candidate is actually embedded.
     let fd: number | undefined;
+    let resolvedResultPath: string | undefined;
     let bytes: Buffer;
     try {
+      resolvedResultPath = resolveResultRef(file.input);
       // O_NONBLOCK prevents a path replaced by a FIFO from blocking this
       // preparation step. The descriptor is also the one that gets read.
       fd = openSync(
@@ -281,6 +298,11 @@ export function prepareMessageInput(
       bytes = bytes.subarray(0, offset);
     } catch (error) {
       if (error instanceof OperationError) throw error;
+      if (
+        resolvedResultPath &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      )
+        failUnknownResultRef(file.input, operation);
       fail(
         "invalid_request",
         `Cannot read file ${file.input}: ${error instanceof Error ? error.message : String(error)}`,

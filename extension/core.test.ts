@@ -25,6 +25,7 @@ let candidateReadDev: number | undefined;
 let candidateReadIno: number | undefined;
 let candidateReadContents: Buffer | undefined;
 let candidateReadOpenCount = 0;
+let candidateReadMissingOnSecondOpen = false;
 let candidateReadIsFile = true;
 mock.module("@earendil-works/pi-coding-agent", {
   namedExports: {
@@ -57,11 +58,20 @@ mock.module("node:fs", {
       openCallCount++;
       if (expectedCanonicalOpenPath && args[0] !== expectedCanonicalOpenPath)
         throw new Error("snapshot opened a non-canonical path");
+      if (candidateReadPath && args[0] === candidateReadPath) {
+        candidateReadOpenCount++;
+        if (candidateReadMissingOnSecondOpen && candidateReadOpenCount === 2) {
+          const error = new Error(
+            "simulated missing result",
+          ) as NodeJS.ErrnoException;
+          error.code = "ENOENT";
+          throw error;
+        }
+      }
       const fd = realFs.openSync(...args);
       if (messageReadFailurePath && args[0] === messageReadFailurePath)
         messageReadFailureFd = fd;
       if (candidateReadPath && args[0] === candidateReadPath) {
-        candidateReadOpenCount++;
         if (candidateReadOpenCount === 2) candidateReadFd = fd;
       }
       return fd;
@@ -350,6 +360,60 @@ test("resolves result references through shared message file preparation", () =>
     assert.ok(forwarded.text.includes(`<file name="${resultRef(requestId)}"`));
     assert.equal(forwarded.text.includes(realpathSync(path)), false);
   } finally {
+    rmSync(path, { force: true });
+  }
+});
+
+test("missing result ref returns the actionable result-ref error", () => {
+  const requestId = "650e8400-e29b-41d4-a716-446655440000";
+  const input = resultRef(requestId);
+  const path = resultPath(requestId);
+  rmSync(path, { force: true });
+
+  assert.throws(
+    () =>
+      prepareMessageInput(
+        "Inspect the missing result",
+        [input],
+        mkdtempSync(join(tmpdir(), "pi-herdsman-missing-result-reference-")),
+        "assign",
+        "Task",
+      ),
+    {
+      message: `Unknown result ref: ${input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
+    },
+  );
+});
+
+test("missing result ref during the second read returns the actionable result-ref error", () => {
+  const requestId = "750e8400-e29b-41d4-a716-446655440000";
+  const input = resultRef(requestId);
+  const path = resultPath(requestId);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, "durable result evidence");
+  candidateReadPath = realpathSync(path);
+  candidateReadFd = undefined;
+  candidateReadOpenCount = 0;
+  candidateReadMissingOnSecondOpen = true;
+  try {
+    assert.throws(
+      () =>
+        prepareMessageInput(
+          "Inspect the result",
+          [input],
+          mkdtempSync(join(tmpdir(), "pi-herdsman-result-reference-read-")),
+          "assign",
+          "Task",
+        ),
+      {
+        message: `Unknown result ref: ${input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
+      },
+    );
+  } finally {
+    candidateReadPath = undefined;
+    candidateReadFd = undefined;
+    candidateReadOpenCount = 0;
+    candidateReadMissingOnSecondOpen = false;
     rmSync(path, { force: true });
   }
 });
