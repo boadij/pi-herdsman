@@ -2568,7 +2568,7 @@ test("accepted result delivery survives session identity failure in status guida
   }
 });
 
-test("result is removed after agent state reaches completed", async () => {
+test("result is removed after agent state reaches completed", async (t) => {
   setLeadEnvironment();
   const label = "completed-result-anchor-agent";
   const mailbox = agentMailboxPath(WORKSPACE, label);
@@ -2600,14 +2600,77 @@ test("result is removed after agent state reaches completed", async () => {
     },
   });
   registerExtension!(pi.pi as never);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => t.mock.timers.reset());
   await pi.events.get("session_start")![0](undefined, fakeContext(entries));
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await Promise.resolve();
+  await Promise.resolve();
   const completed = managedState(label);
   completed.completedRequestId = REQUEST_ID;
+  const delivered = pi.sentMessageCalls.filter(
+    ({ message }) => (message as any).customType === "pi-herdsman-agent-result",
+  );
+  assert.equal(delivered.length, 1);
+  const durableResults = entries.filter(
+    (entry: any) =>
+      entry.customType === "pi-herdsman-agent-result" &&
+      entry.details?.requestId === REQUEST_ID,
+  );
+  assert.equal(durableResults.length, 1);
+  assert.deepEqual(
+    durableResults[0].details,
+    resultEntryDetails(activeState, REQUEST_ID),
+  );
+  assert.equal(readAgentState(mailbox)?.activeRequestId, REQUEST_ID);
+  const pending = await pi.tools[0].execute(
+    "id",
+    { action: "list" },
+    undefined,
+    undefined,
+    fakeContext(entries),
+  );
+  assert.equal(pending.details.cleanup_errors?.[label], undefined);
+  assert.equal(
+    entries.some(
+      (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+    ),
+    false,
+  );
+  t.mock.timers.tick(250);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(readAgentState(mailbox)?.activeRequestId, REQUEST_ID);
+  assert.ok(readResult(mailbox, REQUEST_ID));
+  assert.equal(
+    pi.sentMessageCalls.filter(
+      ({ message }) =>
+        (message as any).customType === "pi-herdsman-agent-result",
+    ).length,
+    1,
+  );
   writeAgentState(mailbox, completed);
-  await new Promise((resolve) => setTimeout(resolve, 350));
+  t.mock.timers.tick(250);
+  await Promise.resolve();
+  await Promise.resolve();
+  for (let index = 0; index < 5; index++)
+    await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(readResult(mailbox, REQUEST_ID), undefined);
   assert.deepEqual(lifecycle.closeOrder, [label]);
+  assert.equal(
+    pi.sentMessageCalls.filter(
+      ({ message }) =>
+        (message as any).customType === "pi-herdsman-agent-result",
+    ).length,
+    1,
+  );
+  const settled = await pi.tools[0].execute(
+    "id",
+    { action: "list" },
+    undefined,
+    undefined,
+    fakeContext(entries),
+  );
+  assert.equal(settled.details.cleanup_errors?.[label], undefined);
   pi.events.get("session_shutdown")?.[0]();
 });
 
