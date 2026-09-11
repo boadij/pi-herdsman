@@ -41,7 +41,7 @@
     "image": "https://raw.githubusercontent.com/boadij/pi-herdsman/main/docs/assets/thumbnail.webp"
   },
   "scripts": {
-    "test": "node --experimental-test-module-mocks --import=./scripts/test-env.mjs --test --test-timeout=10000",
+    "test": "node --experimental-test-module-mocks --import=./scripts/test-env.mjs --test",
     "check": "node scripts/check.mjs",
     "build": "node scripts/build.mjs",
     "package:audit": "node scripts/package-audit.mjs",
