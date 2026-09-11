@@ -1202,6 +1202,97 @@ test("compact coordination calls show available agent definitions", () => {
   );
 });
 
+test("coordination result definitions keep compact calls transcript-stable", () => {
+  const state: Record<string, unknown> = {};
+  let invalidations = 0;
+  const context = {
+    args: {
+      action: "delegate",
+      session: "/tmp/ask-owner-retry.jsonl",
+      label: "ask-owner-retry",
+      task: "Try once more.",
+    },
+    state,
+    invalidate: () => invalidations++,
+  };
+  renderCoordinationResult(
+    "agent",
+    {
+      details: {
+        ok: true,
+        action: "delegate",
+        agent: "ask-owner-retry",
+        definition: "researcher",
+      },
+    },
+    {},
+    presentationTheme,
+    context,
+  );
+  assert.equal(
+    renderedText(
+      renderCoordinationCall("agent", context.args, presentationTheme, context),
+    ).split("\n")[0],
+    "agent continue  ask-owner-retry · researcher",
+  );
+  assert.equal(invalidations, 1);
+
+  renderCoordinationResult(
+    "agent",
+    {
+      details: {
+        ok: true,
+        action: "delegate",
+        agent: "ask-owner-retry",
+        definition: "researcher",
+      },
+    },
+    {},
+    presentationTheme,
+    context,
+  );
+  assert.equal(invalidations, 1);
+
+  const historicalState: Record<string, unknown> = {};
+  let historicalInvalidations = 0;
+  const historicalContext = {
+    args: {
+      action: "steer",
+      agent: "release-review",
+      message: "Continue.",
+    },
+    state: historicalState,
+    agentDefinition: "replacement-definition",
+    invalidate: () => historicalInvalidations++,
+  };
+  renderCoordinationResult(
+    "agent",
+    {
+      details: {
+        ok: true,
+        action: "steer",
+        agent: "release-review",
+        presentation_agent_definition: "researcher",
+      },
+    },
+    {},
+    presentationTheme,
+    historicalContext,
+  );
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "agent",
+        historicalContext.args,
+        presentationTheme,
+        historicalContext,
+      ),
+    ).split("\n")[0],
+    "agent steer  release-review · researcher",
+  );
+  assert.equal(historicalInvalidations, 1);
+});
+
 test("coordination headers use semantic typography without ANSI-specific assertions", () => {
   const tokens: string[] = [];
   const styleProbeTheme = {

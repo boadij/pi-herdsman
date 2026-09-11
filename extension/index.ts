@@ -4691,6 +4691,7 @@ async function actionUnsafe(
       ok: true,
       action: "close",
       agent: agentLabel,
+      presentation_agent_definition: stateAgentDefinition(state),
       ...(cleanupErrors.has(listed.label as string)
         ? { cleanup_error: cleanupErrors.get(listed.label as string) }
         : {}),
@@ -5362,6 +5363,7 @@ async function actionUnsafe(
   const agentLabel = p.agent;
   const resolved = await resolveRuntime(pi, ctx, agentLabel, p.action, signal);
   const runtime = resolved.runtime;
+  const presentationAgentDefinition = runtime.agentDefinition;
   if (p.action === "inspect") {
     const snapshot = await inspectHerdrAgent(
       pi,
@@ -5387,6 +5389,7 @@ async function actionUnsafe(
       ok: true,
       action: "inspect",
       agent: runtime.label,
+      presentation_agent_definition: presentationAgentDefinition,
       session_id: runtime.piSessionId,
       pane_id: runtime.paneId,
       captured_at: snapshot.capturedAt,
@@ -5479,6 +5482,7 @@ async function actionUnsafe(
       ok: true,
       action: "reply",
       agent: runtime.label,
+      presentation_agent_definition: presentationAgentDefinition,
       request_id: requestId,
       ask_id: askId,
       assignment_request_id: currentState.activeRequestId,
@@ -5526,6 +5530,7 @@ async function actionUnsafe(
     ok: true,
     action: p.action,
     agent: runtime!.label,
+    presentation_agent_definition: presentationAgentDefinition,
     request_id: requestId,
     session_id: runtime!.piSessionId,
     assignment_request_id: runtime!.activeRequestId,
@@ -9306,6 +9311,12 @@ export default function (pi: ExtensionAPI): void {
           if (cleanupErrors.size)
             (value as Record<string, unknown>).cleanup_errors =
               Object.fromEntries(cleanupErrors);
+          const presentationAgentDefinition =
+            typeof value.presentation_agent_definition === "string"
+              ? value.presentation_agent_definition
+              : typeof value.definition === "string"
+                ? value.definition
+                : undefined;
           const bounded = truncateModelText(
             formatToolModelResult(p.action, value),
             {
@@ -9323,6 +9334,11 @@ export default function (pi: ExtensionAPI): void {
             ],
             details: {
               ...value,
+              ...(presentationAgentDefinition
+                ? {
+                    presentation_agent_definition: presentationAgentDefinition,
+                  }
+                : {}),
               truncated: bounded.truncated,
               ...(bounded.fullOutputPath
                 ? { full_output_path: bounded.fullOutputPath }

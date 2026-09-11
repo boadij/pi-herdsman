@@ -2136,6 +2136,7 @@ test("registered lead exposes only explicit live controls", async () => {
   assert.equal(steer.details.agent, label);
   assert.equal(steer.details.session_id, identity.piSessionId);
   assert.equal(steer.details.assignment_request_id, REQUEST_ID);
+  assert.equal(steer.details.presentation_agent_definition, "agent");
   assert.equal(steer.details.truncated, false);
   assert.equal(steerSubmitted?.kind, "steer");
   assert.match(steerSubmitted?.text ?? "", /steer evidence/);
@@ -2158,6 +2159,112 @@ test("registered lead exposes only explicit live controls", async () => {
   assert.match(rendered.text, /assignment request: /);
   accepting.events.get("session_shutdown")?.[0]();
   realFs.rmSync(steerFile, { force: true });
+});
+
+test("successful controls persist their definition before runtime teardown", async () => {
+  for (const action of ["steer", "reply", "inspect"] as const) {
+    setLeadEnvironment();
+    const label = `persisted-${action}`;
+    const identity = recoveryIdentity(label);
+    const requestId = randomUUID();
+    const mailbox = agentMailboxPath(WORKSPACE, label);
+    const state = {
+      ...managedState(
+        label,
+        action === "inspect" ? undefined : requestId,
+        identity,
+      ),
+      agentDefinition: "agent",
+    };
+    resetAgentMailbox(mailbox);
+    writeAgentState(mailbox, state);
+    const askId = randomUUID();
+    if (action === "reply") {
+      writeAgentState(mailbox, { ...state, pendingAskId: askId });
+      writeAsk(mailbox, {
+        version: 4,
+        askId,
+        requestId,
+        runId: state.runId,
+        ownerSessionId: state.ownerSessionId,
+        workspaceId: state.workspaceId,
+        agentLabel: state.agentLabel,
+        paneId: state.paneId,
+        piSessionId: state.piSessionId,
+        question: "Which provider should I use?",
+        createdAt: Date.now(),
+      });
+    }
+    let pi: ReturnType<typeof fakePi>;
+    let context = fakeContext();
+    let tornDown = false;
+    const teardown = () => {
+      if (tornDown) return;
+      tornDown = true;
+      for (const handler of pi.events.get("session_shutdown") ?? [])
+        handler(undefined, context);
+    };
+    const acknowledgeAndTearDown = (requestMailbox: string, marker: string) => {
+      const observedRequestId = marker.slice(
+        "__PI_HERDSMAN_AGENT_V4__:".length,
+      );
+      const current = readAgentState(requestMailbox)!;
+      writeAgentState(requestMailbox, {
+        ...current,
+        lastAck: {
+          requestId: observedRequestId,
+          accepted: true,
+          acknowledgedAt: Date.now(),
+        },
+        updatedAt: Date.now(),
+      });
+      teardown();
+    };
+    const baseExec = leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      action === "inspect" ? undefined : acknowledgeAndTearDown,
+      identity.piSessionId,
+      identity,
+    );
+    const exec = async (command: string, args: string[], options: any) => {
+      const result = await baseExec(command, args, options);
+      if (
+        action === "inspect" &&
+        command === "herdr" &&
+        args[0] === "agent" &&
+        args[1] === "get"
+      )
+        teardown();
+      return result;
+    };
+    pi = fakePi({ exec });
+    registerExtension!(pi.pi as never);
+    try {
+      await pi.events.get("session_start")![0](undefined, context);
+      const result = await pi.tools[0].execute(
+        action,
+        {
+          action,
+          agent: label,
+          ...(action !== "inspect" ? { message: "Continue." } : {}),
+        },
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(result.details.ok, true, JSON.stringify(result.details));
+      assert.equal(result.details.presentation_agent_definition, "agent");
+      assert.doesNotMatch(
+        (result.content[0] as { text: string }).text,
+        /presentation_agent_definition/,
+      );
+    } finally {
+      teardown();
+      resetAgentMailbox(mailbox);
+    }
+  }
 });
 
 test("lead steers a blocked parent waiting for direct-child work", async () => {

@@ -1517,6 +1517,21 @@ function resultContent(result: any): string {
   return contentText(content);
 }
 
+function hydrateCoordinationDefinition(
+  details: Record<string, unknown>,
+  context: any,
+): void {
+  const definition =
+    value(details.presentation_agent_definition) ||
+    value(details.definition) ||
+    value(details.agent_definition);
+  if (!definition || !context?.state || typeof context.state !== "object")
+    return;
+  if (context.state.agentDefinition === definition) return;
+  context.state.agentDefinition = definition;
+  context.invalidate?.();
+}
+
 function shortIdentity(input: unknown): string {
   const text = value(input);
   return text.length > 12 ? `${Array.from(text).slice(0, 11).join("")}…` : text;
@@ -1687,9 +1702,9 @@ export function renderCoordinationCall(
     target = action === "list" ? "" : shortIdentity(a.lead);
   const definition =
     tool === "agent"
-      ? action === "delegate"
-        ? a.definition
-        : context?.agentDefinition
+      ? value(a.definition) ||
+        value(context?.state?.agentDefinition) ||
+        context?.agentDefinition
       : undefined;
   const header = coordinationHeader(tool, verb, target, theme);
   const partial = context?.isPartial || context?.argsComplete === false;
@@ -2047,6 +2062,7 @@ export function renderCoordinationResult(
 ): WidthSafeText {
   const details = resultDetails(result);
   const args = (context?.args ?? {}) as Record<string, unknown>;
+  hydrateCoordinationDefinition(details, context);
   const action = value(args.action) || value(details.action) || "agent";
   const expanded = humanExpanded(context, options);
   const failed = details.ok === false || context?.isError === true;
