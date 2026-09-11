@@ -97,7 +97,10 @@ test("parent delegates two same-definition children with exact ownership", async
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "parent" },
+      data: {
+        definition: "parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "parent",
+      },
     },
   ]);
   const mailboxes: string[] = [];
@@ -197,7 +200,7 @@ function registerNativeAgentSession(state: ManagedAgentState): void {
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "agent" },
+        data: { definition: "agent", label: state.agentLabel },
       },
     ],
   });
@@ -668,7 +671,10 @@ test("managed-agent delegation always splits in its current pane for every lead 
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "agent" },
+        data: {
+          definition: "agent",
+          label: process.env.PI_HERDSMAN_LABEL ?? "agent",
+        },
       },
     ]);
     const childMailbox = agentMailboxPath(
@@ -764,7 +770,10 @@ test("parent delegation lock makes concurrent close and delegate fail fast", asy
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "parent" },
+      data: {
+        definition: "parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "parent",
+      },
     },
   ]);
   const leadContext = fakeContext();
@@ -1611,7 +1620,10 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
         {
           type: "custom",
           customType: "pi-herdsman-agent-definition",
-          data: { name: "child" },
+          data: {
+            definition: "child",
+            label: process.env.PI_HERDSMAN_LABEL ?? "child",
+          },
         },
       ],
       childBranch,
@@ -1645,7 +1657,10 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "agent" },
+        data: {
+          definition: "agent",
+          label: process.env.PI_HERDSMAN_LABEL ?? "agent",
+        },
       },
     ];
     parentAgent = fakePi({ exec: parentBase, entries: parentEntries });
@@ -1759,7 +1774,10 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "agent" },
+        data: {
+          definition: "agent",
+          label: process.env.PI_HERDSMAN_LABEL ?? "agent",
+        },
       },
     ]);
     for (const handler of parentAgent.events.get("session_start") ?? [])
@@ -1803,7 +1821,10 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
         {
           type: "custom",
           customType: "pi-herdsman-agent-definition",
-          data: { name: "agent" },
+          data: {
+            definition: "agent",
+            label: process.env.PI_HERDSMAN_LABEL ?? "agent",
+          },
         },
       ],
       parentReplyBranch,
@@ -1848,7 +1869,10 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "child" },
+        data: {
+          definition: "child",
+          label: process.env.PI_HERDSMAN_LABEL ?? "child",
+        },
       },
     ]);
     childResultContext.sessionManager.getSessionId = () => child.piSessionId;
@@ -1894,7 +1918,10 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "agent" },
+        data: {
+          definition: "agent",
+          label: process.env.PI_HERDSMAN_LABEL ?? "agent",
+        },
       },
       {
         customType: "pi-herdsman-agent-result",
@@ -1977,7 +2004,10 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "parent" },
+      data: {
+        definition: "parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "parent",
+      },
     },
   ];
   const base = agentControllerExecutor(parent, [badChild, goodChild]);
@@ -2048,7 +2078,7 @@ test("historical session rejects an active managed representation", async () => 
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name },
+        data: { definition: name, label },
       },
     ],
   };
@@ -2135,7 +2165,7 @@ test("exact requested session IDs remain busy when persisted paths are stale", a
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name },
+        data: { definition: name, label: `${name}-agent` },
       },
     ],
   };
@@ -2194,7 +2224,7 @@ test("concurrent session activation permits one generation", async () => {
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name },
+        data: { definition: name, label: name },
       },
     ],
   };
@@ -2738,7 +2768,10 @@ test("fresh and non-live historical assignments reject disabled definitions", as
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: historicalName },
+        data: {
+          definition: historicalName,
+          label: `${historicalName}-agent`,
+        },
       },
     ],
   };
@@ -2842,7 +2875,7 @@ test("session delegation starts a new agent generation with current prompt conte
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name },
+        data: { definition: name, label: name },
       },
     ],
   };
@@ -2928,7 +2961,7 @@ test("session delegation ignores an unrelated missing live session path", async 
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name },
+        data: { definition: name, label: name },
       },
     ],
   };
@@ -3015,7 +3048,7 @@ test("session delegation keeps an exact live ID busy despite a missing path obse
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name },
+        data: { definition: name, label: name },
       },
     ],
   };
@@ -3100,7 +3133,7 @@ test("session delegation keeps an exact live ID busy despite contradictory live 
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name },
+        data: { definition: name, label: name },
       },
     ],
   };
@@ -3194,7 +3227,7 @@ test("session delegation ignores removed secondary session fields", async () => 
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name },
+        data: { definition: name, label: name },
       },
     ],
   };
@@ -3284,7 +3317,7 @@ test("session delegation fails closed on persisted session path errors", async (
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name },
+        data: { definition: name, label: `${name}-agent` },
       },
     ],
   };

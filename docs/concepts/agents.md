@@ -32,8 +32,8 @@ my-review
 
 Use the exact `agent` value from `agent list` only for
 `steer.agent`, `reply.agent`, or `close.agent` while those actions are listed
-in `available_actions`. An agent label is the live execution identity for one
-assignment, not a continuation handle.
+in `available_actions`. An agent label is the stable logical name for one
+session's sequential assignments, not a continuation handle.
 
 Labels must begin with a lowercase letter, contain only lowercase letters,
 digits, `_`, or `-`, and be at most 32 characters.
@@ -45,12 +45,11 @@ ID and path for correlation.
 
 A session path or full UUID can be supplied as `delegate.session` to continue
 historical work. Session delegation creates a new agent generation for one new
-assignment and uses the saved session's cwd and historical context. With
-`delegate.session`, omitting `label` chooses a fresh available label derived
-from the saved definition; supplying one chooses the exact live label for that
-generation. The Pi session remains the continuation identity, not a
-live-control identity. An exact active or unresolved managed representation
-blocks concurrent activation of that session.
+assignment and uses the saved session's cwd, historical context, definition,
+and logical label. A continuation cannot choose or change its label. The Pi
+session remains the continuation selector, not a live-control identity. An
+exact active or unresolved managed representation blocks concurrent activation
+of that session.
 
 ### herdr identities
 
@@ -114,8 +113,9 @@ The identities are therefore:
 
 ```text
 agent definition → configuration for new work
-Pi session       → durable conversational context and continuation identity
-agent label     → live control identity for one assignment
+Pi session       → durable conversational context and continuation selector
+agent label     → stable logical name across sequential generations
+run/pane/mailbox → concrete live execution generation
 ```
 
 ## See also

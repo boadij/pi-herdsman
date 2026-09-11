@@ -238,8 +238,11 @@ Use delegate to give one bounded assignment to an agent while retaining ownershi
 Each managed agent exists for one assignment only. After its terminal result is
 delivered, Pi Herdsman cleans up that agent automatically. To continue completed
 work with its existing context, use the exact session returned with the result.
-Agent identity is only for controlling the current assignment; it is not a
-continuation identity.
+Agent labels control the currently live generation; they are not continuation
+selectors.
+Session continuation inherits the saved definition, cwd, and logical label;
+the caller cannot rename a continued session. The inherited label controls only
+the currently live generation.
 
 For a live agent, use only operations currently listed in available_actions.
 State describes what is happening; available_actions describes current control
@@ -456,20 +459,7 @@ async function visibleAgentDefinitionMetadata(
       )
     : definitions;
 }
-type Params = {
-  action: "list" | "delegate" | "steer" | "reply" | "close" | "inspect";
-  definition?: string;
-  agent?: string;
-  label?: string;
-  cwd?: string;
-  task?: string;
-  message?: string;
-  session?: string;
-  fork?: string;
-  timeoutMs?: number;
-  files?: string[];
-};
-type ParsedParams =
+type Params =
   | { action: "list" }
   | {
       action: "delegate";
@@ -484,7 +474,6 @@ type ParsedParams =
   | {
       action: "delegate";
       session: string;
-      label?: string;
       task: string;
       files?: string[];
       timeoutMs?: number;
@@ -493,7 +482,7 @@ type ParsedParams =
   | { action: "reply"; agent: string; message: string; files?: string[] }
   | { action: "close"; agent: string }
   | { action: "inspect"; agent: string };
-function parseRequest(p: Params): ParsedParams {
+function parseRequest(p: Params): Params {
   if (p.action === "list") {
     return { action: "list" };
   }
@@ -528,12 +517,8 @@ function parseRequest(p: Params): ParsedParams {
       fail("invalid_request", "Inspect requires an agent", "inspect");
     return { action: "inspect", agent: p.agent! };
   }
-  if (p.action === "delegate" && p.definition !== undefined) {
-    if (
-      p.session !== undefined ||
-      p.agent !== undefined ||
-      p.message !== undefined
-    )
+  if (p.action === "delegate" && "definition" in p) {
+    if ("session" in p || "agent" in p || "message" in p)
       fail(
         "invalid_request",
         "Delegate requires exactly one of definition or session",
@@ -556,13 +541,13 @@ function parseRequest(p: Params): ParsedParams {
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
     };
   }
-  if (p.action === "delegate" && p.session !== undefined) {
+  if (p.action === "delegate" && "session" in p) {
     if (
-      p.definition !== undefined ||
-      p.agent !== undefined ||
-      p.cwd !== undefined ||
-      p.fork !== undefined ||
-      p.message !== undefined
+      "definition" in p ||
+      "agent" in p ||
+      "cwd" in p ||
+      "fork" in p ||
+      "message" in p
     )
       fail(
         "invalid_request",
@@ -579,7 +564,6 @@ function parseRequest(p: Params): ParsedParams {
       action: "delegate",
       session: p.session,
       task: p.task!,
-      ...(p.label !== undefined ? { label: p.label } : {}),
       ...(p.files !== undefined ? { files: p.files } : {}),
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
     };
@@ -1108,16 +1092,19 @@ async function contextAgentDefinitions(ctx: ExtensionContext) {
   };
 }
 const AGENT_DEFINITION_ENTRY = "pi-herdsman-agent-definition";
-type AgentDefinitionEntry = { name: string };
-export function sessionAgentDefinition(
+export type AgentSessionIdentity = {
+  definition: string;
+  label: string;
+};
+export function sessionAgentIdentity(
   entries: readonly unknown[],
-): string | undefined {
+): AgentSessionIdentity | undefined {
   const typed = entries as ReadonlyArray<{
     type?: unknown;
     customType?: unknown;
     data?: unknown;
   }>;
-  let name: string | undefined;
+  let identity: AgentSessionIdentity | undefined;
   for (const entry of typed) {
     if (entry.type !== "custom" || entry.customType !== AGENT_DEFINITION_ENTRY)
       continue;
@@ -1125,24 +1112,33 @@ export function sessionAgentDefinition(
     if (
       !data ||
       typeof data !== "object" ||
-      Object.keys(data).length !== 1 ||
-      typeof (data as { name?: unknown }).name !== "string" ||
-      !(data as { name: string }).name.trim()
+      Object.keys(data).length !== 2 ||
+      typeof (data as { definition?: unknown }).definition !== "string" ||
+      typeof (data as { label?: unknown }).label !== "string" ||
+      !(data as { definition: string }).definition.trim() ||
+      !(data as { label: string }).label.trim()
     )
       throw new Error("invalid pi-herdsman-agent-definition entry");
-    const candidate = (data as AgentDefinitionEntry).name.trim();
-    if (name !== undefined && name !== candidate)
+    const candidate = {
+      definition: (data as { definition: string }).definition.trim(),
+      label: (data as { label: string }).label.trim(),
+    };
+    if (
+      identity !== undefined &&
+      (identity.definition !== candidate.definition ||
+        identity.label !== candidate.label)
+    )
       throw new Error("conflicting pi-herdsman-agent-definition entries");
-    name = candidate;
+    identity = candidate;
   }
-  return name;
+  return identity;
 }
-function readAgentDefinition(
+function readAgentIdentity(
   manager: Pick<SessionManager, "getEntries">,
-): string {
-  const name = sessionAgentDefinition(manager.getEntries());
-  if (!name) throw new Error("missing pi-herdsman-agent-definition entry");
-  return name;
+): AgentSessionIdentity {
+  const identity = sessionAgentIdentity(manager.getEntries());
+  if (!identity) throw new Error("missing pi-herdsman-agent-definition entry");
+  return identity;
 }
 function stateAgentDefinition(state: ManagedAgentState): string {
   if (state.agentDefinition !== undefined) {
@@ -1155,27 +1151,21 @@ function stateAgentDefinition(state: ManagedAgentState): string {
   }
   if (!state.piSessionFile)
     throw new Error("managed agent has no Pi session file");
-  return readAgentDefinition(SessionManager.open(state.piSessionFile));
+  return readAgentIdentity(SessionManager.open(state.piSessionFile)).definition;
 }
-function ensureAgentDefinition(
+function ensureAgentIdentity(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  name: string,
+  definition: string,
+  label: string,
 ): void {
-  const entries = ctx.sessionManager.getEntries();
-  if (
-    entries.some(
-      (entry) =>
-        entry.type === "custom" && entry.customType === AGENT_DEFINITION_ENTRY,
-    )
-  ) {
-    if (readAgentDefinition(ctx.sessionManager) !== name)
-      throw new Error(
-        "agent session agent definition does not match environment",
-      );
+  const identity = sessionAgentIdentity(ctx.sessionManager.getEntries());
+  if (identity) {
+    if (identity.definition !== definition || identity.label !== label)
+      throw new Error("agent session identity does not match environment");
     return;
   }
-  pi.appendEntry(AGENT_DEFINITION_ENTRY, { name });
+  pi.appendEntry(AGENT_DEFINITION_ENTRY, { definition, label });
 }
 type ManagedSession = {
   path: string;
@@ -1292,7 +1282,13 @@ export async function resolveAssignmentSession(
   ctx: ExtensionContext,
   raw: string,
   operation: "delegate" = "delegate",
-): Promise<{ path: string; id: string; agent: string; cwd: string }> {
+): Promise<{
+  path: string;
+  id: string;
+  definition: string;
+  label: string;
+  cwd: string;
+}> {
   const session = await resolveManagedSession(ctx, raw);
   const manager = SessionManager.open(session.path);
   const header = manager.getHeader();
@@ -1302,11 +1298,22 @@ export async function resolveAssignmentSession(
       `Saved assignment session has no non-empty cwd in its session header: ${session.path}`,
       operation,
     );
+  let identity: AgentSessionIdentity;
+  try {
+    identity = readAgentIdentity(manager);
+  } catch (error) {
+    fail(
+      "invalid_request",
+      error instanceof Error ? error.message : String(error),
+      operation,
+    );
+  }
   const cwd = manager.getCwd();
   return {
     path: session.path,
     id: session.id,
-    agent: readAgentDefinition(manager),
+    definition: identity!.definition,
+    label: identity!.label,
     cwd,
   };
 }
@@ -1492,7 +1499,7 @@ function isLeadSessionBoundary(
   try {
     if (SessionManager.open(session.value).getSessionId() !== ownerSessionId)
       return false;
-    return !sessionAgentDefinition(
+    return !sessionAgentIdentity(
       SessionManager.open(session.value).getEntries(),
     );
   } catch {
@@ -1654,12 +1661,12 @@ function validateAgentControllerIdentity(
   const state = validateManagedAgentIdentity(ctx);
   const e = process.env;
   try {
+    const identity = readAgentIdentity(ctx.sessionManager);
     if (
-      readAgentDefinition(ctx.sessionManager) !== e.PI_HERDSMAN_AGENT_DEFINITION
+      identity.definition !== e.PI_HERDSMAN_AGENT_DEFINITION ||
+      identity.label !== e.PI_HERDSMAN_LABEL
     )
-      throw new Error(
-        "agent session agent definition does not match environment",
-      );
+      throw new Error("agent session identity does not match environment");
   } catch (error) {
     fail(
       "target_not_found",
@@ -4594,7 +4601,7 @@ function askRecordBytesFor(
 async function actionUnsafe(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  p: ParsedParams,
+  p: Params,
   signal?: AbortSignal,
   scope?: ControllerScope,
   pendingStarts?: Map<string, PendingStart>,
@@ -4724,7 +4731,7 @@ async function actionUnsafe(
         : undefined;
     await herdrVersion(pi, ctx, signal);
     const agentDefinition = resumed
-      ? resumed.agent
+      ? resumed.definition
       : "definition" in p
         ? p.definition
         : undefined;
@@ -4739,7 +4746,7 @@ async function actionUnsafe(
         "Delegation requires a definition or session",
         "delegate",
       );
-    const requestedLabel = p.label;
+    const requestedLabel = resumed?.label ?? p.label;
     const agentContext = await contextAgentDefinitions(ctx);
     const definition = agentContext.definitions.find(
       (candidate) => candidate.name === agentDefinition,
@@ -5725,9 +5732,6 @@ export default function (pi: ExtensionAPI): void {
       {
         action: StringEnum(["delegate"] as const),
         session: Type.String({ pattern: "\\S" }),
-        label: Type.Optional(
-          Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
-        ),
         task: Type.String({ pattern: "\\S" }),
         files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
         timeoutMs: Type.Optional(
@@ -9741,7 +9745,12 @@ export default function (pi: ExtensionAPI): void {
       const candidate = envManagedAgent(ctx);
       if (!candidate) throw new Error("invalid agent environment");
       if (!delegationEnabled) ownTools = pi.getActiveTools();
-      ensureAgentDefinition(pi, ctx, process.env.PI_HERDSMAN_AGENT_DEFINITION!);
+      ensureAgentIdentity(
+        pi,
+        ctx,
+        process.env.PI_HERDSMAN_AGENT_DEFINITION!,
+        process.env.PI_HERDSMAN_LABEL!,
+      );
       const existing = readAgentState(process.env.PI_HERDSMAN_MAILBOX!);
       if (existing && !sameManagedAgentIdentity(existing, candidate)) {
         throw new Error("agent session identity changed while state existed");

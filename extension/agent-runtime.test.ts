@@ -36,7 +36,7 @@ import support, {
   resetAgentMailbox,
   resultEntryDetails,
   leadExec,
-  sessionAgentDefinition,
+  sessionAgentIdentity,
   setLeadEnvironment,
   setAgentEnvironment,
   watchedResultPaths,
@@ -975,7 +975,10 @@ test("idle parent steers through its current input turn while agent work is pend
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "parent" },
+      data: {
+        definition: "parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "parent",
+      },
     },
   ]);
   const input = () => agent.events.get("input")![0];
@@ -1127,7 +1130,10 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "parent" },
+      data: {
+        definition: "parent",
+        label: process.env.PI_HERDSMAN_LABEL ?? "parent",
+      },
     },
   ];
   const pi = fakePi({
@@ -2346,46 +2352,73 @@ test("a stray agent variable does not suppress lead registration", () => {
 });
 
 test("session agent identity reads the session-wide entry array", () => {
-  assert.equal(
-    sessionAgentDefinition([
+  assert.deepEqual(
+    sessionAgentIdentity([
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "reviewer" },
+        data: { definition: "reviewer", label: "reviewer" },
       },
       { type: "message" },
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
-        data: { name: "reviewer" },
+        data: { definition: "reviewer", label: "reviewer" },
       },
     ]),
-    "reviewer",
+    { definition: "reviewer", label: "reviewer" },
   );
-  assert.equal(sessionAgentDefinition([]), undefined);
+  assert.equal(sessionAgentIdentity([]), undefined);
   assert.throws(
     () =>
-      sessionAgentDefinition([
+      sessionAgentIdentity([
         {
           type: "custom",
           customType: "pi-herdsman-agent-definition",
-          data: { name: 42 },
+          data: { name: "reviewer" },
         },
       ]),
     /invalid pi-herdsman-agent-definition entry/,
   );
   assert.throws(
     () =>
-      sessionAgentDefinition([
+      sessionAgentIdentity([
         {
           type: "custom",
           customType: "pi-herdsman-agent-definition",
-          data: { name: "reviewer" },
+          data: { definition: 42, label: "reviewer" },
+        },
+      ]),
+    /invalid pi-herdsman-agent-definition entry/,
+  );
+  assert.throws(
+    () =>
+      sessionAgentIdentity([
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: { definition: "reviewer", label: "reviewer" },
         },
         {
           type: "custom",
           customType: "pi-herdsman-agent-definition",
-          data: { name: "implementer" },
+          data: { definition: "implementer", label: "reviewer" },
+        },
+      ]),
+    /conflicting pi-herdsman-agent-definition entries/,
+  );
+  assert.throws(
+    () =>
+      sessionAgentIdentity([
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: { definition: "reviewer", label: "reviewer" },
+        },
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: { definition: "reviewer", label: "other" },
         },
       ]),
     /conflicting pi-herdsman-agent-definition entries/,
@@ -2404,11 +2437,35 @@ test("agent persists one definition entry before mailbox initialization", async 
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
-      data: { name: "agent" },
+      data: { definition: "agent", label: "registered-agent" },
     },
   ]);
   assert.ok(readAgentState(mailbox));
   agent.events.get("session_shutdown")?.[0]();
+});
+
+test("agent rejects a conflicting persisted session identity", async () => {
+  const mailbox = setAgentEnvironment("registered-agent");
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { definition: "agent", label: "other-agent" },
+    },
+  ];
+  const agent = fakePi({ entries });
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(entries);
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  await agent.events.get("session_start")![0](undefined, context);
+  assert.ok(
+    notices.some((message) =>
+      message.includes("session identity does not match environment"),
+    ),
+  );
+  agent.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
 });
 
 test("owner ask delivery is branch-local and recovers on tree navigation", async () => {

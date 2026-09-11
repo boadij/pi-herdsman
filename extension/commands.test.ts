@@ -1445,7 +1445,8 @@ test("Running keeps colliding display labels distinct and focuses the selected p
           type: "custom",
           customType: "pi-herdsman-agent-definition",
           data: {
-            name: states[index]!.definition,
+            definition: states[index]!.definition,
+            label: states[index]!.label,
           },
         },
       ],
@@ -2088,7 +2089,7 @@ test("lead agents stop closes a direct subtree agents-first", async () => {
         {
           type: "custom",
           customType: "pi-herdsman-agent-definition",
-          data: { name: "agent" },
+          data: { definition: "agent", label: state.agentLabel },
         },
       ],
     });

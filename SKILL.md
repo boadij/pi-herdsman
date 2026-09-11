@@ -37,8 +37,11 @@ ownership:
 Each managed agent exists for one assignment only. After its terminal result is
 delivered, Pi Herdsman cleans up that agent automatically. To continue completed
 work with its existing context, use the exact session returned with the result.
-Agent identity is only for controlling the current assignment; it is not a
-continuation identity.
+Agent labels control the currently live generation; they are not continuation
+selectors.
+Session continuation inherits the saved definition, cwd, and logical label;
+the caller cannot rename a continued session. The inherited label controls only
+the currently live generation.
 
 For a live agent, use only operations currently listed in available_actions.
 State describes what is happening; available_actions describes current control
