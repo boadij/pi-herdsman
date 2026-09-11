@@ -30,6 +30,7 @@ import support, {
   readAgentState,
   realFs,
   recoveryIdentity,
+  removeAsk,
   registerExtension,
   removeRequest,
   removeResult,
@@ -2622,8 +2623,118 @@ test("owner ask delivery is branch-local and recovers on tree navigation", async
   assert.equal(pi.sent.length, 2);
   assert.deepEqual(pi.sentMessageCalls[0]?.options, {
     triggerTurn: true,
-    deliverAs: "followUp",
   });
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
+});
+
+test("owner ask resolved while busy is not delivered after settlement", async () => {
+  setLeadEnvironment();
+  const label = "busy-resolved-ask";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const requestId = REQUEST_ID;
+  const waiting = {
+    ...managedState(label, requestId, identity),
+    pendingAskId: "99999999-9999-4999-8999-999999999999",
+  };
+  writeAgentState(mailbox, waiting);
+  writeAsk(mailbox, {
+    version: 4,
+    askId: waiting.pendingAskId!,
+    requestId,
+    runId: waiting.runId,
+    ownerSessionId: waiting.ownerSessionId,
+    workspaceId: waiting.workspaceId,
+    agentLabel: waiting.agentLabel,
+    paneId: waiting.paneId,
+    piSessionId: waiting.piSessionId,
+    question: "Choose ALPHA or BETA",
+    createdAt: Date.now(),
+  });
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      undefined,
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext();
+  (context as any).isIdle = () => false;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(pi.sent.length, 0);
+    writeAgentState(mailbox, { ...waiting, pendingAskId: undefined });
+    removeAsk(mailbox, waiting.pendingAskId!);
+    (context as any).isIdle = () => true;
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler(undefined, context);
+    assert.equal(pi.sent.length, 0);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("owner ask waits while busy and delivers once after settlement", async () => {
+  setLeadEnvironment();
+  const label = "busy-pending-ask";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const requestId = REQUEST_ID;
+  const waiting = {
+    ...managedState(label, requestId, identity),
+    pendingAskId: "99999999-9999-4999-8999-999999999999",
+  };
+  writeAgentState(mailbox, waiting);
+  writeAsk(mailbox, {
+    version: 4,
+    askId: waiting.pendingAskId!,
+    requestId,
+    runId: waiting.runId,
+    ownerSessionId: waiting.ownerSessionId,
+    workspaceId: waiting.workspaceId,
+    agentLabel: waiting.agentLabel,
+    paneId: waiting.paneId,
+    piSessionId: waiting.piSessionId,
+    question: "Choose ALPHA or BETA",
+    createdAt: Date.now(),
+  });
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      undefined,
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext();
+  let idle = false;
+  (context as any).isIdle = () => idle;
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.equal(pi.sent.length, 0);
+    idle = true;
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler(undefined, context);
+    assert.equal(
+      pi.sent.filter(
+        (message: any) => message.customType === "pi-herdsman-agent-ask",
+      ).length,
+      1,
+    );
+    assert.deepEqual(pi.sentMessageCalls[0]?.options, { triggerTurn: true });
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
 });
