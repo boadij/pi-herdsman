@@ -1517,19 +1517,26 @@ function resultContent(result: any): string {
   return contentText(content);
 }
 
-function hydrateCoordinationDefinition(
+function hydrateCoordinationAgent(
   details: Record<string, unknown>,
   context: any,
 ): void {
+  if (!context?.state || typeof context.state !== "object") return;
+  const agent = value(details.agent);
   const definition =
     value(details.presentation_agent_definition) ||
     value(details.definition) ||
     value(details.agent_definition);
-  if (!definition || !context?.state || typeof context.state !== "object")
-    return;
-  if (context.state.agentDefinition === definition) return;
-  context.state.agentDefinition = definition;
-  queueMicrotask(() => context.invalidate?.());
+  let changed = false;
+  if (agent && context.state.agentLabel !== agent) {
+    context.state.agentLabel = agent;
+    changed = true;
+  }
+  if (definition && context.state.agentDefinition !== definition) {
+    context.state.agentDefinition = definition;
+    changed = true;
+  }
+  if (changed) queueMicrotask(() => context.invalidate?.());
 }
 
 function shortIdentity(input: unknown): string {
@@ -1702,6 +1709,8 @@ export function renderCoordinationCall(
   let target = "";
   if (tool === "agent" && action === "delegate")
     target = value(a.label) || value(a.definition);
+  else if (tool === "agent" && action === "continue")
+    target = value(context?.state?.agentLabel);
   else if (tool === "agent") target = value(a.agent);
   else if (tool === "staff")
     target = action === "list" ? "" : shortIdentity(a.lead);
@@ -2067,7 +2076,7 @@ export function renderCoordinationResult(
 ): WidthSafeText {
   const details = resultDetails(result);
   const args = (context?.args ?? {}) as Record<string, unknown>;
-  hydrateCoordinationDefinition(details, context);
+  hydrateCoordinationAgent(details, context);
   const action = value(args.action) || value(details.action) || "agent";
   const expanded = humanExpanded(context, options);
   const failed = details.ok === false || context?.isError === true;

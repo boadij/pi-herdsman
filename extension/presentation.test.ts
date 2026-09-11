@@ -1232,6 +1232,12 @@ test("coordination result definitions keep compact calls transcript-stable", asy
     state,
     invalidate: () => invalidations++,
   };
+  assert.equal(
+    renderedText(
+      renderCoordinationCall("agent", context.args, presentationTheme, context),
+    ).split("\n")[0],
+    "agent continue",
+  );
   renderCoordinationResult(
     "agent",
     {
@@ -1252,7 +1258,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
     renderedText(
       renderCoordinationCall("agent", context.args, presentationTheme, context),
     ).split("\n")[0],
-    "agent continue",
+    "agent continue  ask-owner-retry · researcher",
   );
   assert.equal(invalidations, 1);
 
