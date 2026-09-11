@@ -58,6 +58,7 @@ import support, {
   truncateModelText,
   agentMailboxPath,
   writeAsk,
+  writeRequest,
   writeResult,
   writeAgentState,
 } from "./support.ts";
@@ -1868,6 +1869,108 @@ test("controller reply submits the normal request and preserves the assignment",
   );
   resetAgentMailbox(mailbox);
   realFs.rmSync(replyFile, { force: true });
+});
+
+test("controller cleanup barrier blocks newer work until stale acknowledgement cleanup succeeds", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const label = "cleanup-barrier-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  const staleRequestId = randomUUID();
+  const staleState = {
+    ...managedState(label, staleRequestId, identity),
+    lastAck: {
+      requestId: staleRequestId,
+      accepted: true,
+      acknowledgedAt: Date.now(),
+    },
+  };
+  writeAgentState(mailbox, staleState);
+  const stalePath = join(mailbox, `request-${staleRequestId}.json`);
+  writeRequest(mailbox, {
+    version: 4,
+    runId: staleState.runId,
+    requestId: staleRequestId,
+    ownerSessionId: staleState.ownerSessionId,
+    workspaceId: WORKSPACE,
+    agentLabel: label,
+    paneId: identity.paneId,
+    kind: "task",
+    text: "already accepted",
+    createdAt: Date.now(),
+  });
+  let submitted: RequestRecord | undefined;
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      (requestMailbox, marker) => {
+        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+        submitted = readRequest(requestMailbox, requestId);
+        const current = readAgentState(requestMailbox)!;
+        writeAgentState(requestMailbox, {
+          ...current,
+          lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
+          updatedAt: Date.now(),
+        });
+      },
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries);
+  (context as any).isIdle = () => false;
+  try {
+    support.failNextRequestRemoval = true;
+    const blocked = await pi.tools[0].execute(
+      "id",
+      { action: "steer", agent: label, message: "must wait" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(blocked.details.error.category, "internal_failure");
+    assert.equal(realFs.existsSync(stalePath), true);
+    const failedList = await pi.tools[0].execute(
+      "list-after-cleanup-failure",
+      { action: "list" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.match(
+      failedList.details.agents[0].cleanup_error,
+      /Acknowledged request could not be removed/,
+    );
+
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "steer", agent: label, message: "proceed now" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(submitted?.kind, "steer");
+    assert.equal(realFs.existsSync(stalePath), false);
+    const recoveredList = await pi.tools[0].execute(
+      "list-after-cleanup-recovery",
+      { action: "list" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(recoveredList.details.agents[0].cleanup_error, undefined);
+  } finally {
+    support.failNextRequestRemoval = false;
+    pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(stalePath, { recursive: true, force: true });
+    resetAgentMailbox(mailbox);
+  }
 });
 
 test("lead recovery integration validation aborts with session shutdown", async () => {

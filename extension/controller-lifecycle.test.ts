@@ -27,6 +27,7 @@ import {
   agentFromState,
   cascadeExecutor,
   controlMarker,
+  consumeMailboxRequest,
   createStagedAssignmentFixture,
   defaultFixtureIdentity,
   delegatedLifecycleExecutor,
@@ -933,20 +934,20 @@ test("staged fresh assignment bridges pending start through working", async () =
       "assignment did not reach pre-submit validation",
     );
     const beforeAck = await fixture.list();
-    assert.equal(fixture.promptRequested, false);
+    assert.equal(fixture.requestObserved, false);
     assert.equal(beforeAck.details.agents[0].state, "settling");
 
     fixture.releasePreSubmitValidation();
     await waitForTestCondition(
-      () => fixture.promptRequested,
-      "assignment did not reach the gated prompt",
+      () => fixture.requestObserved,
+      "assignment did not reach the gated request handoff",
     );
-    fixture.releasePrompt();
+    fixture.releaseAcknowledgement();
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     const requestId = result.details.request_id;
     assert.match(requestId, /^[0-9a-f-]{36}$/);
-    assert.equal(requestId, fixture.promptRequestId);
+    assert.equal(requestId, fixture.requestId);
     assert.equal(requestId, fixture.acceptedRequestIdWritten);
     assert.equal(
       readAgentState(fixture.mailbox)?.lastAck?.requestId,
@@ -980,6 +981,51 @@ test("staged fresh assignment bridges pending start through working", async () =
     assert.doesNotMatch(fixture.widgetValue.render(160).join("\n"), /ready/);
   } finally {
     fixture.shutdown();
+  }
+});
+
+test("fixture mailbox consumer retries a failed acknowledgement callback", async () => {
+  const mailbox = setAgentEnvironment("fixture-retry-agent");
+  const state = managedState("fixture-retry-agent");
+  writeAgentState(mailbox, state);
+  const request: RequestRecord = {
+    version: 4,
+    runId: state.runId,
+    requestId: randomUUID(),
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    kind: "task",
+    text: "retry fixture acknowledgement",
+    createdAt: Date.now(),
+  };
+  let attempts = 0;
+  const stop = consumeMailboxRequest(mailbox, (observed) => {
+    attempts++;
+    if (attempts === 1) throw new Error("injected fixture callback failure");
+    const current = readAgentState(mailbox)!;
+    writeAgentState(mailbox, {
+      ...current,
+      activeRequestId: observed.requestId,
+      lastAck: {
+        requestId: observed.requestId,
+        accepted: true,
+        acknowledgedAt: Date.now(),
+      },
+      updatedAt: Date.now(),
+    });
+  });
+  try {
+    writeRequest(mailbox, request);
+    await waitForTestCondition(
+      () => readAgentState(mailbox)?.lastAck?.requestId === request.requestId,
+      "fixture mailbox consumer did not retry acknowledgement",
+    );
+    assert.equal(attempts, 2);
+  } finally {
+    stop();
+    resetAgentMailbox(mailbox);
   }
 });
 
@@ -1132,14 +1178,14 @@ test("staged fresh assignment removes a fast completion without observing workin
     );
     fixture.releasePreSubmitValidation();
     await waitForTestCondition(
-      () => fixture.promptRequested,
-      "fast assignment did not reach the gated prompt",
+      () => fixture.requestObserved,
+      "fast assignment did not reach the gated request handoff",
     );
-    fixture.releasePrompt();
+    fixture.releaseAcknowledgement();
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     const requestId = result.details.request_id;
-    assert.equal(requestId, fixture.promptRequestId);
+    assert.equal(requestId, fixture.requestId);
     assert.equal(requestId, fixture.acceptedRequestIdWritten);
     assert.equal(readAgentState(fixture.mailbox)?.activeRequestId, undefined);
 
@@ -1154,7 +1200,7 @@ test("staged fresh assignment removes a fast completion without observing workin
         ),
       "fast completion result was not delivered",
     );
-    assert.equal(requestId, fixture.promptRequestId);
+    assert.equal(requestId, fixture.requestId);
     assert.equal(fixture.workingObservations, 0);
     await waitForTestCondition(
       () => !readAgentState(fixture.mailbox),
@@ -1546,6 +1592,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
   let leadAgent: ReturnType<typeof fakePi> | undefined;
   let leadReply: RequestRecord | undefined;
   let parentReply: RequestRecord | undefined;
+  let stopChildConsumer: (() => void) | undefined;
   try {
     setNestedAgentEnv(childLabel, parent.piSessionId, "child", []);
     childAgent = fakePi();
@@ -1699,6 +1746,12 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     );
     leadAgent.events.get("session_shutdown")?.[0]();
 
+    const parentReady = readAgentState(parentMailbox)!;
+    writeAgentState(parentMailbox, {
+      ...parentReady,
+      lastAck: undefined,
+      updatedAt: Date.now(),
+    });
     setNestedAgentEnv(parentLabel, LEAD_SESSION_ID, "agent", ["child"]);
     parentAgent = fakePi({ exec: parentBase });
     registerExtension!(parentAgent.pi as never);
@@ -1728,18 +1781,21 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       parentRequestId,
     );
     assert.equal(readAgentState(parentMailbox)?.pendingAskId, undefined);
-    const parentBaseWithCapture: ExecHandler = (command, args, options) => {
-      if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
-        const requestId = (args.at(-1) ?? "").replace(
-          "__PI_HERDSMAN_AGENT_V4__:",
-          "",
-        );
-        parentReply = readRequest(childMailbox, requestId);
-      }
-      return parentBase(command, args, options);
-    };
+    stopChildConsumer = consumeMailboxRequest(childMailbox, (request) => {
+      parentReply = request;
+      const current = readAgentState(childMailbox)!;
+      writeAgentState(childMailbox, {
+        ...current,
+        lastAck: {
+          requestId: request.requestId,
+          accepted: true,
+          acknowledgedAt: Date.now(),
+        },
+        updatedAt: Date.now(),
+      });
+    });
     parentAgent.events.get("session_shutdown")?.[0]();
-    parentAgent = fakePi({ exec: parentBaseWithCapture });
+    parentAgent = fakePi({ exec: parentBase });
     registerExtension!(parentAgent.pi as never);
     const parentReplyBranch: unknown[] = [];
     const parentReplyAgentContext = fakeAgentContext(
@@ -1872,6 +1928,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     );
     parentAgent.events.get("session_shutdown")?.[0]();
   } finally {
+    stopChildConsumer?.();
     childAgent?.events.get("session_shutdown")?.[0]();
     parentAgent?.events.get("session_shutdown")?.[0]();
     leadAgent?.events.get("session_shutdown")?.[0]();
@@ -3299,14 +3356,7 @@ test("rejects known generated-label envelope overflow before startup", async () 
     join(PI_AGENT_ROOT, "settings.json"),
     JSON.stringify({ piHerdsman: { mailboxPayloadLimitBytes: mailboxLimit } }),
   );
-  let prompts = 0;
-  const pi = fakePi({
-    exec: (command, args) => {
-      if (command === "herdr" && args[0] === "agent" && args[1] === "prompt")
-        prompts++;
-      return startup.exec(command, args);
-    },
-  });
+  const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
   const emptyEnvelope = requestRecordBytes(label, "", "");
   const task = "x".repeat(mailboxLimit - emptyEnvelope + 1);
@@ -3327,7 +3377,6 @@ test("rejects known generated-label envelope overflow before startup", async () 
     assert.notEqual(result.details.error.rollbackOccurred, true);
     assert.equal(startup.getCount(), 0);
     assert.equal(realFs.existsSync(startup.mailbox), false);
-    assert.equal(prompts, 0);
     assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
       false,
@@ -3345,11 +3394,8 @@ test("revalidates automatic-label collision sizing before startup", async () => 
   const occupiedMailbox = agentMailboxPath(WORKSPACE, occupiedLabel);
   const replacementMailbox = agentMailboxPath(WORKSPACE, "agent-2");
   const occupiedState = managedState(occupiedLabel);
-  let prompts = 0;
   const pi = fakePi({
-    exec: leadExec("other-agent", "idle", DEFAULT_PI_SESSION_ID, () => {
-      prompts++;
-    }),
+    exec: leadExec("other-agent", "idle", DEFAULT_PI_SESSION_ID),
   });
   registerExtension!(pi.pi as never);
   realFs.rmSync(replacementMailbox, { recursive: true, force: true });
@@ -3397,7 +3443,6 @@ test("revalidates automatic-label collision sizing before startup", async () => 
         .length,
       0,
     );
-    assert.equal(prompts, 0);
     assert.equal(realFs.existsSync(replacementMailbox), false);
     assert.equal(
       readFileSync(`${occupiedMailbox}/state.json`, "utf8"),
@@ -3428,14 +3473,7 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
     true,
   );
   realFs.rmSync(startup.mailbox, { recursive: true, force: true });
-  let prompts = 0;
-  const pi = fakePi({
-    exec: (command, args) => {
-      if (command === "herdr" && args[0] === "agent" && args[1] === "prompt")
-        prompts++;
-      return startup.exec(command, args);
-    },
-  });
+  const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
   const preflightEnvelope = requestRecordBytes(label, "", "");
   const task = "x".repeat(131072 - preflightEnvelope);
@@ -3452,7 +3490,6 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
     assert.equal(result.details.error.category, "rollback_failure");
     assert.equal(result.details.error.rollbackOccurred, true);
     assert.ok(startup.getCount() > 0, "overflow must reach authoritative pane");
-    assert.equal(prompts, 0, "overflow must not submit a control marker");
     assert.deepEqual(
       realFs.existsSync(startup.mailbox)
         ? realFs.readdirSync(startup.mailbox)

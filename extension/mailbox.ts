@@ -658,6 +658,45 @@ export function readRequest(
     throw new Error("Request filename identity mismatch");
   return v;
 }
+export function readUnacknowledgedRequest(
+  path: string,
+  state?: Pick<
+    ManagedAgentState,
+    | "runId"
+    | "ownerSessionId"
+    | "workspaceId"
+    | "agentLabel"
+    | "paneId"
+    | "lastAck"
+  >,
+): RequestRecord | undefined {
+  let names: string[];
+  try {
+    names = readdirSync(path).filter((name) => /^request-.*\.json$/.test(name));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  let pending: RequestRecord | undefined;
+  for (const name of names) {
+    const requestId = name.slice("request-".length, -".json".length);
+    const request = readRequest(path, requestId);
+    if (!request) continue;
+    if (
+      state &&
+      (request.runId !== state.runId ||
+        request.ownerSessionId !== state.ownerSessionId ||
+        request.workspaceId !== state.workspaceId ||
+        request.agentLabel !== state.agentLabel ||
+        request.paneId !== state.paneId)
+    )
+      throw new Error("Request identity did not match agent state");
+    if (state?.lastAck?.requestId === request.requestId) continue;
+    if (pending) throw new Error("Multiple unacknowledged requests found");
+    pending = request;
+  }
+  return pending;
+}
 export function unacknowledgedRequestExists(
   path: string,
   state?: Pick<
@@ -671,33 +710,11 @@ export function unacknowledgedRequestExists(
   >,
 ): boolean {
   // This is mailbox-owned durable settlement truth; it does not change the mailbox schema or protocol.
-  let names: string[];
   try {
-    names = readdirSync(path).filter((name) => /^request-.+\.json$/.test(name));
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? false : true;
+    return readUnacknowledgedRequest(path, state) !== undefined;
+  } catch {
+    return true;
   }
-  for (const name of names) {
-    const requestId = name.slice("request-".length, -".json".length);
-    try {
-      const request = readRequest(path, requestId);
-      if (!request) continue;
-      if (
-        state &&
-        (request.runId !== state.runId ||
-          request.ownerSessionId !== state.ownerSessionId ||
-          request.workspaceId !== state.workspaceId ||
-          request.agentLabel !== state.agentLabel ||
-          request.paneId !== state.paneId)
-      )
-        return true;
-      if (state?.lastAck?.requestId === request.requestId) continue;
-      return true;
-    } catch {
-      return true;
-    }
-  }
-  return false;
 }
 export function removeRequest(path: string, requestId: string): void {
   assertFileId(requestId);

@@ -46,6 +46,7 @@ import {
   claimAgentMailbox,
   MailboxClaimOccupiedError,
   parseControlMarker,
+  readUnacknowledgedRequest,
   readRequest,
   readPendingAsk,
   readResult,
@@ -694,8 +695,14 @@ let metadataDirty = false;
 let metadataFlushActive = false;
 let metadataAbortController: AbortController | undefined;
 const cleanupErrors = new Map<string, string>();
+const REQUEST_CLEANUP_ERROR_PREFIX =
+  "Acknowledged request could not be removed:";
 function clearCleanupError(label: string): void {
   cleanupErrors.delete(label);
+}
+function clearRequestCleanupError(label: string): void {
+  if (cleanupErrors.get(label)?.startsWith(REQUEST_CLEANUP_ERROR_PREFIX))
+    cleanupErrors.delete(label);
 }
 function clearAskDeliveryError(label: string): void {
   if (cleanupErrors.get(label)?.startsWith("Ask delivery failed"))
@@ -2155,6 +2162,17 @@ async function submit(
   if (!preflightState)
     fail("target_not_found", "Agent mailbox state is unavailable", operation);
   validateIdentity(runtime, preflightState);
+  if (preflightState.lastAck) {
+    try {
+      removeRequest(runtime.mailboxPath, preflightState.lastAck.requestId);
+      clearRequestCleanupError(runtime.label);
+    } catch (error) {
+      const message = `${REQUEST_CLEANUP_ERROR_PREFIX} ${String(error)}`;
+      cleanupErrors.set(runtime.label, message);
+      appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
+      fail("internal_failure", message, operation);
+    }
+  }
   await validateIntegration(pi, runtime, ctx, { signal });
   try {
     writeRequest(runtime.mailboxPath, request);
@@ -2170,12 +2188,6 @@ async function submit(
   let acknowledgementObserved = false;
   requestStatusRefresh?.();
   try {
-    await runHerdr(
-      pi,
-      ctx,
-      ["agent", "prompt", runtime.paneId, controlMarker(requestId)],
-      { signal },
-    );
     const state = await waitForState(
       runtime.mailboxPath,
       (s) => s.lastAck?.requestId === requestId,
@@ -2225,8 +2237,9 @@ async function submit(
     if (acknowledgementObserved) {
       try {
         removeRequest(runtime.mailboxPath, requestId);
+        clearRequestCleanupError(runtime.label);
       } catch (error) {
-        const message = `Acknowledged request could not be removed: ${String(error)}`;
+        const message = `${REQUEST_CLEANUP_ERROR_PREFIX} ${String(error)}`;
         cleanupErrors.set(runtime.label, message);
         appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
       }
@@ -9362,6 +9375,9 @@ export default function (pi: ExtensionAPI): void {
   let resultWriteAttempts = 0;
   let retryTimer: ReturnType<typeof setInterval> | undefined;
   let stateRetryTimer: ReturnType<typeof setInterval> | undefined;
+  let requestPumpTimer: ReturnType<typeof setInterval> | undefined;
+  let requestPumpErrorReported = false;
+  let acknowledgementErrorReported = false;
   let pendingStateTransition = false;
   let stateErrorReported = false;
   let resultErrorReported = false;
@@ -9374,6 +9390,14 @@ export default function (pi: ExtensionAPI): void {
   let leafStatusGeneration = 0;
   let leafStatusInFlight = false;
   let ownTools: string[] | undefined;
+  const reportAcknowledgementFailure = (
+    ctx: ExtensionContext,
+    error: unknown,
+  ): void => {
+    if (!acknowledgementErrorReported)
+      appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+    acknowledgementErrorReported = true;
+  };
   const ownToolsSnapshot = (): { ownTools?: string[] } =>
     ownTools ? { ownTools } : {};
   const touchActivity = (now = Date.now(), force = false): void => {
@@ -9488,10 +9512,10 @@ export default function (pi: ExtensionAPI): void {
     try {
       writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, candidate);
       state = candidate;
+      acknowledgementErrorReported = false;
       return true;
     } catch (error) {
-      if (agentContext)
-        appendDurableError(pi, agentContext, "pi_herdsman_state_error", error);
+      if (agentContext) reportAcknowledgementFailure(agentContext, error);
       return false;
     }
   };
@@ -9512,6 +9536,34 @@ export default function (pi: ExtensionAPI): void {
   ): void => {
     if (!acknowledge(requestId, accepted, code, message)) return;
     discardAgentRequest(requestId, ctx);
+  };
+  const pumpRequest = (ctx: ExtensionContext): void => {
+    if (!initialized || !state) return;
+    try {
+      const request = readUnacknowledgedRequest(
+        process.env.PI_HERDSMAN_MAILBOX!,
+        state,
+      );
+      if (!request) {
+        requestPumpErrorReported = false;
+        acknowledgementErrorReported = false;
+        return;
+      }
+      pi.sendUserMessage(controlMarker(request.requestId), {
+        deliverAs: "steer",
+      });
+    } catch (error) {
+      if (!requestPumpErrorReported) {
+        requestPumpErrorReported = true;
+        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+      }
+    }
+  };
+  const resetRequestPump = (): void => {
+    if (requestPumpTimer) clearInterval(requestPumpTimer);
+    requestPumpTimer = undefined;
+    requestPumpErrorReported = false;
+    acknowledgementErrorReported = false;
   };
   const askAllowed = (): boolean =>
     !!state?.activeRequestId &&
@@ -9643,6 +9695,7 @@ export default function (pi: ExtensionAPI): void {
   pi.on("session_before_switch", () => ({ cancel: true }));
   pi.on("session_before_fork", () => ({ cancel: true }));
   pi.on("session_start", async (_e: unknown, ctx: ExtensionContext) => {
+    resetRequestPump();
     resetLeafStatus();
     ownTools = undefined;
     if (delegationEnabled) clearAgentRuntimes();
@@ -9733,6 +9786,9 @@ export default function (pi: ExtensionAPI): void {
       if (delegationEnabled)
         startAgentStaleScanner?.(ctx, metadataAbortController.signal);
       initialized = true;
+      pumpRequest(ctx);
+      requestPumpTimer = setInterval(() => pumpRequest(ctx), 250);
+      requestPumpTimer.unref?.();
       if (!delegationEnabled && ctx.mode === "tui" && ctx.hasUI) {
         const generation = leafStatusGeneration;
         leafStatusContext = ctx;
@@ -9811,12 +9867,12 @@ export default function (pi: ExtensionAPI): void {
       return { action: "handled" };
     }
     if (!request) {
-      acknowledgeAndDiscard(id, false, ctx, "invalid", "Request was not found");
       return { action: "handled" };
     }
     if (!initialized || !state) {
       return { action: "handled" };
     }
+    if (state.lastAck?.requestId === id) return { action: "handled" };
     if (
       request.runId !== state.runId ||
       request.ownerSessionId !== state.ownerSessionId ||
@@ -9884,10 +9940,11 @@ export default function (pi: ExtensionAPI): void {
       try {
         writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, candidate);
       } catch (error) {
-        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        reportAcknowledgementFailure(ctx, error);
         return { action: "handled" };
       }
       state = candidate;
+      acknowledgementErrorReported = false;
       try {
         removeAsk(process.env.PI_HERDSMAN_MAILBOX!);
       } catch (error) {
@@ -9984,11 +10041,12 @@ export default function (pi: ExtensionAPI): void {
       try {
         writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, candidate);
       } catch (error) {
-        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        reportAcknowledgementFailure(ctx, error);
         // Retain the request. A repeated exact marker can retry this durable boundary.
         return { action: "handled" };
       }
       state = candidate;
+      acknowledgementErrorReported = false;
       agentStartedAt = Date.now();
       const model = ctx.model
         ? `${ctx.model.provider}/${ctx.model.id}`
@@ -10004,21 +10062,11 @@ export default function (pi: ExtensionAPI): void {
         ...(model ? { model } : {}),
         ...(thinking ? { thinking } : {}),
       });
-      discardAgentRequest(id, ctx);
     }
     if (request.kind === "steer") {
-      if (isIdle) {
-        acknowledgeAndDiscard(id, true, ctx);
-        latest = "";
-        return { action: "transform", text: request.text };
-      }
-      try {
-        pi.sendUserMessage(request.text, { deliverAs: "steer" });
-        acknowledgeAndDiscard(id, true, ctx);
-      } catch (error) {
-        acknowledgeAndDiscard(id, false, ctx, "delivery", String(error));
-      }
-      return { action: "handled" };
+      if (!acknowledge(id, true)) return { action: "handled" };
+      latest = "";
+      return { action: "transform", text: request.text };
     }
     latest = "";
     return { action: "transform", text: request.text };
@@ -10264,6 +10312,7 @@ export default function (pi: ExtensionAPI): void {
     metadataAbortController = undefined;
     invalidateMetadataSession();
     initialized = false;
+    resetRequestPump();
     agentControllerReady = false;
     state = undefined;
     if (delegationEnabled) clearAgentRuntimes();

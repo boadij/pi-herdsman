@@ -59,6 +59,7 @@ import support, {
   setAgentEnvironment,
   startupExecutor,
   stopSummary,
+  testGate,
   visibleWidth,
   waitForTestCondition,
   agentMailboxPath,
@@ -2928,10 +2929,10 @@ test("fresh assignment refreshes the widget after validation", async () => {
   let listCount = 0;
   let resolveInitialStatus: ((value: ExecResult) => void) | undefined;
   let resolveIntegration: ((value: ExecResult) => void) | undefined;
-  let releaseInitialPrompt: (() => void) | undefined;
-  let holdInitialPrompt = true;
+  let releaseInitialHandoff: (() => void) | undefined;
+  const initialHandoff = testGate<void>();
+  let holdInitialHandoff = true;
   let integrationGetCount = 0;
-  let failSubmit = false;
   let failValidation = false;
   const herdrAgent = {
     agent: "pi",
@@ -2952,7 +2953,24 @@ test("fresh assignment refreshes the widget after validation", async () => {
   const emptyList = () => JSON.stringify({ id: 1, result: { agents: [] } });
   const liveList = () =>
     JSON.stringify({ id: 1, result: { agents: [herdrAgent] } });
-  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    async () => {
+      if (!holdInitialHandoff) return;
+      holdInitialHandoff = false;
+      const state = readAgentState(mailbox);
+      if (state)
+        writeAgentState(mailbox, {
+          ...state,
+          activeRequestId: undefined,
+          updatedAt: Date.now(),
+        });
+      releaseInitialHandoff = () => initialHandoff.resolve();
+      await initialHandoff.promise;
+    },
+  );
   const processInfo = {
     pane_id: "startup-pane",
     shell_pid: 123,
@@ -3116,20 +3134,6 @@ test("fresh assignment refreshes the widget after validation", async () => {
           });
         return response;
       }
-      if (command === "herdr" && args[0] === "agent" && args[1] === "prompt")
-        if (holdInitialPrompt) {
-          holdInitialPrompt = false;
-          return new Promise<ExecResult>((resolve) => {
-            releaseInitialPrompt = () => {
-              Promise.resolve(startup.exec(command, args, options)).then(
-                resolve,
-              );
-            };
-          });
-        } else if (failSubmit) {
-          live = false;
-          return { stdout: "{}", stderr: "submit failed", code: 1 };
-        }
       if (
         command === "herdr" &&
         args[0] === "agent" &&
@@ -3238,8 +3242,8 @@ test("fresh assignment refreshes the widget after validation", async () => {
       code: 0,
     });
     await waitForTestCondition(
-      () => releaseInitialPrompt !== undefined,
-      "assignment did not reach initial prompt",
+      () => releaseInitialHandoff !== undefined,
+      "assignment did not reach initial request handoff",
     );
     const pendingList = await pi.tools[0].execute(
       "id",
@@ -3249,7 +3253,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       context,
     );
     assert.equal(pendingList.details.agents[0].state, "settling");
-    releaseInitialPrompt!();
+    releaseInitialHandoff!();
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(pi.sentMessageCalls.length, 1);
@@ -3285,7 +3289,6 @@ test("fresh assignment refreshes the widget after validation", async () => {
     assert.match(rendered, /1 working/);
     assert.match(rendered, /fresh-start-widget-agent/);
 
-    failSubmit = true;
     live = false;
     resetAgentMailbox(mailbox);
     const failed = await pi.tools[0].execute(
@@ -3300,7 +3303,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       undefined,
       context,
     );
-    assert.equal(failed.details.ok, false, JSON.stringify(failed.details));
+    assert.equal(failed.details.ok, true, JSON.stringify(failed.details));
     assert.equal(pi.sentMessageCalls.length, 1);
     await waitForTestCondition(
       () => widget!.render(160).join("\n").includes("herd"),
@@ -3308,7 +3311,6 @@ test("fresh assignment refreshes the widget after validation", async () => {
     );
     assert.match(widget!.render(160).join("\n"), /herd/);
 
-    failSubmit = false;
     failValidation = true;
     live = false;
     resetAgentMailbox(mailbox);

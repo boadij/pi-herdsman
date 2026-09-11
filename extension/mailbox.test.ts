@@ -18,6 +18,7 @@ import {
   MailboxClaimOccupiedError,
   parseControlMarker,
   readRequest,
+  readUnacknowledgedRequest,
   readAsk,
   readPendingAsk,
   readResult,
@@ -434,6 +435,32 @@ test("malformed request handoff fails closed", () => {
   resetAgentMailbox(path);
   writeAgentState(path, state);
   writeFileSync(join(path, "request-bad.json"), "not json");
+  assert.equal(unacknowledgedRequestExists(path, state), true);
+});
+test("ambiguous unacknowledged requests are rejected", () => {
+  const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
+  resetAgentMailbox(path);
+  writeAgentState(path, state);
+  for (const requestId of [
+    "77777777-7777-4777-8777-777777777777",
+    "88888888-8888-4888-8888-888888888888",
+  ])
+    writeRequest(path, {
+      version: 4,
+      runId: state.runId,
+      requestId,
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: requestId,
+      createdAt: Date.now(),
+    });
+  assert.throws(
+    () => readUnacknowledgedRequest(path, state),
+    /Multiple unacknowledged requests/,
+  );
   assert.equal(unacknowledgedRequestExists(path, state), true);
 });
 test("mailbox paths separate workspace and label and use private directories", () => {

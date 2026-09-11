@@ -2018,19 +2018,11 @@ test("assignment retains its request when acknowledgement never arrives", async 
   setLeadEnvironment();
   const label = "ack-timeout-agent";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  startup.stopMailboxConsumer();
   const controller = new AbortController();
+  setTimeout(() => controller.abort(), 10).unref();
   const pi = fakePi({
-    exec: (command, args, options) => {
-      if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
-        setTimeout(() => controller.abort(), 10);
-        return {
-          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
-          stderr: "",
-          code: 0,
-        };
-      }
-      return startup.exec(command, args, options);
-    },
+    exec: startup.exec,
   });
   registerExtension!(pi.pi as never);
   const result = await pi.tools[0].execute(
@@ -2188,23 +2180,6 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
   const base = agentControllerExecutor(observedParent, [child]);
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && args[0] === "agent" && args[1] === "prompt") {
-        const requestId = (args.at(-1) ?? "").replace(
-          "__PI_HERDSMAN_AGENT_V4__:",
-          "",
-        );
-        const current = readAgentState(parentMailbox)!;
-        writeAgentState(parentMailbox, {
-          ...current,
-          lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
-          updatedAt: Date.now(),
-        });
-        return {
-          stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
-          stderr: "",
-          code: 0,
-        };
-      }
       if (command === "herdr" && isAgentList(args)) {
         const liveParent = readAgentState(parentMailbox) ?? observedParent;
         const liveChild = readAgentState(childMailbox) ?? child;
@@ -2615,7 +2590,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
   }
 });
 
-test("acknowledgement state-write failures retain requests for terminal retry", () => {
+test("acknowledgement state-write failures retain requests for durable retry", () => {
   const cases = [
     {
       name: "busy rejection",
@@ -2651,11 +2626,7 @@ test("acknowledgement state-write failures retain requests for terminal retry", 
       isIdle: false,
       activeRequestId: randomUUID(),
       deliveryFailure: true,
-      expected: {
-        accepted: false,
-        code: "delivery" as const,
-        message: "Error: injected steer delivery failure",
-      },
+      expected: { accepted: true },
     },
   ] as const;
 
@@ -2692,29 +2663,27 @@ test("acknowledgement state-write failures retain requests for terminal retry", 
     const input = agent.events.get("input")![0];
     assert.deepEqual(
       input({ text: controlMarker(request.requestId) }, context),
-      {
-        action: "handled",
-      },
+      { action: "handled" },
     );
     assert.equal(readAgentState(mailbox)?.lastAck, undefined);
     assert.ok(readRequest(mailbox, request.requestId));
-    if (scenario.name === "successful steer delivery")
-      assert.equal(agent.sentUsers.length, 1);
+    assert.equal(agent.sentUsers.length, 0);
 
     assert.deepEqual(
       input({ text: controlMarker(request.requestId) }, context),
-      {
-        action: "handled",
-      },
+      scenario.expected.accepted
+        ? { action: "transform", text: request.text }
+        : { action: "handled" },
     );
     const acknowledged = readAgentState(mailbox)?.lastAck;
     assert.equal(acknowledged?.requestId, request.requestId, scenario.name);
     assert.equal(acknowledged?.accepted, scenario.expected.accepted);
     assert.equal(acknowledged?.code, scenario.expected.code);
     assert.equal(acknowledged?.message, scenario.expected.message);
-    assert.equal(readRequest(mailbox, request.requestId), undefined);
-    if (scenario.name === "successful steer delivery")
-      assert.equal(agent.sentUsers.length, 2);
+    if (scenario.expected.accepted)
+      assert.ok(readRequest(mailbox, request.requestId));
+    else assert.equal(readRequest(mailbox, request.requestId), undefined);
+    assert.equal(agent.sentUsers.length, 0);
     agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
   }
