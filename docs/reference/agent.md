@@ -150,8 +150,11 @@ when the exact message limit permits. Otherwise they remain canonical references
 
 `timeoutMs` is valid on `delegate` and `continue` and must be an integer
 from `5001` through `300000`. The startup budget reserves one bounded diagnostic
-window. Current message limits are governed by the Herdsman config file and its
-defaults, plus the fixed mailbox protocol ceiling. Managed mailbox records use
+window; it is unrelated to managed-agent Pi shell execution. Direct calls from
+a managed agent to the Pi built-in `bash` or `powershell` tool receive a default
+600-second timeout when the call omits `timeout`; an explicit timeout is kept
+unchanged. Current message limits are governed by the Herdsman config file and
+its defaults, plus the fixed mailbox protocol ceiling. Managed mailbox records use
 protocol V4 in the `mailboxes-v4` namespace, and control requests use the marker prefix
 `__PI_HERDSMAN_AGENT_V4__:`.
 

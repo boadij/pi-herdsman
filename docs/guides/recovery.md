@@ -50,7 +50,9 @@ recovery error is present, inspect its exact details.
 ## Inactivity advisory
 
 A `working` agent with an exact active assignment can become advisory `stale`
-after ten minutes without observed Pi turn, message, or tool activity.
+after ten minutes without qualifying execution progress. Model streaming,
+turn/message boundaries, and tool execution start/end boundaries count;
+streaming tool updates alone do not reset progress.
 
 Possible list fields:
 

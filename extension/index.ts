@@ -400,6 +400,10 @@ Read-only roles may read these artifacts but must not modify them.
 Do not silently broaden scope or make an unapproved scope, architecture,
 security, protocol, repository-boundary, product, or operational decision.
 
+Managed agents' direct Pi built-in bash and powershell calls without an explicit
+timeout are capped at ${STALE_AFTER_MS / 1000} seconds. Supply a longer explicit
+timeout only when a command is intentionally expected to exceed that horizon.
+
 Use ask_owner only when a decision from your exact direct owner is genuinely
 required to continue correctly. ask_owner may include files for supporting
 evidence; complete strict UTF-8 text may be embedded and other files remain
@@ -6834,6 +6838,45 @@ export default function (pi: ExtensionAPI): void {
     ((ctx: ExtensionContext, signal: AbortSignal) => Promise<void>) | undefined;
   let startAgentStaleScanner:
     ((ctx: ExtensionContext, signal: AbortSignal) => void) | undefined;
+  if (controllerScope || processRole === "managed-agent")
+    pi.on("tool_call", async (event: any, ctx: ExtensionContext) => {
+      if (processRole === "managed-agent") {
+        if (event.toolName === "bash" || event.toolName === "powershell") {
+          const tool = pi
+            .getAllTools()
+            .find((candidate) => candidate.name === event.toolName);
+          const properties = (tool?.parameters as any)?.properties;
+          if (
+            tool?.sourceInfo?.source === "builtin" &&
+            properties &&
+            Object.prototype.hasOwnProperty.call(properties, "timeout") &&
+            !Object.prototype.hasOwnProperty.call(event.input, "timeout")
+          )
+            event.input.timeout = STALE_AFTER_MS / 1000;
+        }
+      }
+      if (!controllerScope) return;
+      if (event.toolName === "agent" && !agentValidator.Check(event.input)) {
+        const error = invalidRequestInput("agent", "Invalid agent input");
+        return {
+          block: true,
+          reason: error.detail.message,
+        };
+      }
+      if (event.toolName === "staff" && !staffValidator.Check(event.input)) {
+        const error = invalidRequestInput("staff", "Invalid staff action");
+        return {
+          block: true,
+          reason: error.detail.message,
+        };
+      }
+      if (controllerScope.kind !== "lead") return;
+      if (event.toolName === CHIEF_TOOLS[0] || !isCurrentChief(ctx)) return;
+      return {
+        block: true,
+        reason: "Chief mode may only use the staff tool.",
+      };
+    });
   if (controllerScope) {
     let statusWidget: ReturnType<typeof createStatusWidget> | undefined;
     const pendingStarts = new Map<string, PendingStart>();
@@ -7158,29 +7201,6 @@ export default function (pi: ExtensionAPI): void {
             `This is the session-start definition snapshot. ` +
             `Use agent list for live agent state or to refresh ` +
             `agent definitions after configuration changes.`,
-        };
-      });
-    if (controllerScope)
-      pi.on("tool_call", async (event: any, ctx: ExtensionContext) => {
-        if (event.toolName === "agent" && !agentValidator.Check(event.input)) {
-          const error = invalidRequestInput("agent", "Invalid agent input");
-          return {
-            block: true,
-            reason: error.detail.message,
-          };
-        }
-        if (event.toolName === "staff" && !staffValidator.Check(event.input)) {
-          const error = invalidRequestInput("staff", "Invalid staff action");
-          return {
-            block: true,
-            reason: error.detail.message,
-          };
-        }
-        if (controllerScope.kind !== "lead") return;
-        if (event.toolName === CHIEF_TOOLS[0] || !isCurrentChief(ctx)) return;
-        return {
-          block: true,
-          reason: "Chief mode may only use the staff tool.",
         };
       });
     pi.on("agent_start", async (_event: unknown, ctx: ExtensionContext) => {
@@ -9254,7 +9274,7 @@ export default function (pi: ExtensionAPI): void {
             pi.sendMessage(
               {
                 customType: "pi-herdsman-agent-stale",
-                content: `Agent ${current.agentLabel} has had no observed Pi activity for ${Math.floor(inactiveMs / 60000)}m ${Math.floor((inactiveMs % 60000) / 1000)}s.\n\nState: working\nRequest: ${current.activeRequestId}\nLast observed activity: ${Math.floor(inactiveMs / 60000)}m ${Math.floor((inactiveMs % 60000) / 1000)}s ago\n\nThis is an inactivity advisory, not proof of a hang.\nIt is safe to leave the agent running. Steer, inspect, or close only when task evidence justifies it;\ndo not close solely because of inactivity.`,
+                content: `Agent ${current.agentLabel} has had no qualifying execution progress for ${Math.floor(inactiveMs / 60000)}m ${Math.floor((inactiveMs % 60000) / 1000)}s.\n\nState: working\nRequest: ${current.activeRequestId}\nLast qualifying progress: ${Math.floor(inactiveMs / 60000)}m ${Math.floor((inactiveMs % 60000) / 1000)}s ago\n\nStreaming tool output does not reset progress.\nThis is an advisory, not proof of a hang.\nInspect once, then leave the agent alone or close the exact agent only when evidence shows it remains wedged;\ndo not close solely because progress is stale.`,
                 display: true,
                 details: {
                   runId: current.runId,
@@ -10500,7 +10520,6 @@ export default function (pi: ExtensionAPI): void {
   for (const event of [
     "message_update",
     "tool_execution_start",
-    "tool_execution_update",
     "tool_execution_end",
   ])
     pi.on(event, () => touchActivity());

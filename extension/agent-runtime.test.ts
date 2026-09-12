@@ -2054,19 +2054,99 @@ test("agent registers native activity events and coalesces activity writes", asy
     "message_update",
     "message_end",
     "tool_execution_start",
-    "tool_execution_update",
     "tool_execution_end",
     "turn_end",
   ])
     assert.equal(agent.events.has(event), true, event);
+  assert.equal(agent.events.has("tool_execution_update"), false);
   const before = readAgentState(mailbox)!.lastActivityAt!;
   agent.events.get("message_update")![0]({}, context);
   assert.equal(readAgentState(mailbox)!.lastActivityAt, before);
   Date.now = () => 1_000_000;
   agent.events.get("message_update")![0]({}, context);
   assert.equal(readAgentState(mailbox)!.lastActivityAt, 1_000_000);
+  const afterMessage = readAgentState(mailbox)!.lastActivityAt;
+  agent.events.get("tool_execution_update")?.[0]({}, context);
+  assert.equal(readAgentState(mailbox)!.lastActivityAt, afterMessage);
+  Date.now = () => 1_006_000;
+  agent.events.get("tool_execution_start")![0]({}, context);
+  assert.equal(readAgentState(mailbox)!.lastActivityAt, 1_006_000);
+  Date.now = () => 1_012_000;
+  agent.events.get("tool_execution_end")![0]({}, context);
+  assert.equal(readAgentState(mailbox)!.lastActivityAt, 1_012_000);
   Date.now = realNow;
   agent.events.get("session_shutdown")?.[0]();
+});
+
+test("managed agents cap direct built-in shell calls without explicit timeouts", async () => {
+  setAgentEnvironment();
+  const cases = [
+    {
+      name: "bash",
+      toolName: "bash",
+      source: "builtin",
+      input: { command: "sleep 1" },
+      timeout: 600,
+    },
+    {
+      name: "powershell",
+      toolName: "powershell",
+      source: "builtin",
+      input: { command: "Start-Sleep 1" },
+      timeout: 600,
+    },
+    {
+      name: "explicit bash timeout",
+      toolName: "bash",
+      source: "builtin",
+      input: { command: "sleep 1", timeout: 17 },
+      timeout: 17,
+    },
+    {
+      name: "built-in bash without timeout schema",
+      toolName: "bash",
+      source: "builtin",
+      input: { command: "sleep 1" },
+      timeout: undefined,
+      hasTimeoutProperty: false,
+    },
+    {
+      name: "extension-owned bash",
+      toolName: "bash",
+      source: "extension",
+      input: { command: "sleep 1" },
+      timeout: undefined,
+    },
+    {
+      name: "unrelated custom tool",
+      toolName: "custom",
+      source: "extension",
+      input: { value: "x" },
+      timeout: undefined,
+    },
+  ] as const;
+  for (const scenario of cases) {
+    const agent = fakePi({
+      allTools: [
+        {
+          name: scenario.toolName,
+          parameters: {
+            type: "object",
+            properties:
+              scenario.hasTimeoutProperty === false ? {} : { timeout: {} },
+          },
+          sourceInfo: { source: scenario.source },
+        },
+      ],
+    });
+    registerExtension!(agent.pi as never);
+    const input = { ...scenario.input };
+    await agent.events.get("tool_call")![0](
+      { toolName: scenario.toolName, input },
+      fakeAgentContext(),
+    );
+    assert.equal(input.timeout, scenario.timeout, scenario.name);
+  }
 });
 
 test("agent restart forces an active activity touch within the coalescing window", async () => {

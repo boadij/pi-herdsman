@@ -3232,12 +3232,21 @@ test("delegation parent notifies only its direct stale child", async () => {
   assert.equal(advisory.customType, "pi-herdsman-agent-stale");
   assert.match(
     advisory.content,
-    /Agent stale-child has had no observed Pi activity/,
+    /Agent stale-child has had no qualifying execution progress/,
+  );
+  assert.match(
+    advisory.content,
+    /Streaming tool output does not reset progress/,
   );
   assert.match(advisory.content, /not proof of a hang/);
-  assert.match(advisory.content, /safe to leave the agent running/);
-  assert.match(advisory.content, /only when task evidence justifies it/);
-  assert.match(advisory.content, /do not close solely because of inactivity/);
+  assert.match(
+    advisory.content,
+    /Inspect once, then leave the agent alone or close the exact agent only when evidence shows it remains wedged/,
+  );
+  assert.match(
+    advisory.content,
+    /do not close solely because progress is stale/,
+  );
   assert.equal(advisory.details.agentLabel, child.agentLabel);
   assert.equal(advisory.details.ownerSessionId, parent.piSessionId);
   assert.equal(advisory.details.requestId, REQUEST_ID);
