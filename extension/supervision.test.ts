@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import {
@@ -212,7 +212,7 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   const value = state("lead");
   const path = writeLeadCoordinationState(runtime, value);
   assert.deepEqual(readLeadCoordinationState(runtime, "lead"), value);
-  assert.match(path, /leads\/[0-9a-f]{64}\.json$/);
+  assert.match(path.split(sep).join("/"), /leads\/[0-9a-f]{64}\.json$/);
   assert.equal(statSync(path).mode & 0o777, 0o600);
   assert.equal(statSync(runtime.leads).mode & 0o777, 0o700);
   assert.throws(() =>
@@ -763,6 +763,20 @@ test("removing a chief message removes its quarantine marker", () => {
   assert.equal(
     chiefMessageQuarantined(runtime, record.toSessionId, record.id),
     false,
+  );
+});
+
+test("re-quarantining a message accepts an existing marker", () => {
+  const runtime = supervisionRuntime(socket());
+  const record = message();
+  writeChiefMessage(record, runtime);
+  quarantineChiefMessage(runtime, record.toSessionId, record.id);
+  assert.doesNotThrow(() =>
+    quarantineChiefMessage(runtime, record.toSessionId, record.id),
+  );
+  assert.equal(
+    chiefMessageQuarantined(runtime, record.toSessionId, record.id),
+    true,
   );
 });
 

@@ -2123,7 +2123,10 @@ test("historical session with its inherited label rejects an active managed repr
   const name = `active-session-${randomUUID().slice(0, 8)}`;
   const label = `${name}-agent`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
-  const identity = recoveryIdentity(label);
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(testTmpRoot, `${label}-session.jsonl`),
+  };
   const aliasPath = `${identity.piSessionFile}-alias`;
   const liveIdentity = { ...identity, piSessionFile: aliasPath };
   const mailbox = agentMailboxPath(WORKSPACE, label);

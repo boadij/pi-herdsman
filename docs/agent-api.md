@@ -20,7 +20,7 @@ For an active chief supervising independent leads, use the [`staff` and
 ## Prerequisites
 
 Installation and supported versions are owned by
-[Getting started](getting-started.md#1-check-requirements). The lead Pi session
+[Getting started](getting-started.md#1-install). The lead Pi session
 must run inside [herdr](https://github.com/herdrdev/herdr).
 
 ## First use

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dirname, join } from "node:path";
@@ -879,7 +885,8 @@ test("start injects mandatory extensions before definition args and configures t
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "root-workspace";
-  const cwd = "/tmp/agent space/ユニコード";
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-space-"));
+  const mailbox = join(cwd, "mailbox with $dollar 'quote' `backtick`");
   const processInfo = {
     pane_id: "pane-1",
     shell_pid: 12,
@@ -887,7 +894,7 @@ test("start injects mandatory extensions before definition args and configures t
     foreground_processes: [{ pid: 12, argv0: "/bin/zsh" }],
   };
   const contract = [
-    "PI_HERDSMAN_MAILBOX=/tmp/mailbox with $dollar 'quote' `backtick`",
+    `PI_HERDSMAN_MAILBOX=${mailbox}`,
     "PI_HERDSMAN_RUN_ID=run-id",
     "PI_HERDSMAN_OWNER_SESSION_ID=owner-session",
     "PI_SUBAGENT_PARENT_SESSION=lead-session",
@@ -1006,7 +1013,7 @@ test("start injects mandatory extensions before definition args and configures t
   const tabCreate = calls.find(
     (args) => args[0] === "tab" && args[1] === "create",
   )!;
-  assert.equal(tabCreate[tabCreate.indexOf("--cwd") + 1], cwd);
+  assert.equal(tabCreate[tabCreate.indexOf("--cwd") + 1], realpathSync(cwd));
   assert.equal(tabCreate[tabCreate.indexOf("--label") + 1], "agents");
   assert.deepEqual(
     tabCreate
@@ -2147,7 +2154,7 @@ async function placementCalls(config: {
   direction?: "right" | "down";
   panes: any[];
   layout?: any;
-}): Promise<string[][]> {
+}): Promise<{ calls: string[][]; cwd: string }> {
   const environment = globalThis.process.env;
   const previous = {
     workspace: environment.HERDR_WORKSPACE_ID,
@@ -2156,7 +2163,7 @@ async function placementCalls(config: {
   };
   const workspaceId = "workspace-1";
   const tabId = "tab-1";
-  const cwd = "/tmp/placement-agent";
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-placement-agent-"));
   environment.HERDR_WORKSPACE_ID = workspaceId;
   if (config.placement === "split") {
     environment.HERDR_TAB_ID = "stale-tab";
@@ -2248,11 +2255,11 @@ async function placementCalls(config: {
     if (previous.pane === undefined) delete environment.HERDR_PANE_ID;
     else environment.HERDR_PANE_ID = previous.pane;
   }
-  return calls;
+  return { calls, cwd };
 }
 
 test("placement validates a non-lead caller and selects the largest agent axis", async () => {
-  const callerCalls = await placementCalls({
+  const caller = await placementCalls({
     placement: "split",
     callerPaneId: "caller",
     direction: "down",
@@ -2266,16 +2273,16 @@ test("placement validates a non-lead caller and selects the largest agent axis",
     ],
   });
   const option = (args: string[], name: string) => args[args.indexOf(name) + 1];
-  const callerSplit = callerCalls.find(
+  const callerSplit = caller.calls.find(
     (args) => args[0] === "pane" && args[1] === "split",
   )!;
   assert.equal(option(callerSplit, "--pane"), "caller");
   assert.equal(option(callerSplit, "--ratio"), "0.65");
   assert.equal(option(callerSplit, "--direction"), "down");
-  assert.equal(option(callerSplit, "--cwd"), "/tmp/placement-agent");
+  assert.equal(option(callerSplit, "--cwd"), realpathSync(caller.cwd));
   assert.equal(callerSplit.includes("--no-focus"), true);
   assert.equal(
-    callerCalls.some((args) => args[0] === "pane" && args[1] === "layout"),
+    caller.calls.some((args) => args[0] === "pane" && args[1] === "layout"),
     false,
   );
 
@@ -2305,7 +2312,7 @@ test("placement validates a non-lead caller and selects the largest agent axis",
       direction: "down",
     },
   ]) {
-    const calls = await placementCalls({
+    const placement = await placementCalls({
       placement: "tab",
       panes: testCase.layout.panes.map((item: any) => ({
         pane_id: item.pane_id,
@@ -2316,16 +2323,18 @@ test("placement validates a non-lead caller and selects the largest agent axis",
       layout: testCase.layout,
     });
     assert.deepEqual(
-      calls.find((args) => args[0] === "pane" && args[1] === "layout"),
+      placement.calls.find(
+        (args) => args[0] === "pane" && args[1] === "layout",
+      ),
       ["pane", "layout", "--pane", testCase.layout.panes[0].pane_id],
     );
-    const agentSplit = calls.find(
+    const agentSplit = placement.calls.find(
       (args) => args[0] === "pane" && args[1] === "split",
     )!;
     assert.equal(option(agentSplit, "--pane"), testCase.anchor);
     assert.equal(option(agentSplit, "--ratio"), "0.5");
     assert.equal(option(agentSplit, "--direction"), testCase.direction);
-    assert.equal(option(agentSplit, "--cwd"), "/tmp/placement-agent");
+    assert.equal(option(agentSplit, "--cwd"), realpathSync(placement.cwd));
     assert.equal(agentSplit.includes("--no-focus"), true);
   }
 });

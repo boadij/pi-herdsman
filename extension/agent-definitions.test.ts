@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import test from "node:test";
 import {
   agentDefinitionDelegationEnabled,
@@ -927,7 +927,7 @@ test("overlays a bundled definition and extends the roster", () => {
     const implementer = discoverAgent("implementer");
     assert.equal(implementer.path, overridePath);
     assert.match(
-      implementer.extensionSource!,
+      implementer.extensionSource!.split(sep).join("/"),
       /extension\/agent-definitions\/implementer\.md$/,
     );
     assert.equal(implementer.overrideSource, overridePath);
@@ -1272,7 +1272,10 @@ test("managed launch policy always includes ask_owner", () => {
   }
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-standalone-"));
   const standalone = withPiAgentDir(root, () => discoverAgent("generalist"));
-  assert.match(standalone.path, /agent-definitions\/generalist\.md$/);
+  assert.match(
+    standalone.path.split(sep).join("/"),
+    /agent-definitions\/generalist\.md$/,
+  );
   assert.equal(
     agentLaunchArgs(standalone, {
       bodyPromptPath: "/prompt",

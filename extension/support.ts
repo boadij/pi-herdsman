@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { after, mock, test } from "node:test";
 import { Value } from "typebox/value";
@@ -111,7 +111,7 @@ mock.module("node:fs", {
         configReadHook?.();
       if (
         typeof args[0] === "string" &&
-        args[0].startsWith(`${PI_AGENTS_DIR}/`)
+        args[0].startsWith(`${PI_AGENTS_DIR}${sep}`)
       )
         agentDefinitionReadCount++;
       return realFs.readFileSync(...args);
@@ -126,16 +126,17 @@ mock.module("node:fs", {
     rmdirSync: realFs.rmdirSync,
     statSync: realFs.statSync,
     unlinkSync: (path: string) => {
-      if (failNextRequestRemoval && path.includes("/request-")) {
+      const name = basename(path);
+      if (failNextRequestRemoval && name.startsWith("request-")) {
         failNextRequestRemoval = false;
         throw new Error("injected request removal failure");
       }
-      if (failNextResultRemoval && path.includes("/result-")) {
+      if (failNextResultRemoval && name.startsWith("result-")) {
         resultRemovalAttempts++;
         failNextResultRemoval = false;
         throw new Error("injected result removal failure");
       }
-      if (path.includes("/result-")) resultRemovalAttempts++;
+      if (name.startsWith("result-")) resultRemovalAttempts++;
       return realFs.unlinkSync(path);
     },
     writeFileSync: realFs.writeFileSync,
