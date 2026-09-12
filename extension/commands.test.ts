@@ -1257,6 +1257,20 @@ test("agents TUI selectors use stable values and current preselection", async ()
   }
 });
 
+const selectTuiItem = (component: any, target: string): void => {
+  for (let attempts = 0; attempts < 100; attempts++) {
+    const selected = component
+      .render(200)
+      .find((line: string) => line.trimStart().startsWith("→"));
+    if (selected?.includes(target)) {
+      component.handleInput("\r");
+      return;
+    }
+    component.handleInput("\u001b[B");
+  }
+  throw new Error(`TUI item was not selected: ${target}`);
+};
+
 test("definition pickers preselect configured values and honor cancellation", async () => {
   for (const scenario of [
     {
@@ -1324,19 +1338,9 @@ test("definition pickers preselect configured values and honor cancellation", as
         );
         const call = customCalls++;
         if (call === 0) {
-          const index = component
-            .render(200)
-            .findIndex((line: string) => line.includes("preselect-agent"));
-          for (let i = 0; i < index - 1; i++) component.handleInput("\u001b[B");
-          component.handleInput("\r");
+          selectTuiItem(component, "preselect-agent");
         } else if (call === 1) {
-          const index = component
-            .render(200)
-            .findIndex((line: string) =>
-              line.includes(`${scenario.field}    `),
-            );
-          for (let i = 0; i < index - 1; i++) component.handleInput("\u001b[B");
-          component.handleInput("\r");
+          selectTuiItem(component, scenario.field);
         } else if (call === 2 && scenario.picker !== undefined) {
           const line = component
             .render(200)
@@ -1873,14 +1877,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
         }
         const target = call === 0 ? selectedName : "Details…";
         if (call === 1) beforeDetails?.();
-        const index = component
-          .render(200)
-          .findIndex((line: string) => line.includes(target));
-        if (index < 0) component.handleInput("\u001b");
-        else {
-          for (let i = 0; i < index - 1; i++) component.handleInput("\u001b[B");
-          component.handleInput("\r");
-        }
+        selectTuiItem(component, target);
       });
       return result;
     };

@@ -7849,7 +7849,7 @@ export default function (pi: ExtensionAPI): void {
           list.onCancel = () => done(undefined);
           const container = new Container();
           container.addChild(
-            new TuiText(theme.bold(theme.fg("accent", title)), 0, 0),
+            new TuiText(theme.bold(theme.fg("accent", title))),
           );
           container.addChild(list);
           return {
