@@ -47,20 +47,29 @@ chief
 
 ```sh
 pi install npm:pi-herdsman
+herdr integration install pi
 ```
 
-The lead Pi session must run inside herdr.
+Start Herdr in your project:
 
-## Try it
+```sh
+herdr
+```
+
+Then run Pi in the Herdr pane:
+
+```sh
+pi
+```
 
 Ask Pi normally:
 
 ```text
-Use an implementer agent to implement the approved change.
+Use scout to inspect this repository.
 ```
 
-That is enough. The implementer runs asynchronously while the lead conversation
-remains available.
+That's enough. The agent runs asynchronously while the lead conversation remains
+available.
 
 Other useful requests look the same:
 

@@ -148,7 +148,7 @@ test("Herdr preflight gates server compatibility, not private server version", a
   );
 });
 
-test("registered lead and unmanaged roles expose the correct surface", () => {
+test("registered lead and unmanaged roles expose the correct surface", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   const lead = fakePi();
@@ -198,12 +198,18 @@ test("registered lead and unmanaged roles expose the correct surface", () => {
   delete process.env.HERDR_PANE_ID;
   const unmanaged = fakePi();
   registerExtension!(unmanaged.pi as never);
-  assert.equal(unmanaged.commands.length, 0);
-  assert.equal(
-    unmanaged.tools.some((tool) => tool.name === "agent"),
-    false,
-  );
+  assert.deepEqual(unmanaged.commands, ["agents"]);
+  assert.deepEqual(unmanaged.tools, []);
   assert.equal(unmanaged.events.size, 0);
+  const notices: string[] = [];
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.ui.notify = (message: string) => notices.push(message);
+  await unmanaged.commandOptions.get("agents").handler("", context);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0]!, /inactive because .*not running inside Herdr/);
+  assert.match(notices[0]!, /herdr\n  pi/);
+  assert.match(notices[0]!, /herdr integration install pi/);
 });
 
 test("active chief describes authoritative remote ask projection", async () => {

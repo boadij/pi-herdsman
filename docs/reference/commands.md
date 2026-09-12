@@ -6,7 +6,8 @@
 
 It is separate from the structured model-facing `agent` API.
 
-Commands require a lead Pi session with UI.
+Agent-management commands require a lead Pi session with UI. Outside Herdr,
+plain `/agents` remains available as a setup diagnostic.
 
 ## Usage
 

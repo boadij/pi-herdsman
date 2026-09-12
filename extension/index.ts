@@ -5640,6 +5640,18 @@ export default function (pi: ExtensionAPI): void {
       renderAgentStaleMessage(message, options, theme),
   );
   const processRole = role();
+  if (processRole === "unmanaged") {
+    pi.registerCommand("agents", {
+      description: "Show Pi Herdsman setup guidance",
+      handler: async (_args, ctx) => {
+        if (!ctx.hasUI) return;
+        ctx.ui.notify(
+          "Pi Herdsman is inactive because this Pi session is not running inside Herdr.\n\nStart Herdr in this project, then run Pi in a Herdr pane:\n  herdr\n  pi\n\nIf needed, install the Pi integration once:\n  herdr integration install pi",
+        );
+      },
+    });
+    return;
+  }
   const allowedAgentDefinitions =
     processRole === "managed-agent" ? allowedAgentDefinitionsFromEnv() : [];
   const controllerScope: ControllerScope | undefined =
@@ -7758,7 +7770,9 @@ export default function (pi: ExtensionAPI): void {
         now: Date.now(),
       });
       if (!rows.length) {
-        ctx.ui.notify("No running agents.");
+        ctx.ui.notify(
+          'No running agents. Ask Pi normally, for example: "Use scout to inspect this repository."',
+        );
         return;
       }
       const options = renderRunningOptions(rows);

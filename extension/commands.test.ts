@@ -1312,6 +1312,32 @@ test("Running uses compact native options and focuses the freshly verified pane"
   }
 });
 
+test("Running explains how to delegate when no agents are running", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const notices: string[] = [];
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.ui.notify = (message: string) => notices.push(message);
+  let selection = 0;
+  context.ui.select = async (_prompt: string, options: string[]) =>
+    selection++ === 0
+      ? options.find((option) => option.startsWith("Running"))
+      : undefined;
+
+  await command.handler("", context);
+
+  assert.ok(
+    notices.some(
+      (message) =>
+        message.includes("No running agents") &&
+        message.includes("Use scout to inspect this repository"),
+    ),
+  );
+});
+
 test("Running warns when the selected agent is replaced before focus", async () => {
   setLeadEnvironment();
   const label = "running-menu-replaced-agent";
