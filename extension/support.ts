@@ -319,6 +319,28 @@ mock.module("@earendil-works/pi-tui", {
         return this.text.split("\n");
       }
     },
+    Input: class {
+      private value = "";
+      focused = false;
+      onSubmit?: (value: string) => void;
+      onEscape?: () => void;
+      getValue() {
+        return this.value;
+      }
+      setValue(value: string) {
+        this.value = value;
+      }
+      handleInput(data: string) {
+        if (tuiMatchesKey(data, tuiKey.enter)) this.onSubmit?.(this.value);
+        else if (tuiMatchesKey(data, tuiKey.escape)) this.onEscape?.();
+        else if (data === "\u007f") this.value = this.value.slice(0, -1);
+        else if (data.length === 1 && data >= " ") this.value += data;
+      }
+      invalidate() {}
+      render(_width: number) {
+        return [this.value];
+      }
+    },
     Markdown: class {
       private readonly text: string;
       constructor(text: string) {
@@ -372,6 +394,40 @@ mock.module("@earendil-works/pi-tui", {
           this.onSelectionChange?.(this.getSelectedItem());
         }
       }
+    },
+    fuzzyFilter: <T>(
+      items: T[],
+      query: string,
+      getText: (item: T) => string,
+    ) => {
+      const tokens = query
+        .toLocaleLowerCase()
+        .trim()
+        .split(/[\s/]+/u)
+        .filter(Boolean);
+      const fuzzyScore = (queryToken: string, text: string): number => {
+        let cursor = 0;
+        let score = 0;
+        for (const character of queryToken) {
+          const index = text.indexOf(character, cursor);
+          if (index < 0) return Number.POSITIVE_INFINITY;
+          score += index;
+          cursor = index + 1;
+        }
+        return score;
+      };
+      return items
+        .map((item, index) => {
+          const text = getText(item).toLocaleLowerCase();
+          const score = tokens.reduce(
+            (total, token) => total + fuzzyScore(token, text),
+            0,
+          );
+          return { item, index, score };
+        })
+        .filter(({ score }) => Number.isFinite(score))
+        .sort((a, b) => a.score - b.score || a.index - b.index)
+        .map(({ item }) => item);
     },
     truncateToWidth: (text: string, width: number) => text.slice(0, width),
     Key: tuiKey,

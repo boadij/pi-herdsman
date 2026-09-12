@@ -1325,6 +1325,15 @@ test("definition pickers preselect configured values and honor cancellation", as
       ],
     };
     let customCalls = 0;
+    const keybindings = {
+      matches: (data: string, key: string) =>
+        ({
+          "tui.select.up": "\u001b[A",
+          "tui.select.down": "\u001b[B",
+          "tui.select.confirm": "\r",
+          "tui.select.cancel": "\u001b",
+        })[key] === data,
+    };
     context.ui.custom = async (factory: any) =>
       new Promise((resolve) => {
         const component = factory(
@@ -1333,7 +1342,7 @@ test("definition pickers preselect configured values and honor cancellation", as
             fg: (_color: string, text: string) => text,
             bold: (text: string) => text,
           },
-          {},
+          keybindings,
           resolve,
         );
         const call = customCalls++;
@@ -1360,6 +1369,109 @@ test("definition pickers preselect configured values and honor cancellation", as
       await pi.events.get("session_shutdown")?.[0]();
       realFs.rmSync(definitionPath, { force: true });
     }
+  }
+});
+
+test("TUI Model picker fuzzy-filters models and cancels in place", async () => {
+  setLeadEnvironment();
+  const definitionPath = join(PI_AGENTS_DIR, "search-agent.md");
+  realFs.writeFileSync(
+    definitionPath,
+    "---\nname: search-agent\nmodel: alpha/original\n---\n",
+  );
+  const models = [
+    ...Array.from({ length: 15 }, (_, index) => ({
+      provider: `provider-${index}`,
+      id: `model-${index}`,
+      name: `Model ${index}`,
+      reasoning: true,
+    })),
+    {
+      provider: "zulu",
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      reasoning: true,
+    },
+    {
+      provider: "alpha",
+      id: "original",
+      name: "Original",
+      reasoning: true,
+    },
+  ];
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "tui";
+  context.modelRegistry = {
+    refresh: async () => undefined,
+    getAll: () => models,
+    getAvailable: () => models,
+  };
+  context.scopedModels = [{ model: models[models.length - 1] }];
+  const keybindings = {
+    matches: (data: string, key: string) =>
+      ({
+        "tui.select.up": "\u001b[A",
+        "tui.select.down": "\u001b[B",
+        "tui.select.confirm": "\r",
+        "tui.select.cancel": "\u001b",
+      })[key] === data,
+  };
+  let customCalls = 0;
+  context.ui.custom = async (factory: any) =>
+    new Promise((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        keybindings,
+        resolve,
+      );
+      switch (customCalls++) {
+        case 0:
+          selectTuiItem(component, "search-agent");
+          break;
+        case 1:
+          selectTuiItem(component, "Model");
+          break;
+        case 2:
+          for (const character of "zulu 46") component.handleInput(character);
+          {
+            const rendered = component.render(200);
+            const selected = rendered.find((line: string) =>
+              line.trimStart().startsWith("→"),
+            );
+            assert.match(selected ?? "", /claude-sonnet-4-6/u);
+            assert.ok(
+              rendered.some((line: string) => line.includes("zulu 46")),
+            );
+          }
+          component.handleInput("\r");
+          break;
+        case 3:
+          selectTuiItem(component, "Model");
+          break;
+        case 4:
+        case 5:
+        case 6:
+          component.handleInput("\u001b");
+          break;
+      }
+    });
+  try {
+    await pi.commandOptions.get("agents").handler("definitions", context);
+    assert.equal(customCalls, 7);
+    assert.equal(
+      discoverAgent("search-agent").frontmatter.model,
+      "zulu/claude-sonnet-4-6",
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(definitionPath, { force: true });
   }
 });
 

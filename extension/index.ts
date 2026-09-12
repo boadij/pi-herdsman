@@ -33,6 +33,8 @@ import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import {
   Container,
+  fuzzyFilter,
+  Input,
   Key,
   matchesKey,
   SelectList,
@@ -7820,6 +7822,14 @@ export default function (pi: ExtensionAPI): void {
       });
     };
     type MenuItem = { value: string; label: string };
+    type ModelMenuItem = MenuItem & { searchText: string };
+    const selectTheme = (theme: any) => ({
+      selectedPrefix: (text: string) => theme.fg("accent", text),
+      selectedText: (text: string) => theme.fg("accent", text),
+      description: (text: string) => theme.fg("muted", text),
+      scrollInfo: (text: string) => theme.fg("muted", text),
+      noMatch: (text: string) => theme.fg("warning", text),
+    });
     const selectMenu = async (
       ctx: ExtensionContext,
       title: string,
@@ -7835,14 +7845,7 @@ export default function (pi: ExtensionAPI): void {
       }
       return (await ctx.ui.custom(
         (tui: any, theme: any, _keys: any, done: (value: unknown) => void) => {
-          const selectTheme = {
-            selectedPrefix: (text: string) => theme.fg("accent", text),
-            selectedText: (text: string) => theme.fg("accent", text),
-            description: (text: string) => theme.fg("muted", text),
-            scrollInfo: (text: string) => theme.fg("muted", text),
-            noMatch: (text: string) => theme.fg("warning", text),
-          };
-          const list = new SelectList(items, 8, selectTheme);
+          const list = new SelectList(items, 8, selectTheme(theme));
           const index = items.findIndex((item) => item.value === selectedValue);
           if (index >= 0) list.setSelectedIndex(index);
           list.onSelect = (item) => done(item.value);
@@ -7873,6 +7876,134 @@ export default function (pi: ExtensionAPI): void {
             invalidate: () => container.invalidate(),
             handleInput: (data: string) => {
               list.handleInput(data);
+              tui.requestRender();
+            },
+          };
+        },
+      )) as string | undefined;
+    };
+    const selectModelMenu = async (
+      ctx: ExtensionContext,
+      items: readonly ModelMenuItem[],
+      selectedValue?: string,
+    ): Promise<string | undefined> => {
+      if (ctx.mode !== "tui")
+        return selectMenu(ctx, "Model", items, selectedValue);
+      return (await ctx.ui.custom(
+        (
+          tui: any,
+          theme: any,
+          keybindings: any,
+          done: (value: unknown) => void,
+        ) => {
+          const input = new Input();
+          const listContainer = new Container();
+          let list: SelectList | undefined;
+          let filtered: ModelMenuItem[] = [...items];
+          let previousQuery = input.getValue();
+          const rebuildList = (): void => {
+            const query = input.getValue();
+            filtered = query
+              ? fuzzyFilter([...items], query, (item) => item.searchText)
+              : [...items];
+            listContainer.clear();
+            if (!filtered.length) {
+              list = undefined;
+              listContainer.addChild(
+                new TuiText(theme.fg("muted", "No matching models"), 1, 0),
+              );
+              return;
+            }
+            list = new SelectList(filtered, 10, selectTheme(theme));
+            const index = query
+              ? 0
+              : filtered.findIndex((item) => item.value === selectedValue);
+            list.setSelectedIndex(index >= 0 ? index : 0);
+            list.onSelect = (item) => done(item.value);
+            list.onCancel = () => done(undefined);
+            listContainer.addChild(list);
+          };
+          input.onSubmit = () => {
+            const item = list?.getSelectedItem();
+            if (item) done(item.value);
+          };
+          input.onEscape = () => done(undefined);
+          rebuildList();
+          const container = new Container();
+          container.addChild(
+            new DynamicBorder((line) => theme.fg("accent", line)),
+          );
+          container.addChild(
+            new TuiText(theme.fg("accent", theme.bold("Model")), 1, 0),
+          );
+          container.addChild(input);
+          container.addChild(listContainer);
+          container.addChild(
+            new TuiText(
+              theme.fg(
+                "dim",
+                "type to filter  ↑↓ navigate  enter select  escape/ctrl+c cancel",
+              ),
+              1,
+              0,
+            ),
+          );
+          container.addChild(
+            new DynamicBorder((line) => theme.fg("accent", line)),
+          );
+          return {
+            get focused() {
+              return input.focused;
+            },
+            set focused(value: boolean) {
+              input.focused = value;
+            },
+            render: (width: number) => container.render(width),
+            invalidate: () => container.invalidate(),
+            handleInput: (data: string) => {
+              if (keybindings.matches(data, "tui.select.up")) {
+                const selected = list?.getSelectedItem();
+                if (selected && list) {
+                  const index = filtered.findIndex(
+                    (item) => item.value === selected.value,
+                  );
+                  list.setSelectedIndex(
+                    index <= 0 ? filtered.length - 1 : index - 1,
+                  );
+                }
+                tui.requestRender();
+                return;
+              }
+              if (keybindings.matches(data, "tui.select.down")) {
+                const selected = list?.getSelectedItem();
+                if (selected && list) {
+                  const index = filtered.findIndex(
+                    (item) => item.value === selected.value,
+                  );
+                  list.setSelectedIndex(
+                    index < 0 || index === filtered.length - 1 ? 0 : index + 1,
+                  );
+                }
+                tui.requestRender();
+                return;
+              }
+              if (keybindings.matches(data, "tui.select.confirm")) {
+                const selected = list?.getSelectedItem();
+                if (selected) done(selected.value);
+                tui.requestRender();
+                return;
+              }
+              if (keybindings.matches(data, "tui.select.cancel")) {
+                done(undefined);
+                tui.requestRender();
+                return;
+              }
+              input.handleInput(data);
+              const query = input.getValue();
+              if (query !== previousQuery) {
+                previousQuery = query;
+                rebuildList();
+              }
               tui.requestRender();
             },
           };
@@ -8025,10 +8156,7 @@ export default function (pi: ExtensionAPI): void {
           if (action === "model") {
             field = "model";
             await ctx.modelRegistry.refresh();
-            const scoped = ctx.scopedModels?.map(({ model }) => model) ?? [];
-            const models = scoped.length
-              ? scoped
-              : ctx.modelRegistry.getAvailable();
+            const models = ctx.modelRegistry.getAvailable();
             const tokens = [
               ...new Set(models.map((model) => modelToken(model))),
             ].sort();
@@ -8048,21 +8176,33 @@ export default function (pi: ExtensionAPI): void {
               const id = compactModelToken(token);
               idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
             }
-            const modelItems: MenuItem[] = tokens.map((token) => {
+            const resolvedConfigured = configured
+              ? resolveConfiguredModel(ctx, configured)
+              : undefined;
+            const modelsByToken = new Map(
+              models.map((model) => [modelToken(model), model]),
+            );
+            if (resolvedConfigured)
+              modelsByToken.set(
+                modelToken(resolvedConfigured),
+                resolvedConfigured,
+              );
+            const modelItems: ModelMenuItem[] = tokens.map((token) => {
               const id = compactModelToken(token);
               return {
                 value: token,
                 label: idCounts.get(id) === 1 ? id : token,
+                searchText: `${id} ${token} ${modelsByToken.get(token)?.name ?? ""}`,
               };
             });
-            const resolvedConfigured = configured
-              ? resolveConfiguredModel(ctx, configured)
-              : undefined;
-            const selectedModel = await selectMenu(
+            const selectedModel = await selectModelMenu(
               ctx,
-              "Model",
               [
-                { value: "inherit", label: "Inherit current session" },
+                {
+                  value: "inherit",
+                  label: "Inherit current session",
+                  searchText: "Inherit current session inherit",
+                },
                 ...modelItems,
               ],
               configured
