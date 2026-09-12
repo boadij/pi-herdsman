@@ -33,8 +33,10 @@ async function waitForTreeGone(pid, timeoutMs) {
   while (Date.now() <= deadline) {
     try {
       if (!processTreeExists(pid)) return true;
-    } catch {
-      return false;
+    } catch (error) {
+      // macOS can briefly report EPERM while a killed process group is
+      // disappearing; keep polling so the later ESRCH probe proves it gone.
+      if (error?.code !== "EPERM") return false;
     }
     await sleep(TREE_POLL_MS);
   }
@@ -62,6 +64,15 @@ function terminateWindowsProcessTree(pid) {
   });
 }
 
+function isAlreadyGoneTaskkillError(error) {
+  return (
+    error?.code === 128 &&
+    /(?:not found|no running instance|does not exist)/i.test(
+      `${error.message ?? ""}\n${error.stderr ?? ""}`,
+    )
+  );
+}
+
 async function terminateProcessTree(pid) {
   if (isWindows) {
     let forceSent = false;
@@ -72,8 +83,9 @@ async function terminateProcessTree(pid) {
       forceSent = true;
       treeGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
     } catch (error) {
-      cleanupError = error instanceof Error ? error.message : String(error);
       treeGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
+      if (!treeGone || !isAlreadyGoneTaskkillError(error))
+        cleanupError = error instanceof Error ? error.message : String(error);
     }
     return { forceSent, treeGone, cleanupError };
   }

@@ -24,7 +24,7 @@ import {
   watchFile,
   unwatchFile,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -787,7 +787,7 @@ function validAgentLabel(value: unknown): value is string {
 function managedAgentEnvironmentError(): string | undefined {
   const e = process.env;
   if (!e.PI_HERDSMAN_MAILBOX) return "PI_HERDSMAN_MAILBOX missing";
-  if (!e.PI_HERDSMAN_MAILBOX.startsWith("/"))
+  if (!isAbsolute(e.PI_HERDSMAN_MAILBOX))
     return "PI_HERDSMAN_MAILBOX is not absolute";
   if (!validId(e.PI_HERDSMAN_RUN_ID)) return "PI_HERDSMAN_RUN_ID invalid";
   if (!validId(e.PI_HERDSMAN_OWNER_SESSION_ID))
@@ -6397,6 +6397,7 @@ export default function (pi: ExtensionAPI): void {
     askId?: string,
     recordId?: string,
     createdAt = Date.now(),
+    runtimeOverride?: ReturnType<typeof supervisionRuntime>,
   ): ChiefMessageRecord => {
     assertCurrentLeadCoordination(ctx);
     const chief = await currentChiefAuthority(ctx);
@@ -6430,7 +6431,7 @@ export default function (pi: ExtensionAPI): void {
       record.toSessionId !== freshChief.piSessionId
     )
       throw new Error("Chief target changed before the message was queued");
-    const runtime = supervisionRuntime();
+    const runtime = runtimeOverride ?? supervisionRuntime();
     if (kind === "lead_ask") writeChiefAskMessage(record, runtime);
     else writeChiefMessage(record, runtime);
     try {
@@ -6472,9 +6473,14 @@ export default function (pi: ExtensionAPI): void {
   };
   // Pending asks are state-first: a persisted ask is retained for later
   // reconciliation if inbox publication did not complete.
-  const reconcilePendingAsk = async (ctx: ExtensionContext): Promise<void> => {
+  const reconcilePendingAsk = async (
+    ctx: ExtensionContext,
+    runtimeOverride?: ReturnType<typeof supervisionRuntime>,
+    isCurrent: () => boolean = () => true,
+  ): Promise<void> => {
     const release = await enterCoordinationPublication();
     try {
+      if (!isCurrent()) return;
       if (
         !leadCoordinationHealthy ||
         chiefMode !== "inactive" ||
@@ -6483,9 +6489,10 @@ export default function (pi: ExtensionAPI): void {
         return;
       assertCurrentLeadCoordination(ctx);
       const chief = await currentChiefAuthority(ctx);
+      if (!isCurrent()) return;
       assertCurrentLeadCoordination(ctx);
       if (!chief) return; // Keep the authoritative ask for the next chief.
-      const runtime = supervisionRuntime();
+      const runtime = runtimeOverride ?? supervisionRuntime();
       const ask = pendingChiefAsk;
       if (
         chiefAskQueued(
@@ -6500,7 +6507,15 @@ export default function (pi: ExtensionAPI): void {
       // Recheck immediately before queueing. Sidecar creation is separate from
       // JSON replacement, so this remains conservative rather than atomic.
       assertCurrentLeadCoordination(ctx);
-      await queueChiefRecord("lead_ask", ask.text, ctx, ask.askId);
+      await queueChiefRecord(
+        "lead_ask",
+        ask.text,
+        ctx,
+        ask.askId,
+        undefined,
+        Date.now(),
+        runtimeOverride,
+      );
       assertCurrentLeadCoordination(ctx);
     } finally {
       release();
@@ -6508,6 +6523,12 @@ export default function (pi: ExtensionAPI): void {
   };
   const startChiefInbox = (ctx: ExtensionContext): void => {
     const generation = ++chiefInboxGeneration;
+    const socket = process.env.HERDR_SOCKET_PATH;
+    if (!socket) return;
+    const runtime = supervisionRuntime(socket);
+    const isCurrent = (): boolean =>
+      generation === chiefInboxGeneration &&
+      !controllerAbortController?.signal.aborted;
     if (chiefInboxTimer) clearTimeout(chiefInboxTimer);
     const transactions = new Map<
       string,
@@ -6538,79 +6559,82 @@ export default function (pi: ExtensionAPI): void {
         throw new Error(`Stale inbox transaction (${phase})`);
       if (transaction.role === "inactive") assertCurrentLeadCoordination(ctx);
     };
-    const inboxOptions = (verifyLease: boolean, verifyLiveChief = true) => ({
-      runtime: supervisionRuntime(),
-      sessionId: ctx.sessionManager.getSessionId(),
-      signal: controllerAbortController?.signal,
-      cleanupError: (error: unknown) => {
-        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
-      },
-      isDelivered: (id: string) => messageDelivered(ctx, id),
-      isAuthorized: async (record: ChiefMessageRecord) => {
-        if (verifyLease) {
-          const chief = await currentChiefAuthority(ctx);
-          if (!chief) throw new Error("Chief lease could not be verified");
-          if (record.toSessionId !== ctx.sessionManager.getSessionId())
-            return false;
-          if (record.leaseId !== chief.leaseId) return false;
-        }
-        return authorizeChiefRecord(record, ctx, verifyLiveChief);
-      },
-      sendMessage: (message: unknown, options: any) =>
-        pi.sendMessage(message, options),
-      transaction: {
-        begin: (record: ChiefMessageRecord) => {
-          const token = {
-            id: record.id,
-            record,
-            generation,
-            sessionId: ctx.sessionManager.getSessionId(),
-            instanceId: leadInstanceId,
-            role: chiefMode,
-            signal: controllerAbortController?.signal,
-          };
-          transactions.set(record.id, token);
-          return token;
+    const inboxOptions = (verifyLease: boolean, verifyLiveChief = true) => {
+      if (!isCurrent()) throw new Error("Stale inbox transaction (options)");
+      return {
+        runtime,
+        sessionId: ctx.sessionManager.getSessionId(),
+        signal: controllerAbortController?.signal,
+        cleanupError: (error: unknown) => {
+          appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         },
-        revalidate: (token: unknown, phase: string) => {
-          revalidateTransaction(token, phase);
-        },
-        clear: (token: unknown) => {
-          for (const [id, value] of transactions)
-            if (value === token) {
-              transactions.delete(id);
-            }
-        },
-      },
-      accepted: async (record: ChiefMessageRecord) => {
-        const transaction = transactions.get(record.id);
-        void transaction;
-        if (
-          chiefMode !== "inactive" ||
-          !leadCoordinationHealthy ||
-          (record.kind !== "chief_message" && record.kind !== "chief_reply")
-        )
-          return;
-        if (
-          record.kind === "chief_reply" &&
-          pendingChiefAsk?.askId === record.askId
-        ) {
-          const previous = pendingChiefAsk;
-          pendingChiefAsk = undefined;
-          if (!persistChiefState()) {
-            pendingChiefAsk = previous;
-            throw new Error("Lead coordination state is unavailable");
+        isDelivered: (id: string) => messageDelivered(ctx, id),
+        isAuthorized: async (record: ChiefMessageRecord) => {
+          if (verifyLease) {
+            const chief = await currentChiefAuthority(ctx);
+            if (!chief) throw new Error("Chief lease could not be verified");
+            if (record.toSessionId !== ctx.sessionManager.getSessionId())
+              return false;
+            if (record.leaseId !== chief.leaseId) return false;
           }
-          if (process.env.HERDR_PANE_ID)
-            queueLeadMetadata(ctx, {
-              paneId: process.env.HERDR_PANE_ID,
-            });
-        }
-      },
-      rejected: (record: ChiefMessageRecord) => {
-        void record;
-      },
-    });
+          return authorizeChiefRecord(record, ctx, verifyLiveChief);
+        },
+        sendMessage: (message: unknown, options: any) =>
+          pi.sendMessage(message, options),
+        transaction: {
+          begin: (record: ChiefMessageRecord) => {
+            const token = {
+              id: record.id,
+              record,
+              generation,
+              sessionId: ctx.sessionManager.getSessionId(),
+              instanceId: leadInstanceId,
+              role: chiefMode,
+              signal: controllerAbortController?.signal,
+            };
+            transactions.set(record.id, token);
+            return token;
+          },
+          revalidate: (token: unknown, phase: string) => {
+            revalidateTransaction(token, phase);
+          },
+          clear: (token: unknown) => {
+            for (const [id, value] of transactions)
+              if (value === token) {
+                transactions.delete(id);
+              }
+          },
+        },
+        accepted: async (record: ChiefMessageRecord) => {
+          const transaction = transactions.get(record.id);
+          void transaction;
+          if (
+            chiefMode !== "inactive" ||
+            !leadCoordinationHealthy ||
+            (record.kind !== "chief_message" && record.kind !== "chief_reply")
+          )
+            return;
+          if (
+            record.kind === "chief_reply" &&
+            pendingChiefAsk?.askId === record.askId
+          ) {
+            const previous = pendingChiefAsk;
+            pendingChiefAsk = undefined;
+            if (!persistChiefState()) {
+              pendingChiefAsk = previous;
+              throw new Error("Lead coordination state is unavailable");
+            }
+            if (process.env.HERDR_PANE_ID)
+              queueLeadMetadata(ctx, {
+                paneId: process.env.HERDR_PANE_ID,
+              });
+          }
+        },
+        rejected: (record: ChiefMessageRecord) => {
+          void record;
+        },
+      };
+    };
     const schedule = (): void => {
       if (
         generation !== chiefInboxGeneration ||
@@ -6621,15 +6645,19 @@ export default function (pi: ExtensionAPI): void {
         chiefInboxTimer = undefined;
         // Recurring lead work is inbox-only. Global inventory and chief/ask
         // repair run once above at session_start or from chief refresh.
-        void drainChiefInbox(
-          inboxOptions(chiefMode === "active", chiefMode === "active"),
-        )
+        void Promise.resolve()
+          .then(() => {
+            if (!isCurrent()) return;
+            return drainChiefInbox(
+              inboxOptions(chiefMode === "active", chiefMode === "active"),
+            );
+          })
           .catch(() => {})
           .finally(schedule);
       }, 500);
       chiefInboxTimer.unref?.();
     };
-    void reconcilePendingAsk(ctx)
+    void reconcilePendingAsk(ctx, runtime, isCurrent)
       .catch(() => {})
       .then(() => drainChiefInbox(inboxOptions(false)))
       .catch(() => {})

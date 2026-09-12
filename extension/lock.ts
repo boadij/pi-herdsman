@@ -82,7 +82,8 @@ export function acquireProcessLock(
     publishClaim(parent, claimDir, `${process.pid}-${id}`, payload);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+    if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EPERM")
+      throw error;
     let entries: string[];
     try {
       entries = fs.readdirSync(claimDir);
@@ -191,7 +192,7 @@ export function acquireProcessLock(
       publishClaim(parent, claimDir, `${process.pid}-${id}`, payload);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EEXIST" || code === "ENOTEMPTY")
+      if (code === "EEXIST" || code === "ENOTEMPTY" || code === "EPERM")
         throw new ProcessLockOccupiedError(occupiedMessage);
       throw error;
     }

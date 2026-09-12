@@ -73,6 +73,7 @@ import {
   writeRequest,
   writeResult,
   writeAgentState,
+  testTmpRoot,
 } from "./support.ts";
 
 test("parent delegates two same-definition children with exact ownership", async () => {
@@ -1084,8 +1085,9 @@ test("fixture mailbox consumer retries a failed acknowledgement callback", async
 test("fresh path sessions remain controllable after controller cache loss", async () => {
   setLeadEnvironment();
   const label = `fresh-path-${randomUUID().slice(0, 8)}`;
-  const sessionPath = "/tmp/registered-agent.jsonl";
+  const sessionPath = join(testTmpRoot, "registered-agent.jsonl");
   realFs.rmSync(sessionPath, { force: true });
+  realFs.writeFileSync(sessionPath, "{}", "utf8");
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -1097,6 +1099,9 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
     AGENT_ID,
     false,
     true,
+    false,
+    undefined,
+    sessionPath,
   );
   const pathSession = (result: { stdout: string; [key: string]: unknown }) => {
     const payload = JSON.parse(result.stdout);
@@ -1142,6 +1147,7 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
     );
     assert.equal(readAgentState(startup.mailbox)?.lastAck?.accepted, true);
     assert.equal(readAgentState(startup.mailbox)?.agentDefinition, "agent");
+    realFs.rmSync(sessionPath, { force: true });
     assert.equal(realFs.existsSync(sessionPath), false);
 
     support.sessionOpenError = new Error("child session is not materialized");
@@ -2344,6 +2350,8 @@ test("concurrent session activation permits one generation", async () => {
 
 test("session assignment reports a pane mismatch from the agent state producer", async () => {
   const label = "agent";
+  const producerMismatchPath = join(testTmpRoot, "producer-mismatch.jsonl");
+  const registeredAgentPath = join(testTmpRoot, "registered-agent.jsonl");
   const mailbox = setAgentEnvironment(label);
   const agent = fakePi();
   registerExtension!(agent.pi as never);
@@ -2351,11 +2359,11 @@ test("session assignment reports a pane mismatch from the agent state producer",
   const paneEnvironment: Record<string, string> = {};
   nativeSessions.set("dddddddd-dddd-4ddd-8ddd-dddddddddddd", {
     id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-    path: "/tmp/producer-mismatch.jsonl",
+    path: producerMismatchPath,
     cwd: "/tmp",
   });
-  realFs.writeFileSync("/tmp/producer-mismatch.jsonl", "{}", "utf8");
-  realFs.writeFileSync("/tmp/registered-agent.jsonl", "{}", "utf8");
+  realFs.writeFileSync(producerMismatchPath, "{}", "utf8");
+  realFs.writeFileSync(registeredAgentPath, "{}", "utf8");
   setLeadEnvironment();
   const lead = fakePi({
     exec: async (command, args) => {
@@ -2512,7 +2520,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       "id",
       {
         action: "continue",
-        session: "/tmp/producer-mismatch.jsonl",
+        session: producerMismatchPath,
         task: "continue the mismatched session",
       },
       undefined,
@@ -2528,8 +2536,8 @@ test("session assignment reports a pane mismatch from the agent state producer",
     agent.events.get("session_shutdown")?.[0]();
     nativeSessions.clear();
     resetAgentMailbox(mailbox);
-    realFs.rmSync("/tmp/producer-mismatch.jsonl", { force: true });
-    realFs.rmSync("/tmp/registered-agent.jsonl", { force: true });
+    realFs.rmSync(producerMismatchPath, { force: true });
+    realFs.rmSync(registeredAgentPath, { force: true });
   }
 });
 

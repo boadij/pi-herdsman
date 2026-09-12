@@ -48,6 +48,7 @@ import support, {
   writeResult,
   writeAgentState,
   waitForTestCondition,
+  testTmpRoot,
 } from "./support.ts";
 
 test("managed agents cancel native session replacement", () => {
@@ -664,7 +665,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   );
   assert.equal(readAgentState(mailbox)?.pendingAskId, undefined);
   assert.equal(readPendingAsk(mailbox, readAgentState(mailbox)!), undefined);
-  const askFile = join("/tmp", "registered-ask-options.md");
+  const askFile = join(testTmpRoot, "registered-ask-options.md");
   realFs.writeFileSync(askFile, "owner options");
   branch[0] = {
     type: "message",
@@ -695,7 +696,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     "ask",
     {
       question: "Should the token be ALPHA or BETA?",
-      files: ["registered-ask-options.md"],
+      files: [askFile],
     },
     undefined,
     undefined,
@@ -719,7 +720,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   );
   assert.match(
     readPendingAsk(mailbox, waiting!)?.question ?? "",
-    /\/tmp\/registered-ask-options\.md/,
+    /registered-ask-options\.md/,
   );
   agent.events.get("agent_settled")![0](undefined, context);
   assert.equal(readResult(mailbox, assignment.requestId), undefined);
@@ -1766,7 +1767,18 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
   assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
   completionMetadataStarted = true;
   agent.events.get("agent_settled")![0](undefined, context);
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await waitForTestCondition(
+    () =>
+      agent.callResults
+        .slice(callsBeforeSettlement)
+        .some(
+          ({ args, succeeded }) =>
+            args.includes("--clear-token") &&
+            args.includes("task") &&
+            !succeeded,
+        ),
+    "first completion metadata clear did not fail",
+  );
   assert.ok(
     agent.calls
       .slice(callsBeforeSettlement)
@@ -1784,7 +1796,10 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { model: { provider: "openai", id: "gpt-5" } },
     context,
   );
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await waitForTestCondition(
+    () => completionFailures >= 2,
+    "second completion metadata clear did not fail",
+  );
   assert.equal(
     agent.calls
       .slice(completionFailure + 1)
@@ -1800,7 +1815,17 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { model: { provider: "openai", id: "gpt-5.1" } },
     context,
   );
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await waitForTestCondition(
+    () =>
+      agent.callResults.some(
+        ({ args, succeeded }) =>
+          succeeded &&
+          args.includes("--clear-token") &&
+          args.includes("task") &&
+          args.includes("model=openai/gpt-5.1"),
+      ),
+    "completion metadata clear did not recover",
+  );
   assert.equal(completionFailures, 2);
   const completionClears = agent.callResults.filter(
     ({ args }, index) =>

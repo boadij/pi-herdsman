@@ -61,6 +61,7 @@ import support, {
   writeRequest,
   writeResult,
   writeAgentState,
+  testTmpRoot,
 } from "./support.ts";
 
 test("project agent discovery is gated by Pi project trust", async () => {
@@ -1561,7 +1562,7 @@ test("session assignment rejects the controller's active session", async () => {
   nativeSessions.clear();
   const session = {
     id: LEAD_SESSION_ID,
-    path: "/tmp/lead.jsonl",
+    path: join(testTmpRoot, "lead.jsonl"),
     cwd: "/tmp",
     entries: [
       {
@@ -1804,7 +1805,7 @@ test("session assignment fails closed on duplicate live representations", async 
   setLeadEnvironment();
   const session = {
     id: "018f2f2e-7b13-7abc-8def-0123456789ae",
-    path: "/tmp/duplicate-live-session.jsonl",
+    path: join(testTmpRoot, "duplicate-live-session.jsonl"),
     cwd: "/tmp",
     entries: [
       {
@@ -2253,7 +2254,7 @@ test("registered lead exposes only explicit live controls", async () => {
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
-  const steerFile = join("/tmp", `${label}-update.md`);
+  const steerFile = join(testTmpRoot, `${label}-update.md`);
   realFs.writeFileSync(steerFile, "steer evidence");
   let steerSubmitted: RequestRecord | undefined;
   const accepting = fakePi({

@@ -66,7 +66,9 @@ function assertWidgetContent(content: unknown): void {
   component.invalidate();
 }
 export const realFs = await import("node:fs");
-const testTmpRoot = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-test-"));
+export const testTmpRoot = realFs.mkdtempSync(
+  join(tmpdir(), "pi-herdsman-test-"),
+);
 process.env.TMPDIR = testTmpRoot;
 const {
   Key: tuiKey,
@@ -2065,6 +2067,7 @@ export function startupExecutor(
   closePaneOnClose = false,
   countStartup = false,
   onAccepted?: (request: RequestRecord) => void | Promise<void>,
+  sessionFile = "/tmp/registered-agent.jsonl",
 ): {
   exec: ExecHandler;
   mailbox: string;
@@ -2421,7 +2424,7 @@ export function startupExecutor(
         agentLabel: label,
         paneId: activePaneId,
         piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-        piSessionFile: "/tmp/registered-agent.jsonl",
+        piSessionFile: sessionFile,
         agentDefinition: "agent",
         cwd: testCwd,
         updatedAt: Date.now(),
