@@ -115,8 +115,9 @@ The path is resolved relative to the declaring project or global file before
 body composition, so each layer preserves its own declaring-file provenance.
 
 References expand when each new agent generation is constructed. A session
-continuation keeps the saved Pi history but uses the current effective
-definition configuration for its new generation.
+continuation keeps the saved Pi history and uses the current effective
+definition configuration for its new generation; omitted model and thinking
+fields retain the saved session's settings.
 
 The Definitions details view re-resolves the selected name when opened, so
 metadata and body references reflect current overlays even if configuration
@@ -210,8 +211,8 @@ Details…
 Back
 ```
 
-Model and thinking each offer `Use default` plus their available values.
-Selecting `Use default` removes only that field. The model chooser stores the
+Model and thinking each offer `Inherit current session` plus their available
+values. Selecting `Inherit current session` removes only that field. The model chooser stores the
 canonical provider/model token; thinking uses the selected model's supported
 levels when available. `Enabled` toggles the definition.
 
@@ -221,17 +222,18 @@ edited through the same flow.
 It changes only the selected top-level line in the global Markdown override and
 preserves unrelated frontmatter, line endings, and body content.
 
-Removing a saved field from a bundled definition restores its bundled value.
-Removing a field from a standalone definition uses Pi's normal default. The
-override file is not deleted.
+Removing a saved model or thinking field inherits the spawning controller for a
+fresh delegation, or the saved session for a continuation. The override file
+is not deleted.
 
 Enable and disable write the scalar `enabled` field in the same global override.
 Removing that field inherits the bundled value, or `true` when no source
 declares it.
 
-Changes affect future `delegate` assignments and `continue` assignments, whose
-runtime configuration comes from the current effective definition. They do not
-mutate an already-running agent or the lead Pi session.
+Changes affect future assignments. Fresh `delegate` assignments inherit unset
+execution fields from their spawning controller; `continue` restores saved
+session settings. They do not mutate an already-running agent or the lead Pi
+session.
 
 ## See also
 

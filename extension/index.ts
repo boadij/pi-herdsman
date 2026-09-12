@@ -5080,6 +5080,12 @@ async function actionUnsafe(
         managedAgent: true,
         approveProject:
           agentContext.projectTrusted && sameCwd(agentCwd, ctx.cwd),
+        ...(p.action === "delegate"
+          ? {
+              inheritedModel: ctx.model ? modelToken(ctx.model) : undefined,
+              inheritedThinking: ctx.thinkingLevel,
+            }
+          : {}),
       });
       started = await startHerdrAgent(pi, ctx, {
         label,
@@ -7814,11 +7820,17 @@ export default function (pi: ExtensionAPI): void {
           const model =
             typeof definition.frontmatter.model === "string"
               ? compactModelToken(definition.frontmatter.model)
-              : "default";
+              : ctx.model
+                ? `inherit · ${compactModelToken(modelToken(ctx.model))}`
+                : "inherit";
           const thinking =
             definition.frontmatter.thinking === false
               ? "off"
-              : (definition.frontmatter.thinking ?? "default");
+              : typeof definition.frontmatter.thinking === "string"
+                ? definition.frontmatter.thinking
+                : ctx.thinkingLevel
+                  ? `inherit · ${ctx.thinkingLevel}`
+                  : "inherit";
           const name = `${definition.name}${definition.projectSource ? " [project]" : ""}${definition.overrideSource && (definition.extensionSource || definition.projectSource) ? " *" : ""}`;
           return { name, model, thinking, definition };
         };
@@ -7862,11 +7874,17 @@ export default function (pi: ExtensionAPI): void {
           const configuredModel =
             typeof definition.frontmatter.model === "string"
               ? compactModelToken(definition.frontmatter.model)
-              : "default";
+              : ctx.model
+                ? `inherit · ${compactModelToken(modelToken(ctx.model))}`
+                : "inherit";
           const configuredThinking =
             definition.frontmatter.thinking === false
               ? "off"
-              : (definition.frontmatter.thinking ?? "default");
+              : typeof definition.frontmatter.thinking === "string"
+                ? definition.frontmatter.thinking
+                : ctx.thinkingLevel
+                  ? `inherit · ${ctx.thinkingLevel}`
+                  : "inherit";
           const action = await ctx.ui.select(definition.name, [
             `Model       ${configuredModel}`,
             `Thinking    ${configuredThinking}`,
@@ -7929,14 +7947,14 @@ export default function (pi: ExtensionAPI): void {
               return idCounts.get(id) === 1 ? id : token;
             });
             const selectedModel = await ctx.ui.select("Model", [
-              "Use default",
+              "Inherit current session",
               ...labels,
               "Back",
             ]);
             if (!selectedModel) return;
             if (selectedModel === "Back") continue;
             value =
-              selectedModel === "Use default"
+              selectedModel === "Inherit current session"
                 ? undefined
                 : (tokens[labels.indexOf(selectedModel)] ?? selectedModel);
           } else if (action.startsWith("Thinking")) {
@@ -7947,22 +7965,36 @@ export default function (pi: ExtensionAPI): void {
                 ? definition.frontmatter.model
                 : undefined;
             const model = configured
-              ? ctx.modelRegistry
-                  .getAll()
-                  .find((candidate) => modelToken(candidate) === configured)
-              : undefined;
+              ? (() => {
+                  const canonical = ctx.modelRegistry
+                    .getAll()
+                    .find((candidate) => modelToken(candidate) === configured);
+                  if (canonical) return canonical;
+                  const compactMatches = ctx.modelRegistry
+                    .getAll()
+                    .filter(
+                      (candidate) =>
+                        compactModelToken(modelToken(candidate)) === configured,
+                    );
+                  return compactMatches.length === 1
+                    ? compactMatches[0]
+                    : undefined;
+                })()
+              : ctx.model;
             const levels = model
               ? getSupportedThinkingLevels(model)
               : [...VALID_THINKING_LEVELS];
             const selectedThinking = await ctx.ui.select("Thinking", [
-              "Use default",
+              "Inherit current session",
               ...levels,
               "Back",
             ]);
             if (!selectedThinking) return;
             if (selectedThinking === "Back") continue;
             value =
-              selectedThinking === "Use default" ? undefined : selectedThinking;
+              selectedThinking === "Inherit current session"
+                ? undefined
+                : selectedThinking;
           } else if (action.startsWith("Enabled")) {
             field = "enabled";
             value = !agentDefinitionEnabled(definition);
@@ -7980,7 +8012,7 @@ export default function (pi: ExtensionAPI): void {
             result.changed
               ? field === "enabled"
                 ? `${definition.name} ${value ? "enabled" : "disabled"}.`
-                : `${definition.name} ${field} ${value === undefined ? "reset" : `set to ${value}`}.`
+                : `${definition.name} ${field} ${value === undefined ? "inherited" : `set to ${value}`}.`
               : `${definition.name} ${field} is already inherited; no change made.`,
           );
           break;

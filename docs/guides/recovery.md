@@ -126,7 +126,9 @@ session identity. If the definition no longer exists, continuation fails instead
 of guessing a replacement; a missing or malformed session identity also fails
 closed. The definition must also be enabled and authorized for the current
 controller, and its current effective configuration is used for the new agent
-generation. Continuation cannot override or regenerate its saved label.
+generation. Omitted model and thinking fields restore the saved session
+settings; explicit definition fields override them. Continuation cannot
+override or regenerate its saved label.
 
 An exact session that is already represented by active or unresolved managed
 work cannot be activated concurrently. The session-start exclusion applies to

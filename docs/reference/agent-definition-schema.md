@@ -63,6 +63,25 @@ Precedence is `bundled < project < global`.
 All effective definitions are sorted and validated together, including every
 `agents` reference.
 
+## Execution settings
+
+`model` and `thinking` are independent optional overrides. An omitted field is
+inherited according to this precedence:
+
+| Operation | Omitted `model` or `thinking` |
+| --- | --- |
+| fresh `delegate` | current spawning controller session |
+| `delegate` with `fork` | current spawning controller session |
+| nested fresh `delegate` | current spawning managed-agent session |
+| `continue` | saved Pi session |
+| any operation with an explicit definition field | explicit definition value |
+
+Model and thinking resolve independently, so either field can be explicit while
+the other inherits. A nested agent inherits from its managed parent, not from
+the root lead. Pi clamps a thinking level to the selected model's capabilities.
+Fresh-delegation settings are snapshotted at launch; changing the controller
+does not change an active agent.
+
 `enabled` controls definition availability. A disabled definition remains in the
 lead roster so it can be enabled again, but owner-visible definition lists omit
 it. `delegate` and `continue` reject a disabled definition. An already
@@ -76,8 +95,8 @@ available actions; disabling a definition does not mutate that assignment.
 | `name`                  | non-empty string                                                      | required                                                          | Effective definition identity.                                                                         |
 | `enabled`               | boolean                                                               | `true`                                                            | `false` makes `delegate` and `continue` unavailable; it does not mutate an active agent.               |
 | `description`           | string                                                                | absent                                                            | Display/selection description.                                                                         |
-| `model`                 | non-empty string                                                      | Pi default/current launch behavior                                | Passed as Pi model selection.                                                                          |
-| `thinking`              | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `false` | Pi default/current launch behavior                                | `false` launches as `off`.                                                                             |
+| `model`                 | non-empty string                                                      | spawning controller for fresh `delegate`; saved session for `continue` | Explicit value is passed as Pi model selection.                                                    |
+| `thinking`              | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `false` | spawning controller for fresh `delegate`; saved session for `continue` | Explicit value wins; `false` launches as `off`.                                                     |
 | `systemPromptMode`      | `append` or `replace`                                                 | `append` only for definition name `delegate`; otherwise `replace` | Controls effective body versus Pi base system prompt.                                                  |
 | `bodyMode`              | `append` or `replace`                                                 | `replace` for non-empty matching overlay body                     | Valid only when overlaying an existing lower-precedence definition; consumed during body composition.  |
 | `noTools`               | boolean                                                               | Pi normal tool policy                                             | `true` emits `--no-tools`; managed `ask_owner` remains infrastructure.                                 |
@@ -223,7 +242,8 @@ When a new agent generation is constructed:
 
 Every new agent generation expands the effective body and its file references
 once at launch. Session continuation preserves the Pi session history while
-using the current effective definition configuration.
+using the current effective definition configuration; model and thinking follow
+the execution-settings precedence above.
 
 ## Runtime prompt order
 

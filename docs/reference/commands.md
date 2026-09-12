@@ -35,7 +35,7 @@ overrides only.
 The details view can show:
 
 - name and description;
-- configured model and thinking;
+- configured or inherited model and thinking;
 - declared tool policy represented by definition metadata (not a complete
   runtime capability probe);
 - named skills;
@@ -61,8 +61,10 @@ Back
 ```
 
 Model selection refreshes Pi's registry and stores the canonical provider/model
-token. `Use default` removes the selected field. Thinking uses Pi's supported
-levels when the selected model is known.
+token. `Inherit current session` removes the selected field. Unset model and
+thinking rows display `inherit · <current session value>` when the current
+value is available. Thinking uses Pi's supported levels when the selected
+model is known.
 
 When Pi provides an explicit scoped-model list, that scope is used. Otherwise
 available models are offered.
@@ -78,12 +80,14 @@ Details re-resolves the selected definition when opened, so it reflects current
 overlays and body references even if the menu remained open while configuration
 changed.
 
-Changes apply to future `delegate` assignments and `continue` assignments, not
-already-running agents or the lead Pi session.
+Changes apply to future assignments, not already-running agents or the lead Pi
+session. Fresh `delegate` assignments inherit the spawning controller's
+current settings when fields are unset; `continue` restores the saved
+session's settings.
 
-Standalone global definitions are editable too. Removing a field from one uses
-Pi's normal default; removing a field from a bundled override restores the
-bundled value.
+Standalone global definitions are editable too. Removing a model or thinking
+field selects `Inherit current session`; removing any other field inherits its
+lower-precedence value.
 
 ## `/agents` Running
 

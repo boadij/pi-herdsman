@@ -248,8 +248,9 @@ The human `Definitions` menu includes bundled, project, and global
 participation. Project participation is marked `[project]`; a global override
 adds `*`, so `[project] *` means both layers contribute. Model, thinking, and
 enabled settings can be changed through the menu, but edits always write global
-overrides. `Use default` removes only that field and inherits the next lower
-layer or Pi's normal default.
+overrides. `Inherit current session` removes only that field. Unset model and
+thinking fields inherit the spawning controller for fresh delegation, while
+continuation restores the saved session's settings.
 
 ## Override an existing bundled role
 
