@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.1](https://github.com/boadij/pi-herdsman/compare/v0.6.0...v0.6.1) (2026-09-12)
+
+
+### Fixes
+
+* remove Unix-only portability assumptions ([#56](https://github.com/boadij/pi-herdsman/issues/56)) ([c2da24e](https://github.com/boadij/pi-herdsman/commit/c2da24e1f7abe4a408045937383ba8152ea285ea))
+
+
+### Documentation
+
+* add project badges ([#58](https://github.com/boadij/pi-herdsman/issues/58)) ([75e5269](https://github.com/boadij/pi-herdsman/commit/75e5269e77205ead9ef80ccc6f4d921f55a7121d))
+
 ## [0.6.0](https://github.com/boadij/pi-herdsman/compare/v0.5.2...v0.6.0) (2026-09-12)
 
 
