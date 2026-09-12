@@ -58,7 +58,6 @@ Model
 Thinking
 Enabled
 Details…
-Back
 ```
 
 Model selection refreshes Pi's registry and stores the canonical provider/model

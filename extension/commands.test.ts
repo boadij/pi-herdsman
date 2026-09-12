@@ -1197,6 +1197,7 @@ test("plain agents opens the native management menu", async () => {
   const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
     if (prompts.length === 1)
@@ -1218,6 +1219,146 @@ test("plain agents opens the native management menu", async () => {
   await pi.events.get("session_shutdown")?.[0]();
 });
 
+test("agents TUI selectors use stable values and current preselection", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "tui";
+  const renders: string[][] = [];
+  let customCalls = 0;
+  context.ui.custom = async (factory: any) =>
+    new Promise((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        {},
+        resolve,
+      );
+      renders.push(component.render(200));
+      if (customCalls++ === 0) {
+        component.handleInput("\u001b[B");
+        component.handleInput("\u001b[B");
+        component.handleInput("\r");
+      } else if (customCalls === 2) component.handleInput("\r");
+      else component.handleInput("\u001b");
+    });
+  try {
+    await pi.commandOptions.get("agents").handler("", context);
+    assert.ok(
+      renders[1]?.some((line) => /Subtree tabs \(current\)/u.test(line)),
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("definition pickers preselect configured values and honor cancellation", async () => {
+  for (const scenario of [
+    {
+      field: "Model",
+      picker: "Inherit current session",
+      property: "model",
+      source: "---\nname: preselect-agent\n---\n",
+      expected: undefined,
+    },
+    {
+      field: "Model",
+      picker: "model",
+      property: "model",
+      source: "---\nname: preselect-agent\nmodel: provider/model\n---\n",
+      expected: "provider/model",
+    },
+    {
+      field: "Thinking",
+      picker: "Inherit current session",
+      property: "thinking",
+      source: "---\nname: preselect-agent\n---\n",
+      expected: undefined,
+    },
+    {
+      field: "Thinking",
+      picker: "high",
+      property: "thinking",
+      source: "---\nname: preselect-agent\nthinking: high\n---\n",
+      expected: "high",
+    },
+    {
+      field: "Model",
+      picker: undefined,
+      property: "model",
+      source: "---\nname: preselect-agent\n---\n",
+      expected: undefined,
+    },
+  ] as const) {
+    setLeadEnvironment();
+    const definitionPath = join(PI_AGENTS_DIR, "preselect-agent.md");
+    realFs.writeFileSync(definitionPath, scenario.source);
+    const pi = fakePi();
+    registerExtension!(pi.pi as never);
+    const context = fakeContext() as any;
+    context.hasUI = true;
+    context.mode = "tui";
+    context.modelRegistry = {
+      refresh: async () => undefined,
+      getAll: () => [{ provider: "provider", id: "model", reasoning: true }],
+      getAvailable: () => [
+        { provider: "provider", id: "model", reasoning: true },
+      ],
+    };
+    let customCalls = 0;
+    context.ui.custom = async (factory: any) =>
+      new Promise((resolve) => {
+        const component = factory(
+          { requestRender: () => undefined },
+          {
+            fg: (_color: string, text: string) => text,
+            bold: (text: string) => text,
+          },
+          {},
+          resolve,
+        );
+        const call = customCalls++;
+        if (call === 0) {
+          const index = component
+            .render(200)
+            .findIndex((line: string) => line.includes("preselect-agent"));
+          for (let i = 0; i < index - 1; i++) component.handleInput("\u001b[B");
+          component.handleInput("\r");
+        } else if (call === 1) {
+          const index = component
+            .render(200)
+            .findIndex((line: string) =>
+              line.includes(`${scenario.field}    `),
+            );
+          for (let i = 0; i < index - 1; i++) component.handleInput("\u001b[B");
+          component.handleInput("\r");
+        } else if (call === 2 && scenario.picker !== undefined) {
+          const line = component
+            .render(200)
+            .find((candidate: string) => candidate.includes(scenario.picker));
+          assert.match(line ?? "", /^→/u);
+          component.handleInput("\r");
+        } else component.handleInput("\u001b");
+      });
+    try {
+      await pi.commandOptions.get("agents").handler("definitions", context);
+      assert.equal(customCalls, 5, JSON.stringify(scenario));
+      assert.equal(
+        discoverAgent("preselect-agent").frontmatter[scenario.property],
+        scenario.expected,
+      );
+    } finally {
+      await pi.events.get("session_shutdown")?.[0]();
+      realFs.rmSync(definitionPath, { force: true });
+    }
+  }
+});
+
 test("message limits use flat config and one rough token formatter", async () => {
   setLeadEnvironment();
   const pi = fakePi();
@@ -1227,6 +1368,7 @@ test("message limits use flat config and one rough token formatter", async () =>
   const notices: string[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.ui.notify = (message: string) => notices.push(message);
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
@@ -1253,6 +1395,59 @@ test("message limits use flat config and one rough token formatter", async () =>
   await pi.events.get("session_shutdown")?.[0]();
 });
 
+test("message limit edits stay in the submenu with the edited field selected", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "tui";
+  const renders: string[][] = [];
+  let customCalls = 0;
+  context.ui.custom = async (factory: any) =>
+    new Promise((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        {},
+        resolve,
+      );
+      renders.push(component.render(200));
+      switch (customCalls++) {
+        case 0:
+          for (let i = 0; i < 3; i++) component.handleInput("\u001b[B");
+          component.handleInput("\r");
+          break;
+        case 1:
+        case 3:
+          component.handleInput("\r");
+          break;
+        case 2:
+          component.handleInput("\u001b[B");
+          component.handleInput("\r");
+          break;
+        case 4:
+        case 5:
+        case 6:
+          component.handleInput("\u001b");
+          break;
+      }
+    });
+  try {
+    await pi.commandOptions.get("agents").handler("", context);
+    assert.ok(renders[3]?.some((line) => line.includes("Inline attachments")));
+    assert.match(
+      renders[3]?.find((line) => line.includes("Inline attachments")) ?? "",
+      /^→/u,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
 test("Running uses compact native options and focuses the freshly verified pane", async () => {
   setLeadEnvironment();
   const label = "running-menu-agent";
@@ -1267,6 +1462,7 @@ test("Running uses compact native options and focuses the freshly verified pane"
   const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.ui.select = async (prompt: string, options: string[]) => {
     prompts.push({ label: prompt, options });
     if (prompts.length === 1) {
@@ -1320,6 +1516,7 @@ test("Running explains how to delegate when no agents are running", async () => 
   const notices: string[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.ui.notify = (message: string) => notices.push(message);
   let selection = 0;
   context.ui.select = async (_prompt: string, options: string[]) =>
@@ -1399,6 +1596,7 @@ test("Running warns when the selected agent is replaced before focus", async () 
   const notices: { message: string; level?: string }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.ui.notify = (message: string, level?: string) =>
     notices.push({ message, level });
   let selection = 0;
@@ -1546,6 +1744,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
   const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   let selection = 0;
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
@@ -1600,6 +1799,7 @@ test("Definitions edits standalone definitions through the shared override write
   let selection = 0;
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.modelRegistry = {
     refresh: async () => undefined,
     getAll: () => [{ provider: "new", id: "model" }],
@@ -1609,7 +1809,8 @@ test("Definitions edits standalone definitions through the shared override write
     prompts.push({ label, options });
     if (selection++ === 0)
       return options.find((option) => option.includes("docs-reviewer"));
-    if (selection === 2) return "Model       old/model";
+    if (selection === 2)
+      return options.find((option) => option.startsWith("Model"));
     if (selection === 3) return "Inherit current session";
     return undefined;
   };
@@ -1650,17 +1851,38 @@ test("Definitions Details snapshots effective append and replace instructions", 
     const command = pi.commandOptions.get("agents");
     const context = fakeContext() as any;
     context.hasUI = true;
+    context.mode = "tui";
     const notices: string[] = [];
     context.ui.notify = (message: string) => notices.push(message);
-    let selection = 0;
-    context.ui.select = async (_label: string, options: string[]) => {
-      if (selection++ === 0)
-        return options.find((option) => option.includes(selectedName));
-      if (selection === 2) {
-        beforeDetails?.();
-        return "Details…";
-      }
-      return undefined;
+    let customCalls = 0;
+    context.ui.custom = async (factory: any) => {
+      const result = new Promise<unknown>((resolve) => {
+        const component = factory(
+          { requestRender: () => undefined },
+          {
+            fg: (_color: string, text: string) => text,
+            bold: (text: string) => text,
+          },
+          {},
+          resolve,
+        );
+        const call = customCalls++;
+        if (call >= 2) {
+          component.handleInput("\u001b");
+          return;
+        }
+        const target = call === 0 ? selectedName : "Details…";
+        if (call === 1) beforeDetails?.();
+        const index = component
+          .render(200)
+          .findIndex((line: string) => line.includes(target));
+        if (index < 0) component.handleInput("\u001b");
+        else {
+          for (let i = 0; i < index - 1; i++) component.handleInput("\u001b[B");
+          component.handleInput("\r");
+        }
+      });
+      return result;
     };
     let error: unknown;
     try {
@@ -1767,7 +1989,7 @@ test("Definitions Details snapshots effective append and replace instructions", 
   }
 });
 
-test("Definitions Back navigates one menu level at a time", async () => {
+test("Definitions cancellation navigates one menu level at a time", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -1776,6 +1998,7 @@ test("Definitions Back navigates one menu level at a time", async () => {
   let selection = 0;
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.modelRegistry = {
     refresh: async () => undefined,
     getAll: () => [{ provider: "provider", id: "model", reasoning: true }],
@@ -1791,13 +2014,13 @@ test("Definitions Back navigates one menu level at a time", async () => {
       case 1:
         return options.find((option) => option.startsWith("Model"));
       case 2:
-        return "Back";
+        return undefined;
       case 3:
         return options.find((option) => option.startsWith("Thinking"));
       case 4:
-        return "Back";
+        return undefined;
       case 5:
-        return "Back";
+        return undefined;
       default:
         return undefined;
     }
@@ -1835,6 +2058,7 @@ test("Definitions applies model and thinking overrides independently", async () 
     let selection = 0;
     const context = fakeContext() as any;
     context.hasUI = true;
+    context.mode = "rpc";
     context.modelRegistry = {
       refresh: async () => undefined,
       getAll: () => [
@@ -1858,10 +2082,8 @@ test("Definitions applies model and thinking overrides independently", async () 
             discoverAgent("implementer").frontmatter[scenario.property],
             scenario.property === "model" ? "provider/new-model" : "medium",
           );
-          return options.find((option) => option.includes("implementer"));
-        case 4:
           return options.find((option) => option.startsWith(scenario.field));
-        case 5:
+        case 4:
           return "Inherit current session";
         default:
           return undefined;
@@ -1892,6 +2114,7 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
   let selection = 0;
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.ui.select = async (_label: string, options: string[]) => {
     switch (selection++) {
       case 0:
@@ -1900,10 +2123,8 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
         return options.find((option) => option.startsWith("Enabled"));
       case 2:
         assert.equal(discoverAgent("implementer").frontmatter.enabled, false);
-        return options.find((option) => option.includes("implementer"));
-      case 3:
         return options.find((option) => option.startsWith("Enabled"));
-      case 4:
+      case 3:
         assert.equal(discoverAgent("implementer").frontmatter.enabled, true);
         return undefined;
       default:
@@ -1946,6 +2167,7 @@ test("Definitions refreshes the model registry before post-model thinking choice
   let selection = 0;
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.model = { provider: "current-provider", id: "current-model" };
   context.thinkingLevel = "high";
   context.modelRegistry = registry;
@@ -1961,11 +2183,9 @@ test("Definitions refreshes the model registry before post-model thinking choice
       case 2:
         return "refresh-model";
       case 3:
-        return options.find((option) => option.includes("implementer"));
-      case 4:
         assert.ok(options.includes("Thinking    inherit · high"));
         return options.find((option) => option.startsWith("Thinking"));
-      case 5:
+      case 4:
         assert.equal(registry.refreshes, 2);
         assert.ok(options.includes("medium"));
         assert.equal(options.includes("xhigh"), false);
@@ -2063,6 +2283,7 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
     const command = pi.commandOptions.get("agents");
     const context = fakeContext() as any;
     context.hasUI = true;
+    context.mode = "rpc";
     context.model = {
       provider: "current-provider",
       id: "current-model",
@@ -2086,7 +2307,6 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
           assert.deepEqual(options, [
             "Inherit current session",
             ...scenario.levels,
-            "Back",
           ]);
           return undefined;
         default:
@@ -2122,6 +2342,7 @@ test("Definitions aligns Unicode names and models by display width", async () =>
   const prompts: string[][] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.ui.select = async (_label: string, options: string[]) => {
     prompts.push(options);
     return undefined;
@@ -2153,6 +2374,11 @@ test("Definitions aligns Unicode names and models by display width", async () =>
 
 test("Definitions separators are ignored and reopen the list", async () => {
   setLeadEnvironment();
+  const definitionPath = join(PI_AGENTS_DIR, "group-custom.md");
+  realFs.writeFileSync(
+    definitionPath,
+    "---\nname: group:Custom\n---\nCustom instructions\n",
+  );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const command = pi.commandOptions.get("agents");
@@ -2160,15 +2386,23 @@ test("Definitions separators are ignored and reopen the list", async () => {
   let selections = 0;
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.mode = "rpc";
   context.ui.select = async (_label: string, options: string[]) => {
     prompts.push(options);
-    return selections++ === 0 ? options[0] : undefined;
+    return selections++ === 0
+      ? options.find((option) => option === "--- Custom ---")
+      : undefined;
   };
-  await command.handler("definitions", context);
-  assert.equal(prompts.length, 2);
-  assert.equal(prompts[0]![0], "--- Bundled (* overridden) ---");
-  assert.deepEqual(prompts[0], prompts[1]);
-  await pi.events.get("session_shutdown")?.[0]();
+  try {
+    await command.handler("definitions", context);
+    assert.equal(prompts.length, 2);
+    assert.equal(prompts[0]![0], "--- Bundled (* overridden) ---");
+    assert.ok(prompts[0]?.includes("--- Custom ---"));
+    assert.deepEqual(prompts[0], prompts[1]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(definitionPath, { force: true });
+  }
 });
 
 test("lead agents stop reports an empty owned inventory safely", async () => {
