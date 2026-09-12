@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.0](https://github.com/boadij/pi-herdsman/compare/v0.5.2...v0.6.0) (2026-09-12)
+
+
+### Features
+
+* improve first-use guidance ([#53](https://github.com/boadij/pi-herdsman/issues/53)) ([32021fe](https://github.com/boadij/pi-herdsman/commit/32021fee247be17e28b76088caafc8680e0f131d))
+* inherit agent execution settings from controller ([#52](https://github.com/boadij/pi-herdsman/issues/52)) ([e7a16b3](https://github.com/boadij/pi-herdsman/commit/e7a16b352ee5ffb17807ad6dc66138be41308be1))
+* polish agents menu navigation and model selection ([#55](https://github.com/boadij/pi-herdsman/issues/55)) ([45b613d](https://github.com/boadij/pi-herdsman/commit/45b613d1654813a81ac1b0ff8ede7f7566350bdc))
+
 ## [0.5.2](https://github.com/boadij/pi-herdsman/compare/v0.5.1...v0.5.2) (2026-09-11)
 
 
