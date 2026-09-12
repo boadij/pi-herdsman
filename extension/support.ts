@@ -70,6 +70,7 @@ const testTmpRoot = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-test-"));
 process.env.TMPDIR = testTmpRoot;
 const {
   Key: tuiKey,
+  fuzzyFilter: tuiFuzzyFilter,
   matchesKey: tuiMatchesKey,
   visibleWidth: tuiVisibleWidth,
 } = await import("@earendil-works/pi-tui");
@@ -319,6 +320,28 @@ mock.module("@earendil-works/pi-tui", {
         return this.text.split("\n");
       }
     },
+    Input: class {
+      private value = "";
+      focused = false;
+      onSubmit?: (value: string) => void;
+      onEscape?: () => void;
+      getValue() {
+        return this.value;
+      }
+      setValue(value: string) {
+        this.value = value;
+      }
+      handleInput(data: string) {
+        if (tuiMatchesKey(data, tuiKey.enter)) this.onSubmit?.(this.value);
+        else if (tuiMatchesKey(data, tuiKey.escape)) this.onEscape?.();
+        else if (data === "\u007f") this.value = this.value.slice(0, -1);
+        else if (data.length === 1 && data >= " ") this.value += data;
+      }
+      invalidate() {}
+      render(_width: number) {
+        return [this.value];
+      }
+    },
     Markdown: class {
       private readonly text: string;
       constructor(text: string) {
@@ -373,6 +396,7 @@ mock.module("@earendil-works/pi-tui", {
         }
       }
     },
+    fuzzyFilter: tuiFuzzyFilter,
     truncateToWidth: (text: string, width: number) => text.slice(0, width),
     Key: tuiKey,
     matchesKey: tuiMatchesKey,

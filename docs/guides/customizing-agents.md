@@ -208,7 +208,6 @@ Model
 Thinking
 Enabled
 Details…
-Back
 ```
 
 Model and thinking each offer `Inherit current session` plus their available

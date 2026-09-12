@@ -82,6 +82,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
     const context = fakeContext() as any;
     context.cwd = project;
     context.hasUI = true;
+    context.mode = "rpc";
     const selections: string[][] = [];
     context.ui.select = async (_title: string, options: string[]) => {
       selections.push(options);
@@ -387,6 +388,7 @@ test("project-only Definitions edits create a global override", async () => {
   const context = fakeContext() as any;
   context.cwd = project;
   context.hasUI = true;
+  context.mode = "rpc";
   context.modelRegistry = {
     refresh: async () => undefined,
     getAll: () => [{ provider: "provider", id: "edited-model" }],

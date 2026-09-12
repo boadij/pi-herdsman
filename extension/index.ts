@@ -33,6 +33,8 @@ import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import {
   Container,
+  fuzzyFilter,
+  Input,
   Key,
   matchesKey,
   SelectList,
@@ -7819,9 +7821,233 @@ export default function (pi: ExtensionAPI): void {
         signal: controllerAbortController?.signal,
       });
     };
+    type MenuItem = { value: string; label: string };
+    type ModelMenuItem = MenuItem & { searchText: string };
+    const selectTheme = (theme: any) => ({
+      selectedPrefix: (text: string) => theme.fg("accent", text),
+      selectedText: (text: string) => theme.fg("accent", text),
+      description: (text: string) => theme.fg("muted", text),
+      scrollInfo: (text: string) => theme.fg("muted", text),
+      noMatch: (text: string) => theme.fg("warning", text),
+    });
+    const selectMenu = async (
+      ctx: ExtensionContext,
+      title: string,
+      items: readonly MenuItem[],
+      selectedValue?: string,
+    ): Promise<string | undefined> => {
+      if (ctx.mode !== "tui") {
+        const selected = await ctx.ui.select(
+          title,
+          items.map((item) => item.label),
+        );
+        return items.find((item) => item.label === selected)?.value;
+      }
+      return (await ctx.ui.custom(
+        (tui: any, theme: any, _keys: any, done: (value: unknown) => void) => {
+          const list = new SelectList(items, 8, selectTheme(theme));
+          const index = items.findIndex((item) => item.value === selectedValue);
+          if (index >= 0) list.setSelectedIndex(index);
+          list.onSelect = (item) => done(item.value);
+          list.onCancel = () => done(undefined);
+          const container = new Container();
+          container.addChild(
+            new DynamicBorder((line) => theme.fg("accent", line)),
+          );
+          container.addChild(
+            new TuiText(theme.fg("accent", theme.bold(title)), 1, 0),
+          );
+          container.addChild(list);
+          container.addChild(
+            new TuiText(
+              theme.fg(
+                "dim",
+                "↑↓ navigate  enter select  escape/ctrl+c cancel",
+              ),
+              1,
+              0,
+            ),
+          );
+          container.addChild(
+            new DynamicBorder((line) => theme.fg("accent", line)),
+          );
+          return {
+            render: (width: number) => container.render(width),
+            invalidate: () => container.invalidate(),
+            handleInput: (data: string) => {
+              list.handleInput(data);
+              tui.requestRender();
+            },
+          };
+        },
+      )) as string | undefined;
+    };
+    const selectModelMenu = async (
+      ctx: ExtensionContext,
+      items: readonly ModelMenuItem[],
+      selectedValue?: string,
+    ): Promise<string | undefined> => {
+      if (ctx.mode !== "tui")
+        return selectMenu(ctx, "Model", items, selectedValue);
+      return (await ctx.ui.custom(
+        (
+          tui: any,
+          theme: any,
+          keybindings: any,
+          done: (value: unknown) => void,
+        ) => {
+          const input = new Input();
+          const listContainer = new Container();
+          let list: SelectList | undefined;
+          let filtered: ModelMenuItem[] = [...items];
+          let previousQuery = input.getValue();
+          const rebuildList = (): void => {
+            const query = input.getValue();
+            const filtering = query.split(/[\s/]+/u).some(Boolean);
+            filtered = filtering
+              ? fuzzyFilter([...items], query, (item) => item.searchText)
+              : [...items];
+            listContainer.clear();
+            if (!filtered.length) {
+              list = undefined;
+              listContainer.addChild(
+                new TuiText(theme.fg("muted", "No matching models"), 1, 0),
+              );
+              return;
+            }
+            list = new SelectList(filtered, 10, selectTheme(theme));
+            const index = filtering
+              ? 0
+              : filtered.findIndex((item) => item.value === selectedValue);
+            list.setSelectedIndex(index >= 0 ? index : 0);
+            list.onSelect = (item) => done(item.value);
+            list.onCancel = () => done(undefined);
+            listContainer.addChild(list);
+          };
+          input.onSubmit = () => {
+            const item = list?.getSelectedItem();
+            if (item) done(item.value);
+          };
+          input.onEscape = () => done(undefined);
+          rebuildList();
+          const container = new Container();
+          container.addChild(
+            new DynamicBorder((line) => theme.fg("accent", line)),
+          );
+          container.addChild(
+            new TuiText(theme.fg("accent", theme.bold("Model")), 1, 0),
+          );
+          container.addChild(input);
+          container.addChild(listContainer);
+          container.addChild(
+            new TuiText(
+              theme.fg(
+                "dim",
+                "type to filter  ↑↓ navigate  enter select  escape/ctrl+c cancel",
+              ),
+              1,
+              0,
+            ),
+          );
+          container.addChild(
+            new DynamicBorder((line) => theme.fg("accent", line)),
+          );
+          return {
+            get focused() {
+              return input.focused;
+            },
+            set focused(value: boolean) {
+              input.focused = value;
+            },
+            render: (width: number) => container.render(width),
+            invalidate: () => container.invalidate(),
+            handleInput: (data: string) => {
+              if (keybindings.matches(data, "tui.select.up")) {
+                const selected = list?.getSelectedItem();
+                if (selected && list) {
+                  const index = filtered.findIndex(
+                    (item) => item.value === selected.value,
+                  );
+                  list.setSelectedIndex(
+                    index <= 0 ? filtered.length - 1 : index - 1,
+                  );
+                }
+                tui.requestRender();
+                return;
+              }
+              if (keybindings.matches(data, "tui.select.down")) {
+                const selected = list?.getSelectedItem();
+                if (selected && list) {
+                  const index = filtered.findIndex(
+                    (item) => item.value === selected.value,
+                  );
+                  list.setSelectedIndex(
+                    index < 0 || index === filtered.length - 1 ? 0 : index + 1,
+                  );
+                }
+                tui.requestRender();
+                return;
+              }
+              if (keybindings.matches(data, "tui.select.confirm")) {
+                const selected = list?.getSelectedItem();
+                if (selected) done(selected.value);
+                tui.requestRender();
+                return;
+              }
+              if (keybindings.matches(data, "tui.select.cancel")) {
+                done(undefined);
+                tui.requestRender();
+                return;
+              }
+              input.handleInput(data);
+              const query = input.getValue();
+              if (query !== previousQuery) {
+                previousQuery = query;
+                rebuildList();
+              }
+              tui.requestRender();
+            },
+          };
+        },
+      )) as string | undefined;
+    };
+    const executionSettings = (
+      ctx: ExtensionContext,
+      definition: Awaited<
+        ReturnType<typeof contextAgentDefinitions>
+      >["definitions"][number],
+    ): { model: string; thinking: string } => ({
+      model:
+        typeof definition.frontmatter.model === "string"
+          ? compactModelToken(definition.frontmatter.model)
+          : ctx.model
+            ? `inherit · ${compactModelToken(modelToken(ctx.model))}`
+            : "inherit",
+      thinking:
+        definition.frontmatter.thinking === false
+          ? "off"
+          : typeof definition.frontmatter.thinking === "string"
+            ? definition.frontmatter.thinking
+            : `inherit · ${pi.getThinkingLevel()}`,
+    });
+    const resolveConfiguredModel = (
+      ctx: ExtensionContext,
+      configured: string,
+    ): { provider: string; id: string; reasoning?: boolean } | undefined => {
+      const models = ctx.modelRegistry.getAll();
+      const canonical = models.find(
+        (candidate) => modelToken(candidate) === configured,
+      );
+      if (canonical) return canonical;
+      const compactMatches = models.filter(
+        (candidate) => compactModelToken(modelToken(candidate)) === configured,
+      );
+      return compactMatches.length === 1 ? compactMatches[0] : undefined;
+    };
     const openDefinitionsMenu = async (
       ctx: ExtensionCommandContext,
     ): Promise<void> => {
+      let selectedDefinition: string | undefined;
       while (true) {
         const definitions = (await contextAgentDefinitions(ctx)).definitions;
         const bundled = definitions.filter(
@@ -7831,18 +8057,7 @@ export default function (pi: ExtensionAPI): void {
           (definition) => !definition.extensionSource,
         );
         const format = (definition: (typeof definitions)[number]) => {
-          const model =
-            typeof definition.frontmatter.model === "string"
-              ? compactModelToken(definition.frontmatter.model)
-              : ctx.model
-                ? `inherit · ${compactModelToken(modelToken(ctx.model))}`
-                : "inherit";
-          const thinking =
-            definition.frontmatter.thinking === false
-              ? "off"
-              : typeof definition.frontmatter.thinking === "string"
-                ? definition.frontmatter.thinking
-                : `inherit · ${pi.getThinkingLevel()}`;
+          const { model, thinking } = executionSettings(ctx, definition);
           const name = `${definition.name}${definition.projectSource ? " [project]" : ""}${definition.overrideSource && (definition.extensionSource || definition.projectSource) ? " *" : ""}`;
           return { name, model, thinking, definition };
         };
@@ -7855,56 +8070,57 @@ export default function (pi: ExtensionAPI): void {
           0,
           ...entries.map(({ model }) => visibleWidth(model)),
         );
-        const options: string[] = [];
+        const options: MenuItem[] = [];
         const addGroup = (
           title: string,
           group: ReturnType<typeof format>[],
         ) => {
           if (!group.length) return;
-          options.push(`--- ${title} ---`);
+          options.push({ value: "", label: `--- ${title} ---` });
           options.push(
-            ...group.map(
-              ({ name, model, thinking }) =>
-                `${padVisible(name, nameWidth)}  ${padVisible(model, modelWidth)}  ${thinking}`,
-            ),
+            ...group.map(({ name, model, thinking, definition }) => ({
+              value: definition.name,
+              label: `${padVisible(name, nameWidth)}  ${padVisible(model, modelWidth)}  ${thinking}`,
+            })),
           );
         };
         addGroup("Bundled (* overridden)", bundled.map(format));
         addGroup("Custom", custom.map(format));
-        const selected = await ctx.ui.select("Definitions", options);
-        if (!selected) return;
-        if (selected.startsWith("---")) continue;
-        const selectedEntry = entries.find(
-          ({ name, model, thinking }) =>
-            `${padVisible(name, nameWidth)}  ${padVisible(model, modelWidth)}  ${thinking}` ===
-            selected,
+        const selected = await selectMenu(
+          ctx,
+          "Definitions",
+          options,
+          selectedDefinition,
         );
-        if (!selectedEntry) return;
-        const definition = selectedEntry.definition;
+        if (selected === undefined) return;
+        if (!selected) continue;
+        const selectedEntry = entries.find(
+          ({ definition }) => definition.name === selected,
+        );
+        if (!selectedEntry) continue;
+        selectedDefinition = selectedEntry.definition.name;
+        let definition = selectedEntry.definition;
         const selectedName = definition.name;
+        let selectedAction = "model";
         while (true) {
-          const configuredModel =
-            typeof definition.frontmatter.model === "string"
-              ? compactModelToken(definition.frontmatter.model)
-              : ctx.model
-                ? `inherit · ${compactModelToken(modelToken(ctx.model))}`
-                : "inherit";
-          const configuredThinking =
-            definition.frontmatter.thinking === false
-              ? "off"
-              : typeof definition.frontmatter.thinking === "string"
-                ? definition.frontmatter.thinking
-                : `inherit · ${pi.getThinkingLevel()}`;
-          const action = await ctx.ui.select(definition.name, [
-            `Model       ${configuredModel}`,
-            `Thinking    ${configuredThinking}`,
-            `Enabled     ${agentDefinitionEnabled(definition) ? "yes" : "no"}`,
-            "Details…",
-            "Back",
-          ]);
-          if (!action) return;
-          if (action === "Back") break;
-          if (action === "Details…") {
+          const { model, thinking } = executionSettings(ctx, definition);
+          const action = await selectMenu(
+            ctx,
+            definition.name,
+            [
+              { value: "model", label: `Model       ${model}` },
+              { value: "thinking", label: `Thinking    ${thinking}` },
+              {
+                value: "enabled",
+                label: `Enabled     ${agentDefinitionEnabled(definition) ? "yes" : "no"}`,
+              },
+              { value: "details", label: "Details…" },
+            ],
+            selectedAction,
+          );
+          if (!action) break;
+          selectedAction = action;
+          if (action === "details") {
             let current;
             try {
               current = (await contextAgentDefinitions(ctx)).definitions.find(
@@ -7921,6 +8137,7 @@ export default function (pi: ExtensionAPI): void {
               );
               break;
             }
+            definition = current;
             const metadata = agentDefinitionMetadata(current);
             if (ctx.mode === "tui") {
               const instructions = expandAgentBodyFiles(
@@ -7937,37 +8154,67 @@ export default function (pi: ExtensionAPI): void {
           }
           let field: OverrideField;
           let value: string | boolean | undefined;
-          if (action.startsWith("Model")) {
+          if (action === "model") {
             field = "model";
             await ctx.modelRegistry.refresh();
-            const scoped = ctx.scopedModels?.map(({ model }) => model) ?? [];
-            const models = scoped.length
-              ? scoped
-              : ctx.modelRegistry.getAvailable();
+            const models = ctx.modelRegistry.getAvailable();
             const tokens = [
               ...new Set(models.map((model) => modelToken(model))),
             ].sort();
+            const configured =
+              typeof definition.frontmatter.model === "string"
+                ? definition.frontmatter.model
+                : undefined;
+            if (configured && !tokens.includes(configured)) {
+              const resolved = resolveConfiguredModel(ctx, configured);
+              const resolvedToken = resolved
+                ? modelToken(resolved)
+                : configured;
+              if (!tokens.includes(resolvedToken)) tokens.push(resolvedToken);
+            }
             const idCounts = new Map<string, number>();
             for (const token of tokens) {
               const id = compactModelToken(token);
               idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
             }
-            const labels = tokens.map((token) => {
+            const resolvedConfigured = configured
+              ? resolveConfiguredModel(ctx, configured)
+              : undefined;
+            const modelsByToken = new Map(
+              models.map((model) => [modelToken(model), model]),
+            );
+            if (resolvedConfigured)
+              modelsByToken.set(
+                modelToken(resolvedConfigured),
+                resolvedConfigured,
+              );
+            const modelItems: ModelMenuItem[] = tokens.map((token) => {
               const id = compactModelToken(token);
-              return idCounts.get(id) === 1 ? id : token;
+              return {
+                value: token,
+                label: idCounts.get(id) === 1 ? id : token,
+                searchText: `${id} ${token} ${modelsByToken.get(token)?.name ?? ""}`,
+              };
             });
-            const selectedModel = await ctx.ui.select("Model", [
-              "Inherit current session",
-              ...labels,
-              "Back",
-            ]);
-            if (!selectedModel) return;
-            if (selectedModel === "Back") continue;
-            value =
-              selectedModel === "Inherit current session"
-                ? undefined
-                : (tokens[labels.indexOf(selectedModel)] ?? selectedModel);
-          } else if (action.startsWith("Thinking")) {
+            const selectedModel = await selectModelMenu(
+              ctx,
+              [
+                {
+                  value: "inherit",
+                  label: "Inherit current session",
+                  searchText: "Inherit current session inherit",
+                },
+                ...modelItems,
+              ],
+              configured
+                ? resolvedConfigured
+                  ? modelToken(resolvedConfigured)
+                  : configured
+                : "inherit",
+            );
+            if (!selectedModel) continue;
+            value = selectedModel === "inherit" ? undefined : selectedModel;
+          } else if (action === "thinking") {
             field = "thinking";
             await ctx.modelRegistry.refresh();
             const configured =
@@ -7975,37 +8222,39 @@ export default function (pi: ExtensionAPI): void {
                 ? definition.frontmatter.model
                 : undefined;
             const model = configured
-              ? (() => {
-                  const canonical = ctx.modelRegistry
-                    .getAll()
-                    .find((candidate) => modelToken(candidate) === configured);
-                  if (canonical) return canonical;
-                  const compactMatches = ctx.modelRegistry
-                    .getAll()
-                    .filter(
-                      (candidate) =>
-                        compactModelToken(modelToken(candidate)) === configured,
-                    );
-                  return compactMatches.length === 1
-                    ? compactMatches[0]
-                    : undefined;
-                })()
+              ? resolveConfiguredModel(ctx, configured)
               : ctx.model;
             const levels = model
               ? getSupportedThinkingLevels(model)
               : [...VALID_THINKING_LEVELS];
-            const selectedThinking = await ctx.ui.select("Thinking", [
-              "Inherit current session",
-              ...levels,
-              "Back",
-            ]);
-            if (!selectedThinking) return;
-            if (selectedThinking === "Back") continue;
+            const configuredThinking =
+              definition.frontmatter.thinking === false
+                ? "off"
+                : typeof definition.frontmatter.thinking === "string"
+                  ? definition.frontmatter.thinking
+                  : undefined;
+            const thinkingItems: MenuItem[] = [
+              { value: "inherit", label: "Inherit current session" },
+              ...levels.map((level) => ({ value: level, label: level })),
+            ];
+            if (
+              configuredThinking &&
+              !levels.includes(configuredThinking as any)
+            )
+              thinkingItems.push({
+                value: configuredThinking,
+                label: configuredThinking,
+              });
+            const selectedThinking = await selectMenu(
+              ctx,
+              "Thinking",
+              thinkingItems,
+              configuredThinking ?? "inherit",
+            );
+            if (!selectedThinking) continue;
             value =
-              selectedThinking === "Inherit current session"
-                ? undefined
-                : selectedThinking;
-          } else if (action.startsWith("Enabled")) {
+              selectedThinking === "inherit" ? undefined : selectedThinking;
+          } else if (action === "enabled") {
             field = "enabled";
             value = !agentDefinitionEnabled(definition);
           } else continue;
@@ -8025,7 +8274,7 @@ export default function (pi: ExtensionAPI): void {
                 : `${definition.name} ${field} ${value === undefined ? "inherited" : `set to ${value}`}.`
               : `${definition.name} ${field} is already inherited; no change made.`,
           );
-          break;
+          definition = verified;
         }
       }
     };
@@ -8033,30 +8282,96 @@ export default function (pi: ExtensionAPI): void {
       ctx: ExtensionCommandContext,
     ): Promise<void> => {
       const current = await placementSettings(ctx);
-      const selected = await ctx.ui.select("Layout", [
-        current.effective === "tab"
-          ? "Lead agents tab (current)"
-          : "Lead agents tab",
-        current.effective === "subtree"
-          ? "Subtree tabs (current)"
-          : "Subtree tabs",
-        current.effective === "split"
-          ? "Split from caller (current)"
-          : "Split from caller",
-      ]);
+      const selected = await selectMenu(
+        ctx,
+        "Layout",
+        [
+          {
+            value: "tab",
+            label:
+              current.effective === "tab"
+                ? "Lead agents tab (current)"
+                : "Lead agents tab",
+          },
+          {
+            value: "subtree",
+            label:
+              current.effective === "subtree"
+                ? "Subtree tabs (current)"
+                : "Subtree tabs",
+          },
+          {
+            value: "split",
+            label:
+              current.effective === "split"
+                ? "Split from caller (current)"
+                : "Split from caller",
+          },
+        ],
+        current.effective,
+      );
       if (!selected) return;
-      const placement = selected.startsWith("Lead agents")
-        ? "tab"
-        : selected.startsWith("Subtree")
-          ? "subtree"
-          : "split";
-      updateConfig("spawnPlacement", placement);
+      updateConfig("spawnPlacement", selected);
       const verified = await placementSettings(ctx);
-      if (verified.effective !== placement)
+      if (verified.effective !== selected)
         throw new Error(
           `Agent placement did not become effective: ${verified.effective}`,
         );
       ctx.ui.notify(`placement: ${verified.effective}`);
+    };
+    const openMessageLimitsMenu = async (
+      ctx: ExtensionCommandContext,
+    ): Promise<void> => {
+      let selectedLimit = "inlineAttachmentLimitBytes";
+      const presets = [1, 4, 16, 64, 128].map((kib) => ({
+        label: formatMessageLimit(kib * 1024),
+        bytes: kib * 1024,
+      }));
+      while (true) {
+        const limits = await messageLimits(ctx);
+        const setting = await selectMenu(
+          ctx,
+          "Message limits",
+          [
+            {
+              value: "inlineAttachmentLimitBytes",
+              label: `Inline attachments   ${formatMessageLimit(limits.inline.bytes)}`,
+            },
+            {
+              value: "mailboxPayloadLimitBytes",
+              label: `Mailbox payload      ${formatMessageLimit(limits.mailbox.bytes)}`,
+            },
+          ],
+          selectedLimit,
+        );
+        if (!setting) return;
+        selectedLimit = setting;
+        const choice = await selectMenu(ctx, "Limit", [
+          ...presets.map(({ label, bytes }) => ({
+            value: String(bytes),
+            label,
+          })),
+          { value: "custom", label: "Custom…" },
+          { value: "reset", label: "Reset" },
+        ]);
+        if (!choice) continue;
+        let value: number | undefined;
+        if (choice === "reset") value = undefined;
+        else if (choice === "custom") {
+          const input = await ctx.ui.input("Custom limit in KiB (1–1024)");
+          if (input === undefined) continue;
+          const kib = Number(input);
+          if (!/^\d+$/u.test(input.trim()) || !validByteLimit(kib * 1024)) {
+            ctx.ui.notify("Enter an integer from 1 through 1024 KiB", "error");
+            continue;
+          }
+          value = kib * 1024;
+        } else value = Number(choice);
+        updateConfig(selectedLimit, value);
+        ctx.ui.notify(
+          `${selectedLimit}: ${value === undefined ? "reset" : formatMessageLimit(value)}`,
+        );
+      }
     };
     const presentStopSummary = (summary: string): void => {
       pi.sendMessage(
@@ -8097,6 +8412,7 @@ export default function (pi: ExtensionAPI): void {
     const openAgentsMenu = async (
       ctx: ExtensionCommandContext,
     ): Promise<void> => {
+      let selectedSection = "running";
       while (true) {
         const snapshot = await loadStatusSnapshot(
           ctx,
@@ -8104,60 +8420,32 @@ export default function (pi: ExtensionAPI): void {
         );
         const running = formatStatusCounts(snapshot.agents) || "0";
         const definitions = (await contextAgentDefinitions(ctx)).definitions;
-        const selected = await ctx.ui.select("agents", [
-          `Running        ${running}`,
-          `Definitions    ${definitions.length}`,
-          `Layout         ${(await placementSettings(ctx)).effective}`,
-          "Message limits",
-          "Stop all…",
-        ]);
+        const selected = await selectMenu(
+          ctx,
+          "agents",
+          [
+            { value: "running", label: `Running        ${running}` },
+            {
+              value: "definitions",
+              label: `Definitions    ${definitions.length}`,
+            },
+            {
+              value: "layout",
+              label: `Layout         ${(await placementSettings(ctx)).effective}`,
+            },
+            { value: "message-limits", label: "Message limits" },
+            { value: "stop-all", label: "Stop all…" },
+          ],
+          selectedSection,
+        );
         if (!selected) return;
-        if (selected.startsWith("Running")) await openRunningAgentsMenu(ctx);
-        else if (selected.startsWith("Definitions"))
-          await openDefinitionsMenu(ctx);
-        else if (selected.startsWith("Layout")) await openPlacementMenu(ctx);
-        else if (selected === "Message limits") {
-          const limits = await messageLimits(ctx);
-          const presets = [1, 4, 16, 64, 128].map((kib) => ({
-            label: formatMessageLimit(kib * 1024),
-            bytes: kib * 1024,
-          }));
-          const setting = await ctx.ui.select("Message limits", [
-            `Inline attachments   ${formatMessageLimit(limits.inline.bytes)}`,
-            `Mailbox payload      ${formatMessageLimit(limits.mailbox.bytes)}`,
-          ]);
-          if (!setting) continue;
-          const key = setting.startsWith("Inline")
-            ? "inlineAttachmentLimitBytes"
-            : "mailboxPayloadLimitBytes";
-          const choice = await ctx.ui.select("Limit", [
-            ...presets.map(({ label }) => label),
-            "Custom…",
-            "Reset",
-          ]);
-          if (!choice) continue;
-          let value: number | undefined;
-          if (choice === "Reset") value = undefined;
-          else if (choice === "Custom…") {
-            const input = await ctx.ui.input("Custom limit in KiB (1–1024)");
-            if (input === undefined) continue;
-            const kib = Number(input);
-            if (!/^\d+$/.test(input.trim()) || !validByteLimit(kib * 1024)) {
-              ctx.ui.notify(
-                "Enter an integer from 1 through 1024 KiB",
-                "error",
-              );
-              continue;
-            }
-            value = kib * 1024;
-          } else value = presets.find(({ label }) => label === choice)?.bytes;
-          if (choice !== "Reset" && choice !== "Custom…" && value === undefined)
-            continue;
-          updateConfig(key, value);
-          ctx.ui.notify(
-            `${key}: ${value === undefined ? "reset" : formatMessageLimit(value)}`,
-          );
-        } else if (selected === "Stop all…") await confirmAndStopAll(ctx);
+        selectedSection = selected;
+        if (selected === "running") await openRunningAgentsMenu(ctx);
+        else if (selected === "definitions") await openDefinitionsMenu(ctx);
+        else if (selected === "layout") await openPlacementMenu(ctx);
+        else if (selected === "message-limits")
+          await openMessageLimitsMenu(ctx);
+        else if (selected === "stop-all") await confirmAndStopAll(ctx);
       }
     };
     if (controllerScope.kind === "lead") {
