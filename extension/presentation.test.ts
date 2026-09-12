@@ -53,6 +53,10 @@ initTheme("dark");
 const nativeDisplay = (value: string) => value.split(sep).join("/");
 const escapedRegExp = (value: string) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function assertPosixMode(path: string, expected: number): void {
+  const actual = statSync(path).mode & 0o777;
+  if (process.platform !== "win32") assert.equal(actual, expected);
+}
 
 const lead = (overrides: Record<string, unknown> = {}) => ({
   lead: "session-a",
@@ -2396,8 +2400,8 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     assert.equal(basename(expected), options.requestId);
     assert.equal(extname(basename(expected)), "");
     assert.equal(readFileSync(expected, "utf8"), text);
-    assert.equal(statSync(expected).mode & 0o777, 0o600);
-    assert.equal(statSync(dirname(expected)).mode & 0o777, 0o700);
+    assertPosixMode(expected, 0o600);
+    assertPosixMode(dirname(expected), 0o700);
     assert.match(
       result.content,
       new RegExp(`^Result ref: ${result.resultRef}`),
@@ -3246,7 +3250,8 @@ test("agent definition display helpers keep authoritative values untouched", (t)
       ),
       "~/.pi/agent/agents/agent.md",
     );
-    assert.equal(displayHomePath("/tmp/agent.md"), "/tmp/agent.md");
+    const outside = join(tmpdir(), "agent.md");
+    assert.equal(displayHomePath(outside), outside);
     assert.equal(displayHomePath(`${home}/..config`), "~/..config");
     assert.equal(
       displaySkillName("/Users/example/.agents/skills/ego-browser/SKILL.md"),
@@ -3294,7 +3299,7 @@ test("Agent definition skills remain readable, deduplicated, and width-safe", (t
           tools: ["exec"],
           skills: ["./skills/project/SKILL.md", "./skills/project/SKILL.md"],
           agents: ["scout"],
-          overrideSource: "/tmp/override.md",
+          overrideSource: join(tmpdir(), "override.md"),
         },
       ],
       theme,
@@ -3303,7 +3308,13 @@ test("Agent definition skills remain readable, deduplicated, and width-safe", (t
       .join("\n");
     assert.match(rendered, /^ skills\s+project\s*$/mu);
     assert.doesNotMatch(rendered, /project, project/);
-    const values = ["exec", "project", "scout", "/tmp/override.md"];
+    const overrideSource = join(tmpdir(), "override.md");
+    const values = [
+      "exec",
+      "project",
+      "scout",
+      displayHomePath(overrideSource),
+    ];
     const starts = values.map((value) =>
       rendered
         .split("\n")

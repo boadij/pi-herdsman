@@ -1747,8 +1747,9 @@ export function testGate<T = void>(): {
 export async function waitForTestCondition(
   condition: () => boolean,
   message: string,
+  timeoutMs = 100,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt++) {
+  for (let attempt = 0; attempt < timeoutMs; attempt++) {
     if (condition()) return;
     await new Promise<void>((resolve) => setTimeout(resolve, 1));
   }

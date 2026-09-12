@@ -43,6 +43,11 @@ import {
 } from "./mailbox.ts";
 import { chooseLabel } from "./core.ts";
 
+function assertPosixMode(path: string, expected: number): void {
+  const actual = statSync(path).mode & 0o777;
+  if (process.platform !== "win32") assert.equal(actual, expected);
+}
+
 const state: ManagedAgentState = {
   version: 4,
   runId: "11111111-1111-4111-8111-111111111111",
@@ -472,7 +477,7 @@ test("mailbox paths separate workspace and label and use private directories", (
   assert.notEqual(first, agentMailboxPath("workspace-a", "agent-2"));
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   resetAgentMailbox(path);
-  assert.equal(statSync(path).mode & 0o777, 0o700);
+  assertPosixMode(path, 0o700);
 });
 test("mailbox scans stay inside the current protocol namespace", () => {
   const path = agentMailboxPath("namespace-test", `agent-${process.pid}`);
@@ -543,10 +548,10 @@ test("startup claims serialize access and reset preserves the claim", () => {
   );
   resetAgentMailbox(path);
   const claimDir = join(path, ".starting");
-  assert.equal(statSync(claimDir).mode & 0o777, 0o700);
+  assertPosixMode(claimDir, 0o700);
   const owners = readdirSync(claimDir);
   assert.equal(owners.length, 1);
-  assert.equal(statSync(join(claimDir, owners[0])).mode & 0o777, 0o600);
+  assertPosixMode(join(claimDir, owners[0]), 0o600);
   assert.equal(readAgentState(path), undefined);
   assert.equal(readRequest(path, requestId), undefined);
   assert.equal(readResult(path, requestId), undefined);

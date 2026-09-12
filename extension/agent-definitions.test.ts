@@ -47,6 +47,11 @@ function discoverAgentDefinitionsWithContents(content: string) {
   return withPiAgentDir(root, () => discoverAgentDefinitions());
 }
 
+function assertPosixMode(path: string, expected: number): void {
+  const actual = statSync(path).mode & 0o777;
+  if (process.platform !== "win32") assert.equal(actual, expected);
+}
+
 test("parses scalar frontmatter fields and applies defaults", () => {
   const definition = discoverAgentDefinitionsWithContents(
     "---\nname: custom\ninheritSkills: false\n---\n\nPrompt\n",
@@ -825,7 +830,7 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   assert.throws(
     () => discoverAgentDefinitions({ projectRoot: project }),
     new RegExp(
-      `${standalone.replaceAll(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}.*bodyMode`,
+      `${standalone.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}.*bodyMode`,
     ),
   );
   unlinkSync(standalone);
@@ -1035,13 +1040,13 @@ test("transports complex prompts through a private temporary file", () => {
   const [promptPath] = writePrivatePromptSnapshots([body]);
   try {
     assert.equal(readFileSync(promptPath, "utf8"), body);
-    assert.equal(statSync(promptPath).mode & 0o777, 0o600);
+    assertPosixMode(promptPath, 0o600);
     const tempRoot = join(
       tmpdir(),
       `pi-herdsman-${process.getuid?.() ?? "user"}`,
     );
-    assert.equal(statSync(tempRoot).mode & 0o777, 0o700);
-    assert.equal(statSync(join(tempRoot, "prompts")).mode & 0o777, 0o700);
+    assertPosixMode(tempRoot, 0o700);
+    assertPosixMode(join(tempRoot, "prompts"), 0o700);
     const launch = agentLaunchArgs(
       {
         name: "delegate",
@@ -1069,10 +1074,7 @@ test("writes ordered private prompt snapshots with private permissions", () => {
       paths.map((path) => readFileSync(path, "utf8")),
       ["body", "append"],
     );
-    assert.deepEqual(
-      paths.map((path) => statSync(path).mode & 0o777),
-      [0o600, 0o600],
-    );
+    for (const path of paths) assertPosixMode(path, 0o600);
   } finally {
     for (const path of paths) unlinkSync(path);
   }

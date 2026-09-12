@@ -3392,14 +3392,14 @@ test("session continuation ignores removed secondary session fields", async () =
   }
 });
 
-test("session continuation fails closed on persisted session path errors", async () => {
+test("session continuation fails closed on an unrelated malformed persisted mailbox path", async () => {
   setLeadEnvironment();
   const name = `error-resume-${randomUUID().slice(0, 8)}`;
   const label = `${name}-agent`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
   const sessionPath = join(PI_AGENT_ROOT, `${name}-session.jsonl`);
   const notDirectoryPath = join(PI_AGENT_ROOT, `${name}-not-directory`);
-  const invalidPersistedPath = `${notDirectoryPath}/session.jsonl`;
+  const invalidPersistedPath = join(notDirectoryPath, "session.jsonl");
   const session = {
     id: DEFAULT_PI_SESSION_ID,
     path: sessionPath,
@@ -3431,6 +3431,8 @@ test("session continuation fails closed on persisted session path errors", async
   const staleLabel = `${name}-stale`;
   const staleMailbox = agentMailboxPath(WORKSPACE, staleLabel);
   resetAgentMailbox(staleMailbox);
+  // Continuation scans all managed states and fails closed on malformed
+  // persisted paths, even when the malformed state is unrelated to the target.
   writeAgentState(staleMailbox, {
     ...managedState(staleLabel),
     piSessionId: "11111111-1111-4111-8111-111111111111",

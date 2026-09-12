@@ -1697,15 +1697,21 @@ test("empty agent metadata succeeds and later reports remain usable", async () =
 
 test("failed completion metadata cannot be bypassed by presentation updates", async (t) => {
   const mailbox = setAgentEnvironment();
-  let metadataAttempts = 0;
+  const taskText = "retry this task metadata";
+  let taskMetadataFailures = 0;
   let completionFailures = 0;
   let completionMetadataStarted = false;
   const agent = fakePi({
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "pane") {
-        metadataAttempts++;
-        if (metadataAttempts === 2 || metadataAttempts === 3)
+        if (
+          !completionMetadataStarted &&
+          args.includes(`task=${taskText}`) &&
+          taskMetadataFailures < 2
+        ) {
+          taskMetadataFailures++;
           throw new Error("temporary task metadata failure");
+        }
         if (
           completionMetadataStarted &&
           completionFailures < 2 &&
@@ -1737,7 +1743,7 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     agentLabel: started.agentLabel,
     paneId: started.paneId,
     kind: "task",
-    text: "retry this task metadata",
+    text: taskText,
     createdAt: Date.now(),
   };
   writeRequest(mailbox, request);
@@ -1751,6 +1757,15 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
   agent.events.get("model_select")![0](
     { model: { provider: "openai", id: "gpt-5" } },
     context,
+  );
+  await waitForTestCondition(
+    () =>
+      agent.callResults.filter(
+        ({ args, succeeded }) =>
+          !succeeded && args.includes(`task=${taskText}`),
+      ).length >= 2,
+    "task metadata failures were not observed",
+    2000,
   );
   await new Promise((resolve) => setImmediate(resolve));
   assert.ok(agent.calls.some((args) => args.includes(`task=${request.text}`)));

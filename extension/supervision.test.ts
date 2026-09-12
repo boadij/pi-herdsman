@@ -72,6 +72,11 @@ const message = (
   ...extra,
 });
 
+function assertPosixMode(path: string, expected: number): void {
+  const actual = statSync(path).mode & 0o777;
+  if (process.platform !== "win32") assert.equal(actual, expected);
+}
+
 const askMessage = (
   extra: Partial<ChiefMessageRecord> = {},
 ): ChiefMessageRecord =>
@@ -213,8 +218,8 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   const path = writeLeadCoordinationState(runtime, value);
   assert.deepEqual(readLeadCoordinationState(runtime, "lead"), value);
   assert.match(path.split(sep).join("/"), /leads\/[0-9a-f]{64}\.json$/);
-  assert.equal(statSync(path).mode & 0o777, 0o600);
-  assert.equal(statSync(runtime.leads).mode & 0o777, 0o700);
+  assertPosixMode(path, 0o600);
+  assertPosixMode(runtime.leads, 0o700);
   assert.throws(() =>
     writeLeadCoordinationState(runtime, { ...value, version: 2 } as never),
   );
