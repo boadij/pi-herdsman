@@ -860,19 +860,16 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   assert.match(
     body.body,
     new RegExp(
-      join(projectAgentDir, "policy.txt").replaceAll(
-        /[.*+?^${}()|[\\]\\]/g,
-        "\\\\$&",
+      join(projectAgentDir, "policy.txt").replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&",
       ),
     ),
   );
   assert.match(
     body.body,
     new RegExp(
-      join(globalAgents, "policy.txt").replaceAll(
-        /[.*+?^${}()|[\\]\\]/g,
-        "\\\\$&",
-      ),
+      join(globalAgents, "policy.txt").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
     ),
   );
   validateAgentDefinitionReferences(
