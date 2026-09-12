@@ -2,6 +2,11 @@
 
 ![Pi Herdsman: asynchronous Pi subagents and agent fleet orchestration](docs/assets/banner.webp)
 
+[![npm](https://img.shields.io/npm/v/pi-herdsman)](https://www.npmjs.com/package/pi-herdsman)
+[![Validate](https://github.com/boadij/pi-herdsman/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/boadij/pi-herdsman/actions/workflows/validate.yml)
+[![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/boadij/pi-herdsman/actions/workflows/validate.yml)
+[![License](https://img.shields.io/npm/l/pi-herdsman)](LICENSE)
+
 **Asynchronous [Pi](https://github.com/earendil-works/pi) subagents and agent fleet orchestration with nested delegation, parallel execution, and supervision in [herdr](https://github.com/herdrdev/herdr).**
 
 Keep the conversation. Delegate the work.
