@@ -70,6 +70,7 @@ const testTmpRoot = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-test-"));
 process.env.TMPDIR = testTmpRoot;
 const {
   Key: tuiKey,
+  fuzzyFilter: tuiFuzzyFilter,
   matchesKey: tuiMatchesKey,
   visibleWidth: tuiVisibleWidth,
 } = await import("@earendil-works/pi-tui");
@@ -395,40 +396,7 @@ mock.module("@earendil-works/pi-tui", {
         }
       }
     },
-    fuzzyFilter: <T>(
-      items: T[],
-      query: string,
-      getText: (item: T) => string,
-    ) => {
-      const tokens = query
-        .toLocaleLowerCase()
-        .trim()
-        .split(/[\s/]+/u)
-        .filter(Boolean);
-      const fuzzyScore = (queryToken: string, text: string): number => {
-        let cursor = 0;
-        let score = 0;
-        for (const character of queryToken) {
-          const index = text.indexOf(character, cursor);
-          if (index < 0) return Number.POSITIVE_INFINITY;
-          score += index;
-          cursor = index + 1;
-        }
-        return score;
-      };
-      return items
-        .map((item, index) => {
-          const text = getText(item).toLocaleLowerCase();
-          const score = tokens.reduce(
-            (total, token) => total + fuzzyScore(token, text),
-            0,
-          );
-          return { item, index, score };
-        })
-        .filter(({ score }) => Number.isFinite(score))
-        .sort((a, b) => a.score - b.score || a.index - b.index)
-        .map(({ item }) => item);
-    },
+    fuzzyFilter: tuiFuzzyFilter,
     truncateToWidth: (text: string, width: number) => text.slice(0, width),
     Key: tuiKey,
     matchesKey: tuiMatchesKey,

@@ -1288,6 +1288,14 @@ test("definition pickers preselect configured values and honor cancellation", as
       expected: "provider/model",
     },
     {
+      field: "Model",
+      picker: "model",
+      filter: " ",
+      property: "model",
+      source: "---\nname: preselect-agent\nmodel: provider/model\n---\n",
+      expected: "provider/model",
+    },
+    {
       field: "Thinking",
       picker: "Inherit current session",
       property: "thinking",
@@ -1351,6 +1359,9 @@ test("definition pickers preselect configured values and honor cancellation", as
         } else if (call === 1) {
           selectTuiItem(component, scenario.field);
         } else if (call === 2 && scenario.picker !== undefined) {
+          if ("filter" in scenario && scenario.filter !== undefined)
+            for (const character of scenario.filter)
+              component.handleInput(character);
           const line = component
             .render(200)
             .find((candidate: string) => candidate.includes(scenario.picker));

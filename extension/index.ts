@@ -7903,7 +7903,8 @@ export default function (pi: ExtensionAPI): void {
           let previousQuery = input.getValue();
           const rebuildList = (): void => {
             const query = input.getValue();
-            filtered = query
+            const filtering = query.split(/[\s/]+/u).some(Boolean);
+            filtered = filtering
               ? fuzzyFilter([...items], query, (item) => item.searchText)
               : [...items];
             listContainer.clear();
@@ -7915,7 +7916,7 @@ export default function (pi: ExtensionAPI): void {
               return;
             }
             list = new SelectList(filtered, 10, selectTheme(theme));
-            const index = query
+            const index = filtering
               ? 0
               : filtered.findIndex((item) => item.value === selectedValue);
             list.setSelectedIndex(index >= 0 ? index : 0);
