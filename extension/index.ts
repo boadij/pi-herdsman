@@ -5083,7 +5083,7 @@ async function actionUnsafe(
         ...(p.action === "delegate"
           ? {
               inheritedModel: ctx.model ? modelToken(ctx.model) : undefined,
-              inheritedThinking: ctx.thinkingLevel,
+              inheritedThinking: pi.getThinkingLevel(),
             }
           : {}),
       });
@@ -7828,9 +7828,7 @@ export default function (pi: ExtensionAPI): void {
               ? "off"
               : typeof definition.frontmatter.thinking === "string"
                 ? definition.frontmatter.thinking
-                : ctx.thinkingLevel
-                  ? `inherit · ${ctx.thinkingLevel}`
-                  : "inherit";
+                : `inherit · ${pi.getThinkingLevel()}`;
           const name = `${definition.name}${definition.projectSource ? " [project]" : ""}${definition.overrideSource && (definition.extensionSource || definition.projectSource) ? " *" : ""}`;
           return { name, model, thinking, definition };
         };
@@ -7882,9 +7880,7 @@ export default function (pi: ExtensionAPI): void {
               ? "off"
               : typeof definition.frontmatter.thinking === "string"
                 ? definition.frontmatter.thinking
-                : ctx.thinkingLevel
-                  ? `inherit · ${ctx.thinkingLevel}`
-                  : "inherit";
+                : `inherit · ${pi.getThinkingLevel()}`;
           const action = await ctx.ui.select(definition.name, [
             `Model       ${configuredModel}`,
             `Thinking    ${configuredThinking}`,

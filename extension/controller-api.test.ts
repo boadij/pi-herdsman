@@ -1313,7 +1313,10 @@ test("session continuation keeps explicit definition execution overrides", async
   const label = `${definition}-agent`;
   const definitionPath = join(PI_AGENTS_DIR, `${definition}.md`);
   const sourceId = randomUUID();
-  const sourcePath = join(tmpdir(), `session-continue-override-${sourceId}.jsonl`);
+  const sourcePath = join(
+    tmpdir(),
+    `session-continue-override-${sourceId}.jsonl`,
+  );
   realFs.writeFileSync(
     definitionPath,
     `---\nname: ${definition}\nmodel: explicit/provider\nthinking: low\n---\ncontinue\n`,
@@ -1746,7 +1749,7 @@ test("agent assignment uses only an explicit exact fork source", async () => {
     (args) =>
       launched.push({ args: [...args], contents: promptLaunchContents(args) }),
   );
-  const pi = fakePi({ exec: startup.exec });
+  const pi = fakePi({ exec: startup.exec, thinkingLevel: "medium" });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
   context.model = { provider: "fork-provider", id: "fork-model" };
@@ -1990,6 +1993,7 @@ test("registered delegate ignores an unrelated agent and forwards its child budg
   const label = "minimum-timeout-agent";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({
+    thinkingLevel: "high",
     exec: (command, args, options) => {
       const result = startup.exec(command, args, options);
       if (command === "herdr" && isAgentList(args)) {
@@ -2011,7 +2015,6 @@ test("registered delegate ignores an unrelated agent and forwards its child budg
   Date.now = () => 1_000_000;
   const context = fakeContext() as any;
   context.model = { provider: "controller-provider", id: "controller-model" };
-  context.thinkingLevel = "high";
   try {
     const result = await pi.tools[0].execute(
       "id",
@@ -2031,10 +2034,7 @@ test("registered delegate ignores an unrelated agent and forwards its child budg
       (args) => args[0] === "agent" && args[1] === "start",
     );
     assert.ok(start >= 0);
-    assert.equal(
-      start >= 0 && pi.calls[start]!.includes("--model"),
-      true,
-    );
+    assert.equal(start >= 0 && pi.calls[start]!.includes("--model"), true);
     assert.equal(
       pi.calls[start]![pi.calls[start]!.indexOf("--model") + 1],
       "controller-provider/controller-model",

@@ -1898,7 +1898,7 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
 
 test("Definitions refreshes the model registry before post-model thinking choices", async () => {
   setLeadEnvironment();
-  const pi = fakePi();
+  const pi = fakePi({ thinkingLevel: "high" });
   registerExtension!(pi.pi as never);
   const command = pi.commandOptions.get("agents");
   const definitionPath = join(PI_AGENTS_DIR, "implementer.md");
@@ -1927,9 +1927,7 @@ test("Definitions refreshes the model registry before post-model thinking choice
     switch (selection++) {
       case 0:
         assert.ok(
-          options.some((option) =>
-            option.includes("inherit · current-model"),
-          ),
+          options.some((option) => option.includes("inherit · current-model")),
         );
         return options.find((option) => option.includes("implementer"));
       case 1:
@@ -1966,7 +1964,7 @@ test("Definitions refreshes the model registry before post-model thinking choice
 
 test("Definitions uses the current model for inherited thinking choices", async () => {
   setLeadEnvironment();
-  const pi = fakePi();
+  const pi = fakePi({ thinkingLevel: "medium" });
   registerExtension!(pi.pi as never);
   const command = pi.commandOptions.get("agents");
   const context = fakeContext() as any;
@@ -1990,7 +1988,9 @@ test("Definitions uses the current model for inherited thinking choices", async 
   context.ui.select = async (_label: string, options: string[]) => {
     switch (selection++) {
       case 0:
-        assert.ok(options.some((option) => option.includes("inherit · current-model")));
+        assert.ok(
+          options.some((option) => option.includes("inherit · current-model")),
+        );
         return options.find((option) => option.includes("implementer"));
       case 1:
         return "Thinking    inherit · medium";
@@ -2014,9 +2014,7 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
   for (const scenario of [
     {
       model: "compact-model",
-      models: [
-        { provider: "provider", id: "compact-model", reasoning: false },
-      ],
+      models: [{ provider: "provider", id: "compact-model", reasoning: false }],
       levels: ["off"],
     },
     {
@@ -2034,7 +2032,7 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
       definitionPath,
       `---\nname: implementer\nmodel: ${scenario.model}\n---\n`,
     );
-    const pi = fakePi();
+    const pi = fakePi({ thinkingLevel: "high" });
     registerExtension!(pi.pi as never);
     const command = pi.commandOptions.get("agents");
     const context = fakeContext() as any;

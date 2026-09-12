@@ -93,6 +93,7 @@ test("parent delegates two same-definition children with exact ownership", async
   const lifecycle = delegatedLifecycleExecutor(parent);
   const starts: string[][] = [];
   const pi = fakePi({
+    thinkingLevel: "high",
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "agent" && args[1] === "start")
         starts.push([...args]);
