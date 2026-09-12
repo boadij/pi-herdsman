@@ -441,18 +441,30 @@ export function sameRunningProcessOwner(
   expected: PaneProcess,
   observed: PaneProcess,
 ): boolean {
+  if (
+    expected.pane_id === undefined ||
+    expected.pane_id !== observed.pane_id ||
+    !Number.isInteger(expected.shell_pid) ||
+    expected.shell_pid <= 0 ||
+    expected.shell_pid !== observed.shell_pid
+  )
+    return false;
+  const expectedGroup = expected.foreground_process_group_id;
+  const observedGroup = observed.foreground_process_group_id;
+  if (expectedGroup !== undefined || observedGroup !== undefined)
+    return (
+      expectedGroup !== undefined &&
+      observedGroup !== undefined &&
+      expectedGroup === observedGroup
+    );
+  const expectedForeground = expected.foreground_processes?.[0]?.pid;
+  const observedForeground = observed.foreground_processes?.[0]?.pid;
   return (
-    expected.pane_id !== undefined &&
-    expected.pane_id === observed.pane_id &&
-    Number.isInteger(expected.shell_pid) &&
-    expected.shell_pid > 0 &&
-    expected.shell_pid === observed.shell_pid &&
-    ((expected.foreground_process_group_id === undefined &&
-      observed.foreground_process_group_id === undefined) ||
-      (expected.foreground_process_group_id !== undefined &&
-        observed.foreground_process_group_id !== undefined &&
-        expected.foreground_process_group_id ===
-          observed.foreground_process_group_id))
+    Number.isInteger(expectedForeground) &&
+    expectedForeground > 0 &&
+    Number.isInteger(observedForeground) &&
+    observedForeground > 0 &&
+    expectedForeground === observedForeground
   );
 }
 async function lockLifecycle(

@@ -3647,6 +3647,33 @@ test("process ownership handles optional foreground process groups", () => {
       { ...running, foreground_process_group_id: undefined },
       true,
     ],
+    [
+      { ...running, foreground_process_group_id: undefined },
+      {
+        ...running,
+        foreground_process_group_id: undefined,
+        foreground_processes: [{ pid: 100 }],
+      },
+      false,
+    ],
+    [
+      { ...running, foreground_process_group_id: undefined },
+      {
+        ...running,
+        foreground_process_group_id: undefined,
+        foreground_processes: undefined,
+      },
+      false,
+    ],
+    [
+      {
+        ...running,
+        foreground_process_group_id: undefined,
+        foreground_processes: undefined,
+      },
+      { ...running, foreground_process_group_id: undefined },
+      false,
+    ],
     [running, { ...running, foreground_process_group_id: undefined }, false],
     [{ ...running, foreground_process_group_id: undefined }, running, false],
     [running, { ...running, foreground_process_group_id: 99 }, false],
