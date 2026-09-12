@@ -6,7 +6,7 @@ This is the shortest human-facing path from installation to useful Pi Herdsman
 orchestration. You do not need to type structured `agent` requests for this
 path.
 
-## 1. Check requirements
+## 1. Install
 
 You need:
 
@@ -14,26 +14,29 @@ You need:
 - Pi `>=0.84.2 <0.86.0` (supported);
 - Node `>=22.19.0`.
 
-Install or refresh the herdr Pi integration:
-
-```sh
-herdr integration install pi
-herdr integration status
-```
-
-Install the package from npm:
+Install the package and herdr Pi integration:
 
 ```sh
 pi install npm:pi-herdsman
+herdr integration install pi
 ```
 
-Pi reads the package manifest and loads the extension plus the optional
-`agents` skill.
+## 2. Start Herdr and Pi
 
-## 2. Start the lead Pi session inside herdr
+Start Herdr in your project:
 
-The lead Pi session must run inside herdr. A lead Pi session started outside herdr
-cannot safely manage herdr agents.
+```sh
+herdr
+```
+
+Then run Pi in the Herdr pane:
+
+```sh
+pi
+```
+
+Pi reads the package manifest and loads the extension plus the optional `agents`
+skill. A lead Pi session started outside Herdr cannot safely manage Herdr agents.
 
 The extension distinguishes a lead Pi session, valid managed agents, and
 unmanaged or invalid environments. Only supported managed environments receive
@@ -41,10 +44,10 @@ Pi Herdsman controls and status UI.
 
 ## 3. Delegate work without leaving the conversation
 
-Ask the lead Pi agent in ordinary language, for example:
+Ask Pi normally:
 
 ```text
-Use an implementer agent to implement the approved change.
+Use scout to inspect this repository.
 ```
 
 Pi Herdsman starts the work asynchronously. Once the assignment is accepted, the
