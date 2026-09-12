@@ -48,6 +48,7 @@ import support, {
   writeResult,
   writeAgentState,
   waitForTestCondition,
+  testTmpRoot,
 } from "./support.ts";
 
 test("managed agents cancel native session replacement", () => {
@@ -664,7 +665,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   );
   assert.equal(readAgentState(mailbox)?.pendingAskId, undefined);
   assert.equal(readPendingAsk(mailbox, readAgentState(mailbox)!), undefined);
-  const askFile = join("/tmp", "registered-ask-options.md");
+  const askFile = join(testTmpRoot, "registered-ask-options.md");
   realFs.writeFileSync(askFile, "owner options");
   branch[0] = {
     type: "message",
@@ -695,7 +696,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     "ask",
     {
       question: "Should the token be ALPHA or BETA?",
-      files: ["registered-ask-options.md"],
+      files: [askFile],
     },
     undefined,
     undefined,
@@ -719,7 +720,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   );
   assert.match(
     readPendingAsk(mailbox, waiting!)?.question ?? "",
-    /\/tmp\/registered-ask-options\.md/,
+    /registered-ask-options\.md/,
   );
   agent.events.get("agent_settled")![0](undefined, context);
   assert.equal(readResult(mailbox, assignment.requestId), undefined);
@@ -1696,15 +1697,21 @@ test("empty agent metadata succeeds and later reports remain usable", async () =
 
 test("failed completion metadata cannot be bypassed by presentation updates", async (t) => {
   const mailbox = setAgentEnvironment();
-  let metadataAttempts = 0;
+  const taskText = "retry this task metadata";
+  let taskMetadataFailures = 0;
   let completionFailures = 0;
   let completionMetadataStarted = false;
   const agent = fakePi({
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "pane") {
-        metadataAttempts++;
-        if (metadataAttempts === 2 || metadataAttempts === 3)
+        if (
+          !completionMetadataStarted &&
+          args.includes(`task=${taskText}`) &&
+          taskMetadataFailures < 2
+        ) {
+          taskMetadataFailures++;
           throw new Error("temporary task metadata failure");
+        }
         if (
           completionMetadataStarted &&
           completionFailures < 2 &&
@@ -1725,7 +1732,13 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
   registerExtension!(agent.pi as never);
   const context = fakeContext();
   agent.events.get("session_start")![0](undefined, context);
-  await new Promise((resolve) => setImmediate(resolve));
+  await waitForTestCondition(
+    () =>
+      readAgentState(mailbox) !== undefined &&
+      agent.callResults.length === agent.calls.length,
+    "agent startup did not settle",
+    2000,
+  );
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
     version: 4,
@@ -1736,7 +1749,7 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     agentLabel: started.agentLabel,
     paneId: started.paneId,
     kind: "task",
-    text: "retry this task metadata",
+    text: taskText,
     createdAt: Date.now(),
   };
   writeRequest(mailbox, request);
@@ -1744,14 +1757,30 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { text: controlMarker(request.requestId) },
     context,
   );
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
+  await waitForTestCondition(
+    () => readAgentState(mailbox)?.activeRequestId === request.requestId,
+    "task request was not accepted",
+    2000,
+  );
   assert.equal(typeof readAgentState(mailbox)?.lastActivityAt, "number");
   agent.events.get("model_select")![0](
     { model: { provider: "openai", id: "gpt-5" } },
     context,
   );
-  await new Promise((resolve) => setImmediate(resolve));
+  await waitForTestCondition(
+    () =>
+      agent.callResults.filter(
+        ({ args, succeeded }) =>
+          !succeeded && args.includes(`task=${taskText}`),
+      ).length >= 2,
+    "task metadata failures were not observed",
+    2000,
+  );
+  await waitForTestCondition(
+    () => agent.callResults.length === agent.calls.length,
+    "task metadata calls did not settle",
+    2000,
+  );
   assert.ok(agent.calls.some((args) => args.includes(`task=${request.text}`)));
   assert.ok(agent.calls.some((args) => args.includes(`task=${request.text}`)));
 
@@ -1761,12 +1790,28 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { message: { role: "assistant", content: "completed" } },
     context,
   );
-  await new Promise((resolve) => setImmediate(resolve));
+  await waitForTestCondition(
+    () => agent.callResults.length === agent.calls.length,
+    "turn metadata did not settle",
+    2000,
+  );
   const callsBeforeSettlement = agent.calls.length;
   assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
   completionMetadataStarted = true;
   agent.events.get("agent_settled")![0](undefined, context);
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await waitForTestCondition(
+    () =>
+      agent.callResults
+        .slice(callsBeforeSettlement)
+        .some(
+          ({ args, succeeded }) =>
+            args.includes("--clear-token") &&
+            args.includes("task") &&
+            !succeeded,
+        ),
+    "first completion metadata clear did not fail",
+    2000,
+  );
   assert.ok(
     agent.calls
       .slice(callsBeforeSettlement)
@@ -1784,7 +1829,15 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { model: { provider: "openai", id: "gpt-5" } },
     context,
   );
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await waitForTestCondition(
+    () =>
+      agent.callResults.filter(
+        ({ args, succeeded }) =>
+          args.includes("--clear-token") && args.includes("task") && !succeeded,
+      ).length >= 2,
+    "second completion metadata clear did not fail",
+    2000,
+  );
   assert.equal(
     agent.calls
       .slice(completionFailure + 1)
@@ -1800,7 +1853,18 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { model: { provider: "openai", id: "gpt-5.1" } },
     context,
   );
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await waitForTestCondition(
+    () =>
+      agent.callResults.some(
+        ({ args, succeeded }) =>
+          succeeded &&
+          args.includes("--clear-token") &&
+          args.includes("task") &&
+          args.includes("model=openai/gpt-5.1"),
+      ),
+    "completion metadata clear did not recover",
+    2000,
+  );
   assert.equal(completionFailures, 2);
   const completionClears = agent.callResults.filter(
     ({ args }, index) =>

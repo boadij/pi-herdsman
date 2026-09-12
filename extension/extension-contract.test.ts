@@ -50,6 +50,7 @@ import support, {
   setAgentEnvironment,
   skillBlock,
   startupExecutor,
+  testTmpRoot,
   waitForTestCondition,
   agentMailboxPath,
   writeRequest,
@@ -2036,8 +2037,8 @@ test("delivered owner asks retain the question in visible message details", asyn
 test("registered delegate embeds text and references binary evidence", async () => {
   setLeadEnvironment();
   const label = "mixed-files-agent";
-  const textPath = join("/tmp", `${label}.md`);
-  const binaryPath = join("/tmp", `${label}.bin`);
+  const textPath = join(testTmpRoot, `${label}.md`);
+  const binaryPath = join(testTmpRoot, `${label}.bin`);
   realFs.writeFileSync(textPath, "complete evidence");
   realFs.writeFileSync(binaryPath, Buffer.from([0, 1, 2]));
   let prompted = "";

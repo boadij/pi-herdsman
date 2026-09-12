@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dirname, join } from "node:path";
@@ -247,7 +253,6 @@ test("inspection keeps partial process evidence when pane identity is absent or 
   const processInfo = {
     pane_id: "different-pane",
     shell_pid: 12,
-    foreground_process_group_id: 12,
     foreground_processes: Array.from({ length: 20 }, (_, pid) => ({
       pid: pid + 1,
       argv0: `${"a".repeat(300)}-${pid}`,
@@ -301,6 +306,10 @@ test("inspection keeps partial process evidence when pane identity is absent or 
   assert.equal(snapshot.recentOutput, "recent output");
   assert.equal(snapshot.recentOutputTruncated, false);
   assert.equal(snapshot.process?.pane_id, undefined);
+  assert.equal(
+    "foreground_process_group_id" in (snapshot.process ?? {}),
+    false,
+  );
   assert.equal(snapshot.process?.foreground_processes?.length, 8);
   assert.equal(snapshot.process?.foreground_processes?.[0]?.pid, 1);
   assert.ok(
@@ -876,7 +885,8 @@ test("start injects mandatory extensions before definition args and configures t
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "root-workspace";
-  const cwd = "/tmp/agent space/ユニコード";
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-space-"));
+  const mailbox = join(cwd, "mailbox with $dollar 'quote' `backtick`");
   const processInfo = {
     pane_id: "pane-1",
     shell_pid: 12,
@@ -884,7 +894,7 @@ test("start injects mandatory extensions before definition args and configures t
     foreground_processes: [{ pid: 12, argv0: "/bin/zsh" }],
   };
   const contract = [
-    "PI_HERDSMAN_MAILBOX=/tmp/mailbox with $dollar 'quote' `backtick`",
+    `PI_HERDSMAN_MAILBOX=${mailbox}`,
     "PI_HERDSMAN_RUN_ID=run-id",
     "PI_HERDSMAN_OWNER_SESSION_ID=owner-session",
     "PI_SUBAGENT_PARENT_SESSION=lead-session",
@@ -1003,7 +1013,7 @@ test("start injects mandatory extensions before definition args and configures t
   const tabCreate = calls.find(
     (args) => args[0] === "tab" && args[1] === "create",
   )!;
-  assert.equal(tabCreate[tabCreate.indexOf("--cwd") + 1], cwd);
+  assert.equal(tabCreate[tabCreate.indexOf("--cwd") + 1], realpathSync(cwd));
   assert.equal(tabCreate[tabCreate.indexOf("--label") + 1], "agents");
   assert.deepEqual(
     tabCreate
@@ -1657,7 +1667,6 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
   const processInfo = {
     pane_id: paneId,
     shell_pid: 12,
-    foreground_process_group_id: 12,
     foreground_processes: [{ pid: 12, argv0: "/bin/zsh" }],
   };
   const pi = {
@@ -2145,7 +2154,7 @@ async function placementCalls(config: {
   direction?: "right" | "down";
   panes: any[];
   layout?: any;
-}): Promise<string[][]> {
+}): Promise<{ calls: string[][]; cwd: string }> {
   const environment = globalThis.process.env;
   const previous = {
     workspace: environment.HERDR_WORKSPACE_ID,
@@ -2154,7 +2163,7 @@ async function placementCalls(config: {
   };
   const workspaceId = "workspace-1";
   const tabId = "tab-1";
-  const cwd = "/tmp/placement-agent";
+  const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-placement-agent-"));
   environment.HERDR_WORKSPACE_ID = workspaceId;
   if (config.placement === "split") {
     environment.HERDR_TAB_ID = "stale-tab";
@@ -2246,11 +2255,11 @@ async function placementCalls(config: {
     if (previous.pane === undefined) delete environment.HERDR_PANE_ID;
     else environment.HERDR_PANE_ID = previous.pane;
   }
-  return calls;
+  return { calls, cwd };
 }
 
 test("placement validates a non-lead caller and selects the largest agent axis", async () => {
-  const callerCalls = await placementCalls({
+  const caller = await placementCalls({
     placement: "split",
     callerPaneId: "caller",
     direction: "down",
@@ -2264,16 +2273,16 @@ test("placement validates a non-lead caller and selects the largest agent axis",
     ],
   });
   const option = (args: string[], name: string) => args[args.indexOf(name) + 1];
-  const callerSplit = callerCalls.find(
+  const callerSplit = caller.calls.find(
     (args) => args[0] === "pane" && args[1] === "split",
   )!;
   assert.equal(option(callerSplit, "--pane"), "caller");
   assert.equal(option(callerSplit, "--ratio"), "0.65");
   assert.equal(option(callerSplit, "--direction"), "down");
-  assert.equal(option(callerSplit, "--cwd"), "/tmp/placement-agent");
+  assert.equal(option(callerSplit, "--cwd"), realpathSync(caller.cwd));
   assert.equal(callerSplit.includes("--no-focus"), true);
   assert.equal(
-    callerCalls.some((args) => args[0] === "pane" && args[1] === "layout"),
+    caller.calls.some((args) => args[0] === "pane" && args[1] === "layout"),
     false,
   );
 
@@ -2303,7 +2312,7 @@ test("placement validates a non-lead caller and selects the largest agent axis",
       direction: "down",
     },
   ]) {
-    const calls = await placementCalls({
+    const placement = await placementCalls({
       placement: "tab",
       panes: testCase.layout.panes.map((item: any) => ({
         pane_id: item.pane_id,
@@ -2314,16 +2323,18 @@ test("placement validates a non-lead caller and selects the largest agent axis",
       layout: testCase.layout,
     });
     assert.deepEqual(
-      calls.find((args) => args[0] === "pane" && args[1] === "layout"),
+      placement.calls.find(
+        (args) => args[0] === "pane" && args[1] === "layout",
+      ),
       ["pane", "layout", "--pane", testCase.layout.panes[0].pane_id],
     );
-    const agentSplit = calls.find(
+    const agentSplit = placement.calls.find(
       (args) => args[0] === "pane" && args[1] === "split",
     )!;
     assert.equal(option(agentSplit, "--pane"), testCase.anchor);
     assert.equal(option(agentSplit, "--ratio"), "0.5");
     assert.equal(option(agentSplit, "--direction"), testCase.direction);
-    assert.equal(option(agentSplit, "--cwd"), "/tmp/placement-agent");
+    assert.equal(option(agentSplit, "--cwd"), realpathSync(placement.cwd));
     assert.equal(agentSplit.includes("--no-focus"), true);
   }
 });
@@ -3575,6 +3586,105 @@ test("running ownership includes shell and foreground process group", () => {
     }),
     false,
   );
+});
+
+test("process ownership handles optional foreground process groups", () => {
+  const shell = {
+    pane_id: "pane-1",
+    shell_pid: 12,
+    foreground_process_group_id: 12,
+    foreground_processes: [{ pid: 12, argv0: "pwsh.exe" }],
+  };
+  const cases = [
+    ["Unix PGID and singleton shell", shell, true],
+    [
+      "Windows-style singleton shell without PGID",
+      { ...shell, foreground_process_group_id: undefined },
+      true,
+    ],
+    [
+      "PGID-only shell proof",
+      { ...shell, foreground_processes: undefined },
+      true,
+    ],
+    [
+      "busy foreground fails closed",
+      { ...shell, foreground_processes: [{ pid: 99, argv0: "node" }] },
+      false,
+    ],
+    [
+      "empty foreground fails closed",
+      { ...shell, foreground_processes: [] },
+      false,
+    ],
+    [
+      "missing foreground proof fails closed",
+      {
+        ...shell,
+        foreground_process_group_id: undefined,
+        foreground_processes: undefined,
+      },
+      false,
+    ],
+    ["shell PID changes", { ...shell, shell_pid: 13 }, false],
+    [
+      "contradictory PGID fails closed",
+      { ...shell, foreground_process_group_id: 99 },
+      false,
+    ],
+  ] as const;
+  for (const [, observed, expected] of cases)
+    assert.equal(sameShellProcessOwner(shell, observed), expected);
+
+  const running = { ...shell, foreground_processes: [{ pid: 99 }] };
+  assert.equal(
+    sameShellProcessOwner(shell, { ...shell, shell_pid: undefined } as any),
+    false,
+  );
+  for (const [expectedProcess, observedProcess, expected] of [
+    [
+      { ...running, foreground_process_group_id: undefined },
+      { ...running, foreground_process_group_id: undefined },
+      true,
+    ],
+    [
+      { ...running, foreground_process_group_id: undefined },
+      {
+        ...running,
+        foreground_process_group_id: undefined,
+        foreground_processes: [{ pid: 100 }],
+      },
+      false,
+    ],
+    [
+      { ...running, foreground_process_group_id: undefined },
+      {
+        ...running,
+        foreground_process_group_id: undefined,
+        foreground_processes: undefined,
+      },
+      false,
+    ],
+    [
+      {
+        ...running,
+        foreground_process_group_id: undefined,
+        foreground_processes: undefined,
+      },
+      { ...running, foreground_process_group_id: undefined },
+      false,
+    ],
+    [running, { ...running, foreground_process_group_id: undefined }, false],
+    [{ ...running, foreground_process_group_id: undefined }, running, false],
+    [running, { ...running, foreground_process_group_id: 99 }, false],
+    [{ ...running, pane_id: undefined }, running, false],
+    [running, { ...running, pane_id: "other-pane" }, false],
+    [running, { ...running, shell_pid: 13 }, false],
+  ] as const)
+    assert.equal(
+      sameRunningProcessOwner(expectedProcess, observedProcess),
+      expected,
+    );
 });
 
 test("shell ownership uses captured identity without a shell allowlist", () => {

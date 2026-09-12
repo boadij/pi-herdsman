@@ -21,7 +21,7 @@ export type HerdrContext = {
 export type PaneProcess = Readonly<{
   pane_id?: string;
   shell_pid: number;
-  foreground_process_group_id: number;
+  foreground_process_group_id?: number;
   foreground_processes?: readonly Readonly<{
     pid?: number;
     argv0?: string;
@@ -412,18 +412,28 @@ export function sameShellProcessOwner(
   observed: PaneProcess,
 ): boolean {
   if (
-    expected.shell_pid !== observed.shell_pid ||
-    observed.foreground_process_group_id !== expected.shell_pid
+    !Number.isInteger(expected.shell_pid) ||
+    expected.shell_pid <= 0 ||
+    expected.shell_pid !== observed.shell_pid
+  )
+    return false;
+  if (
+    observed.foreground_process_group_id !== undefined &&
+    observed.foreground_process_group_id !== observed.shell_pid
   )
     return false;
   const processes = observed.foreground_processes;
-  if (processes?.length !== 1 || processes[0]?.pid !== expected.shell_pid)
+  const foregroundShell =
+    processes?.length === 1 && processes[0]?.pid === observed.shell_pid;
+  if (processes !== undefined && !foregroundShell) return false;
+  if (observed.foreground_process_group_id === undefined && !foregroundShell)
     return false;
   const captured = capturedShellProcess(expected);
   return (
     !captured ||
-    (typeof captured.argv0 === "string" &&
-      processes[0]?.argv0 === captured.argv0)
+    typeof captured.argv0 !== "string" ||
+    processes === undefined ||
+    (foregroundShell && processes[0]?.argv0 === captured.argv0)
   );
 }
 
@@ -431,11 +441,30 @@ export function sameRunningProcessOwner(
   expected: PaneProcess,
   observed: PaneProcess,
 ): boolean {
+  if (
+    expected.pane_id === undefined ||
+    expected.pane_id !== observed.pane_id ||
+    !Number.isInteger(expected.shell_pid) ||
+    expected.shell_pid <= 0 ||
+    expected.shell_pid !== observed.shell_pid
+  )
+    return false;
+  const expectedGroup = expected.foreground_process_group_id;
+  const observedGroup = observed.foreground_process_group_id;
+  if (expectedGroup !== undefined || observedGroup !== undefined)
+    return (
+      expectedGroup !== undefined &&
+      observedGroup !== undefined &&
+      expectedGroup === observedGroup
+    );
+  const expectedForeground = expected.foreground_processes?.[0]?.pid;
+  const observedForeground = observed.foreground_processes?.[0]?.pid;
   return (
-    expected.pane_id === observed.pane_id &&
-    expected.shell_pid === observed.shell_pid &&
-    expected.foreground_process_group_id ===
-      observed.foreground_process_group_id
+    Number.isInteger(expectedForeground) &&
+    expectedForeground > 0 &&
+    Number.isInteger(observedForeground) &&
+    observedForeground > 0 &&
+    expectedForeground === observedForeground
   );
 }
 async function lockLifecycle(
@@ -1186,8 +1215,9 @@ function normalizePaneProcess(
   if (
     !Number.isInteger(candidate.shell_pid) ||
     (candidate.shell_pid as number) <= 0 ||
-    !Number.isInteger(candidate.foreground_process_group_id) ||
-    (candidate.foreground_process_group_id as number) <= 0
+    (candidate.foreground_process_group_id !== undefined &&
+      (!Number.isInteger(candidate.foreground_process_group_id) ||
+        (candidate.foreground_process_group_id as number) <= 0))
   )
     return undefined;
 
@@ -1228,9 +1258,13 @@ function normalizePaneProcess(
   return Object.freeze({
     ...(hasExactPane ? { pane_id: paneId } : {}),
     shell_pid: candidate.shell_pid as number,
-    foreground_process_group_id:
-      candidate.foreground_process_group_id as number,
-    ...(foreground?.length
+    ...(candidate.foreground_process_group_id !== undefined
+      ? {
+          foreground_process_group_id:
+            candidate.foreground_process_group_id as number,
+        }
+      : {}),
+    ...(foreground !== undefined
       ? { foreground_processes: Object.freeze(foreground) }
       : {}),
   });

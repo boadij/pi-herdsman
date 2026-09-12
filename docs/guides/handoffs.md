@@ -150,6 +150,10 @@ line has one of these shapes:
 @~/home-relative.md
 ```
 
+On Windows, native backslash forms are also supported, including `@.\relative.md`,
+`@..\relative.md`, `@~\home-relative.md`, rooted paths, drive-rooted paths,
+and UNC paths. References use the host platform's native path resolution rules.
+
 These remain literal text:
 
 ```text

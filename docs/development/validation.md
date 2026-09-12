@@ -31,10 +31,10 @@ git diff HEAD --check
 
 ## What `npm run check` does
 
-The repository check command runs the complete Node test set in one detached,
-isolated process group with a bounded suite deadline. Node's native TypeScript
-support strips types while loading the source, and the test runner discovers
-the `.test.ts` files automatically.
+The repository check command runs the complete Node test set in one isolated
+process tree with a bounded suite deadline. Node's native TypeScript support
+strips types while loading the source, and the test runner discovers the
+`.test.ts` files automatically.
 
 The test runner uses:
 
@@ -45,19 +45,24 @@ The test runner uses:
 
 ## Process containment
 
-The test runner runs in a detached POSIX process group.
+On POSIX systems the test runner runs in a detached process group. On Windows
+it runs as a normal child process and uses the native `taskkill.exe /PID <pid>
+/T /F` process-tree operation for timeout cleanup.
 
-On the suite deadline, the runner attempts:
+On POSIX suite deadline, the runner attempts:
 
 1. `SIGTERM`;
 2. a bounded grace period;
 3. `SIGKILL` when required;
-4. bounded proof that the process group disappeared.
+4. bounded proof that the process tree disappeared.
+
+On Windows, the runner invokes `taskkill.exe /PID <pid> /T /F` and waits for
+the runner process to disappear.
 
 A test runner that leaks descendants after normal exit is reported as a failure
-and cleaned through the same group boundary.
-
-Windows is not supported by this process-group validation runner.
+on POSIX and cleaned through the same process-group boundary. Windows timeout
+cleanup covers the runner tree; post-parent descendant leak accounting would
+require a Job Object and is not implemented.
 
 ## Focused tests
 
@@ -97,8 +102,8 @@ the read-only verification step:
 npm run check
 ```
 
-`npm run check` remains the bounded full check, including process-group cleanup
-when the test runner times out or leaks descendants.
+`npm run check` remains the bounded full check, including platform-appropriate
+process-tree cleanup when the test runner times out or leaks descendants.
 
 ## Dependency availability
 

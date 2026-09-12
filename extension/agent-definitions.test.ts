@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import test from "node:test";
 import {
   agentDefinitionDelegationEnabled,
@@ -45,6 +45,11 @@ function discoverAgentDefinitionsWithContents(content: string) {
   mkdirSync(agents);
   writeFileSync(join(agents, "custom.md"), content);
   return withPiAgentDir(root, () => discoverAgentDefinitions());
+}
+
+function assertPosixMode(path: string, expected: number): void {
+  const actual = statSync(path).mode & 0o777;
+  if (process.platform !== "win32") assert.equal(actual, expected);
 }
 
 test("parses scalar frontmatter fields and applies defaults", () => {
@@ -216,6 +221,29 @@ test("resolves whole-line body file references from their definition", () => {
     `Before\n@${join(prompts, "one.md")}\n@${join(agents, "custom.md")}\n@${join(homedir(), "prompts", "home.md")}\n@${absolutePath}\nAfter\n@example`,
   );
 });
+
+test(
+  "resolves native Windows body file reference forms",
+  { skip: process.platform !== "win32" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-herdsman-windows-body-files-"));
+    const agents = join(root, "agents");
+    const prompts = join(root, "prompts");
+    mkdirSync(agents);
+    mkdirSync(prompts);
+    const definitionPath = join(agents, "custom.md");
+    writeFileSync(join(prompts, "one.md"), "one");
+    writeFileSync(
+      definitionPath,
+      `---\nname: custom\n---\nBefore\n@..\\prompts\\one.md\n@.\\custom.md\n@~\\prompts\\home.md\n@C:\\work\\prompt.md\n@\\rooted\\prompt.md\n@\\\\server\\share\\prompt.md\nAfter\n@example`,
+    );
+    const definition = withPiAgentDir(root, () => discoverAgent("custom"));
+    assert.equal(
+      definition.body,
+      `Before\n@${join(prompts, "one.md")}\n@${join(agents, "custom.md")}\n@${join(homedir(), "prompts", "home.md")}\n@C:\\work\\prompt.md\n@\\rooted\\prompt.md\n@\\\\server\\share\\prompt.md\nAfter\n@example`,
+    );
+  },
+);
 
 test("normalizes home-relative references in project and global definitions", () => {
   const project = mkdtempSync(join(tmpdir(), "pi-herdsman-project-agents-"));
@@ -802,7 +830,7 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   assert.throws(
     () => discoverAgentDefinitions({ projectRoot: project }),
     new RegExp(
-      `${standalone.replaceAll(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}.*bodyMode`,
+      `${standalone.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*bodyMode`,
     ),
   );
   unlinkSync(standalone);
@@ -832,19 +860,16 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   assert.match(
     body.body,
     new RegExp(
-      join(projectAgentDir, "policy.txt").replaceAll(
-        /[.*+?^${}()|[\\]\\]/g,
-        "\\\\$&",
+      join(projectAgentDir, "policy.txt").replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&",
       ),
     ),
   );
   assert.match(
     body.body,
     new RegExp(
-      join(globalAgents, "policy.txt").replaceAll(
-        /[.*+?^${}()|[\\]\\]/g,
-        "\\\\$&",
-      ),
+      join(globalAgents, "policy.txt").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
     ),
   );
   validateAgentDefinitionReferences(
@@ -904,7 +929,7 @@ test("overlays a bundled definition and extends the roster", () => {
     const implementer = discoverAgent("implementer");
     assert.equal(implementer.path, overridePath);
     assert.match(
-      implementer.extensionSource!,
+      implementer.extensionSource!.split(sep).join("/"),
       /extension\/agent-definitions\/implementer\.md$/,
     );
     assert.equal(implementer.overrideSource, overridePath);
@@ -1012,13 +1037,13 @@ test("transports complex prompts through a private temporary file", () => {
   const [promptPath] = writePrivatePromptSnapshots([body]);
   try {
     assert.equal(readFileSync(promptPath, "utf8"), body);
-    assert.equal(statSync(promptPath).mode & 0o777, 0o600);
+    assertPosixMode(promptPath, 0o600);
     const tempRoot = join(
       tmpdir(),
       `pi-herdsman-${process.getuid?.() ?? "user"}`,
     );
-    assert.equal(statSync(tempRoot).mode & 0o777, 0o700);
-    assert.equal(statSync(join(tempRoot, "prompts")).mode & 0o777, 0o700);
+    assertPosixMode(tempRoot, 0o700);
+    assertPosixMode(join(tempRoot, "prompts"), 0o700);
     const launch = agentLaunchArgs(
       {
         name: "delegate",
@@ -1046,10 +1071,7 @@ test("writes ordered private prompt snapshots with private permissions", () => {
       paths.map((path) => readFileSync(path, "utf8")),
       ["body", "append"],
     );
-    assert.deepEqual(
-      paths.map((path) => statSync(path).mode & 0o777),
-      [0o600, 0o600],
-    );
+    for (const path of paths) assertPosixMode(path, 0o600);
   } finally {
     for (const path of paths) unlinkSync(path);
   }
@@ -1249,7 +1271,10 @@ test("managed launch policy always includes ask_owner", () => {
   }
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-standalone-"));
   const standalone = withPiAgentDir(root, () => discoverAgent("generalist"));
-  assert.match(standalone.path, /agent-definitions\/generalist\.md$/);
+  assert.match(
+    standalone.path.split(sep).join("/"),
+    /agent-definitions\/generalist\.md$/,
+  );
   assert.equal(
     agentLaunchArgs(standalone, {
       bodyPromptPath: "/prompt",

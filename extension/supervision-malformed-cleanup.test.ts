@@ -119,7 +119,7 @@ const socket = () =>
 function malformedInbox() {
   const runtime = supervisionRuntime(socket());
   const path = chiefMessagePath(runtime, "lead", randomUUID());
-  realFs.mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+  realFs.mkdirSync(dirname(path), { recursive: true });
   realFs.writeFileSync(path, "{ truncated", "utf8");
   return { runtime, path };
 }
@@ -139,7 +139,7 @@ test(
         paneId: "pane",
         workspaceId: "workspace",
       });
-      assert.equal(directoryFsyncCount, 1);
+      assert.equal(directoryFsyncCount, process.platform === "win32" ? 0 : 1);
       lease.release();
     } finally {
       directoryFsyncCount = 0;
@@ -231,7 +231,7 @@ test(
 
 test(
   "drain reports quarantine-marker fsync failure and retains quarantine",
-  { concurrency: false },
+  { concurrency: false, skip: process.platform === "win32" },
   async () => {
     const { runtime, path } = malformedInbox();
     const errors: unknown[] = [];
@@ -261,7 +261,7 @@ test(
 
 test(
   "replacement retains quarantine after final marker fsync failure",
-  { concurrency: false },
+  { concurrency: false, skip: process.platform === "win32" },
   () => {
     const runtime = supervisionRuntime(socket());
     const record = {
@@ -306,7 +306,7 @@ test(
 
 test(
   "drain reports final quarantine-marker fsync failure after detach",
-  { concurrency: false },
+  { concurrency: false, skip: process.platform === "win32" },
   async () => {
     const { runtime, path } = malformedInbox();
     const errors: unknown[] = [];

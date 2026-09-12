@@ -71,6 +71,30 @@ test("claim wrapper retains atomic stale recovery after a crash", () => {
   }
 });
 
+test("stale recovery reports a concurrent claimant as occupied", () => {
+  const path = temporaryPath();
+  let releaseConcurrent: (() => void) | undefined;
+  try {
+    mkdirSync(path, 0o700);
+    writeFileSync(
+      join(path, "999999-stale"),
+      JSON.stringify({ pid: 999999, id: "stale" }),
+    );
+    throws(
+      () =>
+        claimProcessLock(path, {
+          afterStaleOwnerRemoved: () => {
+            releaseConcurrent = claimProcessLock(path);
+          },
+        }),
+      (error: unknown) => error instanceof ProcessLockOccupiedError,
+    );
+  } finally {
+    releaseConcurrent?.();
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
 test("empty lock directories fail closed", () => {
   const path = temporaryPath();
   try {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { after, mock, test } from "node:test";
 import { Value } from "typebox/value";
@@ -66,7 +66,9 @@ function assertWidgetContent(content: unknown): void {
   component.invalidate();
 }
 export const realFs = await import("node:fs");
-const testTmpRoot = realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-test-"));
+export const testTmpRoot = realFs.mkdtempSync(
+  join(tmpdir(), "pi-herdsman-test-"),
+);
 process.env.TMPDIR = testTmpRoot;
 const {
   Key: tuiKey,
@@ -110,7 +112,7 @@ mock.module("node:fs", {
         configReadHook?.();
       if (
         typeof args[0] === "string" &&
-        args[0].startsWith(`${PI_AGENTS_DIR}/`)
+        args[0].startsWith(`${PI_AGENTS_DIR}${sep}`)
       )
         agentDefinitionReadCount++;
       return realFs.readFileSync(...args);
@@ -125,16 +127,17 @@ mock.module("node:fs", {
     rmdirSync: realFs.rmdirSync,
     statSync: realFs.statSync,
     unlinkSync: (path: string) => {
-      if (failNextRequestRemoval && path.includes("/request-")) {
+      const name = basename(path);
+      if (failNextRequestRemoval && name.startsWith("request-")) {
         failNextRequestRemoval = false;
         throw new Error("injected request removal failure");
       }
-      if (failNextResultRemoval && path.includes("/result-")) {
+      if (failNextResultRemoval && name.startsWith("result-")) {
         resultRemovalAttempts++;
         failNextResultRemoval = false;
         throw new Error("injected result removal failure");
       }
-      if (path.includes("/result-")) resultRemovalAttempts++;
+      if (name.startsWith("result-")) resultRemovalAttempts++;
       return realFs.unlinkSync(path);
     },
     writeFileSync: realFs.writeFileSync,
@@ -1768,8 +1771,9 @@ export function testGate<T = void>(): {
 export async function waitForTestCondition(
   condition: () => boolean,
   message: string,
+  timeoutMs = 100,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt++) {
+  for (let attempt = 0; attempt < timeoutMs; attempt++) {
     if (condition()) return;
     await new Promise<void>((resolve) => setTimeout(resolve, 1));
   }
@@ -2089,6 +2093,7 @@ export function startupExecutor(
   closePaneOnClose = false,
   countStartup = false,
   onAccepted?: (request: RequestRecord) => void | Promise<void>,
+  sessionFile = "/tmp/registered-agent.jsonl",
 ): {
   exec: ExecHandler;
   mailbox: string;
@@ -2445,7 +2450,7 @@ export function startupExecutor(
         agentLabel: label,
         paneId: activePaneId,
         piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-        piSessionFile: "/tmp/registered-agent.jsonl",
+        piSessionFile: sessionFile,
         agentDefinition: "agent",
         cwd: testCwd,
         updatedAt: Date.now(),

@@ -73,6 +73,7 @@ import {
   writeRequest,
   writeResult,
   writeAgentState,
+  testTmpRoot,
 } from "./support.ts";
 
 test("parent delegates two same-definition children with exact ownership", async () => {
@@ -1084,8 +1085,9 @@ test("fixture mailbox consumer retries a failed acknowledgement callback", async
 test("fresh path sessions remain controllable after controller cache loss", async () => {
   setLeadEnvironment();
   const label = `fresh-path-${randomUUID().slice(0, 8)}`;
-  const sessionPath = "/tmp/registered-agent.jsonl";
+  const sessionPath = join(testTmpRoot, "registered-agent.jsonl");
   realFs.rmSync(sessionPath, { force: true });
+  realFs.writeFileSync(sessionPath, "{}", "utf8");
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -1097,6 +1099,9 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
     AGENT_ID,
     false,
     true,
+    false,
+    undefined,
+    sessionPath,
   );
   const pathSession = (result: { stdout: string; [key: string]: unknown }) => {
     const payload = JSON.parse(result.stdout);
@@ -1142,6 +1147,7 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
     );
     assert.equal(readAgentState(startup.mailbox)?.lastAck?.accepted, true);
     assert.equal(readAgentState(startup.mailbox)?.agentDefinition, "agent");
+    realFs.rmSync(sessionPath, { force: true });
     assert.equal(realFs.existsSync(sessionPath), false);
 
     support.sessionOpenError = new Error("child session is not materialized");
@@ -2117,7 +2123,10 @@ test("historical session with its inherited label rejects an active managed repr
   const name = `active-session-${randomUUID().slice(0, 8)}`;
   const label = `${name}-agent`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
-  const identity = recoveryIdentity(label);
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(testTmpRoot, `${label}-session.jsonl`),
+  };
   const aliasPath = `${identity.piSessionFile}-alias`;
   const liveIdentity = { ...identity, piSessionFile: aliasPath };
   const mailbox = agentMailboxPath(WORKSPACE, label);
@@ -2344,6 +2353,8 @@ test("concurrent session activation permits one generation", async () => {
 
 test("session assignment reports a pane mismatch from the agent state producer", async () => {
   const label = "agent";
+  const producerMismatchPath = join(testTmpRoot, "producer-mismatch.jsonl");
+  const registeredAgentPath = join(testTmpRoot, "registered-agent.jsonl");
   const mailbox = setAgentEnvironment(label);
   const agent = fakePi();
   registerExtension!(agent.pi as never);
@@ -2351,11 +2362,11 @@ test("session assignment reports a pane mismatch from the agent state producer",
   const paneEnvironment: Record<string, string> = {};
   nativeSessions.set("dddddddd-dddd-4ddd-8ddd-dddddddddddd", {
     id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-    path: "/tmp/producer-mismatch.jsonl",
+    path: producerMismatchPath,
     cwd: "/tmp",
   });
-  realFs.writeFileSync("/tmp/producer-mismatch.jsonl", "{}", "utf8");
-  realFs.writeFileSync("/tmp/registered-agent.jsonl", "{}", "utf8");
+  realFs.writeFileSync(producerMismatchPath, "{}", "utf8");
+  realFs.writeFileSync(registeredAgentPath, "{}", "utf8");
   setLeadEnvironment();
   const lead = fakePi({
     exec: async (command, args) => {
@@ -2512,7 +2523,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       "id",
       {
         action: "continue",
-        session: "/tmp/producer-mismatch.jsonl",
+        session: producerMismatchPath,
         task: "continue the mismatched session",
       },
       undefined,
@@ -2528,8 +2539,8 @@ test("session assignment reports a pane mismatch from the agent state producer",
     agent.events.get("session_shutdown")?.[0]();
     nativeSessions.clear();
     resetAgentMailbox(mailbox);
-    realFs.rmSync("/tmp/producer-mismatch.jsonl", { force: true });
-    realFs.rmSync("/tmp/registered-agent.jsonl", { force: true });
+    realFs.rmSync(producerMismatchPath, { force: true });
+    realFs.rmSync(registeredAgentPath, { force: true });
   }
 });
 
@@ -3381,14 +3392,16 @@ test("session continuation ignores removed secondary session fields", async () =
   }
 });
 
-test("session continuation fails closed on persisted session path errors", async () => {
+test("session continuation fails closed on an unrelated malformed persisted mailbox path", async () => {
   setLeadEnvironment();
   const name = `error-resume-${randomUUID().slice(0, 8)}`;
   const label = `${name}-agent`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
   const sessionPath = join(PI_AGENT_ROOT, `${name}-session.jsonl`);
-  const notDirectoryPath = join(PI_AGENT_ROOT, `${name}-not-directory`);
-  const invalidPersistedPath = `${notDirectoryPath}/session.jsonl`;
+  const invalidPersistedPath = `${join(
+    PI_AGENT_ROOT,
+    `${name}-invalid-session`,
+  )}\u0000/session.jsonl`;
   const session = {
     id: DEFAULT_PI_SESSION_ID,
     path: sessionPath,
@@ -3415,11 +3428,15 @@ test("session continuation fails closed on persisted session path errors", async
     `---\nname: ${name}\n---\npersisted path error test\n`,
   );
   realFs.writeFileSync(sessionPath, "{}", "utf8");
-  realFs.writeFileSync(notDirectoryPath, "not a directory", "utf8");
   nativeSessions.set(session.id, session);
   const staleLabel = `${name}-stale`;
   const staleMailbox = agentMailboxPath(WORKSPACE, staleLabel);
   resetAgentMailbox(staleMailbox);
+  // A regular-file child is ENOENT on Windows and intentionally treated as
+  // stale; the NUL path is the host-independent malformed input rejected by
+  // realpathSync without adding a platform-specific mock seam.
+  // Continuation scans all managed states and fails closed on malformed
+  // persisted paths, even when the malformed state is unrelated to the target.
   writeAgentState(staleMailbox, {
     ...managedState(staleLabel),
     piSessionId: "11111111-1111-4111-8111-111111111111",
@@ -3441,7 +3458,6 @@ test("session continuation fails closed on persisted session path errors", async
       ),
       (error: unknown) => {
         assert.match(String(error), /could not canonicalize/);
-        assert.match(String(error), /ENOTDIR/);
         return true;
       },
     );
@@ -3458,7 +3474,6 @@ test("session continuation fails closed on persisted session path errors", async
     resetAgentMailbox(staleMailbox);
     resetAgentMailbox(startup.mailbox);
     realFs.rmSync(definitionPath, { force: true });
-    realFs.rmSync(notDirectoryPath, { force: true });
     realFs.rmSync(sessionPath, { force: true });
   }
 });

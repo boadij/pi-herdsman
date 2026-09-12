@@ -61,6 +61,7 @@ import support, {
   writeRequest,
   writeResult,
   writeAgentState,
+  testTmpRoot,
 } from "./support.ts";
 
 test("project agent discovery is gated by Pi project trust", async () => {
@@ -829,7 +830,7 @@ test("parent controls only direct children and enforces session allowlists", asy
     ),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
-    piSessionFile: "/tmp/ownership-child.jsonl",
+    piSessionFile: join(testTmpRoot, "ownership-child.jsonl"),
   };
   const activeRequestId = randomUUID();
   const workingChild = {
@@ -840,7 +841,7 @@ test("parent controls only direct children and enforces session allowlists", asy
     ),
     ownerSessionId: parent.piSessionId,
     piSessionId: "11111111-1111-4111-8111-111111111111",
-    piSessionFile: "/tmp/ownership-working-child.jsonl",
+    piSessionFile: join(testTmpRoot, "ownership-working-child.jsonl"),
   };
   const sibling = {
     ...managedState(
@@ -850,7 +851,7 @@ test("parent controls only direct children and enforces session allowlists", asy
     ),
     ownerSessionId: LEAD_SESSION_ID,
     piSessionId: "22222222-2222-4222-8222-222222222222",
-    piSessionFile: "/tmp/ownership-sibling.jsonl",
+    piSessionFile: join(testTmpRoot, "ownership-sibling.jsonl"),
   };
   const mailboxes = [parent, child, workingChild, sibling].map((state) =>
     agentMailboxPath(WORKSPACE, state.agentLabel),
@@ -883,11 +884,12 @@ test("parent controls only direct children and enforces session allowlists", asy
   });
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext(entries);
-  const resumePath = "/tmp/ownership-resume.jsonl";
+  const resumePath = join(testTmpRoot, "ownership-resume.jsonl");
+  realFs.writeFileSync(resumePath, "{}", "utf8");
   nativeSessions.set("ownership-resume", {
     id: "33333333-3333-4333-8333-333333333333",
     path: resumePath,
-    cwd: "/tmp",
+    cwd: testTmpRoot,
     entries: [
       {
         type: "custom",
@@ -969,6 +971,7 @@ test("parent controls only direct children and enforces session allowlists", asy
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
     for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
     for (const [name] of files) realFs.unlinkSync(join(PI_AGENTS_DIR, name));
+    realFs.rmSync(resumePath, { force: true });
   }
 });
 
@@ -1563,7 +1566,7 @@ test("session assignment rejects the controller's active session", async () => {
   nativeSessions.clear();
   const session = {
     id: LEAD_SESSION_ID,
-    path: "/tmp/lead.jsonl",
+    path: join(testTmpRoot, "lead.jsonl"),
     cwd: "/tmp",
     entries: [
       {
@@ -1806,7 +1809,7 @@ test("session assignment fails closed on duplicate live representations", async 
   setLeadEnvironment();
   const session = {
     id: "018f2f2e-7b13-7abc-8def-0123456789ae",
-    path: "/tmp/duplicate-live-session.jsonl",
+    path: join(testTmpRoot, "duplicate-live-session.jsonl"),
     cwd: "/tmp",
     entries: [
       {
@@ -2255,7 +2258,7 @@ test("registered lead exposes only explicit live controls", async () => {
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
-  const steerFile = join("/tmp", `${label}-update.md`);
+  const steerFile = join(testTmpRoot, `${label}-update.md`);
   realFs.writeFileSync(steerFile, "steer evidence");
   let steerSubmitted: RequestRecord | undefined;
   const accepting = fakePi({

@@ -838,7 +838,7 @@ export type SupervisionPeekEvidence = Readonly<{
   recentOutput?: string;
   process?: Readonly<{
     shell_pid: number;
-    foreground_process_group_id: number;
+    foreground_process_group_id?: number;
     foreground_processes?: readonly Readonly<{
       pid?: number;
       argv0?: string;

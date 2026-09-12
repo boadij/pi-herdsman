@@ -1,11 +1,13 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const CHECK_TIMEOUT_MS = 120_000;
 const TERM_GRACE_MS = 1_000;
-const GROUP_GONE_TIMEOUT_MS = 5_000;
-const GROUP_POLL_MS = 25;
+const TASKKILL_TIMEOUT_MS = 1_000;
+const TREE_GONE_TIMEOUT_MS = 5_000;
+const TREE_POLL_MS = 25;
+const isWindows = process.platform === "win32";
 const repoRoot = resolve(fileURLToPath(import.meta.url), "..", "..");
 const testRunnerArgs = [
   "--experimental-test-module-mocks",
@@ -13,9 +15,9 @@ const testRunnerArgs = [
   "--test",
 ];
 
-function groupExists(pid) {
+function processTreeExists(pid) {
   try {
-    process.kill(-pid, 0);
+    process.kill(isWindows ? pid : -pid, 0);
     return true;
   } catch (error) {
     if (error?.code === "ESRCH") return false;
@@ -26,20 +28,22 @@ function groupExists(pid) {
 const sleep = (milliseconds) =>
   new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 
-async function waitForGroupGone(pid, timeoutMs) {
+async function waitForTreeGone(pid, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     try {
-      if (!groupExists(pid)) return true;
-    } catch {
-      return false;
+      if (!processTreeExists(pid)) return true;
+    } catch (error) {
+      // macOS can briefly report EPERM while a killed process group is
+      // disappearing; keep polling so the later ESRCH probe proves it gone.
+      if (error?.code !== "EPERM") return false;
     }
-    await sleep(GROUP_POLL_MS);
+    await sleep(TREE_POLL_MS);
   }
   return false;
 }
 
-function signalGroup(pid, signal) {
+function signalProcessGroup(pid, signal) {
   try {
     process.kill(-pid, signal);
     return true;
@@ -49,28 +53,84 @@ function signalGroup(pid, signal) {
   }
 }
 
-async function terminateGroup(pid) {
+function terminateWindowsProcessTree(pid) {
+  return new Promise((resolvePromise, reject) => {
+    execFile(
+      "taskkill.exe",
+      ["/PID", String(pid), "/T", "/F"],
+      { windowsHide: true, timeout: TASKKILL_TIMEOUT_MS },
+      (error) => (error ? reject(error) : resolvePromise()),
+    );
+  });
+}
+
+function isAlreadyGoneTaskkillError(error) {
+  return (
+    error?.code === 128 &&
+    /(?:not found|no running instance|does not exist)/i.test(
+      `${error.message ?? ""}\n${error.stderr ?? ""}`,
+    )
+  );
+}
+
+async function terminateProcessTree(pid) {
+  if (isWindows) {
+    let forceSent = false;
+    let treeGone = false;
+    let cleanupError;
+    try {
+      await terminateWindowsProcessTree(pid);
+      forceSent = true;
+      treeGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
+    } catch (error) {
+      treeGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
+      if (!treeGone || !isAlreadyGoneTaskkillError(error))
+        cleanupError = error instanceof Error ? error.message : String(error);
+    }
+    return { forceSent, treeGone, cleanupError };
+  }
   let termSent = false;
   let killSent = false;
-  let groupGone = false;
+  let treeGone = false;
   let cleanupError;
   try {
-    termSent = signalGroup(pid, "SIGTERM");
-    groupGone = await waitForGroupGone(pid, TERM_GRACE_MS);
-    if (!groupGone) {
-      killSent = signalGroup(pid, "SIGKILL");
-      groupGone = await waitForGroupGone(pid, GROUP_GONE_TIMEOUT_MS);
+    termSent = signalProcessGroup(pid, "SIGTERM");
+    treeGone = await waitForTreeGone(pid, TERM_GRACE_MS);
+    if (!treeGone) {
+      killSent = signalProcessGroup(pid, "SIGKILL");
+      treeGone = await waitForTreeGone(pid, TREE_GONE_TIMEOUT_MS);
     }
   } catch (error) {
     cleanupError = error instanceof Error ? error.message : String(error);
   }
-  return { termSent, killSent, groupGone, cleanupError };
+  return { termSent, killSent, treeGone, cleanupError };
+}
+
+function noProcessTreeCleanup() {
+  return isWindows
+    ? { forceSent: false, treeGone: true, cleanupError: undefined }
+    : {
+        termSent: false,
+        killSent: false,
+        treeGone: true,
+        cleanupError: undefined,
+      };
+}
+
+function timeoutDiagnostic(label, pid, cleanup, close) {
+  if (cleanup.cleanupError)
+    return `check: process tree ${pid} cleanup failed: ${cleanup.cleanupError}`;
+  if (!cleanup.treeGone)
+    return `check: process tree ${pid} did not disappear after forced termination`;
+  if (close === undefined)
+    return `check: ${label} did not close after forced termination`;
+  return `check: suite deadline exceeded while running ${label}`;
 }
 
 async function awaitClose(closePromise) {
   let timer;
   const timeout = new Promise((resolveTimeout) => {
-    timer = setTimeout(() => resolveTimeout(undefined), GROUP_GONE_TIMEOUT_MS);
+    timer = setTimeout(() => resolveTimeout(undefined), TREE_GONE_TIMEOUT_MS);
   });
   const result = await Promise.race([closePromise, timeout]);
   clearTimeout(timer);
@@ -78,13 +138,6 @@ async function awaitClose(closePromise) {
 }
 
 export async function runTestRunner(args, deadline, label = "tests") {
-  if (process.platform === "win32")
-    return {
-      ok: false,
-      kind: "unsupported-platform",
-      label,
-      diagnostic: "check: POSIX process groups are required",
-    };
   const deferredDeadline = deadline !== null && typeof deadline === "object";
   if (!deferredDeadline && deadline - Date.now() <= 0)
     return {
@@ -98,7 +151,7 @@ export async function runTestRunner(args, deadline, label = "tests") {
   try {
     child = spawn(process.execPath, args, {
       cwd: repoRoot,
-      detached: true,
+      ...(isWindows ? { windowsHide: true } : { detached: true }),
       stdio: "inherit",
     });
   } catch (error) {
@@ -131,13 +184,8 @@ export async function runTestRunner(args, deadline, label = "tests") {
   const spawnFailure = async (error) => {
     const pid = child.pid;
     const cleanup = pid
-      ? await terminateGroup(pid)
-      : {
-          termSent: false,
-          killSent: false,
-          groupGone: true,
-          cleanupError: undefined,
-        };
+      ? await terminateProcessTree(pid)
+      : noProcessTreeCleanup();
     const close = await awaitClose(closePromise);
     return {
       ok: false,
@@ -155,27 +203,31 @@ export async function runTestRunner(args, deadline, label = "tests") {
   };
 
   const finishClosed = async (close) => {
-    const groupRemains = (() => {
-      try {
-        return groupExists(child.pid);
-      } catch {
-        return true;
-      }
-    })();
-    if (groupRemains) {
-      const cleanup = await terminateGroup(child.pid);
+    // ponytail: post-parent Windows descendant accounting needs a Job Object;
+    // timeout-tree cleanup is covered, but a Job Object is not implemented.
+    const treeRemains = isWindows
+      ? false
+      : (() => {
+          try {
+            return processTreeExists(child.pid);
+          } catch {
+            return true;
+          }
+        })();
+    if (treeRemains) {
+      const cleanup = await terminateProcessTree(child.pid);
       return {
         ok: false,
-        kind: cleanup.groupGone
-          ? "leaked-process-group"
-          : "leaked-process-group-cleanup-failed",
+        kind: cleanup.treeGone
+          ? "leaked-process-tree"
+          : "leaked-process-tree-cleanup-failed",
         label,
         pid: child.pid,
         ...cleanup,
         close,
-        diagnostic: cleanup.groupGone
-          ? `check: ${label} left descendants in process group ${child.pid}`
-          : `check: process group ${child.pid} did not disappear after leaked descendant cleanup`,
+        diagnostic: cleanup.treeGone
+          ? `check: ${label} left descendants in process tree ${child.pid}`
+          : `check: process tree ${child.pid} did not disappear after leaked descendant cleanup`,
       };
     }
     if (close.code === 0) return { ok: true, label, pid: child.pid, close };
@@ -192,7 +244,7 @@ export async function runTestRunner(args, deadline, label = "tests") {
   if (!child.pid) {
     const lifecycle = await Promise.race([
       lifecyclePromise,
-      sleep(GROUP_GONE_TIMEOUT_MS).then(() => undefined),
+      sleep(TREE_GONE_TIMEOUT_MS).then(() => undefined),
     ]);
     return spawnFailure(lifecycle?.error);
   }
@@ -218,9 +270,12 @@ export async function runTestRunner(args, deadline, label = "tests") {
   }
   const remaining = testDeadline - Date.now();
   if (remaining <= 0) {
-    const cleanup = await terminateGroup(pid);
+    const cleanup = await terminateProcessTree(pid);
     const close = await awaitClose(closePromise);
-    const cleanupComplete = cleanup.groupGone && close !== undefined;
+    const cleanupComplete =
+      cleanup.cleanupError === undefined &&
+      cleanup.treeGone &&
+      close !== undefined;
     return {
       ok: false,
       kind: cleanupComplete ? "suite-timeout" : "suite-timeout-cleanup-failed",
@@ -229,11 +284,7 @@ export async function runTestRunner(args, deadline, label = "tests") {
       timedOut: true,
       ...cleanup,
       close,
-      diagnostic: !cleanup.groupGone
-        ? `check: process group ${pid} did not disappear after forced termination`
-        : close === undefined
-          ? `check: ${label} did not close after forced termination`
-          : `check: suite deadline exceeded while running ${label}`,
+      diagnostic: timeoutDiagnostic(label, pid, cleanup, close),
     };
   }
   let timeoutId;
@@ -250,9 +301,12 @@ export async function runTestRunner(args, deadline, label = "tests") {
     return finishClosed(outcome.close);
   }
   if (outcome.timedOut) {
-    const cleanup = await terminateGroup(pid);
+    const cleanup = await terminateProcessTree(pid);
     const close = await awaitClose(closePromise);
-    const cleanupComplete = cleanup.groupGone && close !== undefined;
+    const cleanupComplete =
+      cleanup.cleanupError === undefined &&
+      cleanup.treeGone &&
+      close !== undefined;
     return {
       ok: false,
       kind: cleanupComplete ? "suite-timeout" : "suite-timeout-cleanup-failed",
@@ -261,11 +315,7 @@ export async function runTestRunner(args, deadline, label = "tests") {
       timedOut: true,
       ...cleanup,
       close,
-      diagnostic: !cleanup.groupGone
-        ? `check: process group ${pid} did not disappear after forced termination`
-        : close === undefined
-          ? `check: ${label} did not close after forced termination`
-          : `check: suite deadline exceeded while running ${label}`,
+      diagnostic: timeoutDiagnostic(label, pid, cleanup, close),
     };
   }
   clearTimeout(timeoutId);
@@ -291,9 +341,11 @@ if (
     console.error(result.diagnostic);
     if (result.kind === "suite-timeout-cleanup-failed")
       console.error(
-        result.groupGone
-          ? "check: timed-out test runner did not close"
-          : `check: process group ${result.pid} could not be reaped`,
+        result.cleanupError
+          ? `check: process tree ${result.pid} cleanup failed: ${result.cleanupError}`
+          : result.treeGone
+            ? "check: timed-out test runner did not close"
+            : `check: process tree ${result.pid} could not be reaped`,
       );
     process.exitCode = 1;
   }

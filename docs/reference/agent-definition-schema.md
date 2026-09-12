@@ -225,13 +225,18 @@ A body line is a reference only when the complete trimmed line matches:
 @~/home-relative/path
 ```
 
+On Windows, native backslash forms are also accepted, including `@.\relative`,
+`@..\relative`, `@~\home-relative`, rooted paths, drive-rooted paths, and UNC
+paths. References use the host platform's native path classification and
+resolution rules.
+
 Before bundled/global body composition, relative references are resolved from
 the definition file that declared them.
 
 When a new agent generation is constructed:
 
-1. references are processed in body order; `~/` is resolved beneath the
-   current user's home directory;
+1. references are processed in body order; `~/` (or `~\` on Windows) is
+   resolved beneath the current user's home directory;
 2. targets are canonicalized with `realpath`;
 3. each canonical file is included once;
 4. a caller `delegate.files` canonical overlap wins and removes the body copy;

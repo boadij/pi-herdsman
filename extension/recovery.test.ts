@@ -56,6 +56,7 @@ import support, {
   setLeadEnvironment,
   setAgentEnvironment,
   startupExecutor,
+  testTmpRoot,
   truncateModelText,
   agentMailboxPath,
   writeAsk,
@@ -1206,7 +1207,10 @@ test("assignment rollback retains primary failure and actionable cleanup details
 test("recovery requires the official session and retries one failed delivery", async (t) => {
   setLeadEnvironment();
   const label = "recovery-agent";
-  const identity = recoveryIdentity(label);
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(testTmpRoot, `${label}-session.jsonl`),
+  };
   const mailbox = agentMailboxPath(WORKSPACE, label);
   writeFileSync(identity.piSessionFile, "{}", "utf8");
   resetAgentMailbox(mailbox);
@@ -1757,7 +1761,7 @@ test("controller reply submits the normal request and preserves the assignment",
     question: "Choose ALPHA or BETA",
     createdAt: Date.now(),
   });
-  const replyFile = join("/tmp", `${label}-decision.md`);
+  const replyFile = join(testTmpRoot, `${label}-decision.md`);
   realFs.writeFileSync(replyFile, "decision evidence");
   let submitted: RequestRecord | undefined;
   const pi = fakePi({

@@ -652,7 +652,7 @@ function quarantineChiefMessageUnlocked(
       writeFileSync(fd, "quarantined\n", "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      fd = openSync(quarantine, "r");
+      fd = openSync(quarantine, process.platform === "win32" ? "r+" : "r");
     }
     fsyncSync(fd);
     closeSync(fd);

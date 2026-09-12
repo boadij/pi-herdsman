@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import test from "node:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
@@ -49,6 +49,14 @@ import {
 import { herdsmanDataRoot, herdsmanTempRoot, resultPath } from "./storage.ts";
 
 initTheme("dark");
+
+const nativeDisplay = (value: string) => value.split(sep).join("/");
+const escapedRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function assertPosixMode(path: string, expected: number): void {
+  const actual = statSync(path).mode & 0o777;
+  if (process.platform !== "win32") assert.equal(actual, expected);
+}
 
 const lead = (overrides: Record<string, unknown> = {}) => ({
   lead: "session-a",
@@ -2392,8 +2400,8 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     assert.equal(basename(expected), options.requestId);
     assert.equal(extname(basename(expected)), "");
     assert.equal(readFileSync(expected, "utf8"), text);
-    assert.equal(statSync(expected).mode & 0o777, 0o600);
-    assert.equal(statSync(dirname(expected)).mode & 0o777, 0o700);
+    assertPosixMode(expected, 0o600);
+    assertPosixMode(dirname(expected), 0o700);
     assert.match(
       result.content,
       new RegExp(`^Result ref: ${result.resultRef}`),
@@ -2857,6 +2865,21 @@ test("ask and stale custom messages preserve attention semantics and identity bo
 test("agent definition overview uses a compact human hierarchy", (t) => {
   {
     const home = homedir();
+    const projectSource = join(
+      tmpdir(),
+      "project",
+      ".pi",
+      "agents",
+      "overridden.md",
+    );
+    const overrideSource = join(
+      home,
+      ".pi",
+      "agent",
+      "agents",
+      "overridden.md",
+    );
+    const customSource = join(home, ".pi", "agent", "agents", "custom.md");
     const tokens: string[] = [];
     const theme = {
       fg: (token: string, text: string) => {
@@ -2883,8 +2906,8 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
         {
           name: "overridden",
           extensionSource: "/extension/agent-definitions/overridden.md",
-          projectSource: "/project/.pi/agents/overridden.md",
-          overrideSource: `${home}/.pi/agent/agents/overridden.md`,
+          projectSource,
+          overrideSource,
           model: "provider/model",
           thinking: "high",
           skills: [
@@ -2895,14 +2918,14 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
         },
         {
           name: "custom",
-          overrideSource: `${home}/.pi/agent/agents/custom.md`,
+          overrideSource: customSource,
           skills: [],
           agents: [],
         },
       ],
       theme,
     );
-    const output = rendered.render(160).join("\n");
+    const output = nativeDisplay(rendered.render(160).join("\n"));
     assert.match(
       output,
       /<b><customMessageText>bundled<\/customMessageText><\/b>/,
@@ -2922,7 +2945,9 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
     );
     assert.match(
       output,
-      /<muted>project\s+<\/muted><dim>\/project\/.pi\/agents\/overridden\.md<\/dim>/,
+      new RegExp(
+        `<muted>project\\s+<\\/muted><dim>${escapedRegExp(nativeDisplay(projectSource))}<\\/dim>`,
+      ),
     );
     assert.match(
       output,
@@ -2964,6 +2989,15 @@ test("agent definition overview uses a compact human hierarchy", (t) => {
 
 test("Agent definition overview preserves provenance, status, and heading semantics", (t) => {
   {
+    const projectOnly = join(tmpdir(), "project", ".pi", "agents", "only.md");
+    const projectGlobal = join(
+      tmpdir(),
+      "project",
+      ".pi",
+      "agents",
+      "global.md",
+    );
+    const globalSource = join(tmpdir(), "global", "project-global.md");
     const theme = {
       fg: (_token: string, text: string) => text,
       bg: (_token: string, text: string) => text,
@@ -2971,20 +3005,30 @@ test("Agent definition overview preserves provenance, status, and heading semant
     };
     const rendered = renderAgentDefinitionsOverview(
       [
-        { name: "project-only", projectSource: "/project/.pi/agents/only.md" },
+        { name: "project-only", projectSource: projectOnly },
         {
           name: "project-global",
-          projectSource: "/project/.pi/agents/global.md",
-          overrideSource: "/global/project-global.md",
+          projectSource: projectGlobal,
+          overrideSource: globalSource,
         },
       ],
       theme,
     )
       .render(160)
       .join("\n");
-    assert.match(rendered, /project\s+\/project\/\.pi\/agents\/only\.md/);
-    assert.match(rendered, /project\s+\/project\/\.pi\/agents\/global\.md/);
-    assert.match(rendered, /source\s+\/global\/project-global\.md/);
+    const normalized = nativeDisplay(rendered);
+    assert.match(
+      normalized,
+      new RegExp(`project\\s+${escapedRegExp(nativeDisplay(projectOnly))}`),
+    );
+    assert.match(
+      normalized,
+      new RegExp(`project\\s+${escapedRegExp(nativeDisplay(projectGlobal))}`),
+    );
+    assert.match(
+      normalized,
+      new RegExp(`source\\s+${escapedRegExp(nativeDisplay(globalSource))}`),
+    );
   }
 
   {
@@ -3141,13 +3185,24 @@ test("expanded agent definitions show their effective extension policy", () => {
     );
   }
 
-  const homeExtension = `${homedir()}/.pi/agent/npm/node_modules/package/dist/index.js`;
+  const homeExtension = join(
+    homedir(),
+    ".pi",
+    "agent",
+    "npm",
+    "node_modules",
+    "package",
+    "dist",
+    "index.js",
+  );
   assert.match(
-    renderedText(
-      renderAgentDefinitionsOverview(
-        [{ name: "home", extensions: [homeExtension] }],
-        presentationTheme,
-        { expanded: true },
+    nativeDisplay(
+      renderedText(
+        renderAgentDefinitionsOverview(
+          [{ name: "home", extensions: [homeExtension] }],
+          presentationTheme,
+          { expanded: true },
+        ),
       ),
     ),
     /extensions\s+default \+ ~\/\.pi\/agent\/npm\/node_modules\/package\/dist\/index\.js/,
@@ -3190,10 +3245,13 @@ test("agent definition display helpers keep authoritative values untouched", (t)
   {
     const home = homedir();
     assert.equal(
-      displayHomePath(`${home}/.pi/agent/agents/agent.md`),
+      nativeDisplay(
+        displayHomePath(join(home, ".pi", "agent", "agents", "agent.md")),
+      ),
       "~/.pi/agent/agents/agent.md",
     );
-    assert.equal(displayHomePath("/tmp/agent.md"), "/tmp/agent.md");
+    const outside = join(tmpdir(), "agent.md");
+    assert.equal(displayHomePath(outside), outside);
     assert.equal(displayHomePath(`${home}/..config`), "~/..config");
     assert.equal(
       displaySkillName("/Users/example/.agents/skills/ego-browser/SKILL.md"),
@@ -3241,7 +3299,7 @@ test("Agent definition skills remain readable, deduplicated, and width-safe", (t
           tools: ["exec"],
           skills: ["./skills/project/SKILL.md", "./skills/project/SKILL.md"],
           agents: ["scout"],
-          overrideSource: "/tmp/override.md",
+          overrideSource: join(tmpdir(), "override.md"),
         },
       ],
       theme,
@@ -3250,7 +3308,13 @@ test("Agent definition skills remain readable, deduplicated, and width-safe", (t
       .join("\n");
     assert.match(rendered, /^ skills\s+project\s*$/mu);
     assert.doesNotMatch(rendered, /project, project/);
-    const values = ["exec", "project", "scout", "/tmp/override.md"];
+    const overrideSource = join(tmpdir(), "override.md");
+    const values = [
+      "exec",
+      "project",
+      "scout",
+      displayHomePath(overrideSource),
+    ];
     const starts = values.map((value) =>
       rendered
         .split("\n")
