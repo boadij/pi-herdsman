@@ -989,6 +989,10 @@ test("staged fresh assignment bridges pending start through working", async () =
     const beforeAck = await fixture.list();
     assert.equal(fixture.requestObserved, false);
     assert.equal(beforeAck.details.agents[0].state, "settling");
+    const renderedBeforeAck = fixture.widgetValue.render(160).join("\n");
+    assert.match(renderedBeforeAck, /starting/);
+    assert.doesNotMatch(renderedBeforeAck, /settling/);
+    assert.equal(renderedBeforeAck.match(/staged-bridge-agent/g)?.length, 1);
 
     fixture.releasePreSubmitValidation();
     await waitForTestCondition(
@@ -1013,6 +1017,9 @@ test("staged fresh assignment bridges pending start through working", async () =
 
     const settlingRefresh = await fixture.list();
     assert.equal(settlingRefresh.details.agents[0].state, "settling");
+    const renderedAfterAck = fixture.widgetValue.render(160).join("\n");
+    assert.match(renderedAfterAck, /starting/);
+    assert.doesNotMatch(renderedAfterAck, /settling/);
 
     fixture.markWorking(requestId);
     const working = await fixture.list();
@@ -1248,9 +1255,13 @@ test("staged fresh assignment removes a fast completion without observing workin
     assert.equal(requestId, fixture.acceptedRequestIdWritten);
     assert.equal(readAgentState(fixture.mailbox)?.activeRequestId, undefined);
 
+    fixture.releaseInitialStatus();
     const beforeCompletion = await fixture.list();
     assert.equal(beforeCompletion.details.agents[0].state, "settling");
     assert.equal(fixture.workingObservations, 0);
+    const renderedBeforeCompletion = fixture.widgetValue.render(160).join("\n");
+    assert.match(renderedBeforeCompletion, /starting/);
+    assert.doesNotMatch(renderedBeforeCompletion, /settling/);
     fixture.completeFast(requestId);
     await waitForTestCondition(
       () =>

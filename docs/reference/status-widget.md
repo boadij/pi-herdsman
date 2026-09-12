@@ -75,9 +75,9 @@ Example:
 
 The header reports exact non-zero lifecycle states in the order `working`,
 `blocked`, `settling`, `starting`, and `unknown`. `starting` is a
-presentation-only count for assignments whose final label and mailbox claim
-are known but whose authoritative agent startup has not completed. It is not
-mailbox state, control authority, or Running inventory.
+presentation-only count for controller-local assignments that have begun
+startup but have not yet become active or terminal. It is not mailbox state,
+control authority, or Running inventory.
 
 Before the first successful refresh, the header says `unavailable`.
 
@@ -103,10 +103,13 @@ useful room before it is truncated.
 
 Working rows use `● working`, blocked rows use `◐ blocked`, settling rows use
 `◌ settling`, starting rows use `◌ starting`, and unknown rows use `? unknown`.
-Working, settling, and starting animate; blocked and unknown rows are static. A
-starting row is reconciled away
-when authoritative agent evidence replaces it, and is removed on startup
-failure, rollback, repeated session start, or shutdown.
+Working, settling, and starting animate; blocked and unknown rows are static.
+While a controller-local start remains pending, an authoritative `settling`
+row is presented as `starting` so launch and request handoff remain visually
+continuous. `working`, `blocked`, and `unknown` authoritative states are never
+overridden. A starting row is removed when its exact request becomes active or
+terminal, its local runtime is removed, startup fails or rolls back, the
+controller session restarts, or shutdown clears transient state.
 
 `Running` inspection shows every authoritative agent row and excludes
 presentation-only starting rows. A terminal result is followed by cleanup; the
