@@ -23,10 +23,15 @@ herdr integration install pi
 
 ## 2. Start Herdr and Pi
 
-Start Herdr in your project, then run Pi in the Herdr pane:
+Start Herdr in your project:
 
 ```sh
 herdr
+```
+
+Then run Pi in the Herdr pane:
+
+```sh
 pi
 ```
 
