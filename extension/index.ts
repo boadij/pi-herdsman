@@ -7731,6 +7731,11 @@ export default function (pi: ExtensionAPI): void {
       snapshot: import("./presentation.ts").StatusSnapshot,
     ): import("./presentation.ts").StatusSnapshot => {
       if (!pendingStarts.size) return snapshot;
+      const agents = snapshot.agents.map((agent) =>
+        pendingStarts.has(agent.label) && agent.state === "settling"
+          ? { ...agent, state: "starting" as const }
+          : agent,
+      );
       const pendingAgents = [...pendingStarts.values()]
         .filter(
           ({ label }) =>
@@ -7747,7 +7752,7 @@ export default function (pi: ExtensionAPI): void {
       return {
         ...snapshot,
         unavailable: false,
-        agents: [...snapshot.agents, ...pendingAgents],
+        agents: [...agents, ...pendingAgents],
       };
     };
     const reconcilePendingStarts = (
@@ -7756,13 +7761,16 @@ export default function (pi: ExtensionAPI): void {
       for (const [label, pending] of pendingStarts) {
         const agent = snapshot.agents.find((item) => item.label === label);
         const runtime = runtimes.get(label);
-        const active =
+        const resolved =
           pending.requestId !== undefined &&
-          (agent?.state === "working" || agent?.state === "blocked");
-        const requestFinished =
-          pending.requestId !== undefined &&
-          runtime?.activeRequestId !== pending.requestId;
-        if ((active || requestFinished) && pendingStarts.get(label) === pending)
+          (agent?.state === "working" ||
+            agent?.state === "blocked" ||
+            (runtime?.activeRequestId === pending.requestId &&
+              agent !== undefined &&
+              agent?.state !== "settling") ||
+            runtime?.completedRequestId === pending.requestId ||
+            !runtime);
+        if (resolved && pendingStarts.get(label) === pending)
           pendingStarts.delete(label);
       }
     };
