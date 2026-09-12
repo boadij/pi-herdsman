@@ -3398,8 +3398,10 @@ test("session continuation fails closed on an unrelated malformed persisted mail
   const label = `${name}-agent`;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
   const sessionPath = join(PI_AGENT_ROOT, `${name}-session.jsonl`);
-  const notDirectoryPath = join(PI_AGENT_ROOT, `${name}-not-directory`);
-  const invalidPersistedPath = join(notDirectoryPath, "session.jsonl");
+  const invalidPersistedPath = `${join(
+    PI_AGENT_ROOT,
+    `${name}-invalid-session`,
+  )}\u0000/session.jsonl`;
   const session = {
     id: DEFAULT_PI_SESSION_ID,
     path: sessionPath,
@@ -3426,11 +3428,13 @@ test("session continuation fails closed on an unrelated malformed persisted mail
     `---\nname: ${name}\n---\npersisted path error test\n`,
   );
   realFs.writeFileSync(sessionPath, "{}", "utf8");
-  realFs.writeFileSync(notDirectoryPath, "not a directory", "utf8");
   nativeSessions.set(session.id, session);
   const staleLabel = `${name}-stale`;
   const staleMailbox = agentMailboxPath(WORKSPACE, staleLabel);
   resetAgentMailbox(staleMailbox);
+  // A regular-file child is ENOENT on Windows and intentionally treated as
+  // stale; the NUL path is the host-independent malformed input rejected by
+  // realpathSync without adding a platform-specific mock seam.
   // Continuation scans all managed states and fails closed on malformed
   // persisted paths, even when the malformed state is unrelated to the target.
   writeAgentState(staleMailbox, {
@@ -3454,7 +3458,6 @@ test("session continuation fails closed on an unrelated malformed persisted mail
       ),
       (error: unknown) => {
         assert.match(String(error), /could not canonicalize/);
-        assert.match(String(error), /ENOTDIR/);
         return true;
       },
     );
@@ -3471,7 +3474,6 @@ test("session continuation fails closed on an unrelated malformed persisted mail
     resetAgentMailbox(staleMailbox);
     resetAgentMailbox(startup.mailbox);
     realFs.rmSync(definitionPath, { force: true });
-    realFs.rmSync(notDirectoryPath, { force: true });
     realFs.rmSync(sessionPath, { force: true });
   }
 });

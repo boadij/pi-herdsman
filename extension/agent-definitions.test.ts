@@ -830,7 +830,7 @@ test("project body modes, duplicate names, body-file provenance, and child valid
   assert.throws(
     () => discoverAgentDefinitions({ projectRoot: project }),
     new RegExp(
-      `${standalone.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}.*bodyMode`,
+      `${standalone.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*bodyMode`,
     ),
   );
   unlinkSync(standalone);
