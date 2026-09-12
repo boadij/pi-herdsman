@@ -7849,9 +7849,25 @@ export default function (pi: ExtensionAPI): void {
           list.onCancel = () => done(undefined);
           const container = new Container();
           container.addChild(
-            new TuiText(theme.bold(theme.fg("accent", title))),
+            new DynamicBorder((line) => theme.fg("accent", line)),
+          );
+          container.addChild(
+            new TuiText(theme.fg("accent", theme.bold(title)), 1, 0),
           );
           container.addChild(list);
+          container.addChild(
+            new TuiText(
+              theme.fg(
+                "dim",
+                "↑↓ navigate  enter select  escape/ctrl+c cancel",
+              ),
+              1,
+              0,
+            ),
+          );
+          container.addChild(
+            new DynamicBorder((line) => theme.fg("accent", line)),
+          );
           return {
             render: (width: number) => container.render(width),
             invalidate: () => container.invalidate(),
