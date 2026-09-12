@@ -217,6 +217,29 @@ test("resolves whole-line body file references from their definition", () => {
   );
 });
 
+test(
+  "resolves native Windows body file reference forms",
+  { skip: process.platform !== "win32" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-herdsman-windows-body-files-"));
+    const agents = join(root, "agents");
+    const prompts = join(root, "prompts");
+    mkdirSync(agents);
+    mkdirSync(prompts);
+    const definitionPath = join(agents, "custom.md");
+    writeFileSync(join(prompts, "one.md"), "one");
+    writeFileSync(
+      definitionPath,
+      `---\nname: custom\n---\nBefore\n@..\\prompts\\one.md\n@.\\custom.md\n@~\\prompts\\home.md\n@C:\\work\\prompt.md\n@\\rooted\\prompt.md\n@\\\\server\\share\\prompt.md\nAfter\n@example`,
+    );
+    const definition = withPiAgentDir(root, () => discoverAgent("custom"));
+    assert.equal(
+      definition.body,
+      `Before\n@${join(prompts, "one.md")}\n@${join(agents, "custom.md")}\n@${join(homedir(), "prompts", "home.md")}\n@C:\\work\\prompt.md\n@\\rooted\\prompt.md\n@\\\\server\\share\\prompt.md\nAfter\n@example`,
+    );
+  },
+);
+
 test("normalizes home-relative references in project and global definitions", () => {
   const project = mkdtempSync(join(tmpdir(), "pi-herdsman-project-agents-"));
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-global-agents-"));

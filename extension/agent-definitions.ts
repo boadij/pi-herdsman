@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CONFIG_DIR_NAME,
@@ -67,7 +67,10 @@ const SUPPORTED_FIELDS = new Set([
   ...BOOLEAN_CAPABILITY_FIELDS,
   ...ARRAY_FIELDS,
 ]);
-const BODY_FILE_REFERENCE = /^[ \t]*@((?:\/|~\/|\.\.?\/).+?)[ \t]*$/gmu;
+const BODY_FILE_REFERENCE =
+  sep === "\\"
+    ? /^[ \t]*@((?:[\\/]|~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\).+?)[ \t]*$/gmu
+    : /^[ \t]*@((?:\/|~\/|\.\.?\/).+?)[ \t]*$/gmu;
 const BUILTIN_AGENT_DIR = fileURLToPath(
   new URL("./agent-definitions", import.meta.url),
 );
@@ -154,17 +157,11 @@ function resolveBodyFileReferences(
   body: string,
   definitionPath: string,
 ): string {
-  return body.replace(
-    BODY_FILE_REFERENCE,
-    (_match, input: string) =>
-      `@${
-        input.startsWith("~/")
-          ? resolve(homedir(), input.slice(2))
-          : input.startsWith("/")
-            ? input
-            : resolve(dirname(definitionPath), input)
-      }`,
-  );
+  return body.replace(BODY_FILE_REFERENCE, (_match, input: string) => {
+    const homeRelative = input.startsWith("~/") || input.startsWith(`~${sep}`);
+    const expanded = homeRelative ? resolve(homedir(), input.slice(2)) : input;
+    return `@${isAbsolute(expanded) ? expanded : resolve(dirname(definitionPath), expanded)}`;
+  });
 }
 
 function isPlainObject(value: unknown): value is { [key: string]: unknown } {

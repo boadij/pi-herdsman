@@ -247,7 +247,6 @@ test("inspection keeps partial process evidence when pane identity is absent or 
   const processInfo = {
     pane_id: "different-pane",
     shell_pid: 12,
-    foreground_process_group_id: 12,
     foreground_processes: Array.from({ length: 20 }, (_, pid) => ({
       pid: pid + 1,
       argv0: `${"a".repeat(300)}-${pid}`,
@@ -301,6 +300,10 @@ test("inspection keeps partial process evidence when pane identity is absent or 
   assert.equal(snapshot.recentOutput, "recent output");
   assert.equal(snapshot.recentOutputTruncated, false);
   assert.equal(snapshot.process?.pane_id, undefined);
+  assert.equal(
+    "foreground_process_group_id" in (snapshot.process ?? {}),
+    false,
+  );
   assert.equal(snapshot.process?.foreground_processes?.length, 8);
   assert.equal(snapshot.process?.foreground_processes?.[0]?.pid, 1);
   assert.ok(
@@ -1657,7 +1660,6 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
   const processInfo = {
     pane_id: paneId,
     shell_pid: 12,
-    foreground_process_group_id: 12,
     foreground_processes: [{ pid: 12, argv0: "/bin/zsh" }],
   };
   const pi = {
@@ -3575,6 +3577,78 @@ test("running ownership includes shell and foreground process group", () => {
     }),
     false,
   );
+});
+
+test("process ownership handles optional foreground process groups", () => {
+  const shell = {
+    pane_id: "pane-1",
+    shell_pid: 12,
+    foreground_process_group_id: 12,
+    foreground_processes: [{ pid: 12, argv0: "pwsh.exe" }],
+  };
+  const cases = [
+    ["Unix PGID and singleton shell", shell, true],
+    [
+      "Windows-style singleton shell without PGID",
+      { ...shell, foreground_process_group_id: undefined },
+      true,
+    ],
+    [
+      "PGID-only shell proof",
+      { ...shell, foreground_processes: undefined },
+      true,
+    ],
+    [
+      "busy foreground fails closed",
+      { ...shell, foreground_processes: [{ pid: 99, argv0: "node" }] },
+      false,
+    ],
+    [
+      "empty foreground fails closed",
+      { ...shell, foreground_processes: [] },
+      false,
+    ],
+    [
+      "missing foreground proof fails closed",
+      {
+        ...shell,
+        foreground_process_group_id: undefined,
+        foreground_processes: undefined,
+      },
+      false,
+    ],
+    ["shell PID changes", { ...shell, shell_pid: 13 }, false],
+    [
+      "contradictory PGID fails closed",
+      { ...shell, foreground_process_group_id: 99 },
+      false,
+    ],
+  ] as const;
+  for (const [, observed, expected] of cases)
+    assert.equal(sameShellProcessOwner(shell, observed), expected);
+
+  const running = { ...shell, foreground_processes: [{ pid: 99 }] };
+  assert.equal(
+    sameShellProcessOwner(shell, { ...shell, shell_pid: undefined } as any),
+    false,
+  );
+  for (const [expectedProcess, observedProcess, expected] of [
+    [
+      { ...running, foreground_process_group_id: undefined },
+      { ...running, foreground_process_group_id: undefined },
+      true,
+    ],
+    [running, { ...running, foreground_process_group_id: undefined }, false],
+    [{ ...running, foreground_process_group_id: undefined }, running, false],
+    [running, { ...running, foreground_process_group_id: 99 }, false],
+    [{ ...running, pane_id: undefined }, running, false],
+    [running, { ...running, pane_id: "other-pane" }, false],
+    [running, { ...running, shell_pid: 13 }, false],
+  ] as const)
+    assert.equal(
+      sameRunningProcessOwner(expectedProcess, observedProcess),
+      expected,
+    );
 });
 
 test("shell ownership uses captured identity without a shell allowlist", () => {

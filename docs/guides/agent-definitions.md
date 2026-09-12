@@ -219,6 +219,11 @@ Supported forms:
 @~/home-relative.md
 ```
 
+On Windows, the native backslash forms are also supported, including
+`@.\relative.md`, `@..\relative.md`, `@~\home-relative.md`, rooted paths,
+drive-rooted paths, and UNC paths. References use the host platform's native
+path resolution rules.
+
 References are resolved from the Markdown file that declares them.
 
 The bundled definitions are `generalist`, `implementer`, `researcher`,

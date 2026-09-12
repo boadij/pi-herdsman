@@ -26,7 +26,7 @@ async function waitForPids(path: string, timeoutMs: number) {
   throw new Error(`fixture did not publish PIDs within ${timeoutMs} ms`);
 }
 
-test("check timeout kills and reaps a fixture process group", async (t) => {
+test("check timeout kills and reaps the fixture process tree", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "pi-herdsman-check-runner-"));
   const pidPath = join(directory, "pids.json");
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -47,9 +47,7 @@ test("check timeout kills and reaps a fixture process group", async (t) => {
   assert.equal(result.kind, "suite-timeout");
   assert.equal(result.timedOut, true);
   assert.match(result.diagnostic, /suite deadline/);
-  assert.equal(result.termSent, true);
-  assert.equal(result.killSent, true);
-  assert.equal(result.groupGone, true);
+  assert.equal(result.treeGone, true);
   assert.ok(Date.now() - startedAt < 8_000);
 
   for (const pid of [pids.parent, pids.child])
