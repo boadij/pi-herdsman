@@ -1,8 +1,6 @@
 ---
 name: generalist
 description: General-purpose execution agent for scoped tasks that do not fit scout, researcher, implementer, or reviewer
-model: openai-codex/gpt-5.6-luna
-thinking: medium
 agents: ["scout", "researcher"]
 systemPromptMode: replace
 inheritProjectContext: true

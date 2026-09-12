@@ -9,9 +9,10 @@ whose assignment lifecycle is coordinated through the extension mailbox.
 
 ### Agent definition
 
-The **agent definition** selects the agent's model, reasoning policy, tools,
-skills, extensions, prompt body, context inheritance, and allowed direct
-agents.
+The **agent definition** may override the agent's model and reasoning policy,
+and selects its tools, skills, extensions, prompt body, context inheritance,
+and allowed direct agents. Fresh agents otherwise inherit model and thinking
+from their spawning controller session.
 
 Example: `reviewer`.
 
@@ -107,9 +108,11 @@ cleanup path.
 
 The Pi session remains available after agent cleanup. To continue the same
 conversational context, use `continue` with the exact session ID or session path
-returned with the result. This creates a new agent generation, which uses the
-current effective authorized configuration for the saved agent definition. To
-derive a separate context instead, use `fork` on a `delegate` action.
+returned with the result. This creates a new agent generation, which restores
+the saved session's model and thinking unless the current definition
+explicitly overrides either field. To derive a separate context instead, use
+`fork` on a `delegate` action; fork is a fresh delegation and inherits from its
+spawning controller when those fields are omitted.
 
 The identities are therefore:
 

@@ -614,6 +614,7 @@ export function fakePi(
     autoActivateRegisteredTools?: boolean;
     persistMessages?: boolean;
     sessionName?: string;
+    thinkingLevel?: string;
     status?: ExecResult;
   } = {},
 ) {
@@ -668,6 +669,9 @@ export function fakePi(
     },
     getSessionName() {
       return options.sessionName;
+    },
+    getThinkingLevel() {
+      return options.thinkingLevel ?? "medium";
     },
     async exec(
       command: string,

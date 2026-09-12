@@ -54,7 +54,8 @@ for one assignment with a live label; it never assigns work to an existing
 agent. `continue` does not accept `cwd` or `fork`; the cwd comes from the saved
 session. The saved definition is resolved again from current configuration and
 must currently be enabled and authorized; its current effective configuration
-is used for the new generation.
+is used for the new generation. Omitted model and thinking fields restore the
+saved session settings, while explicit definition fields override them.
 Concurrent or otherwise conflicting managed representations of the exact
 session fail closed. The controller's own active Pi session cannot be continued
 to itself; use `delegate` with `fork` when a separate derived context is

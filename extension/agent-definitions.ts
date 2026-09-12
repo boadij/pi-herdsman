@@ -21,15 +21,6 @@ import {
 import { snapshotTextFiles } from "./core.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 
-const THINKING_LEVELS = new Set([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
 export const VALID_THINKING_LEVELS = [
   "off",
   "minimal",
@@ -39,6 +30,7 @@ export const VALID_THINKING_LEVELS = [
   "xhigh",
   "max",
 ] as const;
+const THINKING_LEVELS = new Set(VALID_THINKING_LEVELS);
 const SYSTEM_PROMPT_MODES = new Set(["append", "replace"]);
 type BodyMode = "replace" | "append";
 const BODY_MODES = new Set<BodyMode>(["append", "replace"]);
@@ -692,6 +684,8 @@ export type AgentLaunchOptions = {
   cwd?: string;
   managedAgent?: boolean;
   approveProject?: boolean;
+  inheritedModel?: string;
+  inheritedThinking?: string;
 };
 
 export function agentLaunchArgs(
@@ -704,12 +698,16 @@ export function agentLaunchArgs(
     cwd,
     managedAgent,
     approveProject,
+    inheritedModel,
+    inheritedThinking,
   } = {
     bodyPromptPath: options.bodyPromptPath,
     sharedPromptPath: options.sharedPromptPath,
     cwd: options.cwd ?? process.cwd(),
     managedAgent: options.managedAgent ?? false,
     approveProject: options.approveProject ?? false,
+    inheritedModel: options.inheritedModel,
+    inheritedThinking: options.inheritedThinking,
   };
   const bodyPromptPathForLaunch = agent.body ? bodyPromptPath : undefined;
   const { frontmatter } = agent;
@@ -719,10 +717,10 @@ export function agentLaunchArgs(
     );
   const args: string[] = [];
   if (approveProject) args.push("--approve");
-  const model = configuredModel(frontmatter);
+  const model = configuredModel(frontmatter) ?? inheritedModel;
   if (model) args.push("--model", model);
 
-  const thinking = configuredThinking(agent);
+  const thinking = configuredThinking(agent) ?? inheritedThinking;
   if (thinking !== undefined) {
     args.push("--thinking", thinking);
   }

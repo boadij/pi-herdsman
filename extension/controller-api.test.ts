@@ -1258,6 +1258,9 @@ test("session continuation inherits the saved label without an override", async 
     nativeSessions.set(source.id, source);
     const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
     const pi = fakePi({ exec: startup.exec });
+    const context = fakeContext() as any;
+    context.model = { provider: "continue-provider", id: "continue-model" };
+    context.thinkingLevel = "high";
     registerExtension!(pi.pi as never);
     try {
       const result = await pi.tools[0].execute(
@@ -1269,7 +1272,7 @@ test("session continuation inherits the saved label without an override", async 
         },
         undefined,
         undefined,
-        fakeContext(),
+        context,
       );
       assert.equal(result.details.ok, true, JSON.stringify(result.details));
       assert.equal(result.details.agent, label);
@@ -1281,6 +1284,8 @@ test("session continuation inherits the saved label without an override", async 
         (args) => args[0] === "agent" && args[1] === "start",
       )!;
       assert.ok(start);
+      assert.equal(start.includes("--model"), false);
+      assert.equal(start.includes("--thinking"), false);
       assert.equal(
         start[start.indexOf("--session") + 1],
         realFs.realpathSync(source.path),
@@ -1299,6 +1304,63 @@ test("session continuation inherits the saved label without an override", async 
   assert.equal(first.details.agent, label);
   const reused = await run();
   assert.equal(reused.details.agent, label);
+});
+
+test("session continuation keeps explicit definition execution overrides", async () => {
+  setLeadEnvironment();
+  nativeSessions.clear();
+  const definition = `continue-override-${randomUUID().slice(0, 8)}`;
+  const label = `${definition}-agent`;
+  const definitionPath = join(PI_AGENTS_DIR, `${definition}.md`);
+  const sourceId = randomUUID();
+  const sourcePath = join(
+    tmpdir(),
+    `session-continue-override-${sourceId}.jsonl`,
+  );
+  realFs.writeFileSync(
+    definitionPath,
+    `---\nname: ${definition}\nmodel: explicit/provider\nthinking: low\n---\ncontinue\n`,
+  );
+  realFs.writeFileSync(sourcePath, "{}", "utf8");
+  nativeSessions.set(sourceId, {
+    id: sourceId,
+    path: sourcePath,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: sourceId, definition, label },
+      },
+    ],
+  });
+  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.model = { provider: "controller-provider", id: "controller-model" };
+  context.thinkingLevel = "high";
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "continue", session: sourcePath, task: "continue" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    const start = pi.calls.find(
+      (args) => args[0] === "agent" && args[1] === "start",
+    )!;
+    assert.equal(start[start.indexOf("--model") + 1], "explicit/provider");
+    assert.equal(start[start.indexOf("--thinking") + 1], "low");
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    nativeSessions.clear();
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(definitionPath, { force: true });
+    realFs.rmSync(sourcePath, { force: true });
+  }
 });
 
 test("session continuation rejects label overrides and occupied inherited labels", async () => {
@@ -1687,8 +1749,11 @@ test("agent assignment uses only an explicit exact fork source", async () => {
     (args) =>
       launched.push({ args: [...args], contents: promptLaunchContents(args) }),
   );
-  const pi = fakePi({ exec: startup.exec });
+  const pi = fakePi({ exec: startup.exec, thinkingLevel: "medium" });
   registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.model = { provider: "fork-provider", id: "fork-model" };
+  context.thinkingLevel = "medium";
   try {
     const result = await pi.tools[0].execute(
       "id",
@@ -1701,7 +1766,7 @@ test("agent assignment uses only an explicit exact fork source", async () => {
       },
       undefined,
       undefined,
-      fakeContext(),
+      context,
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     const start = pi.calls.find(
@@ -1709,6 +1774,11 @@ test("agent assignment uses only an explicit exact fork source", async () => {
     )!;
     assert.equal(start[start.indexOf("--fork") + 1], source.path);
     assert.equal(start.includes("--session"), false);
+    assert.equal(
+      start[start.indexOf("--model") + 1],
+      "fork-provider/fork-model",
+    );
+    assert.equal(start[start.indexOf("--thinking") + 1], "medium");
     assert.equal(launched[0].contents.length, 3);
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[0]!, /current fork prompt/);
@@ -1923,6 +1993,7 @@ test("registered delegate ignores an unrelated agent and forwards its child budg
   const label = "minimum-timeout-agent";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({
+    thinkingLevel: "high",
     exec: (command, args, options) => {
       const result = startup.exec(command, args, options);
       if (command === "herdr" && isAgentList(args)) {
@@ -1942,6 +2013,8 @@ test("registered delegate ignores an unrelated agent and forwards its child budg
   registerExtension!(pi.pi as never);
   const originalDateNow = Date.now;
   Date.now = () => 1_000_000;
+  const context = fakeContext() as any;
+  context.model = { provider: "controller-provider", id: "controller-model" };
   try {
     const result = await pi.tools[0].execute(
       "id",
@@ -1954,13 +2027,22 @@ test("registered delegate ignores an unrelated agent and forwards its child budg
       },
       undefined,
       undefined,
-      fakeContext(),
+      context,
     );
     assert.equal(result.details.ok, true);
     const start = pi.calls.findIndex(
       (args) => args[0] === "agent" && args[1] === "start",
     );
     assert.ok(start >= 0);
+    assert.equal(start >= 0 && pi.calls[start]!.includes("--model"), true);
+    assert.equal(
+      pi.calls[start]![pi.calls[start]!.indexOf("--model") + 1],
+      "controller-provider/controller-model",
+    );
+    assert.equal(
+      pi.calls[start]![pi.calls[start]!.indexOf("--thinking") + 1],
+      "high",
+    );
     const childTimeout = Number(
       pi.calls[start]![pi.calls[start]!.indexOf("--timeout") + 1],
     );

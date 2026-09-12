@@ -909,7 +909,7 @@ test("overlays a bundled definition and extends the roster", () => {
     );
     assert.equal(implementer.overrideSource, overridePath);
     assert.equal(implementer.frontmatter.description, "User implementation");
-    assert.equal(implementer.frontmatter.model, "openai-codex/gpt-5.6-luna");
+    assert.equal(implementer.frontmatter.model, undefined);
     assert.equal(implementer.frontmatter.noTools, true);
     assert.equal(implementer.frontmatter.noSkills, true);
     assert.equal(implementer.body, "User prompt");
@@ -1099,6 +1099,53 @@ test("builds exact Pi capability launch arguments", () => {
     "--extension",
     "/extensions/shared.ts",
   ]);
+});
+
+test("resolves model and thinking fallbacks independently at launch", () => {
+  const launch = (frontmatter: Frontmatter, options = {}) =>
+    agentLaunchArgs(
+      { name: "agent", path: "/agent.md", frontmatter, body: "" },
+      {
+        inheritedModel: "inherited/model",
+        inheritedThinking: "high",
+        ...options,
+      },
+    );
+  const suffix = ["--no-context-files", "--no-skills"];
+  for (const [frontmatter, settings] of [
+    [{}, ["--model", "inherited/model", "--thinking", "high"]],
+    [
+      { model: "explicit/model" },
+      ["--model", "explicit/model", "--thinking", "high"],
+    ],
+    [{ thinking: "low" }, ["--model", "inherited/model", "--thinking", "low"]],
+    [{ thinking: false }, ["--model", "inherited/model", "--thinking", "off"]],
+  ] as const)
+    assert.deepEqual(launch(frontmatter), [...settings, ...suffix]);
+  assert.deepEqual(
+    agentLaunchArgs(
+      { name: "agent", path: "/agent.md", frontmatter: {}, body: "" },
+      {},
+    ),
+    ["--no-context-files", "--no-skills"],
+  );
+});
+
+test("bundled definitions leave execution settings to the controller", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-bundled-settings-"));
+  withPiAgentDir(root, () => {
+    for (const name of [
+      "generalist",
+      "implementer",
+      "researcher",
+      "reviewer",
+      "scout",
+    ]) {
+      const definition = discoverAgent(name);
+      assert.equal(definition.frontmatter.model, undefined);
+      assert.equal(definition.frontmatter.thinking, undefined);
+    }
+  });
 });
 
 test("appends the shared prompt after context additions", () => {

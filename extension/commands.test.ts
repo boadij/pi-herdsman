@@ -1584,7 +1584,7 @@ test("Definitions edits standalone definitions through the shared override write
     if (selection++ === 0)
       return options.find((option) => option.includes("docs-reviewer"));
     if (selection === 2) return "Model       old/model";
-    if (selection === 3) return "Use default";
+    if (selection === 3) return "Inherit current session";
     return undefined;
   };
   try {
@@ -1795,7 +1795,7 @@ test("Definitions Back navigates one menu level at a time", async () => {
   }
 });
 
-test("Definitions preserves bundled model and thinking set/default semantics", async () => {
+test("Definitions applies model and thinking overrides independently", async () => {
   for (const scenario of [
     { field: "Model", selected: "new-model", property: "model" },
     { field: "Thinking", selected: "medium", property: "thinking" },
@@ -1836,7 +1836,7 @@ test("Definitions preserves bundled model and thinking set/default semantics", a
         case 4:
           return options.find((option) => option.startsWith(scenario.field));
         case 5:
-          return "Use default";
+          return "Inherit current session";
         default:
           return undefined;
       }
@@ -1847,7 +1847,7 @@ test("Definitions preserves bundled model and thinking set/default semantics", a
       assert.doesNotMatch(content, new RegExp(`^${scenario.property}:`, "m"));
       assert.equal(
         discoverAgent("implementer").frontmatter[scenario.property],
-        scenario.property === "model" ? "openai-codex/gpt-5.6-luna" : "high",
+        undefined,
       );
       assert.ok(prompts.some(({ label }) => label === scenario.field));
     } finally {
@@ -1898,7 +1898,7 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
 
 test("Definitions refreshes the model registry before post-model thinking choices", async () => {
   setLeadEnvironment();
-  const pi = fakePi();
+  const pi = fakePi({ thinkingLevel: "high" });
   registerExtension!(pi.pi as never);
   const command = pi.commandOptions.get("agents");
   const definitionPath = join(PI_AGENTS_DIR, "implementer.md");
@@ -1920,10 +1920,15 @@ test("Definitions refreshes the model registry before post-model thinking choice
   let selection = 0;
   const context = fakeContext() as any;
   context.hasUI = true;
+  context.model = { provider: "current-provider", id: "current-model" };
+  context.thinkingLevel = "high";
   context.modelRegistry = registry;
   context.ui.select = async (_label: string, options: string[]) => {
     switch (selection++) {
       case 0:
+        assert.ok(
+          options.some((option) => option.includes("inherit · current-model")),
+        );
         return options.find((option) => option.includes("implementer"));
       case 1:
         return options.find((option) => option.startsWith("Model"));
@@ -1932,6 +1937,7 @@ test("Definitions refreshes the model registry before post-model thinking choice
       case 3:
         return options.find((option) => option.includes("implementer"));
       case 4:
+        assert.ok(options.includes("Thinking    inherit · high"));
         return options.find((option) => option.startsWith("Thinking"));
       case 5:
         assert.equal(registry.refreshes, 2);
@@ -1953,6 +1959,120 @@ test("Definitions refreshes the model registry before post-model thinking choice
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(definitionPath, { force: true });
+  }
+});
+
+test("Definitions uses the current model for inherited thinking choices", async () => {
+  setLeadEnvironment();
+  const pi = fakePi({ thinkingLevel: "medium" });
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.model = {
+    provider: "current-provider",
+    id: "current-model",
+    reasoning: true,
+  };
+  context.thinkingLevel = "medium";
+  const registry = {
+    refreshes: 0,
+    async refresh() {
+      this.refreshes++;
+    },
+    getAll: () => [],
+    getAvailable: () => [],
+  };
+  context.modelRegistry = registry;
+  let selection = 0;
+  context.ui.select = async (_label: string, options: string[]) => {
+    switch (selection++) {
+      case 0:
+        assert.ok(
+          options.some((option) => option.includes("inherit · current-model")),
+        );
+        return options.find((option) => option.includes("implementer"));
+      case 1:
+        return "Thinking    inherit · medium";
+      case 2:
+        assert.equal(registry.refreshes, 1);
+        assert.ok(options.includes("medium"));
+        assert.equal(options.includes("xhigh"), false);
+        return undefined;
+      default:
+        return undefined;
+    }
+  };
+  try {
+    await command.handler("definitions", context);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("Definitions resolves explicit compact model IDs for thinking choices", async () => {
+  for (const scenario of [
+    {
+      model: "compact-model",
+      models: [{ provider: "provider", id: "compact-model", reasoning: false }],
+      levels: ["off"],
+    },
+    {
+      model: "ambiguous-model",
+      models: [
+        { provider: "one", id: "ambiguous-model", reasoning: false },
+        { provider: "two", id: "ambiguous-model", reasoning: false },
+      ],
+      levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    },
+  ] as const) {
+    setLeadEnvironment();
+    const definitionPath = join(PI_AGENTS_DIR, "implementer.md");
+    realFs.writeFileSync(
+      definitionPath,
+      `---\nname: implementer\nmodel: ${scenario.model}\n---\n`,
+    );
+    const pi = fakePi({ thinkingLevel: "high" });
+    registerExtension!(pi.pi as never);
+    const command = pi.commandOptions.get("agents");
+    const context = fakeContext() as any;
+    context.hasUI = true;
+    context.model = {
+      provider: "current-provider",
+      id: "current-model",
+      reasoning: true,
+    };
+    context.thinkingLevel = "high";
+    context.modelRegistry = {
+      refresh: async () => undefined,
+      getAll: () => scenario.models,
+      getAvailable: () => scenario.models,
+    };
+    let selection = 0;
+    context.ui.select = async (_label: string, options: string[]) => {
+      switch (selection++) {
+        case 0:
+          assert.ok(options.some((option) => option.includes(scenario.model)));
+          return options.find((option) => option.includes("implementer"));
+        case 1:
+          return "Thinking    inherit · high";
+        case 2:
+          assert.deepEqual(options, [
+            "Inherit current session",
+            ...scenario.levels,
+            "Back",
+          ]);
+          return undefined;
+        default:
+          return undefined;
+      }
+    };
+    try {
+      await command.handler("definitions", context);
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      realFs.rmSync(definitionPath, { force: true });
+    }
   }
 });
 

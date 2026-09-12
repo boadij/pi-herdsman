@@ -91,7 +91,15 @@ test("parent delegates two same-definition children with exact ownership", async
   for (const [name, content] of files)
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
   const lifecycle = delegatedLifecycleExecutor(parent);
-  const pi = fakePi({ exec: lifecycle.exec });
+  const starts: string[][] = [];
+  const pi = fakePi({
+    thinkingLevel: "high",
+    exec: (command, args) => {
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+        starts.push([...args]);
+      return lifecycle.exec(command, args);
+    },
+  });
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext([
     {
@@ -104,6 +112,11 @@ test("parent delegates two same-definition children with exact ownership", async
       },
     },
   ]);
+  (context as any).model = {
+    provider: "parent-provider",
+    id: "parent-model",
+  };
+  (context as any).thinkingLevel = "high";
   const mailboxes: string[] = [];
   try {
     for (const handler of pi.events.get("session_start") ?? [])
@@ -125,6 +138,14 @@ test("parent delegates two same-definition children with exact ownership", async
       (mailbox) => readAgentState(mailbox)!.agentLabel,
     );
     assert.equal(new Set(labels).size, 2);
+    assert.equal(starts.length, 2);
+    for (const args of starts) {
+      assert.equal(
+        args[args.indexOf("--model") + 1],
+        "parent-provider/parent-model",
+      );
+      assert.equal(args[args.indexOf("--thinking") + 1], "high");
+    }
     const states = mailboxes.map((mailbox) => readAgentState(mailbox)!);
     assert.deepEqual(
       states.map((state) => state.ownerSessionId),

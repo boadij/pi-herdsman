@@ -206,7 +206,9 @@ Original body source paths are never handed to Pi as system-prompt paths.
 
 Each agent generation builds its system prompt once for its single assignment.
 Session continuation builds a new generation with the current effective
-definition configuration while preserving the saved Pi session context.
+definition configuration while preserving the saved Pi session context. Its
+omitted model and thinking fields restore the saved session settings; explicit
+definition overrides still apply.
 
 ## Result handoff
 

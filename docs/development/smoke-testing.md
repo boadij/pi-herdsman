@@ -70,7 +70,8 @@ Verify:
 - a new agent generation, run ID, request ID, and pane are created;
 - the saved logical label is reused exactly (there is no continuation label override);
 - the saved conversation context is available;
-- the current effective definition configuration is used;
+- the current effective definition configuration is used, with omitted model and
+  thinking fields restoring the saved session settings;
 - exactly one result reaches the owner;
 - cleanup removes the second agent, pane, mailbox, and runtime.
 
@@ -188,7 +189,7 @@ Verify the native Definitions selector shows:
   (`[project] *` means both layers contribute);
 - compact, aligned name/model/thinking columns, including Unicode names;
 - model, thinking, enabled, and details actions for a selected definition;
-- `Use default` for model and thinking;
+- `Inherit current session` for model and thinking;
 - narrow panes remain width-safe.
 
 Structured `agent list` should still retain exact deterministic metadata.
@@ -198,9 +199,10 @@ model, thinking, and enabled state. Confirm that project discovery requires Pi
 project trust and that these edits write global overrides only, not project
 files.
 
-Verify unrelated frontmatter and body remain unchanged, `Use default` removes
-only the selected field, fresh definition delegations and session continuations
-use the current effective value, and running agents are not mutated.
+Verify unrelated frontmatter and body remain unchanged, `Inherit current session`
+removes only the selected field, fresh definition delegations inherit the
+spawning controller's current value, continuations restore the saved session's
+value, and running agents are not mutated.
 
 ### `/agents placement`
 
