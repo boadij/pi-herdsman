@@ -643,6 +643,7 @@ export function fakePi(
     sessionName?: string;
     thinkingLevel?: string;
     status?: ExecResult;
+    allTools?: unknown[] | (() => unknown[]);
   } = {},
 ) {
   const events = new Map<string, ((event: any, ctx: Context) => unknown)[]>();
@@ -693,6 +694,11 @@ export function fakePi(
     },
     setActiveTools(next: string[]) {
       activeTools = [...next];
+    },
+    getAllTools() {
+      return typeof options.allTools === "function"
+        ? options.allTools()
+        : (options.allTools ?? []);
     },
     getSessionName() {
       return options.sessionName;

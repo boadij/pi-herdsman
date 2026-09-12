@@ -2508,7 +2508,7 @@ export function renderAgentStaleMessage(
       : "unknown";
   const lines = options.expanded
     ? [
-        `${label} inactive`,
+        `${label} no qualifying execution progress`,
         "",
         "state: working",
         `inactive: ${duration}`,
@@ -2525,13 +2525,13 @@ export function renderAgentStaleMessage(
           : []),
         ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
         "",
-        "Inactivity is advisory only.",
-        "Inspect before intervening.",
-        "Do not close solely because of inactivity.",
+        "Streaming tool output does not reset progress.",
+        "This advisory is not proof of a hang.",
+        "Inspect once, then leave it alone or close the exact agent only when evidence shows it remains wedged.",
       ]
     : [
         statusLine(theme, "warning", "!", `${label} inactive · ${duration}`),
-        "  working · inactivity is not proof of a hang",
+        "  working · no qualifying execution progress is not proof of a hang",
       ];
   return renderMessageBox(
     new WidthSafeText(lines.join("\n"), 0, 0),

@@ -48,7 +48,11 @@ model metadata, missing activity, a guessed session, or an old agent identity.
 ## Inactivity fields
 
 A qualifying `working` agent may also report `stale`, `inactive_ms`, and
-`last_activity_at`. This advisory does not change the state or prove a hang.
+`last_activity_at`. Qualifying progress includes model streaming and tool
+execution boundaries (`tool_execution_start` and `tool_execution_end`), along
+with the surrounding turn and message boundaries. Streaming tool updates alone
+do not advance `last_activity_at`. This advisory does not change the state or
+prove a hang.
 
 ## See also
 

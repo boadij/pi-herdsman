@@ -178,6 +178,10 @@ truth. Read-only roles may read these artifacts but must not modify them.
 Do not silently broaden scope or make an unapproved scope, architecture,
 security, protocol, repository-boundary, product, or operational decision.
 
+Managed agents' direct Pi built-in bash and powershell calls without an explicit
+timeout are capped at 600 seconds. Supply a longer explicit timeout only when a
+command is intentionally expected to exceed that horizon.
+
 Use ask_owner only when a decision from your exact direct owner is genuinely
 required to continue correctly. ask_owner may include files for supporting
 evidence; complete strict UTF-8 text may be embedded and other files remain

@@ -2852,13 +2852,20 @@ test("ask and stale custom messages preserve attention semantics and identity bo
     renderAgentStaleMessage(stale, { expanded: false }, presentationTheme),
   );
   assert.match(collapsedStale, /! researcher inactive · 10m 17s/);
-  assert.match(collapsedStale, /inactivity is not proof of a hang/);
+  assert.match(
+    collapsedStale,
+    /no qualifying execution progress is not proof of a hang/,
+  );
   assert.doesNotMatch(collapsedStale, /✗/);
   const expandedStale = renderedText(
     renderAgentStaleMessage(stale, { expanded: true }, presentationTheme),
   );
   assert.match(expandedStale, /threshold: 10m/);
-  assert.match(expandedStale, /Inactivity is advisory only/);
+  assert.match(expandedStale, /Streaming tool output does not reset progress/);
+  assert.match(
+    expandedStale,
+    /close the exact agent only when evidence shows it remains wedged/,
+  );
   assert.match(expandedStale, /session: session-id/);
 });
 
