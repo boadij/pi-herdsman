@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/boadij/pi-herdsman/compare/v0.6.1...v0.6.2) (2026-09-12)
+
+
+### Fixes
+
+* detect and bound managed-agent stalls ([#59](https://github.com/boadij/pi-herdsman/issues/59)) ([aeb5716](https://github.com/boadij/pi-herdsman/commit/aeb5716df17d9a89e11d1daaec4fcdbce535adc5))
+* keep agent startup status continuous ([#61](https://github.com/boadij/pi-herdsman/issues/61)) ([10ea89a](https://github.com/boadij/pi-herdsman/commit/10ea89a1970087adf93602fbfce29147950abbf7))
+
 ## [0.6.1](https://github.com/boadij/pi-herdsman/compare/v0.6.0...v0.6.1) (2026-09-12)
 
 
