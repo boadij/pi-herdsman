@@ -83,7 +83,8 @@ Request:
 No selectors or other fields are accepted. A successful result includes the
 effective `agent_definitions` roster and visible agent records.
 
-Each actionable live agent record includes:
+Each valid durable generation remains visible, including unresolved `unknown`
+and proven `lost` records. Each actionable live agent record includes:
 
 | Field                                                           | Meaning                                                                                                                           |
 | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -104,8 +105,8 @@ correlated pending `ask_owner` may list `reply`; exact direct ownership may list
 `close`. `available_actions` never lists `delegate` or `continue`: these are
 controller operations, not controls on an already-live agent. An agent cannot
 receive a second assignment. Descendant visibility does not grant control. Lead orphan
-recovery may expose only `close`. Unknown and recovery-only records are
-non-actionable. Every operation rechecks identity, ownership, mailbox state, and
+recovery may expose only `close`. Proven `lost` direct records expose `close`
+only; unknown records remain non-actionable. Every operation rechecks identity, ownership, mailbox state, and
 lifecycle immediately before mutation.
 The public record does not expose `steerable`.
 
@@ -207,7 +208,8 @@ Only `action` and `agent` are accepted. Close requires exact direct ownership,
 or the lead-only evidence-backed orphan recovery condition. Closing abandons a
 pending owner question; closing a delegating agent cascades through directly
 owned agents first. Cleanup remains fail-closed when exact identity or ownership
-cannot be proved.
+cannot be proved. A direct owner may also close a proven `lost` generation
+after a fresh absence proof; `unknown` presence remains non-actionable.
 
 ## Result delivery and errors
 

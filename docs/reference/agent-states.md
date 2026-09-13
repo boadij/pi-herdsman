@@ -5,12 +5,13 @@
 The public state is a safe-control projection built from live lifecycle and
 durable assignment/convergence evidence. It is not a raw herdr lifecycle string.
 
-| State      | Meaning                                                                                              |
-| ---------- | ---------------------------------------------------------------------------------------------------- |
-| `working`  | An assignment is active.                                                                             |
-| `blocked`  | Active assignment waits for owner attention or another condition.                                    |
-| `settling` | Assignment handoff, completion/result delivery, launch, direct-agent gate, or cleanup is converging. |
-| `unknown`  | Exact safe control state cannot be proved.                                                           |
+| State      | Meaning                                                                                                  |
+| ---------- | -------------------------------------------------------------------------------------------------------- |
+| `working`  | An assignment is active.                                                                                 |
+| `blocked`  | Active assignment waits for owner attention or another condition.                                        |
+| `settling` | Assignment handoff, completion/result delivery, launch, direct-agent gate, or cleanup is converging.     |
+| `unknown`  | Exact safe control state cannot be proved.                                                               |
+| `lost`     | Physical execution is proven absent before a durable terminal result; the assignment remains unresolved. |
 
 ## `available_actions` is authoritative
 
@@ -26,6 +27,8 @@ mutation.
 A delegating agent may be blocked while direct agent work is pending and still accept
 steering when `steer` is listed. Descendant visibility does not imply authority;
 records outside the controller's direct ownership can have an empty action list.
+A direct owner has `close` only for a proven `lost` record. `unknown` records
+remain fail-closed with no actions.
 
 ## `blocked` and owner questions
 
@@ -44,6 +47,10 @@ Unknown is intentional fail-closed behavior. Unreadable, oversized, malformed,
 or validation-failing mailbox state is reported with a bounded diagnostic and an
 empty `available_actions` list. Do not substitute pane idleness, elapsed time,
 model metadata, missing activity, a guessed session, or an old agent identity.
+
+`lost` is different: a coherent Herdr inventory proves the expected pane,
+session, and run-scoped alias are absent. It is not completion or task failure;
+use direct-owner `close` to abandon the unresolved generation.
 
 ## Inactivity fields
 

@@ -37,6 +37,7 @@ import support, {
   fakePi,
   fakeAgentContext,
   isAgentList,
+  isApiSnapshot,
   managedState,
   nativeSessions,
   agentControllerExecutor,
@@ -177,6 +178,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     lead.messageRenderers.map(({ customType }) => customType).sort(),
     [
       "pi-herdsman-agent-ask",
+      "pi-herdsman-agent-lost",
       "pi-herdsman-agent-result",
       "pi-herdsman-agent-stale",
       "pi-herdsman-stop-summary",
@@ -1394,7 +1396,7 @@ test("malformed definitions do not abort ordinary lead startup", async () => {
   try {
     await pi.events.get("session_start")![0](undefined, context);
     assert.ok(
-      pi.calls.some((args) => isAgentList(args)),
+      pi.calls.some((args) => isApiSnapshot(args)),
       "agent recovery must still run after roster discovery fails",
     );
     assert.ok(

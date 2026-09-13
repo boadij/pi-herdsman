@@ -32,6 +32,7 @@ import support, {
   fakePi,
   fakeAgentContext,
   herdrAlias,
+  isApiSnapshot,
   isAgentList,
   isPaneList,
   managedState,
@@ -975,7 +976,7 @@ test("parent controls only direct children and enforces session allowlists", asy
   }
 });
 
-test("list exposes only agents with exact mailbox and Pi identities", async () => {
+test("list retains durable agents whose physical identity is not exact", async () => {
   setLeadEnvironment();
   const validLabel = "valid-list-agent";
   const invalidLabel = "invalid-list-agent";
@@ -1017,49 +1018,66 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "--version")
         return { stdout: "0.8.0", stderr: "", code: 0 };
-      if (command === "herdr" && args[0] === "agent" && args[1] === "list")
+      if (command === "herdr" && isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
-              workspace_id: WORKSPACE,
-              agents: [
-                {
-                  name: "unmanaged-agent",
-                  agent_status: "idle",
-                  workspace_id: WORKSPACE,
-                  pane_id: "unmanaged-pane",
-                  cwd: "/tmp",
-                },
-                {
-                  name: herdrAlias(invalidLabel),
-                  agent_status: "idle",
-                  workspace_id: WORKSPACE,
-                  pane_id: invalid.paneId,
-                  cwd: "/tmp",
-                  agent_session: {
-                    source: "herdr:pi",
-                    agent: "pi",
-                    kind: "id",
-                    value: invalid.piSessionId,
+              snapshot: {
+                agents: [
+                  {
+                    name: "unmanaged-agent",
+                    agent_status: "idle",
+                    workspace_id: WORKSPACE,
+                    pane_id: "unmanaged-pane",
+                    cwd: "/tmp",
                   },
-                },
-                {
-                  name: herdrAlias(validLabel),
-                  agent_status: "idle",
-                  workspace_id: WORKSPACE,
-                  pane_id: valid.paneId,
-                  cwd: "/tmp",
-                  agent_session: {
-                    source: "herdr:pi",
-                    agent: "pi",
-                    kind: "id",
-                    value: valid.piSessionId,
+                  {
+                    name: herdrAlias(invalidLabel),
+                    agent_status: "idle",
+                    workspace_id: WORKSPACE,
+                    pane_id: invalid.paneId,
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: DEFAULT_PI_SESSION_ID,
+                    },
                   },
-                  agent_definition: "wrong-herdr-definition",
-                },
-              ],
-              agent_definitions: [],
+                  {
+                    name: herdrAlias(validLabel),
+                    agent_status: "idle",
+                    workspace_id: WORKSPACE,
+                    pane_id: valid.paneId,
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: valid.piSessionId,
+                    },
+                    agent_definition: "wrong-herdr-definition",
+                  },
+                ],
+                panes: [
+                  {
+                    pane_id: "unmanaged-pane",
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                  },
+                  {
+                    pane_id: invalid.paneId,
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                  },
+                  {
+                    pane_id: valid.paneId,
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                  },
+                ],
+              },
             },
           }),
           stderr: "",
@@ -1114,10 +1132,12 @@ test("list exposes only agents with exact mailbox and Pi identities", async () =
       agents
         .filter((agent) => typeof agent.agent === "string")
         .map((agent) => agent.agent),
-      [validLabel],
+      [invalidLabel, validLabel],
     );
-    assert.equal(agents[0].agent_definition, "agent");
-    assert.equal(agents[0].managed, true);
+    assert.equal(agents[0].state, "unknown");
+    assert.deepEqual(agents[0].available_actions, []);
+    assert.equal(agents[1].agent_definition, "agent");
+    assert.equal(agents[1].managed, true);
   } finally {
     nativeSessions.delete(invalid.piSessionId);
     nativeSessions.delete(valid.piSessionId);
@@ -2213,6 +2233,90 @@ test("fresh assignments do not reset an unacknowledged stale mailbox", async () 
   automaticPi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(automaticStartup.mailbox);
   resetAgentMailbox(explicitMailbox);
+});
+
+test("request-only mailbox remnants reserve their labels", async () => {
+  setLeadEnvironment();
+  const explicitLabel = "request-only-explicit";
+  const explicitMailbox = agentMailboxPath(WORKSPACE, explicitLabel);
+  const explicitRequestId = randomUUID();
+  writeRequest(explicitMailbox, {
+    version: 4,
+    runId: AGENT_ID,
+    requestId: explicitRequestId,
+    ownerSessionId: LEAD_SESSION_ID,
+    workspaceId: WORKSPACE,
+    agentLabel: explicitLabel,
+    paneId: "request-only-pane",
+    kind: "task",
+    text: "retain this request-only remnant",
+    createdAt: Date.now(),
+  });
+  const explicitStartup = startupExecutor(
+    explicitLabel,
+    () => DEFAULT_PI_SESSION_ID,
+  );
+  const explicitPi = fakePi({ exec: explicitStartup.exec });
+  registerExtension!(explicitPi.pi as never);
+  const explicit = await explicitPi.tools[0].execute(
+    "id",
+    {
+      action: "delegate",
+      definition: "agent",
+      label: explicitLabel,
+      task: "must not reuse a request-only mailbox",
+    },
+    undefined,
+    undefined,
+    fakeContext(),
+  );
+  assert.equal(explicit.details.error.category, "agent_label_exists");
+  assert.equal(
+    explicitPi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+    false,
+  );
+  explicitPi.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(explicitMailbox);
+
+  setLeadEnvironment();
+  const automaticLabel = "agent";
+  const automaticMailbox = agentMailboxPath(WORKSPACE, automaticLabel);
+  const automaticRequestId = randomUUID();
+  writeRequest(automaticMailbox, {
+    version: 4,
+    runId: AGENT_ID,
+    requestId: automaticRequestId,
+    ownerSessionId: LEAD_SESSION_ID,
+    workspaceId: WORKSPACE,
+    agentLabel: automaticLabel,
+    paneId: "request-only-pane",
+    kind: "task",
+    text: "retain this request-only remnant",
+    createdAt: Date.now(),
+  });
+  const automaticStartup = startupExecutor(
+    `${automaticLabel}-2`,
+    () => DEFAULT_PI_SESSION_ID,
+  );
+  const automaticPi = fakePi({ exec: automaticStartup.exec });
+  registerExtension!(automaticPi.pi as never);
+  const automatic = await automaticPi.tools[0].execute(
+    "id",
+    {
+      action: "delegate",
+      definition: "agent",
+      task: "choose the next safe label",
+    },
+    undefined,
+    undefined,
+    fakeContext(),
+  );
+  assert.equal(automatic.details.ok, true, JSON.stringify(automatic.details));
+  assert.equal(automatic.details.agent, `${automaticLabel}-2`);
+  assert.ok(readRequest(automaticMailbox, automaticRequestId));
+  automaticPi.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(automaticStartup.mailbox);
+  resetAgentMailbox(automaticMailbox);
 });
 
 test("assignment retains its request when acknowledgement never arrives", async () => {

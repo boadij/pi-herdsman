@@ -34,7 +34,7 @@ import type { SupervisionSnapshot } from "./supervision.ts";
 import { herdsmanTempRoot, resultPath, resultRef } from "./storage.ts";
 
 export type AgentLifecycleState =
-  "working" | "blocked" | "settling" | "starting" | "unknown";
+  "working" | "blocked" | "settling" | "starting" | "unknown" | "lost";
 export interface StatusAgent {
   label: string;
   state: AgentLifecycleState;
@@ -173,6 +173,7 @@ const STATE = {
   settling: "◌ settling",
   starting: "◌ starting",
   unknown: "? unknown",
+  lost: "× lost",
 } as const;
 type StateLabel = (typeof STATE)[keyof typeof STATE];
 const STATE_COLOR: Record<StateLabel, string> = {
@@ -181,6 +182,7 @@ const STATE_COLOR: Record<StateLabel, string> = {
   [STATE.settling]: "accent",
   [STATE.starting]: "accent",
   [STATE.unknown]: "warning",
+  [STATE.lost]: "error",
 };
 
 export function compactModelToken(model: string | undefined): string {
@@ -428,6 +430,7 @@ export function formatStatusCounts(agents: readonly StatusAgent[]): string {
     settling: agents.filter((agent) => agent.state === "settling").length,
     starting: agents.filter((agent) => agent.state === "starting").length,
     unknown: agents.filter((agent) => agent.state === "unknown").length,
+    lost: agents.filter((agent) => agent.state === "lost").length,
   };
   return Object.entries(counts)
     .filter(([, count]) => count > 0)
@@ -2532,6 +2535,43 @@ export function renderAgentStaleMessage(
     : [
         statusLine(theme, "warning", "!", `${label} inactive · ${duration}`),
         "  working · no qualifying execution progress is not proof of a hang",
+      ];
+  return renderMessageBox(
+    new WidthSafeText(lines.join("\n"), 0, 0),
+    theme,
+    options.outputPad ?? 0,
+  );
+}
+
+export function renderAgentLostMessage(
+  message: { details?: unknown },
+  options: { expanded?: boolean; outputPad?: number },
+  theme: any,
+): TuiBox {
+  const details =
+    message.details && typeof message.details === "object"
+      ? (message.details as Record<string, unknown>)
+      : {};
+  const label = value(details.agentLabel) || "agent";
+  const lines = options.expanded
+    ? [
+        `${label} disappeared before producing a durable result`,
+        "",
+        "state: lost",
+        "The assignment remains unresolved; loss is not completion or task failure.",
+        ...(value(details.requestId)
+          ? [`request: ${value(details.requestId)}`]
+          : []),
+        ...(value(details.piSessionId)
+          ? [`session: ${value(details.piSessionId)}`]
+          : []),
+        ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
+        "",
+        "Close this lost generation before replacing or continuing it.",
+      ]
+    : [
+        statusLine(theme, "error", "×", `${label} lost`),
+        "  assignment remains unresolved · close before replacing or continuing",
       ];
   return renderMessageBox(
     new WidthSafeText(lines.join("\n"), 0, 0),

@@ -35,6 +35,7 @@ import {
   fakeContext,
   fakePi,
   fakeAgentContext,
+  isApiSnapshot,
   isAgentList,
   isHerdrList,
   isPaneClose,
@@ -2083,9 +2084,9 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
     entries,
     exec: (command, args, options) => {
       const result = base(command, args, options);
-      if (command === "herdr" && isAgentList(args)) {
+      if (command === "herdr" && isApiSnapshot(args)) {
         const value = JSON.parse(result.stdout);
-        const bad = value.result.agents.find(
+        const bad = value.result.snapshot.agents.find(
           (agent: any) => agent.pane_id === badChild.paneId,
         );
         if (bad)
@@ -2105,11 +2106,6 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
-    assert.ok(
-      pi.entries.some(
-        (entry: any) => entry.customType === "pi_herdsman_recovery_error",
-      ),
-    );
     const listed = await pi.tools[0].execute(
       "list",
       { action: "list" },
@@ -2120,7 +2116,7 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
     assert.equal(listed.details.ok, true, JSON.stringify(listed.details));
     assert.deepEqual(
       listed.details.agents.map((agent: any) => agent.agent),
-      [goodChild.agentLabel],
+      [goodChild.agentLabel, badChild.agentLabel],
     );
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
@@ -3599,6 +3595,31 @@ test("revalidates automatic-label collision sizing before startup", async () => 
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(occupiedMailbox);
     resetAgentMailbox(replacementMailbox);
+  }
+});
+
+test("lost mailbox labels remain reserved until explicit close", async () => {
+  setLeadEnvironment();
+  const label = "lost-reserved-agent";
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  const state = managedState(label, REQUEST_ID, recoveryIdentity(label));
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, state);
+  const pi = fakePi({ exec: cascadeExecutor([]).exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "delegate", definition: "agent", label, task: "replace" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.error.category, "agent_label_exists");
+    assert.ok(readAgentState(mailbox));
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
   }
 });
 

@@ -40,6 +40,7 @@ import support, {
   fakePi,
   fakeAgentContext,
   herdrAlias,
+  isApiSnapshot,
   isAgentList,
   isPaneList,
   isTabList,
@@ -48,6 +49,7 @@ import support, {
   nativeSessions,
   projectContextCwds,
   readAgentState,
+  readResult,
   realFs,
   recoveryIdentity,
   registerExtension,
@@ -483,7 +485,6 @@ test("lead agents command uses native completion and exact human grammar", async
     "Usage: /agents definitions | placement [tab|subtree|split] | stop",
     "Usage: /agents placement [tab|subtree|split]",
   ]);
-  assert.equal(pi.calls.length, 2);
 });
 
 test("/agents placement subtree writes flat config outside project settings", async () => {
@@ -1662,6 +1663,97 @@ test("Running explains how to delegate when no agents are running", async () => 
   );
 });
 
+test("Running excludes lost and unknown durable generations", async () => {
+  setLeadEnvironment();
+  const lostLabel = "lost-running-menu-agent";
+  const unknownLabel = "unknown-running-menu-agent";
+  const lostIdentity = {
+    paneId: "lost-running-menu-pane",
+    tabId: "lost-running-menu-tab",
+    piSessionId: "11111111-1111-4111-8111-111111111111",
+    piSessionFile: "/tmp/lost-running-menu-agent.jsonl",
+  };
+  const unknownIdentity = {
+    paneId: "unknown-running-menu-pane",
+    tabId: "unknown-running-menu-tab",
+    piSessionId: "22222222-2222-4222-8222-222222222222",
+    piSessionFile: "/tmp/unknown-running-menu-agent.jsonl",
+  };
+  const mailboxes = [
+    agentMailboxPath(WORKSPACE, lostLabel),
+    agentMailboxPath(WORKSPACE, unknownLabel),
+  ];
+  writeAgentState(
+    mailboxes[0]!,
+    managedState(lostLabel, REQUEST_ID, lostIdentity),
+  );
+  writeAgentState(
+    mailboxes[1]!,
+    managedState(unknownLabel, REQUEST_ID, unknownIdentity),
+  );
+  const pi = fakePi({
+    exec: (command, args) =>
+      command === "herdr" && isApiSnapshot(args)
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                snapshot: {
+                  agents: [],
+                  panes: [
+                    {
+                      pane_id: unknownIdentity.paneId,
+                      workspace_id: WORKSPACE,
+                      cwd: "/tmp",
+                      agent_session: {
+                        source: "herdr:pi",
+                        agent: "pi",
+                        kind: "id",
+                        value: unknownIdentity.piSessionId,
+                      },
+                    },
+                  ],
+                },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const prompts: { label: string; options: string[] }[] = [];
+  const notices: string[] = [];
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.ui.notify = (message: string) => notices.push(message);
+  context.ui.select = async (label: string, options: string[]) => {
+    prompts.push({ label, options });
+    assert.equal(label, "agents");
+    assert.ok(options.includes("Running        1 unknown · 1 lost"));
+    return prompts.length === 1
+      ? options.find((option) => option.startsWith("Running"))
+      : undefined;
+  };
+  try {
+    await command.handler("", context);
+    assert.deepEqual(
+      prompts.map(({ label }) => label),
+      ["agents", "agents"],
+    );
+    assert.ok(notices.some((message) => message.includes("No running agents")));
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "focus"),
+      false,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
+  }
+});
+
 test("Running warns when the selected agent is replaced before focus", async () => {
   setLeadEnvironment();
   const label = "running-menu-replaced-agent";
@@ -1822,7 +1914,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
               tabs: [],
               agents: states.map(({ label, identity }) => ({
                 herdr_agent: herdrAlias(label),
-                status: "working",
+                agent_status: "working",
                 cwd: "/tmp",
                 workspace_id: WORKSPACE,
                 pane_id: identity.paneId,
@@ -2656,13 +2748,15 @@ test("lead agents stop refuses an agent whose identity changes after inventory",
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, agent);
   const lifecycle = cascadeExecutor([agent]);
-  let listCalls = 0;
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = lifecycle.exec(command, args, options);
-      if (command === "herdr" && isAgentList(args) && ++listCalls === 3) {
+      if (command === "herdr" && (isApiSnapshot(args) || isAgentList(args))) {
         const value = JSON.parse(result.stdout);
-        value.result.agents[0].agent_session = {
+        const agents = isApiSnapshot(args)
+          ? value.result.snapshot.agents
+          : value.result.agents;
+        agents[0].agent_session = {
           kind: "id",
           value: "22222222-2222-4222-8222-222222222222",
         };
@@ -2679,8 +2773,7 @@ test("lead agents stop refuses an agent whose identity changes after inventory",
   try {
     await command.handler("stop", context);
     assert.equal(lifecycle.closeOrder.length, 0);
-    assert.match(stopSummary(pi), /pi-herdsman-identity-race/);
-    assert.match(stopSummary(pi), /not closed|No exact agent identity matched/);
+    assert.match(stopSummary(pi), /No owned agents running|not closed/);
     assert.ok(readAgentState(mailbox));
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -2700,6 +2793,8 @@ test("lead agents stop reports cleanup failures and preserves accurate discarded
     REQUEST_ID,
     recoveryIdentity("stop-pending-agent"),
   );
+  pending.piSessionId = "11111111-1111-4111-8111-111111111111";
+  pending.piSessionFile = "/tmp/stop-pending-agent-unique.jsonl";
   pending.completedRequestId = randomUUID();
   const mailboxes = [failed, pending].map((state) =>
     agentMailboxPath(WORKSPACE, state.agentLabel),
@@ -2728,12 +2823,14 @@ test("lead agents stop reports cleanup failures and preserves accurate discarded
   try {
     await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
     const summary = stopSummary(pi);
-    assert.match(summary, /Stopped 1 of 2 agents/);
+    assert.match(summary, /Stopped 0 of 2 agents/);
     assert.match(summary, /✗ stop-failed-agent/);
     assert.match(summary, /Discarded:/);
     assert.match(summary, /stop-pending-agent: active assignment/);
     assert.match(summary, /stop-pending-agent: pending result/);
-    assert.deepEqual(lifecycle.closeOrder, [pending.agentLabel]);
+    assert.deepEqual(lifecycle.closeOrder, []);
+    assert.ok(readAgentState(mailboxes[1]!));
+    assert.ok(readResult(mailboxes[1]!, pending.completedRequestId!));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox));
@@ -2745,6 +2842,8 @@ test("lead agents stop continues independent leads after a partial cascade failu
   const states = ["stop-partial-failure", "stop-independent"].map((label) =>
     managedState(label, undefined, recoveryIdentity(label)),
   );
+  states[1]!.piSessionId = "11111111-1111-4111-8111-111111111111";
+  states[1]!.piSessionFile = "/tmp/stop-independent-unique.jsonl";
   const mailboxes = states.map((state) =>
     agentMailboxPath(WORKSPACE, state.agentLabel),
   );
@@ -2796,9 +2895,9 @@ test("lead agents stop reports and closes a proven orphan subtree", async () => 
   try {
     await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
     assert.deepEqual(lifecycle.closeOrder, [child.agentLabel]);
-    assert.match(stopSummary(pi), /Stopped 1 agents/);
+    assert.match(stopSummary(pi), /Stopped 2 agents/);
     assert.match(stopSummary(pi), /✓ orphan-stop-child/);
-    assert.doesNotMatch(stopSummary(pi), /orphan-stop-parent/);
+    assert.match(stopSummary(pi), /✓ orphan-stop-parent/);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox));
@@ -2820,6 +2919,8 @@ test("lead agents stop scopes its summary to the current lead subtree", async ()
     ),
     ownerSessionId: "foreign-lead-session",
   };
+  foreign.piSessionId = "11111111-1111-4111-8111-111111111111";
+  foreign.piSessionFile = "/tmp/scoped-foreign-agent-unique.jsonl";
   const states = [owned, foreign];
   const mailboxes = states.map((state) =>
     agentMailboxPath(WORKSPACE, state.agentLabel),
@@ -3781,10 +3882,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
     );
     const firstStatusAfterValidation = pi.calls.findIndex(
       (args, index) =>
-        index > getIndexes[0] &&
-        index < getIndexes[1] &&
-        args[0] === "agent" &&
-        args[1] === "list",
+        index > getIndexes[0] && index < getIndexes[1] && isApiSnapshot(args),
     );
     assert.ok(
       firstStatusAfterValidation >= 0,

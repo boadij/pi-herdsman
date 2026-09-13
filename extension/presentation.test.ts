@@ -661,8 +661,11 @@ test("status projection renders the complete stable tree with aligned columns", 
     );
     assert.equal(compactModelToken("provider/model"), "model");
     assert.equal(
-      formatStatusCounts(agents),
-      "1 working · 1 blocked · 1 settling · 1 starting · 1 unknown",
+      formatStatusCounts([
+        ...agents,
+        { label: "lost", definition: "agent", state: "lost" as const },
+      ]),
+      "1 working · 1 blocked · 1 settling · 1 starting · 1 unknown · 1 lost",
     );
     const column = (line: string, token: string) => {
       const index = line.indexOf(token);
@@ -687,6 +690,7 @@ test("status projection renders the complete stable tree with aligned columns", 
       ["settling", "accent", "◌ settling"],
       ["starting", "accent", "◌ starting"],
       ["unknown", "warning", "? unknown"],
+      ["lost", "error", "× lost"],
     ] as const;
     const rows = buildStatusRows(
       expected.map(([state], index) => ({
