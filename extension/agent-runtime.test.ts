@@ -2620,7 +2620,7 @@ test("session agent identity reads the session-wide entry array", () => {
   );
 });
 
-test("automatic compaction retires an active managed session exactly once", async () => {
+test("retired active sessions suppress threshold compaction until completion", async () => {
   const mailbox = setAgentEnvironment("retirement-agent");
   const agent = fakePi();
   registerExtension!(agent.pi as never);
@@ -2656,7 +2656,22 @@ test("automatic compaction retires an active managed session exactly once", asyn
     ),
     true,
   );
-  assert.equal(compact({ reason: "threshold" }, context), undefined);
+  assert.deepEqual(compact({ reason: "threshold" }, context), {
+    cancel: true,
+  });
+  assert.deepEqual(compact({ reason: "threshold" }, context), {
+    cancel: true,
+  });
+  assert.equal(
+    context.sessionManager
+      .getEntries()
+      .filter(
+        (entry: any) =>
+          entry?.type === "custom" &&
+          entry.customType === "pi-herdsman-agent-context-retired",
+      ).length,
+    1,
+  );
   assert.equal(compact({ reason: "overflow" }, context), undefined);
   assert.equal(compact({ reason: "manual" }, context), undefined);
 
@@ -2686,7 +2701,7 @@ test("context retirement bypasses compaction behavior when disabled", async () =
     const mailbox = setAgentEnvironment("retirement-disabled-agent");
     const agent = fakePi();
     registerExtension!(agent.pi as never);
-    const context = fakeAgentContext();
+    const context = fakeAgentContext(agent.entries);
     await agent.events.get("session_start")![0](undefined, context);
     const state = readAgentState(mailbox)!;
     const request: RequestRecord = {
@@ -2703,6 +2718,9 @@ test("context retirement bypasses compaction behavior when disabled", async () =
     };
     writeRequest(mailbox, request);
     agent.events.get("input")![0]({ text: controlMarker(REQUEST_ID) }, context);
+    agent.pi.appendEntry("pi-herdsman-agent-context-retired", {
+      sessionId: context.sessionManager.getSessionId(),
+    });
     assert.equal(
       agent.events.get("session_before_compact")![0](
         { reason: "threshold" },
@@ -2719,7 +2737,7 @@ test("context retirement bypasses compaction behavior when disabled", async () =
         context.sessionManager.getEntries(),
         context.sessionManager.getSessionId(),
       ),
-      false,
+      true,
     );
     agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
@@ -2752,7 +2770,9 @@ test("overflow retires without cancellation and inactive sessions stay untouched
     agent.events.get("input")![0]({ text: controlMarker(REQUEST_ID) }, context);
     const compact = agent.events.get("session_before_compact")![0];
     assert.equal(compact({ reason: "overflow" }, context), undefined);
-    assert.equal(compact({ reason: "threshold" }, context), undefined);
+    assert.deepEqual(compact({ reason: "threshold" }, context), {
+      cancel: true,
+    });
     assert.equal(
       sessionContextRetired(
         context.sessionManager.getEntries(),

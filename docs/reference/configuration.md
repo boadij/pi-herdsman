@@ -52,11 +52,12 @@ serialized request, ask, or chief message record. Chief messages also retain
 their fixed 8 KiB protocol ceiling.
 
 When `contextRetirement` is enabled, automatic context pressure retires a
-managed-agent session after its first deferred threshold compaction. The
-session receives a finalization instruction, and its result requires a fresh
-agent for follow-up. Disabling it bypasses retirement completely, including
-existing retirement markers, and leaves Pi's native compaction and session
-reuse behavior untouched.
+managed-agent session. Herdsman suppresses preventive threshold compaction
+while the assignment finalizes and leaves Pi's overflow recovery available.
+The session receives a finalization instruction, and its result requires a
+fresh agent for follow-up. Disabling it bypasses retirement completely,
+including existing retirement markers, and leaves Pi's native compaction and
+session reuse behavior untouched.
 
 Placement affects future starts, not existing agents. `tab` uses one lead-owned
 agents tab, `subtree` gives each lead-direct agent its own tab, and `split`

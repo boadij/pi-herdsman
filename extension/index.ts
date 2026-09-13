@@ -209,11 +209,12 @@ const HERD_RUN_ENTRY = "pi-herdsman-herd-run";
 const AGENT_CONTEXT_RETIRED_ENTRY = "pi-herdsman-agent-context-retired";
 const CONTEXT_RETIREMENT_INSTRUCTION =
   "Context pressure has retired this session. Do not start new work or new agents. " +
-  "Finish the current coherent operation at the next safe point, perform only " +
-  "essential remaining validation, resolve already-running dependent work, then " +
-  "complete this assignment with a self-contained handoff covering completed work, " +
-  "current state, relevant files, validation already performed, unresolved issues, " +
-  "and exact next steps. This session will not be continued or forked.";
+  "Finish the current coherent operation at the next safe point. Avoid nonessential " +
+  "tool calls and validation; perform only what is needed for a reliable handoff. " +
+  "Resolve already-running dependent work, then complete this assignment with a " +
+  "self-contained handoff covering completed work, current state, relevant files, " +
+  "validation performed, unresolved issues, and exact next steps. This session " +
+  "will not be continued or forked.";
 type HerdRunEntry =
   | { phase: "started"; sessionId: string; startedAt: number }
   | {
@@ -10193,10 +10194,11 @@ export default function (pi: ExtensionAPI): void {
 
       const sessionId = ctx.sessionManager.getSessionId();
       const entries = ctx.sessionManager.getEntries();
-      if (sessionContextRetired(entries, sessionId)) return;
 
       // Persist before changing Pi behavior.
-      pi.appendEntry(AGENT_CONTEXT_RETIRED_ENTRY, { sessionId });
+      if (!sessionContextRetired(entries, sessionId))
+        pi.appendEntry(AGENT_CONTEXT_RETIRED_ENTRY, { sessionId });
+
       if (event.reason === "threshold") return { cancel: true };
     },
   );
