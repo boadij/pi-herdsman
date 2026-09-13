@@ -27,6 +27,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import { herdsmanTempRoot } from "./storage.ts";
 import { Type } from "typebox";
@@ -733,6 +734,46 @@ function claimDelegationLock(
           "Let the current delegation lifecycle finish or stop it through its owning agent, then retry.",
       });
 
+    throw error;
+  }
+}
+
+function assignmentLockPath(mailbox: string): string {
+  return join(
+    herdsmanTempRoot(),
+    "locks",
+    `assignment-${createHash("sha256").update(mailbox).digest("hex")}`,
+  );
+}
+
+function claimAssignmentLock(
+  mailbox: string,
+  operation = "close",
+  ids: { label?: string; paneId?: string } = {},
+): () => void {
+  try {
+    return claimAssignmentLockRaw(mailbox);
+  } catch (error) {
+    if (error instanceof ProcessLockOccupiedError)
+      fail("agent_busy", error.message, operation, {
+        ids,
+        nextAction:
+          "Let the current managed assignment transition finish, then retry.",
+      });
+    throw error;
+  }
+}
+function claimAssignmentLockRaw(mailbox: string): () => void {
+  return claimProcessLock(assignmentLockPath(mailbox), {
+    name: "managed assignment",
+    occupiedMessage: "Managed assignment is already changing",
+  });
+}
+function tryClaimAssignmentLock(mailbox: string): (() => void) | undefined {
+  try {
+    return claimAssignmentLockRaw(mailbox);
+  } catch (error) {
+    if (error instanceof ProcessLockOccupiedError) return undefined;
     throw error;
   }
 }
@@ -2103,8 +2144,27 @@ function sameManagedAgentIdentity(
     sameCwd(left.cwd, right.cwd)
   );
 }
-function discardRequest(path: string, requestId: string): void {
-  removeRequest(path, requestId);
+function sameManagedAgentDurableState(
+  left: ManagedAgentState,
+  right: ManagedAgentState,
+): boolean {
+  const { updatedAt: _leftUpdatedAt, ...leftDurable } = left;
+  const { updatedAt: _rightUpdatedAt, ...rightDurable } = right;
+  return isDeepStrictEqual(leftDurable, rightDurable);
+}
+function runtimeIdentityState(runtime: Runtime): ManagedAgentState {
+  return {
+    version: 4,
+    runId: runtime.runId,
+    ownerSessionId: runtime.ownerSessionId,
+    workspaceId: runtime.workspaceId,
+    agentLabel: runtime.label,
+    paneId: runtime.paneId,
+    piSessionId: runtime.piSessionId ?? "",
+    piSessionFile: runtime.piSessionFile,
+    cwd: runtime.cwd,
+    updatedAt: 0,
+  };
 }
 async function submit(
   pi: ExtensionAPI,
@@ -2147,23 +2207,33 @@ async function submit(
       `Mailbox payload is ${requestBytes} bytes; configured limit is ${limits.mailbox.bytes} bytes`,
       operation,
     );
-  const preflightState = readAgentState(runtime.mailboxPath);
-  if (!preflightState)
-    fail("target_not_found", "Agent mailbox state is unavailable", operation);
-  validateIdentity(runtime, preflightState);
-  if (preflightState.lastAck) {
-    try {
-      removeRequest(runtime.mailboxPath, preflightState.lastAck.requestId);
-      clearRequestCleanupError(runtime.label);
-    } catch (error) {
-      const message = `${REQUEST_CLEANUP_ERROR_PREFIX} ${String(error)}`;
-      cleanupErrors.set(runtime.label, message);
-      appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
-      fail("internal_failure", message, operation);
-    }
-  }
   await validateIntegration(pi, runtime, ctx, { signal });
+  const release = claimAssignmentLock(runtime.mailboxPath, operation, {
+    label: runtime.label,
+    paneId: runtime.paneId,
+  });
   try {
+    const current = readAgentState(runtime.mailboxPath);
+    if (!current)
+      fail("target_not_found", "Agent mailbox state is unavailable", operation);
+    validateIdentity(runtime, current);
+    if (current.lastAck) {
+      try {
+        removeRequest(runtime.mailboxPath, current.lastAck.requestId);
+        clearRequestCleanupError(runtime.label);
+      } catch (error) {
+        const message = `${REQUEST_CLEANUP_ERROR_PREFIX} ${String(error)}`;
+        cleanupErrors.set(runtime.label, message);
+        appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
+        fail("internal_failure", message, operation);
+      }
+    }
+    if (!sameManagedAgentIdentity(current, runtimeIdentityState(runtime)))
+      fail(
+        "target_not_found",
+        "Agent identity changed before request",
+        operation,
+      );
     writeRequest(runtime.mailboxPath, request);
   } catch (error) {
     if (String(error).toLowerCase().includes("too large"))
@@ -2173,6 +2243,8 @@ async function submit(
         operation,
       );
     fail("internal_failure", String(error), operation);
+  } finally {
+    release();
   }
   let acknowledgementObserved = false;
   requestStatusRefresh?.();
@@ -2224,13 +2296,25 @@ async function submit(
     return requestId;
   } finally {
     if (acknowledgementObserved) {
+      const release = claimAssignmentLock(runtime.mailboxPath, operation, {
+        label: runtime.label,
+        paneId: runtime.paneId,
+      });
       try {
-        removeRequest(runtime.mailboxPath, requestId);
+        const current = readAgentState(runtime.mailboxPath);
+        if (
+          current &&
+          sameManagedAgentIdentity(current, runtimeIdentityState(runtime)) &&
+          current.lastAck?.requestId === requestId
+        )
+          removeRequest(runtime.mailboxPath, requestId);
         clearRequestCleanupError(runtime.label);
       } catch (error) {
         const message = `${REQUEST_CLEANUP_ERROR_PREFIX} ${String(error)}`;
         cleanupErrors.set(runtime.label, message);
         appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
+      } finally {
+        release();
       }
     }
   }
@@ -2287,6 +2371,34 @@ type ManagedAgentPresence =
   | { kind: "live"; agent: any }
   | { kind: "unknown"; diagnostic: string; relatedAgents: any[] }
   | { kind: "lost" };
+function durableIdentityKey(state: ManagedAgentState): string {
+  return `${state.workspaceId}\0${state.piSessionId}`;
+}
+function durableParentCandidates(
+  snapshot: readonly ManagedAgentSnapshot[],
+  child: ManagedAgentState,
+): ManagedAgentSnapshot[] {
+  return snapshot.filter(
+    ({ state }) =>
+      state.workspaceId === child.workspaceId &&
+      state.piSessionId === child.ownerSessionId,
+  );
+}
+function assertUniqueDurableIdentities(
+  states: readonly ManagedAgentState[],
+): void {
+  const seen = new Set<string>();
+  for (const state of states) {
+    const key = durableIdentityKey(state);
+    if (seen.has(key))
+      fail(
+        "target_ambiguous",
+        "Managed agent ancestry contains duplicate durable identities",
+        "close",
+      );
+    seen.add(key);
+  }
+}
 type VisibleManagedAgentSnapshot = ManagedAgentSnapshot & {
   parentLabel?: string;
 };
@@ -2557,8 +2669,8 @@ function visibleAgentSnapshots(
   );
   if (scope.kind === "managed-agent") return direct;
   const visible: VisibleManagedAgentSnapshot[] = [...direct];
-  const visibleBySession = new Set(
-    direct.map(({ state }) => state.piSessionId),
+  const ancestryStatus = new Map<string, "visible" | "unresolved">(
+    direct.map(({ state }) => [durableIdentityKey(state), "visible"]),
   );
   const pending = snapshot.agents.filter(
     ({ state }) => state.ownerSessionId !== ownerSessionId,
@@ -2567,32 +2679,46 @@ function visibleAgentSnapshots(
     let progressed = false;
     for (let index = pending.length - 1; index >= 0; index--) {
       const agent = pending[index];
-      const parent = snapshot.agents.find(
-        ({ state }) =>
-          state.workspaceId === agent.state.workspaceId &&
-          state.piSessionId === agent.state.ownerSessionId,
-      );
-      if (parent && !visibleBySession.has(parent.state.piSessionId)) continue;
-      const listed = parent
+      const parents = durableParentCandidates(snapshot.agents, agent.state);
+      if (
+        parents.length === 1 &&
+        !ancestryStatus.has(durableIdentityKey(parents[0].state))
+      )
+        continue;
+      const parent = parents.length === 1 ? parents[0] : undefined;
+      const parentStatus = parent
+        ? ancestryStatus.get(durableIdentityKey(parent.state))
+        : undefined;
+      const unresolved = parents.length !== 1 || parentStatus === "unresolved";
+      const listed = !unresolved
         ? agent.listed
         : {
             ...agent.listed,
             state: "unknown",
             steerable: false,
             recovery_only: true,
-            diagnostic: "Durable parent assignment is missing",
+            diagnostic: parent
+              ? "Durable parent ancestry is unresolved"
+              : parents.length > 1
+                ? "Durable parent ancestry is ambiguous"
+                : "Durable parent assignment is missing",
           };
       visible.push({
         ...agent,
         listed,
-        ...(parent ? { parentLabel: parent.state.agentLabel } : {}),
+        ...(parent && !unresolved
+          ? { parentLabel: parent.state.agentLabel }
+          : {}),
       });
-      visibleBySession.add(agent.state.piSessionId);
+      ancestryStatus.set(
+        durableIdentityKey(agent.state),
+        unresolved ? "unresolved" : "visible",
+      );
       pending.splice(index, 1);
       progressed = true;
     }
     if (!progressed) {
-      for (const agent of pending.splice(0))
+      for (const agent of pending.splice(0)) {
         visible.push({
           ...agent,
           listed: {
@@ -2603,6 +2729,8 @@ function visibleAgentSnapshots(
             diagnostic: "Cyclic durable ancestry",
           },
         });
+        ancestryStatus.set(durableIdentityKey(agent.state), "unresolved");
+      }
     }
   }
   return visible;
@@ -3013,58 +3141,69 @@ async function finalizeDeliveredRoot(
   state: ManagedAgentState,
   requestId: string,
   signal?: AbortSignal,
+  assignmentLockHeld = false,
 ): Promise<void> {
   const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
-  let current = readAgentState(mailbox);
-  if (
-    !current ||
-    !sameManagedAgentIdentity(current, state) ||
-    current.activeRequestId ||
-    current.completedRequestId !== requestId ||
-    newerMailboxWorkExists(mailbox, current, requestId)
-  )
-    throw new Error("Managed agent changed before result cleanup");
-  const presence = managedAgentPresence(
-    current,
-    await herdrSessionSnapshot(pi, ctx, signal),
-  );
-  if (presence.kind === "unknown")
-    throw new Error(
-      "Managed agent presence is unresolved during result cleanup",
-    );
-  if (presence.kind === "live")
-    await closeLiveManagedExecution(
-      pi,
-      ctx,
-      {
-        ...presence.agent,
-        label: current.agentLabel,
-        pi_session_id: current.piSessionId,
-        pi_session_path: current.piSessionFile,
-      },
+  const release = assignmentLockHeld
+    ? undefined
+    : claimAssignmentLock(mailbox, "cleanup", {
+        label: state.agentLabel,
+        paneId: state.paneId,
+      });
+  try {
+    let current = readAgentState(mailbox);
+    if (
+      !current ||
+      !sameManagedAgentIdentity(current, state) ||
+      current.activeRequestId ||
+      current.completedRequestId !== requestId ||
+      newerMailboxWorkExists(mailbox, current, requestId)
+    )
+      throw new Error("Managed agent changed before result cleanup");
+    const presence = managedAgentPresence(
       current,
-      signal,
-      true,
+      await herdrSessionSnapshot(pi, ctx, signal),
     );
-  current = readAgentState(mailbox)!;
-  if (
-    !sameManagedAgentIdentity(current, state) ||
-    current.activeRequestId ||
-    current.completedRequestId !== requestId ||
-    newerMailboxWorkExists(mailbox, current, requestId)
-  )
-    throw new Error("Managed agent changed during result cleanup");
-  removeResult(mailbox, requestId);
-  const after = readAgentState(mailbox);
-  if (
-    after &&
-    sameManagedAgentIdentity(after, state) &&
-    !after.activeRequestId &&
-    after.completedRequestId === requestId &&
-    !newerMailboxWorkExists(mailbox, after, requestId)
-  )
-    removeAgentMailbox(mailbox);
-  invalidateCachedRuntime(state.agentLabel);
+    if (presence.kind === "unknown")
+      throw new Error(
+        "Managed agent presence is unresolved during result cleanup",
+      );
+    if (presence.kind === "live")
+      await closeLiveManagedExecution(
+        pi,
+        ctx,
+        {
+          ...presence.agent,
+          label: current.agentLabel,
+          pi_session_id: current.piSessionId,
+          pi_session_path: current.piSessionFile,
+        },
+        current,
+        signal,
+        true,
+      );
+    current = readAgentState(mailbox)!;
+    if (
+      !sameManagedAgentIdentity(current, state) ||
+      current.activeRequestId ||
+      current.completedRequestId !== requestId ||
+      newerMailboxWorkExists(mailbox, current, requestId)
+    )
+      throw new Error("Managed agent changed during result cleanup");
+    removeResult(mailbox, requestId);
+    const after = readAgentState(mailbox);
+    if (
+      after &&
+      sameManagedAgentIdentity(after, state) &&
+      !after.activeRequestId &&
+      after.completedRequestId === requestId &&
+      !newerMailboxWorkExists(mailbox, after, requestId)
+    )
+      removeAgentMailbox(mailbox);
+    invalidateCachedRuntime(state.agentLabel);
+  } finally {
+    release?.();
+  }
 }
 async function cleanupAfterDeliveredResult(
   pi: ExtensionAPI,
@@ -3132,7 +3271,7 @@ async function cleanupAfterDeliveredResult(
           deliveredRootResultId: result.requestId,
         },
       );
-    await finalizeDeliveredRoot(pi, ctx, state, result.requestId, signal);
+    else await finalizeDeliveredRoot(pi, ctx, state, result.requestId, signal);
     requestHerdRunFinishCheck?.(ctx);
     return true;
   } catch (error) {
@@ -3652,7 +3791,12 @@ function guardMailboxOccupancy(
 function removeMailboxAfterRollback(mailbox: string): void {
   // Without a controller-side acknowledgement observation, retain every request
   // file so a failed handoff can be retried or diagnosed at the mailbox boundary.
-  if (!unacknowledgedRequestExists(mailbox)) removeAgentMailbox(mailbox);
+  const release = claimAssignmentLock(mailbox, "rollback");
+  try {
+    if (!unacknowledgedRequestExists(mailbox)) removeAgentMailbox(mailbox);
+  } finally {
+    release();
+  }
 }
 function watchResult(
   pi: ExtensionAPI,
@@ -3898,53 +4042,67 @@ async function closeManagedAgent(
   state: ManagedAgentState,
   signal?: AbortSignal,
   stopReport?: StopReportCallbacks,
+  assignmentLockHeld = false,
 ): Promise<void> {
   const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
-  const cached = runtimes.get(state.agentLabel);
-  if (hasDurableResult(mailbox, state))
-    fail(
-      "target_ambiguous",
-      "Managed agent has a durable result; close result delivery first",
-      "close",
-    );
-  const runtime = await closeLiveManagedExecution(
-    pi,
-    ctx,
-    agent,
-    state,
-    signal,
-  );
-  const after = readAgentState(mailbox);
-  if (
-    after &&
-    sameManagedAgentIdentity(after, state) &&
-    hasDurableResult(mailbox, after)
-  )
-    fail(
-      "target_ambiguous",
-      "Managed agent produced a durable result during close",
-      "close",
-    );
+  const release = assignmentLockHeld
+    ? undefined
+    : claimAssignmentLock(mailbox, "close", {
+        label: state.agentLabel,
+        paneId: state.paneId,
+      });
   try {
-    removeAgentMailbox(mailbox);
-    clearCleanupError(runtime.label);
-  } catch (error) {
-    const message = `Agent pane closed but mailbox cleanup failed: ${String(error)}`;
-    cleanupErrors.set(runtime.label, message);
-    appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
-    stopReport?.onCleanupFailure?.(runtime.label, message);
-    return;
+    const current = readAgentState(mailbox);
+    if (!current || !sameManagedAgentIdentity(current, state))
+      fail("target_ambiguous", "Managed agent changed before close", "close");
+    if (hasDurableResult(mailbox, current))
+      fail(
+        "target_ambiguous",
+        "Managed agent has a durable result; close result delivery first",
+        "close",
+      );
+    const cached = runtimes.get(state.agentLabel);
+    const runtime = await closeLiveManagedExecution(
+      pi,
+      ctx,
+      agent,
+      current,
+      signal,
+    );
+    const after = readAgentState(mailbox);
+    if (
+      !after ||
+      !sameManagedAgentIdentity(after, current) ||
+      hasDurableResult(mailbox, after)
+    )
+      fail(
+        "target_ambiguous",
+        "Managed agent produced a durable result during close",
+        "close",
+      );
+    try {
+      removeAgentMailbox(mailbox);
+      clearCleanupError(runtime.label);
+    } catch (error) {
+      const message = `Agent pane closed but mailbox cleanup failed: ${String(error)}`;
+      cleanupErrors.set(runtime.label, message);
+      appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
+      stopReport?.onCleanupFailure?.(runtime.label, message);
+      return;
+    }
+    if (cached) {
+      stopResultWatcher(runtime);
+      stopAskWatcher(runtime);
+      cancelAskDeliveryRetries(runtime);
+      clearResultDeliveryEvidence(runtime);
+      runtime.startedAt = undefined;
+      runtimes.delete(runtime.label);
+      clearCleanupError(runtime.label);
+    }
+    stopReport?.onClosed?.(runtime.label);
+  } finally {
+    release?.();
   }
-  if (cached) {
-    stopResultWatcher(runtime);
-    stopAskWatcher(runtime);
-    cancelAskDeliveryRetries(runtime);
-    clearResultDeliveryEvidence(runtime);
-    runtime.startedAt = undefined;
-    runtimes.delete(runtime.label);
-    clearCleanupError(runtime.label);
-  }
-  stopReport?.onClosed?.(runtime.label);
 }
 async function closeManagedSnapshot(
   pi: ExtensionAPI,
@@ -3952,22 +4110,26 @@ async function closeManagedSnapshot(
   snapshot: ManagedAgentSnapshot,
   signal?: AbortSignal,
   stopReport?: StopReportCallbacks,
+  assignmentLockHeld = false,
 ): Promise<void> {
-  if (snapshot.presence.kind === "live") {
-    const mailbox = agentMailboxPath(
-      snapshot.state.workspaceId,
-      snapshot.state.agentLabel,
+  if (snapshot.presence.kind === "unknown")
+    fail(
+      "target_ambiguous",
+      "Managed agent presence cannot be proved safely",
+      "close",
     );
-    let current: ManagedAgentState | undefined;
-    try {
-      current = readAgentState(mailbox);
-    } catch {
-      fail(
-        "target_ambiguous",
-        "A managed mailbox has unresolved state",
-        "close",
-      );
-    }
+  const mailbox = agentMailboxPath(
+    snapshot.state.workspaceId,
+    snapshot.state.agentLabel,
+  );
+  const release = assignmentLockHeld
+    ? undefined
+    : claimAssignmentLock(mailbox, "close", {
+        label: snapshot.state.agentLabel,
+        paneId: snapshot.state.paneId,
+      });
+  try {
+    let current = readAgentState(mailbox);
     if (!current || !sameManagedAgentIdentity(current, snapshot.state))
       fail("target_ambiguous", "Managed agent changed before close", "close");
     if (hasDurableResult(mailbox, current))
@@ -3986,66 +4148,33 @@ async function closeManagedSnapshot(
         "Managed agent presence cannot be proved safely",
         "close",
       );
-    if (presence.kind === "lost") {
-      const latest = readAgentState(mailbox);
-      if (!latest || !sameManagedAgentIdentity(latest, current))
-        fail("target_ambiguous", "Managed agent changed before close", "close");
-      if (hasDurableResult(mailbox, latest))
-        fail(
-          "target_ambiguous",
-          "Managed agent has a durable result; close result delivery first",
-          "close",
-        );
-      removeAgentMailbox(mailbox);
-      invalidateCachedRuntime(latest.agentLabel);
-      stopReport?.onClosed?.(latest.agentLabel);
+    if (presence.kind === "live") {
+      await closeManagedAgent(
+        pi,
+        ctx,
+        { ...presence.agent, label: current.agentLabel },
+        current,
+        signal,
+        stopReport,
+        true,
+      );
       return;
     }
-    const agent = {
-      ...presence.agent,
-      label: current.agentLabel,
-    };
-    await closeManagedAgent(pi, ctx, agent, current, signal, stopReport);
-    return;
+    current = readAgentState(mailbox);
+    if (!current || !sameManagedAgentIdentity(current, snapshot.state))
+      fail("target_ambiguous", "Managed agent changed before close", "close");
+    if (hasDurableResult(mailbox, current))
+      fail(
+        "target_ambiguous",
+        "Managed agent has a durable result; close result delivery first",
+        "close",
+      );
+    removeAgentMailbox(mailbox);
+    invalidateCachedRuntime(current.agentLabel);
+    stopReport?.onClosed?.(current.agentLabel);
+  } finally {
+    release?.();
   }
-  if (snapshot.presence.kind === "unknown")
-    fail(
-      "target_ambiguous",
-      "Managed agent presence cannot be proved safely",
-      "close",
-    );
-  const mailbox = agentMailboxPath(
-    snapshot.state.workspaceId,
-    snapshot.state.agentLabel,
-  );
-  let current = readAgentState(mailbox);
-  if (!current || !sameManagedAgentIdentity(current, snapshot.state))
-    fail("target_ambiguous", "Managed agent changed before close", "close");
-  if (hasDurableResult(mailbox, current))
-    fail(
-      "target_ambiguous",
-      "Managed agent has a durable result; close result delivery first",
-      "close",
-    );
-  const inventory = await herdrSessionSnapshot(pi, ctx, signal);
-  if (managedAgentPresence(current, inventory).kind !== "lost")
-    fail(
-      "target_ambiguous",
-      "Managed agent presence changed before close",
-      "close",
-    );
-  current = readAgentState(mailbox);
-  if (!current || !sameManagedAgentIdentity(current, snapshot.state))
-    fail("target_ambiguous", "Managed agent changed before close", "close");
-  if (hasDurableResult(mailbox, current))
-    fail(
-      "target_ambiguous",
-      "Managed agent has a durable result; close result delivery first",
-      "close",
-    );
-  removeAgentMailbox(mailbox);
-  invalidateCachedRuntime(current.agentLabel);
-  stopReport?.onClosed?.(current.agentLabel);
 }
 type ManagedAgentCascadePlan = {
   parent: ManagedAgentSnapshot;
@@ -4070,6 +4199,7 @@ async function managedAgentCascadePlan(
     true,
     inventory,
   );
+  assertUniqueDurableIdentities(snapshot.mailboxes.map(({ state }) => state));
   const findSnapshot = (candidate: ManagedAgentState): ManagedAgentSnapshot => {
     const matches = snapshot.agents.filter(({ state }) =>
       sameManagedAgentIdentity(state, candidate),
@@ -4349,7 +4479,13 @@ async function closeManagedAgentCascade(
   stopReport?: StopReportCallbacks,
 ): Promise<void> {
   const release = claimDelegationLock(state.workspaceId, state.piSessionId);
+  const parentMailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
+  let parentRelease: (() => void) | undefined;
   try {
+    parentRelease = claimAssignmentLock(parentMailbox, "close", {
+      label: state.agentLabel,
+      paneId: state.paneId,
+    });
     const plan = await managedAgentCascadePlan(
       pi,
       ctx,
@@ -4379,7 +4515,17 @@ async function closeManagedAgentCascade(
         );
       }
     }
-    if (options.deliveredRootResultId) return;
+    if (options.deliveredRootResultId) {
+      await finalizeDeliveredRoot(
+        pi,
+        ctx,
+        state,
+        options.deliveredRootResultId,
+        signal,
+        true,
+      );
+      return;
+    }
     const parentSnapshot = (
       await managedAgentSnapshots(pi, ctx, signal)
     ).agents.find(({ state: candidate }) =>
@@ -4387,7 +4533,14 @@ async function closeManagedAgentCascade(
     );
     if (!parentSnapshot)
       fail("target_not_found", "Parent agent changed before close", "close");
-    await closeManagedSnapshot(pi, ctx, parentSnapshot, signal, stopReport);
+    await closeManagedSnapshot(
+      pi,
+      ctx,
+      parentSnapshot,
+      signal,
+      stopReport,
+      true,
+    );
   } catch (error) {
     throw normalizeCloseFailure(
       error,
@@ -4395,6 +4548,7 @@ async function closeManagedAgentCascade(
       { parentLabel: state.agentLabel },
     );
   } finally {
+    parentRelease?.();
     release();
   }
 }
@@ -5174,7 +5328,12 @@ async function actionUnsafe(
         throw error;
       }
       invalidateCachedRuntime(label);
-      resetAgentMailbox(mailbox);
+      const resetRelease = claimAssignmentLock(mailbox, p.action, { label });
+      try {
+        resetAgentMailbox(mailbox);
+      } finally {
+        resetRelease();
+      }
       const env = [
         `PI_HERDSMAN_MAILBOX=${mailbox}`,
         `PI_HERDSMAN_RUN_ID=${runId}`,
@@ -9992,6 +10151,32 @@ export default function (pi: ExtensionAPI): void {
   let leafStatusGeneration = 0;
   let leafStatusInFlight = false;
   let ownTools: string[] | undefined;
+  let mutationErrorReported = false;
+  const mutateAgentState = (
+    update: (current: ManagedAgentState) => ManagedAgentState,
+  ): ManagedAgentState | undefined => {
+    if (!state) return undefined;
+    const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
+    const release = tryClaimAssignmentLock(mailbox);
+    if (!release) return undefined;
+    try {
+      const current = readAgentState(mailbox);
+      if (!current || !sameManagedAgentIdentity(current, state))
+        return undefined;
+      const next = update(current);
+      writeAgentState(mailbox, next);
+      state = next;
+      mutationErrorReported = false;
+      return next;
+    } catch (error) {
+      if (agentContext && !mutationErrorReported)
+        appendDurableError(pi, agentContext, "pi_herdsman_state_error", error);
+      mutationErrorReported = true;
+      return undefined;
+    } finally {
+      release();
+    }
+  };
   const reportAcknowledgementFailure = (
     ctx: ExtensionContext,
     error: unknown,
@@ -10011,14 +10196,11 @@ export default function (pi: ExtensionAPI): void {
       now - state.lastActivityAt < ACTIVITY_WRITE_MIN_MS
     )
       return;
-    const candidate = { ...state, lastActivityAt: now, updatedAt: now };
-    try {
-      writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, candidate);
-      state = candidate;
-    } catch (error) {
-      if (agentContext)
-        appendDurableError(pi, agentContext, "pi_herdsman_state_error", error);
-    }
+    mutateAgentState((current) => ({
+      ...current,
+      lastActivityAt: now,
+      updatedAt: now,
+    }));
   };
   let lastLeafBreadcrumb: string[] | undefined;
   const resetLeafStatus = (): void => {
@@ -10099,8 +10281,8 @@ export default function (pi: ExtensionAPI): void {
     message?: string,
   ): boolean => {
     if (!state) return false;
-    const candidate: ManagedAgentState = {
-      ...state,
+    const candidate = mutateAgentState((current) => ({
+      ...current,
       lastAck: {
         requestId,
         accepted,
@@ -10109,24 +10291,12 @@ export default function (pi: ExtensionAPI): void {
         acknowledgedAt: Date.now(),
       },
       updatedAt: Date.now(),
-    };
-    try {
-      writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, candidate);
-      state = candidate;
+    }));
+    if (candidate) {
       acknowledgementErrorReported = false;
       return true;
-    } catch (error) {
-      if (agentContext) reportAcknowledgementFailure(agentContext, error);
-      return false;
     }
-  };
-  const discardAgentRequest = (requestId: string, ctx: ExtensionContext) => {
-    try {
-      discardRequest(process.env.PI_HERDSMAN_MAILBOX!, requestId);
-    } catch (error) {
-      appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
-      ctx.ui.notify("pi_herdsman_state_error: request cleanup failed", "error");
-    }
+    return false;
   };
   const acknowledgeAndDiscard = (
     requestId: string,
@@ -10135,8 +10305,34 @@ export default function (pi: ExtensionAPI): void {
     code?: "busy" | "idle" | "invalid" | "identity" | "delivery",
     message?: string,
   ): void => {
-    if (!acknowledge(requestId, accepted, code, message)) return;
-    discardAgentRequest(requestId, ctx);
+    if (!state) return;
+    const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
+    const release = tryClaimAssignmentLock(mailbox);
+    if (!release) return;
+    try {
+      const current = readAgentState(mailbox);
+      if (!current || !sameManagedAgentIdentity(current, state)) return;
+      const candidate: ManagedAgentState = {
+        ...current,
+        lastAck: {
+          requestId,
+          accepted,
+          ...(code ? { code } : {}),
+          ...(message ? { message } : {}),
+          acknowledgedAt: Date.now(),
+        },
+        updatedAt: Date.now(),
+      };
+      writeAgentState(mailbox, candidate);
+      removeRequest(mailbox, requestId);
+      state = candidate;
+      acknowledgementErrorReported = false;
+      clearRequestCleanupError(current.agentLabel);
+    } catch (error) {
+      if (agentContext) reportAcknowledgementFailure(agentContext, error);
+    } finally {
+      release();
+    }
   };
   const pumpRequest = (ctx: ExtensionContext): void => {
     if (!initialized || !state) return;
@@ -10266,20 +10462,30 @@ export default function (pi: ExtensionAPI): void {
           `Mailbox payload is ${askBytes} bytes; configured limit is ${limits.mailbox.bytes} bytes`,
           "ask_owner",
         );
+      const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
+      const release = claimAssignmentLock(mailbox, "ask_owner", {
+        label: state.agentLabel,
+        paneId: state.paneId,
+      });
       try {
-        writeAsk(process.env.PI_HERDSMAN_MAILBOX!, ask);
+        const current = readAgentState(mailbox);
+        if (!current || !sameManagedAgentIdentity(current, state))
+          throw new Error("Agent identity changed while asking its owner");
+        writeAsk(mailbox, ask);
         const next = {
-          ...state,
+          ...current,
           pendingAskId: askId,
           updatedAt: Date.now(),
         };
-        writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, next);
+        writeAgentState(mailbox, next);
         state = next;
       } catch (error) {
         try {
-          removeAsk(process.env.PI_HERDSMAN_MAILBOX!);
+          removeAsk(mailbox);
         } catch {}
         throw error;
+      } finally {
+        release();
       }
       latest = "";
       return {
@@ -10382,7 +10588,31 @@ export default function (pi: ExtensionAPI): void {
           );
         validateAgentDefinitionReferences(definition, definitions);
       }
-      writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, state);
+      const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
+      const release = claimAssignmentLock(mailbox, "session_start", {
+        label: state.agentLabel,
+        paneId: state.paneId,
+      });
+      try {
+        const current = readAgentState(mailbox);
+        if (current && !sameManagedAgentIdentity(current, state))
+          throw new Error("agent session identity changed while state existed");
+        if (existing !== undefined && current === undefined)
+          throw new Error("agent mailbox disappeared while state existed");
+        if (
+          existing !== undefined &&
+          current !== undefined &&
+          !sameManagedAgentDurableState(current, existing)
+        )
+          throw new Error(
+            "agent mailbox changed while session start was preparing",
+          );
+        if (existing === undefined && current !== undefined)
+          state = { ...candidate, ...current, updatedAt: Date.now() };
+        writeAgentState(mailbox, state);
+      } finally {
+        release();
+      }
       if (delegationEnabled) {
         const agentScope = controllerScope;
         if (!agentScope || agentScope.kind !== "managed-agent")
@@ -10546,19 +10776,27 @@ export default function (pi: ExtensionAPI): void {
         },
         updatedAt: Date.now(),
       };
+      const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
+      const release = tryClaimAssignmentLock(mailbox);
+      if (!release) return { action: "handled" };
       try {
-        writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, candidate);
+        const current = readAgentState(mailbox);
+        if (
+          !current ||
+          !sameManagedAgentIdentity(current, state) ||
+          current.pendingAskId !== state.pendingAskId
+        )
+          return { action: "handled" };
+        writeAgentState(mailbox, candidate);
+        removeAsk(mailbox);
       } catch (error) {
         reportAcknowledgementFailure(ctx, error);
         return { action: "handled" };
+      } finally {
+        release();
       }
       state = candidate;
       acknowledgementErrorReported = false;
-      try {
-        removeAsk(process.env.PI_HERDSMAN_MAILBOX!);
-      } catch (error) {
-        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
-      }
       latest = "";
       return {
         action: "transform",
@@ -10635,8 +10873,8 @@ export default function (pi: ExtensionAPI): void {
       return { action: "handled" };
     }
     if (request.kind === "task") {
-      const candidate: ManagedAgentState = {
-        ...state,
+      const candidate = mutateAgentState((current) => ({
+        ...current,
         activeRequestId: id,
         completedRequestId: undefined,
         lastActivityAt: Date.now(),
@@ -10646,15 +10884,11 @@ export default function (pi: ExtensionAPI): void {
           acknowledgedAt: Date.now(),
         },
         updatedAt: Date.now(),
-      };
-      try {
-        writeAgentState(process.env.PI_HERDSMAN_MAILBOX!, candidate);
-      } catch (error) {
-        reportAcknowledgementFailure(ctx, error);
+      }));
+      if (!candidate) {
         // Retain the request. A repeated exact marker can retry this durable boundary.
         return { action: "handled" };
       }
-      state = candidate;
       acknowledgementErrorReported = false;
       agentStartedAt = Date.now();
       const model = ctx.model
@@ -10739,13 +10973,38 @@ export default function (pi: ExtensionAPI): void {
       });
     },
   );
-  const finalizeStateTransition = (ctx: ExtensionContext): void => {
+  const finalizeStateTransition = (
+    ctx: ExtensionContext,
+    assignmentLockHeld = false,
+  ): void => {
     if (!state?.activeRequestId) return;
     pendingStateTransition = true;
+    let release: (() => void) | undefined;
     try {
-      const requestId = state.activeRequestId;
+      if (!assignmentLockHeld) {
+        release = tryClaimAssignmentLock(process.env.PI_HERDSMAN_MAILBOX!);
+        if (!release) {
+          if (!stateRetryTimer)
+            stateRetryTimer = setInterval(
+              () => finalizeStateTransition(ctx),
+              250,
+            );
+          return;
+        }
+      }
+      const current = readAgentState(process.env.PI_HERDSMAN_MAILBOX!);
+      if (
+        !current ||
+        !sameManagedAgentIdentity(current, state) ||
+        !current.activeRequestId
+      ) {
+        if (stateRetryTimer) clearInterval(stateRetryTimer);
+        stateRetryTimer = undefined;
+        return;
+      }
+      const requestId = current.activeRequestId;
       const nextState: ManagedAgentState = {
-        ...state,
+        ...current,
         completedRequestId: requestId,
         activeRequestId: undefined,
         lastActivityAt: undefined,
@@ -10776,6 +11035,8 @@ export default function (pi: ExtensionAPI): void {
       }
       if (!stateRetryTimer)
         stateRetryTimer = setInterval(() => finalizeStateTransition(ctx), 250);
+    } finally {
+      release?.();
     }
   };
   const settleCurrentAgent = (ctx: ExtensionContext): void => {
@@ -10814,16 +11075,33 @@ export default function (pi: ExtensionAPI): void {
     pendingResult = result;
     resultWriteAttempts = 0;
     resultErrorReported = false;
-    const flush = () => {
+    const flush = (assignmentLockHeld = false) => {
       const current = pendingResult;
       if (!current) return;
       resultWriteAttempts++;
+      const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
+      let release: (() => void) | undefined;
       try {
-        writeResult(process.env.PI_HERDSMAN_MAILBOX!, current);
+        if (!assignmentLockHeld) {
+          release = tryClaimAssignmentLock(mailbox);
+          if (!release) return;
+        }
+        const currentState = readAgentState(mailbox);
+        if (
+          !currentState ||
+          !sameManagedAgentIdentity(currentState, state!) ||
+          currentState.activeRequestId !== current.requestId
+        ) {
+          pendingResult = undefined;
+          if (retryTimer) clearInterval(retryTimer);
+          retryTimer = undefined;
+          return;
+        }
+        writeResult(mailbox, current);
         pendingResult = undefined;
         if (retryTimer) clearInterval(retryTimer);
         retryTimer = undefined;
-        finalizeStateTransition(ctx);
+        finalizeStateTransition(ctx, true);
       } catch (error) {
         if (
           current.status === "completed" &&
@@ -10840,7 +11118,7 @@ export default function (pi: ExtensionAPI): void {
             },
           };
           resultWriteAttempts = 0;
-          flush();
+          flush(true);
           return;
         }
         if (resultWriteAttempts >= RESULT_WRITE_MAX_ATTEMPTS) {
@@ -10900,6 +11178,8 @@ export default function (pi: ExtensionAPI): void {
           resultErrorReported = true;
           appendDurableError(pi, ctx, "pi_herdsman_result_error", error);
         }
+      } finally {
+        release?.();
       }
     };
     flush();

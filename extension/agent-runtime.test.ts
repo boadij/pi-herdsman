@@ -24,6 +24,7 @@ import support, {
   fakeAgentContext,
   managedState,
   agentControllerExecutor,
+  assignmentLockPathForTest,
   readPendingAsk,
   readRequest,
   readResult,
@@ -189,6 +190,62 @@ test("managed session start immediately recovers a durable request", async () =>
       request.requestId,
     );
   } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("managed session start does not recreate a mailbox removed after preflight", async () => {
+  const mailbox = setAgentEnvironment("removed-before-session-start");
+  const persisted = managedState("removed-before-session-start");
+  writeAgentState(mailbox, persisted);
+  support.agentStateReadHook = (path) => {
+    support.agentStateReadHook = undefined;
+    realFs.rmSync(path.replace(/[/\\]state\.json$/, ""), {
+      recursive: true,
+      force: true,
+    });
+  };
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext();
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    assert.equal(readAgentState(mailbox), undefined);
+    assert.equal(realFs.existsSync(mailbox), false);
+  } finally {
+    support.agentStateReadHook = undefined;
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("managed session start does not overwrite a same-identity mailbox transition", async () => {
+  const mailbox = setAgentEnvironment("changed-before-session-start");
+  const persisted = managedState("changed-before-session-start");
+  writeAgentState(mailbox, persisted);
+  const intervening = {
+    ...persisted,
+    activeRequestId: REQUEST_ID,
+    lastAck: {
+      requestId: REQUEST_ID,
+      accepted: true,
+      acknowledgedAt: Date.now(),
+    },
+    updatedAt: Date.now(),
+  };
+  support.agentStateReadHook = () => {
+    support.agentStateReadHook = undefined;
+    writeAgentState(mailbox, intervening);
+  };
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext();
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(readAgentState(mailbox), intervening);
+  } finally {
+    support.agentStateReadHook = undefined;
     agent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
   }
@@ -431,6 +488,128 @@ test("registered agent writes state, handles input, and settles one result", asy
   assert.equal(result?.text, "done");
   assert.equal(readAgentState(mailbox)?.completedRequestId, request.requestId);
   assert.equal(readAgentState(mailbox)?.lastActivityAt, undefined);
+});
+
+test("result persistence waits for the assignment lock", async () => {
+  const mailbox = setAgentEnvironment("locked-result-agent");
+  const agent = fakePi();
+  const context = fakeContext();
+  registerExtension!(agent.pi as never);
+  await agent.events.get("session_start")![0](undefined, context);
+  const started = readAgentState(mailbox)!;
+  const request: RequestRecord = {
+    version: 4,
+    runId: started.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: started.ownerSessionId,
+    workspaceId: started.workspaceId,
+    agentLabel: started.agentLabel,
+    paneId: started.paneId,
+    kind: "task",
+    text: "wait for the close lock",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, request);
+  agent.events.get("input")![0](
+    { text: controlMarker(request.requestId) },
+    context,
+  );
+  agent.events.get("message_end")![0](
+    { message: { role: "assistant", content: "done" } },
+    context,
+  );
+  const release = claimProcessLock(assignmentLockPathForTest(mailbox));
+  try {
+    agent.events.get("agent_settled")![0](undefined, context);
+    assert.equal(readResult(mailbox, request.requestId), undefined);
+    assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
+  } finally {
+    release();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(readResult(mailbox, request.requestId)?.text, "done");
+  assert.equal(readAgentState(mailbox)?.completedRequestId, request.requestId);
+  agent.events.get("session_shutdown")?.[0]();
+  realFs.rmSync(mailbox, { recursive: true, force: true });
+});
+
+test("result persistence does not recreate a removed mailbox", async () => {
+  const mailbox = setAgentEnvironment("removed-result-agent");
+  const agent = fakePi();
+  const context = fakeContext();
+  registerExtension!(agent.pi as never);
+  await agent.events.get("session_start")![0](undefined, context);
+  const started = readAgentState(mailbox)!;
+  const request: RequestRecord = {
+    version: 4,
+    runId: started.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: started.ownerSessionId,
+    workspaceId: started.workspaceId,
+    agentLabel: started.agentLabel,
+    paneId: started.paneId,
+    kind: "task",
+    text: "do not recreate the mailbox",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, request);
+  agent.events.get("input")![0](
+    { text: controlMarker(request.requestId) },
+    context,
+  );
+  agent.events.get("message_end")![0](
+    { message: { role: "assistant", content: "lost" } },
+    context,
+  );
+  realFs.rmSync(mailbox, { recursive: true, force: true });
+  agent.events.get("agent_settled")![0](undefined, context);
+  assert.equal(realFs.existsSync(mailbox), false);
+  assert.equal(readResult(mailbox, request.requestId), undefined);
+  agent.events.get("session_shutdown")?.[0]();
+  realFs.rmSync(mailbox, { recursive: true, force: true });
+});
+
+test("managed task acceptance retains its request during assignment contention", async () => {
+  const mailbox = setAgentEnvironment("locked-task-agent");
+  const agent = fakePi();
+  const context = fakeContext();
+  registerExtension!(agent.pi as never);
+  await agent.events.get("session_start")![0](undefined, context);
+  const started = readAgentState(mailbox)!;
+  const request: RequestRecord = {
+    version: 4,
+    runId: started.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: started.ownerSessionId,
+    workspaceId: started.workspaceId,
+    agentLabel: started.agentLabel,
+    paneId: started.paneId,
+    kind: "task",
+    text: "wait for the assignment lock",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, request);
+  const release = claimProcessLock(assignmentLockPathForTest(mailbox));
+  try {
+    assert.deepEqual(
+      agent.events.get("input")![0](
+        { text: controlMarker(request.requestId) },
+        context,
+      ),
+      { action: "handled" },
+    );
+    assert.equal(readAgentState(mailbox)?.activeRequestId, undefined);
+    assert.ok(readRequest(mailbox, request.requestId));
+  } finally {
+    release();
+  }
+  agent.events.get("input")![0](
+    { text: controlMarker(request.requestId) },
+    context,
+  );
+  assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
+  agent.events.get("session_shutdown")?.[0]();
+  realFs.rmSync(mailbox, { recursive: true, force: true });
 });
 
 test("agent bounds result persistence failure and exposes owner recovery evidence", async (t) => {

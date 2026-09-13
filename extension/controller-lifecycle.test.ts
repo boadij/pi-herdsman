@@ -32,6 +32,7 @@ import {
   defaultFixtureIdentity,
   delegatedLifecycleExecutor,
   delegationLockPathForTest,
+  assignmentLockPathForTest,
   fakeContext,
   fakePi,
   fakeAgentContext,
@@ -945,6 +946,44 @@ test("zero-child lead close is blocked by the parent delegation lock", async () 
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     releaseLock?.();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("lead close maps assignment-lock contention to agent_busy", async () => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState(
+      "assignment-lock-close-parent",
+      undefined,
+      recoveryIdentity("assignment-lock-close-parent"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+    piSessionFile: join(testTmpRoot, "assignment-lock-close-parent.jsonl"),
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, parent);
+  const pi = fakePi({ exec: cascadeExecutor([]).exec });
+  registerExtension!(pi.pi as never);
+  const release = claimProcessLock(assignmentLockPathForTest(mailbox), {
+    name: "test assignment transition",
+  });
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "close", agent: parent.agentLabel },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.error.category, "agent_busy");
+    assert.match(result.details.error.message, /managed assignment/i);
+    assert.match(result.details.error.nextAction, /retry/i);
+    assert.ok(readAgentState(mailbox));
+  } finally {
+    release();
+    pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
   }
 });
@@ -2048,7 +2087,7 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
     ),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
-    piSessionFile: "/tmp/recovery-bad.jsonl",
+    piSessionFile: join(testTmpRoot, "recovery-bad.jsonl"),
   };
   const goodChild = {
     ...managedState(
@@ -2058,7 +2097,7 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
     ),
     ownerSessionId: parent.piSessionId,
     piSessionId: "11111111-1111-4111-8111-111111111111",
-    piSessionFile: "/tmp/recovery-good.jsonl",
+    piSessionFile: join(testTmpRoot, "recovery-good.jsonl"),
   };
   const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
   const badMailbox = agentMailboxPath(WORKSPACE, badChild.agentLabel);
@@ -2115,8 +2154,8 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
     );
     assert.equal(listed.details.ok, true, JSON.stringify(listed.details));
     assert.deepEqual(
-      listed.details.agents.map((agent: any) => agent.agent),
-      [goodChild.agentLabel, badChild.agentLabel],
+      listed.details.agents.map((agent: any) => agent.agent).sort(),
+      [goodChild.agentLabel, badChild.agentLabel].sort(),
     );
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();

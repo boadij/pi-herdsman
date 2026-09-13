@@ -2317,6 +2317,129 @@ test("lost parent pane absence preserves durable child ancestry", async () => {
   }
 });
 
+test("missing durable ancestry remains unresolved through grandchildren", async () => {
+  setLeadEnvironment();
+  const child = {
+    ...managedState(
+      "missing-ancestry-child",
+      undefined,
+      recoveryIdentity("missing-ancestry-child"),
+    ),
+    ownerSessionId: PARENT_SESSION_ID,
+    piSessionId: CHILD_SESSION_ID,
+    piSessionFile: join(testTmpRoot, "missing-ancestry-child.jsonl"),
+  };
+  const grandchild = {
+    ...managedState(
+      "missing-ancestry-grandchild",
+      undefined,
+      recoveryIdentity("missing-ancestry-grandchild"),
+    ),
+    ownerSessionId: child.piSessionId,
+    piSessionId: "11111111-1111-4111-8111-111111111111",
+    piSessionFile: join(testTmpRoot, "missing-ancestry-grandchild.jsonl"),
+  };
+  const mailboxes = [child, grandchild].map((state) => ({
+    path: agentMailboxPath(WORKSPACE, state.agentLabel),
+    state,
+  }));
+  for (const { path, state } of mailboxes) {
+    resetAgentMailbox(path);
+    writeAgentState(path, state);
+  }
+  const lifecycle = cascadeExecutor([child, grandchild]);
+  const pi = fakePi({ exec: lifecycle.exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    const listed = result.details.agents as any[];
+    for (const label of [child.agentLabel, grandchild.agentLabel]) {
+      const agent = listed.find((candidate) => candidate.agent === label);
+      assert.equal(agent?.state, "unknown");
+      assert.equal(agent?.recovery_only, true);
+      assert.equal(
+        agent?.diagnostic,
+        label === child.agentLabel
+          ? "Durable parent assignment is missing"
+          : "Durable parent ancestry is unresolved",
+      );
+      assert.deepEqual(agent?.available_actions, []);
+    }
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    for (const { path } of mailboxes) resetAgentMailbox(path);
+  }
+});
+
+test("duplicate durable parent identities keep descendants unresolved", async () => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState(
+      "duplicate-ancestry-parent",
+      undefined,
+      recoveryIdentity("duplicate-ancestry-parent"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+  };
+  const duplicateParent = {
+    ...managedState(
+      "duplicate-ancestry-parent-copy",
+      undefined,
+      recoveryIdentity("duplicate-ancestry-parent-copy"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+  };
+  const child = {
+    ...managedState(
+      "duplicate-ancestry-child",
+      undefined,
+      recoveryIdentity("duplicate-ancestry-child"),
+    ),
+    ownerSessionId: PARENT_SESSION_ID,
+    piSessionId: CHILD_SESSION_ID,
+  };
+  const states = [parent, duplicateParent, child];
+  const mailboxes = states.map((state) =>
+    agentMailboxPath(WORKSPACE, state.agentLabel),
+  );
+  for (const [mailbox, state] of mailboxes.map(
+    (mailbox, index) => [mailbox, states[index]] as const,
+  )) {
+    resetAgentMailbox(mailbox);
+    writeAgentState(mailbox, state);
+  }
+  const pi = fakePi({ exec: cascadeExecutor(states).exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    const listedChild = (result.details.agents as any[]).find(
+      (agent) => agent.agent === child.agentLabel,
+    );
+    assert.equal(listedChild?.state, "unknown");
+    assert.equal(listedChild?.recovery_only, true);
+    assert.equal(
+      listedChild?.diagnostic,
+      "Durable parent ancestry is ambiguous",
+    );
+    assert.deepEqual(listedChild?.available_actions, []);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
+  }
+});
+
 test("lead cannot mutate a child owned by a live parent", async () => {
   setLeadEnvironment();
   const parent = {
@@ -4409,6 +4532,63 @@ test("nested unknown descendants refuse the cascade before any mutation", async 
   const lifecycle = cascadeExecutor([child, grandchild], {
     mismatchSessionLabel: grandchild.agentLabel,
   });
+  const pi = fakePi({ exec: lifecycle.exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "close", agent: parent.agentLabel },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.error.category, "target_ambiguous");
+    assert.deepEqual(lifecycle.closeOrder, []);
+    for (const mailbox of mailboxes) assert.ok(readAgentState(mailbox));
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
+  }
+});
+
+test("duplicate durable parent identities refuse cascade before mutation", async () => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState(
+      "duplicate-cascade-parent",
+      undefined,
+      recoveryIdentity("duplicate-cascade-parent"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+  };
+  const duplicateParent = {
+    ...managedState(
+      "duplicate-cascade-parent-copy",
+      undefined,
+      recoveryIdentity("duplicate-cascade-parent-copy"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+  };
+  const child = {
+    ...managedState(
+      "duplicate-cascade-child",
+      undefined,
+      recoveryIdentity("duplicate-cascade-child"),
+    ),
+    ownerSessionId: PARENT_SESSION_ID,
+    piSessionId: CHILD_SESSION_ID,
+  };
+  const states = [parent, duplicateParent, child];
+  const mailboxes = states.map((state) =>
+    agentMailboxPath(WORKSPACE, state.agentLabel),
+  );
+  for (const [mailbox, state] of mailboxes.map(
+    (mailbox, index) => [mailbox, states[index]] as const,
+  )) {
+    resetAgentMailbox(mailbox);
+    writeAgentState(mailbox, state);
+  }
+  const lifecycle = cascadeExecutor(states);
   const pi = fakePi({ exec: lifecycle.exec });
   registerExtension!(pi.pi as never);
   try {

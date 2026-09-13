@@ -34,6 +34,7 @@ export let failNextResultRemoval = false;
 export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
 export let configReadHook: (() => void) | undefined;
+export let agentStateReadHook: ((path: string) => void) | undefined;
 
 export type WidgetComponent = {
   render(width: number): string[];
@@ -115,7 +116,10 @@ mock.module("node:fs", {
         args[0].startsWith(`${PI_AGENTS_DIR}${sep}`)
       )
         agentDefinitionReadCount++;
-      return realFs.readFileSync(...args);
+      const result = realFs.readFileSync(...args);
+      if (typeof args[0] === "string" && args[0].endsWith(`${sep}state.json`))
+        agentStateReadHook?.(args[0]);
+      return result;
     },
     readSync: (...args: any[]) => {
       return realFs.readSync(...args);
@@ -569,6 +573,14 @@ export function delegationLockPathForTest(
       createHash("sha256")
         .update(workspaceId + "\0" + parentSessionId)
         .digest("hex"),
+  );
+}
+
+export function assignmentLockPathForTest(mailbox: string): string {
+  return join(
+    herdsmanTempRoot(),
+    "locks",
+    "assignment-" + createHash("sha256").update(mailbox).digest("hex"),
   );
 }
 
@@ -2859,5 +2871,11 @@ export default {
   },
   set configReadHook(value: typeof configReadHook) {
     configReadHook = value;
+  },
+  get agentStateReadHook() {
+    return agentStateReadHook;
+  },
+  set agentStateReadHook(value: typeof agentStateReadHook) {
+    agentStateReadHook = value;
   },
 };
