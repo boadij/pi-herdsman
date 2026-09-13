@@ -1131,13 +1131,18 @@ test("list retains durable agents whose physical identity is not exact", async (
     assert.deepEqual(
       agents
         .filter((agent) => typeof agent.agent === "string")
-        .map((agent) => agent.agent),
-      [invalidLabel, validLabel],
+        .map((agent) => agent.agent)
+        .sort(),
+      [invalidLabel, validLabel].sort(),
     );
-    assert.equal(agents[0].state, "unknown");
-    assert.deepEqual(agents[0].available_actions, []);
-    assert.equal(agents[1].agent_definition, "agent");
-    assert.equal(agents[1].managed, true);
+    const invalidAgent = agents.find((agent) => agent.agent === invalidLabel);
+    const validAgent = agents.find((agent) => agent.agent === validLabel);
+    assert.ok(invalidAgent);
+    assert.ok(validAgent);
+    assert.equal(invalidAgent.state, "unknown");
+    assert.deepEqual(invalidAgent.available_actions, []);
+    assert.equal(validAgent.agent_definition, "agent");
+    assert.equal(validAgent.managed, true);
   } finally {
     nativeSessions.delete(invalid.piSessionId);
     nativeSessions.delete(valid.piSessionId);
