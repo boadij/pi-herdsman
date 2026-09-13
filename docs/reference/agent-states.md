@@ -18,8 +18,8 @@ durable assignment/convergence evidence. It is not a raw herdr lifecycle string.
 A live agent record in `agent list` includes an `available_actions` snapshot.
 Use only operations currently listed there; do not infer control eligibility
 from `state` alone. `steer` means active work accepts steering, `reply` means a
-correlated pending `ask_owner` is valid, and `close` means exact ownership or
-approved orphan recovery permits teardown. `available_actions` never includes
+correlated pending `ask_owner` is valid, and `close` means exact direct ownership
+permits teardown. `available_actions` never includes
 `delegate`; an agent generation handles one assignment only. Every operation
 revalidates identity, ownership, mailbox state, and lifecycle immediately before
 mutation.
@@ -27,8 +27,9 @@ mutation.
 A delegating agent may be blocked while direct agent work is pending and still accept
 steering when `steer` is listed. Descendant visibility does not imply authority;
 records outside the controller's direct ownership can have an empty action list.
-A direct owner has `close` only for a proven `lost` record. `unknown` records
-remain fail-closed with no actions.
+Directly owned live records may expose the applicable live controls, including
+`close`; directly owned proven `lost` records expose `close` only. Unknown
+records and non-direct descendants remain fail-closed with no mutation actions.
 
 ## `blocked` and owner questions
 
@@ -51,6 +52,22 @@ model metadata, missing activity, a guessed session, or an old agent identity.
 `lost` is different: a coherent Herdr inventory proves the expected pane,
 session, and run-scoped alias are absent. It is not completion or task failure;
 use direct-owner `close` to abandon the unresolved generation.
+
+## Result precedence and actions
+
+A durable terminal result or `result_error` takes precedence over physical
+absence and projects as `settling` while delivery or recovery converges. A
+failed inventory never proves `lost`; relocated or conflicting evidence is
+`unknown`.
+
+| Record    | Direct-owner actions                                                            |
+| --------- | ------------------------------------------------------------------------------- |
+| `live`    | Existing live controls, including `inspect` and eligible `steer`, plus `close`. |
+| `lost`    | `close` only.                                                                   |
+| `unknown` | None.                                                                           |
+
+Descendants remain visible through durable ancestry but do not gain direct
+control from that visibility.
 
 ## Inactivity fields
 

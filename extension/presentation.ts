@@ -49,7 +49,6 @@ export interface StatusAgent {
   stale?: boolean;
   inactiveMs?: number;
   parentLabel?: string;
-  orphan?: boolean;
 }
 export interface StatusSnapshot {
   agents: StatusAgent[];
@@ -1424,7 +1423,6 @@ export function formatToolModelResult(
         ...(!fallback && Array.isArray(agent.available_actions)
           ? [`can ${agent.available_actions.join(", ") || "nothing"}`]
           : []),
-        ...(agent.orphan === true ? ["orphan"] : []),
         ...(agent.stale === true
           ? [
               `stale${typeof agent.inactive_ms === "number" ? ` ${Math.floor(agent.inactive_ms / 60000)}m inactive` : ""}`,
@@ -1872,7 +1870,6 @@ function agentHierarchy(details: Record<string, unknown>): string[] {
       state,
       ...(definition ? [`definition: ${definition}`] : []),
       ...(actions ? [`can: ${actions}`] : []),
-      ...(agent.orphan === true ? ["orphan"] : []),
       ...(agent.stale === true
         ? [
             `stale${typeof agent.inactive_ms === "number" ? ` · inactive ${formatDuration(agent.inactive_ms)}` : ""}`,

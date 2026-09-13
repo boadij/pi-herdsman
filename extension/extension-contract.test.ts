@@ -462,13 +462,18 @@ test("a replacement chief never falls back to the previous session supervision",
   const pi = fakePi({
     entries,
     exec: (_command, args) => {
-      if (failRefresh && isAgentList(args))
+      if (failRefresh && isApiSnapshot(args))
         throw new Error("supervision unavailable");
-      return isAgentList(args)
+      return isApiSnapshot(args)
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
-              result: { agents: [leadAgent] },
+              result: {
+                snapshot: {
+                  agents: [leadAgent],
+                  panes: [leadAgent],
+                },
+              },
             }),
             stderr: "",
             code: 0,
@@ -546,27 +551,37 @@ test("an obsolete background supervision refresh cannot publish after chief tran
   const pi = fakePi({
     entries,
     exec: async (_command, args) => {
-      if (isAgentList(args) && blockNextRefresh) {
+      if (isApiSnapshot(args) && blockNextRefresh) {
         blockNextRefresh = false;
         return new Promise((resolve) => {
           releaseBlocked = () =>
             resolve({
               stdout: JSON.stringify({
                 id: AGENT_ID,
-                result: { agents: [leadAgent] },
+                result: {
+                  snapshot: {
+                    agents: [leadAgent],
+                    panes: [leadAgent],
+                  },
+                },
               }),
               stderr: "",
               code: 0,
             });
         });
       }
-      if (failRefresh && isAgentList(args))
+      if (failRefresh && isApiSnapshot(args))
         throw new Error("supervision unavailable");
-      return isAgentList(args)
+      return isApiSnapshot(args)
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
-              result: { agents: [leadAgent] },
+              result: {
+                snapshot: {
+                  agents: [leadAgent],
+                  panes: [leadAgent],
+                },
+              },
             }),
             stderr: "",
             code: 0,
@@ -637,8 +652,8 @@ test("registered lead and replacement chief exchange messages and asks", async (
     agent_session: {
       source: "herdr:pi",
       agent: "pi",
-      kind: "path",
-      value: leadPath,
+      kind: "id",
+      value: leadId,
     },
     pane_id: "lead-pane",
     tab_id: "lead-tab",
@@ -649,8 +664,8 @@ test("registered lead and replacement chief exchange messages and asks", async (
     agent_session: {
       source: "herdr:pi",
       agent: "pi",
-      kind: "path",
-      value: chiefPath,
+      kind: "id",
+      value: chiefId,
     },
     pane_id: "chief-pane",
     tab_id: "chief-tab",
@@ -684,8 +699,24 @@ test("registered lead and replacement chief exchange messages and asks", async (
   let unresolvableIdentity = false;
   let aliasAgent: any | undefined;
   let failChiefAliasLookup = false;
-  const exec = (_command: string, args: string[]) =>
-    args[0] === "agent" && args[1] === "get"
+  const exec = (_command: string, args: string[]) => {
+    if (isAgentList(args))
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            agents: [
+              leadAgent,
+              chiefAgent,
+              agentFromState(directAgent, "working"),
+              agentFromState(descendantAgent, "blocked"),
+            ],
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    return args[0] === "agent" && args[1] === "get"
       ? failChiefAliasLookup && args[2] !== leadAgent.pane_id
         ? (() => {
             throw new Error("Chief alias lookup failed");
@@ -703,48 +734,77 @@ test("registered lead and replacement chief exchange messages and asks", async (
             stderr: "",
             code: 0,
           }
-      : isAgentList(args)
+      : isApiSnapshot(args)
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
               result: {
-                agents: [
-                  leadAgent,
-                  chiefAgent,
-                  agentFromState(directAgent, "working"),
-                  agentFromState(descendantAgent, "blocked"),
-                  ...(unresolvableIdentity
-                    ? [
-                        {
-                          agent: "pi",
-                          pane_id: "unknown-pane",
-                        },
-                      ]
-                    : []),
-                  ...(nonPiIntegration
-                    ? [
-                        {
-                          agent: "codex",
-                          agent_session: {
-                            source: "herdr:codex",
-                            agent: "codex",
-                            kind: "id",
-                            value: "codex-session",
+                snapshot: {
+                  agents: [
+                    leadAgent,
+                    chiefAgent,
+                    agentFromState(directAgent, "working"),
+                    agentFromState(descendantAgent, "blocked"),
+                    ...(unresolvableIdentity
+                      ? [
+                          {
+                            agent: "pi",
+                            pane_id: "unknown-pane",
                           },
-                          pane_id: "codex-pane",
-                        },
-                      ]
-                    : []),
-                  ...(duplicateChief
-                    ? [{ ...chiefAgent, pane_id: "duplicate-chief-pane" }]
-                    : []),
-                ],
+                        ]
+                      : []),
+                    ...(nonPiIntegration
+                      ? [
+                          {
+                            agent: "codex",
+                            agent_session: {
+                              source: "herdr:codex",
+                              agent: "codex",
+                              kind: "id",
+                              value: "codex-session",
+                            },
+                            pane_id: "codex-pane",
+                          },
+                        ]
+                      : []),
+                    ...(duplicateChief
+                      ? [{ ...chiefAgent, pane_id: "duplicate-chief-pane" }]
+                      : []),
+                  ],
+                  panes: [
+                    leadAgent,
+                    chiefAgent,
+                    agentFromState(directAgent, "working"),
+                    agentFromState(descendantAgent, "blocked"),
+                    ...(unresolvableIdentity
+                      ? [{ agent: "pi", pane_id: "unknown-pane" }]
+                      : []),
+                    ...(nonPiIntegration
+                      ? [
+                          {
+                            agent: "codex",
+                            agent_session: {
+                              source: "herdr:codex",
+                              agent: "codex",
+                              kind: "id",
+                              value: "codex-session",
+                            },
+                            pane_id: "codex-pane",
+                          },
+                        ]
+                      : []),
+                    ...(duplicateChief
+                      ? [{ ...chiefAgent, pane_id: "duplicate-chief-pane" }]
+                      : []),
+                  ],
+                },
               },
             }),
             stderr: "",
             code: 0,
           }
         : { stdout: "{}", stderr: "", code: 0 };
+  };
   process.env.HERDR_SOCKET_PATH = socket;
   process.env.HERDR_PANE_ID = "lead-pane";
   process.env.HERDR_TAB_ID = "lead-tab";
@@ -1474,9 +1534,12 @@ test("definition roster matches live list and rejects stale sessions", async () 
   process.env.HERDR_PANE_ID = "lead-pane";
   const pi = fakePi({
     exec: (_command, args) =>
-      isAgentList(args)
+      isApiSnapshot(args)
         ? {
-            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { snapshot: { agents: [], panes: [] } },
+            }),
             stderr: "",
             code: 0,
           }
@@ -1750,25 +1813,40 @@ test("list ignores an unrelated unnamed Herdr agent", async () => {
 
   const pi = fakePi({
     exec: (command, args) => {
-      if (command === "herdr" && isAgentList(args))
+      if (command === "herdr" && isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
-              agents: [
-                {
-                  workspace_id: WORKSPACE,
-                  pane_id: "lead-pane",
-                  cwd: "/tmp",
-                  agent_session: {
-                    source: "herdr:pi",
-                    agent: "pi",
-                    kind: "id",
-                    value: LEAD_SESSION_ID,
+              snapshot: {
+                agents: [
+                  {
+                    workspace_id: WORKSPACE,
+                    pane_id: "lead-pane",
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: LEAD_SESSION_ID,
+                    },
+                    // intentionally no name / herdr_agent
                   },
-                  // intentionally no name / herdr_agent
-                },
-              ],
+                ],
+                panes: [
+                  {
+                    pane_id: "lead-pane",
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: LEAD_SESSION_ID,
+                    },
+                  },
+                ],
+              },
             },
           }),
           stderr: "",

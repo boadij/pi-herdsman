@@ -722,54 +722,23 @@ export function fakePi(
         return result;
       }
       try {
-        let result: ExecResult;
-        if (options.exec && command === "herdr" && isApiSnapshot(args)) {
-          // Keep older focused executors useful while they are migrated to
-          // the coherent inventory contract. This is test-fixture adaptation
-          // only; production always requires `api snapshot`.
-          const legacy = await options.exec(
-            command,
-            ["agent", "list"],
-            execOptionsValue,
-          );
-          let legacyPayload: any;
-          try {
-            legacyPayload = JSON.parse(legacy.stdout);
-          } catch {}
-          const agents = legacyPayload?.result?.agents;
-          if (Array.isArray(agents)) {
-            const panes = agents.map((agent: any) => ({
-              pane_id: agent?.pane_id,
-              tab_id: agent?.tab_id,
-              workspace_id: agent?.workspace_id,
-              cwd: agent?.cwd,
-              agent_session: agent?.agent_session,
-            }));
-            result = {
-              stdout: JSON.stringify({
-                id: AGENT_ID,
-                result: { snapshot: { agents, panes } },
-              }),
-              stderr: legacy.stderr,
-              code: legacy.code,
-            };
-          } else {
-            result = await options.exec(command, args, execOptionsValue);
-          }
-        } else
-          result = await (options.exec?.(command, args, execOptionsValue) ?? {
-            stdout:
-              command === "herdr" && isAgentList(args)
-                ? JSON.stringify({ id: AGENT_ID, result: { agents: [] } })
-                : command === "herdr" && isApiSnapshot(args)
-                  ? JSON.stringify({
-                      id: AGENT_ID,
-                      result: { snapshot: { agents: [], panes: [] } },
-                    })
-                  : "{}",
-            stderr: "",
-            code: 0,
-          });
+        const result = await (options.exec?.(
+          command,
+          args,
+          execOptionsValue,
+        ) ?? {
+          stdout:
+            command === "herdr" && isAgentList(args)
+              ? JSON.stringify({ id: AGENT_ID, result: { agents: [] } })
+              : command === "herdr" && isApiSnapshot(args)
+                ? JSON.stringify({
+                    id: AGENT_ID,
+                    result: { snapshot: { agents: [], panes: [] } },
+                  })
+                : "{}",
+          stderr: "",
+          code: 0,
+        });
         callResults.push({
           args,
           succeeded: result.code === 0,
@@ -2245,7 +2214,12 @@ export function createStagedAssignmentFixture(
     get workingObservations(): number {
       return workingObservations;
     },
-    releaseInitialStatus: () => initialStatus.resolve(emptyStatus()),
+    releaseInitialStatus: () =>
+      initialStatus.resolve(
+        readAgentState(startupMailbox)
+          ? startup.exec("herdr", ["api", "snapshot"])
+          : emptyStatus(),
+      ),
     releaseStart: () => start.resolve(),
     releasePreSubmitValidation: () => preSubmitValidation.resolve(),
     releaseAcknowledgement: () => handoff.resolve(),

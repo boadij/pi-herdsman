@@ -1153,9 +1153,12 @@ test("list projects an unreadable current mailbox as non-actionable unknown", as
   realFs.writeFileSync(join(mailbox, "state.json"), "x".repeat(70 * 1024));
   const pi = fakePi({
     exec: (_command, args) =>
-      isAgentList(args)
+      isAgentList(args) || isApiSnapshot(args)
         ? {
-            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { agents: [], snapshot: { agents: [], panes: [] } },
+            }),
             stderr: "",
             code: 0,
           }
@@ -1871,12 +1874,26 @@ test("session assignment fails closed on duplicate live representations", async 
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "--version")
         return { stdout: "0.8.0", stderr: "", code: 0 };
-      if (command === "herdr" && isAgentList(args))
+      if (command === "herdr" && (isAgentList(args) || isApiSnapshot(args)))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
               agents: [agentFromState(first), agentFromState(second)],
+              snapshot: {
+                agents: [agentFromState(first), agentFromState(second)],
+                panes: [first, second].map((state) => ({
+                  pane_id: state.paneId,
+                  workspace_id: state.workspaceId,
+                  cwd: state.cwd,
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: state.piSessionId,
+                  },
+                })),
+              },
             },
           }),
           stderr: "",
@@ -2592,7 +2609,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
   const base = agentControllerExecutor(observedParent, [child]);
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && isAgentList(args)) {
+      if (command === "herdr" && (isAgentList(args) || isApiSnapshot(args))) {
         const liveParent = readAgentState(parentMailbox) ?? observedParent;
         const liveChild = readAgentState(childMailbox) ?? child;
         return {
@@ -2606,6 +2623,26 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
                   liveChild.activeRequestId ? "working" : "idle",
                 ),
               ],
+              snapshot: {
+                agents: [
+                  agentFromState(liveParent, parentStatus),
+                  agentFromState(
+                    liveChild,
+                    liveChild.activeRequestId ? "working" : "idle",
+                  ),
+                ],
+                panes: [liveParent, liveChild].map((state) => ({
+                  pane_id: state.paneId,
+                  workspace_id: state.workspaceId,
+                  cwd: state.cwd,
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: state.piSessionId,
+                  },
+                })),
+              },
             },
           }),
           stderr: "",

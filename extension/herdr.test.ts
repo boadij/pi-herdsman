@@ -173,7 +173,7 @@ test("session snapshot accepts only coherent pane and agent inventories", async 
 
 test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async () => {
   const socketPath =
-    process.platform === "win32"
+    globalThis.process.platform === "win32"
       ? `\\\\.\\pipe\\pi-herdsman-${randomUUID()}`
       : join(tmpdir(), `pi-herdsman-${randomUUID()}.sock`);
   const server = createServer();
@@ -215,7 +215,8 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
   assert.equal(changes, 3);
   controller.abort();
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (process.platform !== "win32") rmSync(socketPath, { force: true });
+  if (globalThis.process.platform !== "win32")
+    rmSync(socketPath, { force: true });
 });
 
 test("lead metadata is display-only and carries current name and ask", () => {
@@ -3577,7 +3578,7 @@ test("exited-start rollback refuses agent, process, and tab ownership changes", 
   else environment.HERDR_WORKSPACE_ID = previousWorkspace;
 });
 
-const process = {
+const processInfo = {
   pane_id: "pane-1",
   shell_pid: 12,
   foreground_process_group_id: 34,
@@ -3659,14 +3660,14 @@ test("cwd comparisons accept equivalent symlink paths", () => {
 });
 
 test("running ownership includes shell and foreground process group", () => {
-  assert.equal(sameRunningProcessOwner(process, process), true);
+  assert.equal(sameRunningProcessOwner(processInfo, processInfo), true);
   assert.equal(
-    sameRunningProcessOwner(process, { ...process, shell_pid: 13 }),
+    sameRunningProcessOwner(processInfo, { ...processInfo, shell_pid: 13 }),
     false,
   );
   assert.equal(
-    sameRunningProcessOwner(process, {
-      ...process,
+    sameRunningProcessOwner(processInfo, {
+      ...processInfo,
       foreground_process_group_id: 35,
     }),
     false,
@@ -3774,7 +3775,7 @@ test("process ownership handles optional foreground process groups", () => {
 
 test("shell ownership uses captured identity without a shell allowlist", () => {
   const captured = {
-    ...process,
+    ...processInfo,
     foreground_process_group_id: 12,
     foreground_processes: [{ pid: 12, argv0: "pwsh.exe" }],
   };
@@ -3788,7 +3789,7 @@ test("shell ownership uses captured identity without a shell allowlist", () => {
   );
   assert.equal(
     sameShellProcessOwner(
-      { ...process, foreground_process_group_id: 20 },
+      { ...processInfo, foreground_process_group_id: 20 },
       captured,
     ),
     true,

@@ -96,7 +96,7 @@ and proven `lost` records. Each actionable live agent record includes:
 | `owner_session_id`                                              | Exact direct owner Pi session.                                                                                                    |
 | `agent_definition`                                              | Effective definition name.                                                                                                        |
 | `active_request_id`, `last_activity_at`, `stale`, `inactive_ms` | Assignment and advisory activity evidence.                                                                                        |
-| `parent_label`, `orphan`                                        | Visible direct-owner ancestry and proven orphan recovery evidence.                                                                |
+| `parent_label`                                                  | Durable parent assignment when the parent is visible.                                                                             |
 | `cleanup_error`, `result_error`, `diagnostic`, `tokens`         | Bounded recovery and presentation evidence when present.                                                                          |
 
 `available_actions` is authoritative model guidance for the current snapshot.
@@ -104,10 +104,11 @@ Do not infer eligibility from `state`. Active work may list `steer`; a valid
 correlated pending `ask_owner` may list `reply`; exact direct ownership may list
 `close`. `available_actions` never lists `delegate` or `continue`: these are
 controller operations, not controls on an already-live agent. An agent cannot
-receive a second assignment. Descendant visibility does not grant control. Lead orphan
-recovery may expose only `close`. Proven `lost` direct records expose `close`
-only; unknown records remain non-actionable. Every operation rechecks identity, ownership, mailbox state, and
-lifecycle immediately before mutation.
+receive a second assignment. Directly owned live agents may expose the
+applicable live controls, including `close`; directly owned proven `lost`
+records expose `close` only. Unknown records and non-direct descendants expose
+no mutation actions. Every operation rechecks identity, ownership, mailbox
+state, and lifecycle immediately before mutation.
 The public record does not expose `steerable`.
 
 The session-start instructions include the same complete definition metadata
@@ -204,8 +205,8 @@ See [`ask_owner` API](ask-owner.md).
 { "action": "close", "agent": "implementer-1" }
 ```
 
-Only `action` and `agent` are accepted. Close requires exact direct ownership,
-or the lead-only evidence-backed orphan recovery condition. Closing abandons a
+Only `action` and `agent` are accepted. Close requires exact direct ownership.
+Closing abandons a
 pending owner question; closing a delegating agent cascades through directly
 owned agents first. Cleanup remains fail-closed when exact identity or ownership
 cannot be proved. A direct owner may also close a proven `lost` generation

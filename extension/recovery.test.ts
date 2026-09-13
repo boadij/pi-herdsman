@@ -637,7 +637,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
         }
         return { stdout: "{}", stderr: "", code: 0 };
       }
-      if (isAgentList(args))
+      if (isAgentList(args) || isApiSnapshot(args))
         return {
           stdout:
             started && !stopped
@@ -648,9 +648,26 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
                   value.agents[0].name = alias;
                   value.agents[0].pane_id = "pane-start";
                   value.agents[0].tab_id = "registered-tab";
+                  value.snapshot = {
+                    agents: value.agents,
+                    panes: [
+                      {
+                        pane_id: "pane-start",
+                        workspace_id: WORKSPACE,
+                        cwd: "/tmp",
+                        agent_session: value.agents[0].agent_session,
+                      },
+                    ],
+                  };
                   return JSON.stringify({ id: AGENT_ID, result: value });
                 })()
-              : emptyList(),
+              : JSON.stringify({
+                  id: AGENT_ID,
+                  result: {
+                    ...JSON.parse(emptyList()).result,
+                    snapshot: { agents: [], panes: [] },
+                  },
+                }),
           stderr: "",
           code: 0,
         };
@@ -1099,7 +1116,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
         }
         return { stdout: "{}", stderr: "", code: 0 };
       }
-      if (isAgentList(args))
+      if (isAgentList(args) || isApiSnapshot(args))
         return {
           stdout: (() => {
             const value = JSON.parse(listResponse(label));
@@ -1114,6 +1131,22 @@ test("assignment rollback retains primary failure and actionable cleanup details
               pane_id: "unmanaged-root-pane",
               cwd: "/tmp",
             });
+            value.snapshot = {
+              agents: value.agents,
+              panes: [
+                {
+                  pane_id: "detail-pane",
+                  workspace_id: WORKSPACE,
+                  cwd: "/tmp",
+                  agent_session: value.agents[0].agent_session,
+                },
+                {
+                  pane_id: "unmanaged-root-pane",
+                  workspace_id: WORKSPACE,
+                  cwd: "/tmp",
+                },
+              ],
+            };
             return JSON.stringify({ id: AGENT_ID, result: value });
           })(),
           stderr: "",
@@ -1344,6 +1377,7 @@ test("completed and failed one-shot agents converge after durable delivery", asy
     ["converge-child-two", randomUUID()],
   ].map(([label, requestId], index) => {
     const identity = recoveryIdentity(label);
+    identity.piSessionFile = join(testTmpRoot, `${label}.jsonl`);
     if (index === 1)
       identity.piSessionId = "11111111-1111-4111-8111-111111111111";
     return {
@@ -1998,11 +2032,29 @@ test("lead recovery integration validation aborts with session shutdown", async 
   let integrationAborted = false;
   const recovery = fakePi({
     exec: async (command, args, options) => {
-      if (command === "herdr" && args[0] === "agent" && args[1] === "list")
+      if (command === "herdr" && (isAgentList(args) || isApiSnapshot(args)))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: JSON.parse(listResponse(label, "working")),
+            result: {
+              agents: JSON.parse(listResponse(label, "working")).agents,
+              snapshot: {
+                agents: JSON.parse(listResponse(label, "working")).agents,
+                panes: [
+                  {
+                    pane_id: "registered-pane",
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: DEFAULT_PI_SESSION_ID,
+                    },
+                  },
+                ],
+              },
+            },
           }),
           stderr: "",
           code: 0,
@@ -2205,22 +2257,22 @@ test("lost parent pane absence preserves durable child ancestry", async () => {
     setLeadEnvironment();
     const parent = {
       ...managedState(
-        "orphan-parent",
+        "missing-parent",
         undefined,
-        recoveryIdentity("orphan-parent"),
+        recoveryIdentity("missing-parent"),
       ),
       piSessionId: PARENT_SESSION_ID,
-      piSessionFile: "/tmp/orphan-parent.jsonl",
+      piSessionFile: join(testTmpRoot, "missing-parent.jsonl"),
     };
     const child = {
       ...managedState(
-        "orphan-child",
+        "missing-parent-child",
         undefined,
-        recoveryIdentity("orphan-child"),
+        recoveryIdentity("missing-parent-child"),
       ),
       ownerSessionId: parent.piSessionId,
       piSessionId: CHILD_SESSION_ID,
-      piSessionFile: "/tmp/orphan-child.jsonl",
+      piSessionFile: join(testTmpRoot, "missing-parent-child.jsonl"),
     };
     const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
     const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
@@ -2246,7 +2298,6 @@ test("lost parent pane absence preserves durable child ancestry", async () => {
         (agent) => agent.agent === child.agentLabel,
       );
       assert.equal(listedChild?.parent_label, parent.agentLabel);
-      assert.equal(listedChild?.orphan, undefined);
       assert.deepEqual(listedChild?.available_actions, []);
       const result = await pi.tools[0].execute(
         "id",
@@ -3164,6 +3215,53 @@ test("automatic close invokes the exact lifecycle only after live identity proof
           stderr: "",
           code: 0,
         };
+      if (command === "herdr" && isApiSnapshot(args))
+        return {
+          stdout: live
+            ? JSON.stringify({
+                id: AGENT_ID,
+                result: {
+                  snapshot: {
+                    agents: (() => {
+                      const value = JSON.parse(
+                        listResponse(
+                          label,
+                          "working",
+                          identity.piSessionId,
+                          identity,
+                        ),
+                      );
+                      value.agents[0].name = runScopedHerdrAlias(
+                        WORKSPACE,
+                        label,
+                        AGENT_ID,
+                      );
+                      return value.agents;
+                    })(),
+                    panes: [
+                      {
+                        pane_id: identity.paneId,
+                        tab_id: identity.tabId,
+                        workspace_id: WORKSPACE,
+                        cwd: "/tmp",
+                        agent_session: {
+                          source: "herdr:pi",
+                          agent: "pi",
+                          kind: "id",
+                          value: identity.piSessionId,
+                        },
+                      },
+                    ],
+                  },
+                },
+              })
+            : JSON.stringify({
+                id: AGENT_ID,
+                result: { snapshot: { agents: [], panes: [] } },
+              }),
+          stderr: "",
+          code: 0,
+        };
       if (command === "herdr" && args[0] === "agent" && args[1] === "get")
         return {
           stdout: JSON.stringify({
@@ -3207,7 +3305,11 @@ test("automatic close invokes the exact lifecycle only after live identity proof
     await pi.events.get("session_start")![0](undefined, fakeContext(entries));
     assert.equal(closeCalls, 1);
     assert.equal(closeArgs?.[2], identity.paneId);
-    assert.equal(readAgentState(mailbox), undefined);
+    assert.equal(
+      readAgentState(mailbox),
+      undefined,
+      JSON.stringify(pi.entries),
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     realFs.unlinkSync(join(PI_AGENTS_DIR, "automatic-close-test.md"));
@@ -3396,7 +3498,7 @@ test("stale scanner skips completion or identity changes before publication", as
   let sendCount = 0;
   const pi = fakePi({
     exec: async (command, args) => {
-      if (command === "herdr" && args[0] === "agent" && args[1] === "list") {
+      if (command === "herdr" && isApiSnapshot(args)) {
         await listPending;
         return {
           stdout: JSON.stringify({
@@ -3449,12 +3551,29 @@ test("stale scanner skips every replaced identity field before publication", asy
     let sends = 0;
     const pi = fakePi({
       exec: async (command, args) => {
-        if (command === "herdr" && args[0] === "agent" && args[1] === "list") {
+        if (command === "herdr" && isApiSnapshot(args)) {
           await pending;
           return {
             stdout: JSON.stringify({
               id: AGENT_ID,
-              result: JSON.parse(listResponse(label, "working")),
+              result: {
+                snapshot: {
+                  agents: JSON.parse(listResponse(label, "working")).agents,
+                  panes: [
+                    {
+                      pane_id: `${label}-pane`,
+                      workspace_id: WORKSPACE,
+                      cwd: "/tmp",
+                      agent_session: {
+                        source: "herdr:pi",
+                        agent: "pi",
+                        kind: "id",
+                        value: DEFAULT_PI_SESSION_ID,
+                      },
+                    },
+                  ],
+                },
+              },
             }),
             stderr: "",
             code: 0,
@@ -3900,7 +4019,7 @@ test("lost close fails closed when a result appears during its final proof", asy
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = cascadeExecutor([]).exec(command, args, options);
-      if (command === "herdr" && isAgentList(args) && ++snapshots === 5) {
+      if (command === "herdr" && isApiSnapshot(args) && ++snapshots === 5) {
         writeAgentState(mailbox, racedState);
         writeResult(mailbox, {
           version: 4,
@@ -3986,7 +4105,6 @@ test("a lost parent retains its live child ancestry and closes child-first", asy
       "lost",
     );
     assert.equal(childRow?.parent_label, parent.agentLabel);
-    assert.equal(childRow?.orphan, undefined);
 
     const closed = await pi.tools[0].execute(
       "id",
@@ -4393,9 +4511,9 @@ test("cascade revalidates a live descendant mailbox before closing it", async ()
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = lifecycle.exec(command, args, options);
-      if (command === "herdr" && isAgentList(args)) {
+      if (command === "herdr" && isApiSnapshot(args)) {
         snapshotCalls++;
-        if (snapshotCalls === 3) writeAgentState(childMailbox, changedChild);
+        if (snapshotCalls === 2) writeAgentState(childMailbox, changedChild);
       }
       return result;
     },
@@ -4410,7 +4528,7 @@ test("cascade revalidates a live descendant mailbox before closing it", async ()
       fakeContext(),
     );
     assert.equal(result.details.error.category, "target_ambiguous");
-    assert.equal(snapshotCalls, 3);
+    assert.equal(snapshotCalls, 2);
     assert.deepEqual(lifecycle.closeOrder, []);
     assert.deepEqual(readAgentState(parentMailbox), parent);
     assert.deepEqual(readAgentState(childMailbox), changedChild);
@@ -4578,7 +4696,9 @@ test("list derives inactivity without changing public state", async () => {
     { label: "future-working", status: "working" as const, at: now + 1_000 },
   ];
   for (const item of cases) {
-    const state = managedState(item.label, REQUEST_ID);
+    const identity = recoveryIdentity(item.label);
+    identity.piSessionId = randomUUID();
+    const state = managedState(item.label, REQUEST_ID, identity);
     if (item.at !== undefined) state.lastActivityAt = item.at;
     writeAgentState(agentMailboxPath(WORKSPACE, item.label), state);
   }
@@ -4589,8 +4709,18 @@ test("list derives inactivity without changing public state", async () => {
           const state = readAgentState(
             agentMailboxPath(WORKSPACE, item.label),
           )!;
+          const identity = recoveryIdentity(item.label);
+          identity.paneId = state.paneId;
+          identity.piSessionId = state.piSessionId;
           return {
-            ...JSON.parse(listResponse(item.label, item.status)).agents[0],
+            ...JSON.parse(
+              listResponse(
+                item.label,
+                item.status,
+                state.piSessionId,
+                identity,
+              ),
+            ).agents[0],
             agent_session: {
               source: "herdr:pi",
               agent: "pi",

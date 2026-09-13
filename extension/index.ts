@@ -979,20 +979,14 @@ async function reusableLeadTab(
   }
   if (
     snapshot.agents.some(
-      ({ state, listed }) =>
-        listed.tab_id === candidate &&
-        state.workspaceId === workspaceId &&
-        !owners.has(state.ownerSessionId),
-    )
-  )
-    return undefined;
-  if (
-    snapshot.agents.some(
-      ({ state, listed, presence }) =>
+      ({ state, presence }) =>
         state.workspaceId === workspaceId &&
         !owners.has(state.ownerSessionId) &&
-        presence.kind !== "live" &&
-        listed.tab_id === candidate,
+        presence.kind === "unknown" &&
+        presence.relatedAgents.some(
+          (agent) =>
+            agent?.workspace_id === workspaceId && agent?.tab_id === candidate,
+        ),
     )
   )
     return undefined;
@@ -2252,7 +2246,7 @@ function pendingResultExists(
     return true;
   }
 }
-function plausibleResultRequestIds(
+function durableResultRequestIds(
   mailboxPath: string,
   state: ManagedAgentState,
 ): string[] {
@@ -2266,66 +2260,21 @@ function plausibleResultRequestIds(
       !!requestId && requestIds.indexOf(requestId) === index,
   );
 }
-function managedAgentResultPending(
+function hasDurableResult(
   mailboxPath: string,
   state: ManagedAgentState,
+  exceptRequestId?: string,
 ): boolean {
   try {
-    return plausibleResultRequestIds(mailboxPath, state).some((requestId) =>
-      readResult(mailboxPath, requestId),
+    return durableResultRequestIds(mailboxPath, state).some(
+      (requestId) =>
+        requestId !== exceptRequestId &&
+        readResult(mailboxPath, requestId) !== undefined,
     );
   } catch {
-    // A mailbox read failure cannot prove that result delivery is unnecessary.
+    // A mailbox read failure cannot prove that no result exists.
     return true;
   }
-}
-function assertNoPendingManagedResult(
-  mailboxPath: string,
-  state: ManagedAgentState,
-  authorization?: { state: ManagedAgentState; requestId: string },
-): void {
-  try {
-    const handoff = readUnacknowledgedRequest(mailboxPath, state);
-    const allowedRequestId =
-      authorization && sameManagedAgentIdentity(state, authorization.state)
-        ? authorization.requestId
-        : undefined;
-    for (const requestId of plausibleResultRequestIds(mailboxPath, state)) {
-      const result = readResult(mailboxPath, requestId);
-      if (
-        requestId !== allowedRequestId &&
-        (result !== undefined || requestId === handoff?.requestId)
-      )
-        fail(
-          "target_ambiguous",
-          "Managed agent has a pending durable result; close result delivery first",
-          "close",
-        );
-    }
-  } catch (error) {
-    if (error instanceof OperationError) throw error;
-    fail(
-      "target_ambiguous",
-      "Managed agent result state is unresolved; close is refused",
-      "close",
-    );
-  }
-}
-function rereadCloseableManagedState(
-  mailboxPath: string,
-  expected: ManagedAgentState,
-  authorization?: { state: ManagedAgentState; requestId: string },
-): ManagedAgentState {
-  let current: ManagedAgentState | undefined;
-  try {
-    current = readAgentState(mailboxPath);
-  } catch {
-    fail("target_ambiguous", "A managed mailbox has unresolved state", "close");
-  }
-  if (!current || !sameManagedAgentIdentity(current, expected))
-    fail("target_ambiguous", "Managed agent changed before close", "close");
-  assertNoPendingManagedResult(mailboxPath, current, authorization);
-  return current;
 }
 type ManagedAgentSnapshot = {
   listed: any;
@@ -2340,7 +2289,6 @@ type ManagedAgentPresence =
   | { kind: "lost" };
 type VisibleManagedAgentSnapshot = ManagedAgentSnapshot & {
   parentLabel?: string;
-  orphan?: boolean;
 };
 type ManagedAgentSnapshotView = Awaited<
   ReturnType<typeof managedAgentSnapshots>
@@ -2573,18 +2521,15 @@ function managedAgentPresence(
   const relatedPanes = inventory.panes.filter((pane) =>
     safeMatches(pane?.agent_session),
   );
-  const conflictingAgent =
-    exact.length !== 1 || relatedAgents.some((agent) => agent !== exact[0]);
-  const conflictingPane = relatedPanes.some(
-    (pane) =>
-      pane?.workspace_id !== state.workspaceId ||
-      pane?.pane_id !== state.paneId,
-  );
   if (
     exact.length === 1 &&
     expectedPane &&
-    !conflictingAgent &&
-    !conflictingPane
+    relatedAgents.every((agent) => agent === exact[0]) &&
+    relatedPanes.every(
+      (pane) =>
+        pane?.workspace_id === state.workspaceId &&
+        pane?.pane_id === state.paneId,
+    )
   )
     return { kind: "live", agent: exact[0] };
   if (
@@ -2597,161 +2542,68 @@ function managedAgentPresence(
   return {
     kind: "unknown",
     relatedAgents,
-    diagnostic:
-      conflictingAgent || conflictingPane
-        ? "Managed session identity is present at a different Herdr location"
-        : "Managed pane exists but exact agent identity is not provable",
+    diagnostic: "Managed physical identity cannot be proved uniquely",
   };
 }
 
-async function assertParentAbsent(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  parent: ManagedAgentState,
-  signal?: AbortSignal,
-): Promise<void> {
-  const presence = managedAgentPresence(
-    parent,
-    await herdrSessionSnapshot(pi, ctx, signal),
-  );
-  if (presence.kind !== "lost")
-    fail(
-      "target_not_found",
-      "Agent is still live; orphan recovery is refused",
-      "close",
-    );
-}
-
-async function visibleAgentSnapshots(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
+function visibleAgentSnapshots(
   snapshot: Awaited<ReturnType<typeof managedAgentSnapshots>>,
   scope: ControllerScope | undefined,
   ownerSessionId: string,
-  signal?: AbortSignal,
-): Promise<VisibleManagedAgentSnapshot[]> {
+): VisibleManagedAgentSnapshot[] {
   if (!scope) return snapshot.agents;
   const direct = snapshot.agents.filter(
     ({ state }) => state.ownerSessionId === ownerSessionId,
   );
-  if (scope.kind === "lead") {
-    const visible: VisibleManagedAgentSnapshot[] = [...direct];
-    const visibleByLabel = new Map(
-      visible.map((agent) => [agent.state.agentLabel, agent]),
-    );
-    const pending = snapshot.agents.filter(
-      ({ state }) => state.ownerSessionId !== ownerSessionId,
-    );
-    let progressed = true;
-    while (pending.length && progressed) {
-      progressed = false;
-      for (let index = pending.length - 1; index >= 0; index--) {
-        const agent = pending[index];
-        const parent = snapshot.agents.find(
-          ({ state }) => state.piSessionId === agent.state.ownerSessionId,
-        );
-        if (parent && visibleByLabel.has(parent.state.agentLabel)) {
-          const child = { ...agent, parentLabel: parent.state.agentLabel };
-          visible.push(child);
-          visibleByLabel.set(agent.state.agentLabel, child);
-          pending.splice(index, 1);
-          progressed = true;
-          continue;
-        }
-        if (parent) continue;
-        const staleParent = snapshot.mailboxes.find(
-          ({ state }) =>
-            state.ownerSessionId === ownerSessionId &&
-            state.piSessionId === agent.state.ownerSessionId,
-        )?.state;
-        if (!staleParent) continue;
-        try {
-          stateAgentDefinition(staleParent);
-          await assertParentAbsent(pi, ctx, staleParent, signal);
-        } catch {
-          continue;
-        }
-        const orphan = {
-          ...agent,
-          parentLabel: staleParent.agentLabel,
-          orphan: true,
-        };
-        visible.push(orphan);
-        visibleByLabel.set(agent.state.agentLabel, orphan);
-        pending.splice(index, 1);
-        progressed = true;
-      }
-    }
-    for (const agent of pending) {
+  if (scope.kind === "managed-agent") return direct;
+  const visible: VisibleManagedAgentSnapshot[] = [...direct];
+  const visibleBySession = new Set(
+    direct.map(({ state }) => state.piSessionId),
+  );
+  const pending = snapshot.agents.filter(
+    ({ state }) => state.ownerSessionId !== ownerSessionId,
+  );
+  while (pending.length) {
+    let progressed = false;
+    for (let index = pending.length - 1; index >= 0; index--) {
+      const agent = pending[index];
       const parent = snapshot.agents.find(
-        ({ state }) => state.piSessionId === agent.state.ownerSessionId,
+        ({ state }) =>
+          state.workspaceId === agent.state.workspaceId &&
+          state.piSessionId === agent.state.ownerSessionId,
       );
-      const visited = new Set<string>();
-      let cursor = agent;
-      let cycle = false;
-      while (true) {
-        if (visited.has(cursor.state.piSessionId)) {
-          cycle = true;
-          break;
-        }
-        visited.add(cursor.state.piSessionId);
-        const ancestor = snapshot.agents.find(
-          ({ state }) => state.piSessionId === cursor.state.ownerSessionId,
-        );
-        if (!ancestor) break;
-        cursor = ancestor;
-      }
+      if (parent && !visibleBySession.has(parent.state.piSessionId)) continue;
+      const listed = parent
+        ? agent.listed
+        : {
+            ...agent.listed,
+            state: "unknown",
+            steerable: false,
+            recovery_only: true,
+            diagnostic: "Durable parent assignment is missing",
+          };
       visible.push({
         ...agent,
-        listed: {
-          ...agent.listed,
-          state: "unknown",
-          steerable: false,
-          recovery_only: true,
-          diagnostic: cycle
-            ? "cyclic ancestry; recovery only"
-            : "incomplete ancestry; recovery only",
-        },
+        listed,
         ...(parent ? { parentLabel: parent.state.agentLabel } : {}),
       });
+      visibleBySession.add(agent.state.piSessionId);
+      pending.splice(index, 1);
+      progressed = true;
     }
-    return visible;
-  }
-  const visible: VisibleManagedAgentSnapshot[] = [];
-  for (const agent of snapshot.agents) {
-    const parent = direct.find(
-      ({ state }) => state.piSessionId === agent.state.ownerSessionId,
-    );
-    if (agent.state.ownerSessionId === ownerSessionId) {
-      visible.push(agent);
-      continue;
+    if (!progressed) {
+      for (const agent of pending.splice(0))
+        visible.push({
+          ...agent,
+          listed: {
+            ...agent.listed,
+            state: "unknown",
+            steerable: false,
+            recovery_only: true,
+            diagnostic: "Cyclic durable ancestry",
+          },
+        });
     }
-    if (scope.kind === "managed-agent" || !parent) {
-      if (scope.kind === "managed-agent") continue;
-      const staleParent = snapshot.mailboxes.find(
-        ({ state }) =>
-          state.ownerSessionId === ownerSessionId &&
-          state.piSessionId === agent.state.ownerSessionId,
-      )?.state;
-      if (!staleParent) continue;
-      try {
-        stateAgentDefinition(staleParent);
-      } catch {
-        continue;
-      }
-      try {
-        await assertParentAbsent(pi, ctx, staleParent, signal);
-      } catch {
-        continue;
-      }
-      visible.push({
-        ...agent,
-        parentLabel: staleParent.agentLabel,
-        orphan: true,
-      });
-      continue;
-    }
-    visible.push({ ...agent, parentLabel: parent.state.agentLabel });
   }
   return visible;
 }
@@ -2761,13 +2613,13 @@ function listedAgentRecords(
   ownerSessionId: string,
   scope: ControllerScope | undefined,
 ): Record<string, unknown>[] {
-  return visible.map(({ listed, state, presence, parentLabel, orphan }) => {
+  return visible.map(({ listed, state, presence, parentLabel }) => {
     const direct = state.ownerSessionId === ownerSessionId;
     const actions: string[] = [];
     if (
       direct &&
       presence.kind === "lost" &&
-      !managedAgentResultPending(
+      !hasDurableResult(
         agentMailboxPath(state.workspaceId, state.agentLabel),
         state,
       )
@@ -2796,17 +2648,6 @@ function listedAgentRecords(
         } catch {}
       }
       actions.push("close");
-    } else if (
-      orphan &&
-      scope?.kind === "lead" &&
-      ((presence.kind === "lost" &&
-        !managedAgentResultPending(
-          agentMailboxPath(state.workspaceId, state.agentLabel),
-          state,
-        )) ||
-        (presence.kind === "live" && !listed.recovery_only))
-    ) {
-      actions.push("close");
     }
     const {
       label: _label,
@@ -2822,7 +2663,6 @@ function listedAgentRecords(
         ? { cleanup_error: cleanupErrors.get(listed.label) }
         : {}),
       ...(parentLabel ? { parent_label: parentLabel } : {}),
-      ...(orphan ? { orphan: true } : {}),
     };
   });
 }
@@ -2837,13 +2677,10 @@ async function agentSnapshotView(
   const snapshot = await managedAgentSnapshots(pi, ctx, signal, proveLead);
   return {
     ...snapshot,
-    visible: await visibleAgentSnapshots(
-      pi,
-      ctx,
+    visible: visibleAgentSnapshots(
       snapshot,
       scope,
       ctx.sessionManager.getSessionId(),
-      signal,
     ),
   };
 }
@@ -3161,6 +2998,74 @@ function resultCleanupReady(
     state.completedRequestId === requestId
   );
 }
+function newerMailboxWorkExists(
+  mailbox: string,
+  state: ManagedAgentState,
+  requestId: string,
+): boolean {
+  return durableResultRequestIds(mailbox, state).some(
+    (candidate) => candidate !== requestId,
+  );
+}
+async function finalizeDeliveredRoot(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  state: ManagedAgentState,
+  requestId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
+  let current = readAgentState(mailbox);
+  if (
+    !current ||
+    !sameManagedAgentIdentity(current, state) ||
+    current.activeRequestId ||
+    current.completedRequestId !== requestId ||
+    newerMailboxWorkExists(mailbox, current, requestId)
+  )
+    throw new Error("Managed agent changed before result cleanup");
+  const presence = managedAgentPresence(
+    current,
+    await herdrSessionSnapshot(pi, ctx, signal),
+  );
+  if (presence.kind === "unknown")
+    throw new Error(
+      "Managed agent presence is unresolved during result cleanup",
+    );
+  if (presence.kind === "live")
+    await closeLiveManagedExecution(
+      pi,
+      ctx,
+      {
+        ...presence.agent,
+        label: current.agentLabel,
+        pi_session_id: current.piSessionId,
+        pi_session_path: current.piSessionFile,
+      },
+      current,
+      signal,
+      true,
+    );
+  current = readAgentState(mailbox)!;
+  if (
+    !sameManagedAgentIdentity(current, state) ||
+    current.activeRequestId ||
+    current.completedRequestId !== requestId ||
+    newerMailboxWorkExists(mailbox, current, requestId)
+  )
+    throw new Error("Managed agent changed during result cleanup");
+  removeResult(mailbox, requestId);
+  const after = readAgentState(mailbox);
+  if (
+    after &&
+    sameManagedAgentIdentity(after, state) &&
+    !after.activeRequestId &&
+    after.completedRequestId === requestId &&
+    !newerMailboxWorkExists(mailbox, after, requestId)
+  )
+    removeAgentMailbox(mailbox);
+  invalidateCachedRuntime(state.agentLabel);
+}
 async function cleanupAfterDeliveredResult(
   pi: ExtensionAPI,
   runtime: Runtime,
@@ -3206,95 +3111,28 @@ async function cleanupAfterDeliveredResult(
       !sameSessionPath(state.piSessionFile, runtime.piSessionFile)
     )
       throw new Error("agent identity changed before result cleanup");
-    const inventory = await herdrSessionSnapshot(pi, ctx, signal);
-    const presence = managedAgentPresence(state, inventory);
-    const resultCleanupAuthorization = {
+    if (newerMailboxWorkExists(runtime.mailboxPath, state, result.requestId))
+      throw new Error("agent has newer mailbox work");
+    const presence = managedAgentPresence(
       state,
-      requestId: result.requestId,
-    };
-    if (presence.kind === "live") {
-      validateIdentity(runtime, state, presence.agent, {
-        requireLiveSession: true,
-        requestId: result.requestId,
-      });
-      if (managedAgent)
-        await closeManagedAgent(
-          pi,
-          ctx,
-          {
-            ...presence.agent,
-            label: state.agentLabel,
-            pi_session_id: state.piSessionId,
-            pi_session_path: state.piSessionFile,
-          },
-          state,
-          signal,
-          {
-            allowPostCompletionTransition: true,
-            allowPendingResult: resultCleanupAuthorization,
-          },
-        );
-      else
-        await closeManagedAgentCascade(pi, ctx, presence.agent, state, signal, {
-          allowPostCompletionTransition: true,
-          allowPendingResult: resultCleanupAuthorization,
-        });
-    } else if (presence.kind === "unknown") {
+      await herdrSessionSnapshot(pi, ctx, signal),
+    );
+    if (presence.kind === "unknown")
       throw new Error(
         "Managed agent identity is unresolved during result cleanup",
       );
-    } else {
-      await closeManagedAgentCascade(pi, ctx, undefined, state, signal, {
-        allowPostCompletionTransition: true,
-        allowPendingResult: resultCleanupAuthorization,
-        onCleanupFailure: (_label, message) => {
-          throw new Error(message);
+    if (!managedAgent)
+      await closeManagedAgentCascade(
+        pi,
+        ctx,
+        presence.kind === "live" ? presence.agent : undefined,
+        state,
+        signal,
+        {
+          deliveredRootResultId: result.requestId,
         },
-        onParentReady: async (snapshot) => {
-          if (snapshot.presence.kind !== "lost")
-            throw new Error(
-              "Managed agent identity is unresolved during result cleanup",
-            );
-          const current = readAgentState(runtime.mailboxPath);
-          if (
-            !current ||
-            !sameManagedAgentIdentity(current, state) ||
-            current.activeRequestId ||
-            current.completedRequestId !== result.requestId
-          )
-            throw new Error("agent identity changed before result cleanup");
-          if (
-            managedAgentPresence(
-              current,
-              await herdrSessionSnapshot(pi, ctx, signal),
-            ).kind !== "lost"
-          )
-            throw new Error(
-              "Managed agent identity is unresolved during result cleanup",
-            );
-          assertNoPendingManagedResult(
-            runtime.mailboxPath,
-            current,
-            resultCleanupAuthorization,
-          );
-          removeResult(runtime.mailboxPath, result.requestId);
-          const after = readAgentState(runtime.mailboxPath);
-          if (
-            after &&
-            sameManagedAgentIdentity(after, state) &&
-            !after.activeRequestId &&
-            after.completedRequestId === result.requestId
-          ) {
-            assertNoPendingManagedResult(
-              runtime.mailboxPath,
-              after,
-              resultCleanupAuthorization,
-            );
-            removeAgentMailbox(runtime.mailboxPath);
-          }
-        },
-      });
-    }
+      );
+    await finalizeDeliveredRoot(pi, ctx, state, result.requestId, signal);
     requestHerdRunFinishCheck?.(ctx);
     return true;
   } catch (error) {
@@ -3998,22 +3836,19 @@ function normalizeCloseFailure(
   });
 }
 
-type CloseManagedAgentOptions = {
-  allowPostCompletionTransition?: boolean;
-  allowPendingResult?: { state: ManagedAgentState; requestId: string };
+type StopReportCallbacks = {
   onClosed?: (label: string) => void;
   onCleanupFailure?: (label: string, message: string) => void;
-  onParentReady?: (snapshot: ManagedAgentSnapshot) => Promise<void>;
 };
 
-async function closeManagedAgent(
+async function closeLiveManagedExecution(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   agent: any,
   state: ManagedAgentState,
   signal?: AbortSignal,
-  options: CloseManagedAgentOptions = {},
-): Promise<void> {
+  allowPostCompletionTransition = false,
+): Promise<Runtime> {
   if (!agent.label || !agent.pane_id)
     fail("target_not_found", "Agent has no exact close identity", "close");
   const ids = { label: agent.label, paneId: agent.pane_id };
@@ -4035,11 +3870,6 @@ async function closeManagedAgent(
   }
   try {
     await validateIntegration(pi, runtime, ctx, { signal });
-    assertNoPendingManagedResult(
-      runtime.mailboxPath,
-      state,
-      options.allowPendingResult,
-    );
     await closeHerdrPane(
       pi,
       ctx,
@@ -4049,7 +3879,7 @@ async function closeManagedAgent(
         workspaceId: runtime.workspaceId,
         cwd: runtime.cwd,
         session: expectedSession(runtime.piSessionId, runtime.piSessionFile),
-        ...(options.allowPostCompletionTransition
+        ...(allowPostCompletionTransition
           ? { allowPostCompletionTransition: true }
           : {}),
       },
@@ -4058,19 +3888,51 @@ async function closeManagedAgent(
   } catch (error) {
     throw normalizeCloseFailure(error, ids);
   }
-  assertNoPendingManagedResult(
-    runtime.mailboxPath,
+  return runtime;
+}
+
+async function closeManagedAgent(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  agent: any,
+  state: ManagedAgentState,
+  signal?: AbortSignal,
+  stopReport?: StopReportCallbacks,
+): Promise<void> {
+  const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
+  const cached = runtimes.get(state.agentLabel);
+  if (hasDurableResult(mailbox, state))
+    fail(
+      "target_ambiguous",
+      "Managed agent has a durable result; close result delivery first",
+      "close",
+    );
+  const runtime = await closeLiveManagedExecution(
+    pi,
+    ctx,
+    agent,
     state,
-    options.allowPendingResult,
+    signal,
   );
+  const after = readAgentState(mailbox);
+  if (
+    after &&
+    sameManagedAgentIdentity(after, state) &&
+    hasDurableResult(mailbox, after)
+  )
+    fail(
+      "target_ambiguous",
+      "Managed agent produced a durable result during close",
+      "close",
+    );
   try {
-    removeAgentMailbox(runtime.mailboxPath);
+    removeAgentMailbox(mailbox);
     clearCleanupError(runtime.label);
   } catch (error) {
     const message = `Agent pane closed but mailbox cleanup failed: ${String(error)}`;
     cleanupErrors.set(runtime.label, message);
     appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
-    options.onCleanupFailure?.(runtime.label, message);
+    stopReport?.onCleanupFailure?.(runtime.label, message);
     return;
   }
   if (cached) {
@@ -4082,17 +3944,16 @@ async function closeManagedAgent(
     runtimes.delete(runtime.label);
     clearCleanupError(runtime.label);
   }
-  options.onClosed?.(runtime.label);
+  stopReport?.onClosed?.(runtime.label);
 }
 async function closeManagedSnapshot(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   snapshot: ManagedAgentSnapshot,
   signal?: AbortSignal,
-  options: CloseManagedAgentOptions = {},
+  stopReport?: StopReportCallbacks,
 ): Promise<void> {
   if (snapshot.presence.kind === "live") {
-    const inventory = await herdrSessionSnapshot(pi, ctx, signal);
     const mailbox = agentMailboxPath(
       snapshot.state.workspaceId,
       snapshot.state.agentLabel,
@@ -4109,8 +3970,16 @@ async function closeManagedSnapshot(
     }
     if (!current || !sameManagedAgentIdentity(current, snapshot.state))
       fail("target_ambiguous", "Managed agent changed before close", "close");
-    assertNoPendingManagedResult(mailbox, current, options.allowPendingResult);
-    const presence = managedAgentPresence(current, inventory);
+    if (hasDurableResult(mailbox, current))
+      fail(
+        "target_ambiguous",
+        "Managed agent has a durable result; close result delivery first",
+        "close",
+      );
+    const presence = managedAgentPresence(
+      current,
+      await herdrSessionSnapshot(pi, ctx, signal),
+    );
     if (presence.kind === "unknown")
       fail(
         "target_ambiguous",
@@ -4118,21 +3987,25 @@ async function closeManagedSnapshot(
         "close",
       );
     if (presence.kind === "lost") {
-      current = rereadCloseableManagedState(
-        mailbox,
-        current,
-        options.allowPendingResult,
-      );
+      const latest = readAgentState(mailbox);
+      if (!latest || !sameManagedAgentIdentity(latest, current))
+        fail("target_ambiguous", "Managed agent changed before close", "close");
+      if (hasDurableResult(mailbox, latest))
+        fail(
+          "target_ambiguous",
+          "Managed agent has a durable result; close result delivery first",
+          "close",
+        );
       removeAgentMailbox(mailbox);
-      invalidateCachedRuntime(current.agentLabel);
-      options.onClosed?.(current.agentLabel);
+      invalidateCachedRuntime(latest.agentLabel);
+      stopReport?.onClosed?.(latest.agentLabel);
       return;
     }
     const agent = {
       ...presence.agent,
       label: current.agentLabel,
     };
-    await closeManagedAgent(pi, ctx, agent, current, signal, options);
+    await closeManagedAgent(pi, ctx, agent, current, signal, stopReport);
     return;
   }
   if (snapshot.presence.kind === "unknown")
@@ -4147,7 +4020,13 @@ async function closeManagedSnapshot(
   );
   let current = readAgentState(mailbox);
   if (!current || !sameManagedAgentIdentity(current, snapshot.state))
-    fail("target_not_found", "Managed agent changed before close", "close");
+    fail("target_ambiguous", "Managed agent changed before close", "close");
+  if (hasDurableResult(mailbox, current))
+    fail(
+      "target_ambiguous",
+      "Managed agent has a durable result; close result delivery first",
+      "close",
+    );
   const inventory = await herdrSessionSnapshot(pi, ctx, signal);
   if (managedAgentPresence(current, inventory).kind !== "lost")
     fail(
@@ -4155,14 +4034,18 @@ async function closeManagedSnapshot(
       "Managed agent presence changed before close",
       "close",
     );
-  current = rereadCloseableManagedState(
-    mailbox,
-    current,
-    options.allowPendingResult,
-  );
+  current = readAgentState(mailbox);
+  if (!current || !sameManagedAgentIdentity(current, snapshot.state))
+    fail("target_ambiguous", "Managed agent changed before close", "close");
+  if (hasDurableResult(mailbox, current))
+    fail(
+      "target_ambiguous",
+      "Managed agent has a durable result; close result delivery first",
+      "close",
+    );
   removeAgentMailbox(mailbox);
   invalidateCachedRuntime(current.agentLabel);
-  options.onClosed?.(current.agentLabel);
+  stopReport?.onClosed?.(current.agentLabel);
 }
 type ManagedAgentCascadePlan = {
   parent: ManagedAgentSnapshot;
@@ -4174,10 +4057,7 @@ async function managedAgentCascadePlan(
   ctx: ExtensionContext,
   parent: ManagedAgentState,
   signal?: AbortSignal,
-  allowPendingParentResult?: {
-    state: ManagedAgentState;
-    requestId: string;
-  },
+  deliveredRootResultId?: string,
 ): Promise<ManagedAgentCascadePlan> {
   if (listAgentStateIssues().length)
     fail("target_ambiguous", "A managed mailbox has unresolved state", "close");
@@ -4214,7 +4094,7 @@ async function managedAgentCascadePlan(
         state.ownerSessionId === ancestor.piSessionId,
     );
     for (const { state } of children) {
-      const key = `${state.workspaceId}\0${state.agentLabel}`;
+      const key = `${state.workspaceId}\0${state.piSessionId}`;
       if (visited.has(key))
         fail(
           "target_ambiguous",
@@ -4231,15 +4111,15 @@ async function managedAgentCascadePlan(
 
   assertManagedAgentCascadeSafe(
     [parentSnapshot, ...descendants],
-    allowPendingParentResult,
+    deliveredRootResultId,
   );
   return { parent: parentSnapshot, descendants };
 }
 function assertManagedAgentCascadeSafe(
   snapshots: readonly ManagedAgentSnapshot[],
-  allowPendingResult?: { state: ManagedAgentState; requestId: string },
+  deliveredRootResultId?: string,
 ): void {
-  for (const snapshot of snapshots) {
+  for (const [index, snapshot] of snapshots.entries()) {
     if (snapshot.presence.kind === "unknown")
       fail(
         "target_ambiguous",
@@ -4261,11 +4141,18 @@ function assertManagedAgentCascadeSafe(
     }
     if (!current || !sameManagedAgentIdentity(current, snapshot.state))
       fail("target_ambiguous", "Managed agent changed before close", "close");
-    assertNoPendingManagedResult(
-      agentMailboxPath(snapshot.state.workspaceId, snapshot.state.agentLabel),
-      current,
-      allowPendingResult,
-    );
+    if (
+      hasDurableResult(
+        agentMailboxPath(snapshot.state.workspaceId, snapshot.state.agentLabel),
+        current,
+        index === 0 ? deliveredRootResultId : undefined,
+      )
+    )
+      fail(
+        "target_ambiguous",
+        "Managed agent has a durable result; close result delivery first",
+        "close",
+      );
   }
 }
 function directChildStates(
@@ -4458,40 +4345,32 @@ async function closeManagedAgentCascade(
   agent: any,
   state: ManagedAgentState,
   signal?: AbortSignal,
-  options: CloseManagedAgentOptions = {},
+  options: CloseCascadeOptions = {},
+  stopReport?: StopReportCallbacks,
 ): Promise<void> {
   const release = claimDelegationLock(state.workspaceId, state.piSessionId);
   try {
-    const allowPendingParentResult = options.allowPendingResult;
     const plan = await managedAgentCascadePlan(
       pi,
       ctx,
       state,
       signal,
-      allowPendingParentResult,
+      options.deliveredRootResultId,
     );
-    const childOptions = {
-      ...options,
-      allowPendingResult: allowPendingParentResult,
-      onCleanupFailure: (label: string, message: string) => {
-        options.onCleanupFailure?.(label, message);
-        throw new Error(message);
-      },
-    } satisfies CloseManagedAgentOptions;
     // Recheck every mailbox after planning and immediately before the first
     // mutation so a result that raced the initial projection aborts the whole
     // cascade rather than leaving partially resolved descendants.
     assertManagedAgentCascadeSafe(
       [plan.parent, ...plan.descendants],
-      allowPendingParentResult,
+      options.deliveredRootResultId,
     );
     for (const [index, child] of plan.descendants.entries()) {
       assertManagedAgentCascadeSafe(
         [plan.parent, ...plan.descendants.slice(index)],
-        allowPendingParentResult,
+        options.deliveredRootResultId,
       );
       try {
-        await closeManagedSnapshot(pi, ctx, child, signal, childOptions);
+        await closeManagedSnapshot(pi, ctx, child, signal, stopReport);
       } catch (error) {
         throw normalizeCloseFailure(
           error,
@@ -4500,6 +4379,7 @@ async function closeManagedAgentCascade(
         );
       }
     }
+    if (options.deliveredRootResultId) return;
     const parentSnapshot = (
       await managedAgentSnapshots(pi, ctx, signal)
     ).agents.find(({ state: candidate }) =>
@@ -4507,12 +4387,7 @@ async function closeManagedAgentCascade(
     );
     if (!parentSnapshot)
       fail("target_not_found", "Parent agent changed before close", "close");
-    if (options.onParentReady) await options.onParentReady(parentSnapshot);
-    else
-      await closeManagedSnapshot(pi, ctx, parentSnapshot, signal, {
-        ...options,
-        allowPendingResult: allowPendingParentResult,
-      });
+    await closeManagedSnapshot(pi, ctx, parentSnapshot, signal, stopReport);
   } catch (error) {
     throw normalizeCloseFailure(
       error,
@@ -4524,6 +4399,10 @@ async function closeManagedAgentCascade(
   }
 }
 
+type CloseCascadeOptions = {
+  deliveredRootResultId?: string;
+};
+
 type StopFailure = { label: string; message: string };
 
 async function stopOwnedAgents(
@@ -4533,14 +4412,7 @@ async function stopOwnedAgents(
 ): Promise<string> {
   const owner = ctx.sessionManager.getSessionId();
   const snapshot = await managedAgentSnapshots(pi, ctx, signal);
-  const visible = await visibleAgentSnapshots(
-    pi,
-    ctx,
-    snapshot,
-    { kind: "lead" },
-    owner,
-    signal,
-  );
+  const visible = visibleAgentSnapshots(snapshot, { kind: "lead" }, owner);
   const reportable = [...visible]
     .sort((left, right) =>
       left.state.agentLabel.localeCompare(right.state.agentLabel),
@@ -4554,7 +4426,7 @@ async function stopOwnedAgents(
     .filter(
       (agent) =>
         agent.presence.kind !== "unknown" &&
-        (agent.state.ownerSessionId === owner || agent.orphan),
+        agent.state.ownerSessionId === owner,
     )
     .filter(
       (agent, index, all) =>
@@ -4613,25 +4485,7 @@ async function stopOwnedAgents(
           },
         );
       const directOwner = currentState.ownerSessionId === owner;
-      let orphanRecovery = false;
-      if (!directOwner) {
-        const durableParentStillVisible = fresh.agents.some(
-          ({ state: candidate }) =>
-            candidate.workspaceId === currentState.workspaceId &&
-            candidate.piSessionId === currentState.ownerSessionId,
-        );
-        const staleParent = fresh.mailboxes.find(
-          ({ state }) =>
-            state.ownerSessionId === owner &&
-            state.piSessionId === currentState.ownerSessionId,
-        )?.state;
-        if (!durableParentStillVisible && staleParent) {
-          stateAgentDefinition(staleParent);
-          await assertParentAbsent(pi, ctx, staleParent, signal);
-          orphanRecovery = true;
-        }
-      }
-      if (!directOwner && !orphanRecovery)
+      if (!directOwner)
         fail(
           "target_not_found",
           "Agent belongs to another owner session",
@@ -4643,21 +4497,22 @@ async function stopOwnedAgents(
             },
           },
         );
-      const options = {
+      const stopReport = {
         onClosed: (label: string) => {
           if (!closed.includes(label)) closed.push(label);
         },
         onCleanupFailure: (label: string, message: string) => {
           recordFailure(label, message);
         },
-      } satisfies CloseManagedAgentOptions;
+      } satisfies StopReportCallbacks;
       await closeManagedAgentCascade(
         pi,
         ctx,
         currentAgent.listed,
         currentState,
         signal,
-        options,
+        {},
+        stopReport,
       );
     } catch (error) {
       const failure = normalizeCloseFailure(error, {
@@ -4945,16 +4800,14 @@ async function actionUnsafe(
       );
     const owner = ctx.sessionManager.getSessionId();
     const directOwner = state.ownerSessionId === owner;
-    const orphanRecovery =
-      !directOwner && scope?.kind === "lead" && candidate.orphan === true;
-    if (!directOwner && !orphanRecovery)
+    if (!directOwner)
       fail(
         "target_not_found",
         "Agent belongs to another owner session",
         "close",
       );
     try {
-      if (directOwner && !orphanRecovery && scope?.kind === "lead")
+      if (directOwner && scope?.kind === "lead")
         await closeManagedAgentCascade(pi, ctx, listed, state, signal);
       else await closeManagedSnapshot(pi, ctx, candidate, signal);
     } catch (error) {
@@ -6704,14 +6557,14 @@ export default function (pi: ExtensionAPI): void {
     try {
       assertCurrentLeadCoordination(ctx);
     } catch (error) {
-      // The post-write coordination check failed. Do not leave an orphaned
+      // The post-write coordination check failed. Do not leave a stranded
       // message that can be delivered under a state it was not queued for.
       try {
         removeChiefMessage(runtime, record.toSessionId, record.id, record);
       } catch (cleanupError) {
         // The coordination state is already invalid, so quarantine before
         // surfacing the failure. This prevents retry from using the failed
-        // write as an orphaned intent.
+        // write as a stranded intent.
         leadCoordinationHealthy = false;
         appendDurableError(pi, ctx, "pi_herdsman_state_error", cleanupError);
         try {
@@ -7196,7 +7049,6 @@ export default function (pi: ExtensionAPI): void {
     const staleNotifications = new Map<string, number>();
     let staleTimer: ReturnType<typeof setTimeout> | undefined;
     let staleGeneration = 0;
-    let lifecycleWatcherStarted = false;
     let supervisionTimer: ReturnType<typeof setInterval> | undefined;
     let supervisionOverviewGeneration = 0;
     let activeSupervisionRender: (() => void) | undefined;
@@ -7978,7 +7830,6 @@ export default function (pi: ExtensionAPI): void {
                 parentLabel: agent.parent_label,
               }
             : {}),
-          ...(agent.orphan ? { orphan: true } : {}),
         } as any;
       });
       return {
@@ -8037,8 +7888,7 @@ export default function (pi: ExtensionAPI): void {
             (runtime?.activeRequestId === pending.requestId &&
               agent !== undefined &&
               agent?.state !== "settling") ||
-            runtime?.completedRequestId === pending.requestId ||
-            !runtime);
+            runtime?.completedRequestId === pending.requestId);
         if (resolved && pendingStarts.get(label) === pending)
           pendingStarts.delete(label);
       }
@@ -9668,8 +9518,7 @@ export default function (pi: ExtensionAPI): void {
         staleTimer.unref?.();
       };
       requestHealthScan();
-      if (process.env.HERDR_SOCKET_PATH && !lifecycleWatcherStarted) {
-        lifecycleWatcherStarted = true;
+      if (process.env.HERDR_SOCKET_PATH) {
         watchHerdrLifecycle(process.env.HERDR_SOCKET_PATH, signal, () => {
           requestStatusRefresh?.();
           requestHealthScan();
@@ -9803,7 +9652,6 @@ export default function (pi: ExtensionAPI): void {
       controllerAbortController?.abort();
       pendingStarts.clear();
       controllerAbortController = new AbortController();
-      lifecycleWatcherStarted = false;
       const sessionSignal = controllerAbortController.signal;
       if (controllerScope.kind === "lead") {
         if (
@@ -9869,7 +9717,6 @@ export default function (pi: ExtensionAPI): void {
         }
       }
       if (controllerScope.kind === "managed-agent") {
-        startAgentHealthScanner(ctx, sessionSignal);
         requestStatusRefresh?.();
         return;
       }

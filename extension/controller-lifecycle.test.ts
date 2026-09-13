@@ -422,9 +422,9 @@ test("lead tab placement vetoes an ambiguous current-lead direct root", async ()
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = lifecycle.exec(command, args, options);
-      if (command !== "herdr" || !isAgentList(args)) return result;
+      if (command !== "herdr" || !isApiSnapshot(args)) return result;
       const value = JSON.parse(result.stdout);
-      value.result.agents.push(agentFromState(parent));
+      value.result.snapshot.agents.push(agentFromState(parent));
       return { ...result, stdout: JSON.stringify(value) };
     },
   });
@@ -495,9 +495,9 @@ test("lead tab placement vetoes ambiguous foreign-herd evidence", async () => {
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = lifecycle.exec(command, args, options);
-      if (command !== "herdr" || !isAgentList(args)) return result;
+      if (command !== "herdr" || !isApiSnapshot(args)) return result;
       const value = JSON.parse(result.stdout);
-      value.result.agents.push(agentFromState(foreign));
+      value.result.snapshot.agents.push(agentFromState(foreign));
       return { ...result, stdout: JSON.stringify(value) };
     },
   });
@@ -634,11 +634,11 @@ test("lead tab revalidation rejects a newly contaminated candidate under the loc
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = lifecycle.exec(command, args, options);
-      if (command !== "herdr" || !isAgentList(args)) return result;
+      if (command !== "herdr" || !isApiSnapshot(args)) return result;
       agentLists++;
       if (agentLists < 3) return result;
       const value = JSON.parse(result.stdout);
-      value.result.agents.push({
+      value.result.snapshot.agents.push({
         ...agentFromState(sibling),
         tab_id: lifecycle.tabForPane(parent.paneId),
       });
@@ -2464,11 +2464,22 @@ test("session assignment reports a pane mismatch from the agent state producer",
             paneEnvironment[match[1]] = match[2];
         return { stdout: "{}", stderr: "", code: 0 };
       }
-      if (isAgentList(args))
+      if (isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: JSON.parse(listResponse(label, "idle", null)),
+            result: {
+              snapshot: {
+                agents: JSON.parse(listResponse(label, "idle", null)).agents,
+                panes: [
+                  {
+                    pane_id: "registered-pane",
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                  },
+                ],
+              },
+            },
           }),
           stderr: "",
           code: 0,
@@ -2903,11 +2914,20 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
     exec: (command, args) =>
       command === "herdr" && args[0] === "--version"
         ? { stdout: "0.8.0", stderr: "", code: 0 }
-        : {
-            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
-            stderr: "",
-            code: 0,
-          },
+        : command === "herdr" && isApiSnapshot(args)
+          ? {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: { snapshot: { agents: [], panes: [] } },
+              }),
+              stderr: "",
+              code: 0,
+            }
+          : {
+              stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+              stderr: "",
+              code: 0,
+            },
   });
   registerExtension!(pi.pi as never);
   try {
@@ -3079,11 +3099,11 @@ test("session continuation ignores an unrelated missing live session path", asyn
   let started = false;
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && isAgentList(args) && !started)
+      if (command === "herdr" && isApiSnapshot(args) && !started)
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { agents: [staleAgent] },
+            result: { snapshot: { agents: [staleAgent], panes: [] } },
           }),
           stderr: "",
           code: 0,
@@ -3169,11 +3189,11 @@ test("session continuation keeps an exact live ID busy despite a missing path ob
   const startup = startupExecutor(name, () => session.id);
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && isAgentList(args))
+      if (command === "herdr" && isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { agents: [staleAgent] },
+            result: { snapshot: { agents: [staleAgent], panes: [] } },
           }),
           stderr: "",
           code: 0,
@@ -3260,11 +3280,11 @@ test("session continuation keeps an exact live ID busy despite contradictory liv
   const startup = startupExecutor(name, () => session.id);
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && isAgentList(args))
+      if (command === "herdr" && isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { agents: [staleAgent] },
+            result: { snapshot: { agents: [staleAgent], panes: [] } },
           }),
           stderr: "",
           code: 0,
@@ -3359,11 +3379,11 @@ test("session continuation ignores removed secondary session fields", async () =
   let started = false;
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && isAgentList(args) && !started)
+      if (command === "herdr" && isApiSnapshot(args) && !started)
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { agents: [staleAgent] },
+            result: { snapshot: { agents: [staleAgent], panes: [] } },
           }),
           stderr: "",
           code: 0,
@@ -3827,11 +3847,28 @@ test("rejects an invalid generated collision label after releasing its claim", a
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "--version")
         return { stdout: "0.8.0", stderr: "", code: 0 };
-      if (command === "herdr" && args[0] === "agent" && args[1] === "list")
+      if (command === "herdr" && isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: JSON.parse(listResponse("other-agent")),
+            result: {
+              snapshot: {
+                agents: JSON.parse(listResponse("other-agent")).agents,
+                panes: [
+                  {
+                    pane_id: "registered-pane",
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: DEFAULT_PI_SESSION_ID,
+                    },
+                  },
+                ],
+              },
+            },
           }),
           stderr: "",
           code: 0,

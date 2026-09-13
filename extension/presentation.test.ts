@@ -1571,7 +1571,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
               available_actions: ["inspect", "close"],
             },
             {
-              agent: "orphan",
+              agent: "recovery",
               parent_label: "missing",
               state: "idle",
               available_actions: ["inspect"],
@@ -1608,13 +1608,12 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
               available_actions: [],
             },
             {
-              agent: "orphan",
+              agent: "recovery",
               parent_label: "missing",
               state: "unknown",
               available_actions: ["inspect"],
               agent_definition: "reviewer",
-              pi_session_id: "orphan-session",
-              orphan: true,
+              pi_session_id: "recovery-session",
               stale: true,
               inactive_ms: 120000,
               diagnostic: "session identity unavailable",
@@ -1631,10 +1630,10 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   assert.ok(hierarchy.indexOf("  child") < hierarchy.indexOf("    grandchild"));
   assert.match(
     hierarchy,
-    /^orphan  unknown · definition: reviewer · can: inspect · orphan · stale · inactive 2m$/m,
+    /^recovery  unknown · definition: reviewer · can: inspect · stale · inactive 2m$/m,
   );
   assert.match(hierarchy, /definition: reviewer/);
-  assert.match(hierarchy, /  session: orphan-session/);
+  assert.match(hierarchy, /  session: recovery-session/);
   assert.match(hierarchy, /  parent: missing \(not present\)/);
   assert.match(hierarchy, /  diagnostic: session identity unavailable/);
   assert.match(hierarchy, /cleanup warning: child cleanup warning/);
@@ -3473,18 +3472,17 @@ test("list model output renders only direct agents", (t) => {
   }
 });
 
-test("List output preserves orphan, session, and diagnostic evidence", (t) => {
+test("List output preserves recovery, session, and diagnostic evidence", (t) => {
   {
     const rendered = formatToolModelResult("list", {
       ok: true,
       agents: [
         { agent: "lead", state: "settling" },
         {
-          agent: "orphan",
+          agent: "recovery",
           parent_label: "missing",
           state: "working",
           available_actions: ["steer"],
-          orphan: true,
         },
         {
           parent_label: "missing-too",
@@ -3495,7 +3493,7 @@ test("List output preserves orphan, session, and diagnostic evidence", (t) => {
     });
     assert.match(rendered, /Agents: 3/);
     assert.match(rendered, /Unmatched ancestry \(recovery only\):/);
-    assert.match(rendered, /orphan · working · non-actionable · orphan/);
+    assert.match(rendered, /recovery · working · non-actionable/);
     assert.match(rendered, /parent: missing \(not present\)/);
     assert.match(rendered, /unknown · unknown · non-actionable/);
     assert.equal((rendered.match(/non-actionable/g) ?? []).length, 2);
