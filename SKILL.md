@@ -64,7 +64,9 @@ file inspection, large logs or command output, and dataset analysis. Keep small,
 tightly coupled work local.
 If several tightly coupled phases are already known, put them in one bounded
 assignment when practical. If genuinely new follow-up work emerges after
-completion and previous context is valuable, continue the exact returned session.
+completion and previous context is valuable, continue the exact returned session
+only when the completion is not marked retired. A retired session requires a
+fresh delegation; pass its resultRef/handoff and relevant files instead.
 Never continue work that depends on an active agent. Continue useful
 independent work when available; otherwise end the turn normally. Agent
 completion or attention resumes the owning controller automatically. Do not

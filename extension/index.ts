@@ -1,9 +1,11 @@
 import type {
   BuildSystemPromptOptions,
+  ContextEvent,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
   ModelSelectEvent,
+  SessionBeforeCompactEvent,
   ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -204,6 +206,14 @@ const PI_SESSION_ID_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$";
 const HERDSMAN_EXTENSION_PATH = fileURLToPath(import.meta.url);
 const AGENT_DEFINITIONS_ENTRY = "pi-herdsman-agent-definitions";
 const HERD_RUN_ENTRY = "pi-herdsman-herd-run";
+const AGENT_CONTEXT_RETIRED_ENTRY = "pi-herdsman-agent-context-retired";
+const CONTEXT_RETIREMENT_INSTRUCTION =
+  "Context pressure has retired this session. Do not start new work or new agents. " +
+  "Finish the current coherent operation at the next safe point, perform only " +
+  "essential remaining validation, resolve already-running dependent work, then " +
+  "complete this assignment with a self-contained handoff covering completed work, " +
+  "current state, relevant files, validation already performed, unresolved issues, " +
+  "and exact next steps. This session will not be continued or forked.";
 type HerdRunEntry =
   | { phase: "started"; sessionId: string; startedAt: number }
   | {
@@ -264,7 +274,9 @@ file inspection, large logs or command output, and dataset analysis. Keep small,
 tightly coupled work local.
 If several tightly coupled phases are already known, put them in one bounded
 assignment when practical. If genuinely new follow-up work emerges after
-completion and previous context is valuable, continue the exact returned session.
+completion and previous context is valuable, continue the exact returned session
+only when the completion is not marked retired. A retired session requires a
+fresh delegation; pass its resultRef/handoff and relevant files instead.
 Never continue work that depends on an active agent. Continue useful
 independent work when available; otherwise end the turn normally. Agent
 completion or attention resumes the owning controller automatically. Do not
@@ -1111,6 +1123,27 @@ export function sessionAgentIdentity(
   }
   return identity;
 }
+export function sessionContextRetired(
+  entries: readonly unknown[],
+  sessionId: string,
+): boolean {
+  return entries.some(
+    (entry: any) =>
+      entry?.type === "custom" &&
+      entry.customType === AGENT_CONTEXT_RETIRED_ENTRY &&
+      entry.data?.sessionId === sessionId,
+  );
+}
+function retiredManagedSession(
+  manager: Pick<SessionManager, "getEntries" | "getSessionId">,
+): boolean {
+  const sessionId = manager.getSessionId();
+  const entries = manager.getEntries();
+  return (
+    !!sessionAgentIdentity(entries, sessionId) &&
+    sessionContextRetired(entries, sessionId)
+  );
+}
 function readAgentIdentity(
   manager: Pick<SessionManager, "getEntries" | "getSessionId">,
 ): AgentSessionIdentity {
@@ -1295,6 +1328,11 @@ export async function resolveAssignmentSession(
       "continue",
     );
   }
+  if (readConfig().contextRetirement && retiredManagedSession(manager))
+    throw new AssignmentSessionResolutionError(
+      `Managed agent session ${manager.getSessionId()} is retired after context pressure. ` +
+        "Delegate a fresh agent and pass the previous handoff/resultRef and relevant files.",
+    );
   const cwd = manager.getCwd();
   return {
     path: session.path,
@@ -2994,6 +3032,22 @@ async function deliverResultUnsafe(
         completion.persistenceError,
       );
     }
+    const sessionRetired =
+      readConfig().contextRetirement &&
+      runtime.piSessionFile !== undefined &&
+      (() => {
+        try {
+          return retiredManagedSession(
+            SessionManager.open(runtime.piSessionFile!),
+          );
+        } catch {
+          return false;
+        }
+      })();
+    const retirementGuidance = sessionRetired
+      ? "Session retired after context pressure. Do not continue or fork this session. " +
+        "For follow-up, delegate a fresh agent and pass this handoff/resultRef plus the relevant files."
+      : undefined;
     const delegationStatus = delegationStatusForResult(
       runtime,
       result.requestId,
@@ -3005,6 +3059,7 @@ async function deliverResultUnsafe(
         content: [
           `Agent result · agent=${result.agentLabel} · definition=${runtime.agentDefinition} · session=${runtime.piSessionId ?? "?"} · request=${result.requestId} · status=${result.status}`,
           completion.content,
+          ...(retirementGuidance ? [retirementGuidance] : []),
           ...(delegationStatus ? [delegationStatus.content] : []),
         ].join("\n\n"),
         display: true,
@@ -3024,6 +3079,7 @@ async function deliverResultUnsafe(
             : {}),
           agentDefinition: runtime.agentDefinition,
           status: result.status,
+          sessionRetired,
           ...(elapsedMs !== undefined ? { elapsedMs } : {}),
           contextUsage: result.contextUsage,
           truncated: completion.truncated,
@@ -4754,11 +4810,19 @@ async function actionUnsafe(
       );
     const forkSource =
       p.action === "delegate" && p.fork
-        ? (
-            await resolveAssignmentSessionOrFail("delegate", () =>
-              resolveManagedSession(ctx, p.fork!),
+        ? await resolveAssignmentSessionOrFail("delegate", async () => {
+            const fork = await resolveManagedSession(ctx, p.fork!);
+            const manager = SessionManager.open(fork.path);
+            if (
+              readConfig().contextRetirement &&
+              retiredManagedSession(manager)
             )
-          ).path
+              throw new AssignmentSessionResolutionError(
+                `Managed agent session ${manager.getSessionId()} is retired after context pressure. ` +
+                  "Delegate a fresh agent without fork and pass the previous handoff/resultRef and relevant files.",
+              );
+            return fork.path;
+          })
         : undefined;
     if (definition.projectSource && !sameCwd(agentCwd, ctx.cwd))
       fail(
@@ -8489,6 +8553,12 @@ export default function (pi: ExtensionAPI): void {
               value: "layout",
               label: `Layout         ${(await placementSettings(ctx)).effective}`,
             },
+            {
+              value: "context-retirement",
+              label: `Context retirement  ${
+                readConfig().contextRetirement ? "on" : "off"
+              }`,
+            },
             { value: "message-limits", label: "Message limits" },
             { value: "stop-all", label: "Stop all…" },
           ],
@@ -8499,7 +8569,11 @@ export default function (pi: ExtensionAPI): void {
         if (selected === "running") await openRunningAgentsMenu(ctx);
         else if (selected === "definitions") await openDefinitionsMenu(ctx);
         else if (selected === "layout") await openPlacementMenu(ctx);
-        else if (selected === "message-limits")
+        else if (selected === "context-retirement") {
+          const enabled = !readConfig().contextRetirement;
+          updateConfig("contextRetirement", enabled);
+          ctx.ui.notify(`context retirement: ${enabled ? "on" : "off"}`);
+        } else if (selected === "message-limits")
           await openMessageLimitsMenu(ctx);
         else if (selected === "stop-all") await confirmAndStopAll(ctx);
       }
@@ -10109,6 +10183,43 @@ export default function (pi: ExtensionAPI): void {
         terminate: true,
       };
     },
+  });
+  pi.on(
+    "session_before_compact",
+    (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
+      if (!readConfig().contextRetirement) return;
+      if (!state?.activeRequestId) return;
+      if (event.reason === "manual") return;
+
+      const sessionId = ctx.sessionManager.getSessionId();
+      const entries = ctx.sessionManager.getEntries();
+      if (sessionContextRetired(entries, sessionId)) return;
+
+      // Persist before changing Pi behavior.
+      pi.appendEntry(AGENT_CONTEXT_RETIRED_ENTRY, { sessionId });
+      if (event.reason === "threshold") return { cancel: true };
+    },
+  );
+  pi.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
+    if (!readConfig().contextRetirement) return;
+    if (!state?.activeRequestId) return;
+
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (!sessionContextRetired(ctx.sessionManager.getEntries(), sessionId))
+      return;
+
+    return {
+      messages: [
+        ...event.messages,
+        {
+          role: "custom" as const,
+          customType: AGENT_CONTEXT_RETIRED_ENTRY,
+          content: CONTEXT_RETIREMENT_INSTRUCTION,
+          display: false,
+          timestamp: Date.now(),
+        },
+      ],
+    };
   });
   pi.on("session_before_switch", () => ({ cancel: true }));
   pi.on("session_before_fork", () => ({ cancel: true }));

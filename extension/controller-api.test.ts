@@ -63,6 +63,7 @@ import support, {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
+const { updateConfig } = await import("./config.ts");
 
 test("project agent discovery is gated by Pi project trust", async () => {
   setLeadEnvironment();
@@ -1239,6 +1240,140 @@ test("assignment session resolution accepts exact paths and UUIDs only", async (
     /missing pi-herdsman-agent-definition entry/,
   );
   nativeSessions.clear();
+});
+
+test("context retirement rejects managed session continuation only when enabled", async () => {
+  const sessionId = "018f2f2e-7b13-7abc-8def-0123456789ae";
+  const session = {
+    id: sessionId,
+    path: join(homedir(), "retired-managed.jsonl"),
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId, definition: "agent", label: "retired-agent" },
+      },
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-context-retired",
+        data: { sessionId },
+      },
+    ],
+  };
+  nativeSessions.clear();
+  nativeSessions.set(sessionId, session);
+  try {
+    updateConfig("contextRetirement", undefined);
+    await assert.rejects(
+      resolveAssignmentSession(fakeContext(), session.path),
+      /retired after context pressure/,
+    );
+    updateConfig("contextRetirement", false);
+    assert.deepEqual(
+      await resolveAssignmentSession(fakeContext(), session.path),
+      {
+        path: session.path,
+        id: sessionId,
+        definition: "agent",
+        label: "retired-agent",
+        cwd: "/tmp",
+      },
+    );
+  } finally {
+    updateConfig("contextRetirement", undefined);
+    nativeSessions.clear();
+  }
+});
+
+test("context retirement guards managed forks without changing ordinary forks", async () => {
+  setLeadEnvironment();
+  const retiredId = "018f2f2e-7b13-7abc-8def-0123456789af";
+  const retiredPath = join(homedir(), "retired-fork-source.jsonl");
+  const ordinaryId = "018f2f2e-7b13-7abc-8def-0123456789b0";
+  const ordinaryPath = join(homedir(), "ordinary-fork-source.jsonl");
+  const identityEntry = (sessionId: string, label: string) => ({
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { sessionId, definition: "agent", label },
+  });
+  nativeSessions.clear();
+  nativeSessions.set(retiredId, {
+    id: retiredId,
+    path: retiredPath,
+    cwd: "/tmp",
+    entries: [
+      identityEntry(retiredId, "retired-fork-agent"),
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-context-retired",
+        data: { sessionId: retiredId },
+      },
+    ],
+  });
+  nativeSessions.set(ordinaryId, {
+    id: ordinaryId,
+    path: ordinaryPath,
+    cwd: "/tmp",
+    entries: [],
+  });
+  const runDelegate = async (
+    source: string,
+    label: string,
+    enabled: boolean,
+  ): Promise<any> => {
+    updateConfig("contextRetirement", enabled);
+    const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+    const pi = fakePi({ exec: startup.exec });
+    registerExtension!(pi.pi as never);
+    try {
+      return await pi.tools[0].execute(
+        "id",
+        {
+          action: "delegate",
+          definition: "agent",
+          label,
+          fork: source,
+          task: "review the fork source",
+        },
+        undefined,
+        undefined,
+        fakeContext(),
+      );
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(startup.mailbox);
+    }
+  };
+  try {
+    const rejected = await runDelegate(
+      retiredPath,
+      "retired-fork-target",
+      true,
+    );
+    assert.equal(rejected.details.error.category, "invalid_request");
+    assert.match(
+      rejected.details.error.message,
+      /retired after context pressure/,
+    );
+
+    const disabled = await runDelegate(
+      retiredPath,
+      "disabled-fork-target",
+      false,
+    );
+    assert.equal(disabled.details.ok, true, JSON.stringify(disabled.details));
+
+    const ordinary = await runDelegate(
+      ordinaryPath,
+      "ordinary-fork-target",
+      true,
+    );
+    assert.equal(ordinary.details.ok, true, JSON.stringify(ordinary.details));
+  } finally {
+    updateConfig("contextRetirement", undefined);
+    nativeSessions.clear();
+  }
 });
 
 test("session continuation inherits the saved label without an override", async () => {

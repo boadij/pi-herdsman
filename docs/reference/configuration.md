@@ -26,6 +26,7 @@ schema is:
 ```json
 {
   "spawnPlacement": "subtree",
+  "contextRetirement": true,
   "inlineAttachmentLimitBytes": 131072,
   "mailboxPayloadLimitBytes": 131072
 }
@@ -36,6 +37,7 @@ An absent file means these defaults:
 | Field                        |            Default | Allowed values                                    |
 | ---------------------------- | -----------------: | ------------------------------------------------- |
 | `spawnPlacement`             |          `subtree` | `tab`, `subtree`, `split`                         |
+| `contextRetirement`          |               true | boolean                                           |
 | `inlineAttachmentLimitBytes` | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB) |
 | `mailboxPayloadLimitBytes`   | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB) |
 
@@ -48,6 +50,13 @@ files are embedded only when the exact serialized mailbox record fits; other
 files remain canonical references. `mailboxPayloadLimitBytes` limits the exact
 serialized request, ask, or chief message record. Chief messages also retain
 their fixed 8 KiB protocol ceiling.
+
+When `contextRetirement` is enabled, automatic context pressure retires a
+managed-agent session after its first deferred threshold compaction. The
+session receives a finalization instruction, and its result requires a fresh
+agent for follow-up. Disabling it bypasses retirement completely, including
+existing retirement markers, and leaves Pi's native compaction and session
+reuse behavior untouched.
 
 Placement affects future starts, not existing agents. `tab` uses one lead-owned
 agents tab, `subtree` gives each lead-direct agent its own tab, and `split`
