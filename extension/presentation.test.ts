@@ -2746,6 +2746,41 @@ test("completion result prose renders Markdown while metadata stays structural",
 });
 
 test("completion warnings preserve truncation and persistence evidence", () => {
+  const retired = renderedText(
+    renderCompletionMessage(
+      {
+        content: "retired result",
+        details: {
+          requestId: "request-id",
+          agentLabel: "agent",
+          status: "completed",
+          truncated: false,
+          sessionRetired: true,
+        },
+      },
+      { expanded: false },
+      presentationTheme,
+    ),
+  );
+  assert.match(retired, /session retired · Ctrl\+O/);
+  const expandedRetired = renderedText(
+    renderCompletionMessage(
+      {
+        content: "retired result",
+        details: {
+          requestId: "request-id",
+          agentLabel: "agent",
+          status: "completed",
+          truncated: false,
+          sessionRetired: true,
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(expandedRetired, /continuation: fresh agent required/);
+
   const collapsedTruncated = renderedText(
     renderCompletionMessage(
       {

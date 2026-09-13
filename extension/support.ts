@@ -453,6 +453,7 @@ const extension = await import("./index.ts");
 export const registerExtension = extension.default;
 export const {
   sessionAgentIdentity,
+  sessionContextRetired,
   resolveManagedSession,
   resolveAssignmentSession,
 } = extension;

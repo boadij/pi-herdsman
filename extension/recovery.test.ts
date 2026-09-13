@@ -64,6 +64,7 @@ import support, {
   writeResult,
   writeAgentState,
 } from "./support.ts";
+const { updateConfig } = await import("./config.ts");
 
 test("combined status reports a completed agent as pending, not active", async () => {
   setAgentEnvironment("status-pending-parent", ["child"]);
@@ -2488,6 +2489,113 @@ test("delivered result remains while agent state is active", async () => {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(parentMailbox);
     resetAgentMailbox(mailbox);
+  }
+});
+
+test("result delivery identifies retired sessions and honors the disabled setting", async () => {
+  setLeadEnvironment();
+  const deliver = async (
+    label: string,
+    marker: boolean,
+    enabled: boolean,
+  ): Promise<any> => {
+    const identity = recoveryIdentity(label);
+    const child = {
+      ...managedState(label, undefined, identity),
+      completedRequestId: REQUEST_ID,
+    };
+    const mailbox = agentMailboxPath(WORKSPACE, label);
+    resetAgentMailbox(mailbox);
+    writeAgentState(mailbox, child);
+    writeResult(mailbox, {
+      version: 4,
+      runId: child.runId,
+      requestId: REQUEST_ID,
+      ownerSessionId: child.ownerSessionId,
+      workspaceId: child.workspaceId,
+      agentLabel: child.agentLabel,
+      paneId: child.paneId,
+      status: "completed",
+      text: "completed child work",
+      completedAt: Date.now(),
+    });
+    nativeSessions.set(identity.piSessionFile!, {
+      id: identity.piSessionId,
+      path: identity.piSessionFile!,
+      cwd: identity.piSessionFile ? "/tmp" : undefined,
+      entries: [
+        {
+          type: "custom",
+          customType: "pi-herdsman-agent-definition",
+          data: {
+            sessionId: identity.piSessionId,
+            definition: "agent",
+            label,
+          },
+        },
+        ...(marker
+          ? [
+              {
+                type: "custom",
+                customType: "pi-herdsman-agent-context-retired",
+                data: { sessionId: identity.piSessionId },
+              },
+            ]
+          : []),
+      ],
+    });
+    const lifecycle = cascadeExecutor([child]);
+    const entries: unknown[] = [];
+    let delivered: any;
+    const pi = fakePi({
+      entries,
+      exec: lifecycle.exec,
+      sendMessage: (message) => {
+        if ((message as any).customType !== "pi-herdsman-agent-result") return;
+        delivered = message;
+        entries.push({
+          message: {
+            customType: "pi-herdsman-agent-result",
+            details: (message as any).details,
+          },
+        });
+      },
+    });
+    registerExtension!(pi.pi as never);
+    try {
+      updateConfig("contextRetirement", enabled);
+      await pi.events.get("session_start")![0](undefined, fakeContext(entries));
+      return delivered;
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+      nativeSessions.delete(identity.piSessionFile!);
+    }
+  };
+
+  try {
+    const retired = await deliver("retired-delivery-agent", true, true);
+    assert.match(
+      retired.content,
+      /Session retired after context pressure\. Do not continue or fork this session\./,
+    );
+    assert.equal(retired.details.sessionRetired, true);
+
+    const disabled = await deliver("disabled-delivery-agent", true, false);
+    assert.doesNotMatch(
+      disabled.content,
+      /Session retired after context pressure/,
+    );
+    assert.equal(disabled.details.sessionRetired, false);
+
+    const ordinary = await deliver("ordinary-delivery-agent", false, true);
+    assert.doesNotMatch(
+      ordinary.content,
+      /Session retired after context pressure/,
+    );
+    assert.equal(ordinary.details.sessionRetired, false);
+  } finally {
+    updateConfig("contextRetirement", undefined);
   }
 });
 

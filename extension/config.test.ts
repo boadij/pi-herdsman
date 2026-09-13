@@ -79,6 +79,7 @@ test.afterEach(resetConfig);
 test("missing config resolves to defaults without creating storage", () => {
   resetConfig();
   assert.deepEqual(readConfig(), DEFAULT_CONFIG);
+  assert.equal(readConfig().contextRetirement, true);
   assert.equal(realFs.existsSync(herdsmanDataRoot()), false);
 });
 
@@ -86,11 +87,12 @@ test("partial and complete valid configs overlay defaults", () => {
   realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
   realFs.writeFileSync(
     herdsmanConfigPath(),
-    JSON.stringify({ spawnPlacement: "split" }),
+    JSON.stringify({ spawnPlacement: "split", contextRetirement: false }),
   );
   assert.deepEqual(readConfig(), {
     ...DEFAULT_CONFIG,
     spawnPlacement: "split",
+    contextRetirement: false,
   });
   realFs.writeFileSync(
     herdsmanConfigPath(),
@@ -102,6 +104,7 @@ test("partial and complete valid configs overlay defaults", () => {
   );
   assert.deepEqual(readConfig(), {
     spawnPlacement: "tab",
+    contextRetirement: true,
     inlineAttachmentLimitBytes: MIN_BYTE_LIMIT,
     mailboxPayloadLimitBytes: MAX_BYTE_LIMIT,
   });
@@ -123,6 +126,7 @@ test("invalid values, malformed JSON, non-object roots, and unknown keys fail cl
       `{"mailboxPayloadLimitBytes":${MIN_BYTE_LIMIT + 0.5}}`,
       "mailboxPayloadLimitBytes",
     ],
+    ['{"contextRetirement":"false"}', "contextRetirement"],
     ["{", "Invalid Pi Herdsman config JSON"],
     ["[]", "root must be an object"],
     ['{"typo":true}', "unknown field typo"],
@@ -137,23 +141,28 @@ test("invalid values, malformed JSON, non-object roots, and unknown keys fail cl
 
 test("updates preserve configured keys, reset one key, and delete the final config", () => {
   updateConfig("spawnPlacement", "tab");
+  updateConfig("contextRetirement", false);
   updateConfig("mailboxPayloadLimitBytes", 64 * 1024);
   assert.deepEqual(
     JSON.parse(realFs.readFileSync(herdsmanConfigPath(), "utf8")),
     {
       spawnPlacement: "tab",
+      contextRetirement: false,
       mailboxPayloadLimitBytes: 64 * 1024,
     },
   );
   assert.equal(readConfig().spawnPlacement, "tab");
+  assert.equal(readConfig().contextRetirement, false);
   updateConfig("spawnPlacement", undefined);
   assert.deepEqual(
     JSON.parse(realFs.readFileSync(herdsmanConfigPath(), "utf8")),
     {
+      contextRetirement: false,
       mailboxPayloadLimitBytes: 64 * 1024,
     },
   );
   updateConfig("mailboxPayloadLimitBytes", undefined);
+  updateConfig("contextRetirement", undefined);
   assert.equal(realFs.existsSync(herdsmanConfigPath()), false);
   assert.deepEqual(readConfig(), DEFAULT_CONFIG);
 });

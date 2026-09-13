@@ -38,6 +38,7 @@ import support, {
   resultEntryDetails,
   leadExec,
   sessionAgentIdentity,
+  sessionContextRetired,
   setLeadEnvironment,
   setAgentEnvironment,
   watchedResultPaths,
@@ -50,6 +51,7 @@ import support, {
   waitForTestCondition,
   testTmpRoot,
 } from "./support.ts";
+const { updateConfig } = await import("./config.ts");
 
 test("managed agents cancel native session replacement", () => {
   setAgentEnvironment();
@@ -1696,7 +1698,8 @@ test("empty agent metadata succeeds and later reports remain usable", async () =
 });
 
 test("failed completion metadata cannot be bypassed by presentation updates", async (t) => {
-  const mailbox = setAgentEnvironment();
+  const label = "failed-completion-metadata-agent";
+  const mailbox = setAgentEnvironment(label);
   const taskText = "retry this task metadata";
   let taskMetadataFailures = 0;
   let completionFailures = 0;
@@ -1887,7 +1890,7 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     assert.ok(args.includes("pane"));
     assert.ok(args.includes("report-metadata"));
     assert.ok(args.includes("--title"));
-    assert.ok(args.includes("registered-agent"));
+    assert.ok(args.includes(label));
     assert.ok(args.includes("--display-agent"));
     assert.ok(args.includes("agent"));
     assert.ok(args.includes("managed=1"));
@@ -2615,6 +2618,203 @@ test("session agent identity reads the session-wide entry array", () => {
       label: "reviewer",
     },
   );
+});
+
+test("retired active sessions suppress threshold compaction until completion", async () => {
+  const mailbox = setAgentEnvironment("retirement-agent");
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries);
+  await agent.events.get("session_start")![0](undefined, context);
+  const state = readAgentState(mailbox)!;
+  const request: RequestRecord = {
+    version: 4,
+    runId: state.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    kind: "task",
+    text: "retire this task",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, request);
+  assert.deepEqual(
+    agent.events.get("input")![0]({ text: controlMarker(REQUEST_ID) }, context),
+    { action: "transform", text: request.text },
+  );
+
+  const compact = agent.events.get("session_before_compact")![0];
+  assert.deepEqual(compact({ reason: "threshold" }, context), {
+    cancel: true,
+  });
+  assert.equal(
+    sessionContextRetired(
+      context.sessionManager.getEntries(),
+      context.sessionManager.getSessionId(),
+    ),
+    true,
+  );
+  assert.deepEqual(compact({ reason: "threshold" }, context), {
+    cancel: true,
+  });
+  assert.deepEqual(compact({ reason: "threshold" }, context), {
+    cancel: true,
+  });
+  assert.equal(
+    context.sessionManager
+      .getEntries()
+      .filter(
+        (entry: any) =>
+          entry?.type === "custom" &&
+          entry.customType === "pi-herdsman-agent-context-retired",
+      ).length,
+    1,
+  );
+  assert.equal(compact({ reason: "overflow" }, context), undefined);
+  assert.equal(compact({ reason: "manual" }, context), undefined);
+
+  const injected = agent.events.get("context")![1]?.(
+    { messages: [{ role: "user", content: "work" }] },
+    context,
+  );
+  const contextResult =
+    injected ??
+    agent.events.get("context")![0]?.(
+      { messages: [{ role: "user", content: "work" }] },
+      context,
+    );
+  assert.ok(contextResult);
+  assert.match(contextResult.messages.at(-1).content, /retired this session/i);
+  assert.match(
+    contextResult.messages.at(-1).content,
+    /self-contained handoff/i,
+  );
+  agent.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("context retirement bypasses compaction behavior when disabled", async () => {
+  updateConfig("contextRetirement", false);
+  try {
+    const mailbox = setAgentEnvironment("retirement-disabled-agent");
+    const agent = fakePi();
+    registerExtension!(agent.pi as never);
+    const context = fakeAgentContext(agent.entries);
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const request: RequestRecord = {
+      version: 4,
+      runId: state.runId,
+      requestId: REQUEST_ID,
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "disabled retirement task",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, request);
+    agent.events.get("input")![0]({ text: controlMarker(REQUEST_ID) }, context);
+    agent.pi.appendEntry("pi-herdsman-agent-context-retired", {
+      sessionId: context.sessionManager.getSessionId(),
+    });
+    assert.equal(
+      agent.events.get("session_before_compact")![0](
+        { reason: "threshold" },
+        context,
+      ),
+      undefined,
+    );
+    assert.equal(
+      agent.events.get("context")![0]({ messages: [] }, context),
+      undefined,
+    );
+    assert.equal(
+      sessionContextRetired(
+        context.sessionManager.getEntries(),
+        context.sessionManager.getSessionId(),
+      ),
+      true,
+    );
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  } finally {
+    updateConfig("contextRetirement", undefined);
+  }
+});
+
+test("overflow retires without cancellation and inactive sessions stay untouched", async () => {
+  const mailbox = setAgentEnvironment("retirement-overflow-agent");
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const request: RequestRecord = {
+      version: 4,
+      runId: state.runId,
+      requestId: REQUEST_ID,
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "recover overflow safely",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, request);
+    agent.events.get("input")![0]({ text: controlMarker(REQUEST_ID) }, context);
+    const compact = agent.events.get("session_before_compact")![0];
+    assert.equal(compact({ reason: "overflow" }, context), undefined);
+    assert.deepEqual(compact({ reason: "threshold" }, context), {
+      cancel: true,
+    });
+    assert.equal(
+      sessionContextRetired(
+        context.sessionManager.getEntries(),
+        context.sessionManager.getSessionId(),
+      ),
+      true,
+    );
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+
+  const inactiveMailbox = setAgentEnvironment("retirement-inactive-agent");
+  const inactiveAgent = fakePi();
+  registerExtension!(inactiveAgent.pi as never);
+  const inactiveContext = fakeAgentContext(inactiveAgent.entries);
+  try {
+    await inactiveAgent.events.get("session_start")![0](
+      undefined,
+      inactiveContext,
+    );
+    inactiveAgent.pi.appendEntry("pi-herdsman-agent-context-retired", {
+      sessionId: inactiveContext.sessionManager.getSessionId(),
+    });
+    assert.equal(
+      inactiveAgent.events.get("session_before_compact")![0](
+        { reason: "threshold" },
+        inactiveContext,
+      ),
+      undefined,
+    );
+    assert.equal(
+      inactiveAgent.events.get("context")![0](
+        { messages: [] },
+        inactiveContext,
+      ),
+      undefined,
+    );
+  } finally {
+    inactiveAgent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(inactiveMailbox);
+  }
 });
 
 test("agent persists one identity entry before mailbox initialization", async () => {

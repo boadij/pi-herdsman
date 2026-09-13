@@ -66,6 +66,7 @@ import support, {
   writeResult,
   writeAgentState,
 } from "./support.ts";
+const { readConfig, updateConfig } = await import("./config.ts");
 test("partial supervision registration is rolled back when host restoration fails", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
@@ -1208,7 +1209,7 @@ test("plain agents opens the native management menu", async () => {
   assert.equal(prompts[0]?.label, "agents");
   assert.deepEqual(
     prompts[0]?.options.map((option) => option.replace(/\s+.*/u, "")),
-    ["Running", "Definitions", "Layout", "Message", "Stop"],
+    ["Running", "Definitions", "Layout", "Context", "Message", "Stop"],
   );
   assert.equal(prompts[1]?.label, "Layout");
   assert.deepEqual(prompts[1]?.options, [
@@ -1520,6 +1521,43 @@ test("message limits use flat config and one rough token formatter", async () =>
   ]);
   assert.match(notices.at(-1) ?? "", /4 KiB · ≈1,024 tokens/);
   await pi.events.get("session_shutdown")?.[0]();
+});
+
+test("main agents menu toggles context retirement", async () => {
+  setLeadEnvironment();
+  updateConfig("contextRetirement", undefined);
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "rpc";
+  const menus: string[][] = [];
+  const notices: string[] = [];
+  context.ui.select = async (_title: string, options: string[]) => {
+    menus.push(options);
+    return menus.length === 1
+      ? options.find((option) => option.includes("Context retirement"))
+      : undefined;
+  };
+  context.ui.notify = (message: string) => notices.push(message);
+  try {
+    await pi.commandOptions.get("agents").handler("", context);
+    assert.match(
+      menus[0]?.find((option) => option.includes("Context retirement")) ?? "",
+      /Context retirement  on/,
+    );
+    assert.equal(readConfig().contextRetirement, false);
+    assert.deepEqual(notices, ["context retirement: off"]);
+    await pi.commandOptions.get("agents").handler("", context);
+    assert.match(
+      menus.at(-1)?.find((option) => option.includes("Context retirement")) ??
+        "",
+      /Context retirement  off/,
+    );
+  } finally {
+    updateConfig("contextRetirement", undefined);
+    await pi.events.get("session_shutdown")?.[0]();
+  }
 });
 
 test("message limit edits stay in the submenu with the edited field selected", async () => {

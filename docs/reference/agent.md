@@ -61,6 +61,12 @@ session fail closed. The controller's own active Pi session cannot be continued
 to itself; use `delegate` with `fork` when a separate derived context is
 required.
 
+When `contextRetirement` is enabled, `continue` is rejected for a retired
+managed-agent session. A `delegate` with `fork` is also rejected when its
+source is a retired managed-agent session; delegate a fresh agent and pass the
+previous handoff/resultRef and relevant files instead. Retired results
+explicitly instruct the controller to delegate a fresh agent.
+
 The saved session's logical label is inherited exactly for the continued
 generation. A caller cannot provide a continuation label; if the inherited
 label is occupied, continuation fails with `agent_label_exists`.
