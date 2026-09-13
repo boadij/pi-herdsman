@@ -887,6 +887,7 @@ test("start injects mandatory extensions before definition args and configures t
   environment.HERDR_WORKSPACE_ID = "root-workspace";
   const cwd = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-space-"));
   const mailbox = join(cwd, "mailbox with $dollar 'quote' `backtick`");
+  const definitionExtension = join(cwd, "definition-extension.ts");
   const processInfo = {
     pane_id: "pane-1",
     shell_pid: 12,
@@ -998,7 +999,14 @@ test("start injects mandatory extensions before definition args and configures t
       placement: { kind: "tab", label: "agents", tabId: "tab-1" },
       extensionPath: join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
       env: contract,
-      agentArgs: ["--name", "value with spaces", "Unicode-路径", "--approve"],
+      agentArgs: [
+        "--extension",
+        definitionExtension,
+        "--name",
+        "value with spaces",
+        "Unicode-路径",
+        "--approve",
+      ],
     });
   } finally {
     Date.now = originalDateNow;
@@ -1038,11 +1046,21 @@ test("start injects mandatory extensions before definition args and configures t
     join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
     "--extension",
     join(getAgentDir(), "extensions", "herdr-agent-state.ts"),
+    "--extension",
+    definitionExtension,
     "--name",
     "value with spaces",
     "Unicode-路径",
     "--approve",
   ]);
+  const piArgs = startArgs.slice(startArgs.indexOf("--") + 1);
+  const herdsmanExtension = piArgs.indexOf(
+    join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
+  );
+  const providedExtension = piArgs.indexOf(definitionExtension);
+  assert.ok(herdsmanExtension >= 0);
+  assert.ok(providedExtension >= 0);
+  assert.ok(herdsmanExtension < providedExtension);
   assert.equal(startArgs[startArgs.indexOf("--timeout") + 1], "300000");
   assert.equal(execTimeouts[start], 300_000);
   assert.equal(

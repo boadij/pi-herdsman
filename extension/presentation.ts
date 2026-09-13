@@ -68,6 +68,7 @@ export interface CompletionMessageDetails {
   piSessionId?: string;
   piSessionFile?: string;
   status: "completed" | "failed";
+  sessionRetired?: boolean;
   elapsedMs?: number;
   contextUsage?: {
     tokens: number | null;
@@ -2395,6 +2396,7 @@ export function renderCompletionMessage(
     const metadata = [
       ...(d?.agentDefinition ? [`definition: ${d.agentDefinition}`] : []),
       ...(d?.piSessionId ? [`session: ${d.piSessionId}`] : []),
+      ...(d?.sessionRetired ? ["continuation: fresh agent required"] : []),
       ...(d?.requestId ? [`request: ${d.requestId}`] : []),
       ...(elapsed ? [`elapsed: ${elapsed}`] : []),
       ...(d?.contextUsage?.percent != null
@@ -2423,6 +2425,7 @@ export function renderCompletionMessage(
     }
   } else {
     const notices = [
+      ...(d?.sessionRetired ? ["session retired"] : []),
       ...(d?.truncated === true ? ["output truncated"] : []),
       ...(d?.resultPersistenceError ? ["result not saved"] : []),
     ];
