@@ -533,6 +533,76 @@ test("result persistence waits for the assignment lock", async () => {
   realFs.rmSync(mailbox, { recursive: true, force: true });
 });
 
+test("assignment-lock contention does not consume result write attempts", async (t) => {
+  const mailbox = setAgentEnvironment("locked-result-retry-agent");
+  const agent = fakePi();
+  const context = fakeContext();
+  registerExtension!(agent.pi as never);
+  await agent.events.get("session_start")![0](undefined, context);
+  const started = readAgentState(mailbox)!;
+  const request: RequestRecord = {
+    version: 4,
+    runId: started.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: started.ownerSessionId,
+    workspaceId: started.workspaceId,
+    agentLabel: started.agentLabel,
+    paneId: started.paneId,
+    kind: "task",
+    text: "retry after the assignment lock",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, request);
+  agent.events.get("input")![0](
+    { text: controlMarker(request.requestId) },
+    context,
+  );
+  agent.events.get("message_end")![0](
+    { message: { role: "assistant", content: "done" } },
+    context,
+  );
+  let release: (() => void) | undefined = claimProcessLock(
+    assignmentLockPathForTest(mailbox),
+  );
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  t.after(() => {
+    t.mock.timers.reset();
+    support.failNextMailboxWrite = false;
+  });
+  try {
+    agent.events.get("agent_settled")![0](undefined, context);
+    for (let attempt = 0; attempt < 10; attempt++) {
+      t.mock.timers.tick(250);
+      await Promise.resolve();
+    }
+    assert.equal(readResult(mailbox, request.requestId), undefined);
+    assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
+    assert.equal(readAgentState(mailbox)?.resultError, undefined);
+
+    release();
+    release = undefined;
+    support.failNextMailboxWrite = true;
+    t.mock.timers.tick(250);
+    await Promise.resolve();
+    assert.equal(readResult(mailbox, request.requestId), undefined);
+    assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
+    assert.equal(readAgentState(mailbox)?.resultError, undefined);
+
+    t.mock.timers.tick(250);
+    await Promise.resolve();
+    assert.equal(readResult(mailbox, request.requestId)?.text, "done");
+    assert.equal(
+      readAgentState(mailbox)?.completedRequestId,
+      request.requestId,
+    );
+    assert.equal(readAgentState(mailbox)?.resultError, undefined);
+  } finally {
+    release?.();
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("result persistence does not recreate a removed mailbox", async () => {
   const mailbox = setAgentEnvironment("removed-result-agent");
   const agent = fakePi();

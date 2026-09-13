@@ -2718,7 +2718,36 @@ function visibleAgentSnapshots(
       progressed = true;
     }
     if (!progressed) {
-      for (const agent of pending.splice(0)) {
+      const pendingByKey = new Map(
+        pending.map((agent) => [durableIdentityKey(agent.state), agent]),
+      );
+      const cycleMembers = new Set<string>();
+      for (const start of pending) {
+        const path: string[] = [];
+        const pathIndexes = new Map<string, number>();
+        let current: ManagedAgentSnapshot | undefined = start;
+        while (current) {
+          const key = durableIdentityKey(current.state);
+          const cycleStart = pathIndexes.get(key);
+          if (cycleStart !== undefined) {
+            for (const member of path.slice(cycleStart))
+              cycleMembers.add(member);
+            break;
+          }
+          pathIndexes.set(key, path.length);
+          path.push(key);
+          const parents = durableParentCandidates(
+            snapshot.agents,
+            current.state,
+          );
+          if (parents.length !== 1) break;
+          current = pendingByKey.get(durableIdentityKey(parents[0].state));
+        }
+      }
+      const cyclic = pending.filter((agent) =>
+        cycleMembers.has(durableIdentityKey(agent.state)),
+      );
+      for (const agent of cyclic) {
         visible.push({
           ...agent,
           listed: {
@@ -2731,6 +2760,13 @@ function visibleAgentSnapshots(
         });
         ancestryStatus.set(durableIdentityKey(agent.state), "unresolved");
       }
+      pending.splice(
+        0,
+        pending.length,
+        ...pending.filter(
+          (agent) => !cycleMembers.has(durableIdentityKey(agent.state)),
+        ),
+      );
     }
   }
   return visible;
@@ -11078,7 +11114,6 @@ export default function (pi: ExtensionAPI): void {
     const flush = (assignmentLockHeld = false) => {
       const current = pendingResult;
       if (!current) return;
-      resultWriteAttempts++;
       const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
       let release: (() => void) | undefined;
       try {
@@ -11097,6 +11132,7 @@ export default function (pi: ExtensionAPI): void {
           retryTimer = undefined;
           return;
         }
+        resultWriteAttempts++;
         writeResult(mailbox, current);
         pendingResult = undefined;
         if (retryTimer) clearInterval(retryTimer);

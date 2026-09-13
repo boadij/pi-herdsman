@@ -2377,6 +2377,73 @@ test("missing durable ancestry remains unresolved through grandchildren", async 
   }
 });
 
+test("cycle descendants inherit unresolved durable ancestry", async () => {
+  setLeadEnvironment();
+  const cycleA = {
+    ...managedState(
+      "cycle-ancestry-a",
+      undefined,
+      recoveryIdentity("cycle-ancestry-a"),
+    ),
+    ownerSessionId: "11111111-1111-4111-8111-111111111111",
+    piSessionId: "22222222-2222-4222-8222-222222222222",
+  };
+  const cycleB = {
+    ...managedState(
+      "cycle-ancestry-b",
+      undefined,
+      recoveryIdentity("cycle-ancestry-b"),
+    ),
+    ownerSessionId: cycleA.piSessionId,
+    piSessionId: "11111111-1111-4111-8111-111111111111",
+  };
+  const descendant = {
+    ...managedState(
+      "cycle-ancestry-descendant",
+      undefined,
+      recoveryIdentity("cycle-ancestry-descendant"),
+    ),
+    ownerSessionId: cycleA.piSessionId,
+    piSessionId: "33333333-3333-4333-8333-333333333333",
+  };
+  const states = [cycleA, cycleB, descendant];
+  const mailboxes = states.map((state) =>
+    agentMailboxPath(WORKSPACE, state.agentLabel),
+  );
+  for (const [mailbox, state] of mailboxes.map(
+    (mailbox, index) => [mailbox, states[index]] as const,
+  )) {
+    resetAgentMailbox(mailbox);
+    writeAgentState(mailbox, state);
+  }
+  const pi = fakePi({ exec: cascadeExecutor(states).exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    const listed = result.details.agents as any[];
+    for (const [label, diagnostic] of [
+      ["cycle-ancestry-a", "Cyclic durable ancestry"],
+      ["cycle-ancestry-b", "Cyclic durable ancestry"],
+      ["cycle-ancestry-descendant", "Durable parent ancestry is unresolved"],
+    ]) {
+      const agent = listed.find((candidate) => candidate.agent === label);
+      assert.equal(agent?.state, "unknown");
+      assert.equal(agent?.recovery_only, true);
+      assert.equal(agent?.diagnostic, diagnostic);
+      assert.deepEqual(agent?.available_actions, []);
+    }
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
+  }
+});
+
 test("duplicate durable parent identities keep descendants unresolved", async () => {
   setLeadEnvironment();
   const parent = {
