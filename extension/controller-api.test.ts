@@ -1277,7 +1277,7 @@ test("context retirement rejects managed session continuation only when enabled"
         id: sessionId,
         definition: "agent",
         label: "retired-agent",
-        cwd: "/tmp",
+        cwd: resolve("/tmp"),
       },
     );
   } finally {

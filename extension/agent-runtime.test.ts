@@ -1698,7 +1698,8 @@ test("empty agent metadata succeeds and later reports remain usable", async () =
 });
 
 test("failed completion metadata cannot be bypassed by presentation updates", async (t) => {
-  const mailbox = setAgentEnvironment();
+  const label = "failed-completion-metadata-agent";
+  const mailbox = setAgentEnvironment(label);
   const taskText = "retry this task metadata";
   let taskMetadataFailures = 0;
   let completionFailures = 0;
@@ -1889,7 +1890,7 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     assert.ok(args.includes("pane"));
     assert.ok(args.includes("report-metadata"));
     assert.ok(args.includes("--title"));
-    assert.ok(args.includes("registered-agent"));
+    assert.ok(args.includes(label));
     assert.ok(args.includes("--display-agent"));
     assert.ok(args.includes("agent"));
     assert.ok(args.includes("managed=1"));
