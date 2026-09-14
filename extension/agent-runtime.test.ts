@@ -1524,7 +1524,15 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     );
     assert.match(
       String((pi.sentMessageCalls[0].message as any).content),
-      /useful decisions or take useful actions based on partial agent results/i,
+      /independent of and non-overlapping with unresolved agent assignments/,
+    );
+    assert.match(
+      String((pi.sentMessageCalls[0].message as any).content),
+      /otherwise end the turn/,
+    );
+    assert.doesNotMatch(
+      String((pi.sentMessageCalls[0].message as any).content),
+      /make useful decisions or take useful actions based on partial agent results/i,
     );
     assert.match(
       String((pi.sentMessageCalls[0].message as any).content),
@@ -1640,6 +1648,10 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     assert.match(
       sentContent(2),
       /Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved\./,
+    );
+    assert.match(
+      sentContent(2),
+      /You may conclude if your own acceptance criteria are satisfied\./,
     );
     assert.equal(
       (pi.sentMessageCalls[2].message as any).details

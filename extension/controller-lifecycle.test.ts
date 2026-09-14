@@ -137,6 +137,37 @@ test("parent delegates two same-definition children with exact ownership", async
         agentMailboxPath(WORKSPACE, started.details.agent as string),
       );
     }
+    const guidance = pi.sentMessageCalls.find(
+      ({ message }) =>
+        (message as any).customType === "pi-herdsman-delegation-guidance",
+    );
+    assert.ok(guidance);
+    const guidanceContent = String((guidance.message as any).content);
+    assert.match(
+      guidanceContent,
+      /Each active delegated assignment has one executor: that agent/,
+    );
+    assert.match(guidanceContent, /Do not repeat its assigned work locally/);
+    assert.match(
+      guidanceContent,
+      /delegate substantially overlapping work elsewhere/,
+    );
+    assert.match(guidanceContent, /independent, non-overlapping work/);
+    assert.match(
+      guidanceContent,
+      /Do not check or steer active agents merely for progress or completion/,
+    );
+    assert.doesNotMatch(
+      guidanceContent,
+      /Delegate any other useful independent work now/,
+    );
+    assert.equal(
+      pi.sentMessageCalls.filter(
+        ({ message }) =>
+          (message as any).customType === "pi-herdsman-delegation-guidance",
+      ).length,
+      1,
+    );
     const labels = mailboxes.map(
       (mailbox) => readAgentState(mailbox)!.agentLabel,
     );

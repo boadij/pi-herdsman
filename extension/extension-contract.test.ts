@@ -170,6 +170,29 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   const agentTool = lead.tools.find((tool) => tool.name === "agent");
   const chiefTool = lead.tools.find((tool) => tool.name === "chief");
+  assert.ok(agentTool);
+  const agentDescription = agentTool.description.replaceAll(/\s+/g, " ");
+  assert.match(
+    agentDescription,
+    /Each active delegated assignment has one executor: that agent/,
+  );
+  assert.match(agentDescription, /Do not repeat its assigned work locally/);
+  assert.match(
+    agentDescription,
+    /delegate substantially overlapping work elsewhere/,
+  );
+  assert.match(
+    agentDescription,
+    /independent of and non-overlapping with active agent assignments/,
+  );
+  assert.match(
+    agentDescription,
+    /Do not list, inspect, steer, sleep, or otherwise check active agents merely for progress or completion/,
+  );
+  assert.doesNotMatch(
+    agentDescription,
+    /Delegate any other useful independent work now/,
+  );
   assert.equal(typeof agentTool?.renderCall, "function");
   assert.equal(typeof agentTool?.renderResult, "function");
   assert.equal(typeof chiefTool?.renderCall, "function");
