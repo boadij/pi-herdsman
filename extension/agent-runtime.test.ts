@@ -1518,25 +1518,33 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       (pi.sentMessageCalls[0].message as any).details.pendingDirectResultCount,
       1,
     );
+    const unresolvedStatus = String(
+      (pi.sentMessageCalls[0].message as any).content,
+    );
     assert.match(
-      String((pi.sentMessageCalls[0].message as any).content),
+      unresolvedStatus,
       /Delegation status: 1 active direct agent; 1 pending direct result; 2 direct agent assignments remain unresolved\./,
     );
     assert.match(
-      String((pi.sentMessageCalls[0].message as any).content),
-      /independent of and non-overlapping with unresolved agent assignments/,
+      unresolvedStatus,
+      /Handle pending agent questions or other required control actions when needed/,
     );
     assert.match(
-      String((pi.sentMessageCalls[0].message as any).content),
-      /otherwise end the turn/,
+      unresolvedStatus,
+      /independent of and non-overlapping with unresolved agent assignments/,
+    );
+    assert.match(unresolvedStatus, /or end the turn/);
+    assert.match(
+      unresolvedStatus,
+      /Do not repeat unresolved agent assignments locally/,
     );
     assert.doesNotMatch(
-      String((pi.sentMessageCalls[0].message as any).content),
+      unresolvedStatus,
       /make useful decisions or take useful actions based on partial agent results/i,
     );
     assert.match(
-      String((pi.sentMessageCalls[0].message as any).content),
-      /do not conclude or produce the final synthesis/i,
+      unresolvedStatus,
+      /or conclude or produce the final synthesis/i,
     );
     assert.equal(
       readResult(childOneMailbox, childOne.activeRequestId!)?.text,

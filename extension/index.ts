@@ -4529,7 +4529,7 @@ function delegationStatusMessage({
   const guidance =
     unresolvedDirectChildCount === 0
       ? "You may conclude if your own acceptance criteria are satisfied."
-      : "Continue only useful work that is independent of and non-overlapping with unresolved agent assignments; otherwise end the turn. Do not conclude or produce the final synthesis while unresolved agent work remains.";
+      : "Handle pending agent questions or other required control actions when needed. Otherwise continue only useful work that is independent of and non-overlapping with unresolved agent assignments, or end the turn. Do not repeat unresolved agent assignments locally or conclude or produce the final synthesis while unresolved agent work remains.";
   return `Delegation status: ${active}; ${pending}; ${unresolved}. ${guidance}`;
 }
 function delegationStatusForResult(
