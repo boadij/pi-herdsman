@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/boadij/pi-herdsman/compare/v0.6.2...v0.7.0) (2026-09-13)
+
+
+### Features
+
+* retire managed sessions at compaction ([#62](https://github.com/boadij/pi-herdsman/issues/62)) ([7c7fac4](https://github.com/boadij/pi-herdsman/commit/7c7fac44531f5d736e115149f5520ec0caf27181))
+
 ## [0.6.2](https://github.com/boadij/pi-herdsman/compare/v0.6.1...v0.6.2) (2026-09-12)
 
 
