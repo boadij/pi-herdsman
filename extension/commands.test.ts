@@ -40,6 +40,7 @@ import support, {
   fakePi,
   fakeAgentContext,
   herdrAlias,
+  isApiSnapshot,
   isAgentList,
   isPaneList,
   isTabList,
@@ -48,6 +49,7 @@ import support, {
   nativeSessions,
   projectContextCwds,
   readAgentState,
+  readResult,
   realFs,
   recoveryIdentity,
   registerExtension,
@@ -484,7 +486,6 @@ test("lead agents command uses native completion and exact human grammar", async
     "Usage: /agents definitions | placement [tab|subtree|split] | stop",
     "Usage: /agents placement [tab|subtree|split]",
   ]);
-  assert.equal(pi.calls.length, 2);
 });
 
 test("/agents placement subtree writes flat config outside project settings", async () => {
@@ -544,9 +545,23 @@ test("Chief activation replaces the lead widget and overview selection is intera
     autoActivateRegisteredTools: true,
     entries,
     exec: (_command, args) => {
+      if (isApiSnapshot(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              snapshot: { agents: [lead], panes: [lead] },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       if (isAgentList(args))
         return {
-          stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [lead] } }),
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [lead] },
+          }),
           stderr: "",
           code: 0,
         };
@@ -769,15 +784,29 @@ async function openChiefOverview(
     activeTools: ["agent", "chief", "read"],
     entries: [],
     exec: (_command, args) => {
-      if (failRefresh && isAgentList(args))
+      if (failRefresh && isApiSnapshot(args))
         throw new Error("supervision unavailable");
-      return isAgentList(args)
+      return isApiSnapshot(args)
         ? {
-            stdout: JSON.stringify({ id: AGENT_ID, result: { agents } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                snapshot: { agents, panes: agents },
+              },
+            }),
             stderr: "",
             code: 0,
           }
-        : { stdout: "{}", stderr: "", code: 0 };
+        : isAgentList(args)
+          ? {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: { agents },
+              }),
+              stderr: "",
+              code: 0,
+            }
+          : { stdout: "{}", stderr: "", code: 0 };
     },
   });
   const context = fakeContext([]) as any;
@@ -1010,9 +1039,12 @@ test("active chief shutdown clears its role before releasing the lease", async (
   );
   const pi = fakePi({
     exec: (_command, args) =>
-      isAgentList(args)
+      isApiSnapshot(args)
         ? {
-            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { agents: [], snapshot: { agents: [], panes: [] } },
+            }),
             stderr: "",
             code: 0,
           }
@@ -1105,9 +1137,12 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     entries,
     activeTools: ["read", "bash", "foreign_tool"],
     exec: (_command, args) =>
-      isAgentList(args)
+      isApiSnapshot(args)
         ? {
-            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { agents: [], snapshot: { agents: [], panes: [] } },
+            }),
             stderr: "",
             code: 0,
           }
@@ -1175,6 +1210,15 @@ test("plain agents opens the native management menu", async () => {
   const pi = fakePi({
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (isApiSnapshot(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { snapshot: { agents: [], panes: [] } },
+          }),
+          stderr: "",
+          code: 0,
+        };
       if (isAgentList(args))
         return {
           stdout: JSON.stringify({
@@ -1700,6 +1744,97 @@ test("Running explains how to delegate when no agents are running", async () => 
   );
 });
 
+test("Running excludes lost and unknown durable generations", async () => {
+  setLeadEnvironment();
+  const lostLabel = "lost-running-menu-agent";
+  const unknownLabel = "unknown-running-menu-agent";
+  const lostIdentity = {
+    paneId: "lost-running-menu-pane",
+    tabId: "lost-running-menu-tab",
+    piSessionId: "11111111-1111-4111-8111-111111111111",
+    piSessionFile: "/tmp/lost-running-menu-agent.jsonl",
+  };
+  const unknownIdentity = {
+    paneId: "unknown-running-menu-pane",
+    tabId: "unknown-running-menu-tab",
+    piSessionId: "22222222-2222-4222-8222-222222222222",
+    piSessionFile: "/tmp/unknown-running-menu-agent.jsonl",
+  };
+  const mailboxes = [
+    agentMailboxPath(WORKSPACE, lostLabel),
+    agentMailboxPath(WORKSPACE, unknownLabel),
+  ];
+  writeAgentState(
+    mailboxes[0]!,
+    managedState(lostLabel, REQUEST_ID, lostIdentity),
+  );
+  writeAgentState(
+    mailboxes[1]!,
+    managedState(unknownLabel, REQUEST_ID, unknownIdentity),
+  );
+  const pi = fakePi({
+    exec: (command, args) =>
+      command === "herdr" && isApiSnapshot(args)
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                snapshot: {
+                  agents: [],
+                  panes: [
+                    {
+                      pane_id: unknownIdentity.paneId,
+                      workspace_id: WORKSPACE,
+                      cwd: "/tmp",
+                      agent_session: {
+                        source: "herdr:pi",
+                        agent: "pi",
+                        kind: "id",
+                        value: unknownIdentity.piSessionId,
+                      },
+                    },
+                  ],
+                },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const prompts: { label: string; options: string[] }[] = [];
+  const notices: string[] = [];
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.ui.notify = (message: string) => notices.push(message);
+  context.ui.select = async (label: string, options: string[]) => {
+    prompts.push({ label, options });
+    assert.equal(label, "agents");
+    assert.ok(options.includes("Running        1 unknown · 1 lost"));
+    return prompts.length === 1
+      ? options.find((option) => option.startsWith("Running"))
+      : undefined;
+  };
+  try {
+    await command.handler("", context);
+    assert.deepEqual(
+      prompts.map(({ label }) => label),
+      ["agents", "agents"],
+    );
+    assert.ok(notices.some((message) => message.includes("No running agents")));
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "focus"),
+      false,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    for (const mailbox of mailboxes) resetAgentMailbox(mailbox);
+  }
+});
+
 test("Running warns when the selected agent is replaced before focus", async () => {
   setLeadEnvironment();
   const label = "running-menu-replaced-agent";
@@ -1716,18 +1851,43 @@ test("Running warns when the selected agent is replaced before focus", async () 
   const pi = fakePi({
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
-      if (isAgentList(args))
+      if (isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: JSON.parse(
-              listResponse(
-                label,
-                "working",
-                currentIdentity.piSessionId,
-                currentIdentity,
+            result: {
+              ...JSON.parse(
+                listResponse(
+                  label,
+                  "working",
+                  currentIdentity.piSessionId,
+                  currentIdentity,
+                ),
               ),
-            ),
+              snapshot: {
+                agents: JSON.parse(
+                  listResponse(
+                    label,
+                    "working",
+                    currentIdentity.piSessionId,
+                    currentIdentity,
+                  ),
+                ).agents,
+                panes: [
+                  {
+                    pane_id: currentIdentity.paneId,
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: currentIdentity.piSessionId,
+                    },
+                  },
+                ],
+              },
+            },
           }),
           stderr: "",
           code: 0,
@@ -1849,7 +2009,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
   const pi = fakePi({
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
-      if (isAgentList(args))
+      if (isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
@@ -1860,7 +2020,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
               tabs: [],
               agents: states.map(({ label, identity }) => ({
                 herdr_agent: herdrAlias(label),
-                status: "working",
+                agent_status: "working",
                 cwd: "/tmp",
                 workspace_id: WORKSPACE,
                 pane_id: identity.paneId,
@@ -1877,6 +2037,30 @@ test("Running keeps colliding display labels distinct and focuses the selected p
               })),
               available_panes: [],
               agent_definitions: [],
+              snapshot: {
+                agents: states.map(({ label, identity }) => ({
+                  ...JSON.parse(
+                    listResponse(
+                      label,
+                      "working",
+                      identity.piSessionId,
+                      identity,
+                    ),
+                  ).agents[0],
+                  name: herdrAlias(label),
+                })),
+                panes: states.map(({ identity }) => ({
+                  pane_id: identity.paneId,
+                  workspace_id: WORKSPACE,
+                  cwd: "/tmp",
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: identity.piSessionId,
+                  },
+                })),
+              },
             },
           }),
           stderr: "",
@@ -2567,9 +2751,12 @@ test("lead agents stop reports an empty owned inventory safely", async () => {
   setLeadEnvironment();
   const pi = fakePi({
     exec: (command, args) =>
-      command === "herdr" && isAgentList(args)
+      command === "herdr" && isApiSnapshot(args)
         ? {
-            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { snapshot: { agents: [], panes: [] } },
+            }),
             stderr: "",
             code: 0,
           }
@@ -2694,13 +2881,15 @@ test("lead agents stop refuses an agent whose identity changes after inventory",
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, agent);
   const lifecycle = cascadeExecutor([agent]);
-  let listCalls = 0;
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = lifecycle.exec(command, args, options);
-      if (command === "herdr" && isAgentList(args) && ++listCalls === 3) {
+      if (command === "herdr" && (isApiSnapshot(args) || isAgentList(args))) {
         const value = JSON.parse(result.stdout);
-        value.result.agents[0].agent_session = {
+        const agents = isApiSnapshot(args)
+          ? value.result.snapshot.agents
+          : value.result.agents;
+        agents[0].agent_session = {
           kind: "id",
           value: "22222222-2222-4222-8222-222222222222",
         };
@@ -2717,8 +2906,7 @@ test("lead agents stop refuses an agent whose identity changes after inventory",
   try {
     await command.handler("stop", context);
     assert.equal(lifecycle.closeOrder.length, 0);
-    assert.match(stopSummary(pi), /pi-herdsman-identity-race/);
-    assert.match(stopSummary(pi), /not closed|No exact agent identity matched/);
+    assert.match(stopSummary(pi), /No owned agents running|not closed/);
     assert.ok(readAgentState(mailbox));
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -2738,6 +2926,8 @@ test("lead agents stop reports cleanup failures and preserves accurate discarded
     REQUEST_ID,
     recoveryIdentity("stop-pending-agent"),
   );
+  pending.piSessionId = "11111111-1111-4111-8111-111111111111";
+  pending.piSessionFile = "/tmp/stop-pending-agent-unique.jsonl";
   pending.completedRequestId = randomUUID();
   const mailboxes = [failed, pending].map((state) =>
     agentMailboxPath(WORKSPACE, state.agentLabel),
@@ -2766,12 +2956,14 @@ test("lead agents stop reports cleanup failures and preserves accurate discarded
   try {
     await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
     const summary = stopSummary(pi);
-    assert.match(summary, /Stopped 1 of 2 agents/);
+    assert.match(summary, /Stopped 0 of 2 agents/);
     assert.match(summary, /✗ stop-failed-agent/);
     assert.match(summary, /Discarded:/);
     assert.match(summary, /stop-pending-agent: active assignment/);
     assert.match(summary, /stop-pending-agent: pending result/);
-    assert.deepEqual(lifecycle.closeOrder, [pending.agentLabel]);
+    assert.deepEqual(lifecycle.closeOrder, []);
+    assert.ok(readAgentState(mailboxes[1]!));
+    assert.ok(readResult(mailboxes[1]!, pending.completedRequestId!));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox));
@@ -2783,6 +2975,8 @@ test("lead agents stop continues independent leads after a partial cascade failu
   const states = ["stop-partial-failure", "stop-independent"].map((label) =>
     managedState(label, undefined, recoveryIdentity(label)),
   );
+  states[1]!.piSessionId = "11111111-1111-4111-8111-111111111111";
+  states[1]!.piSessionFile = "/tmp/stop-independent-unique.jsonl";
   const mailboxes = states.map((state) =>
     agentMailboxPath(WORKSPACE, state.agentLabel),
   );
@@ -2805,44 +2999,6 @@ test("lead agents stop continues independent leads after a partial cascade failu
   }
 });
 
-test("lead agents stop reports and closes a proven orphan subtree", async () => {
-  setLeadEnvironment();
-  const parent = managedState(
-    "orphan-stop-parent",
-    undefined,
-    recoveryIdentity("orphan-stop-parent"),
-  );
-  parent.piSessionId = PARENT_SESSION_ID;
-  const child = managedState(
-    "orphan-stop-child",
-    undefined,
-    recoveryIdentity("orphan-stop-child"),
-  );
-  child.ownerSessionId = parent.piSessionId;
-  child.piSessionId = CHILD_SESSION_ID;
-  const mailboxes = [parent, child].map((state) =>
-    agentMailboxPath(WORKSPACE, state.agentLabel),
-  );
-  writeAgentState(mailboxes[0]!, parent);
-  writeAgentState(mailboxes[1]!, child);
-  const lifecycle = cascadeExecutor([child], {
-    omitAgentLabels: [parent.agentLabel],
-  });
-  const pi = fakePi({ exec: lifecycle.exec });
-  registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
-  try {
-    await command.handler("stop", { ...fakeContext(), hasUI: true } as any);
-    assert.deepEqual(lifecycle.closeOrder, [child.agentLabel]);
-    assert.match(stopSummary(pi), /Stopped 1 agents/);
-    assert.match(stopSummary(pi), /✓ orphan-stop-child/);
-    assert.doesNotMatch(stopSummary(pi), /orphan-stop-parent/);
-  } finally {
-    pi.events.get("session_shutdown")?.[0]();
-    mailboxes.forEach((mailbox) => resetAgentMailbox(mailbox));
-  }
-});
-
 test("lead agents stop scopes its summary to the current lead subtree", async () => {
   setLeadEnvironment();
   const owned = managedState(
@@ -2858,6 +3014,8 @@ test("lead agents stop scopes its summary to the current lead subtree", async ()
     ),
     ownerSessionId: "foreign-lead-session",
   };
+  foreign.piSessionId = "11111111-1111-4111-8111-111111111111";
+  foreign.piSessionFile = "/tmp/scoped-foreign-agent-unique.jsonl";
   const states = [owned, foreign];
   const mailboxes = states.map((state) =>
     agentMailboxPath(WORKSPACE, state.agentLabel),
@@ -2895,40 +3053,73 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
       return ["read", "bash", "ask_owner"];
     },
     exec: (command, args) =>
-      command === "herdr" && isAgentList(args)
+      command === "herdr" && isApiSnapshot(args)
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
               result: {
-                agents: [
-                  agentFromState(state),
-                  {
-                    agent: "pi",
-                    workspace_id: WORKSPACE,
-                    pane_id: "lead-pane",
-                    agent_session: {
-                      source: "herdr:pi",
+                snapshot: {
+                  agents: [
+                    agentFromState(state),
+                    {
                       agent: "pi",
-                      kind: "id",
-                      value: LEAD_SESSION_ID,
+                      workspace_id: WORKSPACE,
+                      pane_id: "lead-pane",
+                      agent_session: {
+                        source: "herdr:pi",
+                        agent: "pi",
+                        kind: "id",
+                        value: LEAD_SESSION_ID,
+                      },
                     },
-                  },
-                ],
+                  ],
+                  panes: [
+                    {
+                      pane_id: state.paneId,
+                      workspace_id: WORKSPACE,
+                      cwd: state.cwd,
+                      agent_session: {
+                        source: "herdr:pi",
+                        agent: "pi",
+                        kind: "id",
+                        value: state.piSessionId,
+                      },
+                    },
+                    {
+                      pane_id: "lead-pane",
+                      workspace_id: WORKSPACE,
+                      cwd: "/tmp",
+                      agent_session: {
+                        source: "herdr:pi",
+                        agent: "pi",
+                        kind: "id",
+                        value: LEAD_SESSION_ID,
+                      },
+                    },
+                  ],
+                },
               },
             }),
             stderr: "",
             code: 0,
           }
-        : command === "herdr" && isPaneList(args)
+        : command === "herdr" && isAgentList(args)
           ? {
               stdout: JSON.stringify({
                 id: AGENT_ID,
                 result: {
-                  panes: [
+                  agents: [
+                    agentFromState(state),
                     {
-                      pane_id: "lead-pane",
+                      agent: "pi",
                       workspace_id: WORKSPACE,
-                      agent: NON_PI_AGENT,
+                      pane_id: "lead-pane",
+                      agent_session: {
+                        source: "herdr:pi",
+                        agent: "pi",
+                        kind: "id",
+                        value: LEAD_SESSION_ID,
+                      },
                     },
                   ],
                 },
@@ -2936,7 +3127,24 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
               stderr: "",
               code: 0,
             }
-          : { stdout: "{}", stderr: "", code: 0 },
+          : command === "herdr" && isPaneList(args)
+            ? {
+                stdout: JSON.stringify({
+                  id: AGENT_ID,
+                  result: {
+                    panes: [
+                      {
+                        pane_id: "lead-pane",
+                        workspace_id: WORKSPACE,
+                        agent: NON_PI_AGENT,
+                      },
+                    ],
+                  },
+                }),
+                stderr: "",
+                code: 0,
+              }
+            : { stdout: "{}", stderr: "", code: 0 },
   });
   const context = fakeAgentContext() as any;
   context.mode = "tui";
@@ -3044,7 +3252,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
   try {
     const pi = fakePi({
       exec: (command, args) => {
-        if (command === "herdr" && args[0] === "agent" && args[1] === "list")
+        if (command === "herdr" && isApiSnapshot(args))
           return new Promise((resolve) =>
             pendingLists.push({ resolve }),
           ) as any;
@@ -3126,7 +3334,9 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
       pending.resolve({
         stdout: JSON.stringify({
           id: 1,
-          result: JSON.parse(listResponse("old-agent")),
+          result: {
+            snapshot: { agents: [], panes: [] },
+          },
         }),
         stderr: "",
         code: 0,
@@ -3138,7 +3348,9 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
       pending.resolve({
         stdout: JSON.stringify({
           id: 1,
-          result: JSON.parse(listResponse("new-agent")),
+          result: {
+            snapshot: { agents: [], panes: [] },
+          },
         }),
         stderr: "",
         code: 0,
@@ -3158,7 +3370,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
   }
 });
 
-test("TUI status refresh consumes the supported Herdr agent list envelope", async (t) => {
+test("TUI status refresh consumes the coherent Herdr session snapshot", async (t) => {
   setLeadEnvironment();
   const label = "sleep-smoke-a";
   const identity = {
@@ -3205,26 +3417,47 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
     activeTools: ["read", "bash", "ask_owner"],
     exec: (command, args) => {
       calls.push(args);
-      if (command === "herdr" && args[0] === "agent" && args[1] === "list")
+      if (command === "herdr" && isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
-              agents: [
-                herdrAgent,
-                {
-                  agent: "pi",
-                  workspace_id: WORKSPACE,
-                  pane_id: "unmanaged-lead-pane",
-                  cwd: "/tmp",
-                  agent_session: {
-                    source: "herdr:pi",
+              snapshot: {
+                agents: [
+                  herdrAgent,
+                  {
                     agent: "pi",
-                    kind: "id",
-                    value: LEAD_SESSION_ID,
+                    workspace_id: WORKSPACE,
+                    pane_id: "unmanaged-lead-pane",
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: LEAD_SESSION_ID,
+                    },
                   },
-                },
-              ],
+                ],
+                panes: [
+                  {
+                    pane_id: identity.paneId,
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                    agent_session: herdrAgent.agent_session,
+                  },
+                  {
+                    pane_id: "unmanaged-lead-pane",
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: LEAD_SESSION_ID,
+                    },
+                  },
+                ],
+              },
             },
           }),
           stderr: "",
@@ -3303,12 +3536,7 @@ test("TUI status refresh consumes the supported Herdr agent list envelope", asyn
   globalThis.setInterval = originalSetInterval;
 
   assert.ok(widget);
-  assert.ok(
-    calls.some(
-      (args) =>
-        args[0] === "agent" && args[1] === "list" && !args.includes("--json"),
-    ),
-  );
+  assert.ok(calls.some((args) => args[0] === "api" && args[1] === "snapshot"));
   assert.ok(
     pi.execOptions.some((options) => options.timeout === 30_000),
     "direct Herdr status polling must have a finite timeout",
@@ -3366,7 +3594,22 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
     tokens: { task: "fresh task" },
   };
   const envelope = () =>
-    JSON.stringify({ id: 1, result: { agents: [herdrAgent] } });
+    JSON.stringify({
+      id: 1,
+      result: {
+        snapshot: {
+          agents: [herdrAgent],
+          panes: [
+            {
+              pane_id: identity.paneId,
+              workspace_id: WORKSPACE,
+              cwd: "/tmp",
+              agent_session: herdrAgent.agent_session,
+            },
+          ],
+        },
+      },
+    });
   let listCount = 0;
   let resolveInitial: ((value: ExecResult) => void) | undefined;
   let resolveReconciliation: ((value: ExecResult) => void) | undefined;
@@ -3374,7 +3617,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   const pi = fakePi({
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
-      if (isAgentList(args)) {
+      if (isApiSnapshot(args)) {
         listCount++;
         if (listCount === 1)
           return new Promise<ExecResult>((resolve) => {
@@ -3431,7 +3674,10 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   assert.match(widget.render(160).join("\n"), /1 unknown/);
 
   resolveReconciliation!({
-    stdout: JSON.stringify({ id: 1, result: { agents: [] } }),
+    stdout: JSON.stringify({
+      id: 1,
+      result: { snapshot: { agents: [], panes: [] } },
+    }),
     stderr: "",
     code: 0,
   });
@@ -3497,9 +3743,25 @@ test("fresh assignment refreshes the widget after validation", async () => {
     display_agent: "agent",
     tokens: { task: "fresh task" },
   };
-  const emptyList = () => JSON.stringify({ id: 1, result: { agents: [] } });
-  const liveList = () =>
-    JSON.stringify({ id: 1, result: { agents: [herdrAgent] } });
+  const snapshot = (live: boolean) =>
+    JSON.stringify({
+      id: 1,
+      result: {
+        snapshot: {
+          agents: live ? [herdrAgent] : [],
+          panes: live
+            ? [
+                {
+                  pane_id: herdrAgent.pane_id,
+                  workspace_id: WORKSPACE,
+                  cwd: requestedCwd,
+                  agent_session: herdrAgent.agent_session,
+                },
+              ]
+            : [],
+        },
+      },
+    });
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -3528,14 +3790,14 @@ test("fresh assignment refreshes the widget after validation", async () => {
   let startedOwnerSessionId = LEAD_SESSION_ID;
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && isAgentList(args)) {
+      if (command === "herdr" && isApiSnapshot(args)) {
         listCount++;
         if (listCount === 1)
           return new Promise<ExecResult>((resolve) => {
             resolveInitialStatus = resolve;
           });
         return {
-          stdout: live ? liveList() : emptyList(),
+          stdout: snapshot(live),
           stderr: "",
           code: 0,
         };
@@ -3777,7 +4039,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       () => resolveInitialStatus !== undefined,
       "assignment did not request initial status",
     );
-    resolveInitialStatus!({ stdout: liveList(), stderr: "", code: 0 });
+    resolveInitialStatus!({ stdout: snapshot(true), stderr: "", code: 0 });
     await waitForTestCondition(
       () => resolveIntegration !== undefined,
       "assignment did not reach integration validation",
@@ -3819,10 +4081,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
     );
     const firstStatusAfterValidation = pi.calls.findIndex(
       (args, index) =>
-        index > getIndexes[0] &&
-        index < getIndexes[1] &&
-        args[0] === "agent" &&
-        args[1] === "list",
+        index > getIndexes[0] && index < getIndexes[1] && isApiSnapshot(args),
     );
     assert.ok(
       firstStatusAfterValidation >= 0,

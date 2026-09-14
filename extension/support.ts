@@ -34,6 +34,7 @@ export let failNextResultRemoval = false;
 export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
 export let configReadHook: (() => void) | undefined;
+export let agentStateReadHook: ((path: string) => void) | undefined;
 
 export type WidgetComponent = {
   render(width: number): string[];
@@ -115,7 +116,10 @@ mock.module("node:fs", {
         args[0].startsWith(`${PI_AGENTS_DIR}${sep}`)
       )
         agentDefinitionReadCount++;
-      return realFs.readFileSync(...args);
+      const result = realFs.readFileSync(...args);
+      if (typeof args[0] === "string" && args[0].endsWith(`${sep}state.json`))
+        agentStateReadHook?.(args[0]);
+      return result;
     },
     readSync: (...args: any[]) => {
       return realFs.readSync(...args);
@@ -547,6 +551,9 @@ export function isTabClose(args: string[]): boolean {
 export function isAgentList(args: string[]): boolean {
   return args[0] === "agent" && args[1] === "list";
 }
+export function isApiSnapshot(args: readonly string[]): boolean {
+  return args[0] === "api" && args[1] === "snapshot";
+}
 export function isTabList(args: string[]): boolean {
   return args[0] === "tab" && args[1] === "list";
 }
@@ -567,6 +574,14 @@ export function delegationLockPathForTest(
       createHash("sha256")
         .update(workspaceId + "\0" + parentSessionId)
         .digest("hex"),
+  );
+}
+
+export function assignmentLockPathForTest(mailbox: string): string {
+  return join(
+    herdsmanTempRoot(),
+    "locks",
+    "assignment-" + createHash("sha256").update(mailbox).digest("hex"),
   );
 }
 
@@ -728,7 +743,12 @@ export function fakePi(
           stdout:
             command === "herdr" && isAgentList(args)
               ? JSON.stringify({ id: AGENT_ID, result: { agents: [] } })
-              : "{}",
+              : command === "herdr" && isApiSnapshot(args)
+                ? JSON.stringify({
+                    id: AGENT_ID,
+                    result: { snapshot: { agents: [], panes: [] } },
+                  })
+                : "{}",
           stderr: "",
           code: 0,
         });
@@ -998,6 +1018,45 @@ export function leadExec(
         stderr: "",
         code: 0,
       };
+    if (command === "herdr" && isApiSnapshot(args))
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            snapshot: {
+              agents: JSON.parse(
+                listResponse(
+                  label,
+                  status,
+                  listSession,
+                  identity,
+                  useAgentStatus,
+                  agentStatus,
+                ),
+              ).agents,
+              panes: [
+                {
+                  pane_id: identity.paneId,
+                  workspace_id: WORKSPACE,
+                  cwd: "/tmp",
+                  agent: label,
+                  agent_status: useAgentStatus ? agentStatus : status,
+                  agent_session: listSession
+                    ? {
+                        source: "herdr:pi",
+                        agent: "pi",
+                        kind: "id",
+                        value: listSession,
+                      }
+                    : undefined,
+                },
+              ],
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
     if (command === "herdr" && isPaneList(args))
       return {
         stdout: JSON.stringify({
@@ -1104,6 +1163,37 @@ export function agentControllerExecutor(
             agents: [parent, ...children].map((state) =>
               agentFromState(state, state.activeRequestId ? "working" : "idle"),
             ),
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (isApiSnapshot(args))
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            snapshot: {
+              agents: [parent, ...children].map((state) =>
+                agentFromState(
+                  state,
+                  state.activeRequestId ? "working" : "idle",
+                ),
+              ),
+              panes: [parent, ...children].map((state) => ({
+                pane_id: state.paneId,
+                workspace_id: state.workspaceId,
+                cwd: state.cwd,
+                agent: state.agentLabel,
+                agent_status: state.activeRequestId ? "working" : "idle",
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: state.piSessionId,
+                },
+              })),
+            },
           },
         }),
         stderr: "",
@@ -1261,6 +1351,20 @@ export function delegatedLifecycleExecutor(
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: { agents: [...live.values()].map(agentForState) },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (isApiSnapshot(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              snapshot: {
+                agents: [...live.values()].map(agentForState),
+                panes: panes(),
+              },
+            },
           }),
           stderr: "",
           code: 0,
@@ -1551,6 +1655,82 @@ export function cascadeExecutor(
           });
         return {
           stdout: JSON.stringify({ id: AGENT_ID, result: { agents } }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (isPaneList(args)) {
+        const panes = [
+          ...[...live.values()]
+            .filter((state) => !omitPaneLabels.has(state.agentLabel))
+            .map((state) => ({
+              pane_id: state.paneId,
+              tab_id: `${state.agentLabel}-tab`,
+              workspace_id: state.workspaceId,
+              cwd: state.cwd,
+              foreground_cwd: state.cwd,
+              agent_status: "unknown",
+              agent_session: {
+                source: "herdr:pi",
+                agent: "pi",
+                kind: "id",
+                value: state.piSessionId,
+              },
+            })),
+          ...[...paneOnly].map((paneId) => ({
+            pane_id: paneId,
+            workspace_id: WORKSPACE,
+            cwd: "/tmp",
+          })),
+        ];
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: { panes } }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (isApiSnapshot(args)) {
+        const agents = [...live.values()]
+          .filter((state) => !omitAgentLabels.has(state.agentLabel))
+          .map((state) => {
+            const agent = agentFromState(state);
+            if (state.agentLabel === options.mismatchSessionLabel)
+              agent.agent_session = {
+                source: "herdr:pi",
+                agent: "pi",
+                kind: "id",
+                value: "22222222-2222-4222-8222-222222222222",
+              };
+            return agent;
+          });
+        const panes = [
+          ...[...live.values()]
+            .filter((state) => !omitPaneLabels.has(state.agentLabel))
+            .map((state) => ({
+              pane_id: state.paneId,
+              tab_id: `${state.agentLabel}-tab`,
+              workspace_id: state.workspaceId,
+              cwd: state.cwd,
+              foreground_cwd: state.cwd,
+              agent_status: "unknown",
+              agent_session: {
+                source: "herdr:pi",
+                agent: "pi",
+                kind: "id",
+                value: state.piSessionId,
+              },
+            })),
+          ...[...paneOnly].map((paneId) => ({
+            pane_id: paneId,
+            workspace_id: WORKSPACE,
+            cwd: "/tmp",
+          })),
+        ];
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { snapshot: { agents, panes } },
+          }),
           stderr: "",
           code: 0,
         };
@@ -1900,19 +2080,55 @@ export function createStagedAssignmentFixture(
     persistMessages: true,
     exec: async (command, args, options) => {
       if (command === "herdr" && isAgentList(args)) {
+        const state = readAgentState(startupMailbox);
+        const agents =
+          state && !paneClosed
+            ? [
+                {
+                  ...JSON.parse(
+                    listResponse(
+                      label,
+                      state.activeRequestId ? "working" : "idle",
+                    ),
+                  ).agents[0],
+                  name: runScopedHerdrAlias(WORKSPACE, label, state.runId),
+                  pane_id: "startup-pane",
+                  workspace_id: WORKSPACE,
+                  cwd: "/tmp",
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: state.piSessionId,
+                  },
+                },
+              ]
+            : [];
+        if (agents.some((agent: any) => agent.agent_status === "working"))
+          workingObservations++;
+        return {
+          stdout: JSON.stringify({ id: 1, result: { agents } }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "herdr" && isApiSnapshot(args)) {
         if (holdInitialStatus) {
           holdInitialStatus = false;
           return initialStatus.promise;
         }
         if (!started)
           return {
-            stdout: JSON.stringify({ id: 1, result: { agents: [] } }),
+            stdout: JSON.stringify({
+              id: 1,
+              result: { snapshot: { agents: [], panes: [] } },
+            }),
             stderr: "",
             code: 0,
           };
         const result = await startup.exec(command, args, options);
         const payload = JSON.parse(result.stdout);
-        const agents = payload.result?.agents ?? payload.agents ?? [];
+        const agents = payload.result?.snapshot?.agents ?? [];
         if (agents.some((agent: any) => agent.agent_status === "working"))
           workingObservations++;
         return result;
@@ -1974,7 +2190,10 @@ export function createStagedAssignmentFixture(
   registerExtension!(pi.pi as never);
   const sessionStart = pi.events.get("session_start")![0](undefined, context);
   const emptyStatus = (): ExecResult => ({
-    stdout: JSON.stringify({ id: 1, result: { agents: [] } }),
+    stdout: JSON.stringify({
+      id: 1,
+      result: { snapshot: { agents: [], panes: [] } },
+    }),
     stderr: "",
     code: 0,
   });
@@ -2008,7 +2227,12 @@ export function createStagedAssignmentFixture(
     get workingObservations(): number {
       return workingObservations;
     },
-    releaseInitialStatus: () => initialStatus.resolve(emptyStatus()),
+    releaseInitialStatus: () =>
+      initialStatus.resolve(
+        readAgentState(startupMailbox)
+          ? startup.exec("herdr", ["api", "snapshot"])
+          : emptyStatus(),
+      ),
     releaseStart: () => start.resolve(),
     releasePreSubmitValidation: () => preSubmitValidation.resolve(),
     releaseAcknowledgement: () => handoff.resolve(),
@@ -2197,6 +2421,55 @@ export function startupExecutor(
         };
       }
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (isApiSnapshot(args)) {
+        const state = readAgentState(mailbox);
+        const agents =
+          state && runId && !stopped
+            ? [
+                {
+                  ...JSON.parse(
+                    listResponse(
+                      label,
+                      state.activeRequestId ? "working" : "idle",
+                    ),
+                  ).agents[0],
+                  name: runScopedHerdrAlias(WORKSPACE, label, state.runId),
+                  pane_id: activePaneId,
+                  workspace_id: WORKSPACE,
+                  cwd: testCwd,
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: sessionForGet(getCount) ?? DEFAULT_PI_SESSION_ID,
+                  },
+                },
+              ]
+            : [];
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              snapshot: {
+                agents,
+                panes:
+                  closePaneOnClose && (paneClosed || tabClosed)
+                    ? []
+                    : [
+                        {
+                          pane_id: activePaneId,
+                          workspace_id: WORKSPACE,
+                          cwd: testCwd,
+                          agent_session: agents[0]?.agent_session,
+                        },
+                      ],
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
       if (isTabList(args))
         return {
           stdout: JSON.stringify({
@@ -2599,5 +2872,11 @@ export default {
   },
   set configReadHook(value: typeof configReadHook) {
     configReadHook = value;
+  },
+  get agentStateReadHook() {
+    return agentStateReadHook;
+  },
+  set agentStateReadHook(value: typeof agentStateReadHook) {
+    agentStateReadHook = value;
   },
 };

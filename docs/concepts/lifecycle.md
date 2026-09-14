@@ -23,6 +23,13 @@ cleanup
 gone
 ```
 
+If the expected pane, Pi session, and run-scoped alias are all absent from a
+coherent Herdr inventory before a durable result resolves the assignment, the
+assignment projects as `lost`. The mailbox remains the durable owner of that
+generation until the direct owner explicitly closes it; physical disappearance
+does not mean completion or task failure. Moved, conflicting, or incomplete
+evidence remains `unknown`.
+
 The authoritative final result is correlated to the accepted assignment request
 ID.
 
@@ -52,6 +59,7 @@ The public states are:
 - `blocked`
 - `settling`
 - `unknown`
+- `lost`
 
 See [Agent states](../reference/agent-states.md) for their exact control
 meaning.

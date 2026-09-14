@@ -47,6 +47,16 @@ Do not guess from pane IDs, process appearance, elapsed time, or stale metadata.
 Refresh `list` and resolve the identity/lifecycle condition. If a cleanup or
 recovery error is present, inspect its exact details.
 
+## Agent is `lost`
+
+`lost` means the expected physical execution is proven gone before a durable
+terminal result resolved the assignment. The durable mailbox remains owned and
+the assignment remains unresolved; loss is not completion or task failure.
+Only the direct owner may use `close` to abandon the lost generation. Close it
+before replacing it or continuing its saved session. Herdsman never
+redelegates or continues it automatically. Moved or conflicting evidence is
+`unknown`, not `lost`, and remains fail-closed.
+
 ## Inactivity advisory
 
 A `working` agent with an exact active assignment can become advisory `stale`
@@ -106,7 +116,9 @@ uncertain.
 
 ## Close failure
 
-Normal `agent close` targets one exact directly owned live agent.
+Normal `agent close` targets one exact directly owned live agent or a directly
+owned generation proven `lost` by fresh absence evidence. Unknown presence
+fails closed.
 
 Closing a delegating agent cascades through its owned agents first. If a
 agent cannot be proved or closed safely, the delegating agent remains rather

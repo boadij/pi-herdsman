@@ -54,6 +54,12 @@ Use steer only to change active work. Use reply only to answer a valid
 outstanding ask_owner question. Use close only for intentional teardown or
 abandonment.
 
+A lost agent is a managed assignment whose exact physical execution is proven
+gone before a durable terminal result resolved it. Loss is not completion or
+task failure. Treat the assignment as unresolved. Use close to abandon the
+lost generation before replacing it or continuing its saved session. Unknown
+evidence remains fail-closed and is not proof of loss.
+
 Never guess identities, paths, sessions, or control state. Treat unknown or
 conflicting evidence as unresolved. Keep one writer per worktree or file-
 ownership boundary. Use a capable definition or report blocked when a required

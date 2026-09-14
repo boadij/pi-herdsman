@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdtempSync,
   realpathSync,
@@ -7,6 +7,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dirname, join } from "node:path";
@@ -17,6 +18,8 @@ import {
   herdrAgentAlias,
   listHerdrAgents,
   listAllHerdrAgents,
+  herdrSessionSnapshot,
+  watchHerdrLifecycle,
   leadMetadataArgs,
   reportLeadMetadata,
   inspectHerdrAgent,
@@ -131,6 +134,89 @@ test("agent list fails closed when the native agents array is absent", async () 
       /agent list ownership proof is unavailable/,
     );
   }
+});
+
+test("session snapshot accepts only coherent pane and agent inventories", async () => {
+  for (const snapshot of [
+    { panes: [{ pane_id: "pane" }], agents: [{ name: "agent" }] },
+  ]) {
+    const pi = {
+      exec: async () => ({
+        code: 0,
+        stdout: JSON.stringify({ id: 1, result: { snapshot } }),
+        stderr: "",
+      }),
+    } as any;
+    assert.deepEqual(
+      await herdrSessionSnapshot(pi, { cwd: "/tmp" } as any),
+      snapshot,
+    );
+  }
+  for (const snapshot of [
+    {},
+    { panes: [], agents: null },
+    { panes: {}, agents: [] },
+  ]) {
+    const pi = {
+      exec: async () => ({
+        code: 0,
+        stdout: JSON.stringify({ id: 1, result: { snapshot } }),
+        stderr: "",
+      }),
+    } as any;
+    await assert.rejects(
+      herdrSessionSnapshot(pi, { cwd: "/tmp" } as any),
+      /session inventory is unavailable/,
+    );
+  }
+});
+
+test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async () => {
+  const socketPath =
+    globalThis.process.platform === "win32"
+      ? `\\\\.\\pipe\\pi-herdsman-${randomUUID()}`
+      : join(tmpdir(), `pi-herdsman-${randomUUID()}.sock`);
+  const server = createServer();
+  let connections = 0;
+  let request: any;
+  server.on("connection", (socket) => {
+    connections++;
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      request = JSON.parse(buffer.slice(0, newline));
+      socket.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+      if (connections === 1) {
+        socket.write(JSON.stringify({ event: "pane.closed" }) + "\n");
+        socket.end();
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  const controller = new AbortController();
+  let changes = 0;
+  watchHerdrLifecycle(socketPath, controller.signal, () => changes++);
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
+  assert.equal(request.method, "events.subscribe");
+  assert.deepEqual(
+    request.params.subscriptions.map((entry: any) => entry.type),
+    [
+      "pane.closed",
+      "pane.exited",
+      "pane.moved",
+      "tab.closed",
+      "workspace.closed",
+    ],
+  );
+  assert.equal(connections, 2);
+  assert.equal(changes, 3);
+  controller.abort();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (globalThis.process.platform !== "win32")
+    rmSync(socketPath, { force: true });
 });
 
 test("lead metadata is display-only and carries current name and ask", () => {
@@ -3510,7 +3596,7 @@ test("exited-start rollback refuses agent, process, and tab ownership changes", 
   else environment.HERDR_WORKSPACE_ID = previousWorkspace;
 });
 
-const process = {
+const processInfo = {
   pane_id: "pane-1",
   shell_pid: 12,
   foreground_process_group_id: 34,
@@ -3592,14 +3678,14 @@ test("cwd comparisons accept equivalent symlink paths", () => {
 });
 
 test("running ownership includes shell and foreground process group", () => {
-  assert.equal(sameRunningProcessOwner(process, process), true);
+  assert.equal(sameRunningProcessOwner(processInfo, processInfo), true);
   assert.equal(
-    sameRunningProcessOwner(process, { ...process, shell_pid: 13 }),
+    sameRunningProcessOwner(processInfo, { ...processInfo, shell_pid: 13 }),
     false,
   );
   assert.equal(
-    sameRunningProcessOwner(process, {
-      ...process,
+    sameRunningProcessOwner(processInfo, {
+      ...processInfo,
       foreground_process_group_id: 35,
     }),
     false,
@@ -3707,7 +3793,7 @@ test("process ownership handles optional foreground process groups", () => {
 
 test("shell ownership uses captured identity without a shell allowlist", () => {
   const captured = {
-    ...process,
+    ...processInfo,
     foreground_process_group_id: 12,
     foreground_processes: [{ pid: 12, argv0: "pwsh.exe" }],
   };
@@ -3721,7 +3807,7 @@ test("shell ownership uses captured identity without a shell allowlist", () => {
   );
   assert.equal(
     sameShellProcessOwner(
-      { ...process, foreground_process_group_id: 20 },
+      { ...processInfo, foreground_process_group_id: 20 },
       captured,
     ),
     true,

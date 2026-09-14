@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
+import { createConnection, type Socket } from "node:net";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
@@ -13,6 +14,10 @@ import { OperationError } from "./errors.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 
 export type HerdrRecord = Record<string, any>;
+export type HerdrSessionSnapshot = {
+  panes: HerdrRecord[];
+  agents: HerdrRecord[];
+};
 export type HerdrContext = {
   workspaceId: string;
   tabId?: string;
@@ -84,6 +89,16 @@ const MAX_PROCESS_CMDLINE_BYTES = 4 * 1024;
 const POLL_INTERVAL = 75;
 const INITIAL_RATIO = 0.65;
 const AGENT_SPLIT_RATIO = 0.5;
+const LIFECYCLE_SUBSCRIPTIONS = [
+  { type: "pane.closed" },
+  { type: "pane.exited" },
+  { type: "pane.moved" },
+  { type: "tab.closed" },
+  { type: "workspace.closed" },
+] as const;
+const LIFECYCLE_SUBSCRIPTION_ID = "pi-herdsman:lifecycle";
+const LIFECYCLE_RECONNECT_MS = 1_000;
+const MAX_EVENT_BUFFER_BYTES = 1024 * 1024;
 const HERDR_AGENT_STATE_EXTENSION = join(
   getAgentDir(),
   "extensions",
@@ -518,6 +533,102 @@ export async function listAllHerdrAgents(
   if (!Array.isArray(result?.agents))
     error("agent list", "agent list ownership proof is unavailable");
   return { agents: result.agents };
+}
+
+export async function herdrSessionSnapshot(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): Promise<HerdrSessionSnapshot> {
+  const result = await runHerdr(pi, ctx, ["api", "snapshot"], { signal });
+  const snapshot = result?.snapshot;
+  if (!Array.isArray(snapshot?.panes) || !Array.isArray(snapshot?.agents))
+    error("session snapshot", "Herdr session inventory is unavailable");
+  return { panes: snapshot.panes, agents: snapshot.agents };
+}
+
+export function watchHerdrLifecycle(
+  socketPath: string,
+  signal: AbortSignal,
+  onChange: () => void,
+): void {
+  let socket: Socket | undefined;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+
+  const connect = (): void => {
+    if (signal.aborted) return;
+    let buffer = "";
+    let subscribed = false;
+    const current = createConnection(socketPath);
+    socket = current;
+    current.setEncoding("utf8");
+    current.unref();
+    const drop = (): void => {
+      if (socket === current) socket = undefined;
+      current.destroy();
+    };
+    current.once("connect", () => {
+      current.write(
+        `${JSON.stringify({
+          id: LIFECYCLE_SUBSCRIPTION_ID,
+          method: "events.subscribe",
+          params: { subscriptions: LIFECYCLE_SUBSCRIPTIONS },
+        })}\n`,
+      );
+    });
+    current.on("data", (chunk: string) => {
+      buffer += chunk;
+      if (Buffer.byteLength(buffer) > MAX_EVENT_BUFFER_BYTES) {
+        drop();
+        return;
+      }
+      for (;;) {
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) break;
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        let message: any;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          drop();
+          return;
+        }
+        if (!subscribed) {
+          if (
+            message?.id !== LIFECYCLE_SUBSCRIPTION_ID ||
+            message?.error ||
+            !message?.result
+          ) {
+            drop();
+            return;
+          }
+          subscribed = true;
+          onChange();
+          continue;
+        }
+        onChange();
+      }
+    });
+    current.on("error", drop);
+    current.once("close", () => {
+      if (socket === current) socket = undefined;
+      if (signal.aborted) return;
+      retry = setTimeout(connect, LIFECYCLE_RECONNECT_MS);
+      retry.unref?.();
+    });
+  };
+
+  signal.addEventListener(
+    "abort",
+    () => {
+      if (retry) clearTimeout(retry);
+      socket?.destroy();
+    },
+    { once: true },
+  );
+  connect();
 }
 
 export type LeadMetadata = {

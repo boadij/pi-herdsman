@@ -32,9 +32,11 @@ import {
   defaultFixtureIdentity,
   delegatedLifecycleExecutor,
   delegationLockPathForTest,
+  assignmentLockPathForTest,
   fakeContext,
   fakePi,
   fakeAgentContext,
+  isApiSnapshot,
   isAgentList,
   isHerdrList,
   isPaneClose,
@@ -421,9 +423,9 @@ test("lead tab placement vetoes an ambiguous current-lead direct root", async ()
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = lifecycle.exec(command, args, options);
-      if (command !== "herdr" || !isAgentList(args)) return result;
+      if (command !== "herdr" || !isApiSnapshot(args)) return result;
       const value = JSON.parse(result.stdout);
-      value.result.agents.push(agentFromState(parent));
+      value.result.snapshot.agents.push(agentFromState(parent));
       return { ...result, stdout: JSON.stringify(value) };
     },
   });
@@ -494,9 +496,9 @@ test("lead tab placement vetoes ambiguous foreign-herd evidence", async () => {
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = lifecycle.exec(command, args, options);
-      if (command !== "herdr" || !isAgentList(args)) return result;
+      if (command !== "herdr" || !isApiSnapshot(args)) return result;
       const value = JSON.parse(result.stdout);
-      value.result.agents.push(agentFromState(foreign));
+      value.result.snapshot.agents.push(agentFromState(foreign));
       return { ...result, stdout: JSON.stringify(value) };
     },
   });
@@ -633,11 +635,11 @@ test("lead tab revalidation rejects a newly contaminated candidate under the loc
   const pi = fakePi({
     exec: (command, args, options) => {
       const result = lifecycle.exec(command, args, options);
-      if (command !== "herdr" || !isAgentList(args)) return result;
+      if (command !== "herdr" || !isApiSnapshot(args)) return result;
       agentLists++;
       if (agentLists < 3) return result;
       const value = JSON.parse(result.stdout);
-      value.result.agents.push({
+      value.result.snapshot.agents.push({
         ...agentFromState(sibling),
         tab_id: lifecycle.tabForPane(parent.paneId),
       });
@@ -944,6 +946,44 @@ test("zero-child lead close is blocked by the parent delegation lock", async () 
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     releaseLock?.();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("lead close maps assignment-lock contention to agent_busy", async () => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState(
+      "assignment-lock-close-parent",
+      undefined,
+      recoveryIdentity("assignment-lock-close-parent"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+    piSessionFile: join(testTmpRoot, "assignment-lock-close-parent.jsonl"),
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, parent);
+  const pi = fakePi({ exec: cascadeExecutor([]).exec });
+  registerExtension!(pi.pi as never);
+  const release = claimProcessLock(assignmentLockPathForTest(mailbox), {
+    name: "test assignment transition",
+  });
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "close", agent: parent.agentLabel },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.error.category, "agent_busy");
+    assert.match(result.details.error.message, /managed assignment/i);
+    assert.match(result.details.error.nextAction, /retry/i);
+    assert.ok(readAgentState(mailbox));
+  } finally {
+    release();
+    pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
   }
 });
@@ -2047,7 +2087,7 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
     ),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
-    piSessionFile: "/tmp/recovery-bad.jsonl",
+    piSessionFile: join(testTmpRoot, "recovery-bad.jsonl"),
   };
   const goodChild = {
     ...managedState(
@@ -2057,7 +2097,7 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
     ),
     ownerSessionId: parent.piSessionId,
     piSessionId: "11111111-1111-4111-8111-111111111111",
-    piSessionFile: "/tmp/recovery-good.jsonl",
+    piSessionFile: join(testTmpRoot, "recovery-good.jsonl"),
   };
   const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
   const badMailbox = agentMailboxPath(WORKSPACE, badChild.agentLabel);
@@ -2083,9 +2123,9 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
     entries,
     exec: (command, args, options) => {
       const result = base(command, args, options);
-      if (command === "herdr" && isAgentList(args)) {
+      if (command === "herdr" && isApiSnapshot(args)) {
         const value = JSON.parse(result.stdout);
-        const bad = value.result.agents.find(
+        const bad = value.result.snapshot.agents.find(
           (agent: any) => agent.pane_id === badChild.paneId,
         );
         if (bad)
@@ -2105,11 +2145,6 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
-    assert.ok(
-      pi.entries.some(
-        (entry: any) => entry.customType === "pi_herdsman_recovery_error",
-      ),
-    );
     const listed = await pi.tools[0].execute(
       "list",
       { action: "list" },
@@ -2119,8 +2154,8 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
     );
     assert.equal(listed.details.ok, true, JSON.stringify(listed.details));
     assert.deepEqual(
-      listed.details.agents.map((agent: any) => agent.agent),
-      [goodChild.agentLabel],
+      listed.details.agents.map((agent: any) => agent.agent).sort(),
+      [goodChild.agentLabel, badChild.agentLabel].sort(),
     );
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
@@ -2468,11 +2503,22 @@ test("session assignment reports a pane mismatch from the agent state producer",
             paneEnvironment[match[1]] = match[2];
         return { stdout: "{}", stderr: "", code: 0 };
       }
-      if (isAgentList(args))
+      if (isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: JSON.parse(listResponse(label, "idle", null)),
+            result: {
+              snapshot: {
+                agents: JSON.parse(listResponse(label, "idle", null)).agents,
+                panes: [
+                  {
+                    pane_id: "registered-pane",
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                  },
+                ],
+              },
+            },
           }),
           stderr: "",
           code: 0,
@@ -2907,11 +2953,20 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
     exec: (command, args) =>
       command === "herdr" && args[0] === "--version"
         ? { stdout: "0.8.0", stderr: "", code: 0 }
-        : {
-            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
-            stderr: "",
-            code: 0,
-          },
+        : command === "herdr" && isApiSnapshot(args)
+          ? {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: { snapshot: { agents: [], panes: [] } },
+              }),
+              stderr: "",
+              code: 0,
+            }
+          : {
+              stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+              stderr: "",
+              code: 0,
+            },
   });
   registerExtension!(pi.pi as never);
   try {
@@ -3083,11 +3138,11 @@ test("session continuation ignores an unrelated missing live session path", asyn
   let started = false;
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && isAgentList(args) && !started)
+      if (command === "herdr" && isApiSnapshot(args) && !started)
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { agents: [staleAgent] },
+            result: { snapshot: { agents: [staleAgent], panes: [] } },
           }),
           stderr: "",
           code: 0,
@@ -3173,11 +3228,11 @@ test("session continuation keeps an exact live ID busy despite a missing path ob
   const startup = startupExecutor(name, () => session.id);
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && isAgentList(args))
+      if (command === "herdr" && isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { agents: [staleAgent] },
+            result: { snapshot: { agents: [staleAgent], panes: [] } },
           }),
           stderr: "",
           code: 0,
@@ -3264,11 +3319,11 @@ test("session continuation keeps an exact live ID busy despite contradictory liv
   const startup = startupExecutor(name, () => session.id);
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && isAgentList(args))
+      if (command === "herdr" && isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { agents: [staleAgent] },
+            result: { snapshot: { agents: [staleAgent], panes: [] } },
           }),
           stderr: "",
           code: 0,
@@ -3363,11 +3418,11 @@ test("session continuation ignores removed secondary session fields", async () =
   let started = false;
   const pi = fakePi({
     exec: (command, args, options) => {
-      if (command === "herdr" && isAgentList(args) && !started)
+      if (command === "herdr" && isApiSnapshot(args) && !started)
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { agents: [staleAgent] },
+            result: { snapshot: { agents: [staleAgent], panes: [] } },
           }),
           stderr: "",
           code: 0,
@@ -3602,6 +3657,31 @@ test("revalidates automatic-label collision sizing before startup", async () => 
   }
 });
 
+test("lost mailbox labels remain reserved until explicit close", async () => {
+  setLeadEnvironment();
+  const label = "lost-reserved-agent";
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  const state = managedState(label, REQUEST_ID, recoveryIdentity(label));
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, state);
+  const pi = fakePi({ exec: cascadeExecutor([]).exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "delegate", definition: "agent", label, task: "replace" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.error.category, "agent_label_exists");
+    assert.ok(readAgentState(mailbox));
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("rolls back fresh assignment when the authoritative pane makes the request too large", async () => {
   setLeadEnvironment();
   const label = "fresh-envelope-boundary";
@@ -3806,11 +3886,28 @@ test("rejects an invalid generated collision label after releasing its claim", a
     exec: (command, args) => {
       if (command === "herdr" && args[0] === "--version")
         return { stdout: "0.8.0", stderr: "", code: 0 };
-      if (command === "herdr" && args[0] === "agent" && args[1] === "list")
+      if (command === "herdr" && isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: JSON.parse(listResponse("other-agent")),
+            result: {
+              snapshot: {
+                agents: JSON.parse(listResponse("other-agent")).agents,
+                panes: [
+                  {
+                    pane_id: "registered-pane",
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: DEFAULT_PI_SESSION_ID,
+                    },
+                  },
+                ],
+              },
+            },
           }),
           stderr: "",
           code: 0,

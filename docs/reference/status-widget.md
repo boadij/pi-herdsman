@@ -74,7 +74,7 @@ Example:
 ```
 
 The header reports exact non-zero lifecycle states in the order `working`,
-`blocked`, `settling`, `starting`, and `unknown`. `starting` is a
+`blocked`, `settling`, `starting`, `unknown`, and `lost`. `starting` is a
 presentation-only count for controller-local assignments that have begun
 startup but have not yet become active or terminal. It is not mailbox state,
 control authority, or Running inventory.
@@ -102,8 +102,9 @@ every row. The task is the rightmost elastic field and is kept only when it has
 useful room before it is truncated.
 
 Working rows use `● working`, blocked rows use `◐ blocked`, settling rows use
-`◌ settling`, starting rows use `◌ starting`, and unknown rows use `? unknown`.
-Working, settling, and starting animate; blocked and unknown rows are static.
+`◌ settling`, starting rows use `◌ starting`, unknown rows use `? unknown`, and
+lost rows use `× lost` with the theme's attention/error styling. Working,
+settling, and starting animate; blocked, unknown, and lost rows are static.
 While a controller-local start remains pending, an authoritative `settling`
 row is presented as `starting` so launch and request handoff remain visually
 continuous. `working`, `blocked`, and `unknown` authoritative states are never
@@ -111,9 +112,13 @@ overridden. A starting row is removed when its exact request becomes active or
 terminal, its local runtime is removed, startup fails or rolls back, the
 controller session restarts, or shutdown clears transient state.
 
-`Running` inspection shows every authoritative agent row and excludes
-presentation-only starting rows. A terminal result is followed by cleanup; the
-widget does not retain an idle completed agent.
+The normal widget retains `lost` and fail-closed `unknown` rows because they
+represent durable unresolved generations whose physical state is either proven
+gone or not safely provable. `Running` inspection excludes `lost` and
+fail-closed `unknown` rows because they are not safely focusable targets; it
+otherwise shows authoritative live agent rows and excludes presentation-only
+starting rows. A terminal result is followed by cleanup; the widget does not
+retain an idle completed agent.
 
 ## Optional metadata
 

@@ -71,9 +71,10 @@ A lead Pi session owns its direct agents.
 A delegating agent may own direct agents when its effective definition has
 allowed `agents`.
 
-Public list visibility follows this ownership boundary. Lead recovery may expose
-a proven orphan descendant only when durable ownership and exact absence of its
-former delegating agent are established.
+Public list visibility follows this ownership boundary. Durable descendants
+remain attached to their recorded parent even when that parent is lost or
+physically unresolved; missing durable ancestry is shown as non-actionable
+recovery evidence.
 
 ## Authority boundaries
 
