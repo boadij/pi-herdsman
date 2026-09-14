@@ -163,17 +163,29 @@ local work remains.
 Inspect the actual transcript and verify the delegating agent:
 
 - ends its turn normally after the assignment;
+- does not repeat the delegated reconnaissance locally;
+- does not delegate substantially overlapping reconnaissance to another agent;
 - does not poll `agent list`;
+- does not use `agent list`, `agent inspect`, or `agent steer` merely to check
+  progress;
+- does not send "finish", "status", or equivalent progress nudges to a healthy
+  agent;
 - does not sleep or use a separate wait mechanism;
+- ends the turn when no genuinely independent work remains;
 - wakes when the agent result is delivered;
 - integrates the result into one final delegating agent outcome.
 
 ## Useful concurrency
 
-Give a delegating agent one delegated task A and independent local task B.
+Delegate bounded task A and give the controller genuinely independent,
+non-overlapping local task B.
 
-Verify it can work on B while A is active, then ends its turn when no useful
-independent work remains and integrates A after result delivery.
+Verify:
+
+- B can proceed while A is active;
+- B does not repeat A's assigned scope;
+- the controller ends its turn once B is complete if A remains active;
+- A is integrated after its result arrives.
 
 ## Lead `/agents` commands
 

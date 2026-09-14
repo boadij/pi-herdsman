@@ -289,10 +289,12 @@ assignment when practical. If genuinely new follow-up work emerges after
 completion and previous context is valuable, continue the exact returned session
 only when the completion is not marked retired. A retired session requires a
 fresh delegation; pass its resultRef/handoff and relevant files instead.
-Never continue work that depends on an active agent. Continue useful
-independent work when available; otherwise end the turn normally. Agent
-completion or attention resumes the owning controller automatically. Do not
-poll, sleep, or use another wait mechanism merely for agent completion.
+Each active delegated assignment has one executor: that agent. Do not repeat
+its assigned work locally or delegate substantially overlapping work elsewhere.
+Continue only useful work that is independent of and non-overlapping with active
+agent assignments; otherwise end the turn normally. Agent completion or attention
+resumes the owning controller automatically. Do not list, inspect, steer, sleep,
+or otherwise check active agents merely for progress or completion.
 
 If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before
@@ -4527,7 +4529,7 @@ function delegationStatusMessage({
   const guidance =
     unresolvedDirectChildCount === 0
       ? "You may conclude if your own acceptance criteria are satisfied."
-      : "You may make useful decisions or take useful actions based on partial agent results, but do not conclude or produce the final synthesis while unresolved agent work remains.";
+      : "Continue only useful work that is independent of and non-overlapping with unresolved agent assignments; otherwise end the turn. Do not conclude or produce the final synthesis while unresolved agent work remains.";
   return `Delegation status: ${active}; ${pending}; ${unresolved}. ${guidance}`;
 }
 function delegationStatusForResult(
@@ -10147,7 +10149,7 @@ export default function (pi: ExtensionAPI): void {
                 {
                   customType: "pi-herdsman-delegation-guidance",
                   content:
-                    "Agent work is asynchronous. Delegate any other useful independent work now. If no useful independent work remains, end your turn; do not poll, sleep, or actively wait. Agent results and attention will resume it automatically. Do not conclude or produce the final synthesis while unresolved agent work remains.",
+                    "Agent work is asynchronous. Each active delegated assignment has one executor: that agent. Do not repeat its assigned work locally or delegate substantially overlapping work elsewhere. Continue only useful independent, non-overlapping work; otherwise end the turn. Do not check or steer active agents merely for progress or completion. Agent results and attention will resume you automatically. Do not conclude or produce the final synthesis while unresolved agent work remains.",
                   display: false,
                 },
                 { triggerTurn: true, deliverAs: "steer" },

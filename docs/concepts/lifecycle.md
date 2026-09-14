@@ -77,10 +77,14 @@ restart recovery. The agent then runs independently in its managed Pi session
 while the owner remains available for other useful work and, for a lead Pi
 session, continued user interaction.
 
-The owner must not poll for completion. It may continue with work that does not
-depend on the result or end its turn normally. Agent completion or an
-`ask_owner` question is delivered back to that same owner when attention is
-required.
+Each active delegated assignment has one executor: that agent. The owner retains
+lifecycle and control authority but does not repeat the delegated assignment
+locally or assign substantially overlapping work elsewhere.
+
+The owner may continue genuinely independent, non-overlapping work. When no such
+work remains, it ends its turn normally. It does not list, inspect, steer, sleep,
+or otherwise check an active agent merely for progress or completion. Agent
+completion, clarification, and recovery attention return asynchronously.
 
 Conceptually:
 
@@ -94,9 +98,11 @@ agent runs independently
 result or question returns to the owner
 ```
 
-This is asynchronous but not fire-and-forget. The owner retains explicit
-assignment ownership, can steer eligible active work, receives clarification
-requests, and remains responsible for result delivery and lifecycle control.
+This is asynchronous but not fire-and-forget. The owner retains lifecycle and
+control authority: it can steer eligible active work when the assignment
+actually changes, receives clarification requests, and remains responsible for
+result delivery and cleanup. The delegated agent remains the executor of its
+active assignment.
 
 ## Exactly-once assignment result
 

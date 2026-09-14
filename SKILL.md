@@ -73,10 +73,13 @@ assignment when practical. If genuinely new follow-up work emerges after
 completion and previous context is valuable, continue the exact returned session
 only when the completion is not marked retired. A retired session requires a
 fresh delegation; pass its resultRef/handoff and relevant files instead.
-Never continue work that depends on an active agent. Continue useful
-independent work when available; otherwise end the turn normally. Agent
-completion or attention resumes the owning controller automatically. Do not
-poll, sleep, or use another wait mechanism merely for agent completion.
+Each active delegated assignment has one executor: that agent. Do not repeat
+its assigned work locally or delegate substantially overlapping work elsewhere.
+Continue only useful work that is independent of and non-overlapping with active
+agent assignments; otherwise end the turn normally. Agent completion or
+attention resumes the owning controller automatically. Do not list, inspect,
+steer, sleep, or otherwise check active agents merely for progress or
+completion.
 
 If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before
