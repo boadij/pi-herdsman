@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/boadij/pi-herdsman/compare/v0.7.0...v0.7.1) (2026-09-14)
+
+
+### Fixes
+
+* harden managed-agent lifecycle recovery ([#63](https://github.com/boadij/pi-herdsman/issues/63)) ([6a7bb27](https://github.com/boadij/pi-herdsman/commit/6a7bb271e3276353a00fc74af492a7c430732ca0))
+
 ## [0.7.0](https://github.com/boadij/pi-herdsman/compare/v0.6.2...v0.7.0) (2026-09-13)
 
 
