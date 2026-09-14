@@ -19,7 +19,8 @@ plain `/agents` remains available as a setup diagnostic.
 ```
 
 The plain command opens a native Pi selection menu with `Running`,
-`Definitions`, `Layout`, `Message limits`, and `Stop all…` destinations. The
+`Definitions`, `Layout`, `Context retirement  on|off`, `Message limits`, and
+`Stop all…` destinations. The
 Message limits view edits the user-wide inline attachment and mailbox payload
 limits. It is available only to a lead Pi session with UI. Current
 values and presets show a rough token equivalent using four UTF-8 bytes per
