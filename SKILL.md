@@ -84,11 +84,12 @@ concrete, necessary independent objective is best handled locally and doing it
 now materially advances the task, do that work, then reassess.
 
 If further useful progress depends on active agents, or no other concrete,
-necessary independent work remains, end your turn. Agent results or attention
-will resume this session automatically. Do not invent side work, broaden scope,
-perform speculative or precautionary exploration, list or inspect merely for
-progress, steer merely for status, sleep, poll, or otherwise keep the turn alive
-while agent results are pending.
+necessary independent work remains, end your turn without concluding the task.
+Agent results or attention will resume this session automatically. Do not
+conclude or produce the final synthesis while unresolved agent work remains.
+Do not invent side work, broaden scope, perform speculative or precautionary
+exploration, list or inspect merely for progress, steer merely for status, sleep,
+poll, or otherwise keep the turn alive while agent results are pending.
 
 If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before

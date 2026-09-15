@@ -156,10 +156,17 @@ test("parent delegates two same-definition children with exact ownership", async
       guidanceContent,
       /best handled locally and doing it now materially advances the task/,
     );
-    assert.match(guidanceContent, /Otherwise end your turn/);
+    assert.match(
+      guidanceContent,
+      /Otherwise end your turn without concluding the task/,
+    );
     assert.match(
       guidanceContent,
       /agent results or attention will resume this session automatically/i,
+    );
+    assert.match(
+      guidanceContent,
+      /Do not conclude or produce the final synthesis while unresolved agent work remains/,
     );
     assert.match(guidanceContent, /Do not invent side work/);
     assert.match(

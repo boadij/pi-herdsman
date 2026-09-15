@@ -199,11 +199,15 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   assert.match(
     agentDescription,
-    /no other concrete, necessary independent work remains, end your turn/,
+    /no other concrete, necessary independent work remains, end your turn without concluding the task/,
   );
   assert.match(
     agentDescription,
     /Agent results or attention will resume this session automatically/,
+  );
+  assert.match(
+    agentDescription,
+    /Do not conclude or produce the final synthesis while unresolved agent work remains/,
   );
   assert.match(agentDescription, /Do not invent side work/);
   assert.match(
