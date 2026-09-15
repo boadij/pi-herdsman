@@ -75,11 +75,21 @@ only when the completion is not marked retired. A retired session requires a
 fresh delegation; pass its resultRef/handoff and relevant files instead.
 Each active delegated assignment has one executor: that agent. Do not repeat
 its assigned work locally or delegate substantially overlapping work elsewhere.
-Continue only useful work that is independent of and non-overlapping with active
-agent assignments; otherwise end the turn normally. Agent completion or
-attention resumes the owning controller automatically. Do not list, inspect,
-steer, sleep, or otherwise check active agents merely for progress or
-completion.
+
+After starting an agent assignment or receiving an agent result or attention
+event, reassess the remaining work. Handle required agent control when needed.
+If another concrete, necessary objective is independent of active agent
+assignments and an authorized agent is the right owner, delegate it. If a
+concrete, necessary independent objective is best handled locally and doing it
+now materially advances the task, do that work, then reassess.
+
+If further useful progress depends on active agents, or no other concrete,
+necessary independent work remains, end your turn without concluding the task.
+Agent results or attention will resume this session automatically. Do not
+conclude or produce the final synthesis while unresolved agent work remains.
+Do not invent side work, broaden scope, perform speculative or precautionary
+exploration, list or inspect merely for progress, steer merely for status, sleep,
+poll, or otherwise keep the turn alive while agent results are pending.
 
 If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before

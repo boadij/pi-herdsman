@@ -81,21 +81,38 @@ Each active delegated assignment has one executor: that agent. The owner retains
 lifecycle and control authority but does not repeat the delegated assignment
 locally or assign substantially overlapping work elsewhere.
 
-The owner may continue genuinely independent, non-overlapping work. When no such
-work remains, it ends its turn normally. It does not list, inspect, steer, sleep,
-or otherwise check an active agent merely for progress or completion. Agent
-completion, clarification, and recovery attention return asynchronously.
+After starting an agent assignment or receiving an agent result or attention
+event, the owner reassesses the remaining work:
+
+1. Handle required agent control when needed.
+2. Delegate another concrete, necessary objective when it is independent of
+   active assignments and an authorized agent is the right owner.
+3. Continue concrete, necessary independent work locally when the owner is the
+   right owner and doing it now materially advances the task.
+4. Otherwise end the turn.
+
+After control, delegation, or local parallel work, the owner reassesses again.
+Once further useful progress depends on active agents, or no other concrete,
+necessary independent work remains, it ends the turn. Agent results,
+clarifications, and recovery attention resume the session automatically.
+
+The owner does not invent side work merely because agents are running. It does
+not poll, sleep, inspect merely for progress, send status steering, or use
+another mechanism to keep the turn alive.
 
 Conceptually:
 
 ```text
-assignment accepted
-       ↓
-owner remains available
-       ↓
-agent runs independently
-       ↓
-result or question returns to the owner
+assignment or agent event
+          ↓
+reassess remaining work
+    ↙        ↓        ↘
+ control   parallel   no useful
+            work      action
+          ↙     ↘        ↓
+      delegate  local  end turn
+          \      /        ↓
+           reassess   agent event resumes
 ```
 
 This is asynchronous but not fire-and-forget. The owner retains lifecycle and

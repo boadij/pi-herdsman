@@ -1525,19 +1525,26 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       unresolvedStatus,
       /Delegation status: 1 active direct agent; 1 pending direct result; 2 direct agent assignments remain unresolved\./,
     );
+    assert.match(unresolvedStatus, /Handle required agent control if needed/);
     assert.match(
       unresolvedStatus,
-      /Handle pending agent questions or other required control actions when needed/,
+      /another concrete, necessary objective is independent of unresolved agent assignments/,
     );
     assert.match(
       unresolvedStatus,
-      /independent of and non-overlapping with unresolved agent assignments/,
+      /an authorized agent is the right owner, delegate it/,
     );
-    assert.match(unresolvedStatus, /or end the turn/);
     assert.match(
       unresolvedStatus,
-      /Do not repeat unresolved agent assignments locally/,
+      /best handled locally and doing it now materially advances the task/,
     );
+    assert.match(unresolvedStatus, /Otherwise end your turn/);
+    assert.match(
+      unresolvedStatus,
+      /agent results or attention will resume this session automatically/i,
+    );
+    assert.match(unresolvedStatus, /Do not repeat unresolved assignments/);
+    assert.match(unresolvedStatus, /invent side work merely to remain active/);
     assert.doesNotMatch(
       unresolvedStatus,
       /make useful decisions or take useful actions based on partial agent results/i,
