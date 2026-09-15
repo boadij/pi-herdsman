@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.2](https://github.com/boadij/pi-herdsman/compare/v0.7.1...v0.7.2) (2026-09-15)
+
+
+### Fixes
+
+* clarify delegated work ownership ([#66](https://github.com/boadij/pi-herdsman/issues/66)) ([f9f65a6](https://github.com/boadij/pi-herdsman/commit/f9f65a60e8a0625e7fa5df50e2a6b002545710ef))
+* guide delegated controller navigation ([#69](https://github.com/boadij/pi-herdsman/issues/69)) ([46f4ba0](https://github.com/boadij/pi-herdsman/commit/46f4ba0ff712f6da2380762f39b2eb1f08669eaf))
+* preserve agent control during unresolved work ([#68](https://github.com/boadij/pi-herdsman/issues/68)) ([1c325cc](https://github.com/boadij/pi-herdsman/commit/1c325cc404e6eebebb75ce79d38a8fc7f57b3dc6))
+
 ## [0.7.1](https://github.com/boadij/pi-herdsman/compare/v0.7.0...v0.7.1) (2026-09-14)
 
 
