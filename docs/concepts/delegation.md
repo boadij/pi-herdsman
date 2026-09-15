@@ -92,17 +92,26 @@ Do not:
 Direct ownership grants lifecycle and control authority. It does not make the
 owner a second executor of an active delegated assignment.
 
-A useful pattern is:
+A useful parallel pattern is:
 
 ```text
-delegating agent
-├── scout: bounded reconnaissance
-└── local independent analysis
+controller
+├── agent A: independent reconnaissance
+├── agent B: separate independent analysis
+└── local: bounded independent controller work
 
-agent result arrives
+local work becomes sufficiently complete
 ↓
-delegating agent integrates both
+controller ends its turn
+
+agent result or attention resumes the controller
+↓
+controller integrates and reassesses
 ```
+
+Parallelism is optional. Do not create additional assignments or local side work
+merely to keep the controller active. For the full turn-navigation model, see
+[Asynchronous orchestration](lifecycle.md#asynchronous-orchestration).
 
 ## Clarification across ownership edges
 

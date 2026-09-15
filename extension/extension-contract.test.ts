@@ -183,11 +183,32 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   assert.match(
     agentDescription,
-    /independent of and non-overlapping with active agent assignments/,
+    /After starting an agent assignment or receiving an agent result or attention event, reassess the remaining work/,
   );
   assert.match(
     agentDescription,
-    /Do not list, inspect, steer, sleep, or otherwise check active agents merely for progress or completion/,
+    /another concrete, necessary objective is independent of active agent assignments/,
+  );
+  assert.match(
+    agentDescription,
+    /an authorized agent is the right owner, delegate it/,
+  );
+  assert.match(
+    agentDescription,
+    /best handled locally and doing it now materially advances the task/,
+  );
+  assert.match(
+    agentDescription,
+    /no other concrete, necessary independent work remains, end your turn/,
+  );
+  assert.match(
+    agentDescription,
+    /Agent results or attention will resume this session automatically/,
+  );
+  assert.match(agentDescription, /Do not invent side work/);
+  assert.match(
+    agentDescription,
+    /list or inspect merely for progress, steer merely for status, sleep, poll/,
   );
   assert.doesNotMatch(
     agentDescription,

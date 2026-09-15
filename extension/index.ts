@@ -291,10 +291,20 @@ only when the completion is not marked retired. A retired session requires a
 fresh delegation; pass its resultRef/handoff and relevant files instead.
 Each active delegated assignment has one executor: that agent. Do not repeat
 its assigned work locally or delegate substantially overlapping work elsewhere.
-Continue only useful work that is independent of and non-overlapping with active
-agent assignments; otherwise end the turn normally. Agent completion or attention
-resumes the owning controller automatically. Do not list, inspect, steer, sleep,
-or otherwise check active agents merely for progress or completion.
+
+After starting an agent assignment or receiving an agent result or attention
+event, reassess the remaining work. Handle required agent control when needed.
+If another concrete, necessary objective is independent of active agent
+assignments and an authorized agent is the right owner, delegate it. If a
+concrete, necessary independent objective is best handled locally and doing it
+now materially advances the task, do that work, then reassess.
+
+If further useful progress depends on active agents, or no other concrete,
+necessary independent work remains, end your turn. Agent results or attention
+will resume this session automatically. Do not invent side work, broaden scope,
+perform speculative or precautionary exploration, list or inspect merely for
+progress, steer merely for status, sleep, poll, or otherwise keep the turn alive
+while agent results are pending.
 
 If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before
@@ -4529,7 +4539,7 @@ function delegationStatusMessage({
   const guidance =
     unresolvedDirectChildCount === 0
       ? "You may conclude if your own acceptance criteria are satisfied."
-      : "Handle pending agent questions or other required control actions when needed. Otherwise continue only useful work that is independent of and non-overlapping with unresolved agent assignments, or end the turn. Do not repeat unresolved agent assignments locally or conclude or produce the final synthesis while unresolved agent work remains.";
+      : "Handle required agent control if needed, then reassess the remaining work. If another concrete, necessary objective is independent of unresolved agent assignments and an authorized agent is the right owner, delegate it. If a concrete, necessary independent objective is best handled locally and doing it now materially advances the task, do that work, then reassess. Otherwise end your turn; agent results or attention will resume this session automatically. Do not repeat unresolved assignments, invent side work merely to remain active, or conclude or produce the final synthesis while unresolved agent work remains.";
   return `Delegation status: ${active}; ${pending}; ${unresolved}. ${guidance}`;
 }
 function delegationStatusForResult(
@@ -10149,7 +10159,7 @@ export default function (pi: ExtensionAPI): void {
                 {
                   customType: "pi-herdsman-delegation-guidance",
                   content:
-                    "Agent work is asynchronous. Each active delegated assignment has one executor: that agent. Do not repeat its assigned work locally or delegate substantially overlapping work elsewhere. Continue only useful independent, non-overlapping work; otherwise end the turn. Do not check or steer active agents merely for progress or completion. Agent results and attention will resume you automatically. Do not conclude or produce the final synthesis while unresolved agent work remains.",
+                    "An agent assignment started. Reassess the remaining work. Handle required agent control if needed. If another concrete, necessary objective is independent of active agent assignments and an authorized agent is the right owner, delegate it. If a concrete, necessary independent objective is best handled locally and doing it now materially advances the task, do that work, then reassess. Otherwise end your turn; agent results or attention will resume this session automatically. Do not invent side work, repeat delegated work, create substantially overlapping assignments, poll, sleep, inspect for progress, steer for status, or otherwise keep the turn alive merely because agents are running.",
                   display: false,
                 },
                 { triggerTurn: true, deliverAs: "steer" },

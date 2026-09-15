@@ -155,37 +155,42 @@ Verify:
 6. agent produces exactly one final result;
 7. no agent/mailbox leak remains.
 
-## Delegating-agent natural waiting
+## Delegating-agent turn ending
 
-Ask a delegating agent to delegate required reconnaissance when no useful independent
-local work remains.
+Ask a delegation-enabled controller to delegate required reconnaissance when no
+other concrete, necessary independent work is known.
 
 Inspect the actual transcript and verify the delegating agent:
 
-- ends its turn normally after the assignment;
+- ends its turn after the assignment when nothing else useful is independently actionable;
 - does not repeat the delegated reconnaissance locally;
+- does not manufacture adjacent analysis merely to remain active;
 - does not delegate substantially overlapping reconnaissance to another agent;
 - does not poll `agent list`;
-- does not use `agent list`, `agent inspect`, or `agent steer` merely to check
-  progress;
+- does not use `agent inspect` or `agent steer` merely to check progress;
 - does not send "finish", "status", or equivalent progress nudges to a healthy
   agent;
-- does not sleep or use a separate wait mechanism;
-- ends the turn when no genuinely independent work remains;
-- wakes when the agent result is delivered;
+- does not sleep or use another mechanism to keep the turn alive;
+- the agent result resumes the controller session;
 - integrates the result into one final delegating agent outcome.
 
 ## Useful concurrency
 
-Delegate bounded task A and give the controller genuinely independent,
-non-overlapping local task B.
+Delegate bounded task A and give the controller concrete, necessary independent
+local task B.
 
 Verify:
 
-- B can proceed while A is active;
+- B proceeds while A is active;
 - B does not repeat A's assigned scope;
-- the controller ends its turn once B is complete if A remains active;
-- A is integrated after its result arrives.
+- once B is sufficiently complete, the controller reassesses instead of
+  manufacturing more work;
+- if further useful progress depends on A, the controller ends its turn;
+- A's result resumes the controller and is integrated.
+
+Also verify a controller with two already-known independent delegated objectives
+may delegate A and B before ending its turn. It must not create a third
+assignment merely to increase concurrency.
 
 ## Lead `/agents` commands
 

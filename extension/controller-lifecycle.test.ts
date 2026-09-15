@@ -143,19 +143,32 @@ test("parent delegates two same-definition children with exact ownership", async
     );
     assert.ok(guidance);
     const guidanceContent = String((guidance.message as any).content);
+    assert.match(guidanceContent, /Reassess the remaining work/);
     assert.match(
       guidanceContent,
-      /Each active delegated assignment has one executor: that agent/,
+      /another concrete, necessary objective is independent of active agent assignments/,
     );
-    assert.match(guidanceContent, /Do not repeat its assigned work locally/);
     assert.match(
       guidanceContent,
-      /delegate substantially overlapping work elsewhere/,
+      /an authorized agent is the right owner, delegate it/,
     );
-    assert.match(guidanceContent, /independent, non-overlapping work/);
     assert.match(
       guidanceContent,
-      /Do not check or steer active agents merely for progress or completion/,
+      /best handled locally and doing it now materially advances the task/,
+    );
+    assert.match(guidanceContent, /Otherwise end your turn/);
+    assert.match(
+      guidanceContent,
+      /agent results or attention will resume this session automatically/i,
+    );
+    assert.match(guidanceContent, /Do not invent side work/);
+    assert.match(
+      guidanceContent,
+      /repeat delegated work, create substantially overlapping assignments/,
+    );
+    assert.match(
+      guidanceContent,
+      /poll, sleep, inspect for progress, steer for status/,
     );
     assert.doesNotMatch(
       guidanceContent,
