@@ -640,7 +640,7 @@ export type ExecHandler = (
 ) => ExecResult | Promise<ExecResult>;
 
 const HERDR_STATUS_RESPONSE = JSON.stringify({
-  client: { version: "0.9.0" },
+  client: { version: "0.9.1" },
   server: { running: true, compatible: true },
 });
 function herdrStatusResult(): ExecResult {

@@ -20,14 +20,14 @@ herdr integration status
 ```
 
 The `herdr status --json` output is the Herdr 0.9 CLI protocol compatibility
-preflight. It must report a Herdr client version of `>=0.9.0`,
+preflight. It must report a Herdr client version of `>=0.9.1`,
 `server.running` as `true`, and `server.compatible` as `true`.
 
 The supported repository contract requires:
 
 - Node `>=22.19.0`
 - Pi `>=0.84.2 <0.86.0`
-- herdr `>=0.9.0`
+- herdr `>=0.9.1`
 
 Run focused tests and other intermediate checks before this smoke suite. Do
 not format during smoke testing; complete smoke testing and review before the

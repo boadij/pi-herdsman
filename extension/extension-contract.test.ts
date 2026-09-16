@@ -91,8 +91,11 @@ test("Herdr version parsing accepts preview suffixes but rejects trailing text",
     assert.equal(parseHerdrVersion(version), undefined, version);
 });
 
-test("Herdr preflight gates server compatibility, not private server version", async () => {
-  const run = async (server: Record<string, unknown>) => {
+test("Herdr preflight gates minimum client version and server compatibility", async () => {
+  const run = async (
+    server: Record<string, unknown>,
+    clientVersion = "0.9.1",
+  ) => {
     setLeadEnvironment();
     const label = `preflight-${randomUUID().slice(0, 8)}`;
     const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
@@ -101,7 +104,7 @@ test("Herdr preflight gates server compatibility, not private server version", a
       status: {
         code: 0,
         stdout: JSON.stringify({
-          client: { version: "0.9.0" },
+          client: { version: clientVersion },
           server,
         }),
         stderr: "",
@@ -126,6 +129,10 @@ test("Herdr preflight gates server compatibility, not private server version", a
       resetAgentMailbox(startup.mailbox);
     }
   };
+
+  const oldClient = await run({ running: true, compatible: true }, "0.9.0");
+  assert.equal(oldClient.details.error.category, "invalid_request");
+  assert.match(oldClient.details.error.message, /Herdr >=0\.9\.1/);
 
   const incompatible = await run({ running: true, compatible: false });
   assert.equal(incompatible.details.error.category, "invalid_request");

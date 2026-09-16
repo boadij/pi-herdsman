@@ -1425,7 +1425,9 @@ async function herdrVersion(
     : undefined;
   const supported = (match: RegExpMatchArray | undefined): boolean =>
     !!match &&
-    (Number(match[1]) > 0 || (Number(match[1]) === 0 && Number(match[2]) >= 9));
+    (Number(match[1]) > 0 ||
+      Number(match[2]) > 9 ||
+      (Number(match[2]) === 9 && Number(match[3]) >= 1));
   if (
     !supported(clientMatch) ||
     server.running !== true ||
@@ -1433,7 +1435,7 @@ async function herdrVersion(
   ) {
     fail(
       "invalid_request",
-      "Herdr status is unavailable or incompatible; Herdr >=0.9.0 with a running compatible server is required",
+      "Herdr status is unavailable or incompatible; Herdr >=0.9.1 with a running compatible server is required",
       "preflight",
     );
   }
