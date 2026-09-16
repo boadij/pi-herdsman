@@ -101,6 +101,27 @@ The normal response is to inspect the returned stage/diagnostic and the current
 herdr environment. Do not add client-side polling or arbitrary sleeps as an
 operator workaround.
 
+Managed Herdr panes must be able to reach their interactive shell prompt
+without requiring human input. Shell startup that waits for a question,
+confirmation, first-run wizard, credential prompt, or similar interaction can
+prevent agent startup.
+
+Herdr sets `HERDR_ENV=1` in pane processes, so shell configuration can use that
+marker to disable interactive startup behavior only inside Herdr.
+
+For example, with Oh My Zsh, place this before sourcing Oh My Zsh:
+
+```zsh
+[[ ${HERDR_ENV:-} == 1 ]] && zstyle ':omz:update' mode disabled
+```
+
+Normal terminals keep their configured update behavior; Herdr panes skip
+automatic Oh My Zsh update checks. Run `omz update` manually when desired.
+
+If startup still fails, inspect the returned `pane_readiness` stage and bounded
+pane diagnostic rather than adding arbitrary sleeps or automatically answering
+terminal prompts.
+
 ## Cleanup or rollback failure
 
 A `rollback_failure` can contain both:
