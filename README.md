@@ -152,7 +152,7 @@ tools, extensions, skills, and instructions.
 
 ## Requirements
 
-- [herdr](https://github.com/herdrdev/herdr) `>=0.9.0`
+- [herdr](https://github.com/herdrdev/herdr) `>=0.9.1`
 - Pi `>=0.84.2 <0.86.0` (supported)
 - Node `>=22.19.0`
 
