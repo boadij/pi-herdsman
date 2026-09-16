@@ -44,11 +44,9 @@ export type StartedHerdrAgent = {
   paneId: string;
   cwd: string;
   createdTab: boolean;
-  createdPane: boolean;
+  shellProcess?: PaneProcess;
   sessionReference?: ExpectedSession;
   agent?: HerdrRecord;
-  paneOwnership: Record<string, PaneProcess>;
-  tabPaneOwnership: Record<string, PaneProcess>;
 };
 
 export class HerdrStartFailure extends Error {
@@ -392,18 +390,6 @@ export function herdrAgentAlias(
   return alias(workspaceId, label, runId);
 }
 
-export function paneIsAvailable(
-  pane: HerdrRecord,
-  tabId: string,
-  cwd: string,
-): boolean {
-  return (
-    pane.tab_id === tabId &&
-    !pane.agent &&
-    pane.agent_status === "unknown" &&
-    sameCwd(pane.foreground_cwd, cwd)
-  );
-}
 function canonicalCwd(value: string): string {
   const resolved = resolve(value);
   try {
@@ -975,9 +961,6 @@ export async function startHerdrAgent(
     let panes: any[] | undefined;
     let paneId: string | undefined;
     let createdTab = false;
-    let createdPane = false;
-    const ownership: Record<string, PaneProcess> = {};
-    const tabOwnership: Record<string, PaneProcess> = {};
     const tabs =
       placement.kind === "tab" && !placement.tabId
         ? undefined
@@ -1057,7 +1040,7 @@ export async function startHerdrAgent(
       );
       tab = made.tab;
       paneId = made.root_pane.pane_id;
-      createdTab = createdPane = true;
+      createdTab = true;
     } else {
       const existingPanes =
         panes ??
@@ -1115,7 +1098,6 @@ export async function startHerdrAgent(
           },
         );
         paneId = split.pane.pane_id;
-        createdPane = true;
       }
     }
     if (!paneId) error("start", "Herdr did not return a pane");
@@ -1126,9 +1108,6 @@ export async function startHerdrAgent(
       paneId,
       cwd,
       createdTab,
-      createdPane,
-      paneOwnership: ownership,
-      tabPaneOwnership: tabOwnership,
     };
     let started: any;
     stage = "pane_readiness";
@@ -1159,10 +1138,7 @@ export async function startHerdrAgent(
       throw failure;
     }
     stage = "ownership_capture";
-    for (const key of Object.keys(ownership)) delete ownership[key];
-    for (const key of Object.keys(tabOwnership)) delete tabOwnership[key];
-    ownership[paneId] = shell;
-    tabOwnership[paneId] = shell;
+    attempt.shellProcess = shell;
     const currentPanes =
       (
         await runHerdr(pi, ctx, ["pane", "list", "--workspace", workspaceId], {
@@ -1176,26 +1152,22 @@ export async function startHerdrAgent(
     if (
       !currentPane ||
       currentPane.workspace_id !== workspaceId ||
-      currentPane.tab_id !== tab.tab_id ||
-      !paneIsAvailable(currentPane, tab.tab_id, cwd)
+      currentPane.tab_id !== tab.tab_id
     )
-      error(
-        "start",
-        `pane ${paneId} did not become an available shell (topology changed before launch)`,
+      error("start", `pane ${paneId} topology changed before launch`);
+    if (createdTab) {
+      const tabPanes = currentPanes.filter(
+        (item: any) => item.tab_id === tab.tab_id,
       );
-    for (const pane of currentPanes.filter(
-      (item: any) => item.tab_id === tab.tab_id && item.pane_id !== paneId,
-    )) {
-      const observed = await paneProcess(
-        pi,
-        ctx,
-        pane.pane_id,
-        options.signal,
-        startupDeadline,
-        true,
-      );
-      tabOwnership[pane.pane_id] = observed;
+      if (tabPanes.length !== 1 || tabPanes[0]?.pane_id !== paneId)
+        error("start", `tab ${tab.tab_id} topology changed before launch`);
     }
+    if (!sameCwd(currentPane.cwd, cwd))
+      error("start", `pane ${paneId} cwd does not match requested cwd`, {
+        expected_cwd: cwd,
+        observed_cwd:
+          typeof currentPane.cwd === "string" ? currentPane.cwd : null,
+      });
     stage = "agent_start";
     const latest = await paneProcess(
       pi,
@@ -1265,7 +1237,6 @@ export async function startHerdrAgent(
       : undefined;
     attempt.herdrAgent = agent.name ?? attempt.herdrAgent;
     attempt.paneId = paneId;
-    attempt.createdPane = createdPane;
     attempt.sessionReference = reference;
     attempt.agent = agent;
     return attempt;
@@ -1875,15 +1846,8 @@ export async function rollbackHerdrStart(
 ): Promise<void> {
   const release = await lockLifecycle(ctx, signal);
   try {
-    if (started.createdPane && !started.paneOwnership[started.paneId])
-      error("rollback", `pane ${started.paneId} process ownership is unproven`);
-    if (started.createdTab && !Object.keys(started.tabPaneOwnership).length)
-      error("rollback", `tab ${started.tabId} process ownership is unproven`);
-    const processOwnership = started.createdTab
-      ? started.tabPaneOwnership
-      : started.paneOwnership;
-    const targetProcess = processOwnership[started.paneId];
-    if (!targetProcess)
+    const expectedShell = started.shellProcess;
+    if (!expectedShell)
       error("rollback", `pane ${started.paneId} process ownership is unproven`);
     const listedAgents = await runHerdr(pi, ctx, ["agent", "list"], {
       signal,
@@ -1957,7 +1921,7 @@ export async function rollbackHerdrStart(
           workspaceId: started.workspaceId,
           cwd: started.cwd,
         },
-        targetProcess,
+        expectedShell,
         "rollback",
         signal,
       );
@@ -1980,45 +1944,34 @@ export async function rollbackHerdrStart(
       error("rollback", `tab ${started.tabId} ownership is unproven`);
     }
     if (started.createdTab) {
-      const listedPanes = await runHerdr(
+      const result = await runHerdr(
         pi,
         ctx,
         ["pane", "list", "--workspace", started.workspaceId],
         { signal },
       );
-      if (!Array.isArray(listedPanes?.panes))
+      if (!Array.isArray(result?.panes))
         error("rollback", "pane list ownership proof is unavailable");
-      const panes = listedPanes.panes;
-      const currentIds = panes
-        .filter((pane: any) => pane.tab_id === started.tabId)
-        .map((pane: any) => pane.pane_id)
-        .sort();
-      const expectedIds = Object.keys(processOwnership).sort();
-      if (
-        currentIds.length !== expectedIds.length ||
-        currentIds.some(
-          (paneId: string, index: number) => paneId !== expectedIds[index],
-        )
-      ) {
+      const listedPanes = result.panes;
+      const tabPanes = listedPanes.filter(
+        (pane: any) => pane.tab_id === started.tabId,
+      );
+      if (tabPanes.length !== 1 || tabPanes[0]?.pane_id !== started.paneId)
         error("rollback", `tab ${started.tabId} pane ownership is unproven`);
-      }
     }
-    for (const [paneId, expected] of Object.entries(processOwnership)) {
-      const pane = (
-        await runHerdr(pi, ctx, ["pane", "get", paneId], { signal })
-      ).pane;
-      if (
-        !pane ||
-        pane.pane_id !== paneId ||
-        pane.workspace_id !== started.workspaceId ||
-        pane.tab_id !== started.tabId ||
-        !sameCwd(pane.cwd, started.cwd)
-      )
-        error("rollback", `pane ${paneId} ownership is unproven`);
-      const observed = await paneProcess(pi, ctx, paneId, signal);
-      if (!observed || !sameShellProcessOwner(expected, observed))
-        error("rollback", `pane ${paneId} process ownership is unproven`);
-    }
+    const pane = (
+      await runHerdr(pi, ctx, ["pane", "get", started.paneId], { signal })
+    ).pane;
+    if (
+      !pane ||
+      pane.pane_id !== started.paneId ||
+      pane.workspace_id !== started.workspaceId ||
+      pane.tab_id !== started.tabId
+    )
+      error("rollback", `pane ${started.paneId} ownership is unproven`);
+    const observed = await paneProcess(pi, ctx, started.paneId, signal);
+    if (!observed || !sameShellProcessOwner(expectedShell, observed))
+      error("rollback", `pane ${started.paneId} process ownership is unproven`);
     if (!managed) {
       const listedAgents = await runHerdr(pi, ctx, ["agent", "list"], {
         signal,
@@ -2039,7 +1992,7 @@ export async function rollbackHerdrStart(
         signal,
         noResult: true,
       });
-    else if (started.createdPane)
+    else
       await runHerdr(pi, ctx, ["pane", "close", started.paneId], {
         signal,
         noResult: true,
@@ -2060,15 +2013,12 @@ export async function rollbackHerdrStart(
         error("rollback", "tab list disappearance proof is unavailable");
       if (!Array.isArray(currentPanes?.panes))
         error("rollback", "pane list disappearance proof is unavailable");
-      const capturedPaneIds = new Set(Object.keys(started.tabPaneOwnership));
       if (
         currentTabs.tabs.some((item: any) => item.tab_id === started.tabId) ||
-        currentPanes.panes.some((item: any) =>
-          capturedPaneIds.has(item.pane_id),
-        )
+        currentPanes.panes.some((item: any) => item.pane_id === started.paneId)
       )
         error("rollback", `tab ${started.tabId} did not disappear after close`);
-    } else if (started.createdPane)
+    } else
       await verifyHerdrPaneClosed(
         pi,
         ctx,
