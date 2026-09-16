@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/boadij/pi-herdsman/compare/v0.7.2...v0.7.3) (2026-09-16)
+
+
+### Fixes
+
+* diagnose blocked shell startup before agent launch ([#70](https://github.com/boadij/pi-herdsman/issues/70)) ([9f82301](https://github.com/boadij/pi-herdsman/commit/9f82301e92f6215054fc6cb50d8d18d1284c9074))
+
 ## [0.7.2](https://github.com/boadij/pi-herdsman/compare/v0.7.1...v0.7.2) (2026-09-15)
 
 
