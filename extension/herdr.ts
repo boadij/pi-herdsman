@@ -1132,15 +1132,32 @@ export async function startHerdrAgent(
     };
     let started: any;
     stage = "pane_readiness";
-    const shell = await proveShellReady(
-      pi,
-      ctx,
-      paneId,
-      undefined,
-      startupDeadline,
-      "start",
-      options.signal,
-    );
+    let shell: PaneProcess;
+    try {
+      shell = await proveShellReady(
+        pi,
+        ctx,
+        paneId,
+        undefined,
+        startupDeadline,
+        "start",
+        options.signal,
+      );
+    } catch (failure) {
+      if (failure instanceof OperationError)
+        throw withStartupDiagnostic(
+          failure,
+          await captureStartupDiagnostic(
+            pi,
+            ctx,
+            paneId,
+            startupDeadline,
+            options.signal,
+          ),
+        );
+
+      throw failure;
+    }
     stage = "ownership_capture";
     for (const key of Object.keys(ownership)) delete ownership[key];
     for (const key of Object.keys(tabOwnership)) delete tabOwnership[key];

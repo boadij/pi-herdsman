@@ -1969,6 +1969,66 @@ test("startup does not launch while the exact readiness marker is pending", asyn
   }
 });
 
+test("startup readiness failure captures the blocked pane diagnostic", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "blocked-workspace";
+  const calls: string[][] = [];
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const blocker = "[oh-my-zsh] Would you like to update? [Y/n]";
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const key = args.slice(0, 2).join(" ");
+      if (key === "tab list") return response({ tabs: [] });
+      if (key === "tab create")
+        return response({
+          tab: { tab_id: "blocked-tab", label: "agents" },
+          root_pane: { pane_id: "blocked-pane" },
+        });
+      if (key === "pane run") return response({});
+      if (key === "pane wait-output")
+        return { code: 1, stdout: "", stderr: "shell readiness timed out" };
+      if (key === "pane read") return { code: 0, stdout: blocker, stderr: "" };
+      if (key === "agent start")
+        assert.fail("agent start must not run before shell readiness");
+      throw new Error("unexpected Herdr call: " + args.join(" "));
+    },
+  } as any;
+
+  let caught: unknown;
+  try {
+    await startHerdrAgent(pi, { cwd: "/tmp/blocked-agent" } as any, {
+      label: "blocked",
+      runId: "blocked-run",
+      cwd: "/tmp/blocked-agent",
+      placement: { kind: "tab", label: "agents" },
+    });
+    assert.fail("startup should fail");
+  } catch (failure) {
+    caught = failure;
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+
+  assert.ok(caught instanceof HerdrStartFailure);
+  assert.equal(caught.stage, "pane_readiness");
+  const cause = caught.cause as any;
+  assert.equal(cause.detail.details.paneSnapshotAttempted, true);
+  assert.equal(cause.detail.details.paneSnapshotStatus, "captured");
+  assert.ok(cause.detail.details.paneSnapshot.length <= 8192);
+  assert.match(cause.detail.details.paneSnapshot, /Would you like to update/);
+  assert.equal(
+    calls.some((args) => args[0] === "agent" && args[1] === "start"),
+    false,
+  );
+});
+
 type StartAgentCase =
   | "missing-marker"
   | "corrupt-marker"
@@ -2189,7 +2249,7 @@ test("readiness exhaustion preserves the diagnostic reserve and never starts", a
     assert.ok(result.failure);
     assert.equal(
       result.calls.some((args) => args[0] === "pane" && args[1] === "read"),
-      false,
+      true,
     );
   } finally {
     Date.now = originalDateNow;
