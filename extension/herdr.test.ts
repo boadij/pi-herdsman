@@ -2038,6 +2038,7 @@ type StartAgentCase =
   | "workspace-mutation"
   | "tab-mutation"
   | "pane-mutation"
+  | "extra-pane"
   | "cwd-mutation"
   | "shell-pid-mutation"
   | "busy-foreground-pgid"
@@ -2131,6 +2132,16 @@ async function startAgentCase(
               foreground_cwd: cwd,
               ...mutation,
             },
+            ...(kind === "extra-pane"
+              ? [
+                  {
+                    pane_id: "foreign-pane",
+                    workspace_id: "case-workspace",
+                    tab_id: "case-tab",
+                    cwd,
+                  },
+                ]
+              : []),
           ],
         });
       }
@@ -2196,6 +2207,7 @@ test("startHerdrAgent rejects unstable readiness observations without starting a
     "workspace-mutation",
     "tab-mutation",
     "pane-mutation",
+    "extra-pane",
     "cwd-mutation",
     "shell-pid-mutation",
     "busy-foreground-pgid",
@@ -2205,7 +2217,16 @@ test("startHerdrAgent rejects unstable readiness observations without starting a
     {
       const result = await startAgentCase(kind);
       assert.equal(result.agentStarts, 0);
-      assert.ok(result.failure);
+      if (kind === "extra-pane") {
+        assert.ok(result.failure instanceof HerdrStartFailure);
+        assert.equal(result.failure.stage, "ownership_capture");
+        assert.match(
+          String(result.failure.cause),
+          /topology changed before launch/,
+        );
+      } else {
+        assert.ok(result.failure);
+      }
     }
   }
 });
