@@ -328,11 +328,22 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
   {
     const rows = renderSupervisionLeads(
       [
-        lead({ lead: "attention", displayName: "attention", needsYou: true }),
+        lead({
+          lead: "attention",
+          displayName: "attention",
+          needsYou: true,
+          agentCounts: { working: 1, total: 1 },
+        }),
         lead({
           lead: "working",
           displayName: "working",
           runtimeState: "working",
+          agentCounts: { working: 1, total: 1 },
+        }),
+        lead({
+          lead: "delegated",
+          displayName: "delegated",
+          agentCounts: { working: 1, total: 1 },
         }),
         lead({ lead: "idle", displayName: "idle" }),
       ],
@@ -340,7 +351,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
     );
     assert.deepEqual(
       rows.slice(1).map((line) => line.slice(0, 6)),
-      ["├─ ◐ a", "├─ ● w", "└─ ○ i"],
+      ["├─ ◐ a", "├─ ● w", "├─ ◉ d", "└─ ○ i"],
     );
   }
 
@@ -569,7 +580,11 @@ test("Supervision selection uses opaque handles and moves safely", (t) => {
 
   {
     const leads = [
-      lead({ lead: "opaque-lead-a", displayName: "one" }),
+      lead({
+        lead: "opaque-lead-a",
+        displayName: "one",
+        agentCounts: { working: 1, total: 1 },
+      }),
       lead({ lead: "opaque-lead-b", displayName: "two" }),
     ];
     const before = structuredClone(leads);
