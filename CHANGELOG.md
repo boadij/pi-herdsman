@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.4](https://github.com/boadij/pi-herdsman/compare/v0.7.3...v0.7.4) (2026-09-16)
+
+
+### Fixes
+
+* harden agent startup rollback ownership ([#72](https://github.com/boadij/pi-herdsman/issues/72)) ([7020157](https://github.com/boadij/pi-herdsman/commit/7020157079887b3f62ce5c71c93cfc5b13c69b1c))
+* require Herdr 0.9.1 ([#74](https://github.com/boadij/pi-herdsman/issues/74)) ([b4dbf36](https://github.com/boadij/pi-herdsman/commit/b4dbf368fa9af702cef404ba6a3becbfb4637ac2))
+
 ## [0.7.3](https://github.com/boadij/pi-herdsman/compare/v0.7.2...v0.7.3) (2026-09-16)
 
 
