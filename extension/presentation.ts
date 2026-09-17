@@ -648,14 +648,17 @@ export function renderSupervisionLeads(
     safeLine(header, width),
     ...shown.map((lead, index) => {
       const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
+      const group = classifySupervisedLead(lead);
       const marker =
         lead.lead === selectedLead
           ? ">"
-          : classifySupervisedLead(lead) === "NEEDS YOU"
+          : group === "NEEDS YOU"
             ? "◐"
-            : classifySupervisedLead(lead) === "WORKING"
+            : group === "WORKING"
               ? "●"
-              : "○";
+              : group === "IDLE/DONE" && (lead.agentCounts?.working ?? 0) > 0
+                ? "◉"
+                : "○";
       return safeLine(
         `${branch} ${marker} ${lead.displayName}  ${leadAgentCounts(lead)}`,
         width,
