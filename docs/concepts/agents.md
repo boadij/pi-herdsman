@@ -71,10 +71,11 @@ A lead Pi session owns its direct agents.
 A delegating agent may own direct agents when its effective definition has
 allowed `agents`.
 
-Public list visibility follows this ownership boundary. Durable descendants
+Public list visibility follows this ownership boundary. A lead sees only
+generations whose durable owner chain resolves to that lead. Durable descendants
 remain attached to their recorded parent even when that parent is lost or
-physically unresolved; missing durable ancestry is shown as non-actionable
-recovery evidence.
+physically unresolved. Missing, ambiguous, or cyclic durable ancestry is not
+attributed to a herd.
 
 ## Authority boundaries
 

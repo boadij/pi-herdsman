@@ -66,8 +66,8 @@ failed inventory never proves `lost`; relocated or conflicting evidence is
 | `lost`    | `close` only.                                                                   |
 | `unknown` | None.                                                                           |
 
-Descendants remain visible through durable ancestry but do not gain direct
-control from that visibility.
+Owned descendants remain visible through proven durable ancestry but do not gain
+direct control from that visibility.
 
 ## Inactivity fields
 

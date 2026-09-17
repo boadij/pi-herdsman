@@ -2723,8 +2723,8 @@ function visibleAgentSnapshots(
   );
   if (scope.kind === "managed-agent") return direct;
   const visible: VisibleManagedAgentSnapshot[] = [...direct];
-  const ancestryStatus = new Map<string, "visible" | "unresolved">(
-    direct.map(({ state }) => [durableIdentityKey(state), "visible"]),
+  const visibleIdentities = new Set(
+    direct.map(({ state }) => durableIdentityKey(state)),
   );
   const pending = snapshot.agents.filter(
     ({ state }) => state.ownerSessionId !== ownerSessionId,
@@ -2734,94 +2734,20 @@ function visibleAgentSnapshots(
     for (let index = pending.length - 1; index >= 0; index--) {
       const agent = pending[index];
       const parents = durableParentCandidates(snapshot.agents, agent.state);
-      if (
-        parents.length === 1 &&
-        !ancestryStatus.has(durableIdentityKey(parents[0].state))
-      )
-        continue;
-      const parent = parents.length === 1 ? parents[0] : undefined;
-      const parentStatus = parent
-        ? ancestryStatus.get(durableIdentityKey(parent.state))
-        : undefined;
-      const unresolved = parents.length !== 1 || parentStatus === "unresolved";
-      const listed = !unresolved
-        ? agent.listed
-        : {
-            ...agent.listed,
-            state: "unknown",
-            steerable: false,
-            recovery_only: true,
-            diagnostic: parent
-              ? "Durable parent ancestry is unresolved"
-              : parents.length > 1
-                ? "Durable parent ancestry is ambiguous"
-                : "Durable parent assignment is missing",
-          };
+      if (parents.length !== 1) continue;
+
+      const parent = parents[0]!;
+      if (!visibleIdentities.has(durableIdentityKey(parent.state))) continue;
+
       visible.push({
         ...agent,
-        listed,
-        ...(parent && !unresolved
-          ? { parentLabel: parent.state.agentLabel }
-          : {}),
+        parentLabel: parent.state.agentLabel,
       });
-      ancestryStatus.set(
-        durableIdentityKey(agent.state),
-        unresolved ? "unresolved" : "visible",
-      );
+      visibleIdentities.add(durableIdentityKey(agent.state));
       pending.splice(index, 1);
       progressed = true;
     }
-    if (!progressed) {
-      const pendingByKey = new Map(
-        pending.map((agent) => [durableIdentityKey(agent.state), agent]),
-      );
-      const cycleMembers = new Set<string>();
-      for (const start of pending) {
-        const path: string[] = [];
-        const pathIndexes = new Map<string, number>();
-        let current: ManagedAgentSnapshot | undefined = start;
-        while (current) {
-          const key = durableIdentityKey(current.state);
-          const cycleStart = pathIndexes.get(key);
-          if (cycleStart !== undefined) {
-            for (const member of path.slice(cycleStart))
-              cycleMembers.add(member);
-            break;
-          }
-          pathIndexes.set(key, path.length);
-          path.push(key);
-          const parents = durableParentCandidates(
-            snapshot.agents,
-            current.state,
-          );
-          if (parents.length !== 1) break;
-          current = pendingByKey.get(durableIdentityKey(parents[0].state));
-        }
-      }
-      const cyclic = pending.filter((agent) =>
-        cycleMembers.has(durableIdentityKey(agent.state)),
-      );
-      for (const agent of cyclic) {
-        visible.push({
-          ...agent,
-          listed: {
-            ...agent.listed,
-            state: "unknown",
-            steerable: false,
-            recovery_only: true,
-            diagnostic: "Cyclic durable ancestry",
-          },
-        });
-        ancestryStatus.set(durableIdentityKey(agent.state), "unresolved");
-      }
-      pending.splice(
-        0,
-        pending.length,
-        ...pending.filter(
-          (agent) => !cycleMembers.has(durableIdentityKey(agent.state)),
-        ),
-      );
-    }
+    if (!progressed) break;
   }
   return visible;
 }
