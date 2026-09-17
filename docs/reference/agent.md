@@ -89,8 +89,9 @@ Request:
 No selectors or other fields are accepted. A successful result includes the
 effective `agent_definitions` roster and visible agent records.
 
-Each valid durable generation remains visible, including unresolved `unknown`
-and proven `lost` records. Each actionable live agent record includes:
+Each valid durable generation in the controller's proven ownership projection
+remains visible, including physically unresolved `unknown` and proven `lost`
+records. Each actionable live agent record includes:
 
 | Field                                                           | Meaning                                                                                                                           |
 | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -122,10 +123,11 @@ projection returned by `list` for that controller. It is a startup snapshot;
 use `list` for live agent state, ownership, or a refreshed definition roster
 after configuration changes. Leaf agents do not receive a definition roster.
 
-Lead controllers see the complete effective definition roster and agents visible
-through their ownership boundary. Delegating agents see only allowed enabled
-leaf definitions and their visible agents. Unknown mailbox diagnostics remain
-non-actionable.
+Lead controllers see the complete effective definition roster and agents whose
+durable ownership chain resolves to that lead. Delegating agents see only allowed
+enabled leaf definitions and their direct agents. Unrooted, ambiguous, or cyclic
+durable ancestry is not attributed to the current controller. Unknown mailbox
+diagnostics remain non-actionable.
 
 ## `inspect`
 

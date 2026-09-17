@@ -2318,27 +2318,28 @@ test("lost parent pane absence preserves durable child ancestry", async () => {
   }
 });
 
-test("missing durable ancestry remains unresolved through grandchildren", async () => {
+test("lead list excludes another lead's durable subtree", async () => {
   setLeadEnvironment();
+  const foreignLeadSessionId = PARENT_SESSION_ID;
   const child = {
     ...managedState(
-      "missing-ancestry-child",
+      "foreign-lead-agent",
       undefined,
-      recoveryIdentity("missing-ancestry-child"),
+      recoveryIdentity("foreign-lead-agent"),
     ),
-    ownerSessionId: PARENT_SESSION_ID,
+    ownerSessionId: foreignLeadSessionId,
     piSessionId: CHILD_SESSION_ID,
-    piSessionFile: join(testTmpRoot, "missing-ancestry-child.jsonl"),
+    piSessionFile: join(testTmpRoot, "foreign-lead-agent.jsonl"),
   };
   const grandchild = {
     ...managedState(
-      "missing-ancestry-grandchild",
+      "foreign-lead-descendant",
       undefined,
-      recoveryIdentity("missing-ancestry-grandchild"),
+      recoveryIdentity("foreign-lead-descendant"),
     ),
     ownerSessionId: child.piSessionId,
     piSessionId: "11111111-1111-4111-8111-111111111111",
-    piSessionFile: join(testTmpRoot, "missing-ancestry-grandchild.jsonl"),
+    piSessionFile: join(testTmpRoot, "foreign-lead-descendant.jsonl"),
   };
   const mailboxes = [child, grandchild].map((state) => ({
     path: agentMailboxPath(WORKSPACE, state.agentLabel),
@@ -2361,16 +2362,11 @@ test("missing durable ancestry remains unresolved through grandchildren", async 
     );
     const listed = result.details.agents as any[];
     for (const label of [child.agentLabel, grandchild.agentLabel]) {
-      const agent = listed.find((candidate) => candidate.agent === label);
-      assert.equal(agent?.state, "unknown");
-      assert.equal(agent?.recovery_only, true);
       assert.equal(
-        agent?.diagnostic,
-        label === child.agentLabel
-          ? "Durable parent assignment is missing"
-          : "Durable parent ancestry is unresolved",
+        listed.some((candidate) => candidate.agent === label),
+        false,
+        `${label} belongs to another lead`,
       );
-      assert.deepEqual(agent?.available_actions, []);
     }
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -2378,7 +2374,7 @@ test("missing durable ancestry remains unresolved through grandchildren", async 
   }
 });
 
-test("cycle descendants inherit unresolved durable ancestry", async () => {
+test("lead list excludes cyclic unrooted durable ancestry", async () => {
   setLeadEnvironment();
   const cycleA = {
     ...managedState(
@@ -2428,16 +2424,16 @@ test("cycle descendants inherit unresolved durable ancestry", async () => {
       fakeContext(),
     );
     const listed = result.details.agents as any[];
-    for (const [label, diagnostic] of [
-      ["cycle-ancestry-a", "Cyclic durable ancestry"],
-      ["cycle-ancestry-b", "Cyclic durable ancestry"],
-      ["cycle-ancestry-descendant", "Durable parent ancestry is unresolved"],
+    for (const label of [
+      cycleA.agentLabel,
+      cycleB.agentLabel,
+      descendant.agentLabel,
     ]) {
-      const agent = listed.find((candidate) => candidate.agent === label);
-      assert.equal(agent?.state, "unknown");
-      assert.equal(agent?.recovery_only, true);
-      assert.equal(agent?.diagnostic, diagnostic);
-      assert.deepEqual(agent?.available_actions, []);
+      assert.equal(
+        listed.some((candidate) => candidate.agent === label),
+        false,
+        label,
+      );
     }
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -2445,7 +2441,7 @@ test("cycle descendants inherit unresolved durable ancestry", async () => {
   }
 });
 
-test("duplicate durable parent identities keep descendants unresolved", async () => {
+test("lead list excludes descendants with ambiguous durable parents", async () => {
   setLeadEnvironment();
   const parent = {
     ...managedState(
@@ -2492,16 +2488,12 @@ test("duplicate durable parent identities keep descendants unresolved", async ()
       undefined,
       fakeContext(),
     );
-    const listedChild = (result.details.agents as any[]).find(
-      (agent) => agent.agent === child.agentLabel,
-    );
-    assert.equal(listedChild?.state, "unknown");
-    assert.equal(listedChild?.recovery_only, true);
     assert.equal(
-      listedChild?.diagnostic,
-      "Durable parent ancestry is ambiguous",
+      (result.details.agents as any[]).some(
+        (agent) => agent.agent === child.agentLabel,
+      ),
+      false,
     );
-    assert.deepEqual(listedChild?.available_actions, []);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     for (const mailbox of mailboxes) resetAgentMailbox(mailbox);

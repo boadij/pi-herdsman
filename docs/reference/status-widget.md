@@ -92,8 +92,9 @@ Header refresh staleness is not agent inactivity.
 Every visible agent is rendered in a stable tree. Siblings are sorted by
 logical label and use Pi's `├─`, `└─`, and `│` connectors.
 The row shows the agent definition and its exact logical agent label
-separately. Recovery-only ancestry evidence is retained by structured status
-paths but is not included in this human projection.
+separately. The tree contains only agents in the controller's proven ownership
+projection; unrooted, ambiguous, or cyclic durable ancestry is not attributed to
+the herd.
 
 Rows share globally aligned columns for state, elapsed time, compact model,
 thinking, context percentage, and optional inactivity. Context is shown as a
@@ -113,9 +114,9 @@ overridden. A starting row is removed when its exact request becomes active or
 terminal, its local runtime is removed, startup fails or rolls back, the
 controller session restarts, or shutdown clears transient state.
 
-The normal widget retains `lost` and fail-closed `unknown` rows because they
-represent durable unresolved generations whose physical state is either proven
-gone or not safely provable. `Running` inspection excludes `lost` and
+The normal widget retains owned `lost` and fail-closed `unknown` rows because
+they represent durable unresolved generations whose physical state is either
+proven gone or not safely provable. `Running` inspection excludes `lost` and
 fail-closed `unknown` rows because they are not safely focusable targets; it
 otherwise shows authoritative live agent rows and excludes presentation-only
 starting rows. A terminal result is followed by cleanup; the widget does not
