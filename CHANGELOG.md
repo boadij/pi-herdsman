@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.1](https://github.com/boadij/pi-herdsman/compare/v0.8.0...v0.8.1) (2026-09-18)
+
+
+### Fixes
+
+* make agent inspection passive ([#80](https://github.com/boadij/pi-herdsman/issues/80)) ([7e48ced](https://github.com/boadij/pi-herdsman/commit/7e48ced8eb8741c4b7f0d5608a87e2c33cfdea64))
+* preserve cleanup and recovery evidence in agent output ([#78](https://github.com/boadij/pi-herdsman/issues/78)) ([51bcd3c](https://github.com/boadij/pi-herdsman/commit/51bcd3c4df6d50319f7e3e02ae73c417b653f589))
+
+
+### Refactoring
+
+* **agentic-system-audit:** streamline workflow and enforce reachability verification ([f7bf08a](https://github.com/boadij/pi-herdsman/commit/f7bf08a1ff8ebc364ad49593db08fcd941ae9086))
+
 ## [0.8.0](https://github.com/boadij/pi-herdsman/compare/v0.7.4...v0.8.0) (2026-09-17)
 
 
