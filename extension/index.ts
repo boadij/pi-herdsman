@@ -15,6 +15,7 @@ import {
   StringEnum,
 } from "@earendil-works/pi-ai";
 import {
+  buildContextEntries,
   CURRENT_SESSION_VERSION,
   DynamicBorder,
   getAgentDir,
@@ -1294,9 +1295,9 @@ function readAgentTranscript(state: ManagedAgentState): {
       "transcript",
     );
 
-  let header: any;
+  let entries: ReturnType<typeof parseSessionEntries>;
   try {
-    header = parseSessionEntries(readFileSync(state.piSessionFile, "utf8"))[0];
+    entries = parseSessionEntries(readFileSync(state.piSessionFile, "utf8"));
   } catch (error) {
     fail(
       "target_not_found",
@@ -1304,6 +1305,7 @@ function readAgentTranscript(state: ManagedAgentState): {
       "transcript",
     );
   }
+  const header = entries[0];
   if (
     !header ||
     header.type !== "session" ||
@@ -1316,25 +1318,10 @@ function readAgentTranscript(state: ManagedAgentState): {
       "transcript",
     );
 
-  let manager: SessionManager;
-  try {
-    manager = SessionManager.open(state.piSessionFile);
-  } catch (error) {
-    fail(
-      "internal_failure",
-      `Unable to open agent Pi session: ${String(error)}`,
-      "transcript",
-    );
-  }
-  if (manager!.getSessionId() !== state.piSessionId)
-    fail(
-      "target_not_found",
-      "Persisted Pi session identity does not match the managed agent",
-      "transcript",
-    );
-
   const bounded = truncateTail(
-    formatAgentTranscript(manager!.buildContextEntries()),
+    formatAgentTranscript(
+      buildContextEntries(entries.slice(1) as SessionEntry[]),
+    ),
     { maxBytes: AGENT_TRANSCRIPT_MAX_BYTES },
   );
   return { transcript: bounded.content, truncated: bounded.truncated };

@@ -4141,6 +4141,18 @@ test("lost managed agents remain visible and notify their owner once", async (t)
       },
     ],
   });
+  realFs.appendFileSync(
+    identity.piSessionFile,
+    `${JSON.stringify({
+      type: "message",
+      id: "entry-0",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "last persisted work" }],
+      },
+    })}\n`,
+  );
   writeAgentState(mailbox, state);
   const lifecycle = cascadeExecutor([state]);
   const pi = fakePi({

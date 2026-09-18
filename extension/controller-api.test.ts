@@ -3537,16 +3537,6 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
   };
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
-  realFs.writeFileSync(
-    identity.piSessionFile,
-    `${JSON.stringify({
-      type: "session",
-      version: 3,
-      id: identity.piSessionId,
-      timestamp: new Date().toISOString(),
-      cwd: "/tmp",
-    })}\n`,
-  );
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   const session = {
     id: identity.piSessionId,
@@ -3588,6 +3578,28 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       },
     ],
   };
+  const writeSession = (): void => {
+    const entries = session.contextEntries.map((entry, index) => ({
+      ...entry,
+      id: `entry-${index}`,
+      ...(index ? { parentId: `entry-${index - 1}` } : {}),
+      timestamp: new Date().toISOString(),
+    }));
+    realFs.writeFileSync(
+      identity.piSessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: identity.piSessionId,
+          timestamp: new Date().toISOString(),
+          cwd: "/tmp",
+        }),
+        ...entries.map((entry) => JSON.stringify(entry)),
+      ].join("\n") + "\n",
+    );
+  };
+  writeSession();
   nativeSessions.set(identity.piSessionId, session);
   const pi = fakePi({
     exec: leadExec(
@@ -3638,6 +3650,7 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
         },
       },
     ];
+    writeSession();
     const completed = await pi.tools[0]!.execute(
       "id",
       { action: "transcript", agent: label },
@@ -3663,6 +3676,7 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
         },
       },
     ];
+    writeSession();
     const bounded = await pi.tools[0]!.execute(
       "id",
       { action: "transcript", agent: label },
