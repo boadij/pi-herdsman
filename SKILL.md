@@ -45,15 +45,25 @@ State describes what is happening; available_actions describes current control
 eligibility. Every operation revalidates exact state and identity before
 mutation.
 
-The live-agent control actions are `steer`, `reply`, and `close`; these mutate
+The live-agent control actions are `steer`, `interrupt`, `reply`, and `close`;
+these mutate
 live agent execution and are available only when listed. Read-only `inspect`
 captures bounded live terminal/process evidence. Read-only `transcript` captures
 bounded persisted Pi conversation and tool evidence when listed. Neither changes
 agent state. A completed agent does not remain available for another assignment.
 
-Use steer only to change active work. Use reply only to answer a valid
-outstanding ask_owner question. Use close only for intentional teardown or
-abandonment.
+Use steer only to change active work non-preemptively. Steering does not cancel
+an in-flight model or tool operation; Pi may queue it until the current
+operation reaches a safe boundary.
+
+Use interrupt only when the current in-flight operation itself must be
+abandoned. Interrupt is preemptive: it cancels the current Pi operation and
+continues the same assignment with the required replacement message. Do not
+interrupt merely because an agent is slow or marked stale; inactivity is
+advisory and does not prove a hang.
+
+Use reply only to answer a valid outstanding ask_owner question. Use close only
+for intentional teardown or abandonment.
 
 A lost agent is a managed assignment whose exact physical execution is proven
 gone before a durable terminal result resolved it. Loss is not completion or
@@ -97,7 +107,7 @@ If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before
 starting another assignment; follow the stored recovery nextAction.
 
-Before delegate, continue, steer, or reply, make the message self-contained.
+Before delegate, continue, steer, interrupt, or reply, make the message self-contained.
 
 Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md,
 GEMINI.md, or equivalents merely because they exist. Rely on normal project or

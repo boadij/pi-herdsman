@@ -1903,6 +1903,7 @@ test("controller reply submits the normal request and preserves the assignment",
   assert.deepEqual(afterReply.details.agents[0].available_actions, [
     "inspect",
     "steer",
+    "interrupt",
     "close",
   ]);
   const missingAsk = await pi.tools[0].execute(

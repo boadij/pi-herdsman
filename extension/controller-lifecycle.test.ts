@@ -4055,6 +4055,8 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
     },
     { action: "steer", message: "change" },
     { action: "steer", agent: "agent" },
+    { action: "interrupt", message: "change now" },
+    { action: "interrupt", agent: "agent" },
     { action: "close" },
   ];
   for (const params of cases) {

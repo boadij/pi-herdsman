@@ -221,6 +221,10 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     agentDescription,
     /list, inspect, or transcript merely for progress, steer merely for status, sleep, poll/,
   );
+  assert.match(agentDescription, /steer.*non-preemptively/);
+  assert.match(agentDescription, /interrupt.*preemptive/);
+  assert.match(agentDescription, /same assignment/);
+  assert.match(agentDescription, /Do not.*interrupt merely.*stale/);
   assert.doesNotMatch(
     agentDescription,
     /Delegate any other useful independent work now/,

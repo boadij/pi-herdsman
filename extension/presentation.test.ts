@@ -1189,6 +1189,7 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
 test("compact coordination calls show available agent definitions", () => {
   for (const [action, expected] of [
     ["steer", "agent steer  release-review · researcher"],
+    ["interrupt", "agent interrupt  release-review · researcher"],
     ["reply", "agent reply  release-review · researcher"],
     ["inspect", "agent inspect  release-review · researcher"],
     ["close", "agent close  release-review · researcher"],
@@ -1437,6 +1438,15 @@ test("coordination prose source mapping covers agent, chief, and staff actions",
       "agent",
       { action: "steer", agent: "researcher", message: "steer message" },
       "steer message",
+    ],
+    [
+      "agent",
+      {
+        action: "interrupt",
+        agent: "researcher",
+        message: "interrupt message",
+      },
+      "interrupt message",
     ],
     [
       "agent",
@@ -3711,16 +3721,21 @@ test("Capability summaries preserve deterministic tool and skill policy output",
 
 test("successful control results contain factual assignment evidence", (t) => {
   {
-    for (const action of ["delegate", "steer", "reply"]) {
+    for (const action of ["delegate", "steer", "interrupt", "reply"]) {
       const rendered = formatToolModelResult(action, {
         ok: true,
         agent: "agent",
         request_id: "request",
         session_id: "session",
+        assignment_request_id: "assignment",
       });
-      assert.match(rendered, /agent agent\./);
+      if (action === "interrupt") {
+        assert.match(rendered, /Interrupt accepted for agent agent\./);
+        assert.match(rendered, /asked to stop/);
+      } else assert.match(rendered, /agent agent\./);
       assert.match(rendered, /Session: session/);
       assert.match(rendered, /Request: request/);
+      assert.match(rendered, /Assignment request: assignment/);
       assert.doesNotMatch(rendered, /Next:|Continue|poll|sleep|wait/);
     }
   }

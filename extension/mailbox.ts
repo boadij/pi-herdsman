@@ -66,7 +66,7 @@ export interface RequestRecord {
   workspaceId: string;
   agentLabel: string;
   paneId: string;
-  kind: "task" | "steer" | "reply";
+  kind: "task" | "steer" | "interrupt" | "reply";
   askId?: string;
   text: string;
   createdAt: number;
@@ -468,7 +468,12 @@ function validate(
         throw new Error("Invalid acknowledgement message");
     }
   } else if (kind === "request") {
-    if (v.kind !== "task" && v.kind !== "steer" && v.kind !== "reply")
+    if (
+      v.kind !== "task" &&
+      v.kind !== "steer" &&
+      v.kind !== "interrupt" &&
+      v.kind !== "reply"
+    )
       throw new Error("Invalid request kind");
     if (
       (v.kind === "reply" &&

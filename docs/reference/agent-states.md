@@ -17,7 +17,9 @@ durable assignment/convergence evidence. It is not a raw herdr lifecycle string.
 
 A live agent record in `agent list` includes an `available_actions` snapshot.
 Use only operations currently listed there; do not infer control eligibility
-from `state` alone. `steer` means active work accepts steering, `reply` means a
+from `state` alone. `steer` means active work accepts cooperative steering,
+`interrupt` means a currently working Pi operation may be preempted with
+replacement direction, `reply` means a
 correlated pending `ask_owner` is valid, and `close` means exact direct ownership
 permits teardown. `available_actions` never includes
 `delegate`; an agent generation handles one assignment only. Every operation
@@ -25,7 +27,9 @@ revalidates identity, ownership, mailbox state, and lifecycle immediately before
 mutation.
 
 A delegating agent may be blocked while direct agent work is pending and still accept
-steering when `steer` is listed. Descendant visibility does not imply authority;
+steering when `steer` is listed, but it cannot expose `interrupt` without a
+currently working Pi operation. Stale or inactive fields are advisory and do
+not automatically authorize or recommend interrupt. Descendant visibility does not imply authority;
 records outside the controller's direct ownership can have an empty action list.
 Directly owned live records may expose the applicable live controls, including
 `close`; directly owned live or proven `lost` records may also expose the
@@ -62,11 +66,11 @@ absence and projects as `settling` while delivery or recovery converges. A
 failed inventory never proves `lost`; relocated or conflicting evidence is
 `unknown`.
 
-| Record    | Direct-owner actions                                                                                                  |
-| --------- | --------------------------------------------------------------------------------------------------------------------- |
-| `live`    | `inspect`, `transcript` when a materialized persisted Pi session file exists, eligible `steer`/`reply`, plus `close`. |
-| `lost`    | `transcript` when a materialized persisted Pi session file exists, plus `close`.                                      |
-| `unknown` | None.                                                                                                                 |
+| Record    | Direct-owner actions                                                                                                                                                  |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live`    | `inspect`, `transcript` when a materialized persisted Pi session file exists, eligible `steer`, `interrupt` while state is `working`, eligible `reply`, plus `close`. |
+| `lost`    | `transcript` when a materialized persisted Pi session file exists, plus `close`.                                                                                      |
+| `unknown` | None.                                                                                                                                                                 |
 
 Owned descendants remain visible through proven durable ancestry but do not gain
 direct control from that visibility.

@@ -146,10 +146,19 @@ generation may be restored from its exact managed identity, while ordinary
 same-workspace tab movement remains presentation-only and does not change
 assignment ownership.
 
-## Steering is different
+## Steering and interruption
 
-`steer` changes the current active assignment. It does not create an independent
-result.
+`steer` changes the current active assignment cooperatively. It does not create
+another result and does not cancel the current Pi operation. If a tool or model
+operation does not finish, a queued steer may not take effect.
+
+`interrupt` changes the same active assignment preemptively. It requests
+cancellation of the current Pi operation and supplies the replacement
+instruction that continues the same assignment. The generation, active task
+request, ownership, Pi session, and final-result obligation remain unchanged.
+
+Neither action creates another assignment. `close` is the operation that
+abandons the managed generation.
 
 Steering is at-least-once at the agent boundary: an agent can apply a steer
 before its acknowledgement write is recorded. If that acknowledgement write
