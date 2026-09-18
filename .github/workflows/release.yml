@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag to retry npm publication
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -19,35 +24,68 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v5
+      - id: release
+        if: ${{ github.event_name == 'push' }}
+        uses: googleapis/release-please-action@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      - id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+          RECOVERY_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$RECOVERY_TAG"
+          elif [ "$RELEASE_CREATED" = "true" ]; then
+            TAG="$RELEASE_TAG"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          test -n "$TAG"
+
+          case "$TAG" in
+            *$'\n'*|*$'\r'*)
+              echo "release tag must be a single line" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v6
+        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
-          fetch-depth: 0
+          ref: refs/tags/${{ steps.target.outputs.tag }}
 
       - uses: actions/setup-node@v6
+        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - name: Publish released npm version
+        if: ${{ steps.target.outputs.publish == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.target.outputs.tag }}
         run: |
           set -euo pipefail
+
           VERSION=$(node -p "require('./package.json').version")
-          TAG="v$VERSION"
+          test "v$VERSION" = "$RELEASE_TAG"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
 
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || exit 0
-          npm view "pi-herdsman@$VERSION" version >/dev/null 2>&1 && exit 0
-
-          git checkout --detach "$TAG"
-          test "$(node -p "require('./package.json').version")" = "$VERSION"
           npm ci
           npm run release:check
           npm publish
