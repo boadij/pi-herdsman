@@ -2887,7 +2887,7 @@ test("a stray agent variable does not suppress lead registration", () => {
   registerExtension!(lead.pi as never);
   assert.equal(lead.tools.length, 1);
   assert.equal(lead.tools[0].name, "agent");
-  assert.deepEqual(lead.commands, ["agents"]);
+  assert.deepEqual(lead.commands, ["agents", "herdsman"]);
 });
 
 test("session agent identity reads the session-wide entry array", () => {

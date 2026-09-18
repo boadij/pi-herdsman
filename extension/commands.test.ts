@@ -460,11 +460,20 @@ test("lead agents command uses native completion and exact human grammar", async
   );
   const command = pi.commandOptions.get("agents");
   assert.ok(command);
+  const alias = pi.commandOptions.get("herdsman");
+  assert.ok(alias);
+  assert.equal(alias.description, "Alias for /agents");
+  assert.equal(alias.handler, command.handler);
+  assert.equal(alias.getArgumentCompletions, command.getArgumentCompletions);
   assert.deepEqual(command.getArgumentCompletions(""), [
     { value: "definitions", label: "definitions" },
     { value: "placement", label: "placement" },
     { value: "stop", label: "stop" },
   ]);
+  assert.deepEqual(
+    alias.getArgumentCompletions(""),
+    command.getArgumentCompletions(""),
+  );
   assert.deepEqual(command.getArgumentCompletions("placement "), [
     { value: "placement tab", label: "tab" },
     { value: "placement subtree", label: "subtree" },

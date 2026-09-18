@@ -162,7 +162,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   process.env.HERDR_PANE_ID = "lead-pane";
   const lead = fakePi();
   registerExtension!(lead.pi as never);
-  assert.deepEqual(lead.commands.sort(), ["agents", "chief"]);
+  assert.deepEqual(lead.commands.sort(), ["agents", "chief", "herdsman"]);
   assert.deepEqual(lead.tools.map((tool) => tool.name).sort(), [
     "agent",
     "chief",
@@ -245,7 +245,6 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   assert.ok(lead.tools.every((tool) => tool.executionMode === "sequential"));
   assert.equal(lead.commands.includes("subagents"), false);
-  assert.equal(lead.commands.includes("herdsman"), false);
   assert.equal(
     lead.tools.some((tool) =>
       ["subagent", "chief_of_staff", "herdsman"].includes(tool.name),
@@ -260,14 +259,20 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   delete process.env.HERDR_PANE_ID;
   const unmanaged = fakePi();
   registerExtension!(unmanaged.pi as never);
-  assert.deepEqual(unmanaged.commands, ["agents"]);
+  assert.deepEqual(unmanaged.commands, ["agents", "herdsman"]);
   assert.deepEqual(unmanaged.tools, []);
   assert.equal(unmanaged.events.size, 0);
   const notices: string[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
   context.ui.notify = (message: string) => notices.push(message);
-  await unmanaged.commandOptions.get("agents").handler("", context);
+  const agentsCommand = unmanaged.commandOptions.get("agents");
+  const herdsmanCommand = unmanaged.commandOptions.get("herdsman");
+  assert.ok(agentsCommand);
+  assert.ok(herdsmanCommand);
+  assert.equal(herdsmanCommand.description, "Alias for /agents");
+  assert.equal(herdsmanCommand.handler, agentsCommand.handler);
+  await herdsmanCommand.handler("", context);
   assert.equal(notices.length, 1);
   assert.match(notices[0]!, /inactive because .*not running inside Herdr/);
   assert.match(notices[0]!, /herdr\n  pi/);
