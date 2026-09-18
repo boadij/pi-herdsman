@@ -299,7 +299,11 @@ test("inspection reads raw bounded text and tolerates unavailable process eviden
           stderr: "",
         };
       if (args[0] === "agent" && args[1] === "read")
-        return { code: 0, stdout: text, stderr: "" };
+        return {
+          code: 0,
+          stdout: text,
+          stderr: "successful CLI diagnostic that is not terminal output",
+        };
       if (args[0] === "pane" && args[1] === "process-info")
         return { code: 1, stdout: "", stderr: "unavailable" };
       throw new Error(`unexpected command: ${args.join(" ")}`);
@@ -321,16 +325,72 @@ test("inspection reads raw bounded text and tolerates unavailable process eviden
     "pane",
     "--source",
     "recent-unwrapped",
-    "--lines",
-    "80",
     "--format",
     "text",
   ]);
-  assert.equal(calls[1].filter((arg) => arg === "--lines").length, 1);
+  assert.equal(calls[1].includes("--lines"), false);
   assert.equal(calls[1].includes("--raw"), false);
   assert.equal(
     calls.filter((args) => args[0] === "agent" && args[1] === "get").length,
     2,
+  );
+});
+
+test("inspection preserves structured Herdr read failures", async () => {
+  const message =
+    "cannot read while agent is working; wait and retry or use --source visible";
+  const stderr = JSON.stringify({
+    id: "cli:agent:read",
+    error: {
+      code: "agent_not_idle",
+      message,
+      padding: "x".repeat(9_000),
+    },
+  });
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      if (args[0] === "agent" && args[1] === "get")
+        return {
+          code: 0,
+          killed: false,
+          stdout: JSON.stringify({
+            id: 1,
+            result: {
+              agent: {
+                workspace_id: "workspace",
+                pane_id: "pane",
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: "session",
+                },
+              },
+            },
+          }),
+          stderr: "",
+        };
+      if (args[0] === "agent" && args[1] === "read")
+        return { code: 1, killed: false, stdout: "", stderr };
+      throw new Error(`unexpected command: ${args.join(" ")}`);
+    },
+  } as any;
+
+  await assert.rejects(
+    inspectHerdrAgent(pi, { cwd: "/tmp" } as any, {
+      workspaceId: "workspace",
+      paneId: "pane",
+      piSessionId: "session",
+    }),
+    (failure: any) => {
+      assert.equal(failure.detail.operation, "herdr agent read");
+      assert.equal(failure.detail.message, message);
+      assert.equal(failure.detail.details.herdrCode, "agent_not_idle");
+      assert.equal(failure.detail.details.exitCode, 1);
+      assert.equal(failure.detail.details.killed, false);
+      assert.ok(Buffer.byteLength(failure.detail.details.stderr) <= 8 * 1024);
+      return true;
+    },
   );
 });
 
@@ -519,7 +579,8 @@ test("inspection preserves bounded terminal output", async () => {
   assert.ok(Buffer.byteLength(snapshot.recentOutput) <= 16 * 1024);
   assert.equal(snapshot.recentOutputTruncated, true);
   assert.equal(snapshot.recentOutput?.includes("\uFFFD"), false);
-  assert.deepEqual(calls[1]?.slice(-4), ["--lines", "80", "--format", "text"]);
+  assert.equal(calls[1]?.includes("--lines"), false);
+  assert.deepEqual(calls[1]?.slice(-2), ["--format", "text"]);
   output = "x".repeat(16 * 1024);
   const exact = await inspectHerdrAgent(pi, { cwd: "/tmp" } as any, {
     workspaceId: "workspace",
@@ -679,6 +740,28 @@ test("runHerdr enforces stdout success envelopes and preserves diagnostics", asy
       { noResult: true },
     ),
     undefined,
+  );
+  await assert.rejects(
+    runHerdr(
+      {
+        exec: async () => ({
+          code: 0,
+          killed: true,
+          stdout: "",
+          stderr: "",
+        }),
+      } as any,
+      ctx,
+      ["pane", "run"],
+      { noResult: true },
+    ),
+    (failure: any) => {
+      assert.match(failure.message, /killed/i);
+      assert.equal(failure.detail.operation, "herdr pane run");
+      assert.equal(failure.detail.details.exitCode, 0);
+      assert.equal(failure.detail.details.killed, true);
+      return true;
+    },
   );
   assert.deepEqual(
     await runHerdr(

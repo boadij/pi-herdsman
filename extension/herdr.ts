@@ -1,6 +1,7 @@
 import {
   getAgentDir,
   SessionManager,
+  type ExecResult,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -190,9 +191,9 @@ export async function inspectHerdrAgent(
     (validate && !(await validate(before)))
   )
     throw new Error("Inspection target identity did not match");
-  // Pi's exec API exposes only signal, timeout, and cwd; it has no supported
-  // stdout/stderr max-buffer option. Keep the Herdr read at 80 lines and
-  // enforce the local 16 KiB byte bound after capture instead of inventing one.
+  // Keep inspection passive. Explicit --lines can make Herdr page an
+  // alternate-screen transcript and reject an active agent with agent_not_idle.
+  // Herdsman's local bound below still caps evidence at 80 lines / 16 KiB.
   const outputResult = await pi.exec(
     "herdr",
     [
@@ -201,15 +202,13 @@ export async function inspectHerdrAgent(
       target.paneId,
       "--source",
       "recent-unwrapped",
-      "--lines",
-      "80",
       "--format",
       "text",
     ],
     { cwd: ctx.cwd, signal, timeout: 30_000 },
   );
   if (outputResult.code !== 0 || outputResult.killed)
-    throw new Error("Inspection output could not be read");
+    throwHerdrFailure("herdr agent read", outputResult);
   let process: PaneProcess | undefined;
   try {
     process = await paneProcess(pi, ctx, target.paneId, signal);
@@ -230,11 +229,9 @@ export async function inspectHerdrAgent(
     (validate && !(await validate(after)))
   )
     throw new Error("Inspection target changed during capture");
-  const raw = [outputResult.stdout, outputResult.stderr]
-    .map((value) => String(value ?? ""))
-    .filter((value) => value.length > 0)
-    .join("\n");
-  const inspectionOutput = boundedInspectionOutput(raw);
+  const inspectionOutput = boundedInspectionOutput(
+    String(outputResult.stdout ?? ""),
+  );
   return Object.freeze({
     identity: Object.freeze({ ...target, agent: after }),
     capturedAt: Date.now(),
@@ -263,6 +260,38 @@ function structuredHerdrError(value: any): any | undefined {
   );
 }
 
+function throwHerdrFailure(operation: string, result: ExecResult): never {
+  const stdout = String(result.stdout ?? "");
+  const stderr = String(result.stderr ?? "");
+  const stdoutDiagnostic = boundedDiagnostic(stdout);
+  const stderrDiagnostic = boundedDiagnostic(stderr);
+  const value =
+    structuredHerdrError(parseJson(stdout)) ??
+    structuredHerdrError(parseJson(stderr));
+  const structuredMessage =
+    typeof value?.message === "string" ? boundedDiagnostic(value.message) : "";
+
+  error(
+    operation,
+    structuredMessage ||
+      stderrDiagnostic ||
+      stdoutDiagnostic ||
+      (result.killed ? "Herdr command was killed" : `exit ${result.code}`),
+    {
+      ...(value?.details && typeof value.details === "object"
+        ? value.details
+        : {}),
+      ...(typeof value?.code === "string" && value.code
+        ? { herdrCode: value.code }
+        : {}),
+      exitCode: result.code,
+      killed: result.killed === true,
+      ...(stdoutDiagnostic ? { stdout: stdoutDiagnostic } : {}),
+      ...(stderrDiagnostic ? { stderr: stderrDiagnostic } : {}),
+    },
+  );
+}
+
 export async function runHerdr(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -282,19 +311,7 @@ export async function runHerdr(
   const stderr = String(result.stderr ?? "");
   const stdoutJson = parseJson(stdout);
   const operation = `herdr ${args.slice(0, 2).join(" ") || "command"}`;
-  if (result.code !== 0) {
-    const stderrJson = parseJson(stderr);
-    const value =
-      structuredHerdrError(stdoutJson) ?? structuredHerdrError(stderrJson);
-    error(
-      operation,
-      value?.message ??
-        (boundedDiagnostic(stderr) ||
-          boundedDiagnostic(stdout) ||
-          `exit ${result.code}`),
-      value?.details,
-    );
-  }
+  if (result.code !== 0 || result.killed) throwHerdrFailure(operation, result);
   if (options.noResult) return undefined;
   if (stdoutJson === undefined) {
     const classification =
