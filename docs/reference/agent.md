@@ -114,9 +114,9 @@ correlated pending `ask_owner` may list `reply`; exact direct ownership may list
 controller operations, not controls on an already-live agent. An agent cannot
 receive a second assignment. Directly owned live agents may expose the
 applicable live controls, including `close`; directly owned live records expose
-`transcript` when persisted session evidence exists, and directly owned proven
-`lost` records expose `transcript` when persisted session evidence exists plus
-`close`. Unknown records and non-direct descendants expose
+`transcript` when their materialized persisted Pi session file exists, and
+directly owned proven `lost` records expose `transcript` when their materialized
+persisted Pi session file exists plus `close`. Unknown records and non-direct descendants expose
 no mutation actions. Every operation rechecks identity, ownership, mailbox
 state, and lifecycle immediately before mutation.
 The public record does not expose `steerable`.
@@ -168,8 +168,14 @@ textual tool results, and persisted compaction/branch summaries. It does not
 expose raw assistant reasoning, system messages, extension custom entries or
 messages, model/provider metadata, images, or live terminal/process state.
 
-Output is tail-bounded to 16 KiB; `transcript_truncated` reports whether
-earlier projected content was omitted. A finalized assistant tool call is
+Pi can assign a session ID and future session path before creating the JSONL
+file. During that brief interval `transcript` is not listed in
+`available_actions`; this is normal startup behavior. A materialized session
+file must be non-empty before `transcript` is advertised. Output is tail-bounded
+to 16 KiB. Individual textual tool results larger than 4 KiB preserve their
+beginning and end and replace their middle with an omission marker. The
+`transcript_truncated` field is true when an individual tool result or the final
+transcript was bounded. A finalized assistant tool call is
 persisted before the tool starts, so a currently executing tool may appear
 without a corresponding tool result. That absence does not itself prove that
 the tool is still running. `inspect` remains the live terminal/process
