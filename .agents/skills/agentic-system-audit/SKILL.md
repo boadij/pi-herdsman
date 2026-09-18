@@ -7,39 +7,23 @@ description: Audit an agentic software system end to end for contradictions, gap
 
 Audit the **whole agentic contract**, not isolated files.
 
-The goal is to find places where the system does not glue together cleanly:
-
-- two surfaces claim different things;
-- code permits something instructions forbid;
-- instructions require something runtime cannot do;
-- an agent has a capability it is not told about;
-- an agent is told it has a capability it cannot actually receive;
-- a result omits information required for the next correct action;
-- metadata means different things in different layers;
-- one rule has multiple competing owners;
-- the same instruction is repeated unnecessarily;
-- behavior changes across root/parent/child, definition/session/fork, UI/model, or success/failure paths without matching guidance;
-- documentation, tests, schemas, prompts, and implementation have drifted apart;
-- safety depends on convention where enforcement is required;
-- validation protects one path but an equivalent sibling path bypasses it;
-- obsolete compatibility, stale configuration, or dead abstractions remain;
-- model-visible text is unnecessarily verbose, ambiguous, or operationally incomplete.
+Find where code, prompts, tools, state, results, docs, tests, configuration, packaging, or runtime capabilities disagree or leave the next safe action ambiguous.
 
 Prefer deletion, consolidation, one canonical owner, and the smallest durable correction.
 
 This is a **read-only audit**. Do not modify the repository.
 
-## Operating model
+# Operating model
 
-Delegate the audit work. The orchestrator coordinates and returns the final result; it should not perform a competing independent repository review.
+Delegate the audit. The orchestrator coordinates and returns the result; it should not perform a competing repository review.
 
-Use the existing bundled roles:
+Use:
 
-- `reviewer`: lead auditor and final synthesis;
-- `scout`: fast local evidence gathering;
-- `researcher`: current upstream/API verification only when external truth materially affects a finding;
-- `implementer`: never during the audit itself;
-- `generalist`: only as fallback when a required read-only role is unavailable, and only if the generalist's effective tool policy is read-only.
+- `reviewer`: lead auditor, evidence reconciliation, synthesis;
+- `scout`: focused local evidence;
+- `researcher`: external/API verification when material conclusions depend on it;
+- `implementer`: never during the audit;
+- `generalist`: fallback only when the required role is unavailable and its effective policy is read-only.
 
 Start with:
 
@@ -47,879 +31,478 @@ Start with:
 { "action": "list" }
 ```
 
-Use the effective capabilities actually reported in the current context. Do not assume a role can delegate merely because its global definition normally can.
+Use effective capabilities from the current context. Do not assume definition-level delegation, tools, skills, or extensions survive overrides or depth.
 
 ## Preferred topology
 
-When a directly assigned `reviewer` can delegate, assign **one lead reviewer**.
-
-Require that reviewer to launch three scouts in parallel with the lenses below and to use `researcher` only for material external-contract questions.
-
 ```text
 orchestrator
-└── reviewer: lead audit + synthesis
-    ├── scout: runtime/contracts
-    ├── scout: instructions/capabilities
-    ├── scout: presentation/docs/tests
-    └── researcher: only if upstream truth is material
+└── reviewer
+    ├── scout A: runtime/contracts/reachability
+    ├── scout B: instructions/capabilities
+    ├── scout C: presentation/docs/tests/package glue
+    └── researcher: only when the research trigger is met
 ```
 
-This is the default because:
+Use one lead reviewer. Do not spawn a second generic reviewer by default.
 
-- reconnaissance happens in parallel;
-- lenses do not overlap materially;
-- one reviewer owns cross-surface reasoning;
-- the orchestrator receives one coherent result;
-- duplicate findings are removed before handoff.
+## Leaf fallback
 
-Do not spawn a second generic reviewer by default.
+If the lead reviewer cannot delegate:
 
-## Leaf-constrained fallback
+1. run the three scout lenses directly in parallel;
+2. run researcher only when triggered;
+3. pass exact scout/researcher `resultPath` values to one reviewer through `files`;
+4. have that reviewer verify, reconcile, prioritize, and synthesize.
 
-If the current execution context would make the lead reviewer a leaf that cannot delegate:
+The orchestrator must not redo the scouts' analysis.
 
-1. assign the three scout lenses directly in parallel;
-2. optionally assign one researcher for identified external-contract questions;
-3. wait for those results naturally;
-4. assign one reviewer with the exact scout/researcher `resultPath` values through `files`;
-5. ask that reviewer to verify, de-duplicate, prioritize, and synthesize.
+# Lead reviewer contract
 
-Do not have the orchestrator redo the scouts' analysis itself.
-
-## Lead-reviewer assignment
+The reviewer may not receive this skill directly, so its assignment must carry the rules required for a valid audit.
 
 Give the reviewer this objective:
 
-> Audit the repository as one agentic system. Delegate the three prescribed scout lenses in parallel. Use researcher only where current upstream/API behavior is necessary to establish whether a local assumption is correct. Independently verify every material conclusion before reporting it. Do not edit anything.
+> Audit the repository as one agentic system. Remain strictly read-only.
 >
-> Find contradictions, gaps, missing enforcement, misleading capability claims, instruction duplication, ambiguous identity/state/result semantics, context-dependent mismatches, stale docs/tests/configuration, safety holes, unnecessary architecture, token waste, and any other issue that could make an agent act incorrectly or make maintainers misunderstand the system.
+> Delegate three focused scouts:
 >
-> Compare behavior across root vs parent vs child, definition vs exact-session continuation vs fork, model-visible vs UI-visible output, success vs failure/recovery, configured vs effective capability, and static instruction vs dynamic result guidance.
+> - A: runtime producers, validation, state, identity, lifecycle, and production reachability;
+> - B: instruction ownership and effective capabilities;
+> - C: model/UI projections, docs, tests, and repository/package glue.
 >
-> Return one de-duplicated health report with exact evidence and the smallest durable fix for every material finding.
+> Use researcher when a candidate material finding or its impact depends on external API/runtime truth.
+>
+> Before reporting any P0-P2 finding:
+>
+> - identify the semantic source and relevant producers;
+> - prove the disputed state/value is reachable on a production path when behavior is at issue;
+> - trace it through every consumer boundary relevant to the claim;
+> - resolve material upstream/runtime assumptions for the repository's supported versions using primary evidence when available;
+> - verify that a claimed regression check would fail for the old behavior.
+>
+> Do not report representable-but-unreachable states as defects. Do not treat differently named fields as equivalent without tracing semantics. Do not leave an answerable material uncertainty as follow-up.
+>
+> If required evidence genuinely cannot be established, report a bounded `Unverified risk`, not a definitive finding.
+>
+> Compare root/parent/child, definition/session/fork, model/UI, success/failure/recovery, configured/effective capability, and static/dynamic guidance.
+>
+> Independently verify material conclusions and return one de-duplicated report using the required output contract with the smallest durable fix for each finding.
 
-Require the reviewer to pass any supplied canonical diff, repository snapshot, specification, or relevant source artifact to scouts instead of making each scout rediscover it independently.
+Pass supplied canonical diffs, snapshots, specs, or source artifacts to scouts instead of making them rediscover the same material.
 
----
+# Material finding closure
 
-# Scout lenses
+Scouts return **candidate evidence**. The reviewer closes candidates before severity is assigned.
 
-Each scout gets **one lens only**.
-
-Do not tell all scouts to "review everything."
-
-## Scout A: runtime contract and state machine
-
-Audit the executable control flow.
-
-Inspect the smallest set of files necessary to trace:
+Trace every boundary used by the claim. For result/state findings, prefer:
 
 ```text
-tool/schema input
-→ validation
-→ effective configuration
-→ execution
-→ durable state
-→ public state projection
-→ success/error result
-→ next legal action
+semantic source
+→ producer
+→ validation/normalization
+→ runtime/durable state
+→ structured/public projection
+→ model consumer
+→ human/API consumer
+→ docs/tests
 ```
 
-Check especially:
+Not every step applies to every finding.
 
-### Input contracts
+## Provenance
 
-Compare:
+Find where the disputed fact originates and how it changes.
 
-- tool parameter schema;
-- runtime validation;
-- mutually exclusive field combinations;
-- defaults;
-- normalization;
-- trust-boundary validation;
-- error messages.
+Do not infer semantic equivalence from similar field names. Trace producers and scope first.
 
-Find:
+## Reachability
 
-- schema permits what runtime rejects without useful guidance;
-- runtime accepts what schema/instructions omit;
-- equivalent actions validate differently without reason;
-- values are validated too late, after mutation;
-- one branch bypasses shared validation.
+Do not confuse **representability** with **reachability**.
 
-### Identity
+A type, schema, fixture, or doc proves a value can be described. A behavioral finding requires a production path that can actually produce the material state/value.
 
-Trace every identity independently:
+If the harmful state cannot occur on the claimed path, dismiss or narrow the candidate.
 
-- logical label;
-- agent definition;
-- Pi session ID/path;
-- owner session;
-- request ID;
-- ask ID;
-- run ID;
-- workspace;
-- tab;
-- pane;
-- internal Herdr alias.
+## Consumer contract
 
-Find:
+Establish what the actual consumer receives.
 
-- overloaded field names;
-- display identity stored where exact identity is expected;
-- model told to control with a non-control identity;
-- result/error loses the identity needed for the next action;
-- stale identity can bind to a replacement generation;
-- one path uses weaker proof than siblings.
+For model-visible claims, determine whether the model gets `content`, `details`, both, or another transformation.
 
-### State
+For human claims, distinguish compact TUI, expanded TUI, plain/RPC/JSON, and logs/files.
+
+Never assume renderer-visible metadata is model-visible.
+
+## External contract
+
+If a material conclusion depends on upstream behavior, resolve it for the repository's **supported version range**.
+
+Prefer:
+
+```text
+supported-version primary source/API/type contract
+→ supported-version official docs
+→ installed dependency source
+→ targeted runtime smoke only if still unresolved
+```
+
+Do not substitute latest behavior for the supported range. Do not require a smoke test when source plus local integration already establishes the behavior.
+
+## Test discrimination
+
+When claiming a test gap or proposing a regression:
+
+> Would this test fail for the old bug and pass for the corrected behavior?
+
+Do not count assertion volume as coverage.
+
+## Closure outcomes
+
+Every material candidate becomes exactly one of:
+
+- **Verified finding**: evidence establishes defect and consequence.
+- **Dismissed/narrowed**: intentional, unreachable, semantically different, or immaterial.
+- **`Unverified risk`**: evidence genuinely cannot be established with available read-only capabilities.
+
+An `Unverified risk` must state known evidence, missing evidence, version/runtime scope, why it matters, and one exact resolver.
+
+Do not use it for an answerable question that was not investigated.
+
+# Scout A: runtime contracts and reachability
+
+Own:
+
+> Can this state/value actually happen, where is it produced, and what runtime contract governs it?
 
 Trace:
 
 ```text
-working
-blocked
-settling
-unknown
+schema/input
+→ validation
+→ effective configuration
+→ execution
+→ runtime/durable state
+→ public result
+→ next legal action
 ```
 
-plus independent flags such as `steerable`, inactivity/staleness, pending result, pending ask, child gating, launch/cleanup convergence.
-
 Check:
 
-- state meaning differs between API, UI, prompt, docs, and enforcement;
-- next-action guidance disagrees with actual eligibility;
-- state collapses two materially different situations the agent must distinguish;
-- runtime supports a transition that no instruction explains;
-- instruction suggests a transition runtime cannot accept.
+- schema vs runtime acceptance/rejection;
+- defaults, normalization, mutually exclusive fields;
+- validation before mutation;
+- sibling-path validation consistency;
+- logical label, definition, Pi session, owner, request, ask, run, workspace, tab, pane, Herdr identity;
+- stale/replacement identity binding;
+- public state vs actual action eligibility;
+- `working`, `blocked`, `settling`, `unknown`, steerability, staleness, pending ask/result, child gating, cleanup convergence;
+- fresh delegation, continuation, fork, replacement, completion, parent-child completion, ask/reply, close, rollback, restart/recovery;
+- source identity, request correlation, result paths, truncation, cleanup warnings, primary/cleanup errors, rollback/retry state.
 
-### Lifecycle
+Return exact production paths, reachability evidence, and candidate mismatches. Do not decide architecture from local evidence alone.
 
-Compare:
+# Scout B: instruction and capability stack
 
-- fresh start;
-- definition delegation;
-- exact-session continuation;
-- fork;
-- replacement;
-- completion;
-- parent-child completion;
-- owner question;
-- close;
-- rollback;
-- restart/recovery.
+Own:
 
-Look for asymmetric behavior that is intentional in code but invisible in guidance.
+> Who owns this rule, and is it truthful for the effective execution context?
 
-### Results
-
-Trace successful and failed outputs all the way to the owning model.
-
-Check:
-
-- structured `details` versus model-visible `content`;
-- source agent identity;
-- request correlation;
-- result paths;
-- truncation/overflow;
-- cleanup warnings;
-- failure evidence;
-- whether the recipient can unambiguously decide what to do next.
-
-Return only material findings and verified invariants.
-
----
-
-## Scout B: instruction and capability stack
-
-Audit what every agent is told versus what every agent can actually do.
-
-Map all instruction layers:
+Map:
 
 ```text
 system/base prompt
 tool description
-controller-scope prompt/description
-shared managed-agent prompt
-agent-definition body
-body @file content
+controller scope
+shared agent prompt
+role body
+body @file
 skills
-dynamic tool-result guidance
-error guidance
-human documentation
+dynamic success/error guidance
+human docs
 ```
 
-For each rule, identify its intended **single owner**.
-
-Flag any rule with:
-
-- zero owners: instruction gap;
-- multiple authoritative owners: redundancy/drift risk;
-- conflicting owners: contradiction;
-- wrong owner: behavior depends on context the instruction layer cannot know.
-
-### Capability truth
-
-Compare:
-
-```text
-definition fields
-→ override composition
-→ effective tools/skills/extensions/context
-→ inferred infrastructure
-→ launch arguments
-→ actual runtime role/depth
-→ model instructions
-```
-
-Look for:
-
-- **ghost capability**: prompt says the agent can do something unavailable at runtime;
-- **hidden capability**: runtime exposes a required tool but the agent is never told when/how to use it;
-- **context-dependent capability mismatch**: valid as root child but invalid as nested leaf;
-- definition metadata that advertises capabilities removed at launch;
-- infrastructure tools accidentally removable by normal policy;
-- user-customizable policy accidentally treated as mandatory infrastructure.
-
-### Instruction conflicts
-
-Search for contradictions such as:
-
-```text
-"wait"
-vs
-"never poll"
-
-"report blocked"
-vs
-"reply when blocked on owner"
-
-"delegate when..."
-vs
-this execution context cannot delegate
-
-"read-only"
-vs
-available or instructed mutation path
-
-"replace"
-vs
-"append"
-
-"exact label"
-vs
-display/composite identity
-```
-
-### Redundancy
-
-Find repeated rules across:
-
-- tool description;
-- shared prompt;
-- role body;
-- skill;
-- dynamic success result;
-- dynamic error result.
-
-A rule should normally live in exactly one of:
-
-```text
-static invariant
-dynamic next-action guidance
-role-specific behavior
-advanced optional strategy
-```
-
-Flag repeated prose that adds no new information.
-
-### Prompt authority
-
-Check whether role prompts contain global orchestration policy that should belong to the controller/tool layer.
-
-Check whether shared prompts contain API mechanics better owned by the tool description.
-
-Check whether optional skills reteach mandatory API rules rather than adding advanced strategy.
-
-### Impossible or underspecified instructions
-
-Find instructions that:
-
-- require unavailable tools;
-- assume internet access that is not guaranteed;
-- require waiting but do not explain how;
-- require owner approval without an escalation mechanism;
-- say "use X when relevant" but never define relevance;
-- tell the agent to preserve scope without identifying the authority for scope;
-- tell a child to coordinate descendants it can never have.
-
-Return exact conflicting statements and their runtime evidence.
-
----
-
-## Scout C: presentation, documentation, tests, and repository glue
-
-Audit everything that communicates the system outside the core execution branch.
-
-### Model-visible presentation
-
-Inspect:
-
-- `list`;
-- assignment acknowledgement;
-- steer acknowledgement;
-- reply acknowledgement;
-- close result;
-- completion delivery;
-- errors;
-- result truncation.
-
-Ask:
-
-> Does this result contain exactly the information the agent needs for its next legal decision?
+For each normative rule, find its intended single owner.
 
 Flag:
 
-- important data only in UI/details but invisible to the LLM;
-- raw metadata with no action value;
-- ambiguous terminology;
-- repeated IDs with unclear meaning;
-- missing source identity;
-- static policy repeated on every result;
-- dynamic next-action advice missing when it is most useful.
+- zero owner: instruction gap;
+- multiple authoritative owners: `DUPLICATE_AUTHORITY`;
+- conflicting owners: `CONTRADICTION`;
+- wrong owner: `AUTHORITY_LEAK`.
 
-### Human presentation
-
-Inspect:
-
-- status widget;
-- `/agents definitions`;
-- completion renderer;
-- warnings;
-- compact versus expanded views.
-
-Find:
-
-- machine envelope leaking into human preview;
-- same datum shown twice;
-- human display string reused as machine identity;
-- UI claims stronger truth than runtime owns;
-- important failures silently hidden.
-
-### Documentation
-
-Compare canonical docs against code and tests.
-
-Find:
-
-- shipped behavior undocumented;
-- unshipped behavior documented as available;
-- duplicate canonical owners;
-- old filenames/concepts still packaged or referenced;
-- docs explain implementation detail instead of public invariant;
-- examples that runtime rejects;
-- terminology differs from tool/runtime terminology.
-
-### Tests
-
-Do not count tests. Evaluate contract coverage.
-
-Find:
-
-- high-value public behavior with no discriminating regression;
-- tests that would pass for both correct and incorrect behavior;
-- tests assert internal formatting but not user/model semantics;
-- sibling control paths lack the same invariant check;
-- mocked tests cannot detect the integration failure they claim to cover;
-- documented behavior has no test;
-- test fixtures accidentally encode stale architecture.
-
-### Repository/package glue
-
-Check:
-
-- package `files`;
-- skill/package discovery;
-- README links;
-- AGENTS/maintainer instructions;
-- validation scripts;
-- stale compatibility;
-- dead configuration;
-- deleted features still named in package/docs/tests;
-- source files intentionally excluded from formatting/testing without clear reason.
-
-Return material drift and cleanup opportunities.
-
----
-
-# Optional researcher lens
-
-Use `researcher` only for a **specific external assumption** whose truth matters. For a material P0-P2 finding whose resolution depends on authoritative upstream/API behavior, run the researcher assignment in parallel with the required local scout and reconciliation workflow below; do not defer an answerable question to optional follow-up.
-
-Good research questions:
-
-- Does current Pi expose this hook on synthetic/custom-message turns?
-- Does current Pi send custom-message `details` into model context?
-- What exact precedence does Pi apply to `--tools`, `--no-tools`, and `--exclude-tools`?
-- Does current Herdr return this identity/state field?
-- Is a documented upstream behavior still true in the supported version range?
-
-Bad research assignment:
-
-> Research Pi and Herdr generally.
-
-Require:
-
-- current official or primary sources;
-- exact version/date relevance;
-- direct answer;
-- only evidence material to the local finding.
-
-External research must verify local assumptions, not broaden the audit into product research.
-
-# Material uncertainty resolution
-
-Whenever a material P0-P2 finding depends on an external or unverified runtime assumption, the lead reviewer must actively resolve it while keeping the audit read-only:
-
-1. Assign one narrowly scoped local `scout` to trace the repository's actual path, installed dependency/source if available, launch arguments, and discriminating tests.
-2. When authoritative upstream/API behavior is material, assign one narrowly scoped `researcher` in parallel, limited to the supported version range and primary sources.
-3. Have the lead reviewer reconcile the local scout result and, when assigned, the researcher result; classify the outcome as verified runtime behavior, documentation/contract mismatch, test gap, or a bounded `Unverified risk` only when the evidence cannot establish it.
-4. Where relevant, distinguish restored history/identity from current runtime configuration, and source-level evidence from a real-process integration guarantee.
-5. Include exact evidence, version scope, remaining limitation, and the one targeted smoke test or upstream question needed if it genuinely cannot be resolved.
-
-Do not leave an answerable question as a generic optional follow-up. These assignments and the reconciliation remain read-only.
-
----
-
-# Cross-surface contract matrix
-
-The lead reviewer must explicitly compare these chains.
-
-## 1. Input contract
-
-```text
-tool schema
-↔ tool description
-↔ runtime validation
-↔ errors
-↔ docs
-↔ tests
-```
-
-## 2. Capability contract
+Compare:
 
 ```text
 definition
-↔ override
-↔ effective configuration
-↔ launch arguments
-↔ actual role/depth
-↔ prompt/tool availability
-↔ presentation
+→ override composition
+→ effective tools/skills/extensions/context
+→ launch args
+→ actual role/depth
+→ model instructions
+→ presentation
 ```
 
-## 3. Instruction contract
+Find:
+
+- `GHOST_CAPABILITY`;
+- `HIDDEN_CAPABILITY`;
+- root/parent/leaf capability mismatches;
+- metadata advertising removed capabilities;
+- infrastructure accidentally removable by normal policy;
+- user-configurable policy treated as mandatory infrastructure;
+- impossible or underspecified instructions;
+- global policy embedded in role prompts;
+- API mechanics redundantly taught by prompts/skills.
+
+Return exact instruction text, owner, effective runtime evidence, and candidate conflicts.
+
+# Scout C: presentation, docs, tests, and repository glue
+
+Own:
+
+> Where does runtime truth go, what does each consumer actually see, and do docs/tests describe that contract?
+
+## Model-visible presentation
+
+Inspect list, assignment/steer/reply/close acknowledgements, completion delivery, errors, and truncation.
+
+Ask:
+
+> Using only what the model actually receives, can it identify the source, understand the state, and choose the next legal action?
+
+Flag missing correlation, hidden material details, ambiguous terminology, duplicated IDs, static policy repeated on every result, or missing dynamic next-action evidence.
+
+For opacity candidates, trace projection semantics, not just field names.
+
+## Human presentation
+
+Compare status widget, definitions view, completion renderer, warnings, compact/expanded views, and any plain/API surface.
+
+Find hidden failures, duplicated data, display identity reused as machine identity, or UI claims stronger than runtime evidence.
+
+## Documentation
+
+Find shipped-but-undocumented behavior, documented-but-unshipped behavior, duplicate canonical owners, stale terminology, rejected examples, and implementation details presented as public contracts.
+
+## Tests
+
+Find public contracts without discriminating regressions, tests that pass for correct and broken behavior, mocks that cannot detect claimed integration failures, missing sibling invariants, and stale fixtures.
+
+## Repository/package glue
+
+Check package files, discovery, README links, AGENTS/maintainer guidance, validation scripts, dead compatibility/configuration, and removed concepts that still ship or remain referenced.
+
+Return projection chains, consumer visibility, docs/tests evidence, and candidate mismatches.
+
+# Research trigger
+
+Research is conditional. Once triggered, verification is required when capability exists.
+
+Trigger researcher when:
 
 ```text
-controller contract
-↔ shared agent contract
-↔ role body
-↔ skills
-↔ dynamic results
+a candidate likely to affect a P0-P2 finding, verdict, or remediation
+depends on external API/runtime behavior
 ```
 
-## 4. Identity contract
+Research input should contain only:
 
 ```text
-label
-↔ definition
-↔ session
-↔ request
-↔ owner
-↔ Herdr identity
-↔ result/error/UI fields
+exact disputed assumption
+supported version range
+preferred primary source/repository
+required direct answer
 ```
 
-## 5. State contract
+Require primary/official evidence, exact version relevance, and only material findings.
+
+If web capability is unavailable:
+
+1. inspect installed/local upstream source;
+2. inspect pinned/supported dependency source where reachable;
+3. use other authoritative read-only evidence;
+4. otherwise return `Unverified risk`.
+
+Do not add dependencies or require optional web tooling to run the audit.
+
+# Cross-surface contract matrix
+
+Cover each applicable chain.
+
+## Input
 
 ```text
-Herdr/Pi/mailbox evidence
-↔ public state
-↔ steerable
-↔ tool eligibility
-↔ displayed state
-↔ next-action guidance
+schema ↔ description ↔ validation ↔ errors ↔ docs ↔ tests
 ```
 
-## 6. Completion contract
+## Capability
 
 ```text
-agent completion
-↔ durable result
-↔ result file
-↔ owner custom message
-↔ LLM-visible content
-↔ human rendering
-↔ cleanup convergence
+definition ↔ override ↔ effective config ↔ launch ↔ role/depth ↔ tools/prompts ↔ presentation
 ```
 
-## 7. Configuration contract
+## Instruction
 
 ```text
-source syntax
-↔ parsing
-↔ merge
-↔ validation
-↔ effective metadata
-↔ runtime
-↔ persistence/editing UI
-↔ documentation
+controller ↔ shared prompt ↔ role body ↔ skills ↔ dynamic results
 ```
 
-## 8. Recovery contract
+## Identity
 
 ```text
-failure
-↔ retained evidence
-↔ rollback ownership
-↔ structured error
-↔ model guidance
-↔ human guidance
-↔ safe retry boundary
+label ↔ definition ↔ session ↔ request ↔ owner ↔ Herdr identity ↔ result/error/UI
 ```
 
-## 9. Distribution contract
+## State
 
 ```text
-repository
-↔ package manifest
-↔ installed files
-↔ discovered extension/skill/docs
-↔ maintainer instructions
+runtime evidence ↔ public state ↔ steerability ↔ eligibility ↔ displayed state ↔ next action
 ```
 
-A finding that appears only within one file is usually less important than a mismatch across one of these chains.
+## Completion
 
----
+```text
+completion ↔ durable result ↔ result file ↔ owner message ↔ model content ↔ human rendering ↔ cleanup
+```
 
-# Mandatory context comparisons
+## Configuration
 
-Many agentic bugs exist only at boundaries. Check these explicitly.
+```text
+syntax ↔ parsing ↔ merge ↔ validation ↔ effective metadata ↔ runtime ↔ persistence/UI ↔ docs
+```
+
+## Recovery
+
+```text
+failure ↔ retained evidence ↔ rollback ownership ↔ structured error ↔ model/human guidance ↔ retry boundary
+```
+
+## Distribution
+
+```text
+repository ↔ package manifest ↔ installed files ↔ discovery ↔ maintainer guidance
+```
+
+# Mandatory boundary comparisons
+
+Check where applicable:
 
 ## Controller depth
 
-Compare:
-
 ```text
-root
-direct agent / parent
-nested child / leaf
-unmanaged session
+root | direct agent/parent | nested child/leaf | unmanaged session
 ```
-
-Ask whether the same definition, prompt, tool list, metadata, and instructions remain truthful in each context.
 
 ## Agent generation
 
-Compare:
-
 ```text
-fresh
-exact-session continuation
-fork
+fresh | exact-session continuation | fork
 ```
-
-Ask what is re-resolved for each new agent generation and what historical Pi
-session context remains stable.
 
 ## Visibility
 
-Compare:
-
 ```text
-LLM-visible content
-structured details
-TUI rendering
-plain/RPC/JSON mode
-logs/files
+model content | structured details | compact TUI | expanded TUI | plain/RPC/JSON | logs/files
 ```
-
-Never assume metadata visible to a renderer is visible to the model.
 
 ## Outcome
 
-Compare:
-
 ```text
-success
-blocked
-failure
-rollback failure
-close
-cleanup pending
-overflow/truncation
-restart recovery
+success | blocked | failure | rollback failure | close | cleanup pending | overflow | restart recovery
 ```
 
-## Configuration state
-
-Compare:
+## Configuration
 
 ```text
-bundled only
-matching partial override
-standalone global definition
-empty override fields
-explicit false
-explicit []
-invalid definition
+bundled | partial override | standalone global | empty fields | false | [] | invalid
 ```
-
----
 
 # Defect taxonomy
 
-Use these labels consistently.
+Use consistently:
 
-## `CONTRADICTION`
+- `CONTRADICTION`: authoritative surfaces prescribe incompatible behavior.
+- `GAP`: required knowledge/behavior has no appropriate owner or result.
+- `GHOST_CAPABILITY`: instructions/metadata claim unavailable capability.
+- `HIDDEN_CAPABILITY`: required capability exists without enough safe guidance.
+- `DUPLICATE_AUTHORITY`: one normative rule has multiple authoritative owners.
+- `AUTHORITY_LEAK`: policy is owned by a layer that should not control it.
+- `CONTEXT_MISMATCH`: rule is correct in one context and wrong in another.
+- `IDENTITY_AMBIGUITY`: identity loses exact or single semantic meaning.
+- `STATE_AMBIGUITY`: displayed/instructed state does not map cleanly to legal actions.
+- `RESULT_OPACITY`: receiver lacks material source, state, correlation, outcome, or next-action evidence.
+- `FAIL_OPEN`: missing/ambiguous evidence causes unsafe continuation.
+- `DRIFT`: code, tests, docs, metadata, examples, or prompts describe different generations.
+- `TEST_BLIND_SPOT`: material public contract lacks a discriminating regression.
+- `TOKEN_WASTE`: repeated model context adds no decision value.
+- `DEAD_COMPLEXITY`: compatibility/abstraction/state/configuration has no justified current use.
+- `UX_AMBIGUITY`: human presentation obscures correct system behavior.
 
-Two authoritative surfaces prescribe incompatible behavior.
-
-Example:
-
-```text
-role prompt: delegate to scout
-runtime context: this agent is a leaf and cannot receive agent assignments
-```
-
-## `GAP`
-
-The system requires knowledge or behavior that no appropriate instruction/result supplies.
-
-Example:
-
-```text
-completion delivered without identifying which parallel agent produced it
-```
-
-## `GHOST_CAPABILITY`
-
-Instructions or metadata claim a capability unavailable in the real execution context.
-
-## `HIDDEN_CAPABILITY`
-
-A required runtime capability exists but the agent lacks enough guidance to use it safely.
-
-## `DUPLICATE_AUTHORITY`
-
-The same normative rule is owned by multiple instruction layers.
-
-## `AUTHORITY_LEAK`
-
-A lower-level role/prompt owns policy that should be controlled by a higher-level orchestration or safety boundary.
-
-## `CONTEXT_MISMATCH`
-
-A rule is correct in one lifecycle/depth/visibility mode but incorrectly reused in another.
-
-## `IDENTITY_AMBIGUITY`
-
-A field, label, or display string has more than one semantic meaning or loses exact correlation.
-
-## `STATE_AMBIGUITY`
-
-Displayed or instructed state does not map cleanly to legal next actions.
-
-## `RESULT_OPACITY`
-
-The receiver lacks source, outcome, correlation, or next-action evidence.
-
-## `FAIL_OPEN`
-
-Missing/ambiguous evidence causes the system to proceed when it should reject or preserve state.
-
-## `DRIFT`
-
-Code, tests, docs, package metadata, examples, or prompts describe different generations of the system.
-
-## `TEST_BLIND_SPOT`
-
-A material public contract lacks a discriminating regression.
-
-## `TOKEN_WASTE`
-
-Static instructions/results repeatedly spend model context without changing behavior or improving the next decision.
-
-## `DEAD_COMPLEXITY`
-
-Compatibility, abstraction, state, configuration, or code has no current justified owner/use.
-
-## `UX_AMBIGUITY`
-
-Human presentation makes the system harder to understand even when runtime behavior is correct.
-
-Create another label only when none of these accurately describes the issue.
-
----
+Create another label only when none fits.
 
 # Severity
 
-Use four levels.
-
-## P0
-
-Can produce unsafe/destructive behavior, wrong-target control, security/trust-boundary violation, data loss, or corrupt durable state.
-
-## P1
-
-Can materially cause an agent to take the wrong action, become stuck, mis-handle delegation/lifecycle, or misunderstand an authoritative result.
-
-## P2
-
-Produces meaningful confusion, drift risk, redundant authority, weak diagnostics, avoidable context cost, or recurring maintainer mistakes.
-
-## P3
-
-Small cleanup, naming, presentation, or maintainability issue with little immediate behavioral risk.
+- **P0**: unsafe/destructive behavior, wrong-target control, trust-boundary violation, data loss, or durable corruption.
+- **P1**: materially wrong action, stuck lifecycle, broken delegation/control, or misunderstanding of an authoritative result.
+- **P2**: meaningful confusion, drift risk, redundant authority, weak diagnostics, avoidable context cost, or recurring maintainer mistakes.
+- **P3**: small cleanup, naming, presentation, or maintainability issue with little behavioral risk.
 
 Do not inflate severity because a finding is interesting.
 
----
-
 # Evidence standard
 
-Every material finding needs at least two sides when it is a cross-surface mismatch.
-
-Use:
+A material cross-surface finding needs:
 
 ```text
-Finding
-  A: exact claim/behavior + source location
-  B: conflicting/missing claim/behavior + source location
-  Runtime consequence
-  Minimal correction
+A: semantic behavior/claim + exact source
+B: conflicting/missing behavior/claim + exact source
+Connection: why A and B are the same contract crossing a boundary
+Reachability: production path when behavior is at issue
+Consequence: what can actually go wrong
+Minimal correction: narrowest root owner
 ```
 
-Do not report speculative architectural preferences as defects.
+A scout's conclusion is evidence, not authority.
 
-If evidence remains incomplete after the material uncertainty resolution workflow:
+The lead reviewer independently verifies every P0/P1, every P2 affecting architecture/verdict/external assumptions, and any disputed conclusion.
 
-```text
-Unverified risk
-```
-
-and say exactly what evidence, version scope, limitation, and targeted smoke test or upstream question would establish or dismiss it. Do not use this label for an answerable question that was not investigated.
-
-A scout's conclusion is evidence, not authority. The lead reviewer independently verifies every P0/P1 and any P2 that drives architectural change.
-
----
+Do not report architectural preference as a defect.
 
 # Audit heuristics
 
-Actively search for these patterns.
+Use these to find candidates. They do not replace closure.
 
-## "Who owns this sentence?"
-
-For every normative instruction, ask:
-
-> If this wording changes, what is the one file/layer that should change?
-
-If the answer is multiple files, there is likely duplicate authority.
-
-## "Can the recipient act on this?"
-
-For every tool result/error/message, ask:
-
-> After reading only the model-visible form of this result, can the receiving agent identify the source, understand the state, and choose the next legal action?
-
-If not, there is a result gap.
-
-## "Can the agent actually do what it is told?"
-
-For every role instruction, compare against effective runtime capabilities in every possible depth.
-
-## "Does runtime enforce the important part?"
-
-Safety, ownership, identity, validation, and data-loss boundaries must not depend only on prompts.
-
-## "Does code know something the model does not?"
-
-Look especially at:
-
-- `details`;
-- hidden metadata;
-- UI-only fields;
-- internal IDs;
-- cleanup evidence;
-- capability inference;
-- state subconditions.
-
-## "Does the model know something code does not enforce?"
-
-Look for instructions such as:
-
-```text
-only once
-never overlap
-must wait
-exact owner
-read-only
-do not broaden scope
-```
-
-Determine which are strategic conventions and which require enforcement.
-
-## "What changes at session continuation?"
-
-Anything resolved at generation time but described as if dynamically refreshed is suspect.
-
-## "What changes at root/child depth?"
-
-Anything defined globally but projected differently by controller depth is suspect.
-
-## "What was deleted but still has a shadow?"
-
-Search docs, tests, package files, comments, compatibility branches, field names, and examples for removed concepts.
-
-## "Is this test capable of failing for the old bug?"
-
-Prefer discriminating regressions over assertion volume.
-
-## "Is the same fact sent twice?"
-
-Check model messages and human rendering for:
-
-- result path;
-- agent identity;
-- model;
-- state;
-- warnings;
-- next-action text.
-
----
+- **Who owns this sentence?** One normative rule should normally have one authoritative owner.
+- **Can the recipient act on this?** Check only what that consumer actually receives.
+- **Can the agent do what it is told?** Compare prompts to effective capability at every depth.
+- **Does runtime enforce the important part?** Safety, ownership, identity, validation, and data-loss boundaries should not rely only on prompts.
+- **Does code know something the model does not?** Inspect `details`, hidden metadata, cleanup evidence, capability inference, state subconditions, correlation IDs.
+- **Does the model know something code does not enforce?** Separate strategy from invariants such as exact ownership, read-only, no overlap, or one-shot rules.
+- **What changes at continuation?** Generation-time facts described as dynamically refreshed are suspect.
+- **What changes at root/child depth?** Global policy projected differently by depth is suspect.
+- **What was deleted but still has a shadow?** Search docs, tests, package files, comments, compatibility branches, fields, examples.
+- **Would this test fail for the old bug?** Prefer one discriminating regression over many weak assertions.
+- **Is the same fact sent twice?** Check model/human identity, paths, model, state, warnings, next-action text.
+- **Is this field mismatch semantic drift?** Find all producers, scope, reachability, and consumers first.
 
 # Efficiency rules
 
-Do not turn this into a repository-wide file-reading contest.
-
 1. Start from entry points and contract surfaces.
-2. Trace callers before declaring a local bug.
-3. Have scouts use search/grep to map ownership before opening large files.
-4. Each scout stays within its assigned lens.
-5. Researcher receives specific questions only.
-6. Reviewer verifies material scout findings, not every line scouts inspected.
-7. Do not spawn another agent merely to confirm `No findings.`
-8. Use a targeted second reviewer only for an uncertain P0/P1 or a disputed architectural conclusion.
-9. Do not assign an implementer during diagnosis.
-10. Stop when the contract matrix is covered and new searches produce no materially new issue class.
+2. Search ownership before opening large files.
+3. Trace callers and producers before declaring a bug.
+4. Keep scouts inside their lenses.
+5. Pass canonical artifacts instead of rediscovering them.
+6. Research only external assumptions that can change a material conclusion.
+7. Reviewer verifies candidate findings, not every inspected line.
+8. Do not spawn agents merely to confirm `No findings.`
+9. Use a second reviewer only for an uncertain P0/P1 or disputed architecture.
+10. Never assign an implementer during diagnosis.
+11. Stop when the contract matrix is covered and new searches produce no materially new issue class.
 
-The objective is maximum useful insight per agent, not maximum agent count.
+Optimize for useful evidence per agent, not agent count.
 
----
-
-# Lead-reviewer output
-
-Return one report in this order.
+# Required output
 
 ## 1. Verdict
 
@@ -931,24 +514,22 @@ PASS WITH FINDINGS
 FAIL
 ```
 
-`PASS` means no material P0-P2 findings after the required surfaces were covered.
+`PASS` means no material P0-P2 findings after required surfaces were covered and material candidates were closed.
 
 ## 2. Executive summary
 
-At most five bullets covering the highest-impact system-health conclusions.
+At most five bullets.
 
 ## 3. Findings
 
 Order by severity, then confidence.
 
-Format:
-
 ```text
-[P1][CONTEXT_MISMATCH] Nested reviewer is instructed to delegate but launches as a leaf
+[P1][CONTEXT_MISMATCH] Short title
 
 Evidence:
-- extension/agent-definitions/reviewer.md: ...
-- extension/index.ts: ...
+- path:line ...
+- path:line ...
 
 Why it matters:
 ...
@@ -959,13 +540,11 @@ Minimal durable fix:
 Confidence: high
 ```
 
-For contradictions, quote or precisely paraphrase both competing contracts.
-
 Do not bury findings in prose.
 
 ## 4. Instruction ownership map
 
-Summarize the desired/current ownership of:
+Summarize meaningful ownership gaps/collisions across:
 
 ```text
 tool schema
@@ -979,20 +558,9 @@ dynamic error guidance
 human docs
 ```
 
-Flag only ownership collisions that remain after de-duplication.
-
 ## 5. Contract coverage
 
-Mark each as:
-
-```text
-verified
-finding
-not applicable
-not verified
-```
-
-for:
+For:
 
 ```text
 input
@@ -1006,15 +574,23 @@ recovery
 distribution
 ```
 
-Do not claim whole-system PASS with an unexplained `not verified`.
+report:
 
-## 6. Healthy invariants
+```text
+status: verified | finding | not applicable | not verified
+scope: what was actually traced
+```
 
-List only important invariants that were explicitly checked and found coherent.
+Example:
 
-This prevents future reviewers from reopening already-verified architecture without evidence.
+```text
+recovery | verified | startup rollback, retained cleanup evidence, retry markers
+completion | finding | compact cleanup-warning projection
+```
 
-## 7. Remediation order
+`verified` applies only to the stated scope. Do not claim whole-system PASS with unexplained `not verified`.
+
+## 6. Remediation order
 
 Give the shortest dependency-aware sequence.
 
@@ -1022,46 +598,45 @@ Prefer:
 
 ```text
 fix root contract once
-→ delete duplicate instructions
-→ update focused tests
+→ delete duplicate authority
+→ add/update one discriminating regression
 → update canonical docs
 ```
 
-over one patch per symptom.
+## 7. Unverified risks
 
-Call out deletions and consolidations explicitly.
+Include only genuinely unresolved material claims after the closure workflow. State known evidence, missing evidence, version/runtime scope, consequence, and exact resolver.
 
-## 8. Optional follow-up
+Omit when empty.
 
-Only include:
+## 8. Non-blocking follow-up
 
-- a targeted runtime smoke that would materially increase confidence when the required workflow could not establish or dismiss the assumption;
-- a specific upstream question still unresolved when the required workflow could not establish or dismiss it;
-- a separate implementation task justified by the findings.
+Include only useful work not required to validate a material finding, such as a separate implementation task or non-material integration smoke.
 
-Do not append generic "more testing" advice or use optional follow-up for an answerable material uncertainty.
+Never put answerable material uncertainty here.
 
----
+Omit when empty.
 
 # Orchestrator finalization
 
-The orchestrator should normally return the lead reviewer's synthesized report rather than writing a second competing review.
+Normally return the lead reviewer's report instead of writing a second review.
 
-Before returning, check only:
+Before returning, verify:
 
-- Did the audit cover all required contract chains?
-- Are P0/P1 findings backed by exact evidence?
-- Are duplicate scout findings consolidated?
-- Does every proposed fix identify the correct root owner rather than a symptom?
-- Did every material P0-P2 external or runtime uncertainty go through the required local/upstream verification and lead reconciliation?
-- Are only bounded unresolved claims labeled `Unverified risk`, with exact evidence and limitations?
-- Is implementation work clearly separated from diagnosis?
+- every required contract chain has scoped coverage;
+- P0/P1 findings have exact evidence;
+- material P2 findings have closed evidence;
+- result/state findings trace producer, reachability, and consumer semantics;
+- material external assumptions were resolved for supported versions when possible;
+- duplicate scout candidates were consolidated;
+- fixes target root owners, not symptoms;
+- only genuinely unresolved claims are `Unverified risk`;
+- no answerable material question was deferred to follow-up;
+- implementation remains separate from diagnosis.
 
-If a material P0-P2 finding remains uncertain after the required workflow, report it only as a bounded `Unverified risk` with the evidence, version scope, limitation, and targeted smoke test or upstream question that would resolve it. Do not leave an answerable question unresolved or in optional follow-up.
+If a check fails, return the report to the reviewer for reconciliation.
 
 Otherwise stop.
-
----
 
 # After the audit
 
@@ -1069,37 +644,32 @@ Do not automatically fix findings.
 
 If implementation is requested later:
 
-1. use the audit report as the canonical scope artifact;
+1. use the audit report as canonical scope;
 2. assign the smallest capable `implementer`;
-3. keep unrelated cleanup out unless the audit proved it simplifies the same root cause;
-4. after implementation, assign one independent `reviewer` against the audit findings and final diff;
-5. run focused and full validation appropriate to the repository.
-
-The audit itself remains read-only.
-
----
+3. keep unrelated cleanup out unless it simplifies the same proven root cause;
+4. independently review the final diff against the audit findings;
+5. run focused and repository validation appropriate to the change.
 
 # Success criteria
 
-A successful audit should make it possible to answer all of these without ambiguity:
+A successful audit can answer without material guessing:
 
 ```text
-What is every agent allowed to do?
-What is every agent told to do?
-Which layer owns each instruction?
+What can each agent actually do?
+What is each agent told to do?
+Who owns each normative rule?
 Which identity is authoritative for each operation?
-What does every public state permit next?
-What changes by root/parent/child depth?
-What changes by definition/session/fork lifecycle?
-What does the model actually see versus the UI?
-Can every result be attributed to its source?
-Can every failure be acted on safely?
-Does configuration produce the capability/prompt that presentation claims?
+What does each public state permit next?
+What changes by depth and generation?
+What does the model see versus human/API surfaces?
+Can each result be attributed to source/request?
+Can each failure be acted on safely?
+Does effective configuration match prompts/presentation?
+Are reported states and error fields reachable?
 Do tests discriminate the important contracts?
-Do docs and package contents describe the shipped system?
-Is any important rule duplicated?
-Is any important rule missing?
-Is any complexity present without a current need?
+Do docs/package contents describe what ships?
+Is important authority duplicated or missing?
+Is unjustified complexity present?
 ```
 
-If any answer requires guessing, the audit is not complete.
+If a material answer still requires guessing and the evidence was available, the audit is incomplete.
