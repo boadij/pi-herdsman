@@ -23,6 +23,7 @@ export const nativeSessions = new Map<
     id: string;
     path: string;
     entries?: unknown[];
+    contextEntries?: unknown[];
     cwd?: string;
     sessionName?: string;
   }
@@ -88,8 +89,13 @@ realFs.writeFileSync(
   join(PI_AGENTS_DIR, "agent.md"),
   "---\nname: agent\n---\nagent instructions\n",
 );
-const { parseFrontmatter: nativeParseFrontmatter } =
-  await import("@earendil-works/pi-coding-agent");
+const {
+  buildContextEntries: nativeBuildContextEntries,
+  CURRENT_SESSION_VERSION: nativeCurrentSessionVersion,
+  parseFrontmatter: nativeParseFrontmatter,
+  parseSessionEntries: nativeParseSessionEntries,
+  truncateTail: nativeTruncateTail,
+} = await import("@earendil-works/pi-coding-agent");
 after(() => realFs.rmSync(testTmpRoot, { recursive: true, force: true }));
 mock.module("node:fs", {
   namedExports: {
@@ -213,24 +219,14 @@ mock.module("@earendil-works/pi-coding-agent", {
         outputLines: content ? content.split("\n").length : 0,
       };
     },
-    truncateTail: (
-      text: string,
-      options: { maxBytes?: number; maxLines?: number },
-    ) => {
-      const lines = text.split("\n");
-      const maxLines = options.maxLines ?? lines.length;
-      const content = lines.slice(-maxLines).join("\n");
-      return {
-        content,
-        truncated: content !== text,
-        totalLines: lines.length,
-        outputLines: content ? content.split("\n").length : 0,
-      };
-    },
+    truncateTail: nativeTruncateTail,
     truncateLine: (text: string) => ({ text, wasTruncated: false }),
     CONFIG_DIR_NAME: ".pi",
+    buildContextEntries: nativeBuildContextEntries,
+    CURRENT_SESSION_VERSION: nativeCurrentSessionVersion,
     getAgentDir: () => PI_AGENT_ROOT,
     parseFrontmatter: nativeParseFrontmatter,
+    parseSessionEntries: nativeParseSessionEntries,
     loadProjectContextFiles: ({ cwd }: { cwd: string }) => {
       projectContextCwds.push(cwd);
       return [];
@@ -249,6 +245,19 @@ mock.module("@earendil-works/pi-coding-agent", {
           getCwd: () => resolve(session?.cwd || process.cwd()),
           getSessionName: () => session?.sessionName,
           getEntries: () =>
+            session?.entries ?? [
+              {
+                type: "custom",
+                customType: "pi-herdsman-agent-definition",
+                data: {
+                  sessionId: session?.id ?? DEFAULT_PI_SESSION_ID,
+                  definition: "agent",
+                  label: "agent",
+                },
+              },
+            ],
+          buildContextEntries: () =>
+            session?.contextEntries ??
             session?.entries ?? [
               {
                 type: "custom",

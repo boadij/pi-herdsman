@@ -2,7 +2,7 @@
 
 [Documentation index](../README.md) · [supervision reference](supervision.md)
 
-`agent` is the structured model-facing API for managed agents. It has seven actions:
+`agent` is the structured model-facing API for managed agents. It has eight actions:
 
 ```text
 list
@@ -12,6 +12,7 @@ steer
 reply
 close
 inspect
+transcript
 ```
 
 Unknown fields and unsupported selector combinations fail with `invalid_request`.
@@ -93,18 +94,18 @@ Each valid durable generation in the controller's proven ownership projection
 remains visible, including physically unresolved `unknown` and proven `lost`
 records. Each actionable live agent record includes:
 
-| Field                                                           | Meaning                                                                                                                           |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`                                                         | Exact live logical agent identity to copy into `steer.agent`, `reply.agent`, or `close.agent`. It is not a continuation identity. |
-| `state`                                                         | Safe lifecycle state for observability.                                                                                           |
-| `available_actions`                                             | Snapshot of operations currently eligible for this controller.                                                                    |
-| `workspace_id`, `pane_id`, `tab_id`, `tab_label`                | Herdr identity evidence.                                                                                                          |
-| `cwd`, `pi_session_id`, `pi_session_path`                       | Agent location and Pi session evidence.                                                                                           |
-| `owner_session_id`                                              | Exact direct owner Pi session.                                                                                                    |
-| `agent_definition`                                              | Effective definition name.                                                                                                        |
-| `active_request_id`, `last_activity_at`, `stale`, `inactive_ms` | Assignment and advisory activity evidence.                                                                                        |
-| `parent_label`                                                  | Durable parent assignment when the parent is visible.                                                                             |
-| `cleanup_error`, `result_error`, `diagnostic`, `tokens`         | Bounded recovery and presentation evidence when present.                                                                          |
+| Field                                                           | Meaning                                                                                                                                                                |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`                                                         | Exact live logical agent identity to copy into `inspect.agent`, `transcript.agent`, `steer.agent`, `reply.agent`, or `close.agent`. It is not a continuation identity. |
+| `state`                                                         | Safe lifecycle state for observability.                                                                                                                                |
+| `available_actions`                                             | Snapshot of operations currently eligible for this controller.                                                                                                         |
+| `workspace_id`, `pane_id`, `tab_id`, `tab_label`                | Herdr identity evidence.                                                                                                                                               |
+| `cwd`, `pi_session_id`, `pi_session_path`                       | Agent location and Pi session evidence.                                                                                                                                |
+| `owner_session_id`                                              | Exact direct owner Pi session.                                                                                                                                         |
+| `agent_definition`                                              | Effective definition name.                                                                                                                                             |
+| `active_request_id`, `last_activity_at`, `stale`, `inactive_ms` | Assignment and advisory activity evidence.                                                                                                                             |
+| `parent_label`                                                  | Durable parent assignment when the parent is visible.                                                                                                                  |
+| `cleanup_error`, `result_error`, `diagnostic`, `tokens`         | Bounded recovery and presentation evidence when present.                                                                                                               |
 
 `available_actions` is authoritative model guidance for the current snapshot.
 Do not infer eligibility from `state`. Active work may list `steer`; a valid
@@ -112,8 +113,10 @@ correlated pending `ask_owner` may list `reply`; exact direct ownership may list
 `close`. `available_actions` never lists `delegate` or `continue`: these are
 controller operations, not controls on an already-live agent. An agent cannot
 receive a second assignment. Directly owned live agents may expose the
-applicable live controls, including `close`; directly owned proven `lost`
-records expose `close` only. Unknown records and non-direct descendants expose
+applicable live controls, including `close`; directly owned live records expose
+`transcript` when persisted session evidence exists, and directly owned proven
+`lost` records expose `transcript` when persisted session evidence exists plus
+`close`. Unknown records and non-direct descendants expose
 no mutation actions. Every operation rechecks identity, ownership, mailbox
 state, and lifecycle immediately before mutation.
 The public record does not expose `steerable`.
@@ -151,10 +154,31 @@ The identity is checked again after capture; if the pane or Pi session was
 replaced, inspection fails closed. Inspection does not change agent state,
 mailbox records, lifecycle, or available controls.
 
+## `transcript`
+
+```json
+{ "action": "transcript", "agent": "implementer-1" }
+```
+
+`transcript` accepts only `action` and the exact agent label. It is available
+only to the exact direct owner when `available_actions` includes `transcript`.
+It reads the exact persisted Pi session through Pi's native compaction-aware
+session context and returns user text, visible assistant text, tool calls,
+textual tool results, and persisted compaction/branch summaries. It does not
+expose raw assistant reasoning, system messages, extension custom entries or
+messages, model/provider metadata, images, or live terminal/process state.
+
+Output is tail-bounded to 16 KiB; `transcript_truncated` reports whether
+earlier projected content was omitted. A finalized assistant tool call is
+persisted before the tool starts, so a currently executing tool may appear
+without a corresponding tool result. That absence does not itself prove that
+the tool is still running. `inspect` remains the live terminal/process
+observation path. Transcript is read-only and does not change agent state.
+
 ## `files` and `timeoutMs`
 
 `files` is valid on `delegate` and `continue`, and on `steer` and `reply`; it is not
-valid on `list` or `close`. Paths are resolved from the controller cwd, checked
+valid on `list`, `close`, `inspect`, or `transcript`. Paths are resolved from the controller cwd, checked
 as readable regular files, canonicalized with `realpath`, and embedded only
 when the exact message limit permits. Otherwise they remain canonical references.
 

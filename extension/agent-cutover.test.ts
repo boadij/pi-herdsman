@@ -208,6 +208,18 @@ test("agent schemas expose explicit assignment actions and reject cross-fields",
     false,
   );
   assert.equal(
+    Value.Check(schema, { action: "transcript", agent: "target" }),
+    true,
+  );
+  assert.equal(
+    Value.Check(schema, {
+      action: "transcript",
+      agent: "target",
+      message: "not allowed",
+    }),
+    false,
+  );
+  assert.equal(
     Value.Check(schema, {
       action: "delegate",
       definition: "agent",

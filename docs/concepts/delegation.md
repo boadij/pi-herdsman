@@ -87,7 +87,7 @@ Do not:
 - repeat work already assigned to an active agent;
 - delegate substantially overlapping work to multiple active agents;
 - continue work that depends on an active agent result;
-- inspect, list, or steer active agents merely to check progress or completion.
+- inspect, transcript, list, or steer active agents merely to check progress or completion.
 
 Direct ownership grants lifecycle and control authority. It does not make the
 owner a second executor of an active delegated assignment.

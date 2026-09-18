@@ -97,7 +97,7 @@ necessary independent work remains, it ends the turn. Agent results,
 clarifications, and recovery attention resume the session automatically.
 
 The owner does not invent side work merely because agents are running. It does
-not poll, sleep, inspect merely for progress, send status steering, or use
+not poll, sleep, inspect or transcript merely for progress, send status steering, or use
 another mechanism to keep the turn alive.
 
 Conceptually:

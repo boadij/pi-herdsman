@@ -3757,6 +3757,22 @@ test("Model output preserves inspection, concise controls, and structured errors
   }
 
   {
+    const rendered = formatToolModelResult("transcript", {
+      ok: true,
+      action: "transcript",
+      agent: "implementation",
+      session_id: "session-1",
+      transcript:
+        'assistant:\nChecking.\n\ntool read:\n{"path":"extension/index.ts"}',
+      transcript_truncated: true,
+    });
+    assert.match(rendered, /Transcript agent implementation/);
+    assert.match(rendered, /untrusted observation/);
+    assert.match(rendered, /tool read/);
+    assert.match(rendered, /Earlier persisted transcript content was omitted/);
+  }
+
+  {
     assert.doesNotMatch(
       formatToolModelResult("close", { ok: true, agent: "agent" }),
       /Next:/,

@@ -6,6 +6,7 @@ import type {
   ExtensionContext,
   ModelSelectEvent,
   SessionBeforeCompactEvent,
+  SessionEntry,
   ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -14,13 +15,18 @@ import {
   StringEnum,
 } from "@earendil-works/pi-ai";
 import {
+  buildContextEntries,
+  CURRENT_SESSION_VERSION,
   DynamicBorder,
   getAgentDir,
+  parseSessionEntries,
   SessionManager,
+  truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import {
   realpathSync,
+  readFileSync,
   statSync,
   unlinkSync,
   watchFile,
@@ -234,6 +240,7 @@ const STALE_SCAN_MS = 30_000;
 const ACTIVITY_WRITE_MIN_MS = 5_000;
 const RESULT_WRITE_MAX_ATTEMPTS = 8;
 const TOKEN_ESTIMATE_BYTES = 4;
+const AGENT_TRANSCRIPT_MAX_BYTES = 16 * 1024;
 function formatMessageLimit(bytes: number): string {
   const tokens = Math.ceil(bytes / TOKEN_ESTIMATE_BYTES);
   return `${bytes / 1024} KiB · ≈${tokens.toLocaleString("en-US")} tokens`;
@@ -263,8 +270,10 @@ mutation.
 
 The live-agent control actions are \`steer\`, \`reply\`, and \`close\`; these mutate
 live agent execution and are available only when listed. Read-only \`inspect\`
-captures bounded current evidence without changing agent state. A completed
-agent does not remain available for another assignment.
+captures bounded live terminal/process evidence. Read-only \`transcript\`
+captures bounded persisted Pi conversation and tool evidence when listed.
+Neither changes agent state. A completed agent does not remain available for
+another assignment.
 
 Use steer only to change active work. Use reply only to answer a valid
 outstanding ask_owner question. Use close only for intentional teardown or
@@ -272,9 +281,10 @@ abandonment.
 
 A lost agent is a managed assignment whose exact physical execution is proven
 gone before a durable terminal result resolved it. Loss is not completion or
-task failure. Treat the assignment as unresolved. Use close to abandon the
-lost generation before replacing it or continuing its saved session. Unknown
-evidence remains fail-closed and is not proof of loss.
+task failure. Treat the assignment as unresolved. When transcript is listed,
+use it only when the last persisted work materially affects recovery. Use close
+to abandon the lost generation before replacing it or continuing its saved
+session. Unknown evidence remains fail-closed and is not proof of loss.
 
 Never guess identities, paths, sessions, or control state. Treat unknown or
 conflicting evidence as unresolved. Keep one writer per worktree or file-
@@ -304,7 +314,7 @@ necessary independent work remains, end your turn without concluding the task.
 Agent results or attention will resume this session automatically. Do not
 conclude or produce the final synthesis while unresolved agent work remains.
 Do not invent side work, broaden scope, perform speculative or precautionary
-exploration, list or inspect merely for progress, steer merely for status, sleep,
+exploration, list, inspect, or transcript merely for progress, steer merely for status, sleep,
 poll, or otherwise keep the turn alive while agent results are pending.
 
 If list reports result_error, do not start a new delegation over unresolved
@@ -517,7 +527,8 @@ type Params =
   | { action: "steer"; agent: string; message: string; files?: string[] }
   | { action: "reply"; agent: string; message: string; files?: string[] }
   | { action: "close"; agent: string }
-  | { action: "inspect"; agent: string };
+  | { action: "inspect"; agent: string }
+  | { action: "transcript"; agent: string };
 function parseRequest(p: Params): Params {
   if (p.action === "list") {
     return { action: "list" };
@@ -552,6 +563,11 @@ function parseRequest(p: Params): Params {
     if (!p.agent)
       fail("invalid_request", "Inspect requires an agent", "inspect");
     return { action: "inspect", agent: p.agent! };
+  }
+  if (p.action === "transcript") {
+    if (!p.agent)
+      fail("invalid_request", "Transcript requires an agent", "transcript");
+    return { action: "transcript", agent: p.agent! };
   }
   if (p.action === "delegate" && "definition" in p) {
     if ("session" in p || "agent" in p || "message" in p)
@@ -1223,6 +1239,92 @@ function stateAgentDefinition(state: ManagedAgentState): string {
   if (!state.piSessionFile)
     throw new Error("managed agent has no Pi session file");
   return readAgentIdentity(SessionManager.open(state.piSessionFile)).definition;
+}
+
+function formatAgentTranscript(entries: readonly SessionEntry[]): string {
+  const blocks: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.type === "compaction") {
+      if (entry.summary.trim())
+        blocks.push(`compaction summary:\n${entry.summary.trim()}`);
+      continue;
+    }
+    if (entry.type === "branch_summary") {
+      if (entry.summary.trim())
+        blocks.push(`branch summary:\n${entry.summary.trim()}`);
+      continue;
+    }
+    if (entry.type !== "message") continue;
+
+    const message = entry.message as any;
+    if (message.role === "user") {
+      const text = contentText(message.content, "").trim();
+      if (text && !parseControlMarker(text)) blocks.push(`user:\n${text}`);
+      continue;
+    }
+    if (message.role === "assistant") {
+      for (const part of message.content ?? []) {
+        if (part.type === "text" && part.text.trim()) {
+          blocks.push(`assistant:\n${part.text.trim()}`);
+        } else if (part.type === "toolCall") {
+          blocks.push(`tool ${part.name}:\n${JSON.stringify(part.arguments)}`);
+        }
+      }
+      continue;
+    }
+    if (message.role === "toolResult") {
+      const text = contentText(message.content, "").trim();
+      blocks.push(
+        `tool result ${message.toolName}${message.isError ? " [error]" : ""}:${text ? `\n${text}` : ""}`,
+      );
+    }
+  }
+
+  return blocks.join("\n\n");
+}
+
+function readAgentTranscript(state: ManagedAgentState): {
+  transcript: string;
+  truncated: boolean;
+} {
+  if (!state.piSessionId || !state.piSessionFile)
+    fail(
+      "target_not_found",
+      "Agent has no persisted Pi session identity",
+      "transcript",
+    );
+
+  let entries: ReturnType<typeof parseSessionEntries>;
+  try {
+    entries = parseSessionEntries(readFileSync(state.piSessionFile, "utf8"));
+  } catch (error) {
+    fail(
+      "target_not_found",
+      `Unable to read current agent Pi session: ${String(error)}`,
+      "transcript",
+    );
+  }
+  const header = entries[0];
+  if (
+    !header ||
+    header.type !== "session" ||
+    header.version !== CURRENT_SESSION_VERSION ||
+    header.id !== state.piSessionId
+  )
+    fail(
+      "target_not_found",
+      "Persisted Pi session is missing a matching current session header",
+      "transcript",
+    );
+
+  const bounded = truncateTail(
+    formatAgentTranscript(
+      buildContextEntries(entries.slice(1) as SessionEntry[]),
+    ),
+    { maxBytes: AGENT_TRANSCRIPT_MAX_BYTES },
+  );
+  return { transcript: bounded.content, truncated: bounded.truncated };
 }
 function ensureAgentIdentity(
   pi: ExtensionAPI,
@@ -2759,6 +2861,7 @@ function listedAgentRecords(
 ): Record<string, unknown>[] {
   return visible.map(({ listed, state, presence, parentLabel }) => {
     const direct = state.ownerSessionId === ownerSessionId;
+    const transcriptAvailable = !!state.piSessionId && !!state.piSessionFile;
     const actions: string[] = [];
     if (
       direct &&
@@ -2768,9 +2871,11 @@ function listedAgentRecords(
         state,
       )
     ) {
+      if (transcriptAvailable) actions.push("transcript");
       actions.push("close");
     } else if (presence.kind === "live" && direct && !listed.recovery_only) {
       actions.push("inspect");
+      if (transcriptAvailable) actions.push("transcript");
       if (listed.steerable === true) actions.push("steer");
       if (state.pendingAskId) {
         try {
@@ -5019,6 +5124,73 @@ async function actionUnsafe(
         : {}),
     };
   }
+  if (p.action === "transcript") {
+    const agentLabel = p.agent;
+    const ownerSessionId = ctx.sessionManager.getSessionId();
+    const view = await agentSnapshotView(pi, ctx, scope, signal);
+    const candidates = view.visible.filter(
+      ({ listed }) => listed.label === agentLabel,
+    );
+    if (candidates.length === 0)
+      fail("target_not_found", "No exact agent identity matched", "transcript");
+    if (candidates.length > 1)
+      fail(
+        "target_ambiguous",
+        "Agent identity matched multiple managed agents",
+        "transcript",
+      );
+    const candidate = candidates[0]!;
+    const state = candidate.state;
+    if (state.ownerSessionId !== ownerSessionId)
+      fail(
+        "target_not_found",
+        "Agent belongs to another owner session",
+        "transcript",
+      );
+    const availableActions =
+      (listedAgentRecords([candidate], ownerSessionId, scope)[0]
+        ?.available_actions as string[] | undefined) ?? [];
+    if (!availableActions.includes("transcript"))
+      fail(
+        candidate.presence.kind === "unknown"
+          ? "target_ambiguous"
+          : "agent_busy",
+        "Agent transcript is not currently available",
+        "transcript",
+        {
+          nextAction:
+            "Refresh agent list and use transcript only when it is listed in available_actions.",
+        },
+      );
+    const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
+    const result = readAgentTranscript(state);
+    let current: ManagedAgentState | undefined;
+    try {
+      current = readAgentState(mailbox);
+    } catch (error) {
+      fail(
+        "internal_failure",
+        `Agent mailbox state is malformed or oversized: ${String(error)}`,
+        "transcript",
+        { ids: { label: state.agentLabel, paneId: state.paneId } },
+      );
+    }
+    if (!current || !sameManagedAgentIdentity(current, state))
+      fail(
+        "target_ambiguous",
+        "Managed agent identity changed during transcript read",
+        "transcript",
+      );
+    return {
+      ok: true,
+      action: "transcript",
+      agent: state.agentLabel,
+      presentation_agent_definition: candidate.agentDefinition,
+      session_id: state.piSessionId,
+      transcript: result.transcript,
+      transcript_truncated: result.truncated,
+    };
+  }
   const limits = await messageLimits(ctx);
   const assignment =
     p.action === "delegate" || p.action === "continue"
@@ -5878,7 +6050,11 @@ async function action(
       "Delegation controller is not initialized as an exact managed agent",
       "controller",
     );
-  if (p.action === "list" || p.action === "inspect")
+  if (
+    p.action === "list" ||
+    p.action === "inspect" ||
+    p.action === "transcript"
+  )
     return actionUnsafe(pi, ctx, p, signal, scope, pendingStarts);
   const release = claimDelegationLock(
     process.env.PI_HERDSMAN_WORKSPACE_ID!,
@@ -6106,7 +6282,7 @@ export default function (pi: ExtensionAPI): void {
     ),
     Type.Object(
       {
-        action: StringEnum(["close", "inspect"] as const),
+        action: StringEnum(["close", "inspect", "transcript"] as const),
         agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
       },
       { additionalProperties: false },
@@ -10088,7 +10264,7 @@ export default function (pi: ExtensionAPI): void {
                 {
                   customType: "pi-herdsman-delegation-guidance",
                   content:
-                    "An agent assignment started. Reassess the remaining work. Handle required agent control if needed. If another concrete, necessary objective is independent of active agent assignments and an authorized agent is the right owner, delegate it. If a concrete, necessary independent objective is best handled locally and doing it now materially advances the task, do that work, then reassess. Otherwise end your turn without concluding the task; agent results or attention will resume this session automatically. Do not conclude or produce the final synthesis while unresolved agent work remains. Do not invent side work, repeat delegated work, create substantially overlapping assignments, poll, sleep, inspect for progress, steer for status, or otherwise keep the turn alive merely because agents are running.",
+                    "An agent assignment started. Reassess the remaining work. Handle required agent control if needed. If another concrete, necessary objective is independent of active agent assignments and an authorized agent is the right owner, delegate it. If a concrete, necessary independent objective is best handled locally and doing it now materially advances the task, do that work, then reassess. Otherwise end your turn without concluding the task; agent results or attention will resume this session automatically. Do not conclude or produce the final synthesis while unresolved agent work remains. Do not invent side work, repeat delegated work, create substantially overlapping assignments, poll, sleep, inspect or transcript for progress, steer for status, or otherwise keep the turn alive merely because agents are running.",
                   display: false,
                 },
                 { triggerTurn: true, deliverAs: "steer" },

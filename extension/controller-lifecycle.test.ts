@@ -175,7 +175,7 @@ test("parent delegates two same-definition children with exact ownership", async
     );
     assert.match(
       guidanceContent,
-      /poll, sleep, inspect for progress, steer for status/,
+      /poll, sleep, inspect or transcript for progress, steer for status/,
     );
     assert.doesNotMatch(
       guidanceContent,

@@ -32,7 +32,8 @@ my-review
 ```
 
 Use the exact `agent` value from `agent list` only for
-`steer.agent`, `reply.agent`, or `close.agent` while those actions are listed
+`inspect.agent`, `transcript.agent`, `steer.agent`, `reply.agent`, or
+`close.agent` while those actions are listed
 in `available_actions`. An agent label is the stable logical name across
 sequential generations of one managed session, not a continuation selector.
 It is a control target only for the currently live generation.
