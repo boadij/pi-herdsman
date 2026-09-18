@@ -2565,6 +2565,7 @@ test("registered lead exposes only explicit live controls", async () => {
   );
   assert.deepEqual(listed.details.agents[0].available_actions, [
     "inspect",
+    "transcript",
     "steer",
     "close",
   ]);
@@ -3017,6 +3018,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     assert.equal(ownerAsk.details.agents[0].state, "blocked");
     assert.deepEqual(ownerAsk.details.agents[0].available_actions, [
       "inspect",
+      "transcript",
       "reply",
       "close",
     ]);
@@ -3492,6 +3494,7 @@ test("assignment status normalization fails closed safely", async () => {
       assert.equal(settledList.details.agents[0].state, "settling");
       assert.deepEqual(settledList.details.agents[0].available_actions, [
         "inspect",
+        "transcript",
         "close",
       ]);
     } finally {
@@ -3523,4 +3526,177 @@ test("rejects context injection before unsupported actions perform work", async 
   );
   assert.equal(closeFilesResult.details.error.category, "invalid_request");
   assert.equal(pi.calls.length, 0);
+});
+
+test("transcript projects persisted agent evidence without Herdr terminal reads", async () => {
+  setLeadEnvironment();
+  const label = "transcript-agent";
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(testTmpRoot, `${label}.jsonl`),
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  realFs.writeFileSync(
+    identity.piSessionFile,
+    `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: identity.piSessionId,
+      timestamp: new Date().toISOString(),
+      cwd: "/tmp",
+    })}\n`,
+  );
+  writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
+  const session = {
+    id: identity.piSessionId,
+    path: identity.piSessionFile,
+    contextEntries: [
+      {
+        type: "custom_message",
+        customType: "private-test",
+        content: "INTERNAL CUSTOM MESSAGE",
+        display: false,
+      },
+      {
+        type: "message",
+        message: { role: "system", content: "INTERNAL SYSTEM MESSAGE" },
+      },
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Inspect the controller path." }],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "PRIVATE REASONING" },
+            { type: "text", text: "I will inspect the implementation." },
+            {
+              type: "toolCall",
+              id: "call-running",
+              name: "read",
+              arguments: { path: "extension/index.ts", limit: 100 },
+            },
+          ],
+          stopReason: "toolUse",
+        },
+      },
+    ],
+  };
+  nativeSessions.set(identity.piSessionId, session);
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      undefined,
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0]!.execute(
+      "id",
+      { action: "transcript", agent: label },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(result.details.ok, true);
+    assert.equal(result.details.action, "transcript");
+    assert.equal(result.details.agent, label);
+    assert.equal(result.details.session_id, identity.piSessionId);
+    assert.match(result.details.transcript, /Inspect the controller path/);
+    assert.match(
+      result.details.transcript,
+      /I will inspect the implementation/,
+    );
+    assert.match(result.details.transcript, /tool read:/);
+    assert.doesNotMatch(result.details.transcript, /PRIVATE REASONING/);
+    assert.doesNotMatch(result.details.transcript, /INTERNAL CUSTOM MESSAGE/);
+    assert.doesNotMatch(result.details.transcript, /INTERNAL SYSTEM MESSAGE/);
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "read"),
+      false,
+    );
+
+    session.contextEntries = [
+      ...session.contextEntries,
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "read",
+          isError: false,
+          content: [{ type: "text", text: "tool completed" }],
+        },
+      },
+    ];
+    const completed = await pi.tools[0]!.execute(
+      "id",
+      { action: "transcript", agent: label },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.match(completed.details.transcript, /tool result read:/);
+
+    session.contextEntries = [
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "old evidence ".repeat(2000) }],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "recent tail evidence" }],
+        },
+      },
+    ];
+    const bounded = await pi.tools[0]!.execute(
+      "id",
+      { action: "transcript", agent: label },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(bounded.details.transcript_truncated, true);
+    assert.ok(
+      Buffer.byteLength(bounded.details.transcript, "utf8") <= 16 * 1024,
+    );
+    assert.match(bounded.details.transcript, /recent tail evidence/);
+    assert.doesNotMatch(bounded.details.transcript, /old evidence/);
+
+    realFs.writeFileSync(identity.piSessionFile, "");
+    const emptyBefore = readFileSync(identity.piSessionFile, "utf8");
+    const emptyStatBefore = realFs.statSync(identity.piSessionFile);
+    const rejected = await pi.tools[0]!.execute(
+      "id",
+      { action: "transcript", agent: label },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(rejected.details.ok, false);
+    assert.equal(rejected.details.error.category, "target_not_found");
+    assert.equal(readFileSync(identity.piSessionFile, "utf8"), emptyBefore);
+    const emptyStatAfter = realFs.statSync(identity.piSessionFile);
+    assert.equal(emptyStatAfter.size, emptyStatBefore.size);
+    assert.equal(emptyStatAfter.mtimeMs, emptyStatBefore.mtimeMs);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    nativeSessions.delete(identity.piSessionId);
+    realFs.rmSync(identity.piSessionFile, { force: true });
+    resetAgentMailbox(mailbox);
+  }
 });

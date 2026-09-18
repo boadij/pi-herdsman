@@ -28,8 +28,9 @@ A delegating agent may be blocked while direct agent work is pending and still a
 steering when `steer` is listed. Descendant visibility does not imply authority;
 records outside the controller's direct ownership can have an empty action list.
 Directly owned live records may expose the applicable live controls, including
-`close`; directly owned proven `lost` records expose `close` only. Unknown
-records and non-direct descendants remain fail-closed with no mutation actions.
+`close`; directly owned live or proven `lost` records may also expose the
+read-only `transcript` action when persisted session identity exists. Unknown
+records and non-direct descendants remain fail-closed with no actions.
 
 ## `blocked` and owner questions
 
@@ -60,11 +61,11 @@ absence and projects as `settling` while delivery or recovery converges. A
 failed inventory never proves `lost`; relocated or conflicting evidence is
 `unknown`.
 
-| Record    | Direct-owner actions                                                            |
-| --------- | ------------------------------------------------------------------------------- |
-| `live`    | Existing live controls, including `inspect` and eligible `steer`, plus `close`. |
-| `lost`    | `close` only.                                                                   |
-| `unknown` | None.                                                                           |
+| Record    | Direct-owner actions                                                                                    |
+| --------- | ------------------------------------------------------------------------------------------------------- |
+| `live`    | `inspect`, `transcript` when persisted session identity exists, eligible `steer`/`reply`, plus `close`. |
+| `lost`    | `transcript` when persisted session identity exists, plus `close`.                                      |
+| `unknown` | None.                                                                                                   |
 
 Owned descendants remain visible through proven durable ancestry but do not gain
 direct control from that visibility.

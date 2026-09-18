@@ -47,8 +47,9 @@ mutation.
 
 The live-agent control actions are `steer`, `reply`, and `close`; these mutate
 live agent execution and are available only when listed. Read-only `inspect`
-captures bounded current evidence without changing agent state. A completed
-agent does not remain available for another assignment.
+captures bounded live terminal/process evidence. Read-only `transcript` captures
+bounded persisted Pi conversation and tool evidence when listed. Neither changes
+agent state. A completed agent does not remain available for another assignment.
 
 Use steer only to change active work. Use reply only to answer a valid
 outstanding ask_owner question. Use close only for intentional teardown or
@@ -56,9 +57,10 @@ abandonment.
 
 A lost agent is a managed assignment whose exact physical execution is proven
 gone before a durable terminal result resolved it. Loss is not completion or
-task failure. Treat the assignment as unresolved. Use close to abandon the
-lost generation before replacing it or continuing its saved session. Unknown
-evidence remains fail-closed and is not proof of loss.
+task failure. Treat the assignment as unresolved. When transcript is listed,
+use it only when the last persisted work materially affects recovery. Use close
+to abandon the lost generation before replacing it or continuing its saved
+session. Unknown evidence remains fail-closed and is not proof of loss.
 
 Never guess identities, paths, sessions, or control state. Treat unknown or
 conflicting evidence as unresolved. Keep one writer per worktree or file-
@@ -88,7 +90,7 @@ necessary independent work remains, end your turn without concluding the task.
 Agent results or attention will resume this session automatically. Do not
 conclude or produce the final synthesis while unresolved agent work remains.
 Do not invent side work, broaden scope, perform speculative or precautionary
-exploration, list or inspect merely for progress, steer merely for status, sleep,
+exploration, list, inspect, or transcript merely for progress, steer merely for status, sleep,
 poll, or otherwise keep the turn alive while agent results are pending.
 
 If list reports result_error, do not start a new delegation over unresolved

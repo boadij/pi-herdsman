@@ -840,7 +840,10 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   );
   assert.equal(listed.details.agents.length, 1);
   assert.equal(listed.details.agents[0].state, "lost");
-  assert.deepEqual(listed.details.agents[0].available_actions, ["close"]);
+  assert.deepEqual(listed.details.agents[0].available_actions, [
+    "transcript",
+    "close",
+  ]);
   assert.match(
     listed.details.cleanup_errors[label],
     /pane list disappearance proof is unavailable/,
@@ -1840,6 +1843,7 @@ test("controller reply submits the normal request and preserves the assignment",
   );
   assert.deepEqual(waitingList.details.agents[0].available_actions, [
     "inspect",
+    "transcript",
     "reply",
     "close",
   ]);
@@ -1902,6 +1906,7 @@ test("controller reply submits the normal request and preserves the assignment",
   );
   assert.deepEqual(afterReply.details.agents[0].available_actions, [
     "inspect",
+    "transcript",
     "steer",
     "close",
   ]);
@@ -4103,12 +4108,39 @@ test("stale scanner never notifies non-working candidates", async () => {
 test("lost managed agents remain visible and notify their owner once", async (t) => {
   setLeadEnvironment();
   const label = "lost-controller-agent";
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(testTmpRoot, `${label}.jsonl`),
+  };
   const state = {
-    ...managedState(label, REQUEST_ID, recoveryIdentity(label)),
+    ...managedState(label, REQUEST_ID, identity),
     lastActivityAt: Date.now(),
   };
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
+  realFs.writeFileSync(
+    identity.piSessionFile,
+    `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: identity.piSessionId,
+      timestamp: new Date().toISOString(),
+      cwd: "/tmp",
+    })}\n`,
+  );
+  nativeSessions.set(state.piSessionId, {
+    id: state.piSessionId,
+    path: state.piSessionFile!,
+    contextEntries: [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "last persisted work" }],
+        },
+      },
+    ],
+  });
   writeAgentState(mailbox, state);
   const lifecycle = cascadeExecutor([state]);
   const pi = fakePi({
@@ -4138,13 +4170,27 @@ test("lost managed agents remain visible and notify their owner once", async (t)
       (candidate: any) => candidate.agent === label,
     );
     assert.equal(agent.state, "lost");
-    assert.deepEqual(agent.available_actions, ["close"]);
+    assert.deepEqual(agent.available_actions, ["transcript", "close"]);
     assert.equal(
       pi.sent.filter(
         (message: any) => message.customType === "pi-herdsman-agent-lost",
       ).length,
       1,
     );
+
+    const transcript = await pi.tools[0].execute(
+      "id",
+      { action: "transcript", agent: label },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(
+      transcript.details.ok,
+      true,
+      JSON.stringify(transcript.details),
+    );
+    assert.match(transcript.details.transcript, /last persisted work/);
 
     t.mock.timers.tick(30_000);
     for (let index = 0; index < 8; index++)
@@ -4168,6 +4214,8 @@ test("lost managed agents remain visible and notify their owner once", async (t)
     assert.equal(readAgentState(mailbox), undefined);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
+    nativeSessions.delete(state.piSessionId);
+    realFs.rmSync(identity.piSessionFile, { force: true });
     resetAgentMailbox(mailbox);
   }
 });
@@ -4336,7 +4384,10 @@ test("lost close fails closed when a result appears during its final proof", asy
       undefined,
       fakeContext(),
     );
-    assert.deepEqual(listed.details.agents[0].available_actions, ["close"]);
+    assert.deepEqual(listed.details.agents[0].available_actions, [
+      "transcript",
+      "close",
+    ]);
     const closed = await pi.tools[0].execute(
       "id",
       { action: "close", agent: state.agentLabel },

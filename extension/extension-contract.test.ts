@@ -219,7 +219,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.match(agentDescription, /Do not invent side work/);
   assert.match(
     agentDescription,
-    /list or inspect merely for progress, steer merely for status, sleep, poll/,
+    /list, inspect, or transcript merely for progress, steer merely for status, sleep, poll/,
   );
   assert.doesNotMatch(
     agentDescription,

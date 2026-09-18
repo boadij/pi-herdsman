@@ -167,7 +167,7 @@ Inspect the actual transcript and verify the delegating agent:
 - does not manufacture adjacent analysis merely to remain active;
 - does not delegate substantially overlapping reconnaissance to another agent;
 - does not poll `agent list`;
-- does not use `agent inspect` or `agent steer` merely to check progress;
+- does not use `agent inspect`, `agent transcript`, or `agent steer` merely to check progress;
 - does not send "finish", "status", or equivalent progress nudges to a healthy
   agent;
 - does not sleep or use another mechanism to keep the turn alive;
