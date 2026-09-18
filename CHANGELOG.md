@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/boadij/pi-herdsman/compare/v0.7.4...v0.8.0) (2026-09-17)
+
+
+### Features
+
+* **chief:** show delegated activity in ambient widget ([#75](https://github.com/boadij/pi-herdsman/issues/75)) ([9dd8765](https://github.com/boadij/pi-herdsman/commit/9dd87655e3c5a0fa75a22d51ccffe9a311f693b4))
+
+
+### Fixes
+
+* isolate lead agent visibility by ownership ([#77](https://github.com/boadij/pi-herdsman/issues/77)) ([50ebfa8](https://github.com/boadij/pi-herdsman/commit/50ebfa85dbd62d9618600edf57d34009f7d1d50f))
+
 ## [0.7.4](https://github.com/boadij/pi-herdsman/compare/v0.7.3...v0.7.4) (2026-09-16)
 
 
