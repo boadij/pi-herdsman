@@ -73,6 +73,7 @@ test("managed requests pump through Pi semantic input", async () => {
   const mailbox = setAgentEnvironment("pump-agent");
   let context: ReturnType<typeof fakeAgentContext>;
   let transformed: unknown;
+  let aborted = 0;
   const agent = fakePi({
     sendUserMessage(content) {
       transformed = agent.events.get("input")![0]({ text: content }, context);
@@ -144,6 +145,39 @@ test("managed requests pump through Pi semantic input", async () => {
       {
         content: controlMarker(steer.requestId),
         options: { deliverAs: "steer" },
+      },
+    ]);
+    context.isIdle = () => false;
+    (context as any).abort = () => {
+      aborted++;
+    };
+    const interrupt: RequestRecord = {
+      ...steer,
+      requestId: randomUUID(),
+      kind: "interrupt",
+      text: "pump this interrupt",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, interrupt);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (readAgentState(mailbox)?.lastAck?.requestId === interrupt.requestId)
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (attempt === 99) assert.fail("mailbox pump did not accept interrupt");
+    }
+    assert.equal(aborted, 1);
+    assert.deepEqual(agent.sentUserCalls, [
+      {
+        content: controlMarker(request.requestId),
+        options: { deliverAs: "steer" },
+      },
+      {
+        content: controlMarker(steer.requestId),
+        options: { deliverAs: "steer" },
+      },
+      {
+        content: controlMarker(interrupt.requestId),
+        options: { deliverAs: "followUp" },
       },
     ]);
   } finally {
