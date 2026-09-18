@@ -43,7 +43,7 @@ must not be presented as exhausted cleanup.
 | `target_not_found`         | Exact requested identity or ownership evidence was not found.                       |
 | `target_ambiguous`         | More than one live candidate matched an identity that must be exact.                |
 | `rollback_failure`         | Primary operation failed and cleanup did not fully converge.                        |
-| `agent_busy`               | Agent state does not allow the requested control action.                            |
+| `agent_busy`               | Agent state or readiness does not allow the requested action.                       |
 | `invalid_request`          | Request fields, values, definition input, file input, or preconditions are invalid. |
 | `internal_failure`         | An invariant or underlying operation failed outside a narrower public category.     |
 

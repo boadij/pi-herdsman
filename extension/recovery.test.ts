@@ -840,10 +840,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   );
   assert.equal(listed.details.agents.length, 1);
   assert.equal(listed.details.agents[0].state, "lost");
-  assert.deepEqual(listed.details.agents[0].available_actions, [
-    "transcript",
-    "close",
-  ]);
+  assert.deepEqual(listed.details.agents[0].available_actions, ["close"]);
   assert.match(
     listed.details.cleanup_errors[label],
     /pane list disappearance proof is unavailable/,
@@ -1843,7 +1840,6 @@ test("controller reply submits the normal request and preserves the assignment",
   );
   assert.deepEqual(waitingList.details.agents[0].available_actions, [
     "inspect",
-    "transcript",
     "reply",
     "close",
   ]);
@@ -1906,7 +1902,6 @@ test("controller reply submits the normal request and preserves the assignment",
   );
   assert.deepEqual(afterReply.details.agents[0].available_actions, [
     "inspect",
-    "transcript",
     "steer",
     "close",
   ]);
@@ -4396,10 +4391,7 @@ test("lost close fails closed when a result appears during its final proof", asy
       undefined,
       fakeContext(),
     );
-    assert.deepEqual(listed.details.agents[0].available_actions, [
-      "transcript",
-      "close",
-    ]);
+    assert.deepEqual(listed.details.agents[0].available_actions, ["close"]);
     const closed = await pi.tools[0].execute(
       "id",
       { action: "close", agent: state.agentLabel },

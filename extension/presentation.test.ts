@@ -3769,7 +3769,7 @@ test("Model output preserves inspection, concise controls, and structured errors
     assert.match(rendered, /Transcript agent implementation/);
     assert.match(rendered, /untrusted observation/);
     assert.match(rendered, /tool read/);
-    assert.match(rendered, /Earlier persisted transcript content was omitted/);
+    assert.match(rendered, /Some persisted transcript content was omitted/);
   }
 
   {

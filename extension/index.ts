@@ -241,6 +241,9 @@ const ACTIVITY_WRITE_MIN_MS = 5_000;
 const RESULT_WRITE_MAX_ATTEMPTS = 8;
 const TOKEN_ESTIMATE_BYTES = 4;
 const AGENT_TRANSCRIPT_MAX_BYTES = 16 * 1024;
+const AGENT_TRANSCRIPT_TOOL_RESULT_MAX_BYTES = 4 * 1024;
+const AGENT_TRANSCRIPT_TOOL_RESULT_OMISSION =
+  "\n[... middle of tool result omitted ...]\n";
 function formatMessageLimit(bytes: number): string {
   const tokens = Math.ceil(bytes / TOKEN_ESTIMATE_BYTES);
   return `${bytes / 1024} KiB · ≈${tokens.toLocaleString("en-US")} tokens`;
@@ -1241,8 +1244,53 @@ function stateAgentDefinition(state: ManagedAgentState): string {
   return readAgentIdentity(SessionManager.open(state.piSessionFile)).definition;
 }
 
-function formatAgentTranscript(entries: readonly SessionEntry[]): string {
+function truncateAgentTranscriptToolResult(text: string): {
+  text: string;
+  truncated: boolean;
+} {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= AGENT_TRANSCRIPT_TOOL_RESULT_MAX_BYTES)
+    return { text, truncated: false };
+
+  const markerBytes = Buffer.byteLength(
+    AGENT_TRANSCRIPT_TOOL_RESULT_OMISSION,
+    "utf8",
+  );
+  const payloadBytes = AGENT_TRANSCRIPT_TOOL_RESULT_MAX_BYTES - markerBytes;
+  const headBudget = Math.ceil(payloadBytes / 2);
+  const tailBudget = Math.floor(payloadBytes / 2);
+  let headEnd = headBudget;
+  while (headEnd > 0 && (bytes[headEnd] & 0xc0) === 0x80) headEnd--;
+  let tailStart = bytes.length - tailBudget;
+  while (tailStart < bytes.length && (bytes[tailStart] & 0xc0) === 0x80)
+    tailStart++;
+
+  return {
+    text:
+      bytes.subarray(0, headEnd).toString("utf8") +
+      AGENT_TRANSCRIPT_TOOL_RESULT_OMISSION +
+      bytes.subarray(tailStart).toString("utf8"),
+    truncated: true,
+  };
+}
+
+function agentTranscriptReady(state: ManagedAgentState): boolean {
+  if (!state.piSessionId || !state.piSessionFile) return false;
+
+  try {
+    const file = statSync(state.piSessionFile, { throwIfNoEntry: false });
+    return !!file?.isFile() && file.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function formatAgentTranscript(entries: readonly SessionEntry[]): {
+  text: string;
+  truncated: boolean;
+} {
   const blocks: string[] = [];
+  let truncated = false;
 
   for (const entry of entries) {
     if (entry.type === "compaction") {
@@ -1274,14 +1322,17 @@ function formatAgentTranscript(entries: readonly SessionEntry[]): string {
       continue;
     }
     if (message.role === "toolResult") {
-      const text = contentText(message.content, "").trim();
+      const result = truncateAgentTranscriptToolResult(
+        contentText(message.content, "").trim(),
+      );
+      truncated ||= result.truncated;
       blocks.push(
-        `tool result ${message.toolName}${message.isError ? " [error]" : ""}:${text ? `\n${text}` : ""}`,
+        `tool result ${message.toolName}${message.isError ? " [error]" : ""}:${result.text ? `\n${result.text}` : ""}`,
       );
     }
   }
 
-  return blocks.join("\n\n");
+  return { text: blocks.join("\n\n"), truncated };
 }
 
 function readAgentTranscript(state: ManagedAgentState): {
@@ -1318,13 +1369,16 @@ function readAgentTranscript(state: ManagedAgentState): {
       "transcript",
     );
 
-  const bounded = truncateTail(
-    formatAgentTranscript(
-      buildContextEntries(entries.slice(1) as SessionEntry[]),
-    ),
-    { maxBytes: AGENT_TRANSCRIPT_MAX_BYTES },
+  const formatted = formatAgentTranscript(
+    buildContextEntries(entries.slice(1) as SessionEntry[]),
   );
-  return { transcript: bounded.content, truncated: bounded.truncated };
+  const bounded = truncateTail(formatted.text, {
+    maxBytes: AGENT_TRANSCRIPT_MAX_BYTES,
+  });
+  return {
+    transcript: bounded.content,
+    truncated: formatted.truncated || bounded.truncated,
+  };
 }
 function ensureAgentIdentity(
   pi: ExtensionAPI,
@@ -2861,7 +2915,7 @@ function listedAgentRecords(
 ): Record<string, unknown>[] {
   return visible.map(({ listed, state, presence, parentLabel }) => {
     const direct = state.ownerSessionId === ownerSessionId;
-    const transcriptAvailable = !!state.piSessionId && !!state.piSessionFile;
+    const transcriptAvailable = agentTranscriptReady(state);
     const actions: string[] = [];
     if (
       direct &&
@@ -5150,18 +5204,38 @@ async function actionUnsafe(
     const availableActions =
       (listedAgentRecords([candidate], ownerSessionId, scope)[0]
         ?.available_actions as string[] | undefined) ?? [];
-    if (!availableActions.includes("transcript"))
+    if (!availableActions.includes("transcript")) {
+      if (candidate.presence.kind === "unknown")
+        fail(
+          "target_ambiguous",
+          "Agent transcript availability cannot be proved",
+          "transcript",
+        );
+      if (
+        candidate.presence.kind === "live" &&
+        !candidate.listed.recovery_only &&
+        state.piSessionId &&
+        state.piSessionFile
+      )
+        fail(
+          "agent_busy",
+          "Agent transcript is not available yet because Pi has not persisted this agent's session file",
+          "transcript",
+          {
+            nextAction:
+              "This is expected briefly after delegation. Do not poll or retry immediately; use transcript later only when it is listed in available_actions and persisted transcript evidence is needed.",
+          },
+        );
       fail(
-        candidate.presence.kind === "unknown"
-          ? "target_ambiguous"
-          : "agent_busy",
+        "agent_busy",
         "Agent transcript is not currently available",
         "transcript",
         {
           nextAction:
-            "Refresh agent list and use transcript only when it is listed in available_actions.",
+            "Use transcript only when it is listed in available_actions.",
         },
       );
+    }
     const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
     const result = readAgentTranscript(state);
     let current: ManagedAgentState | undefined;

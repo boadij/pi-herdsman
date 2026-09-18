@@ -2565,7 +2565,6 @@ test("registered lead exposes only explicit live controls", async () => {
   );
   assert.deepEqual(listed.details.agents[0].available_actions, [
     "inspect",
-    "transcript",
     "steer",
     "close",
   ]);
@@ -3018,7 +3017,6 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     assert.equal(ownerAsk.details.agents[0].state, "blocked");
     assert.deepEqual(ownerAsk.details.agents[0].available_actions, [
       "inspect",
-      "transcript",
       "reply",
       "close",
     ]);
@@ -3494,7 +3492,6 @@ test("assignment status normalization fails closed safely", async () => {
       assert.equal(settledList.details.agents[0].state, "settling");
       assert.deepEqual(settledList.details.agents[0].available_actions, [
         "inspect",
-        "transcript",
         "close",
       ]);
     } finally {
@@ -3537,6 +3534,7 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
   };
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
+  realFs.rmSync(identity.piSessionFile, { force: true });
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   const session = {
     id: identity.piSessionId,
@@ -3599,7 +3597,6 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       ].join("\n") + "\n",
     );
   };
-  writeSession();
   nativeSessions.set(identity.piSessionId, session);
   const pi = fakePi({
     exec: leadExec(
@@ -3613,6 +3610,43 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
   });
   registerExtension!(pi.pi as never);
   try {
+    const before = await pi.tools[0]!.execute(
+      "id",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(
+      before.details.agents[0].available_actions.includes("transcript"),
+      false,
+    );
+    const pending = await pi.tools[0]!.execute(
+      "id",
+      { action: "transcript", agent: label },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(pending.details.error.category, "agent_busy");
+    assert.match(
+      pending.details.error.message,
+      /Pi has not persisted this agent's session file/,
+    );
+    assert.equal(realFs.existsSync(identity.piSessionFile), false);
+
+    writeSession();
+    const ready = await pi.tools[0]!.execute(
+      "id",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(
+      ready.details.agents[0].available_actions.includes("transcript"),
+      true,
+    );
     const result = await pi.tools[0]!.execute(
       "id",
       { action: "transcript", agent: label },
@@ -3660,6 +3694,60 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
     );
     assert.match(completed.details.transcript, /tool result read:/);
 
+    const hugeToolResult =
+      "TOOL-BEGIN\n" +
+      "🙂".repeat(700) +
+      "MIDDLE-SENTINEL" +
+      "界".repeat(900) +
+      "\nTOOL-END";
+    session.contextEntries = [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "before large tool evidence" }],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "bash",
+          isError: false,
+          content: [{ type: "text", text: hugeToolResult }],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "after large tool evidence" }],
+        },
+      },
+    ];
+    writeSession();
+    const boundedTool = await pi.tools[0]!.execute(
+      "id",
+      { action: "transcript", agent: label },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(boundedTool.details.transcript_truncated, true);
+    assert.match(boundedTool.details.transcript, /TOOL-BEGIN/);
+    assert.match(boundedTool.details.transcript, /TOOL-END/);
+    assert.match(
+      boundedTool.details.transcript,
+      /\[\.\.\. middle of tool result omitted \.\.\.\]/,
+    );
+    assert.doesNotMatch(boundedTool.details.transcript, /MIDDLE-SENTINEL/);
+    assert.doesNotMatch(boundedTool.details.transcript, /�/);
+    assert.match(boundedTool.details.transcript, /before large tool evidence/);
+    assert.match(boundedTool.details.transcript, /after large tool evidence/);
+    assert.ok(
+      Buffer.byteLength(boundedTool.details.transcript, "utf8") <= 16 * 1024,
+    );
+
     session.contextEntries = [
       {
         type: "message",
@@ -3692,6 +3780,17 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
     assert.doesNotMatch(bounded.details.transcript, /old evidence/);
 
     realFs.writeFileSync(identity.piSessionFile, "");
+    const emptyList = await pi.tools[0]!.execute(
+      "id",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(
+      emptyList.details.agents[0].available_actions.includes("transcript"),
+      false,
+    );
     const emptyBefore = readFileSync(identity.piSessionFile, "utf8");
     const emptyStatBefore = realFs.statSync(identity.piSessionFile);
     const rejected = await pi.tools[0]!.execute(
@@ -3702,11 +3801,33 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       fakeContext(pi.entries),
     );
     assert.equal(rejected.details.ok, false);
-    assert.equal(rejected.details.error.category, "target_not_found");
+    assert.equal(rejected.details.error.category, "agent_busy");
+    assert.match(
+      rejected.details.error.message,
+      /Pi has not persisted this agent's session file/,
+    );
     assert.equal(readFileSync(identity.piSessionFile, "utf8"), emptyBefore);
     const emptyStatAfter = realFs.statSync(identity.piSessionFile);
     assert.equal(emptyStatAfter.size, emptyStatBefore.size);
     assert.equal(emptyStatAfter.mtimeMs, emptyStatBefore.mtimeMs);
+    realFs.writeFileSync(
+      identity.piSessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        timestamp: new Date().toISOString(),
+        cwd: "/tmp",
+      })}\n`,
+    );
+    const mismatched = await pi.tools[0]!.execute(
+      "id",
+      { action: "transcript", agent: label },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.equal(mismatched.details.error.category, "target_not_found");
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     nativeSessions.delete(identity.piSessionId);
