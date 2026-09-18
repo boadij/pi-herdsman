@@ -32,7 +32,7 @@ my-review
 ```
 
 Use the exact `agent` value from `agent list` only for
-`inspect.agent`, `transcript.agent`, `steer.agent`, `reply.agent`, or
+`inspect.agent`, `transcript.agent`, `steer.agent`, `interrupt.agent`, `reply.agent`, or
 `close.agent` while those actions are listed
 in `available_actions`. An agent label is the stable logical name across
 sequential generations of one managed session, not a continuation selector.

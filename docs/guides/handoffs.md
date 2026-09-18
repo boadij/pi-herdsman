@@ -4,7 +4,7 @@
 
 Pi Herdsman has two text-file mechanisms with different purposes:
 
-- `files` supplies evidence to delegate, continue, steer, reply,
+- `files` supplies evidence to delegate, continue, steer, interrupt, reply,
   or ask_owner.
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
@@ -14,7 +14,7 @@ canonical local references and are not copied or snapshotted.
 
 ## Message `files`
 
-For `delegate`, `continue`, `steer`, and
+For `delegate`, `continue`, `steer`, `interrupt`, and
 `reply`, make the message self-contained. Do not attach or mention agent
 instruction files such as `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or equivalents
 merely because they exist; rely on normal project or runtime discovery.
@@ -79,7 +79,7 @@ path attribute, and observed byte size. File content remains raw text. This
 markup frames evidence for the model and is not a security boundary.
 
 `files` is supported by `delegate`, `continue`,
-`steer`, `reply`, and `ask_owner`. For
+`steer`, `interrupt`, `reply`, and `ask_owner`. For
 controller actions, relative paths resolve from the calling controller's cwd;
 for `ask_owner`, they resolve from the managed agent's cwd. Accepted ordinary
 filesystem paths retain canonical absolute-path names; `result:<request-id>`
@@ -278,7 +278,7 @@ permission to modify them.
 
 When dependent work uses an artifact, pass the same path through `files` on the
 message that creates or updates the dependency: `delegate.files` for a new
-agent, `steer.files` for an active agent, `ask_owner.files` for supporting
+agent, `steer.files` and `interrupt.files` for an active agent, `ask_owner.files` for supporting
 evidence in a question, or `reply.files` for the owner's answer. Update the
 artifact before submission. Small text is embedded at submission time; a
 reference-only artifact remains a live canonical local path.

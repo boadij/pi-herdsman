@@ -2566,6 +2566,7 @@ test("registered lead exposes only explicit live controls", async () => {
   assert.deepEqual(listed.details.agents[0].available_actions, [
     "inspect",
     "steer",
+    "interrupt",
     "close",
   ]);
   const steer = await accepting.tools[0].execute(
@@ -2601,6 +2602,49 @@ test("registered lead exposes only explicit live controls", async () => {
   );
   assert.match(rendered.text, new RegExp(`session: ${identity.piSessionId}`));
   assert.match(rendered.text, /assignment request: /);
+  let interruptSubmitted: RequestRecord | undefined;
+  const interruptPi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      (requestMailbox, marker) => {
+        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+        interruptSubmitted = readRequest(requestMailbox, requestId);
+        const current = readAgentState(requestMailbox)!;
+        writeAgentState(requestMailbox, {
+          ...current,
+          lastAck: { requestId, accepted: true, acknowledgedAt: Date.now() },
+          updatedAt: Date.now(),
+        });
+      },
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  registerExtension!(interruptPi.pi as never);
+  const interruptContext = fakeContext(interruptPi.entries);
+  await interruptPi.events.get("session_start")![0](
+    undefined,
+    interruptContext,
+  );
+  const interrupt = await interruptPi.tools[0].execute(
+    "interrupt",
+    {
+      action: "interrupt",
+      agent: label,
+      message: "Stop and use the fallback.",
+    },
+    undefined,
+    undefined,
+    interruptContext,
+  );
+  assert.equal(interrupt.details.ok, true);
+  assert.equal(interrupt.details.action, "interrupt");
+  assert.equal(interrupt.details.assignment_request_id, REQUEST_ID);
+  assert.equal(interruptSubmitted?.kind, "interrupt");
+  assert.equal(interruptSubmitted?.text, "Stop and use the fallback.");
+  interruptPi.events.get("session_shutdown")?.[0]();
   accepting.events.get("session_shutdown")?.[0]();
   realFs.rmSync(steerFile, { force: true });
 });
@@ -2845,6 +2889,13 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     assert.equal(workingParent.details.agents[0].state, "working");
     assert.ok(
       workingParent.details.agents[0].available_actions.includes("steer"),
+    );
+    assert.ok(
+      workingParent.details.agents[0].available_actions.includes("interrupt"),
+    );
+    assert.equal(
+      listed.details.agents[0].available_actions.includes("interrupt"),
+      false,
     );
 
     parentStatus = "idle";

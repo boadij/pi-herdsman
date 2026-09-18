@@ -2,13 +2,14 @@
 
 [Documentation index](../README.md) · [supervision reference](supervision.md)
 
-`agent` is the structured model-facing API for managed agents. It has eight actions:
+`agent` is the structured model-facing API for managed agents. It has nine actions:
 
 ```text
 list
 delegate
 continue
 steer
+interrupt
 reply
 close
 inspect
@@ -94,23 +95,25 @@ Each valid durable generation in the controller's proven ownership projection
 remains visible, including physically unresolved `unknown` and proven `lost`
 records. Each actionable live agent record includes:
 
-| Field                                                           | Meaning                                                                                                                                                                |
-| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`                                                         | Exact live logical agent identity to copy into `inspect.agent`, `transcript.agent`, `steer.agent`, `reply.agent`, or `close.agent`. It is not a continuation identity. |
-| `state`                                                         | Safe lifecycle state for observability.                                                                                                                                |
-| `available_actions`                                             | Snapshot of operations currently eligible for this controller.                                                                                                         |
-| `workspace_id`, `pane_id`, `tab_id`, `tab_label`                | Herdr identity evidence.                                                                                                                                               |
-| `cwd`, `pi_session_id`, `pi_session_path`                       | Agent location and Pi session evidence.                                                                                                                                |
-| `owner_session_id`                                              | Exact direct owner Pi session.                                                                                                                                         |
-| `agent_definition`                                              | Effective definition name.                                                                                                                                             |
-| `active_request_id`, `last_activity_at`, `stale`, `inactive_ms` | Assignment and advisory activity evidence.                                                                                                                             |
-| `parent_label`                                                  | Durable parent assignment when the parent is visible.                                                                                                                  |
-| `cleanup_error`, `result_error`, `diagnostic`, `tokens`         | Bounded recovery and presentation evidence when present.                                                                                                               |
+| Field                                                           | Meaning                                                                                                                                                                                   |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`                                                         | Exact live logical agent identity to copy into `inspect.agent`, `transcript.agent`, `steer.agent`, `interrupt.agent`, `reply.agent`, or `close.agent`. It is not a continuation identity. |
+| `state`                                                         | Safe lifecycle state for observability.                                                                                                                                                   |
+| `available_actions`                                             | Snapshot of operations currently eligible for this controller.                                                                                                                            |
+| `workspace_id`, `pane_id`, `tab_id`, `tab_label`                | Herdr identity evidence.                                                                                                                                                                  |
+| `cwd`, `pi_session_id`, `pi_session_path`                       | Agent location and Pi session evidence.                                                                                                                                                   |
+| `owner_session_id`                                              | Exact direct owner Pi session.                                                                                                                                                            |
+| `agent_definition`                                              | Effective definition name.                                                                                                                                                                |
+| `active_request_id`, `last_activity_at`, `stale`, `inactive_ms` | Assignment and advisory activity evidence.                                                                                                                                                |
+| `parent_label`                                                  | Durable parent assignment when the parent is visible.                                                                                                                                     |
+| `cleanup_error`, `result_error`, `diagnostic`, `tokens`         | Bounded recovery and presentation evidence when present.                                                                                                                                  |
 
 `available_actions` is authoritative model guidance for the current snapshot.
 Do not infer eligibility from `state`. Active work may list `steer`; a valid
 correlated pending `ask_owner` may list `reply`; exact direct ownership may list
-`close`. `available_actions` never lists `delegate` or `continue`: these are
+`close`. A currently working agent may list `interrupt`; a delegating agent
+blocked while waiting on children may still list `steer` but not `interrupt`.
+`available_actions` never lists `delegate` or `continue`: these are
 controller operations, not controls on an already-live agent. An agent cannot
 receive a second assignment. Directly owned live agents may expose the
 applicable live controls, including `close`; directly owned live records expose
@@ -183,7 +186,7 @@ observation path. Transcript is read-only and does not change agent state.
 
 ## `files` and `timeoutMs`
 
-`files` is valid on `delegate` and `continue`, and on `steer` and `reply`; it is not
+`files` is valid on `delegate`, `continue`, `steer`, `interrupt`, and `reply`; it is not
 valid on `list`, `close`, `inspect`, or `transcript`. Paths are resolved from the controller cwd, checked
 as readable regular files, canonicalized with `realpath`, and embedded only
 when the exact message limit permits. Otherwise they remain canonical references.
@@ -220,6 +223,35 @@ evidence files remain attachable.
 
 Use only when `steer` is listed in `available_actions`. Steering changes the
 current assignment and does not create another final result.
+
+`steer` changes the current assignment without cancelling the current Pi
+operation. While Pi is executing a model or tool operation, steering may remain
+queued until that operation reaches a safe boundary. Steering cannot stop a
+wedged tool.
+
+## `interrupt`
+
+```json
+{
+  "action": "interrupt",
+  "agent": "implementer-1",
+  "message": "Stop the hanging command and continue with a different approach."
+}
+```
+
+`interrupt` accepts `action`, the exact live `agent`, a required non-empty
+`message`, and optional `files`. It is available only to the exact direct owner
+while the agent has a currently working Pi operation.
+
+Interrupt is preemptive: it requests Pi cancellation of the current operation
+and continues the same managed generation and assignment using the replacement
+message. It does not create another assignment or terminal result and does not
+close or recreate the agent. Previous Pi-queued steering/follow-up input is
+removed from execution by Pi's native abort behavior and may remain preserved
+in the child editor.
+
+Cancellation uses Pi's native abort mechanism. Non-cooperative third-party
+tools may not stop immediately; `close` remains the destructive fallback.
 
 ## `reply`
 

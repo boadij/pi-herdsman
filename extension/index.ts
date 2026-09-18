@@ -271,16 +271,25 @@ State describes what is happening; available_actions describes current control
 eligibility. Every operation revalidates exact state and identity before
 mutation.
 
-The live-agent control actions are \`steer\`, \`reply\`, and \`close\`; these mutate
-live agent execution and are available only when listed. Read-only \`inspect\`
+The live-agent control actions are \`steer\`, \`interrupt\`, \`reply\`, and \`close\`;
+these mutate live agent execution and are available only when listed. Read-only \`inspect\`
 captures bounded live terminal/process evidence. Read-only \`transcript\`
 captures bounded persisted Pi conversation and tool evidence when listed.
 Neither changes agent state. A completed agent does not remain available for
 another assignment.
 
-Use steer only to change active work. Use reply only to answer a valid
-outstanding ask_owner question. Use close only for intentional teardown or
-abandonment.
+Use steer only to change active work non-preemptively. Steering does not cancel
+an in-flight model or tool operation; Pi may queue it until the current
+operation reaches a safe boundary.
+
+Use interrupt only when the current in-flight operation itself must be
+abandoned. Interrupt is preemptive: it cancels the current Pi operation and
+continues the same assignment with the required replacement message. Do not
+interrupt merely because an agent is slow or marked stale; inactivity is
+advisory and does not prove a hang.
+
+Use reply only to answer a valid outstanding ask_owner question. Use close only
+for intentional teardown or abandonment.
 
 A lost agent is a managed assignment whose exact physical execution is proven
 gone before a durable terminal result resolved it. Loss is not completion or
@@ -324,7 +333,7 @@ If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before
 starting another assignment; follow the stored recovery nextAction.
 
-Before delegate, continue, steer, or reply, make the message self-contained.
+Before delegate, continue, steer, interrupt, or reply, make the message self-contained.
 
 Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md,
 GEMINI.md, or equivalents merely because they exist. Rely on normal project or
@@ -527,7 +536,12 @@ type Params =
       files?: string[];
       timeoutMs?: number;
     }
-  | { action: "steer"; agent: string; message: string; files?: string[] }
+  | {
+      action: "steer" | "interrupt";
+      agent: string;
+      message: string;
+      files?: string[];
+    }
   | { action: "reply"; agent: string; message: string; files?: string[] }
   | { action: "close"; agent: string }
   | { action: "inspect"; agent: string }
@@ -536,12 +550,18 @@ function parseRequest(p: Params): Params {
   if (p.action === "list") {
     return { action: "list" };
   }
-  if (p.action === "steer") {
-    if (!p.agent) fail("invalid_request", "Steer requires an agent", "steer");
+  if (p.action === "steer" || p.action === "interrupt") {
+    const label = p.action === "interrupt" ? "Interrupt" : "Steer";
+    if (!p.agent)
+      fail("invalid_request", `${label} requires an agent`, p.action);
     if (!p.message)
-      fail("invalid_request", "Steer requires a non-empty message", "steer");
+      fail(
+        "invalid_request",
+        `${label} requires a non-empty message`,
+        p.action,
+      );
     return {
-      action: "steer",
+      action: p.action,
       agent: p.agent!,
       message: p.message!,
       ...(p.files ? { files: p.files } : {}),
@@ -2379,18 +2399,14 @@ function runtimeIdentityState(runtime: Runtime): ManagedAgentState {
 async function submit(
   pi: ExtensionAPI,
   runtime: Runtime,
-  kind: "task" | "steer" | "reply",
+  kind: "task" | "steer" | "interrupt" | "reply",
   text: string,
   ctx: ExtensionContext,
   signal?: AbortSignal,
   askId?: string,
   createdAt = Date.now(),
   requestId = randomUUID(),
-  operation = kind === "task"
-    ? "delegate"
-    : kind === "steer"
-      ? "steer"
-      : "reply",
+  operation = kind === "task" ? "delegate" : kind,
 ): Promise<string> {
   if (!text.trim())
     fail("invalid_request", "Message must not be empty", operation);
@@ -2931,6 +2947,8 @@ function listedAgentRecords(
       actions.push("inspect");
       if (transcriptAvailable) actions.push("transcript");
       if (listed.steerable === true) actions.push("steer");
+      if (listed.state === "working" && !state.pendingAskId)
+        actions.push("interrupt");
       if (state.pendingAskId) {
         try {
           const ask = readPendingAsk(
@@ -4025,7 +4043,7 @@ async function resolveRuntime(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   agentLabel: string,
-  operation: "steer" | "reply" | "inspect",
+  operation: "steer" | "interrupt" | "reply" | "inspect",
   signal?: AbortSignal,
 ): Promise<{
   runtime: Runtime;
@@ -5022,7 +5040,7 @@ async function rollbackUnknownStartedAgent(
 }
 function requestRecordBytesFor(
   runtime: Runtime,
-  kind: "task" | "steer" | "reply",
+  kind: "task" | "steer" | "interrupt" | "reply",
   text: string,
   askId: string | undefined,
   createdAt: number,
@@ -5972,6 +5990,21 @@ async function actionUnsafe(
     );
   if (p.action === "steer" && !runtime.activeRequestId)
     fail("agent_busy", "Agent has no active assignment", "steer");
+  if (p.action === "interrupt" && resolved.controlState !== "working")
+    fail(
+      "agent_busy",
+      `Agent has no interruptible active operation: ${resolved.controlState}`,
+      "interrupt",
+      {
+        nextAction:
+          "Use interrupt only when available_actions includes interrupt. Use steer for non-preemptive assignment changes.",
+      },
+    );
+  if (
+    (p.action === "steer" || p.action === "interrupt") &&
+    !runtime.activeRequestId
+  )
+    fail("agent_busy", "Agent has no active assignment", p.action);
   if (p.action === "reply") {
     const currentState = readAgentState(runtime.mailboxPath);
     const askId = currentState?.pendingAskId;
@@ -6050,50 +6083,48 @@ async function actionUnsafe(
     };
   }
   const requestCreatedAt = Date.now();
-  const steerRequestId = p.action === "steer" ? randomUUID() : undefined;
-  const messageInput =
-    p.action === "steer"
-      ? prepareMessageInput(
-          p.message!,
-          p.files ?? [],
-          ctx.cwd,
-          "steer",
-          "Steer",
-          {
-            inlineLimitBytes: limits.inline.bytes,
-            mailboxLimitBytes: limits.mailbox.bytes,
-            serializedBytes: (text) =>
-              requestRecordBytesFor(
-                runtime!,
-                "steer",
-                text,
-                undefined,
-                requestCreatedAt,
-                steerRequestId!,
-              ),
-          },
-        )
-      : assignmentInput!;
+  const controlRequestId = randomUUID();
+  const controlAction = p.action;
+  const messageInput = prepareMessageInput(
+    p.message,
+    p.files ?? [],
+    ctx.cwd,
+    controlAction,
+    controlAction === "interrupt" ? "Interrupt" : "Steer",
+    {
+      inlineLimitBytes: limits.inline.bytes,
+      mailboxLimitBytes: limits.mailbox.bytes,
+      serializedBytes: (text) =>
+        requestRecordBytesFor(
+          runtime,
+          controlAction,
+          text,
+          undefined,
+          requestCreatedAt,
+          controlRequestId,
+        ),
+    },
+  );
   const requestId = await submit(
     pi,
-    runtime!,
-    "steer",
+    runtime,
+    controlAction,
     messageInput.text,
     ctx,
     signal,
     undefined,
     requestCreatedAt,
-    steerRequestId!,
-    p.action,
+    controlRequestId,
+    controlAction,
   );
   return {
     ok: true,
     action: p.action,
-    agent: runtime!.label,
+    agent: runtime.label,
     presentation_agent_definition: presentationAgentDefinition,
     request_id: requestId,
-    session_id: runtime!.piSessionId,
-    assignment_request_id: runtime!.activeRequestId,
+    session_id: runtime.piSessionId,
+    assignment_request_id: runtime.activeRequestId,
   };
 }
 
@@ -6295,7 +6326,7 @@ export default function (pi: ExtensionAPI): void {
             }),
             {
               description:
-                "Supporting files for delegation, steering, replying, or ask_owner. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path, result:<request-id>, and byte size. Files do not grant capabilities.",
+                "Supporting files for delegation, steering, interrupting, replying, or ask_owner. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path, result:<request-id>, and byte size. Files do not grant capabilities.",
             },
           ),
         ),
@@ -6338,7 +6369,7 @@ export default function (pi: ExtensionAPI): void {
     ),
     Type.Object(
       {
-        action: StringEnum(["steer"] as const),
+        action: StringEnum(["steer", "interrupt"] as const),
         agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
         message: Type.String({ pattern: "\\S" }),
         files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
@@ -11143,7 +11174,9 @@ export default function (pi: ExtensionAPI): void {
         text: `Owner reply:\n\n${request.text}\n\nContinue the original assignment using this answer.`,
       };
     }
-    if (request.kind === "steer" && state.pendingAskId) {
+    const controlRequest =
+      request.kind === "steer" || request.kind === "interrupt";
+    if (controlRequest && state.pendingAskId) {
       acknowledgeAndDiscard(
         id,
         false,
@@ -11183,7 +11216,7 @@ export default function (pi: ExtensionAPI): void {
       );
       return { action: "handled" };
     }
-    if (request.kind === "steer" && (pendingResult || pendingStateTransition)) {
+    if (controlRequest && (pendingResult || pendingStateTransition)) {
       acknowledgeAndDiscard(
         id,
         false,
@@ -11194,6 +11227,19 @@ export default function (pi: ExtensionAPI): void {
       return { action: "handled" };
     }
     const isIdle = ctx.isIdle();
+    if (
+      request.kind === "interrupt" &&
+      (!state.activeRequestId || isIdle || ctx.signal?.aborted)
+    ) {
+      acknowledgeAndDiscard(
+        id,
+        false,
+        ctx,
+        "idle",
+        "Agent has no active Pi operation to interrupt",
+      );
+      return { action: "handled" };
+    }
     if (
       request.kind === "steer" &&
       !steerAcceptanceAllowed(
@@ -11246,9 +11292,19 @@ export default function (pi: ExtensionAPI): void {
         ...(thinking ? { thinking } : {}),
       });
     }
-    if (request.kind === "steer") {
+    if (request.kind === "steer" || request.kind === "interrupt") {
       if (!acknowledge(id, true)) return { action: "handled" };
       latest = "";
+      if (request.kind === "interrupt") {
+        ctx.abort();
+        return {
+          action: "transform",
+          text:
+            `Owner interrupt:\n\n${request.text}\n\n` +
+            "The previous in-flight operation was intentionally aborted. " +
+            "Continue the original assignment using this replacement instruction.",
+        };
+      }
       return { action: "transform", text: request.text };
     }
     latest = "";

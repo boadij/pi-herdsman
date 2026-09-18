@@ -91,6 +91,23 @@ test("Pi UUIDv7 session and run identities are valid mailbox fields", () => {
     createdAt: Date.now(),
   });
   assert.equal(readRequest(path, requestId)?.requestId, requestId);
+  const interruptRequest = {
+    version: 4 as const,
+    runId: v7State.runId,
+    requestId: "018f2f2e-7b15-7abc-8def-0123456789ab",
+    ownerSessionId: v7State.ownerSessionId,
+    workspaceId: v7State.workspaceId,
+    agentLabel: v7State.agentLabel,
+    paneId: v7State.paneId,
+    kind: "interrupt" as const,
+    text: "stop and continue",
+    createdAt: Date.now(),
+  };
+  writeRequest(path, interruptRequest);
+  assert.deepEqual(
+    readRequest(path, interruptRequest.requestId),
+    interruptRequest,
+  );
 });
 test("asks and reply requests round-trip with strict correlation", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));

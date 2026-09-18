@@ -152,6 +152,89 @@ test("managed requests pump through Pi semantic input", async () => {
   }
 });
 
+test("managed interrupt aborts the current Pi operation and replaces direction", () => {
+  const mailbox = setAgentEnvironment("interrupt-agent");
+  const assignmentRequestId = REQUEST_ID;
+  const initial = managedState("interrupt-agent", assignmentRequestId);
+  writeAgentState(mailbox, initial);
+  let aborted = 0;
+  const agent = fakePi();
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext();
+  context.isIdle = () => false;
+  context.abort = () => {
+    aborted++;
+  };
+  const input = () => agent.events.get("input")![0];
+  try {
+    agent.events.get("session_start")![0](undefined, context);
+    const interrupt: RequestRecord = {
+      version: 4,
+      runId: initial.runId,
+      requestId: randomUUID(),
+      ownerSessionId: initial.ownerSessionId,
+      workspaceId: initial.workspaceId,
+      agentLabel: initial.agentLabel,
+      paneId: initial.paneId,
+      kind: "interrupt",
+      text: "Stop this operation and continue differently.",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, interrupt);
+    const transformed = input()(
+      { text: controlMarker(interrupt.requestId) },
+      context,
+    );
+    assert.equal(aborted, 1);
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      interrupt.requestId,
+    );
+    assert.equal(readAgentState(mailbox)?.activeRequestId, assignmentRequestId);
+    assert.deepEqual(transformed, {
+      action: "transform",
+      text:
+        "Owner interrupt:\n\n" +
+        "Stop this operation and continue differently.\n\n" +
+        "The previous in-flight operation was intentionally aborted. " +
+        "Continue the original assignment using this replacement instruction.",
+    });
+
+    const steer: RequestRecord = {
+      ...interrupt,
+      requestId: randomUUID(),
+      kind: "steer",
+      text: "Ordinary steer.",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, steer);
+    assert.deepEqual(
+      input()({ text: controlMarker(steer.requestId) }, context),
+      { action: "transform", text: steer.text },
+    );
+    assert.equal(aborted, 1);
+
+    const idleInterrupt: RequestRecord = {
+      ...interrupt,
+      requestId: randomUUID(),
+      text: "Too late.",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, idleInterrupt);
+    context.isIdle = () => true;
+    assert.deepEqual(
+      input()({ text: controlMarker(idleInterrupt.requestId) }, context),
+      { action: "handled" },
+    );
+    assert.equal(readAgentState(mailbox)?.lastAck?.accepted, false);
+    assert.equal(readAgentState(mailbox)?.lastAck?.code, "idle");
+    assert.equal(aborted, 1);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("managed session start immediately recovers a durable request", async () => {
   const mailbox = setAgentEnvironment("pump-recovery-agent");
   const persisted = managedState("pump-recovery-agent");

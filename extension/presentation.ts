@@ -1415,6 +1415,18 @@ export function formatToolModelResult(
       transcript || "(no persisted transcript evidence)",
     ].join("\n");
   }
+  if (action === "interrupt") {
+    return [
+      `Interrupt accepted for agent ${value(v.agent) || "unknown"}.`,
+      "The current Pi operation was asked to stop and the replacement instruction continues the same assignment.",
+      ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
+      ...(value(v.request_id) ? [`Request: ${v.request_id}`] : []),
+      ...(value(v.assignment_request_id)
+        ? [`Assignment request: ${v.assignment_request_id}`]
+        : []),
+      ...cleanup,
+    ].join("\n");
+  }
   if (action === "list") {
     const agents = Array.isArray(v.agents)
       ? (v.agents as Record<string, unknown>[])
@@ -1961,11 +1973,13 @@ function expandedResultLines(
               : "sent to Chief"
             : action === "steer"
               ? "steering sent"
-              : action === "reply"
-                ? `reply sent to ${display}`
-                : action === "close"
-                  ? `${display} closed`
-                  : `${action} ${display}`;
+              : action === "interrupt"
+                ? "interrupt accepted"
+                : action === "reply"
+                  ? `reply sent to ${display}`
+                  : action === "close"
+                    ? `${display} closed`
+                    : `${action} ${display}`;
   const lines = [heading];
   const fields: Array<[string, unknown]> = [
     ["definition", details.definition ?? details.agent_definition],
