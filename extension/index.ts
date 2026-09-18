@@ -6249,14 +6249,19 @@ export default function (pi: ExtensionAPI): void {
   );
   const processRole = role();
   if (processRole === "unmanaged") {
-    pi.registerCommand("agents", {
+    const agentsCommand = {
       description: "Show Pi Herdsman setup guidance",
-      handler: async (_args, ctx) => {
+      handler: async (_args: string, ctx: ExtensionCommandContext) => {
         if (!ctx.hasUI) return;
         ctx.ui.notify(
           "Pi Herdsman is inactive because this Pi session is not running inside Herdr.\n\nStart Herdr in this project, then run Pi in a Herdr pane:\n  herdr\n  pi\n\nIf needed, install the Pi integration once:\n  herdr integration install pi",
         );
       },
+    };
+    pi.registerCommand("agents", agentsCommand);
+    pi.registerCommand("herdsman", {
+      ...agentsCommand,
+      description: "Alias for /agents",
     });
     return;
   }
@@ -9623,7 +9628,7 @@ export default function (pi: ExtensionAPI): void {
         supervisionToolRegistered = true;
         registerSupervisionTool = undefined;
       };
-      pi.registerCommand("agents", {
+      const agentsCommand = {
         description: "Manage Herdr agents",
         getArgumentCompletions: (argumentPrefix: string) => {
           const commands = ["definitions", "placement", "stop"];
@@ -9668,6 +9673,11 @@ export default function (pi: ExtensionAPI): void {
             ctx.ui.notify(String(error), "error");
           }
         },
+      };
+      pi.registerCommand("agents", agentsCommand);
+      pi.registerCommand("herdsman", {
+        ...agentsCommand,
+        description: "Alias for /agents",
       });
     }
     const recoverControllerRuntimes = async (

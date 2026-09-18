@@ -4,10 +4,15 @@
 
 `/agents` is the human-facing agent-management command namespace.
 
+`/herdsman` is a discovery alias for `/agents`. It accepts the same arguments
+and runs the same command behavior; help and usage text continue to use
+`/agents` as the canonical name.
+
 It is separate from the structured model-facing `agent` API.
 
 Agent-management commands require a lead Pi session with UI. Outside Herdr,
-plain `/agents` remains available as a setup diagnostic.
+plain `/agents` and its `/herdsman` alias remain available as a setup
+diagnostic.
 
 ## Usage
 
