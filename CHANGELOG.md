@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0](https://github.com/boadij/pi-herdsman/compare/v0.8.1...v0.9.0) (2026-09-18)
+
+
+### Features
+
+* add agent transcript action ([#81](https://github.com/boadij/pi-herdsman/issues/81)) ([6a490f7](https://github.com/boadij/pi-herdsman/commit/6a490f7734bf0d0d1d0ad5f78483b40ee111de75))
+
+
+### Fixes
+
+* improve agent transcript readiness and bounds ([#83](https://github.com/boadij/pi-herdsman/issues/83)) ([b5e0ca6](https://github.com/boadij/pi-herdsman/commit/b5e0ca694f3e7abd50b78e3fc3196275572cff82))
+
 ## [0.8.1](https://github.com/boadij/pi-herdsman/compare/v0.8.0...v0.8.1) (2026-09-18)
 
 

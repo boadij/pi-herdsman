@@ -1,6 +1,6 @@
 {
   "name": "pi-herdsman",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "type": "module",
   "description": "Asynchronous Pi subagents and agent fleet orchestration with nested delegation, parallel execution, and supervision in herdr.",
   "license": "Apache-2.0",
