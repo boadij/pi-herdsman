@@ -10680,7 +10680,8 @@ export default function (pi: ExtensionAPI): void {
         return;
       }
       pi.sendUserMessage(controlMarker(request.requestId), {
-        deliverAs: "steer",
+        // Interrupt replacement must outlive the run being aborted.
+        deliverAs: request.kind === "interrupt" ? "followUp" : "steer",
       });
     } catch (error) {
       if (!requestPumpErrorReported) {
