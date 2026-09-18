@@ -1345,6 +1345,11 @@ export function formatToolModelResult(
       `Agent ${action} failed.`,
       `Category: ${value(e.category) || "error"}`,
       `Message: ${value(e.message) || "Operation failed"}`,
+      ...[
+        evidenceLine("Operation", e.operation),
+        evidenceLine("Rollback occurred", e.rollbackOccurred),
+        evidenceLine("Retry attempted", e.retryAttempted),
+      ].filter((line): line is string => line !== undefined),
       ...(e.ids && typeof e.ids === "object"
         ? [evidenceLine("Identity", e.ids)].filter(
             (line): line is string => line !== undefined,
@@ -1786,6 +1791,11 @@ function errorLines(
     `${action} failed`,
     `category: ${value(error.category) || "error"}`,
     `message: ${message}`,
+    ...[
+      evidenceLine("operation", error.operation),
+      evidenceLine("rollback occurred", error.rollbackOccurred),
+      evidenceLine("retry attempted", error.retryAttempted),
+    ].filter((line): line is string => line !== undefined),
     ...(value(error.nextAction) ? [`next: ${value(error.nextAction)}`] : []),
     ...(error.ids && typeof error.ids === "object"
       ? [evidenceLine("identity", error.ids)!]
@@ -2150,7 +2160,8 @@ export function renderCoordinationResult(
               : `${action} ${label}`;
     return new WidthSafeText(
       statusLine(theme, "success", "✓", message) +
-        (details.cleanup_error
+        (details.cleanup_error ||
+        (details.cleanup_errors && typeof details.cleanup_errors === "object")
           ? `\n${humanText(theme, "warning", `  ! cleanup warning · Ctrl+O`)}`
           : ""),
       0,

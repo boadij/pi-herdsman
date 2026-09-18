@@ -71,8 +71,10 @@ A `rollback_failure` can preserve:
 
 Inspect these fields before another destructive attempt.
 
-Model-facing error text surfaces available identity, stage, primary cause,
-cleanup cause, and next action without discarding the structured details.
+Model-facing error text surfaces operation, rollback and retry state, available
+identity, stage, primary cause, cleanup cause, and next action. Complete
+structured error details remain available in tool-result details for UI and
+logging.
 
 ## Model-visible truncation
 

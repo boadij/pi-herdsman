@@ -1730,6 +1730,9 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
           error: {
             category: "agent_busy",
             message: "** FAILED ** `steering`",
+            operation: "steer",
+            rollbackOccurred: false,
+            retryAttempted: true,
             nextAction: "refresh agents",
             ids: { agent: "researcher", session: "session-id" },
             details: { stage: "validate" },
@@ -1745,6 +1748,9 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
     ),
   );
   assert.match(expandedError, /category: agent_busy/);
+  assert.match(expandedError, /operation: steer/);
+  assert.match(expandedError, /rollback occurred: false/);
+  assert.match(expandedError, /retry attempted: true/);
   assert.match(expandedError, /identity: agent=researcher, session=session-id/);
   assert.match(expandedError, /stage: validate/);
   assert.match(
@@ -2496,6 +2502,27 @@ test("tool and completion renderers retain structured action details", (t) => {
         ),
       ),
       "agents 2 · 1 working · 1 blocked",
+    );
+    const cleanupWarning = renderedText(
+      renderCoordinationResult(
+        "agent",
+        {
+          details: {
+            ok: true,
+            agent: "researcher",
+            cleanup_errors: {
+              researcher: "mailbox cleanup failed",
+            },
+          },
+        },
+        {},
+        presentationTheme,
+        { args: { action: "delegate", definition: "researcher" } },
+      ),
+    );
+    assert.match(
+      cleanupWarning,
+      /✓ researcher started\n  ! cleanup warning · Ctrl\+O/,
     );
     assert.match(
       formatToolModelResult("close", {
@@ -3764,6 +3791,9 @@ test("Model output preserves inspection, concise controls, and structured errors
       error: {
         category: "rollback_failure",
         message: "startup failed",
+        operation: "delegate",
+        rollbackOccurred: true,
+        retryAttempted: false,
         ids: { label: "agent", paneId: "pane-1" },
         details: { stage: "agent_start" },
         primary: { category: "pane_not_ready", message: "Pi did not start" },
@@ -3771,6 +3801,9 @@ test("Model output preserves inspection, concise controls, and structured errors
         nextAction: "Inspect the preserved pane",
       },
     });
+    assert.match(rendered, /Operation: delegate/);
+    assert.match(rendered, /Rollback occurred: true/);
+    assert.match(rendered, /Retry attempted: false/);
     assert.match(rendered, /Identity: label=agent, paneId=pane-1/);
     assert.match(rendered, /Stage: agent_start/);
     assert.match(
