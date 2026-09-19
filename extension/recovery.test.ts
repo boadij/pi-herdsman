@@ -4079,6 +4079,95 @@ test("delegation parent notifies only its direct stale child", async () => {
     nativeSessions.delete(state.piSessionFile!);
 });
 
+test("stale working parents remain visible while waiting parents project blocked", async (t) => {
+  setLeadEnvironment();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => t.mock.timers.reset());
+  const parent = {
+    ...managedState(
+      "stale-working-parent",
+      REQUEST_ID,
+      recoveryIdentity("stale-working-parent"),
+    ),
+    lastActivityAt: now - 11 * 60_000,
+  };
+  const child = {
+    ...managedState("active-parent-child", randomUUID(), {
+      ...recoveryIdentity("active-parent-child"),
+      piSessionId: CHILD_SESSION_ID,
+    }),
+    ownerSessionId: parent.piSessionId,
+  };
+  for (const state of [parent, child])
+    writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), state);
+
+  let parentLifecycle: "working" | "idle" = "working";
+  const controller = agentControllerExecutor(parent, [child]);
+  const exec = (command: string, args: string[], options?: any) => {
+    const result = controller(command, args, options);
+    if (command !== "herdr" || (!isAgentList(args) && !isApiSnapshot(args)))
+      return result;
+    const payload = JSON.parse(result.stdout);
+    const agents = isApiSnapshot(args)
+      ? payload.result.snapshot.agents
+      : payload.result.agents;
+    agents[0].agent_status = parentLifecycle;
+    if (isApiSnapshot(args))
+      payload.result.snapshot.panes[0].agent_status = parentLifecycle;
+    return { ...result, stdout: JSON.stringify(payload) };
+  };
+  const pi = fakePi({ exec });
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      pi.sent.filter(
+        (message: any) => message.customType === "pi-herdsman-agent-stale",
+      ).length,
+      1,
+      "a stale working parent must notify its own owner even with an active child",
+    );
+    const stale = pi.sent.find(
+      (message: any) => message.customType === "pi-herdsman-agent-stale",
+    ) as any;
+    assert.equal(stale.details.agentLabel, parent.agentLabel);
+    assert.equal(stale.details.ownerSessionId, LEAD_SESSION_ID);
+
+    pi.sent.length = 0;
+    parentLifecycle = "idle";
+    t.mock.timers.tick(30_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    const waiting = await pi.tools[0].execute(
+      "id",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(
+      waiting.details.agents.find(
+        (agent: any) => agent.agent === parent.agentLabel,
+      )?.state,
+      "blocked",
+      "an idle parent waiting on an unresolved child projects blocked",
+    );
+    assert.equal(
+      pi.sent.filter(
+        (message: any) => message.customType === "pi-herdsman-agent-stale",
+      ).length,
+      0,
+      "a waiting parent must not receive a stale advisory",
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    for (const state of [parent, child])
+      resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
+  }
+});
+
 test("health scanner alerts true runtime blocking", async () => {
   setLeadEnvironment();
   const label = "runtime-blocked";

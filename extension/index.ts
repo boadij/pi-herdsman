@@ -10301,13 +10301,6 @@ export default function (pi: ExtensionAPI): void {
         if (
           agent.presence.kind !== "live" ||
           listed.state !== "working" ||
-          snapshot.agents.some(
-            ({ state: child }) =>
-              child.ownerSessionId === state.piSessionId &&
-              (child.resultError ||
-                child.activeRequestId ||
-                child.completedRequestId),
-          ) ||
           !state.activeRequestId ||
           state.lastActivityAt === undefined ||
           state.lastActivityAt > now ||
