@@ -61,6 +61,7 @@ import support, {
   startupExecutor,
   testTmpRoot,
   truncateModelText,
+  waitForTestCondition,
   agentMailboxPath,
   writeAsk,
   writeRequest,
@@ -321,7 +322,7 @@ test("conflicting same-request entries do not suppress an exact combined result"
       0,
       "a conflicting same-request result must not resolve status",
     );
-    assert.equal(queued, 1, "a conflicting entry must not suppress redelivery");
+    assert.equal(queued, 2, "a conflicting entry must not suppress redelivery");
     assert.ok(readResult(childMailbox, REQUEST_ID));
 
     entries.push({
@@ -354,7 +355,10 @@ test("conflicting same-request entries do not suppress an exact combined result"
       0,
       "an exact persisted result must not create a second status steer",
     );
-    assert.equal(readResult(childMailbox, REQUEST_ID), undefined);
+    await waitForTestCondition(
+      () => readResult(childMailbox, REQUEST_ID) === undefined,
+      "exact persisted result did not clean up",
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(childMailbox);
@@ -1668,6 +1672,94 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
     recovered.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(childMailbox);
     resetAgentMailbox(siblingMailbox);
+  }
+});
+
+test("settlement redelivers an unpersisted child result in the same session", async () => {
+  setLeadEnvironment();
+
+  const label = "settled-redelivery-child";
+  const child = {
+    ...managedState(label, undefined, recoveryIdentity(label)),
+    completedRequestId: REQUEST_ID,
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, child);
+  writeResult(mailbox, {
+    version: 4,
+    runId: child.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: child.ownerSessionId,
+    workspaceId: child.workspaceId,
+    agentLabel: child.agentLabel,
+    paneId: child.paneId,
+    status: "completed",
+    text: "durable child result",
+    completedAt: Date.now(),
+  });
+
+  const lifecycle = cascadeExecutor([child]);
+  const entries: unknown[] = [];
+  let deliveries = 0;
+
+  const pi = fakePi({
+    entries,
+    exec: lifecycle.exec,
+    sendMessage: (message) => {
+      if ((message as any).customType !== "pi-herdsman-agent-result") return;
+
+      deliveries++;
+      if (deliveries === 1) return;
+
+      entries.push({
+        message: {
+          role: "custom",
+          customType: "pi-herdsman-agent-result",
+          details: (message as any).details,
+        },
+      });
+    },
+  });
+
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries);
+
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+
+    assert.equal(deliveries, 1);
+    assert.ok(readResult(mailbox, REQUEST_ID));
+    assert.equal(
+      entries.some(
+        (entry: any) =>
+          entry.message?.customType === "pi-herdsman-agent-result",
+      ),
+      false,
+    );
+
+    pi.events.get("agent_settled")![0](undefined, context);
+
+    await waitForTestCondition(
+      () => deliveries === 2,
+      "settlement did not redeliver the lost child result",
+    );
+
+    await waitForTestCondition(
+      () => readResult(mailbox, REQUEST_ID) === undefined,
+      "redelivered child result did not clean up",
+    );
+
+    assert.equal(deliveries, 2);
+    assert.deepEqual(lifecycle.closeOrder, [label]);
+
+    pi.events.get("agent_settled")![0](undefined, context);
+    await Promise.resolve();
+    assert.equal(deliveries, 2);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
   }
 });
 

@@ -18,8 +18,9 @@ durable assignment/convergence evidence. It is not a raw herdr lifecycle string.
 A live agent record in `agent list` includes an `available_actions` snapshot.
 Use only operations currently listed there; do not infer control eligibility
 from `state` alone. `steer` means active work accepts cooperative steering,
-`interrupt` means a currently working Pi operation may be preempted with
-replacement direction, `reply` means a
+`interrupt` means a currently working Pi operation may be preempted,
+superseding earlier undelivered steering with replacement direction, `reply`
+means a
 correlated pending `ask_owner` is valid, and `close` means exact direct ownership
 permits teardown. `available_actions` never includes
 `delegate`; an agent generation handles one assignment only. Every operation

@@ -81,6 +81,7 @@ test("managed requests pump through Pi semantic input", async () => {
   });
   registerExtension!(agent.pi as never);
   context = fakeAgentContext();
+  context.mode = "rpc";
   try {
     await agent.events.get("session_start")![0](undefined, context);
     const state = readAgentState(mailbox)!;
@@ -192,12 +193,24 @@ test("managed interrupt aborts the current Pi operation and replaces direction",
   const initial = managedState("interrupt-agent", assignmentRequestId);
   writeAgentState(mailbox, initial);
   let aborted = 0;
+  let editorText = "manual unsent draft";
   const agent = fakePi();
   registerExtension!(agent.pi as never);
   const context = fakeAgentContext();
   context.isIdle = () => false;
+  const editor = context.ui as typeof context.ui & {
+    getEditorText: () => string;
+    setEditorText: (text: string) => void;
+  };
+  editor.getEditorText = () => editorText;
+  editor.setEditorText = (text: string) => {
+    editorText = text;
+  };
   context.abort = () => {
     aborted++;
+    // Simulate Pi interactive-mode abort restoring queued user text.
+    editorText =
+      "OLD QUEUED STEERING THAT SHOULD BE SUPERSEDED\n\n" + editorText;
   };
   const input = () => agent.events.get("input")![0];
   try {
@@ -220,6 +233,7 @@ test("managed interrupt aborts the current Pi operation and replaces direction",
       context,
     );
     assert.equal(aborted, 1);
+    assert.equal(editorText, "manual unsent draft");
     assert.equal(
       readAgentState(mailbox)?.lastAck?.requestId,
       interrupt.requestId,
@@ -1717,8 +1731,8 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       "two",
     );
     // Child two was accepted by pi.sendMessage above, but its owner-session
-    // result entry is still not observable. It remains unresolved alongside
-    // child three; no second status steer is sent while it awaits persistence.
+    // result entry is still not observable. Settlement redelivers it while it
+    // remains unresolved alongside child three.
     assert.equal(
       entries.some(
         (entry: any) =>
@@ -1730,7 +1744,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       false,
     );
     settle(undefined, context);
-    assert.equal(pi.sent.length, 2);
+    assert.equal(pi.sent.length, 3);
     entries.push({
       message: {
         customType: "pi-herdsman-agent-result",
@@ -1748,7 +1762,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     deliver(childThree, childThreeMailbox, "three");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(pi.sent.length, 3);
+    assert.equal(pi.sent.length, 4);
     writeAgentState(childThreeMailbox, {
       ...childThree,
       activeRequestId: undefined,
@@ -1776,30 +1790,30 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     settle(undefined, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(pi.sent.length, 3);
+    assert.equal(pi.sent.length, 5);
     assert.match(
-      sentContent(2),
+      sentContent(3),
       /Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved\./,
     );
     assert.match(
-      sentContent(2),
+      sentContent(3),
       /You may conclude if your own acceptance criteria are satisfied\./,
     );
     assert.equal(
-      (pi.sentMessageCalls[2].message as any).details
+      (pi.sentMessageCalls[3].message as any).details
         .unresolvedDirectChildCount,
       0,
     );
     assert.equal(
-      (pi.sentMessageCalls[2].message as any).details.activeDirectChildCount,
+      (pi.sentMessageCalls[3].message as any).details.activeDirectChildCount,
       0,
     );
     assert.equal(
-      (pi.sentMessageCalls[2].message as any).details.pendingDirectResultCount,
+      (pi.sentMessageCalls[3].message as any).details.pendingDirectResultCount,
       0,
     );
     assert.match(
-      sentContent(2),
+      sentContent(3),
       /Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved\./,
     );
     assert.ok(readResult(childThreeMailbox, thirdRequestId));
@@ -1819,7 +1833,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       /1 direct agent assignment remains unresolved/,
     );
     assert.match(
-      sentContent(2),
+      sentContent(3),
       /Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved\./,
     );
     assert.equal(earlyResultStatus, "failed");
@@ -1835,6 +1849,8 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     assert.deepEqual(
       pi.sentMessageCalls.map(({ message }) => (message as any).customType),
       [
+        "pi-herdsman-agent-result",
+        "pi-herdsman-agent-result",
         "pi-herdsman-agent-result",
         "pi-herdsman-agent-result",
         "pi-herdsman-agent-result",

@@ -290,10 +290,11 @@ an in-flight model or tool operation; Pi may queue it until the current
 operation reaches a safe boundary.
 
 Use interrupt only when the current in-flight operation itself must be
-abandoned. Interrupt is preemptive: it cancels the current Pi operation and
-continues the same assignment with the required replacement message. Do not
-interrupt merely because an agent is slow or marked stale; inactivity is
-advisory and does not prove a hang.
+abandoned. Interrupt is preemptive: it cancels the current Pi operation,
+supersedes any earlier steering that Pi has not yet delivered, and continues
+the same assignment with the required replacement message. Do not interrupt
+merely because an agent is slow or marked stale; inactivity is advisory and
+does not prove a hang.
 
 Use reply only to answer a valid outstanding ask_owner question. Use close only
 for intentional teardown or abandonment.
@@ -3590,14 +3591,14 @@ async function settlePersistedResults(
     } catch {
       continue;
     }
-    if (
-      !result ||
-      !hasDeliveredResult(
-        entries,
-        resultDeliveryExpectation(runtime, requestId),
-      )
-    )
-      continue;
+    if (!result) continue;
+
+    const expected = resultDeliveryExpectation(runtime, requestId);
+    if (!hasDeliveredResult(entries, expected))
+      resultDeliveryEvidence.delete(
+        resultDeliveryEvidenceKey(runtime, requestId),
+      );
+
     await deliverResult(pi, runtime, ctx, result, signal);
   }
 }
@@ -10343,7 +10344,7 @@ export default function (pi: ExtensionAPI): void {
                 "Use transcript when persisted conversation/tool history is enough; use inspect only when live terminal/process evidence is needed.",
                 "If the current operation appears healthy or legitimately long-running, leave it alone.",
                 "Use steer for a non-preemptive correction.",
-                "Use interrupt only when the current operation itself must be abandoned; interrupt cancels that operation and continues the same assignment.",
+                "Use interrupt only when the current operation itself must be abandoned; interrupt cancels that operation, supersedes earlier steering Pi has not yet delivered, and continues the same assignment.",
                 "Use close only to abandon the assignment or as destructive fallback.",
               ].join("\n"),
               display: true,
@@ -11695,7 +11696,13 @@ export default function (pi: ExtensionAPI): void {
       if (!acknowledge(id, true)) return { action: "handled" };
       latest = "";
       if (request.kind === "interrupt") {
+        const editorText =
+          ctx.mode === "tui" ? ctx.ui.getEditorText() : undefined;
+
         ctx.abort();
+
+        if (editorText !== undefined) ctx.ui.setEditorText(editorText);
+
         return {
           action: "transform",
           text:

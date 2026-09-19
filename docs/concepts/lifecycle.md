@@ -131,8 +131,9 @@ When attention arrives, the owner handles a required action before ending the
 turn. For evidence, use `transcript` for persisted Pi conversation and tool
 history, and `inspect` for live terminal/process state. Leave healthy or
 legitimately long-running stale work alone. Use `steer` for a cooperative
-non-preemptive correction, `interrupt` only to cancel the current operation
-while continuing the same assignment, `close` to abandon an assignment, and
+non-preemptive correction, `interrupt` to cancel the current operation,
+supersede earlier undelivered steering, and continue the same assignment,
+`close` to abandon an assignment, and
 `reply` only for the exact pending owner question. Do not poll or keep the turn
 alive solely to wait for agent progress.
 
@@ -189,8 +190,9 @@ another result and does not cancel the current Pi operation. If a tool or model
 operation does not finish, a queued steer may not take effect.
 
 `interrupt` changes the same active assignment preemptively. It requests
-cancellation of the current Pi operation and supplies the replacement
-instruction that continues the same assignment. The generation, active task
+cancellation of the current Pi operation, supersedes earlier steering that Pi
+has not yet delivered, and supplies the replacement instruction that continues
+the same assignment. The generation, active task
 request, ownership, Pi session, and final-result obligation remain unchanged.
 
 Neither action creates another assignment. `close` is the operation that
