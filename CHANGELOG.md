@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.1](https://github.com/boadij/pi-herdsman/compare/v0.10.0...v0.10.1) (2026-09-19)
+
+
+### Fixes
+
+* reconcile queues across agent interrupt ([#92](https://github.com/boadij/pi-herdsman/issues/92)) ([16a7b4e](https://github.com/boadij/pi-herdsman/commit/16a7b4ece9fa0249c698977c2c67e6c108b614e6))
+* reconcile unresolved agent attention ([#89](https://github.com/boadij/pi-herdsman/issues/89)) ([eff9461](https://github.com/boadij/pi-herdsman/commit/eff946145b7e1ef4fb493be4ea0fadd853b47ce6))
+
+
+### Other Changes
+
+* audit unresolved work liveness ([#91](https://github.com/boadij/pi-herdsman/issues/91)) ([f68a74f](https://github.com/boadij/pi-herdsman/commit/f68a74f397ad0e74ab245b1eac05bc66c0891202))
+
 ## [0.10.0](https://github.com/boadij/pi-herdsman/compare/v0.9.0...v0.10.0) (2026-09-18)
 
 
