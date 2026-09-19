@@ -155,6 +155,10 @@ When claiming a test gap or proposing a regression:
 
 > Would this test fail for the old bug and pass for the corrected behavior?
 
+For lifecycle/recovery bugs, pair the harmful case with its nearest legitimate
+opposite when that distinction matters, such as a stale working parent versus a
+parent correctly waiting on unresolved child work.
+
 Do not count assertion volume as coverage.
 
 ## Closure outcomes
@@ -174,6 +178,12 @@ Do not use it for an answerable question that was not investigated.
 Own:
 
 > Can this state/value actually happen, where is it produced, and what runtime contract governs it?
+
+Prove this liveness invariant for unresolved directly-owned assignments:
+
+> Every unresolved directly-owned assignment must either remain capable of
+> making progress without its owner, or have a reliable reconciliation path
+> that brings the exact owner back when action is required.
 
 Trace:
 
@@ -197,6 +207,8 @@ Check:
 - stale/replacement identity binding;
 - public state vs actual action eligibility;
 - `working`, `blocked`, `settling`, `unknown`, steerability, staleness, pending ask/result, child gating, cleanup convergence;
+- unresolved-work liveness across owner idle/busy state, failed attention delivery, reminder recurrence, episode termination, and restart;
+- parent/child distinctions where a working parent may itself be stale while a legitimately waiting parent projects blocked;
 - fresh delegation, continuation, fork, replacement, completion, parent-child completion, ask/reply, close, rollback, restart/recovery;
 - source identity, request correlation, result paths, truncation, cleanup warnings, primary/cleanup errors, rollback/retry state.
 
@@ -375,7 +387,7 @@ syntax ↔ parsing ↔ merge ↔ validation ↔ effective metadata ↔ runtime �
 ## Recovery
 
 ```text
-failure ↔ retained evidence ↔ rollback ownership ↔ structured error ↔ model/human guidance ↔ retry boundary
+failure ↔ retained evidence ↔ autonomous progress/attention owner ↔ wake/delivery ↔ recurrence/termination ↔ structured error ↔ model/human guidance ↔ retry boundary
 ```
 
 ## Distribution
@@ -483,6 +495,7 @@ Use these to find candidates. They do not replace closure.
 - **What changes at root/child depth?** Global policy projected differently by depth is suspect.
 - **What was deleted but still has a shadow?** Search docs, tests, package files, comments, compatibility branches, fields, examples.
 - **Would this test fail for the old bug?** Prefer one discriminating regression over many weak assertions.
+- **Can unresolved work disappear from attention forever?** Prove either autonomous progress remains possible or reconciliation eventually wakes the exact responsible owner. Check hierarchy boundaries, owner idle/busy state, failed delivery, recurring versus one-shot attention, restart behavior, and episode termination.
 - **Is the same fact sent twice?** Check model/human identity, paths, model, state, warnings, next-action text.
 - **Is this field mismatch semantic drift?** Find all producers, scope, reachability, and consumers first.
 
@@ -664,6 +677,7 @@ What changes by depth and generation?
 What does the model see versus human/API surfaces?
 Can each result be attributed to source/request?
 Can each failure be acted on safely?
+Can unresolved directly-owned work remain unnoticed forever?
 Does effective configuration match prompts/presentation?
 Are reported states and error fields reachable?
 Do tests discriminate the important contracts?
