@@ -1744,7 +1744,11 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       false,
     );
     settle(undefined, context);
-    assert.equal(pi.sent.length, 3);
+    await waitForTestCondition(
+      () => pi.sent.length === 3,
+      "settlement did not redeliver child two",
+      1_000,
+    );
     entries.push({
       message: {
         customType: "pi-herdsman-agent-result",
@@ -1790,7 +1794,11 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     settle(undefined, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(pi.sent.length, 5);
+    await waitForTestCondition(
+      () => pi.sent.length === 5,
+      "settlement did not deliver child three",
+      1_000,
+    );
     assert.match(
       sentContent(3),
       /Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved\./,
