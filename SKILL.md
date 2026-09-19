@@ -57,10 +57,11 @@ an in-flight model or tool operation; Pi may queue it until the current
 operation reaches a safe boundary.
 
 Use interrupt only when the current in-flight operation itself must be
-abandoned. Interrupt is preemptive: it cancels the current Pi operation and
-continues the same assignment with the required replacement message. Do not
-interrupt merely because an agent is slow or marked stale; inactivity is
-advisory and does not prove a hang.
+abandoned. Interrupt is preemptive: it cancels the current Pi operation,
+supersedes any earlier steering that Pi has not yet delivered, and continues
+the same assignment with the required replacement message. Do not interrupt
+merely because an agent is slow or marked stale; inactivity is advisory and
+does not prove a hang.
 
 Use reply only to answer a valid outstanding ask_owner question. Use close only
 for intentional teardown or abandonment.
@@ -331,7 +332,8 @@ Use the event's current `available_actions` as advisory snapshot authority;
 every action revalidates identity, ownership, and lifecycle. Use `transcript`
 for persisted conversation and tool evidence, and `inspect` for live
 terminal/process evidence. `steer` is cooperative and non-preemptive;
-`interrupt` cancels the current operation while continuing the same assignment.
+`interrupt` cancels the current operation, supersedes earlier steering Pi has
+not yet delivered, and continues the same assignment.
 Do not add automatic interrupt, close, restart, or redelegation. Physical
 `unknown` remains fail-closed, has no mutation actions, and receives at most one
 attention event per unresolved episode. `settling` alone is not a generic

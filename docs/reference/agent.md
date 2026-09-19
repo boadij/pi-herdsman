@@ -180,7 +180,8 @@ attention: it is one notification per unresolved physical-identity episode.
 For recovery evidence, use `transcript` for persisted Pi conversation and tool
 history, and `inspect` for live terminal/process evidence. Use `steer` for a
 cooperative correction. Use `interrupt` only to cancel the current operation;
-it continues the same durable assignment. Use `close` only when abandoning the
+it supersedes earlier undelivered steering and continues the same durable
+assignment. Use `close` only when abandoning the
 assignment is intended. Do not poll or create another delivery path for health
 attention.
 
@@ -292,12 +293,13 @@ wedged tool.
 `message`, and optional `files`. It is available only to the exact direct owner
 while the agent has a currently working Pi operation.
 
-Interrupt is preemptive: it requests Pi cancellation of the current operation
-and continues the same managed generation and assignment using the replacement
-message. It does not create another assignment or terminal result and does not
+Interrupt is preemptive: it requests Pi cancellation of the current operation,
+supersedes earlier steering Pi has not yet delivered, and continues the same
+managed generation and assignment using the replacement message. It does not
+create another assignment or terminal result and does not
 close or recreate the agent. Previous Pi-queued steering/follow-up input is
-removed from execution by Pi's native abort behavior and may remain preserved
-in the child editor.
+removed from execution by Pi's native abort behavior and is not retained in the
+child editor.
 
 Cancellation uses Pi's native abort mechanism. Non-cooperative third-party
 tools may not stop immediately; `close` remains the destructive fallback.

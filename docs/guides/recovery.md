@@ -20,7 +20,8 @@ Use this decision sequence:
 3. Is the work healthy or legitimately long-running? Leave it alone.
 4. Is a cooperative correction needed? Use `steer`.
 5. Must the current operation itself be abandoned? Use `interrupt`; it cancels
-   that operation and continues the same assignment.
+   that operation, supersedes earlier undelivered steering, and continues the
+   same assignment.
 6. Is the assignment being abandoned? Use `close`.
 7. Is an owner decision pending? Use `reply` for the exact pending question.
 
@@ -119,7 +120,9 @@ Do not close or interrupt solely because of inactivity. A stale advisory may
 repeat while the same condition remains unresolved, but healthy or legitimately
 long-running work should be left alone. Use `transcript` for persisted evidence
 and `inspect` for live evidence; use `steer` for cooperative correction and
-`interrupt` only when the current operation itself must be abandoned.
+`interrupt` only when the current operation itself must be abandoned; it
+cancels that operation, supersedes earlier undelivered steering, and continues
+the same assignment.
 
 Proven lost work remains unresolved and may receive repeated direct-owner
 attention until it is resolved or the exact owner closes it. Physical

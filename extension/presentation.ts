@@ -2681,7 +2681,7 @@ export function renderAgentStaleMessage(
         "Use transcript for persisted conversation/tool evidence; use inspect for live terminal/process evidence.",
         "If the operation is healthy or legitimately long-running, leave it alone.",
         "Use steer for a non-preemptive correction.",
-        "Interrupt only when the current operation must be abandoned; it continues the same assignment.",
+        "Interrupt only when the current operation must be abandoned; it supersedes earlier steering Pi has not yet delivered and continues the same assignment.",
         "Close only when abandoning the assignment is intended.",
       ]
     : [
