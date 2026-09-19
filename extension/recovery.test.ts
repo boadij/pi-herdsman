@@ -3726,7 +3726,9 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   setLeadEnvironment();
   const label = "scanner-agent";
   const mailbox = agentMailboxPath(WORKSPACE, label);
-  const staleAt = Date.now() - 10 * 60_000 - 1_000;
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const staleAt = now - 10 * 60_000 - 1_000;
   writeAgentState(mailbox, {
     ...managedState(label, REQUEST_ID, defaultFixtureIdentity),
     lastActivityAt: staleAt,
@@ -3752,28 +3754,52 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   assert.equal(attempts, 2, "a failed advisory is retried on the next scan");
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(attempts, 2, "a successful episode is deduplicated");
+  assert.equal(attempts, 2, "a successful episode waits for its reminder");
+
+  now += 5 * 60_000;
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 3);
+  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 150_000);
+
+  now += 2 * 60_000 + 30_000;
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 4);
+  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 75_000);
+
+  now += 75_000;
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 5);
+  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 60_000);
+
+  now += 60_000;
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 6);
+  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 60_000);
 
   writeAgentState(mailbox, {
     ...readAgentState(mailbox)!,
-    lastActivityAt: Date.now(),
-    updatedAt: Date.now(),
+    lastActivityAt: now,
+    updatedAt: now,
   });
   writeAgentState(mailbox, {
     ...readAgentState(mailbox)!,
-    lastActivityAt: Date.now() - 10 * 60_000 - 1_000,
-    updatedAt: Date.now(),
+    lastActivityAt: now - 10 * 60_000 - 1_000,
+    updatedAt: now,
   });
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
     attempts,
-    3,
+    7,
     "a changed activity timestamp starts a new episode",
   );
   pi.events.get("session_shutdown")?.[0]();
   t.mock.timers.tick(60_000);
-  assert.equal(attempts, 3, "shutdown removes the recurring scanner");
+  assert.equal(attempts, 7, "shutdown removes the recurring scanner");
 });
 
 test("stale scanner skips completion or identity changes before publication", async () => {
@@ -4005,17 +4031,21 @@ test("delegation parent notifies only its direct stale child", async () => {
   );
   assert.match(
     advisory.content,
-    /Streaming tool output does not reset progress/,
+    /Streaming tool output does not count as qualifying progress/,
   );
   assert.match(advisory.content, /not proof of a hang/);
   assert.match(
     advisory.content,
-    /Inspect once, then leave the agent alone or close the exact agent only when evidence shows it remains wedged/,
+    /Use transcript when persisted conversation\/tool history is enough; use inspect only when live terminal\/process evidence is needed/,
   );
+  assert.match(advisory.content, /legitimately long-running/);
+  assert.match(advisory.content, /Available actions:/);
+  assert.match(advisory.content, /steer for a non-preemptive correction/);
   assert.match(
     advisory.content,
-    /do not close solely because progress is stale/,
+    /interrupt.*current operation.*continues the same assignment/,
   );
+  assert.match(advisory.content, /Next reminder if unresolved/);
   assert.equal(advisory.details.agentLabel, child.agentLabel);
   assert.equal(advisory.details.ownerSessionId, parent.piSessionId);
   assert.equal(advisory.details.requestId, REQUEST_ID);
@@ -4034,7 +4064,11 @@ test("delegation parent notifies only its direct stale child", async () => {
   await rootPi.events.get("session_start")![0](undefined, fakeContext());
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(
-    rootSent.map((message: any) => message.details.agentLabel),
+    rootSent
+      .filter(
+        (message: any) => message.customType === "pi-herdsman-agent-stale",
+      )
+      .map((message: any) => message.details.agentLabel),
     [],
     "lead must not steal a parent's child advisory",
   );
@@ -4045,69 +4079,439 @@ test("delegation parent notifies only its direct stale child", async () => {
     nativeSessions.delete(state.piSessionFile!);
 });
 
-test("stale scanner never notifies non-working candidates", async () => {
+test("health scanner alerts true runtime blocking", async () => {
   setLeadEnvironment();
-  const cases = ["blocked", "settling", "unknown"] as const;
-  const states = cases.map((label) => ({
-    ...managedState(
-      `not-${label}`,
-      REQUEST_ID,
-      recoveryIdentity(`not-${label}`),
-    ),
+  const label = "runtime-blocked";
+  const state = {
+    ...managedState(label, REQUEST_ID, recoveryIdentity(label)),
     lastActivityAt: Date.now() - 11 * 60_000,
-  }));
-  for (const state of states)
-    writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), state);
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, state);
+  const sent: any[] = [];
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      DEFAULT_PI_SESSION_ID,
+      undefined,
+      DEFAULT_PI_SESSION_ID,
+      recoveryIdentity(label),
+      true,
+      "blocked",
+    ),
+    sendMessage: (message) => sent.push(message),
+  });
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].customType, "pi-herdsman-agent-attention");
+  assert.equal(sent[0].details.reason, "blocked");
+  assert.match(sent[0].content, /no Herdsman ask_owner question exists/);
+  pi.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("settling alone does not trigger generic health attention", async () => {
+  setLeadEnvironment();
+  const label = "settling-health-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, {
+    ...managedState(label, REQUEST_ID, identity),
+    lastActivityAt: Date.now() - 11 * 60_000,
+  });
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      DEFAULT_PI_SESSION_ID,
+      undefined,
+      DEFAULT_PI_SESSION_ID,
+      identity,
+      true,
+      "settling",
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    pi.sent.some(
+      (message: any) => message.customType === "pi-herdsman-agent-attention",
+    ),
+    false,
+  );
+  pi.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("health attention stays idle-only and does not queue resolved stale work", async (t) => {
+  setLeadEnvironment();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => t.mock.timers.reset());
+  const label = "busy-health-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, {
+    ...managedState(label, REQUEST_ID, identity),
+    lastActivityAt: now - 11 * 60_000,
+  });
+  const sent: any[] = [];
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      DEFAULT_PI_SESSION_ID,
+      undefined,
+      DEFAULT_PI_SESSION_ID,
+      identity,
+    ),
+    sendMessage: (message) => sent.push(message),
+  });
+  const context = fakeContext();
+  (context as any).isIdle = () => false;
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, context);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sent.length, 0);
+  writeAgentState(mailbox, {
+    ...readAgentState(mailbox)!,
+    lastActivityAt: now,
+    updatedAt: now,
+  });
+  (context as any).isIdle = () => true;
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sent.length, 0);
+  pi.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("result errors wake the direct owner with durable recovery evidence", async () => {
+  setLeadEnvironment();
+  const label = "result-error-health-agent";
+  const identity = recoveryIdentity(label);
+  const state = {
+    ...managedState(label, undefined, identity),
+    resultError: {
+      code: "write_failure" as const,
+      message: "result write failed",
+      requestId: REQUEST_ID,
+      runId: AGENT_ID,
+      ownerSessionId: LEAD_SESSION_ID,
+      workspaceId: WORKSPACE,
+      agentLabel: label,
+      paneId: identity.paneId,
+      originalStatus: "completed" as const,
+      attempts: 8,
+      failedAt: Date.now() - 1_000,
+      retrySafe: false,
+      cleanupSafe: true,
+      nextAction:
+        "Inspect result_error, resolve mailbox persistence, then close this agent.",
+    },
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, state);
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "idle",
+      DEFAULT_PI_SESSION_ID,
+      undefined,
+      DEFAULT_PI_SESSION_ID,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  await new Promise((resolve) => setImmediate(resolve));
+  const attention = pi.sent.find(
+    (message: any) => message.customType === "pi-herdsman-agent-attention",
+  ) as any;
+  assert.equal(attention?.details.reason, "result_error");
+  assert.equal(attention?.details.requestId, REQUEST_ID);
+  assert.equal(attention?.details.nextReminderMs, 5 * 60_000);
+  assert.match(attention.content, /Inspect result_error/);
+  pi.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("physical unknown attention is one-shot and fail-closed", async (t) => {
+  setLeadEnvironment();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => t.mock.timers.reset());
+  const label = "unknown-health-agent";
+  const identity = recoveryIdentity(label);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
+  const mismatched = { ...identity, paneId: "different-pane" };
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      DEFAULT_PI_SESSION_ID,
+      undefined,
+      DEFAULT_PI_SESSION_ID,
+      mismatched,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    pi.sent.filter(
+      (message: any) => message.customType === "pi-herdsman-agent-attention",
+    ).length,
+    1,
+  );
+  const attention = pi.sent.find(
+    (message: any) => message.customType === "pi-herdsman-agent-attention",
+  ) as any;
+  assert.equal(attention.details.reason, "unknown");
+  assert.deepEqual(attention.details.availableActions, []);
+  now += 20 * 60_000;
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    pi.sent.filter(
+      (message: any) => message.customType === "pi-herdsman-agent-attention",
+    ).length,
+    1,
+  );
+  pi.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("delivered owner asks repeat without duplicating first delivery", async (t) => {
+  setLeadEnvironment();
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => t.mock.timers.reset());
+  const label = "repeat-owner-ask";
+  const identity = recoveryIdentity(label);
+  const state = {
+    ...managedState(label, REQUEST_ID, identity),
+    pendingAskId: "99999999-9999-4999-8999-999999999999",
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, state);
+  const ask = {
+    version: 4 as const,
+    askId: state.pendingAskId!,
+    requestId: REQUEST_ID,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    question: "Choose ALPHA or BETA",
+    createdAt: now,
+  };
+  writeAsk(mailbox, ask);
+  const entries = [{ customType: "pi-herdsman-agent-ask", details: ask }];
+  const pi = fakePi({
+    entries,
+    persistMessages: true,
+    exec: leadExec(
+      label,
+      "working",
+      DEFAULT_PI_SESSION_ID,
+      undefined,
+      DEFAULT_PI_SESSION_ID,
+      identity,
+    ),
+  });
+  registerExtension!(pi.pi as never);
+  await pi.events.get("session_start")![0](undefined, fakeContext(entries));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    pi.sent.filter(
+      (message: any) => message.customType === "pi-herdsman-agent-ask",
+    ).length,
+    0,
+  );
+  now += 5 * 60_000;
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  const reminders = pi.sent.filter(
+    (message: any) => message.customType === "pi-herdsman-agent-ask",
+  ) as any[];
+  assert.equal(reminders.length, 1);
+  assert.equal(reminders[0].details.askId, ask.askId);
+  assert.equal(reminders[0].details.requestId, ask.requestId);
+  assert.equal(reminders[0].details.nextReminderMs, 150_000);
+  assert.match(reminders[0].content, /still waiting/);
+  writeAgentState(mailbox, { ...state, pendingAskId: undefined });
+  removeAsk(mailbox, ask.askId);
+  now += 3 * 60_000;
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    pi.sent.filter(
+      (message: any) => message.customType === "pi-herdsman-agent-ask",
+    ).length,
+    1,
+  );
+  pi.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("old unacknowledged requests get attention without being resubmitted", async () => {
+  setLeadEnvironment();
+  const label = "old-handoff-health";
+  const identity = recoveryIdentity(label);
+  const state = managedState(label, REQUEST_ID, identity);
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  const request: RequestRecord = {
+    version: 4,
+    runId: state.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    kind: "task",
+    text: "retain this exact intent",
+    createdAt: Date.now() - 11 * 60_000,
+  };
+  writeAgentState(mailbox, state);
+  writeRequest(mailbox, request);
   const pi = fakePi({
     exec: (command, args) => {
-      if (command === "herdr" && args[0] === "agent" && args[1] === "list")
+      if (command === "herdr" && isApiSnapshot(args))
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
-              agents: states.map((state, index) =>
-                JSON.parse(
+              snapshot: {
+                agents: JSON.parse(
                   listResponse(
-                    state.agentLabel,
+                    label,
                     "working",
                     DEFAULT_PI_SESSION_ID,
-                    state,
-                    true,
-                    cases[index],
+                    identity,
                   ),
-                ),
-              ),
-              workspace_id: WORKSPACE,
+                ).agents,
+                panes: [
+                  {
+                    pane_id: identity.paneId,
+                    workspace_id: WORKSPACE,
+                    cwd: "/tmp",
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: identity.piSessionId,
+                    },
+                  },
+                ],
+              },
             },
           }),
           stderr: "",
           code: 0,
         };
-      return leadExec(
-        states[0].agentLabel,
-        "working",
-        DEFAULT_PI_SESSION_ID,
-      )(command, args);
-    },
-    sendMessage: () => {
-      throw new Error("unexpected advisory");
+      return { stdout: "{}", stderr: "", code: 0 };
     },
   });
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, fakeContext());
   await new Promise((resolve) => setImmediate(resolve));
+  const attention = pi.sent.find(
+    (message: any) => message.customType === "pi-herdsman-agent-attention",
+  ) as any;
+  assert.equal(attention?.details.reason, "handoff");
+  assert.equal(attention?.details.requestId, REQUEST_ID);
+  assert.match(attention.content, /Do not submit the same intent again/);
+  assert.ok(readRequest(mailbox, REQUEST_ID));
+  pi.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+});
+
+test("health reconciliation publishes at most one attention per scan", async (t) => {
+  setLeadEnvironment();
+  const states = ["first-health-error", "second-health-error"].map((label) => {
+    const identity = recoveryIdentity(label);
+    return {
+      ...managedState(label, undefined, identity),
+      resultError: {
+        code: "write_failure" as const,
+        message: `${label} failed`,
+        requestId: REQUEST_ID,
+        runId: AGENT_ID,
+        ownerSessionId: LEAD_SESSION_ID,
+        workspaceId: WORKSPACE,
+        agentLabel: label,
+        paneId: identity.paneId,
+        originalStatus: "completed" as const,
+        attempts: 8,
+        failedAt: Date.now() - 1_000,
+        retrySafe: false,
+        cleanupSafe: true,
+        nextAction: "Resolve the stored result error, then close this agent.",
+      },
+    };
+  });
+  states[1]!.runId = randomUUID();
+  states[1]!.resultError!.runId = states[1]!.runId;
+  for (const state of states)
+    writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), state);
+  const pi = fakePi({
+    exec: (command, args) => {
+      if (command === "herdr" && isApiSnapshot(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { snapshot: { agents: [], panes: [] } },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => t.mock.timers.reset());
+  await pi.events.get("session_start")![0](undefined, fakeContext());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    pi.sent.filter(
+      (message: any) => message.customType === "pi-herdsman-agent-attention",
+    ).length,
+    1,
+  );
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    pi.sent.filter(
+      (message: any) => message.customType === "pi-herdsman-agent-attention",
+    ).length,
+    2,
+  );
   pi.events.get("session_shutdown")?.[0]();
   for (const state of states)
     resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
 });
 
-test("lost managed agents remain visible and notify their owner once", async (t) => {
+test("lost managed agents remain visible and repeatedly notify their owner", async (t) => {
   setLeadEnvironment();
   const label = "lost-controller-agent";
   const identity = {
     ...recoveryIdentity(label),
     piSessionFile: join(testTmpRoot, `${label}.jsonl`),
   };
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
   const state = {
     ...managedState(label, REQUEST_ID, identity),
     lastActivityAt: Date.now(),
@@ -4209,6 +4613,16 @@ test("lost managed agents remain visible and notify their owner once", async (t)
       ).length,
       1,
     );
+    now += 5 * 60_000;
+    t.mock.timers.tick(30_000);
+    for (let index = 0; index < 8; index++)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      pi.sent.filter(
+        (message: any) => message.customType === "pi-herdsman-agent-lost",
+      ).length,
+      2,
+    );
     assert.ok(readAgentState(mailbox));
 
     const closed = await pi.tools[0].execute(
@@ -4220,6 +4634,15 @@ test("lost managed agents remain visible and notify their owner once", async (t)
     );
     assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
     assert.equal(readAgentState(mailbox), undefined);
+    now += 5 * 60_000;
+    t.mock.timers.tick(30_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      pi.sent.filter(
+        (message: any) => message.customType === "pi-herdsman-agent-lost",
+      ).length,
+      2,
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     nativeSessions.delete(state.piSessionId);

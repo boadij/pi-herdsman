@@ -225,6 +225,24 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.match(agentDescription, /interrupt.*preemptive/);
   assert.match(agentDescription, /same assignment/);
   assert.match(agentDescription, /Do not.*interrupt merely.*stale/);
+  assert.match(
+    agentDescription,
+    /unresolved agent work only when that work can still make progress without you/,
+  );
+  assert.match(
+    agentDescription,
+    /attention event says your action is required.*handle it before returning to passive waiting/,
+  );
+  assert.match(
+    agentDescription,
+    /Recovery attention is state-specific and may repeat/,
+  );
+  assert.match(agentDescription, /available_actions/);
+  assert.match(
+    agentDescription,
+    /Transcript is persisted conversation\/tool evidence/,
+  );
+  assert.match(agentDescription, /inspect is live terminal\/process evidence/);
   assert.doesNotMatch(
     agentDescription,
     /Delegate any other useful independent work now/,
@@ -237,6 +255,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     lead.messageRenderers.map(({ customType }) => customType).sort(),
     [
       "pi-herdsman-agent-ask",
+      "pi-herdsman-agent-attention",
       "pi-herdsman-agent-lost",
       "pi-herdsman-agent-result",
       "pi-herdsman-agent-stale",

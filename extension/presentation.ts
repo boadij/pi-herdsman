@@ -2565,6 +2565,68 @@ export function renderAgentAskMessage(
   return renderMessageBox(content, theme, options.outputPad ?? 0);
 }
 
+export function renderAgentAttentionMessage(
+  message: { details?: unknown },
+  options: { expanded?: boolean; outputPad?: number },
+  theme: any,
+): TuiBox {
+  const details =
+    message.details && typeof message.details === "object"
+      ? (message.details as Record<string, unknown>)
+      : {};
+  const label = value(details.agentLabel) || "agent";
+  const reason = (value(details.reason) || "recovery").replaceAll("_", " ");
+  const summary = value(details.summary);
+  const summaryPreview = summary
+    ? collapseDisplayText(summary, 160)
+    : undefined;
+  const diagnostic = value(details.diagnostic);
+  const actions = Array.isArray(details.availableActions)
+    ? details.availableActions.filter(
+        (action): action is string =>
+          typeof action === "string" && action.length > 0,
+      )
+    : [];
+  const nextReminder =
+    typeof details.nextReminderMs === "number" &&
+    Number.isFinite(details.nextReminderMs) &&
+    details.nextReminderMs >= 0
+      ? formatElapsed(0, details.nextReminderMs)
+      : undefined;
+  const lines = options.expanded
+    ? [
+        `${label} needs attention`,
+        "",
+        `reason: ${reason}`,
+        ...(summary ? [summary] : []),
+        ...(diagnostic ? [`diagnostic: ${diagnostic}`] : []),
+        ...(actions.length ? [`actions: ${actions.join(" · ")}`] : []),
+        ...(value(details.requestId)
+          ? [`request: ${value(details.requestId)}`]
+          : []),
+        ...(value(details.piSessionId)
+          ? [`session: ${value(details.piSessionId)}`]
+          : []),
+        ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
+        ...(nextReminder ? [`next reminder: ~${nextReminder}`] : []),
+        ...(value(details.nextAction) ? ["", value(details.nextAction)] : []),
+      ]
+    : [
+        statusLine(
+          theme,
+          "warning",
+          "!",
+          `${label} needs attention · ${reason}`,
+        ),
+        ...(summaryPreview ? [`  ${summaryPreview}`] : []),
+      ];
+  return renderMessageBox(
+    new WidthSafeText(lines.join("\n"), 0, 0),
+    theme,
+    options.outputPad ?? 0,
+  );
+}
+
 export function renderAgentStaleMessage(
   message: { details?: unknown },
   options: { expanded?: boolean; outputPad?: number },
@@ -2579,6 +2641,18 @@ export function renderAgentStaleMessage(
     Number.isFinite(details.inactiveMs) && Number(details.inactiveMs) >= 0
       ? (formatElapsed(0, Number(details.inactiveMs)) ?? "unknown")
       : "unknown";
+  const availableActions = Array.isArray(details.availableActions)
+    ? details.availableActions.filter(
+        (action): action is string =>
+          typeof action === "string" && action.length > 0,
+      )
+    : [];
+  const nextReminder =
+    typeof details.nextReminderMs === "number" &&
+    Number.isFinite(details.nextReminderMs) &&
+    details.nextReminderMs >= 0
+      ? formatElapsed(0, details.nextReminderMs)
+      : undefined;
   const lines = options.expanded
     ? [
         `${label} no qualifying execution progress`,
@@ -2590,6 +2664,10 @@ export function renderAgentStaleMessage(
               `threshold: ${formatElapsed(0, Number(details.thresholdMs)) ?? "unknown"}`,
             ]
           : []),
+        ...(availableActions.length
+          ? [`actions: ${availableActions.join(" · ")}`]
+          : []),
+        ...(nextReminder ? [`next reminder: ~${nextReminder}`] : []),
         ...(value(details.requestId)
           ? [`request: ${value(details.requestId)}`]
           : []),
@@ -2600,7 +2678,11 @@ export function renderAgentStaleMessage(
         "",
         "Streaming tool output does not reset progress.",
         "This advisory is not proof of a hang.",
-        "Inspect once, then leave it alone or close the exact agent only when evidence shows it remains wedged.",
+        "Use transcript for persisted conversation/tool evidence; use inspect for live terminal/process evidence.",
+        "If the operation is healthy or legitimately long-running, leave it alone.",
+        "Use steer for a non-preemptive correction.",
+        "Interrupt only when the current operation must be abandoned; it continues the same assignment.",
+        "Close only when abandoning the assignment is intended.",
       ]
     : [
         statusLine(theme, "warning", "!", `${label} inactive · ${duration}`),
@@ -2623,12 +2705,28 @@ export function renderAgentLostMessage(
       ? (message.details as Record<string, unknown>)
       : {};
   const label = value(details.agentLabel) || "agent";
+  const availableActions = Array.isArray(details.availableActions)
+    ? details.availableActions.filter(
+        (action): action is string =>
+          typeof action === "string" && action.length > 0,
+      )
+    : [];
+  const nextReminder =
+    typeof details.nextReminderMs === "number" &&
+    Number.isFinite(details.nextReminderMs) &&
+    details.nextReminderMs >= 0
+      ? formatElapsed(0, details.nextReminderMs)
+      : undefined;
   const lines = options.expanded
     ? [
         `${label} disappeared before producing a durable result`,
         "",
         "state: lost",
         "The assignment remains unresolved; loss is not completion or task failure.",
+        ...(availableActions.length
+          ? [`actions: ${availableActions.join(" · ")}`]
+          : []),
+        ...(nextReminder ? [`next reminder: ~${nextReminder}`] : []),
         ...(value(details.requestId)
           ? [`request: ${value(details.requestId)}`]
           : []),

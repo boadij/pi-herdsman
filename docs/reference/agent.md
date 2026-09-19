@@ -135,6 +135,55 @@ enabled leaf definitions and their direct agents. Unrooted, ambiguous, or cyclic
 durable ancestry is not attributed to the current controller. Unknown mailbox
 diagnostics remain non-actionable.
 
+## Health attention
+
+Health reconciliation is event-driven with a 30-second fallback scan. It
+reconciles fresh mailbox and Herdr state and sends attention only to the exact
+direct owner while that owner is idle. The `available_actions` included in an
+attention event is an advisory snapshot of current authority; every later
+`steer`, `interrupt`, `reply`, or `close` call revalidates identity, ownership,
+mailbox state, and lifecycle.
+
+Persistent actionable attention may repeat while the same condition remains
+unresolved. Reminder timing is process-local and advisory, not a mailbox API;
+restarting may cause an unresolved condition to be reminded again. The normal
+cadence is approximately `5m → 2m30s → 1m15s → 1m` with 30-second scan
+granularity. The first stale advisory remains eligible after ten minutes
+without qualifying execution progress.
+
+Generic attention reasons are:
+
+- `result_error`: a terminal result could not be durably persisted; follow the
+  stored recovery details and `nextAction`;
+- `blocked`: the live Herdr runtime is blocked without a pending `ask_owner`
+  question;
+- `handoff`: an old durable request remains unacknowledged; do not duplicate or
+  resubmit it because non-acknowledgement does not prove non-delivery;
+- `unknown`: physical identity is ambiguous and remains fail-closed, with no
+  mutation actions and at most one attention event per episode.
+
+Stale and lost assignments, and delivered `ask_owner` questions, retain their
+dedicated message types. Stale attention is advisory and does not by itself
+justify intervention. `settling` alone does not generate generic attention.
+The public `blocked` projection can also mean that a delegating parent is
+waiting for direct children; that progress-capable parent state is distinct
+from a live Herdr runtime reporting `blocked`.
+
+Initial attention eligibility is: stale after ten minutes without qualifying
+progress; lost, `result_error`, live runtime `blocked`, and physical `unknown`
+immediately; an old retained handoff after ten minutes; and a delivered
+`ask_owner` reminder approximately five minutes after health reconciliation
+first observes that the original ask was successfully delivered. The reminder
+path never duplicates first ask delivery. Unknown is the exception to repeated
+attention: it is one notification per unresolved physical-identity episode.
+
+For recovery evidence, use `transcript` for persisted Pi conversation and tool
+history, and `inspect` for live terminal/process evidence. Use `steer` for a
+cooperative correction. Use `interrupt` only to cancel the current operation;
+it continues the same durable assignment. Use `close` only when abandoning the
+assignment is intended. Do not poll or create another delivery path for health
+attention.
+
 ## `inspect`
 
 ```json
