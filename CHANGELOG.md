@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.0](https://github.com/boadij/pi-herdsman/compare/v0.9.0...v0.10.0) (2026-09-18)
+
+
+### Features
+
+* add /herdsman alias for /agents ([#88](https://github.com/boadij/pi-herdsman/issues/88)) ([ac1bd2f](https://github.com/boadij/pi-herdsman/commit/ac1bd2f283ec254cb54e3e627db4c22f4e0cfc1d))
+* add preemptive agent interrupt ([#84](https://github.com/boadij/pi-herdsman/issues/84)) ([ae23e51](https://github.com/boadij/pi-herdsman/commit/ae23e5165dc65f8246cb2f66f116ceed3dd63454))
+
+
+### Fixes
+
+* continue interrupted agents with follow-up ([#87](https://github.com/boadij/pi-herdsman/issues/87)) ([15880be](https://github.com/boadij/pi-herdsman/commit/15880be58dcfc9f61b9133319005afe04e2ee477))
+* gate npm publish on release creation ([#86](https://github.com/boadij/pi-herdsman/issues/86)) ([b373963](https://github.com/boadij/pi-herdsman/commit/b37396305d2522597ceeaa7ad3ea8334ce2d6642))
+
 ## [0.9.0](https://github.com/boadij/pi-herdsman/compare/v0.8.1...v0.9.0) (2026-09-18)
 
 
