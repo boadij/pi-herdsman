@@ -303,6 +303,41 @@ retry destructive cleanup blindly, or silently take over delegated work.
 See [Recovery](docs/guides/recovery.md) for operator procedures and the
 [`agent` API](docs/reference/agent.md) for the exact machine contract.
 
+## Health attention and turn completion
+
+End a turn with unresolved agent work only when that work can still make
+progress without the owner, or Herdsman is reconciling a durable transition
+that can produce a future result or attention event. If an attention event
+requires owner action, handle it before returning to passive waiting. If an
+inactivity advisory appears healthy or legitimately long-running, leave it
+alone and end the turn; Herdsman will reconcile it again.
+
+Health reconciliation is event-driven with a 30-second fallback scan. Actionable
+health attention is sent only to the exact direct owner and is based on freshly
+reconciled state. Persistent state-specific attention may repeat while the
+condition remains unresolved. Reminder timing is process-local and advisory;
+restarting Herdsman can cause an unresolved condition to be reminded again.
+
+The first stale advisory remains at ten minutes without qualifying execution
+progress. Persistent attention repeats approximately `5m → 2m30s → 1m15s →
+1m` with 30-second scan granularity. Stale attention is advisory, not proof of
+a hang. Lost and delivered `ask_owner` attention retain their existing message
+identity, while `result_error`, external runtime `blocked`, old unacknowledged
+handoffs, and physical `unknown` use generic attention. An unresolved
+unacknowledged request must not be duplicated or resubmitted: retained work is
+not proof of non-delivery.
+
+Use the event's current `available_actions` as advisory snapshot authority;
+every action revalidates identity, ownership, and lifecycle. Use `transcript`
+for persisted conversation and tool evidence, and `inspect` for live
+terminal/process evidence. `steer` is cooperative and non-preemptive;
+`interrupt` cancels the current operation while continuing the same assignment.
+Do not add automatic interrupt, close, restart, or redelegation. Physical
+`unknown` remains fail-closed, has no mutation actions, and receives at most one
+attention event per unresolved episode. `settling` alone is not a generic
+attention condition. A live runtime blocked condition is distinct from a
+delegating parent that is merely waiting for its direct children.
+
 ## Chief and staff
 
 Ordinary leads own their complete herd, including every agent beneath them. The

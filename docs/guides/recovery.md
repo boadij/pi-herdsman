@@ -5,14 +5,50 @@
 Recovery is identity-safe and conservative. Use the public state and returned
 structured error before attempting another mutation.
 
+## Health attention
+
+Health attention is sent to the exact direct owner after fresh reconciliation
+of mailbox and Herdr state. It is event-driven with a 30-second fallback scan,
+and it is published only when the owner is idle. Read the exact condition and
+the event's current `available_actions` before acting; the eventual action
+rechecks identity, ownership, mailbox state, and lifecycle.
+
+Use this decision sequence:
+
+1. Need persisted conversation or tool history? Use `transcript`.
+2. Need live terminal or process evidence? Use `inspect`.
+3. Is the work healthy or legitimately long-running? Leave it alone.
+4. Is a cooperative correction needed? Use `steer`.
+5. Must the current operation itself be abandoned? Use `interrupt`; it cancels
+   that operation and continues the same assignment.
+6. Is the assignment being abandoned? Use `close`.
+7. Is an owner decision pending? Use `reply` for the exact pending question.
+
+Persistent actionable conditions may repeat approximately `5m → 2m30s →
+1m15s → 1m`, with 30-second scan granularity. Reminder state is process-local
+and advisory, not durable mailbox state. Health attention is direct-owner-only;
+do not poll, add a second delivery path, or keep a turn alive solely to wait.
+Do not intervene solely because a stale threshold was reached.
+
+The generic attention reasons are `result_error`, live runtime `blocked`, old
+unacknowledged `handoff`, and physical `unknown`. Stale, lost, and delivered
+`ask_owner` conditions retain their dedicated message types. A retained
+unacknowledged request must not be duplicated or resubmitted: timeout or lack
+of acknowledgement does not prove non-delivery. `settling` alone does not
+generate generic attention.
+
 ## Agent is `blocked`
 
 A blocked agent still has an active assignment.
 
 If the agent is waiting for an owner answer, use `reply` with its exact agent.
 
-Otherwise resolve the reported external/attention condition. Do not delegate new
-task to a blocked agent.
+Otherwise inspect the reported external/runtime condition and resolve it using
+only the currently listed actions. A live Herdr runtime reported as `blocked`
+may generate health attention when no `ask_owner` question exists. This is
+different from a delegating parent whose public projection is `blocked` while
+it waits for direct child work; parent waiting is not, by itself, evidence of
+an externally blocked runtime. Do not delegate a new task to a blocked agent.
 
 ## Agent is `settling`
 
@@ -35,7 +71,9 @@ If `list` reports `result_error`, the agent's result could not be persisted
 after bounded retries. The condition retains the run, request, owner, agent,
 and failure category. Do not delegate over it: resolve the mailbox persistence
 problem, then close the exact agent before delegating new work. The condition
-marks retry as unsafe and exact-owner cleanup as safe.
+marks retry as unsafe and exact-owner cleanup as safe. It may also produce
+direct-owner `result_error` attention; use its stored recovery details and
+`nextAction` rather than inventing a separate persistence recovery.
 
 ## Agent is `unknown`
 
@@ -44,8 +82,12 @@ evidence.
 
 Do not guess from pane IDs, process appearance, elapsed time, or stale metadata.
 
-Refresh `list` and resolve the identity/lifecycle condition. If a cleanup or
-recovery error is present, inspect its exact details.
+Physical `unknown` remains fail-closed: it has no mutation actions and receives
+at most one generic attention event for an unresolved episode. Do not infer
+loss, guess a pane or process, or use `ask_owner` as a generic escalation path.
+Refresh `list` and resolve the identity/lifecycle condition when new exact
+evidence is available. If a cleanup or recovery error is present, inspect its
+exact details.
 
 ## Agent is `lost`
 
@@ -73,7 +115,15 @@ Possible list fields:
 This is not proof that the agent is hung, dead, safe to terminate, or safe to
 replace.
 
-Do not close solely because of inactivity.
+Do not close or interrupt solely because of inactivity. A stale advisory may
+repeat while the same condition remains unresolved, but healthy or legitimately
+long-running work should be left alone. Use `transcript` for persisted evidence
+and `inspect` for live evidence; use `steer` for cooperative correction and
+`interrupt` only when the current operation itself must be abandoned.
+
+Proven lost work remains unresolved and may receive repeated direct-owner
+attention until it is resolved or the exact owner closes it. Physical
+disappearance is not completion.
 
 ## Startup failure
 

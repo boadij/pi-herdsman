@@ -35,7 +35,9 @@ import {
   retainSupervisionSelection,
   renderCompletionMessage,
   renderAgentAskMessage,
+  renderAgentAttentionMessage,
   renderAgentStaleMessage,
+  renderAgentLostMessage,
   renderCoordinationCall,
   renderCoordinationResult,
   renderAgentDefinitionsOverview,
@@ -2898,7 +2900,7 @@ test("completion warnings preserve truncation and persistence evidence", () => {
   );
 });
 
-test("ask and stale custom messages preserve attention semantics and identity boundaries", () => {
+test("ask, stale, and lost custom messages preserve attention semantics and identity boundaries", () => {
   const ask = {
     details: {
       agentLabel: "implementer",
@@ -2936,6 +2938,14 @@ test("ask and stale custom messages preserve attention semantics and identity bo
       requestId: "request-id",
       piSessionId: "session-id",
       paneId: "pane-id",
+      availableActions: [
+        "inspect",
+        "transcript",
+        "steer",
+        "interrupt",
+        "close",
+      ],
+      nextReminderMs: 300000,
     },
   };
   const collapsedStale = renderedText(
@@ -2954,9 +2964,92 @@ test("ask and stale custom messages preserve attention semantics and identity bo
   assert.match(expandedStale, /Streaming tool output does not reset progress/);
   assert.match(
     expandedStale,
-    /close the exact agent only when evidence shows it remains wedged/,
+    /Use transcript for persisted conversation\/tool evidence; use inspect for live terminal\/process evidence/,
   );
+  assert.match(
+    expandedStale,
+    /actions: inspect · transcript · steer · interrupt · close/,
+  );
+  assert.match(expandedStale, /next reminder: ~5m/);
   assert.match(expandedStale, /session: session-id/);
+
+  const compactStale = collapsedStale;
+  assert.doesNotMatch(compactStale, /actions:|next reminder:/);
+
+  const lost = {
+    details: {
+      agentLabel: "researcher",
+      requestId: "request-id",
+      piSessionId: "session-id",
+      paneId: "pane-id",
+      availableActions: ["transcript", "close"],
+      nextReminderMs: 150000,
+    },
+  };
+  const collapsedLost = renderedText(
+    renderAgentLostMessage(lost, { expanded: false }, presentationTheme),
+  );
+  assert.match(collapsedLost, /× researcher lost/);
+  assert.doesNotMatch(collapsedLost, /actions:|next reminder:/);
+  const expandedLost = renderedText(
+    renderAgentLostMessage(lost, { expanded: true }, presentationTheme),
+  );
+  assert.match(expandedLost, /actions: transcript · close/);
+  assert.match(expandedLost, /next reminder: ~2m 30s/);
+  assert.match(expandedLost, /request: request-id/);
+});
+
+test("generic attention messages keep compact output small and expanded identity details", () => {
+  const attention = {
+    details: {
+      reason: "result_error",
+      summary: "The terminal result could not be persisted.",
+      diagnostic: "mailbox is read-only",
+      runId: "run-id",
+      requestId: "request-id",
+      ownerSessionId: "owner-session-id",
+      workspaceId: "workspace-id",
+      agentLabel: "implementer",
+      paneId: "pane-id",
+      piSessionId: "session-id",
+      availableActions: ["transcript", "close"],
+      nextReminderMs: 300000,
+      nextAction: "Inspect the persistence failure, then close this agent.",
+    },
+  };
+  const collapsed = renderedText(
+    renderAgentAttentionMessage(
+      attention,
+      { expanded: false },
+      presentationTheme,
+    ),
+  );
+  assert.match(collapsed, /! implementer needs attention · result error/);
+  assert.match(collapsed, /The terminal result could not be persisted\./);
+  assert.doesNotMatch(
+    collapsed,
+    /request-id|session-id|pane-id|next reminder|nextAction|diagnostic/,
+  );
+
+  const expanded = renderedText(
+    renderAgentAttentionMessage(
+      attention,
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(expanded, /reason: result error/);
+  assert.match(expanded, /The terminal result could not be persisted\./);
+  assert.match(expanded, /diagnostic: mailbox is read-only/);
+  assert.match(expanded, /actions: transcript · close/);
+  assert.match(expanded, /request: request-id/);
+  assert.match(expanded, /session: session-id/);
+  assert.match(expanded, /pane: pane-id/);
+  assert.match(expanded, /next reminder: ~5m/);
+  assert.match(
+    expanded,
+    /Inspect the persistence failure, then close this agent\./,
+  );
 });
 
 test("agent definition overview uses a compact human hierarchy", (t) => {

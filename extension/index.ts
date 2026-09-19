@@ -189,6 +189,7 @@ import {
   renderAgentAskMessage,
   renderAgentStaleMessage,
   renderAgentLostMessage,
+  renderAgentAttentionMessage,
   renderCoordinationCall,
   renderCoordinationResult,
   truncateModelText,
@@ -237,6 +238,8 @@ type HerdRunEntry =
 const CHIEF_TOOLS = ["staff"] as const;
 const STALE_AFTER_MS = 10 * 60_000;
 const STALE_SCAN_MS = 30_000;
+const ATTENTION_REPEAT_MIN_MS = 60_000;
+const ATTENTION_FIRST_REPEAT_MS = STALE_AFTER_MS / 2;
 const ACTIVITY_WRITE_MIN_MS = 5_000;
 const RESULT_WRITE_MAX_ATTEMPTS = 8;
 const TOKEN_ESTIMATE_BYTES = 4;
@@ -244,6 +247,10 @@ const AGENT_TRANSCRIPT_MAX_BYTES = 16 * 1024;
 const AGENT_TRANSCRIPT_TOOL_RESULT_MAX_BYTES = 4 * 1024;
 const AGENT_TRANSCRIPT_TOOL_RESULT_OMISSION =
   "\n[... middle of tool result omitted ...]\n";
+function formatAttentionDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
 function formatMessageLimit(bytes: number): string {
   const tokens = Math.ceil(bytes / TOKEN_ESTIMATE_BYTES);
   return `${bytes / 1024} KiB · ≈${tokens.toLocaleString("en-US")} tokens`;
@@ -297,6 +304,19 @@ task failure. Treat the assignment as unresolved. When transcript is listed,
 use it only when the last persisted work materially affects recovery. Use close
 to abandon the lost generation before replacing it or continuing its saved
 session. Unknown evidence remains fail-closed and is not proof of loss.
+
+End your turn with unresolved agent work only when that work can still make
+progress without you, or Herdsman is reconciling a durable transition that can
+produce a future result or attention event. If an attention event says your
+action is required, handle it before returning to passive waiting. If an
+inactivity advisory appears healthy or legitimately long-running, leave it
+alone and end the turn; Herdsman will remind you if the condition remains
+unresolved.
+
+Recovery attention is state-specific and may repeat while the same condition
+remains unresolved. Use the event's current evidence and available_actions.
+Transcript is persisted conversation/tool evidence; inspect is live
+terminal/process evidence. Use only currently listed actions.
 
 Never guess identities, paths, sessions, or control state. Treat unknown or
 conflicting evidence as unresolved. Keep one writer per worktree or file-
@@ -6247,6 +6267,11 @@ export default function (pi: ExtensionAPI): void {
     (message, options, theme) =>
       renderAgentLostMessage(message, options, theme),
   );
+  pi.registerMessageRenderer(
+    "pi-herdsman-agent-attention",
+    (message, options, theme) =>
+      renderAgentAttentionMessage(message, options, theme),
+  );
   const processRole = role();
   if (processRole === "unmanaged") {
     const agentsCommand = {
@@ -7533,9 +7558,14 @@ export default function (pi: ExtensionAPI): void {
     let statusContext: ExtensionContext | undefined;
     let statusGeneration = 0;
     let statusWidgetGeneration = 0;
-    const staleNotifications = new Map<string, number>();
-    let staleTimer: ReturnType<typeof setTimeout> | undefined;
-    let staleGeneration = 0;
+    type AttentionReminder = {
+      episode: string;
+      intervalMs: number;
+      nextAt: number;
+    };
+    const attentionReminders = new Map<string, AttentionReminder>();
+    let healthTimer: ReturnType<typeof setTimeout> | undefined;
+    let healthGeneration = 0;
     let supervisionTimer: ReturnType<typeof setInterval> | undefined;
     let supervisionOverviewGeneration = 0;
     let activeSupervisionRender: (() => void) | undefined;
@@ -9821,33 +9851,62 @@ export default function (pi: ExtensionAPI): void {
           controllerAbortController?.signal,
         ).catch(() => {});
       });
-    const lostDeliveryEvidence = new Set<string>();
-    const hasDeliveredAgentLoss = (
-      entries: readonly unknown[],
-      state: ManagedAgentState,
-    ): boolean =>
-      entries.some((entry: any) => {
-        const message = entry?.message ?? entry;
-        return (
-          message?.customType === "pi-herdsman-agent-lost" &&
-          message?.details?.runId === state.runId &&
-          message?.details?.ownerSessionId === state.ownerSessionId
-        );
+    const attentionDue = (
+      runId: string,
+      episode: string,
+      now: number,
+    ): boolean => {
+      const reminder = attentionReminders.get(runId);
+      return reminder?.episode !== episode || now >= reminder.nextAt;
+    };
+    const nextAttentionInterval = (runId: string, episode: string): number => {
+      const reminder = attentionReminders.get(runId);
+      return reminder?.episode === episode
+        ? Math.max(ATTENTION_REPEAT_MIN_MS, reminder.intervalMs / 2)
+        : ATTENTION_FIRST_REPEAT_MS;
+    };
+    const recordAttention = (
+      runId: string,
+      episode: string,
+      intervalMs: number,
+    ): void => {
+      const sentAt = Date.now();
+      attentionReminders.set(runId, {
+        episode,
+        intervalMs,
+        nextAt: sentAt + intervalMs,
       });
+    };
+    const currentOwnedState = (
+      state: ManagedAgentState,
+      ownerSessionId: string,
+    ): ManagedAgentState | undefined => {
+      const current = listAgentStates().find(({ state: candidate }) =>
+        sameManagedAgentIdentity(candidate, state),
+      )?.state;
+      return current?.ownerSessionId === ownerSessionId ? current : undefined;
+    };
+    const currentAvailableActions = (
+      agent: ManagedAgentSnapshot,
+      ownerSessionId: string,
+    ): string[] =>
+      (listedAgentRecords([agent], ownerSessionId, controllerScope)[0]
+        ?.available_actions as string[] | undefined) ?? [];
     const publishAgentLoss = (
       ctx: ExtensionContext,
       state: ManagedAgentState,
+      availableActions: string[],
+      nextReminderMs: number,
       signal: AbortSignal,
-    ): void => {
-      const key = `${state.runId}:${state.ownerSessionId}`;
-      if (lostDeliveryEvidence.has(key)) return;
-      if (hasDeliveredAgentLoss(ctx.sessionManager.getEntries(), state)) {
-        lostDeliveryEvidence.add(key);
-        return;
-      }
+    ): boolean => {
       const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
       const current = readAgentState(mailbox);
-      if (!current || !sameManagedAgentIdentity(current, state)) return;
+      if (
+        !current ||
+        !sameManagedAgentIdentity(current, state) ||
+        current.ownerSessionId !== ctx.sessionManager.getSessionId()
+      )
+        return false;
       const currentHandoff = readUnacknowledgedRequest(mailbox, current);
       const requestIds = [
         current.completedRequestId,
@@ -9856,12 +9915,12 @@ export default function (pi: ExtensionAPI): void {
       ].filter((value): value is string => !!value);
       try {
         if (requestIds.some((requestId) => readResult(mailbox, requestId)))
-          return;
+          return false;
       } catch {
-        return;
+        return false;
       }
       const latest = readAgentState(mailbox);
-      if (!latest || !sameManagedAgentIdentity(latest, current)) return;
+      if (!latest || !sameManagedAgentIdentity(latest, current)) return false;
       const latestHandoff = readUnacknowledgedRequest(mailbox, latest);
       const latestRequestId =
         latest.completedRequestId ??
@@ -9876,16 +9935,26 @@ export default function (pi: ExtensionAPI): void {
         if (
           latestRequestIds.some((requestId) => readResult(mailbox, requestId))
         )
-          return;
+          return false;
       } catch {
-        return;
+        return false;
       }
-      if (signal.aborted) return;
+      if (signal.aborted || !ctx.isIdle()) return false;
       try {
+        if (signal.aborted || !ctx.isIdle()) return false;
         pi.sendMessage(
           {
             customType: "pi-herdsman-agent-lost",
-            content: `Agent ${current.agentLabel} disappeared before its assignment produced a durable result.\n\nThe assignment remains unresolved.\nSession: ${current.piSessionId}\nPane: ${current.paneId}\n${latestRequestId ? `Request: ${latestRequestId}\n` : ""}\nClose this lost generation before replacing or continuing it. Do not treat disappearance as completion.`,
+            content: [
+              `Agent ${current.agentLabel} is still lost and its assignment remains unresolved.`,
+              ...(latestRequestId ? [`Request: ${latestRequestId}`] : []),
+              `Available actions: ${availableActions.join(", ") || "none"}`,
+              `Next reminder if unresolved: ~${formatAttentionDuration(nextReminderMs)}`,
+              "",
+              "Use transcript only when persisted work materially affects the recovery decision.",
+              "Close this lost generation before replacing it or continuing its saved session.",
+              "Physical disappearance is not task completion.",
+            ].join("\n"),
             display: true,
             details: {
               runId: current.runId,
@@ -9897,13 +9966,16 @@ export default function (pi: ExtensionAPI): void {
               piSessionFile: current.piSessionFile,
               agentDefinition: stateAgentDefinition(current),
               requestId: latestRequestId,
+              availableActions,
+              nextReminderMs,
             },
           },
-          { triggerTurn: true, deliverAs: "steer" },
+          { triggerTurn: true },
         );
-        lostDeliveryEvidence.add(key);
+        return true;
       } catch {
         // The next health reconciliation retries attention delivery.
+        return false;
       }
     };
     const scanAgentHealth = async (
@@ -9911,57 +9983,369 @@ export default function (pi: ExtensionAPI): void {
       signal: AbortSignal,
       generation: number,
     ): Promise<void> => {
-      if (signal.aborted || generation !== staleGeneration) return;
+      if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
+        return;
       const ownerSessionId = ctx.sessionManager.getSessionId();
       const snapshot = await managedAgentSnapshots(pi, ctx, signal);
-      if (signal.aborted || generation !== staleGeneration) return;
+      if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
+        return;
       const now = Date.now();
+      const ownedRuns = new Set(
+        snapshot.agents
+          .filter(({ state }) => state.ownerSessionId === ownerSessionId)
+          .map(({ state }) => state.runId),
+      );
+      for (const runId of attentionReminders.keys())
+        if (!ownedRuns.has(runId)) attentionReminders.delete(runId);
+      let published = false;
       for (const agent of snapshot.agents) {
-        if (signal.aborted || generation !== staleGeneration) return;
+        if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
+          return;
         const { state, listed } = agent;
+        if (state.ownerSessionId !== ownerSessionId) continue;
+        const availableActions = currentAvailableActions(agent, ownerSessionId);
+        if (state.resultError) {
+          const error = state.resultError;
+          const episode = `result-error:${error.failedAt}:${error.requestId}`;
+          if (published || !attentionDue(state.runId, episode, now)) continue;
+          const intervalMs = nextAttentionInterval(state.runId, episode);
+          const current = currentOwnedState(state, ownerSessionId);
+          if (
+            !current?.resultError ||
+            current.resultError.failedAt !== error.failedAt ||
+            current.resultError.requestId !== error.requestId ||
+            !ctx.isIdle()
+          )
+            continue;
+          try {
+            if (!ctx.isIdle()) continue;
+            pi.sendMessage(
+              {
+                customType: "pi-herdsman-agent-attention",
+                content: [
+                  `Agent ${current.agentLabel} could not persist its terminal result.`,
+                  `Request: ${error.requestId}`,
+                  `Failure: ${error.message}`,
+                  `Available actions: ${availableActions.join(", ") || "none"}`,
+                  `Next reminder if unresolved: ~${formatAttentionDuration(intervalMs)}`,
+                  "",
+                  error.nextAction,
+                  "Do not start overlapping replacement work while this assignment remains unresolved.",
+                ].join("\n"),
+                display: true,
+                details: {
+                  reason: "result_error",
+                  summary: error.message,
+                  runId: current.runId,
+                  requestId: error.requestId,
+                  ownerSessionId: current.ownerSessionId,
+                  workspaceId: current.workspaceId,
+                  agentLabel: current.agentLabel,
+                  paneId: current.paneId,
+                  piSessionId: current.piSessionId,
+                  availableActions,
+                  nextReminderMs: intervalMs,
+                  nextAction: error.nextAction,
+                },
+              },
+              { triggerTurn: true },
+            );
+            recordAttention(state.runId, episode, intervalMs);
+            published = true;
+          } catch {}
+          continue;
+        }
+        if (agent.presence.kind === "lost" && !state.completedRequestId) {
+          const episode = "lost";
+          if (published || !attentionDue(state.runId, episode, now)) continue;
+          const intervalMs = nextAttentionInterval(state.runId, episode);
+          if (
+            publishAgentLoss(ctx, state, availableActions, intervalMs, signal)
+          ) {
+            recordAttention(state.runId, episode, intervalMs);
+            published = true;
+          }
+          continue;
+        }
+        if (agent.presence.kind === "unknown") {
+          const episode = "unknown";
+          if (published || !attentionDue(state.runId, episode, now)) continue;
+          const current = currentOwnedState(state, ownerSessionId);
+          if (!current || !ctx.isIdle()) continue;
+          try {
+            if (!ctx.isIdle()) continue;
+            pi.sendMessage(
+              {
+                customType: "pi-herdsman-agent-attention",
+                content: [
+                  `Agent ${current.agentLabel} has unresolved physical identity.`,
+                  `Available actions: ${availableActions.join(", ") || "none"}`,
+                  "",
+                  "No safe direct control action is currently available.",
+                  "Do not infer loss, guess a pane or process, or target ambiguous execution.",
+                  "Herdsman will continue reconciling physical identity automatically.",
+                ].join("\n"),
+                display: true,
+                details: {
+                  reason: "unknown",
+                  runId: current.runId,
+                  ownerSessionId: current.ownerSessionId,
+                  workspaceId: current.workspaceId,
+                  agentLabel: current.agentLabel,
+                  paneId: current.paneId,
+                  piSessionId: current.piSessionId,
+                  availableActions,
+                },
+              },
+              { triggerTurn: true },
+            );
+            attentionReminders.set(state.runId, {
+              episode,
+              intervalMs: Number.POSITIVE_INFINITY,
+              nextAt: Number.POSITIVE_INFINITY,
+            });
+            published = true;
+          } catch {}
+          continue;
+        }
+        if (state.pendingAskId) {
+          let ask: AskRecord | undefined;
+          try {
+            ask = readPendingAsk(
+              agentMailboxPath(state.workspaceId, state.agentLabel),
+              state,
+            );
+          } catch {}
+          if (ask && hasDeliveredAsk(ctx.sessionManager.getBranch(), ask)) {
+            const episode = `ask:${ask.askId}`;
+            const reminder = attentionReminders.get(state.runId);
+            if (!reminder || reminder.episode !== episode) {
+              attentionReminders.set(state.runId, {
+                episode,
+                intervalMs: ATTENTION_FIRST_REPEAT_MS,
+                nextAt: now + ATTENTION_FIRST_REPEAT_MS,
+              });
+              continue;
+            }
+            if (published || !attentionDue(state.runId, episode, now)) continue;
+            const intervalMs = nextAttentionInterval(state.runId, episode);
+            const current = currentOwnedState(state, ownerSessionId);
+            if (!current?.pendingAskId || !ctx.isIdle()) continue;
+            try {
+              const currentAsk = readPendingAsk(
+                agentMailboxPath(current.workspaceId, current.agentLabel),
+                current,
+              );
+              if (
+                !currentAsk ||
+                currentAsk.askId !== ask.askId ||
+                !hasDeliveredAsk(ctx.sessionManager.getBranch(), currentAsk)
+              )
+                continue;
+              if (!ctx.isIdle()) continue;
+              pi.sendMessage(
+                {
+                  customType: "pi-herdsman-agent-ask",
+                  content: [
+                    `Agent ${currentAsk.agentLabel} is still waiting for your answer:`,
+                    "",
+                    currentAsk.question,
+                    "",
+                    `Available actions: ${availableActions.join(", ") || "none"}`,
+                    `Next reminder if unresolved: ~${formatAttentionDuration(intervalMs)}`,
+                    "",
+                    "Reply to this exact pending ask if the required decision is available.",
+                    "Do not delegate around or duplicate the blocked assignment.",
+                  ].join("\n"),
+                  display: true,
+                  details: {
+                    askId: currentAsk.askId,
+                    question: currentAsk.question,
+                    requestId: currentAsk.requestId,
+                    runId: currentAsk.runId,
+                    agentLabel: currentAsk.agentLabel,
+                    workspaceId: currentAsk.workspaceId,
+                    paneId: currentAsk.paneId,
+                    piSessionId: currentAsk.piSessionId,
+                    availableActions,
+                    nextReminderMs: intervalMs,
+                  },
+                },
+                { triggerTurn: true },
+              );
+              recordAttention(state.runId, episode, intervalMs);
+              published = true;
+            } catch {}
+          } else {
+            attentionReminders.delete(state.runId);
+          }
+          continue;
+        }
         if (
-          state.ownerSessionId === ownerSessionId &&
-          agent.presence.kind === "lost" &&
-          !state.completedRequestId &&
-          !state.resultError
-        )
-          publishAgentLoss(ctx, state, signal);
+          agent.presence.kind === "live" &&
+          agent.lifecycleState === "blocked" &&
+          state.activeRequestId
+        ) {
+          const episode = `blocked:${state.activeRequestId}`;
+          if (published || !attentionDue(state.runId, episode, now)) continue;
+          const intervalMs = nextAttentionInterval(state.runId, episode);
+          const current = currentOwnedState(state, ownerSessionId);
+          if (
+            !current?.activeRequestId ||
+            current.pendingAskId ||
+            !ctx.isIdle()
+          )
+            continue;
+          try {
+            if (!ctx.isIdle()) continue;
+            pi.sendMessage(
+              {
+                customType: "pi-herdsman-agent-attention",
+                content: [
+                  `Agent ${current.agentLabel} is blocked in its live runtime, but no Herdsman ask_owner question exists.`,
+                  `Request: ${current.activeRequestId}`,
+                  `Available actions: ${availableActions.join(", ") || "none"}`,
+                  `Next reminder if unresolved: ~${formatAttentionDuration(intervalMs)}`,
+                  "",
+                  "Use transcript for persisted conversation/tool evidence.",
+                  "Use inspect only when the live blocking state matters.",
+                  "Do not invent an owner reply or send guessed terminal input.",
+                  "Close only when abandoning the assignment is the intended recovery.",
+                ].join("\n"),
+                display: true,
+                details: {
+                  reason: "blocked",
+                  runId: current.runId,
+                  requestId: current.activeRequestId,
+                  ownerSessionId: current.ownerSessionId,
+                  workspaceId: current.workspaceId,
+                  agentLabel: current.agentLabel,
+                  paneId: current.paneId,
+                  piSessionId: current.piSessionId,
+                  availableActions,
+                  nextReminderMs: intervalMs,
+                },
+              },
+              { triggerTurn: true },
+            );
+            recordAttention(state.runId, episode, intervalMs);
+            published = true;
+          } catch {}
+          continue;
+        }
+        let request: RequestRecord | undefined;
+        try {
+          request = readUnacknowledgedRequest(
+            agentMailboxPath(state.workspaceId, state.agentLabel),
+            state,
+          );
+        } catch {
+          continue;
+        }
         if (
-          state.ownerSessionId !== ownerSessionId ||
+          request &&
+          request.createdAt <= now &&
+          now - request.createdAt >= STALE_AFTER_MS
+        ) {
+          const episode = `handoff:${request.requestId}`;
+          if (published || !attentionDue(state.runId, episode, now)) continue;
+          const intervalMs = nextAttentionInterval(state.runId, episode);
+          const current = currentOwnedState(state, ownerSessionId);
+          if (!current || !ctx.isIdle()) continue;
+          try {
+            const currentRequest = readUnacknowledgedRequest(
+              agentMailboxPath(current.workspaceId, current.agentLabel),
+              current,
+            );
+            if (
+              !currentRequest ||
+              currentRequest.requestId !== request.requestId ||
+              !ctx.isIdle()
+            )
+              continue;
+            pi.sendMessage(
+              {
+                customType: "pi-herdsman-agent-attention",
+                content: [
+                  `Agent ${current.agentLabel} still has an unacknowledged ${currentRequest.kind} request.`,
+                  `Request: ${currentRequest.requestId}`,
+                  `Pending for: ${formatAttentionDuration(now - currentRequest.createdAt)}`,
+                  `Available actions: ${availableActions.join(", ") || "none"}`,
+                  `Next reminder if unresolved: ~${formatAttentionDuration(intervalMs)}`,
+                  "",
+                  "The durable request is still retained.",
+                  "Do not submit the same intent again: acknowledgement timeout does not prove non-delivery.",
+                  "Herdsman will continue reconciling this exact request.",
+                ].join("\n"),
+                display: true,
+                details: {
+                  reason: "handoff",
+                  runId: current.runId,
+                  requestId: currentRequest.requestId,
+                  ownerSessionId: current.ownerSessionId,
+                  workspaceId: current.workspaceId,
+                  agentLabel: current.agentLabel,
+                  paneId: current.paneId,
+                  piSessionId: current.piSessionId,
+                  availableActions,
+                  nextReminderMs: intervalMs,
+                },
+              },
+              { triggerTurn: true },
+            );
+            recordAttention(state.runId, episode, intervalMs);
+            published = true;
+          } catch {}
+          continue;
+        }
+        if (
           agent.presence.kind !== "live" ||
           listed.state !== "working" ||
           !state.activeRequestId ||
           state.lastActivityAt === undefined ||
           state.lastActivityAt > now ||
           now - state.lastActivityAt < STALE_AFTER_MS
-        )
+        ) {
+          attentionReminders.delete(state.runId);
           continue;
-        const key = `${state.runId}:${state.activeRequestId}`;
-        if (staleNotifications.get(key) === state.lastActivityAt) continue;
-        const current = listAgentStates().find(({ state: candidate }) =>
-          sameManagedAgentIdentity(candidate, state),
-        )?.state;
+        }
+        const episode = `stale:${state.activeRequestId}:${state.lastActivityAt}`;
+        if (published || !attentionDue(state.runId, episode, now)) continue;
+        const intervalMs = nextAttentionInterval(state.runId, episode);
+        const current = currentOwnedState(state, ownerSessionId);
         if (
           !current ||
-          current.ownerSessionId !== ownerSessionId ||
-          current.runId !== state.runId ||
-          current.workspaceId !== state.workspaceId ||
-          current.agentLabel !== state.agentLabel ||
-          current.paneId !== state.paneId ||
-          current.piSessionId !== state.piSessionId ||
-          !sameSessionPath(current.piSessionFile, state.piSessionFile) ||
           current.activeRequestId !== state.activeRequestId ||
-          current.lastActivityAt !== state.lastActivityAt
+          current.lastActivityAt !== state.lastActivityAt ||
+          !ctx.isIdle()
         )
           continue;
-        if (signal.aborted || generation !== staleGeneration) return;
+        if (signal.aborted || generation !== healthGeneration) return;
         const inactiveMs = now - current.lastActivityAt;
         try {
-          if (signal.aborted || generation !== staleGeneration) return;
+          if (
+            signal.aborted ||
+            generation !== healthGeneration ||
+            !ctx.isIdle()
+          )
+            return;
           pi.sendMessage(
             {
               customType: "pi-herdsman-agent-stale",
-              content: `Agent ${current.agentLabel} has had no qualifying execution progress for ${Math.floor(inactiveMs / 60000)}m ${Math.floor((inactiveMs % 60000) / 1000)}s.\n\nState: working\nRequest: ${current.activeRequestId}\nLast qualifying progress: ${Math.floor(inactiveMs / 60000)}m ${Math.floor((inactiveMs % 60000) / 1000)}s ago\n\nStreaming tool output does not reset progress.\nThis is an advisory, not proof of a hang.\nInspect once, then leave the agent alone or close the exact agent only when evidence shows it remains wedged;\ndo not close solely because progress is stale.`,
+              content: [
+                `Agent ${current.agentLabel} has had no qualifying execution progress for ${formatAttentionDuration(inactiveMs)}.`,
+                `Request: ${current.activeRequestId}`,
+                `Available actions: ${availableActions.join(", ") || "none"}`,
+                `Next reminder if unresolved: ~${formatAttentionDuration(intervalMs)}`,
+                "",
+                "This is advisory inactivity, not proof of a hang.",
+                "Streaming tool output does not count as qualifying progress.",
+                "Use transcript when persisted conversation/tool history is enough; use inspect only when live terminal/process evidence is needed.",
+                "If the current operation appears healthy or legitimately long-running, leave it alone.",
+                "Use steer for a non-preemptive correction.",
+                "Use interrupt only when the current operation itself must be abandoned; interrupt cancels that operation and continues the same assignment.",
+                "Use close only to abandon the assignment or as destructive fallback.",
+              ].join("\n"),
               display: true,
               details: {
                 runId: current.runId,
@@ -9974,12 +10358,16 @@ export default function (pi: ExtensionAPI): void {
                 lastActivityAt: current.lastActivityAt,
                 inactiveMs,
                 thresholdMs: STALE_AFTER_MS,
+                availableActions,
+                nextReminderMs: intervalMs,
               },
             },
-            { triggerTurn: true, deliverAs: "steer" },
+            { triggerTurn: true },
           );
-          if (generation === staleGeneration && !signal.aborted)
-            staleNotifications.set(key, current.lastActivityAt);
+          if (generation === healthGeneration && !signal.aborted) {
+            recordAttention(state.runId, episode, intervalMs);
+            published = true;
+          }
         } catch {
           // Publication is best-effort; the next scan retries it.
         }
@@ -9989,7 +10377,7 @@ export default function (pi: ExtensionAPI): void {
       ctx: ExtensionContext,
       signal: AbortSignal,
     ): void => {
-      const generation = ++staleGeneration;
+      const generation = ++healthGeneration;
       let healthInFlight = false;
       let healthRescanRequested = false;
       const requestHealthScan = (): void => {
@@ -10008,16 +10396,16 @@ export default function (pi: ExtensionAPI): void {
             if (healthRescanRequested && !signal.aborted) requestHealthScan();
           });
       };
-      if (staleTimer) clearTimeout(staleTimer);
+      if (healthTimer) clearTimeout(healthTimer);
       const schedule = (): void => {
-        if (signal.aborted || generation !== staleGeneration) return;
-        staleTimer = setTimeout(() => {
-          if (signal.aborted || generation !== staleGeneration) return;
-          staleTimer = undefined;
+        if (signal.aborted || generation !== healthGeneration) return;
+        healthTimer = setTimeout(() => {
+          if (signal.aborted || generation !== healthGeneration) return;
+          healthTimer = undefined;
           requestHealthScan();
-          if (generation === staleGeneration) schedule();
+          if (generation === healthGeneration) schedule();
         }, STALE_SCAN_MS);
-        staleTimer.unref?.();
+        healthTimer.unref?.();
       };
       requestHealthScan();
       if (process.env.HERDR_SOCKET_PATH) {
@@ -10287,10 +10675,10 @@ export default function (pi: ExtensionAPI): void {
       controllerSessionActive = false;
       if (statusTimer) clearInterval(statusTimer);
       statusTimer = undefined;
-      if (staleTimer) clearTimeout(staleTimer);
-      staleTimer = undefined;
-      ++staleGeneration;
-      staleNotifications.clear();
+      if (healthTimer) clearTimeout(healthTimer);
+      healthTimer = undefined;
+      ++healthGeneration;
+      attentionReminders.clear();
       statusRefresh = false;
       statusInFlight = false;
       if (statusWidget) {

@@ -100,6 +100,42 @@ The owner does not invent side work merely because agents are running. It does
 not poll, sleep, inspect or transcript merely for progress, send status steering, or use
 another mechanism to keep the turn alive.
 
+Health reconciliation follows the same boundary. It is event-driven, with a
+30-second fallback scan for durable and physical state that has not emitted a
+separate event. Each scan reconciles fresh mailbox and Herdr evidence for the
+controller's direct agents and sends health attention only to an idle exact
+direct owner. The event's `available_actions` is a current advisory snapshot;
+the selected action revalidates identity, ownership, mailbox state, and
+lifecycle before it mutates anything.
+
+Unresolved work may remain passive when it can still make progress without the
+owner, or when a durable transition can produce a future result or attention
+event. A condition that requires owner action wakes the direct owner. If that
+same state-specific condition persists, attention may repeat. Reminder timing
+is process-local and advisory rather than durable mailbox state, so a restart
+may produce another reminder. Persistent attention follows approximately
+`5m → 2m30s → 1m15s → 1m`, subject to the 30-second scan; stale still first
+becomes eligible after ten minutes without qualifying execution progress.
+
+The health conditions are deliberately narrow: stale working and proven lost
+retain their dedicated messages; a delivered owner question may be reminded;
+`result_error`, a live runtime `blocked` condition, and an old retained
+unacknowledged handoff use generic attention. A retained request is not proof
+of non-delivery and must not be duplicated. Physical `unknown` remains
+fail-closed and receives at most one attention event for an episode. `settling`
+alone is not a timeout or generic attention condition. A parent projected as
+blocked while waiting for direct children is progress-capable and is not the
+same as Herdr reporting that the managed child runtime is blocked.
+
+When attention arrives, the owner handles a required action before ending the
+turn. For evidence, use `transcript` for persisted Pi conversation and tool
+history, and `inspect` for live terminal/process state. Leave healthy or
+legitimately long-running stale work alone. Use `steer` for a cooperative
+non-preemptive correction, `interrupt` only to cancel the current operation
+while continuing the same assignment, `close` to abandon an assignment, and
+`reply` only for the exact pending owner question. Do not poll or keep the turn
+alive solely to wait for agent progress.
+
 Conceptually:
 
 ```text
