@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.11.0](https://github.com/boadij/pi-herdsman/compare/v0.10.1...v0.11.0) (2026-09-20)
+
+
+### Features
+
+* align chief supervision with lead semantics ([#93](https://github.com/boadij/pi-herdsman/issues/93)) ([f82a194](https://github.com/boadij/pi-herdsman/commit/f82a194d38c0829b1fb26318e48fa2f15fea4945))
+
+
+### CI
+
+* validate built extension with Pi loader ([#96](https://github.com/boadij/pi-herdsman/issues/96)) ([1bd83d8](https://github.com/boadij/pi-herdsman/commit/1bd83d8752826c3c6e0efee0bb3a7c4da0e1ff6f))
+
+
+### Other Changes
+
+* validate Pi 0.86.1 ([#95](https://github.com/boadij/pi-herdsman/issues/95)) ([8ddf4ae](https://github.com/boadij/pi-herdsman/commit/8ddf4ae8cda3181ee90a5872194c08d616029471))
+
 ## [0.10.1](https://github.com/boadij/pi-herdsman/compare/v0.10.0...v0.10.1) (2026-09-19)
 
 
