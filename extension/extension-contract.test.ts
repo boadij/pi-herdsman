@@ -459,7 +459,7 @@ test("active chief describes authoritative remote ask projection", async () => {
   setLeadEnvironment();
 });
 
-test("staff transcript requires exact persisted evidence and revalidates the lead", async () => {
+test("staff transcript advertises persisted candidates and revalidates the lead", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";

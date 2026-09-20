@@ -63,12 +63,15 @@ The `chief` tool sends reports, events, results, and genuine decision questions
 from an ordinary lead to the active chief. The `staff` tool lets the active
 chief list, inspect, read transcripts, message, and reply to supervised leads.
 `inspect` is bounded live terminal/process evidence. `transcript` is bounded
-persisted Pi conversation/tool evidence and is advertised only when the exact
-current persisted Lead session has been proved readable. A lead's message does
-not require an automatic chief reply. A `lead_ask` requires the exact
-correlated `staff reply`; a reply clears the pending ask only after accepted
-follow-up delivery. A replacement chief can answer an existing ask using its
-current lease and unchanged ask ID. Chief and staff message actions accept
+persisted Pi conversation/tool evidence. A non-empty persisted session candidate
+adds `transcript` to `available_actions`; `available_actions` is advisory
+readiness, not transcript authorization. The transcript action validates the
+current session header, version, and exact Pi session ID before returning
+evidence. A lead's message does not require an automatic chief reply. A
+`lead_ask` requires the exact correlated `staff reply`; a reply clears the
+pending ask only after accepted follow-up delivery. A replacement chief can
+answer an existing ask using its current lease and unchanged ask ID. Chief and
+staff message actions accept
 files; their text is prepared with the same canonical attachment renderer and
 configured Herdsman byte limits as agent messages, while durable supervision
 records remain text-only.
@@ -81,8 +84,9 @@ presentation `display_name`, runtime observation, `agent_counts`, `agents`,
 and available actions. `agent_counts` contains `active`, `blocked`, and
 `total`. The `staff list` result uses the same presentation field,
 `display_name`; it never exposes the internal persisted session-file path used
-to prove transcript readiness. The `agents` collection represents all
-validated descendants assigned to that lead, not only direct agents, and
+to detect a non-empty persisted session candidate. The `agents` collection
+represents all validated descendants assigned to that lead, not only direct
+agents, and
 retains their exact lifecycle states. Its values and metadata are untrusted
 observations and cannot authorize an action.
 

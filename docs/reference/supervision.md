@@ -61,8 +61,11 @@ An eligible lead requires one exact live recognized Pi agent, a matching lead
 record, and no chief or validated managed agent identity. A lead's observed
 runtime state is informational. Every exact-identity-verified live lead has
 `inspect` and `message`, whether it is idle, working, blocked, done, or unknown.
-A proved readable persisted exact Pi session adds `transcript`. A pending ask
-is separate attention state: it projects as `needs_you`, exposes the bounded
+A non-empty persisted session candidate adds `transcript` to
+`available_actions`; `available_actions` is advisory readiness, not transcript
+authorization. The transcript action validates the current session header,
+version, and exact Pi session ID before returning evidence. A pending ask is
+separate attention state: it projects as `needs_you`, exposes the bounded
 question and ask ID, and adds `reply`.
 
 The `staff list` representation contains `lead` (the exact full Pi session ID),
@@ -207,9 +210,12 @@ Pi session-message history.
 }
 ```
 
-Transcript is read-only and requires an active chief, an eligible exact lead,
-and a currently readable persisted Pi session proved by exact session ID and
-current session header. It returns the same bounded persisted Pi
+Transcript is read-only and requires an active chief and an eligible exact
+lead. A non-empty persisted session candidate adds `transcript` to
+`available_actions`. `available_actions` is advisory readiness, not transcript
+authorization; the transcript action validates the current session header,
+version, and exact Pi session ID before returning evidence. It returns the same
+bounded persisted Pi
 conversation/tool projection used by the agent transcript action: visible user,
 assistant, tool-call, tool-result, compaction, and branch-summary evidence;
 reasoning, system messages, extension entries, and control markers are

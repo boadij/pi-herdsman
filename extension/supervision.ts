@@ -1171,7 +1171,7 @@ export type LeadCoordinationState = {
 
 export type SupervisedLead = {
   lead: string;
-  /** Internal: caller proved a readable persisted exact Pi session. */
+  /** Internal: path to a non-empty persisted session candidate. */
   piSessionFile?: string;
   instanceId?: string;
   displayName: string;
@@ -1202,7 +1202,7 @@ export type RuntimeState =
   | "lost";
 export type LiveAgent = {
   sessionId: string;
-  /** Internal: caller proved a readable persisted exact Pi session. */
+  /** Internal: path to a non-empty persisted session candidate. */
   piSessionFile?: string;
   sessionKind: "id";
   workspaceId: string;

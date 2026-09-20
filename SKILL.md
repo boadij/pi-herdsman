@@ -362,9 +362,12 @@ leads through `list`, `inspect`, `transcript`, `message`, and `reply`. `inspect`
 is bounded live terminal/process evidence; `transcript` is bounded persisted Pi
 conversation/tool evidence. The target is the exact full Pi session ID in the
 `lead` field shown by a fresh supervision snapshot or returned by `staff` `list`;
-`display_name` is never a target. Every verified lead accepts `message`;
-`transcript` is listed only when exact persisted session evidence is available;
-`reply` requires its exact pending ask ID and current chief lease. Chief
+`display_name` is never a target. Every verified lead accepts `message`; a
+non-empty persisted session candidate adds `transcript` to
+`available_actions`. `available_actions` is advisory readiness, not transcript
+authorization; the transcript action validates the current session header,
+version, and exact Pi session ID before returning evidence. `reply` requires
+its exact pending ask ID and current chief lease. Chief
 supervises independent leads, does not own their agent trees, and receives no
 owner controls.
 
@@ -417,8 +420,11 @@ does not block a new message to that lead.
 
 Every exact-identity-verified live lead exposes `inspect` and `message`,
 regardless of observed runtime state (`idle|working|blocked|done|unknown`). A
-provable persisted exact Pi session adds `transcript`; a pending ask adds
-`reply`. Delivered content identifies direction and
+non-empty persisted session candidate adds `transcript` to
+`available_actions`; a pending ask adds `reply`. `available_actions` is
+advisory readiness, not transcript authorization; the transcript action
+validates the current session header, version, and exact Pi session ID before
+returning evidence. Delivered content identifies direction and
 model-visible sender and target identity; UI-only details do not establish it.
 Supervision projects descendant lifecycle states exactly. `agent_counts` uses
 `active`, `blocked`, and `total`; `active` counts `working`, `settling`, and

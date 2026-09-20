@@ -393,7 +393,7 @@ test("supervision authority is coordination state, not metadata", () => {
   );
 });
 
-test("live lead actions advertise transcript only with proven internal evidence", () => {
+test("live lead actions advertise transcript for persisted session candidates", () => {
   const agent = {
     sessionId: "lead",
     sessionKind: "id" as const,
