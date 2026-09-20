@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { homedir } from "node:os";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
 
 const root = process.cwd();
 const normalize = (path) => path.replace(/^package\//u, "");
@@ -85,4 +86,33 @@ for (const entry of files) {
 }
 
 if (process.exitCode) process.exit(process.exitCode);
+
+const isolated = mkdtempSync(resolve(tmpdir(), "pi-herdsman-package-audit-"));
+
+try {
+  const { extensions, errors } = await discoverAndLoadExtensions(
+    [root],
+    isolated,
+    isolated,
+  );
+
+  if (errors.length)
+    throw new Error(
+      [
+        "Pi failed to load built package extension:",
+        ...errors.map(({ path, error }) => `${path}: ${error}`),
+      ].join("\n"),
+    );
+
+  const expectedEntry = resolve(root, "dist/index.js");
+  const loadedEntries = extensions.map(({ resolvedPath }) => resolvedPath);
+
+  if (loadedEntries.length !== 1 || loadedEntries[0] !== expectedEntry)
+    throw new Error(
+      `Pi package load expected ${expectedEntry}, loaded ${JSON.stringify(loadedEntries)}`,
+    );
+} finally {
+  rmSync(isolated, { recursive: true, force: true });
+}
+
 console.log(`package audit passed: ${files.length} files`);
