@@ -11,6 +11,7 @@ import {
   removeChiefMessage,
   readChiefMessage,
   listChiefMessagePaths,
+  writeChiefMessage,
   supervisionRuntime,
   readLeadCoordinationState,
   writeLeadCoordinationState,
@@ -282,6 +283,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     false,
   );
   assert.equal(lead.events.has("before_agent_start"), true);
+  assert.equal(lead.events.has("context"), false);
   assert.ok(lead.events.has("session_start"));
   assert.ok(lead.events.has("session_shutdown"));
 
@@ -365,10 +367,17 @@ test("active chief describes authoritative remote ask projection", async () => {
   );
   assert.match(renderedStaffResult.text, /✓ sent to workspace\/api/);
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
-  const chiefPrompt = pi.events.get("before_agent_start")![0](
+  const beforeStart = await pi.events.get("before_agent_start")![0](
     { systemPromptOptions: { contextFiles: [] } },
     context,
-  )?.systemPrompt;
+  );
+  const chiefPrompt = beforeStart?.systemPrompt;
+  assert.equal(
+    beforeStart?.message?.customType,
+    "pi-herdsman-supervision-context",
+  );
+  assert.equal(beforeStart?.message?.display, false);
+  assert.match(String(beforeStart?.message?.content), /status="fresh"/);
   assert.match(
     String(chiefPrompt),
     /Chief coordination is event-driven, not polling/,
@@ -887,26 +896,27 @@ test("a replacement chief never falls back to the previous session supervision",
     getSessionId: () => sessionId,
   };
   const sessionStart = pi.events.get("session_start")![0];
-  const agentStart = pi.events.get("agent_start")![0];
+  const beforeStart = () =>
+    pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      context,
+    );
   try {
     await sessionStart(undefined, context);
-    await agentStart(undefined, context);
-    assert.match(
-      pi.events.get("context")![0]({ messages: [] }, context).messages.at(-1)
-        .content,
-      /status="fresh"/,
-    );
+    const first = await beforeStart();
+    assert.equal(first?.message?.customType, "pi-herdsman-supervision-context");
+    assert.equal(first?.message?.display, false);
+    assert.match(String(first?.message?.content), /status="fresh"/);
 
     sessionId = chiefB;
     failRefresh = true;
     await sessionStart(undefined, context);
-    await agentStart(undefined, context);
-    const message = pi.events
-      .get("context")![0]({ messages: [] }, context)
-      .messages.at(-1);
-    assert.match(message.content, /status="unavailable"/);
-    assert.doesNotMatch(message.content, /status="stale"/);
-    assert.doesNotMatch(message.content, new RegExp(leadId));
+    const message = (await beforeStart())?.message;
+    assert.equal(message?.customType, "pi-herdsman-supervision-context");
+    assert.equal(message?.display, false);
+    assert.match(String(message?.content), /status="unavailable"/);
+    assert.doesNotMatch(String(message?.content), /status="stale"/);
+    assert.doesNotMatch(String(message?.content), new RegExp(leadId));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
@@ -1001,10 +1011,17 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     getSessionId: () => sessionId,
   };
   const sessionStart = pi.events.get("session_start")![0];
-  const agentStart = pi.events.get("agent_start")![0];
+  const beforeStart = () =>
+    pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      context,
+    );
   try {
     await sessionStart(undefined, context);
-    await agentStart(undefined, context);
+    const first = await beforeStart();
+    assert.equal(first?.message?.customType, "pi-herdsman-supervision-context");
+    assert.equal(first?.message?.display, false);
+    assert.match(String(first?.message?.content), /status="fresh"/);
     blockNextRefresh = true;
     const command = pi.commandOptions.get("chief");
     assert.ok(command);
@@ -1016,14 +1033,294 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     failRefresh = true;
     releaseBlocked();
     await background;
-    await agentStart(undefined, context);
-    const message = pi.events
-      .get("context")![0]({ messages: [] }, context)
-      .messages.at(-1);
-    assert.match(message.content, /status="unavailable"/);
-    assert.doesNotMatch(message.content, /status="stale"/);
-    assert.doesNotMatch(message.content, new RegExp(leadId));
+    const message = (await beforeStart())?.message;
+    assert.equal(message?.customType, "pi-herdsman-supervision-context");
+    assert.equal(message?.display, false);
+    assert.match(String(message?.content), /status="unavailable"/);
+    assert.doesNotMatch(String(message?.content), /status="stale"/);
+    assert.doesNotMatch(String(message?.content), new RegExp(leadId));
   } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("Chief supervision context is persistent, deduplicated, and compaction-aware", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `supervision-continuity-${randomUUID()}.sock`,
+  );
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { role: "chief", leadTools: ["agent", "chief"] },
+    },
+  ];
+  const branch: any[] = [];
+  const pi = fakePi({ entries, allTools: REGISTERED_ROLE_TOOLS });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries, branch) as any;
+  const beforeStart = () =>
+    pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      context,
+    );
+
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const first = await beforeStart();
+    assert.equal(first?.message?.customType, "pi-herdsman-supervision-context");
+    assert.equal(first?.message?.display, false);
+    assert.match(String(first?.message?.content), /status="fresh"/);
+
+    const content = String(first?.message?.content);
+    branch.push({
+      type: "custom_message",
+      id: "snapshot-1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      customType: "pi-herdsman-supervision-context",
+      content,
+      display: false,
+    });
+    const second = await beforeStart();
+    assert.equal(second?.message, undefined);
+
+    branch.splice(
+      0,
+      branch.length,
+      {
+        type: "custom_message",
+        id: "snapshot-old",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        customType: "pi-herdsman-supervision-context",
+        content,
+        display: false,
+      },
+      {
+        type: "message",
+        id: "kept",
+        parentId: "snapshot-old",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "kept" }],
+          timestamp: 1,
+        },
+      },
+      {
+        type: "compaction",
+        id: "compact",
+        parentId: "kept",
+        timestamp: new Date().toISOString(),
+        summary: "summary",
+        firstKeptEntryId: "kept",
+        tokensBefore: 100,
+      },
+    );
+    const afterCompaction = await beforeStart();
+    assert.ok(afterCompaction?.message);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("Chief preflight gate defers idle inbox delivery until agent_start", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `supervision-preflight-gate-${randomUUID()}.sock`,
+  );
+  const leadId = LEAD_SESSION_ID;
+  const chiefId = `chief-${randomUUID()}`;
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { role: "chief", leadTools: ["agent", "chief"] },
+    },
+  ];
+  const leadAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: leadId,
+    },
+    pane_id: "lead-pane",
+    tab_id: "lead-tab",
+    workspace_id: WORKSPACE,
+    agent_status: "idle",
+  };
+  const chiefAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: chiefId,
+    },
+    pane_id: "chief-pane",
+    tab_id: "chief-tab",
+    workspace_id: WORKSPACE,
+    agent_status: "idle",
+  };
+  const inventory = { agents: [leadAgent, chiefAgent], panes: [] };
+  let blockedRefreshes = 0;
+  const releaseBlocked: (() => void)[] = [];
+  let refreshStarted = 0;
+  const pi = fakePi({
+    entries,
+    allTools: REGISTERED_ROLE_TOOLS,
+    exec: (_command, args) => {
+      if (isApiSnapshot(args)) {
+        if (blockedRefreshes > 0) {
+          blockedRefreshes--;
+          refreshStarted++;
+          return new Promise((resolve) => {
+            releaseBlocked.push(() =>
+              resolve({
+                stdout: JSON.stringify({
+                  id: AGENT_ID,
+                  result: { snapshot: inventory },
+                }),
+                stderr: "",
+                code: 0,
+              }),
+            );
+          });
+        }
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { snapshot: inventory },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (isAgentList(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: inventory.agents },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => chiefId,
+    getSessionFile: () => "/tmp/chief-preflight-gate.jsonl",
+  };
+  const runtime = supervisionRuntime();
+
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    const descriptor = JSON.parse(readFileSync(runtime.descriptor, "utf8")) as {
+      leaseId: string;
+    };
+    writeLeadCoordinationState(runtime, {
+      version: 1,
+      instanceId: randomUUID(),
+      piSessionId: leadId,
+      updatedAt: Date.now(),
+    });
+    const messageId = randomUUID();
+    writeChiefMessage({
+      version: 1,
+      id: messageId,
+      leaseId: descriptor.leaseId,
+      kind: "lead_message",
+      fromSessionId: leadId,
+      toSessionId: chiefId,
+      leadSessionId: leadId,
+      text: "queued before Chief preflight completes",
+      createdAt: Date.now(),
+    });
+    blockedRefreshes = 2;
+    const beforeStart = pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      context,
+    );
+    const overlappingBeforeStart = pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      context,
+    );
+    await waitForTestCondition(
+      () => refreshStarted === 2,
+      "Overlapping Chief preflights did not start",
+    );
+    assert.equal(context.isIdle(), true);
+    await new Promise<void>((resolve) => setTimeout(resolve, 650));
+    assert.equal(pi.sentMessageCalls.length, 0);
+    assert.equal(
+      listChiefMessagePaths(runtime, chiefId).some(
+        (path) => readChiefMessage(path).id === messageId,
+      ),
+      true,
+    );
+
+    releaseBlocked.shift()!();
+    const prepared = await beforeStart;
+    assert.equal(
+      prepared?.message?.customType,
+      "pi-herdsman-supervision-context",
+    );
+    assert.equal(pi.sentMessageCalls.length, 0);
+
+    await pi.events.get("agent_start")![0](undefined, context);
+    await new Promise<void>((resolve) => setTimeout(resolve, 650));
+    assert.equal(pi.sentMessageCalls.length, 0);
+
+    releaseBlocked.shift()!();
+    const overlappingPrepared = await overlappingBeforeStart;
+    assert.equal(
+      overlappingPrepared?.message?.customType,
+      "pi-herdsman-supervision-context",
+    );
+    assert.equal(pi.sentMessageCalls.length, 0);
+
+    await pi.events.get("agent_start")![0](undefined, context);
+    await waitForTestCondition(
+      () => pi.sentMessageCalls.length === 2,
+      "Chief inbox delivery did not resume after agent_start",
+      2000,
+    );
+    assert.equal(
+      (pi.sentMessageCalls[0]?.message as any)?.customType,
+      "pi-herdsman-supervision-context",
+    );
+    assert.deepEqual(pi.sentMessageCalls[0]?.options, { triggerTurn: false });
+    assert.match(
+      String((pi.sentMessageCalls[1]?.message as any)?.content),
+      /queued before Chief preflight completes/,
+    );
+    assert.deepEqual(pi.sentMessageCalls[1]?.options, {
+      deliverAs: "followUp",
+      triggerTurn: true,
+    });
+  } finally {
+    for (const release of releaseBlocked) release();
     pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
@@ -1103,6 +1400,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
   let unresolvableIdentity = false;
   let aliasAgent: any | undefined;
   let failChiefAliasLookup = false;
+  let replacement: ReturnType<typeof fakePi> | undefined;
   const exec = (_command: string, args: string[]) => {
     if (isAgentList(args))
       return {
@@ -1264,12 +1562,20 @@ test("registered lead and replacement chief exchange messages and asks", async (
   try {
     writeAgentState(directAgentMailbox, directAgent);
     writeAgentState(descendantAgentMailbox, descendantAgent);
+    const chiefStart = await chief.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      chiefContext,
+    );
     await chief.events.get("agent_start")![0](undefined, chiefContext);
-    const supervisionMessage = chief.events
-      .get("context")![0]({ messages: [] }, chiefContext)
-      .messages.at(-1);
+    const supervisionMessage = chiefStart?.message;
+    assert.equal(
+      supervisionMessage?.customType,
+      "pi-herdsman-supervision-context",
+    );
+    assert.equal(supervisionMessage?.display, false);
+    assert.match(String(supervisionMessage?.content), /status="fresh"/);
     const leadFromSnapshot =
-      supervisionMessage.content.match(/^  lead: (.+)$/mu)?.[1];
+      supervisionMessage?.content.match(/^  lead: (.+)$/mu)?.[1];
     assert.equal(leadFromSnapshot, leadId);
     assert.match(supervisionMessage.content, /leads: 1/);
     assert.match(
@@ -1413,6 +1719,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         ": second from the chief",
     );
 
+    const chiefDeliveryStart = chief.sentMessageCalls.length;
     const message = await leadTool.execute(
       "message",
       { action: "message", message: "progress update" },
@@ -1421,12 +1728,36 @@ test("registered lead and replacement chief exchange messages and asks", async (
       leadContext,
     );
     assertToolResult(message);
-    await new Promise<void>((resolve) => setTimeout(resolve, 550));
+    await waitForTestCondition(
+      () => {
+        const calls = chief.sentMessageCalls.slice(chiefDeliveryStart);
+        return (
+          calls.some(
+            (call) =>
+              (call.message as any)?.customType ===
+              "pi-herdsman-supervision-context",
+          ) &&
+          calls.some((call) =>
+            /From lead .* to chief .*progress update/.test(
+              String((call.message as any)?.content ?? ""),
+            ),
+          )
+        );
+      },
+      "Chief did not receive supervision context and the lead follow-up",
+      2000,
+    );
+    const deliveryCalls = chief.sentMessageCalls.slice(chiefDeliveryStart);
+    assert.equal(
+      (deliveryCalls[0]?.message as any)?.customType,
+      "pi-herdsman-supervision-context",
+    );
+    assert.deepEqual(deliveryCalls[0]?.options, { triggerTurn: false });
     assert.match(
-      String(chief.sentMessageCalls[0]?.message?.content),
+      String((deliveryCalls[1]?.message as any)?.content),
       /From lead .* to chief .*progress update/,
     );
-    assert.deepEqual(chief.sentMessageCalls[0]?.options, {
+    assert.deepEqual(deliveryCalls[1]?.options, {
       deliverAs: "followUp",
       triggerTurn: true,
     });
@@ -1478,6 +1809,10 @@ test("registered lead and replacement chief exchange messages and asks", async (
         return record.kind === "lead_ask" && record.askId === askId;
       }),
       false,
+    );
+    await chief.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      chiefContext,
     );
     await chief.events.get("agent_start")![0](undefined, chiefContext);
     await new Promise<void>((resolve) => setTimeout(resolve, 650));
@@ -1570,7 +1905,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     process.env.HERDR_PANE_ID = "replacement-pane";
     process.env.HERDR_TAB_ID = "replacement-tab";
     const replacementEntries = [...chiefEntries];
-    const replacement = fakePi({
+    replacement = fakePi({
       exec,
       entries: replacementEntries,
       allTools: REGISTERED_ROLE_TOOLS,
@@ -1733,10 +2068,11 @@ test("registered lead and replacement chief exchange messages and asks", async (
       ),
       /Lead coordination state changed/,
     );
-    replacement.events.get("session_shutdown")?.[0]();
+    await replacement.events.get("session_shutdown")?.[0]();
   } finally {
-    lead.events.get("session_shutdown")?.[0]();
-    chief.events.get("session_shutdown")?.[0]();
+    await replacement?.events.get("session_shutdown")?.[0]();
+    await lead.events.get("session_shutdown")?.[0]();
+    await chief.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
@@ -1977,7 +2313,7 @@ test("definition roster matches live list and rejects stale sessions", async () 
     getSessionId: () => sessionId,
   };
   await pi.events.get("session_start")![0](undefined, context);
-  const prompt = pi.events.get("before_agent_start")![0](
+  const prompt = await pi.events.get("before_agent_start")![0](
     { systemPrompt: "base" },
     context,
   );
@@ -1994,19 +2330,19 @@ test("definition roster matches live list and rejects stale sessions", async () 
   assert.deepEqual(roster, listResult.details.agent_definitions);
   sessionId = randomUUID();
   assert.equal(
-    pi.events.get("before_agent_start")![0]({ systemPrompt: "base" }, context),
+    await pi.events.get("before_agent_start")![0](
+      { systemPrompt: "base" },
+      context,
+    ),
     undefined,
   );
   await pi.events.get("session_start")![0](undefined, context);
-  assert.match(
-    pi.events.get("before_agent_start")![0]({ systemPrompt: "base" }, context)
-      ?.systemPrompt ?? "",
-    /<agent_definitions>/,
+  const restartedPrompt = await pi.events.get("before_agent_start")![0](
+    { systemPrompt: "base" },
+    context,
   );
-  assert.equal(
-    pi.events.get("context")?.[0]({ messages: [{ role: "user" }] }, context),
-    undefined,
-  );
+  assert.match(restartedPrompt?.systemPrompt ?? "", /<agent_definitions>/);
+  assert.equal(pi.events.has("context"), false);
   pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_PANE_ID;
 });
@@ -2037,7 +2373,8 @@ test("delegating agents receive only their allowed definition roster", async () 
   const context = fakeAgentContext(entries) as any;
   for (const handler of pi.events.get("session_start") ?? [])
     await handler(undefined, context);
-  const prompt = pi.events.get("before_agent_start")![0](
+  assert.equal(pi.events.has("context"), true);
+  const prompt = await pi.events.get("before_agent_start")![0](
     { systemPrompt: "base" },
     context,
   );
@@ -2090,12 +2427,15 @@ test("leaf agents and active Chiefs do not receive agent definition rosters", as
   registerExtension!(chief.pi as never);
   const context = fakeContext(entries) as any;
   await chief.events.get("session_start")![0](undefined, context);
-  const prompt = chief.events.get("before_agent_start")![0](
-    { systemPrompt: "base" },
+  const prompt = await chief.events.get("before_agent_start")![0](
+    { systemPromptOptions: { contextFiles: [] } },
     context,
   );
   assert.match(prompt?.systemPrompt ?? "", /Chief/);
   assert.doesNotMatch(prompt?.systemPrompt ?? "", /<agent_definitions>/);
+  assert.equal(prompt?.message?.customType, "pi-herdsman-supervision-context");
+  assert.equal(prompt?.message?.display, false);
+  assert.match(String(prompt?.message?.content), /status="fresh"/);
   chief.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_PANE_ID;
   delete process.env.HERDR_TAB_ID;
@@ -2127,11 +2467,15 @@ test("first failed chief supervision refresh is explicitly unavailable", async (
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
-  await pi.events.get("agent_start")![0](undefined, context);
-  const result = pi.events.get("context")![0]({ messages: [] }, context);
-  assert.match(result.messages.at(-1).content, /status="unavailable"/);
+  const result = await pi.events.get("before_agent_start")![0](
+    { systemPromptOptions: { contextFiles: [] } },
+    context,
+  );
+  assert.equal(result?.message?.customType, "pi-herdsman-supervision-context");
+  assert.equal(result?.message?.display, false);
+  assert.match(String(result?.message?.content), /status="unavailable"/);
   assert.match(
-    result.messages.at(-1).content,
+    String(result?.message?.content),
     /Do not infer that there are zero leads/,
   );
   pi.events.get("session_shutdown")?.[0]();

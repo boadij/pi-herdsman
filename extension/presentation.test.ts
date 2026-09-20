@@ -106,6 +106,12 @@ test("Supervision context formatting preserves state, safety, and bounded record
     };
     const formatted = formatSupervisionContext(snapshot, { status: "fresh" });
     assert.match(formatted, /<supervision_state status="fresh">/);
+    assert.match(formatted, /Persisted hidden model context/);
+    assert.match(
+      formatted,
+      /Later supervision_state blocks supersede earlier snapshots/,
+    );
+    assert.match(formatted, /An identical refresh may be omitted/);
     assert.match(
       formatted,
       /This supervision is state-only context, not a response target\./,
@@ -149,7 +155,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
     assert.doesNotMatch(formatted, /lead_session_id/);
 
     const stale = formatSupervisionContext(snapshot, { status: "stale" });
-    assert.match(stale, /The refresh for this run failed/);
+    assert.match(stale, /The latest refresh attempt failed/);
     assert.match(stale, /lead-bbbbbbbb/);
     const unavailable = formatSupervisionContext(undefined, {
       status: "unavailable",
