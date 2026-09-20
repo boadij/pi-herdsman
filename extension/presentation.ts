@@ -167,22 +167,35 @@ export function buildStatusTree(
   return rows;
 }
 
-const STATE = {
-  working: "● working",
-  blocked: "◐ blocked",
-  settling: "◌ settling",
-  starting: "◌ starting",
-  unknown: "? unknown",
-  lost: "× lost",
+type LifecyclePresentationState = AgentLifecycleState | "idle" | "done";
+
+const LIFECYCLE = {
+  idle: ["○", "idle"],
+  working: ["●", "working"],
+  blocked: ["◐", "blocked"],
+  settling: ["◌", "settling"],
+  starting: ["◌", "starting"],
+  done: ["○", "done"],
+  unknown: ["?", "unknown"],
+  lost: ["×", "lost"],
 } as const;
-type StateLabel = (typeof STATE)[keyof typeof STATE];
-const STATE_COLOR: Record<StateLabel, string> = {
-  [STATE.working]: "success",
-  [STATE.blocked]: "warning",
-  [STATE.settling]: "accent",
-  [STATE.starting]: "accent",
-  [STATE.unknown]: "warning",
-  [STATE.lost]: "error",
+
+function lifecycleLabel(state: LifecyclePresentationState): string {
+  const [marker, label] = LIFECYCLE[state];
+  return `${marker} ${label}`;
+}
+
+function lifecycleMarker(state: LifecyclePresentationState): string {
+  return LIFECYCLE[state][0];
+}
+
+const STATE_COLOR: Record<string, string> = {
+  [lifecycleLabel("working")]: "success",
+  [lifecycleLabel("blocked")]: "warning",
+  [lifecycleLabel("settling")]: "accent",
+  [lifecycleLabel("starting")]: "accent",
+  [lifecycleLabel("unknown")]: "warning",
+  [lifecycleLabel("lost")]: "error",
 };
 
 export function compactModelToken(model: string | undefined): string {
@@ -207,7 +220,7 @@ export type StatusRow = {
   spinner: string;
   definition: string;
   agentLabel: string;
-  state: StateLabel;
+  state: string;
   elapsed: string;
   model: string;
   thinking: string;
@@ -233,7 +246,7 @@ export function buildStatusRows(
       spinner: activitySpinner(agent.state, options.frame ?? 0),
       definition: agent.definition || "?",
       agentLabel: agent.label,
-      state: STATE[agent.state],
+      state: lifecycleLabel(agent.state),
       elapsed: formatElapsed(agent.startedAt, options.now) ?? "",
       model: compactModelToken(agent.model),
       thinking: agent.thinking ?? "",
@@ -443,17 +456,15 @@ export type SupervisedLeadSnapshot = Readonly<{
   lead: string;
   displayName: string;
   workspaceLabel?: string;
-  runtimeState: "idle" | "working" | "blocked" | "done" | "unknown";
+  runtimeState: LifecyclePresentationState;
   needsYou?: boolean;
   pendingAskId?: string;
   pendingAskQuestion?: string;
   agentCounts?: Readonly<{
-    working?: number;
+    active?: number;
     blocked?: number;
     total?: number;
   }>;
-  lastActivity?: string;
-  stale?: boolean;
 }>;
 
 export type SupervisedLeadDisplay = SupervisedLeadSnapshot &
@@ -607,10 +618,10 @@ export function orderedSupervisionLeads(
 function leadAgentCounts(lead: SupervisedLeadSnapshot): string {
   const counts = lead.agentCounts;
   if (!counts) return "no agents";
-  const total = counts.total ?? (counts.working ?? 0) + (counts.blocked ?? 0);
+  const total = counts.total ?? (counts.active ?? 0) + (counts.blocked ?? 0);
   if (!total) return "no agents";
   const parts = [
-    counts.working ? `${counts.working} working` : "",
+    counts.active ? `${counts.active} active` : "",
     counts.blocked ? `${counts.blocked} blocked` : "",
   ].filter(Boolean);
   const agents = `${total} agent${total === 1 ? "" : "s"}`;
@@ -648,19 +659,17 @@ export function renderSupervisionLeads(
     safeLine(header, width),
     ...shown.map((lead, index) => {
       const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
-      const group = classifySupervisedLead(lead);
+      const needsYou = lead.needsYou === true || !!lead.pendingAskId;
       const marker =
-        lead.lead === selectedLead
-          ? ">"
-          : group === "NEEDS YOU"
-            ? "◐"
-            : group === "WORKING"
-              ? "●"
-              : group === "IDLE/DONE" && (lead.agentCounts?.working ?? 0) > 0
-                ? "◉"
-                : "○";
+        (lead.runtimeState === "idle" || lead.runtimeState === "done") &&
+        (lead.agentCounts?.active ?? 0) > 0
+          ? "◉"
+          : lifecycleMarker(lead.runtimeState);
+      const navigation = lead.lead === selectedLead ? ">" : "";
+      const attention = needsYou ? "!" : "";
+      const indicators = `${navigation}${attention}`;
       return safeLine(
-        `${branch} ${marker} ${lead.displayName}  ${leadAgentCounts(lead)}`,
+        `${branch} ${indicators}${marker} ${lead.displayName}  ${leadAgentCounts(lead)}`,
         width,
       );
     }),
@@ -784,10 +793,8 @@ export function formatSupervisionContext(
       `  actions: ${lead.availableActions.map(supervisionValue).join(", ")}`,
     );
     lines.push(
-      `  agent_counts: working=${supervisionValue(lead.agentCounts.working)} blocked=${supervisionValue(lead.agentCounts.blocked)} total=${supervisionValue(lead.agentCounts.total)}`,
+      `  agent_counts: active=${supervisionValue(lead.agentCounts.active)} blocked=${supervisionValue(lead.agentCounts.blocked)} total=${supervisionValue(lead.agentCounts.total)}`,
     );
-    if (lead.lastActivity !== undefined)
-      lines.push(`  last_activity: ${supervisionValue(lead.lastActivity)}`);
     if (!lead.agents.length) lines.push("  agents: none");
     else {
       lines.push("  agents:");
@@ -834,7 +841,7 @@ export function createSupervisionWidget(
       return renderSupervisionLeads(getLeads(), width, {
         status: getStatus(),
         ordinaryCap: 6,
-      });
+      }).filter((line) => line.length > 0);
     },
     invalidate() {},
   };
@@ -883,11 +890,11 @@ export function renderSupervisionPeek(
     return true;
   };
   add(lead.displayName);
-  add(`State: ${lead.runtimeState}`);
+  add(`State: ${lifecycleLabel(lead.runtimeState)}`);
   add(`agents: ${leadAgentCounts(lead)}`);
   if (lead.pendingAskQuestion)
     add(`Pending question: ${lead.pendingAskQuestion}`);
-  if (evidence.recentOutput && add("Recent activity")) {
+  if (evidence.recentOutput && add("Recent output")) {
     let start = 0;
     while (start <= evidence.recentOutput.length && lines.length < limit) {
       const end = evidence.recentOutput.indexOf("\n", start);
@@ -1394,7 +1401,7 @@ export function formatToolModelResult(
       ...(value(v.pane_id) ? [`Pane: ${v.pane_id}`] : []),
       ...(foreground.length ? [`Foreground: ${foreground.join(" · ")}`] : []),
       ...(value(v.recent_output)
-        ? ["Recent activity:", value(v.recent_output)]
+        ? ["Recent output:", value(v.recent_output)]
         : []),
       ...(v.recent_output_truncated === true
         ? ["Recent output truncated: yes"]
@@ -2061,9 +2068,6 @@ function expandedResultLines(
           ...(value(lead.pending_ask_question)
             ? [`  question: ${value(lead.pending_ask_question)}`]
             : []),
-          ...(lead.last_activity !== undefined && lead.last_activity !== null
-            ? [`  last activity: ${String(lead.last_activity)}`]
-            : []),
           ...(lead.agent_counts && typeof lead.agent_counts === "object"
             ? [
                 `  agent counts: ${Object.entries(counts)
@@ -2160,6 +2164,26 @@ export function renderCoordinationResult(
       0,
       0,
     );
+  if (action === "transcript" && (tool === "agent" || tool === "staff")) {
+    const label =
+      value(details.agent) ||
+      value(details.display_name) ||
+      shortIdentity(details.lead) ||
+      "target";
+    const tail = textLines(details.transcript).at(-1);
+    const preview = tail ? collapseDisplayText(tail) : undefined;
+    return new WidthSafeText(
+      [
+        humanText(theme, "toolTitle", `transcript  ${label}`),
+        ...(preview ? [humanText(theme, "muted", `  ${preview}`)] : []),
+        ...(details.transcript_truncated === true
+          ? [humanText(theme, "muted", "  earlier content omitted · Ctrl+O")]
+          : []),
+      ].join("\n"),
+      0,
+      0,
+    );
+  }
   if (tool === "agent") {
     if (action === "list")
       return new WidthSafeText(
@@ -2175,22 +2199,6 @@ export function renderCoordinationResult(
           ...inspectEvidence(details, false, theme).map((line) =>
             humanText(theme, "muted", `  ${line}`),
           ),
-        ].join("\n"),
-        0,
-        0,
-      );
-    }
-    if (action === "transcript") {
-      const label = value(details.agent) || "agent";
-      const tail = textLines(details.transcript).at(-1);
-      const preview = tail ? collapseDisplayText(tail) : undefined;
-      return new WidthSafeText(
-        [
-          humanText(theme, "toolTitle", `transcript  ${label}`),
-          ...(preview ? [humanText(theme, "muted", `  ${preview}`)] : []),
-          ...(details.transcript_truncated === true
-            ? [humanText(theme, "muted", "  earlier content omitted · Ctrl+O")]
-            : []),
         ].join("\n"),
         0,
         0,
@@ -2239,8 +2247,11 @@ export function renderCoordinationResult(
   }
   if (action === "list") {
     const leads = Array.isArray(details.leads) ? details.leads : [];
-    const working = leads.filter(
-      (lead: any) => lead?.runtime_state === "working",
+    const active = leads.filter(
+      (lead: any) =>
+        lead?.runtime_state === "working" ||
+        lead?.runtime_state === "settling" ||
+        lead?.runtime_state === "starting",
     ).length;
     const needs = leads.filter((lead: any) => lead?.needs_you === true).length;
     return new WidthSafeText(
@@ -2249,7 +2260,7 @@ export function renderCoordinationResult(
         "toolTitle",
         [
           `staff ${leads.length} leads`,
-          working ? `${working} working` : "",
+          active ? `${active} active` : "",
           needs ? `${needs} needs you` : "",
         ]
           .filter(Boolean)

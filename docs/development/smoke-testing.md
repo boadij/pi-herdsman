@@ -258,60 +258,68 @@ No live Pi/herdr smoke was run for the current worktree. Every scenario below
 is **NOT RUN**, not a claim of failure or success. The automated tests are not
 substitutes for these checks.
 
-| Scenario                                                                                                                             | Result  |
-| ------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| Normal lead has `agent` and `chief`, not `staff`                                                                                     | NOT RUN |
-| Active Chief has exactly `staff`, not lead controller tools                                                                          | NOT RUN |
-| Persisted Chief resume collision becomes suspended                                                                                   | NOT RUN |
-| Ordinary losing `/chief` collision remains a lead with its tools and offers Focus/Cancel                                             | NOT RUN |
-| Delegating agent and agent retain their current role tools                                                                           | NOT RUN |
-| Activate one Chief with `/chief`                                                                                                     | NOT RUN |
-| Activation refuses a lead with owned or unresolved agent work                                                                        | NOT RUN |
-| Two exact simultaneous Chief claims have one winner                                                                                  | NOT RUN |
-| Stale exact lease recovery                                                                                                           | NOT RUN |
-| Malformed role, lead state, lease, or descriptor fails closed; coordination publication invalidates stale state and disables actions | NOT RUN |
-| Discover leads across multiple workspaces                                                                                            | NOT RUN |
-| Exclude managed agents and the active Chief from leads                                                                               | NOT RUN |
-| Agent exclusion uses the production validated snapshot and stale/ambiguous generations fail closed                                   | NOT RUN |
-| Herdr `agent_status` lifecycle normalization is reflected                                                                            | NOT RUN |
-| Nested agent aggregation attaches only to the proven lead                                                                            | NOT RUN |
-| A blocked agent does not mark its lead `needs you`                                                                                   | NOT RUN |
-| Duplicate live agents, coordination records, or agent evidence fail closed                                                           | NOT RUN |
-| Target disappearance or replacement between list and action is rejected                                                              | NOT RUN |
-| Inspect a lead and compare bounded peek evidence                                                                                     | NOT RUN |
-| Focus a lead after exact revalidation                                                                                                | NOT RUN |
-| Chief `message` to idle, working, or blocked leads                                                                                   | NOT RUN |
-| Two Chief messages queue and arrive once and in order                                                                                | NOT RUN |
-| A quarantined message does not block a new message to the same lead                                                                  | NOT RUN |
-| Leads retain descendant ownership after a Chief `message`                                                                            | NOT RUN |
-| Lead `chief message` reaches the active Chief                                                                                        | NOT RUN |
-| Lead `chief ask` reaches the active Chief and creates one pending ask                                                                | NOT RUN |
-| Pending ask projects as `needs_you` with bounded public question and exact reply action                                              | NOT RUN |
-| A second lead ask while one is pending is rejected                                                                                   | NOT RUN |
-| Exact Chief `reply` reaches the lead and clears the ask after local acceptance                                                       | NOT RUN |
-| Pending ask remains replyable after chief replacement using the unchanged ask ID/current lease                                       | NOT RUN |
-| Failed ask queue restores the exact previous pending-ask state                                                                       | NOT RUN |
-| Metadata publication failure does not remove communication eligibility                                                               | NOT RUN |
-| Ordinary lead messages leave lead coordination state unchanged                                                                       | NOT RUN |
-| Follow-up delivery while the receiver is streaming, never steering                                                                   | NOT RUN |
-| Receiver restart delivers each queued message once                                                                                   | NOT RUN |
-| Accepted-before-delete crash deduplicates without reinjection                                                                        | NOT RUN |
-| Failed delivery/acceptance retains the queued record                                                                                 | NOT RUN |
-| Transient authorization lookup failure retains the queued message                                                                    | NOT RUN |
-| Stale lease, wrong sender/generation, duplicate identity, and malformed records fail closed                                          | NOT RUN |
-| Lead/Chief messages show bounded direction-aware model-visible sender and target identity                                            | NOT RUN |
-| Queued inbox records are ordered by `createdAt`, then ID                                                                             | NOT RUN |
-| Resume with a free or occupied lease                                                                                                 | NOT RUN |
-| Confirm `/chief leave` without mutating supervised leads                                                                             | NOT RUN |
-| Empty-roster Escape closes the native custom UI                                                                                      | NOT RUN |
-| Empty-roster Ctrl+C closes the native custom UI                                                                                      | NOT RUN |
-| Real terminal arrow sequences navigate the visual order                                                                              | NOT RUN |
-| Space switches overview to peek and Escape/Space returns without nested custom UI                                                    | NOT RUN |
-| Ctrl+C closes from peek                                                                                                              | NOT RUN |
-| Enter focuses the lead and closes the overview                                                                                       | NOT RUN |
-| Background refresh redraws the open overview                                                                                         | NOT RUN |
-| Ambient and overview rendering stay within the supplied width                                                                        | NOT RUN |
-| Named herdr sockets independently support one Chief each                                                                             | NOT RUN |
+| Scenario                                                                                                                                                                       | Result  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| Normal lead has `agent` and `chief`, not `staff`                                                                                                                               | NOT RUN |
+| Active Chief has exactly `staff`, not lead controller tools                                                                                                                    | NOT RUN |
+| Active Chief remains exactly `staff` after `/tree` restores a pre-Chief Lead branch                                                                                            | NOT RUN |
+| Leaving Chief persists `role` plus exact `leadTools`; resume repairs stale restored `staff` before another model turn                                                          | NOT RUN |
+| A legitimate ordinary branch loadout is preserved instead of being overwritten by an older `leadTools` checkpoint                                                              | NOT RUN |
+| Persisted Chief resume collision becomes suspended                                                                                                                             | NOT RUN |
+| Ordinary losing `/chief` collision remains a lead with its tools and offers Focus/Cancel                                                                                       | NOT RUN |
+| Delegating agent and agent retain their current role tools                                                                                                                     | NOT RUN |
+| Activate one Chief with `/chief`                                                                                                                                               | NOT RUN |
+| Activation refuses a lead with owned or unresolved agent work                                                                                                                  | NOT RUN |
+| Two exact simultaneous Chief claims have one winner                                                                                                                            | NOT RUN |
+| Stale exact lease recovery                                                                                                                                                     | NOT RUN |
+| Malformed role, lead state, lease, or descriptor fails closed; coordination publication invalidates stale state and disables actions                                           | NOT RUN |
+| Discover leads across multiple workspaces                                                                                                                                      | NOT RUN |
+| Exclude managed agents and the active Chief from leads                                                                                                                         | NOT RUN |
+| Agent exclusion uses the production validated snapshot and stale/ambiguous generations fail closed                                                                             | NOT RUN |
+| Herdr `agent_status` lifecycle normalization is reflected                                                                                                                      | NOT RUN |
+| Nested agent aggregation attaches only to the proven lead                                                                                                                      | NOT RUN |
+| A blocked agent does not mark its lead `needs you`                                                                                                                             | NOT RUN |
+| Duplicate live agents, coordination records, or agent evidence fail closed                                                                                                     | NOT RUN |
+| Target disappearance or replacement between list and action is rejected                                                                                                        | NOT RUN |
+| Inspect a lead and compare bounded peek evidence                                                                                                                               | NOT RUN |
+| Read `staff transcript` when `transcript` is advertised; the action validates the persisted session header, version, and exact Pi session ID; content is bounded and read-only | NOT RUN |
+| `staff inspect` exposes live terminal/process evidence while `staff transcript` exposes persisted conversation/tool evidence                                                   | NOT RUN |
+| Focus a lead after exact revalidation                                                                                                                                          | NOT RUN |
+| Chief `message` to idle, working, or blocked leads                                                                                                                             | NOT RUN |
+| Two Chief messages queue and arrive once and in order                                                                                                                          | NOT RUN |
+| A quarantined message does not block a new message to the same lead                                                                                                            | NOT RUN |
+| Leads retain descendant ownership after a Chief `message`                                                                                                                      | NOT RUN |
+| Lead `chief message` reaches the active Chief                                                                                                                                  | NOT RUN |
+| Lead `chief ask` reaches the active Chief and creates one pending ask                                                                                                          | NOT RUN |
+| Pending ask projects as `needs_you` with bounded public question and exact reply action                                                                                        | NOT RUN |
+| A second lead ask while one is pending is rejected                                                                                                                             | NOT RUN |
+| Exact Chief `reply` reaches the lead and clears the ask after local acceptance                                                                                                 | NOT RUN |
+| Pending ask remains replyable after chief replacement using the unchanged ask ID/current lease                                                                                 | NOT RUN |
+| Failed ask queue restores the exact previous pending-ask state                                                                                                                 | NOT RUN |
+| Metadata publication failure does not remove communication eligibility                                                                                                         | NOT RUN |
+| Ordinary lead messages leave lead coordination state unchanged                                                                                                                 | NOT RUN |
+| Follow-up delivery while the receiver is streaming, never steering                                                                                                             | NOT RUN |
+| Receiver restart delivers each queued message once                                                                                                                             | NOT RUN |
+| Accepted-before-delete crash deduplicates without reinjection                                                                                                                  | NOT RUN |
+| Failed delivery/acceptance retains the queued record                                                                                                                           | NOT RUN |
+| Transient authorization lookup failure retains the queued message                                                                                                              | NOT RUN |
+| Stale lease, wrong sender/generation, duplicate identity, and malformed records fail closed                                                                                    | NOT RUN |
+| Lead/Chief messages show bounded direction-aware model-visible sender and target identity                                                                                      | NOT RUN |
+| Queued inbox records are ordered by `createdAt`, then ID                                                                                                                       | NOT RUN |
+| Resume with a free or occupied lease                                                                                                                                           | NOT RUN |
+| Confirm `/chief leave` without mutating supervised leads                                                                                                                       | NOT RUN |
+| Suspended Chief retains no Herdsman authority tools                                                                                                                            | NOT RUN |
+| Descendant `working`, `settling`, and `blocked` states remain exact; counts report `active`, `blocked`, and `total`                                                            | NOT RUN |
+| Chief rows separate `!` attention from lifecycle: `●` working, `◐` blocked, `?` unknown, and `◉` delegated active descendants                                                  | NOT RUN |
+| Empty-roster Escape closes the native custom UI                                                                                                                                | NOT RUN |
+| Empty-roster Ctrl+C closes the native custom UI                                                                                                                                | NOT RUN |
+| Real terminal arrow sequences navigate the visual order                                                                                                                        | NOT RUN |
+| Space switches overview to peek and Escape/Space returns without nested custom UI                                                                                              | NOT RUN |
+| Ctrl+C closes from peek                                                                                                                                                        | NOT RUN |
+| Enter focuses the lead and closes the overview                                                                                                                                 | NOT RUN |
+| Background refresh redraws the open overview                                                                                                                                   | NOT RUN |
+| Ambient and overview rendering stay within the supplied width                                                                                                                  | NOT RUN |
+| Named herdr sockets independently support one Chief each                                                                                                                       | NOT RUN |
 
 Named herdr socket independence is also **NOT RUN** because no live Pi/herdr
 runtime was available for this worktree.

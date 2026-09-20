@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { Value } from "typebox/value";
 import {
   claimChiefLease,
+  invalidateLeadCoordinationState,
   removeChiefMessage,
   readChiefMessage,
   listChiefMessagePaths,
@@ -71,6 +72,12 @@ function assertToolResult(result: any): asserts result is {
     ),
   );
 }
+
+const REGISTERED_ROLE_TOOLS = [
+  { name: "agent" },
+  { name: "chief" },
+  { name: "staff" },
+];
 
 test("Herdr version parsing accepts preview suffixes but rejects trailing text", async () => {
   const { parseHerdrVersion } = await import("./index.ts");
@@ -314,10 +321,14 @@ test("active chief describes authoritative remote ask projection", async () => {
     {
       type: "custom",
       customType: "pi-herdsman-role",
-      data: { role: "chief" },
+      data: { role: "chief", leadTools: ["agent", "chief"] },
     },
   ];
-  const pi = fakePi({ entries, activeTools: ["agent", "chief"] });
+  const pi = fakePi({
+    entries,
+    activeTools: ["agent", "chief"],
+    allTools: REGISTERED_ROLE_TOOLS,
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   context.ui.notify = () => undefined;
@@ -374,15 +385,19 @@ test("active chief describes authoritative remote ask projection", async () => {
   );
   for (const expected of [
     /The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name/,
-    /For general state questions and ordinary messages or replies, use a fresh snapshot directly; do not call staff list, inspect, or another read command first/,
+    /For ordinary state and coordination, use a fresh snapshot directly; do not call staff list, inspect, transcript, or another read command merely to poll progress/,
     /The message and reply actions revalidate exact identity and state themselves/,
     /Every exact-identity-verified lead accepts message/,
     /reply only with the exact pending ask ID and current chief lease/,
     /Messages are bounded and direction-aware, and temporary verification or delivery failures retain queued records/,
     /Metadata is presentation-only and never authority/,
     /Human conversation remains the dispatch surface/,
+    /Inspect provides bounded live terminal\/process evidence/,
+    /Transcript provides bounded persisted Pi conversation\/tool evidence/,
+    /does not own their agent trees, and receives no owner controls/,
   ])
     assert.match(description, expected);
+  assert.doesNotMatch(description, /\b(steer|interrupt|close)\b/);
   const schema = JSON.stringify(tool.parameters);
   assert.equal(
     schema.match(
@@ -404,6 +419,26 @@ test("active chief describes authoritative remote ask projection", async () => {
   }
   assert.equal(
     Value.Check(tool.parameters, {
+      action: "inspect",
+      lead: LEAD_SESSION_ID,
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(tool.parameters, {
+      action: "transcript",
+      lead: LEAD_SESSION_ID,
+    }),
+    true,
+  );
+  for (const action of ["steer", "interrupt", "close", "delegate", "continue"])
+    assert.equal(
+      Value.Check(tool.parameters, { action, lead: LEAD_SESSION_ID }),
+      false,
+      action,
+    );
+  assert.equal(
+    Value.Check(tool.parameters, {
       action: "send",
       root: LEAD_SESSION_ID,
       message: "legacy target names are rejected",
@@ -422,6 +457,278 @@ test("active chief describes authoritative remote ask projection", async () => {
   delete process.env.HERDR_TAB_ID;
   delete process.env.HERDR_SOCKET_PATH;
   setLeadEnvironment();
+});
+
+test("staff transcript advertises persisted candidates and revalidates the lead", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `supervision-transcript-${randomUUID()}.sock`,
+  );
+  const chiefId = randomUUID();
+  const leadId = randomUUID();
+  const sessionRoot = realFs.realpathSync(
+    realFs.mkdtempSync(join(tmpdir(), "pi-herdsman-staff-transcript-")),
+  );
+  const leadPath = join(sessionRoot, "lead.jsonl");
+  const header = {
+    type: "session",
+    version: 3,
+    id: leadId,
+    timestamp: new Date().toISOString(),
+    cwd: "/tmp",
+  };
+  const transcriptEntries = [
+    header,
+    {
+      type: "message",
+      id: "user-entry",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "visible user" }],
+      },
+    },
+    {
+      type: "message",
+      id: "system-entry",
+      parentId: "user-entry",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "system",
+        content: [{ type: "text", text: "HIDDEN_SYSTEM" }],
+      },
+    },
+    {
+      type: "message",
+      id: "assistant-entry",
+      parentId: "system-entry",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "HIDDEN_REASONING" },
+          { type: "text", text: "visible assistant" },
+          {
+            type: "toolCall",
+            name: "visible_tool",
+            arguments: { answer: "visible argument" },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "tool-entry",
+      parentId: "assistant-entry",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolName: "visible_tool",
+        content: [{ type: "text", text: "visible tool result" }],
+        isError: false,
+      },
+    },
+    {
+      type: "custom",
+      customType: "hidden-custom",
+      id: "custom-entry",
+      parentId: "tool-entry",
+      timestamp: new Date().toISOString(),
+      data: "HIDDEN_CUSTOM",
+    },
+    {
+      type: "message",
+      id: "control-entry",
+      parentId: "custom-entry",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [{ type: "text", text: controlMarker(randomUUID()) }],
+      },
+    },
+  ];
+  writeFileSync(
+    leadPath,
+    transcriptEntries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    "utf8",
+  );
+  nativeSessions.set(leadPath, { id: leadId, path: leadPath, entries: [] });
+  let leadAgent: any = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "path",
+      value: leadPath,
+    },
+    pane_id: "lead-pane",
+    tab_id: "lead-tab",
+    workspace_id: WORKSPACE,
+    cwd: "/tmp",
+    agent_status: "idle",
+  };
+  const chiefAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: chiefId,
+    },
+    pane_id: "chief-pane",
+    tab_id: "chief-tab",
+    workspace_id: WORKSPACE,
+    cwd: "/tmp",
+    agent_status: "idle",
+  };
+  let mutateLeadDuringTranscript = false;
+  let snapshotCalls = 0;
+  const exec = (_command: string, args: string[]) => {
+    if (isApiSnapshot(args)) {
+      snapshotCalls++;
+      if (mutateLeadDuringTranscript && snapshotCalls > 1) {
+        leadAgent = { ...leadAgent, pane_id: "changed-pane" };
+        mutateLeadDuringTranscript = false;
+      }
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            snapshot: {
+              agents: [leadAgent, chiefAgent],
+              panes: [leadAgent, chiefAgent],
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    }
+    if (args[0] === "agent" && args[1] === "get")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            agent: args[2] === leadAgent.pane_id ? leadAgent : chiefAgent,
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    return { stdout: "{}", stderr: "", code: 0 };
+  };
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { role: "chief", leadTools: ["agent", "chief"] },
+    },
+  ];
+  const pi = fakePi({ entries, exec, allTools: REGISTERED_ROLE_TOOLS });
+  const context = fakeContext(entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => chiefId,
+    getSessionFile: () => "/tmp/staff-transcript-chief.jsonl",
+  };
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    instanceId: randomUUID(),
+    piSessionId: leadId,
+    updatedAt: Date.now(),
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const tool = pi.tools.find((candidate) => candidate.name === "staff");
+    assert.ok(tool);
+
+    const listed = await tool.execute(
+      "list",
+      { action: "list" },
+      undefined,
+      undefined,
+      context,
+    );
+    assertToolResult(listed);
+    assert.deepEqual(
+      (listed.details?.leads as any[])[0]?.available_actions,
+      ["inspect", "transcript", "message"],
+      JSON.stringify(listed.details),
+    );
+
+    const transcript = await tool.execute(
+      "transcript",
+      { action: "transcript", lead: leadId },
+      undefined,
+      undefined,
+      context,
+    );
+    assertToolResult(transcript);
+    assert.match(transcript.details?.transcript, /visible user/);
+    assert.match(transcript.details?.transcript, /visible assistant/);
+    assert.match(transcript.details?.transcript, /visible argument/);
+    assert.match(transcript.details?.transcript, /visible tool result/);
+    for (const hidden of ["HIDDEN_SYSTEM", "HIDDEN_REASONING", "HIDDEN_CUSTOM"])
+      assert.doesNotMatch(transcript.details?.transcript, new RegExp(hidden));
+    assert.doesNotMatch(transcript.details?.transcript, /__PI_HERDSMAN/);
+
+    writeFileSync(
+      leadPath,
+      JSON.stringify({ ...header, id: randomUUID() }) + "\n",
+      "utf8",
+    );
+    const malformed = await tool.execute(
+      "list",
+      { action: "list" },
+      undefined,
+      undefined,
+      context,
+    );
+    assertToolResult(malformed);
+    assert.deepEqual(
+      (malformed.details?.leads as any[])[0]?.available_actions,
+      ["inspect", "transcript", "message"],
+    );
+    await assert.rejects(
+      tool.execute(
+        "transcript",
+        { action: "transcript", lead: leadId },
+        undefined,
+        undefined,
+        context,
+      ),
+      /Persisted Pi session is missing a matching current session header/,
+    );
+    writeFileSync(
+      leadPath,
+      transcriptEntries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+      "utf8",
+    );
+
+    snapshotCalls = 0;
+    mutateLeadDuringTranscript = true;
+    await assert.rejects(
+      tool.execute(
+        "transcript",
+        { action: "transcript", lead: leadId },
+        undefined,
+        undefined,
+        context,
+      ),
+      /Lead changed during transcript read/,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    invalidateLeadCoordinationState(supervisionRuntime(), leadId);
+    nativeSessions.delete(leadPath);
+    realFs.rmSync(sessionRoot, { recursive: true, force: true });
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
 });
 
 test("lead rejects a remote chief with mismatched physical identity", async () => {
@@ -526,7 +833,11 @@ test("a replacement chief never falls back to the previous session supervision",
     `supervision-replacement-context-${randomUUID()}.sock`,
   );
   const entries = [
-    { type: "custom", customType: "pi-herdsman-role", data: { role: "chief" } },
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { role: "chief", leadTools: ["agent", "chief"] },
+    },
   ];
   const chiefA = `chief-a-${randomUUID()}`;
   const chiefB = `chief-b-${randomUUID()}`;
@@ -548,6 +859,7 @@ test("a replacement chief never falls back to the previous session supervision",
   };
   const pi = fakePi({
     entries,
+    allTools: REGISTERED_ROLE_TOOLS,
     exec: (_command, args) => {
       if (failRefresh && isApiSnapshot(args))
         throw new Error("supervision unavailable");
@@ -613,7 +925,11 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     `supervision-background-context-${randomUUID()}.sock`,
   );
   const entries = [
-    { type: "custom", customType: "pi-herdsman-role", data: { role: "chief" } },
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { role: "chief", leadTools: ["agent", "chief"] },
+    },
   ];
   const chiefA = `chief-a-${randomUUID()}`;
   const chiefB = `chief-b-${randomUUID()}`;
@@ -637,6 +953,7 @@ test("an obsolete background supervision refresh cannot publish after chief tran
   };
   const pi = fakePi({
     entries,
+    allTools: REGISTERED_ROLE_TOOLS,
     exec: async (_command, args) => {
       if (isApiSnapshot(args) && blockNextRefresh) {
         blockNextRefresh = false;
@@ -911,7 +1228,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     {
       type: "custom",
       customType: "pi-herdsman-role",
-      data: { role: "chief" },
+      data: { role: "chief", leadTools: ["agent", "chief"] },
     },
     {
       type: "custom",
@@ -919,7 +1236,11 @@ test("registered lead and replacement chief exchange messages and asks", async (
       data: {},
     },
   ];
-  const chief = fakePi({ exec, entries: chiefEntries });
+  const chief = fakePi({
+    exec,
+    entries: chiefEntries,
+    allTools: REGISTERED_ROLE_TOOLS,
+  });
   registerExtension!(chief.pi as never);
   const chiefContext = fakeContext(chiefEntries) as any;
   chiefContext.sessionManager = {
@@ -953,7 +1274,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.match(supervisionMessage.content, /leads: 1/);
     assert.match(
       supervisionMessage.content,
-      /agent_counts: working=1 blocked=1 total=2/,
+      /agent_counts: active=1 blocked=1 total=2/,
     );
     assert.match(
       supervisionMessage.content,
@@ -1181,7 +1502,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     assert.ok(projectedLead);
     assert.deepEqual(projectedLead.agent_counts, {
-      working: 1,
+      active: 1,
       blocked: 1,
       total: 2,
     });
@@ -1249,7 +1570,11 @@ test("registered lead and replacement chief exchange messages and asks", async (
     process.env.HERDR_PANE_ID = "replacement-pane";
     process.env.HERDR_TAB_ID = "replacement-tab";
     const replacementEntries = [...chiefEntries];
-    const replacement = fakePi({ exec, entries: replacementEntries });
+    const replacement = fakePi({
+      exec,
+      entries: replacementEntries,
+      allTools: REGISTERED_ROLE_TOOLS,
+    });
     registerExtension!(replacement.pi as never);
     const replacementContext = fakeContext(replacementEntries) as any;
     replacementContext.sessionManager = {
@@ -1506,7 +1831,11 @@ test("malformed persisted role fails closed without authoritative lead state", a
       data: { role: "not-a-role" },
     },
   ];
-  const pi = fakePi({ entries, activeTools: ["agent", "chief"] });
+  const pi = fakePi({
+    entries,
+    activeTools: ["agent", "chief"],
+    allTools: REGISTERED_ROLE_TOOLS,
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
@@ -1574,9 +1903,17 @@ test("persisted Chief startup skips agent definition discovery", async () => {
     "---\nname: malformed\nmodel: {not valid json\n---\nmalformed\n",
   );
   const entries = [
-    { type: "custom", customType: "pi-herdsman-role", data: { role: "chief" } },
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { role: "chief", leadTools: ["agent", "chief"] },
+    },
   ];
-  const pi = fakePi({ entries, activeTools: ["agent", "chief"] });
+  const pi = fakePi({
+    entries,
+    activeTools: ["agent", "chief"],
+    allTools: REGISTERED_ROLE_TOOLS,
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   try {
@@ -1739,9 +2076,17 @@ test("leaf agents and active Chiefs do not receive agent definition rosters", as
     `supervision-roster-chief-${randomUUID()}.sock`,
   );
   const entries = [
-    { type: "custom", customType: "pi-herdsman-role", data: { role: "chief" } },
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { role: "chief", leadTools: ["agent", "chief"] },
+    },
   ];
-  const chief = fakePi({ entries, activeTools: ["agent", "chief"] });
+  const chief = fakePi({
+    entries,
+    activeTools: ["agent", "chief"],
+    allTools: REGISTERED_ROLE_TOOLS,
+  });
   registerExtension!(chief.pi as never);
   const context = fakeContext(entries) as any;
   await chief.events.get("session_start")![0](undefined, context);
@@ -1766,10 +2111,15 @@ test("first failed chief supervision refresh is explicitly unavailable", async (
     `supervision-unavailable-${randomUUID()}.sock`,
   );
   const entries = [
-    { type: "custom", customType: "pi-herdsman-role", data: { role: "chief" } },
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { role: "chief", leadTools: ["agent", "chief"] },
+    },
   ];
   const pi = fakePi({
     entries,
+    allTools: REGISTERED_ROLE_TOOLS,
     exec: () => {
       throw new Error("supervision unavailable");
     },

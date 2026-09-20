@@ -18,7 +18,14 @@ import { herdsmanDataRoot } from "./storage.ts";
 
 export type LeadRole = "lead" | "chief";
 
-export function sessionLeadRole(entries: unknown[]): LeadRole {
+export type LeadRoleState = Readonly<{
+  role: LeadRole;
+  leadTools: readonly string[];
+}>;
+
+export function sessionLeadRoleState(
+  entries: unknown[],
+): LeadRoleState | undefined {
   const entry = [...entries]
     .reverse()
     .find(
@@ -26,16 +33,24 @@ export function sessionLeadRole(entries: unknown[]): LeadRole {
         candidate?.type === "custom" &&
         candidate.customType === "pi-herdsman-role",
     ) as any;
-  if (!entry) return "lead";
+  if (!entry) return undefined;
   const data = entry.data;
   if (
     !data ||
     typeof data !== "object" ||
-    Object.keys(data).length !== 1 ||
-    (data.role !== "lead" && data.role !== "chief")
+    Array.isArray(data) ||
+    Object.keys(data).length !== 2 ||
+    !Object.hasOwn(data, "role") ||
+    !Object.hasOwn(data, "leadTools") ||
+    (data.role !== "lead" && data.role !== "chief") ||
+    !Array.isArray(data.leadTools) ||
+    data.leadTools.some(
+      (name: unknown) => typeof name !== "string" || name.length === 0,
+    ) ||
+    new Set(data.leadTools).size !== data.leadTools.length
   )
     throw new Error("invalid pi-herdsman-role entry");
-  return data.role;
+  return { role: data.role, leadTools: [...data.leadTools] };
 }
 
 export type ChiefDescriptor = {
@@ -1156,6 +1171,8 @@ export type LeadCoordinationState = {
 
 export type SupervisedLead = {
   lead: string;
+  /** Internal: path to a non-empty persisted session candidate. */
+  piSessionFile?: string;
   instanceId?: string;
   displayName: string;
   workspaceId: string;
@@ -1166,18 +1183,27 @@ export type SupervisedLead = {
   needsYou: boolean;
   pendingAskId?: string;
   pendingAskQuestion?: string;
-  agentCounts: { working: number; blocked: number; total: number };
-  lastActivity?: number;
-  availableActions: Array<"inspect" | "message" | "reply">;
+  agentCounts: { active: number; blocked: number; total: number };
+  availableActions: Array<"inspect" | "transcript" | "message" | "reply">;
   agents: Array<{ id: string; label: string; state: RuntimeState }>;
 };
 export type SupervisionSnapshot = {
   leads: SupervisedLead[];
   diagnostics?: string[];
 };
-export type RuntimeState = "idle" | "working" | "blocked" | "done" | "unknown";
+export type RuntimeState =
+  | "idle"
+  | "working"
+  | "blocked"
+  | "settling"
+  | "starting"
+  | "done"
+  | "unknown"
+  | "lost";
 export type LiveAgent = {
   sessionId: string;
+  /** Internal: path to a non-empty persisted session candidate. */
+  piSessionFile?: string;
   sessionKind: "id";
   workspaceId: string;
   paneId: string;
@@ -1188,7 +1214,6 @@ export type LiveAgent = {
   sessionName?: string;
   tokens?: Readonly<Record<string, unknown>>;
   runtimeState?: RuntimeState;
-  lastActivity?: number;
 };
 export type WorkspaceProvenance = Readonly<{
   workspaceLabel?: string;
@@ -1438,11 +1463,12 @@ export function projectSupervision(options: {
       needsYou: !!pending,
       ...(pending ? { pendingAskId: pending.askId } : {}),
       ...(pending ? { pendingAskQuestion: pending.question } : {}),
-      agentCounts: { working: 0, blocked: 0, total: 0 },
-      ...(agent.lastActivity !== undefined
-        ? { lastActivity: agent.lastActivity }
-        : {}),
-      availableActions: ["inspect"],
+      agentCounts: { active: 0, blocked: 0, total: 0 },
+      ...(agent.piSessionFile ? { piSessionFile: agent.piSessionFile } : {}),
+      availableActions: [
+        "inspect",
+        ...(agent.piSessionFile ? ["transcript" as const] : []),
+      ],
       agents: [],
     });
   }
@@ -1469,7 +1495,12 @@ export function projectSupervision(options: {
     const lead = leads.find((r) => r.lead === owner);
     if (!lead) continue;
     lead.agentCounts.total++;
-    if (managedAgent.runtimeState === "working") lead.agentCounts.working++;
+    if (
+      managedAgent.runtimeState === "working" ||
+      managedAgent.runtimeState === "settling" ||
+      managedAgent.runtimeState === "starting"
+    )
+      lead.agentCounts.active++;
     if (managedAgent.runtimeState === "blocked") lead.agentCounts.blocked++;
     if (lead.agents.length < 32)
       lead.agents.push({
@@ -1509,9 +1540,6 @@ export function serializeSupervision(snapshot: SupervisionSnapshot) {
         ? { pending_ask_question: r.pendingAskQuestion }
         : {}),
       agent_counts: r.agentCounts,
-      ...(r.lastActivity !== undefined
-        ? { last_activity: r.lastActivity }
-        : {}),
       available_actions: r.availableActions,
       agents: r.agents,
     })),

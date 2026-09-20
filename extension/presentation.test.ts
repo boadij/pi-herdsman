@@ -83,8 +83,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
           needsYou: true,
           pendingAskId: "ask-123",
           pendingAskQuestion: "OAuth or service accounts?",
-          agentCounts: { working: 1, blocked: 1, total: 2 },
-          lastActivity: 123,
+          agentCounts: { active: 1, blocked: 1, total: 2 },
           availableActions: ["inspect", "message", "reply"] as const,
           agents: [
             { id: "agent-z", label: "reviewer", state: "blocked" as const },
@@ -99,7 +98,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
           paneId: "pane-a",
           runtimeState: "idle" as const,
           needsYou: false,
-          agentCounts: { working: 0, blocked: 0, total: 0 },
+          agentCounts: { active: 0, blocked: 0, total: 0 },
           availableActions: ["inspect", "message"] as const,
           agents: [],
         },
@@ -131,7 +130,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
       "runtime: working",
       "runtime: idle",
       "actions: inspect, message, reply",
-      "agent_counts: working=1 blocked=1 total=2",
+      "agent_counts: active=1 blocked=1 total=2",
       "ask_id: ask-123",
       "question: OAuth or service accounts?",
       "implementer · working · id=agent-a",
@@ -176,7 +175,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
             needsYou: true,
             pendingAskId: hostile,
             pendingAskQuestion: hostile,
-            agentCounts: { working: 0, blocked: 0, total: 1 },
+            agentCounts: { active: 0, blocked: 0, total: 1 },
             availableActions: ["inspect", "message", "reply"],
             agents: [{ id: hostile, label: hostile, state: "unknown" }],
           },
@@ -211,7 +210,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
           paneId: `pane-${index}`,
           runtimeState: "working" as const,
           needsYou: false,
-          agentCounts: { working: 0, blocked: 0, total: 0 },
+          agentCounts: { active: 0, blocked: 0, total: 0 },
           availableActions: ["inspect", "message"] as const,
           agents: [],
         })),
@@ -334,27 +333,79 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
           lead: "attention",
           displayName: "attention",
           needsYou: true,
-          agentCounts: { working: 1, total: 1 },
+          runtimeState: "blocked",
+          agentCounts: { active: 1, total: 1 },
         }),
         lead({
           lead: "working",
           displayName: "working",
           runtimeState: "working",
-          agentCounts: { working: 1, total: 1 },
+          agentCounts: { active: 1, total: 1 },
         }),
         lead({
           lead: "delegated",
           displayName: "delegated",
-          agentCounts: { working: 1, total: 1 },
+          agentCounts: { active: 1, total: 1 },
+        }),
+        lead({
+          lead: "blocked",
+          displayName: "blocked",
+          runtimeState: "blocked",
+        }),
+        lead({
+          lead: "unknown",
+          displayName: "unknown",
+          runtimeState: "unknown",
         }),
         lead({ lead: "idle", displayName: "idle" }),
       ],
       120,
     );
-    assert.deepEqual(
-      rows.slice(1).map((line) => line.slice(0, 6)),
-      ["├─ ◐ a", "├─ ● w", "├─ ◉ d", "└─ ○ i"],
+    const output = rows.join("\n");
+    assert.equal(rows[1], "├─ !◐ attention  1 agent · 1 active");
+    assert.equal(rows[2], "├─ ● working  1 agent · 1 active");
+    assert.equal(
+      rows.some((line) => line === ""),
+      false,
     );
+    const widgetRows = createSupervisionWidget(
+      () => [
+        lead({
+          lead: "widget-a",
+          displayName: "widget-a",
+          agentCounts: { active: 1, total: 1 },
+        }),
+        lead({ lead: "widget-b", displayName: "widget-b" }),
+      ],
+      () => "fresh",
+    ).render(120);
+    assert.equal(widgetRows[1], "├─ ◉ widget-a  1 agent · 1 active");
+    assert.equal(widgetRows[1]?.startsWith("├─ "), true);
+    assert.equal(
+      widgetRows.some((line) => line === ""),
+      false,
+    );
+    assert.match(output, /!◐ attention/);
+    assert.match(output, /● working/);
+    assert.match(output, /◐ blocked/);
+    assert.match(output, /\? unknown/);
+    assert.match(output, /◉ delegated/);
+    assert.match(output, /○ idle/);
+
+    const selectedRows = renderSupervisionLeads(
+      [
+        lead({
+          lead: "selected",
+          displayName: "selected",
+          needsYou: true,
+          runtimeState: "blocked",
+        }),
+      ],
+      120,
+      {},
+      "selected",
+    );
+    assert.equal(selectedRows[1], "└─ >!◐ selected  no agents");
   }
 
   {
@@ -363,8 +414,8 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
     );
     const rows = renderSupervisionLeads(leads, 120, { ordinaryCap: 2 });
     assert.deepEqual(
-      rows.slice(1).map((line) => line.slice(0, 6)),
-      ["├─ ○ l", "├─ ○ l", "└─ … 6"],
+      rows.slice(1).map((line) => line.slice(0, 3)),
+      ["├─ ", "├─ ", "└─ "],
     );
     assert.match(rows.at(-1)!, /└─ … 6 more · \/chief/);
   }
@@ -503,7 +554,7 @@ test("Supervision peeks remain bounded while exposing safe process evidence", (t
       lead({
         displayName: "api/backend",
         runtimeState: "working",
-        agentCounts: { working: 2 },
+        agentCounts: { active: 2 },
       }),
       {
         process: {
@@ -559,7 +610,7 @@ test("Supervision peeks remain bounded while exposing safe process evidence", (t
       10,
     );
     assert.equal(output.length, 10);
-    assert.ok(output.includes("Recent activity"));
+    assert.ok(output.includes("Recent output"));
     assert.doesNotMatch(output.join("\n"), /agent-99999/);
     assert.ok(output.every((line) => visibleWidth(line) <= 80));
   }
@@ -585,7 +636,7 @@ test("Supervision selection uses opaque handles and moves safely", (t) => {
       lead({
         lead: "opaque-lead-a",
         displayName: "one",
-        agentCounts: { working: 1, total: 1 },
+        agentCounts: { active: 1, total: 1 },
       }),
       lead({ lead: "opaque-lead-b", displayName: "two" }),
     ];
@@ -596,11 +647,11 @@ test("Supervision selection uses opaque handles and moves safely", (t) => {
 
     assert.deepEqual(leads, before);
     assert.deepEqual(unselected, renderSupervisionLeads(leads, 80));
-    assert.equal(first.filter((line) => line.startsWith("├─ > ")).length, 1);
-    assert.equal(second.filter((line) => line.startsWith("└─ > ")).length, 1);
+    assert.equal(first.filter((line) => line.startsWith("├─ >")).length, 1);
+    assert.equal(second.filter((line) => line.startsWith("└─ >")).length, 1);
     assert.notEqual(first[1], second[1]);
-    assert.equal(first[1]!.startsWith("├─ > "), true);
-    assert.equal(second[2]!.startsWith("└─ > "), true);
+    assert.equal(first[1]!.startsWith("├─ >"), true);
+    assert.equal(second[2]!.startsWith("└─ >"), true);
     assert.equal(
       first.some((line) => line.includes("opaque-lead-a")),
       false,
@@ -1572,6 +1623,34 @@ test("coordination results keep collapsed identity bounded and expose structured
   assert.doesNotMatch(expanded, /model-facing prose/);
 });
 
+test("compact transcript results are shared by agent and staff", () => {
+  for (const [tool, details, label] of [
+    ["agent", { agent: "implementer" }, "implementer"],
+    ["staff", { lead: "lead-session", display_name: "api" }, "api"],
+  ] as const) {
+    const rendered = renderedText(
+      renderCoordinationResult(
+        tool,
+        {
+          content: [],
+          details: {
+            ok: true,
+            action: "transcript",
+            transcript: "user: hello\nassistant: done",
+            transcript_truncated: true,
+            ...details,
+          },
+        },
+        { expanded: false },
+        presentationTheme,
+      ),
+    );
+    assert.match(rendered, new RegExp(`transcript  ${label}`));
+    assert.match(rendered, /assistant: done/);
+    assert.match(rendered, /earlier content omitted/);
+  }
+});
+
 test("coordination observations, evidence, hierarchy, errors, and width safety are semantic", () => {
   const list = renderedText(
     renderCoordinationResult(
@@ -1861,7 +1940,11 @@ test("chief and staff coordination renderers share semantic status language", ()
         {
           details: {
             ok: true,
-            leads: [{ runtime_state: "working", needs_you: true }],
+            leads: [
+              { runtime_state: "working", needs_you: true },
+              { runtime_state: "settling", needs_you: false },
+              { runtime_state: "starting", needs_you: false },
+            ],
           },
         },
         {},
@@ -1869,7 +1952,7 @@ test("chief and staff coordination renderers share semantic status language", ()
         { args: { action: "list" } },
       ),
     ),
-    "staff 1 leads · 1 working · 1 needs you",
+    "staff 3 leads · 3 active · 1 needs you",
   );
   assert.match(
     renderedText(
@@ -1967,8 +2050,7 @@ test("chief and staff coordination renderers share semantic status language", ()
               needs_you: true,
               pending_ask_id: "pending-ask",
               pending_ask_question: "Which provider should I use?",
-              last_activity: 1735787045000,
-              agent_counts: { working: 2, blocked: 1, total: 3 },
+              agent_counts: { active: 2, blocked: 1, total: 3 },
               agents: [{ label: "one" }, { label: "two" }, { label: "three" }],
               available_actions: ["inspect", "reply"],
             },
@@ -1984,10 +2066,10 @@ test("chief and staff coordination renderers share semantic status language", ()
     "needs you: yes",
     "ask: pending-ask",
     "question: Which provider should I use?",
-    "last activity: 1735787045000",
-    "agent counts: working=2 · blocked=1 · total=3",
+    "agent counts: active=2 · blocked=1 · total=3",
   ])
     assert.ok(staffList.includes(evidence));
+  assert.doesNotMatch(staffList, /last activity/);
 });
 
 test("widget never exceeds its width", (t) => {
