@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/boadij/pi-herdsman/compare/v0.11.0...v0.11.1) (2026-09-20)
+
+
+### Fixes
+
+* preserve chief supervision context continuity ([#97](https://github.com/boadij/pi-herdsman/issues/97)) ([8f9ba12](https://github.com/boadij/pi-herdsman/commit/8f9ba12fc1ddbfa4016b9f774d46ac8f4efbad64))
+
 ## [0.11.0](https://github.com/boadij/pi-herdsman/compare/v0.10.1...v0.11.0) (2026-09-20)
 
 
