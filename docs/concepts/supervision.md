@@ -78,11 +78,15 @@ records remain text-only.
 
 ## Supervision state
 
-The automatic `<supervision_state>` provider context is ephemeral, bounded, and
-state-only. It contains `leads`, with each lead's exact session ID,
-presentation `display_name`, runtime observation, `agent_counts`, `agents`,
-and available actions. `agent_counts` contains `active`, `blocked`, and
-`total`. The `staff list` result uses the same presentation field,
+The automatic `<supervision_state>` context is hidden, persistent, bounded, and
+state-only. Newly starting Chief work refreshes supervision. Changed rendered
+state appends a hidden custom message, while byte-identical state may reuse the
+latest active snapshot. Later snapshots supersede earlier ones. Pi's ordinary
+branch and compaction semantics determine which historical snapshots remain in
+active model context. The snapshot contains `leads`, with each lead's exact
+session ID, presentation `display_name`, runtime observation, `agent_counts`,
+`agents`, and available actions. `agent_counts` contains `active`, `blocked`,
+and `total`. The `staff list` result uses the same presentation field,
 `display_name`; it never exposes the internal persisted session-file path used
 to detect a non-empty persisted session candidate. The `agents` collection
 represents all validated descendants assigned to that lead, not only direct

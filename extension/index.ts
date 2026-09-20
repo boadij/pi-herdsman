@@ -236,6 +236,7 @@ type HerdRunEntry =
       completedAt: number;
     };
 const CHIEF_TOOLS = ["staff"] as const;
+const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const STALE_AFTER_MS = 10 * 60_000;
 const STALE_SCAN_MS = 30_000;
 const ATTENTION_REPEAT_MIN_MS = 60_000;
@@ -426,8 +427,9 @@ model-callable tool is staff; use it to list, inspect, read transcripts, message
 and reply to supervised leads. Chief supervises independent leads and does not
 receive owner controls. Do not perform local implementation work yourself or assume
 the Pi process's cwd represents the supervised scope. The automatic supervision
-snapshot is ephemeral
-provider context for this run only and may be fresh, stale, or unavailable;
+snapshot is hidden persistent Pi model context. Herdsman refreshes it before
+newly starting Chief runs and may omit a byte-identical active snapshot; it may
+be fresh, stale, or unavailable;
 Treat a fresh snapshot as default situational state. For general state questions
 and ordinary messages or replies, use a fresh snapshot directly. Do not call
 staff list, inspect, transcript, or another read command first. The message and reply tools
@@ -6534,8 +6536,6 @@ export default function (pi: ExtensionAPI): void {
   let leadContext: ExtensionContext | undefined;
   let chiefModeGeneration = 0;
   let sessionGeneration = 0;
-  let supervisionRunContext:
-    { content: string; timestamp: number; sessionId: string } | undefined;
   let supervisionSnapshot: import("./supervision.ts").SupervisionSnapshot = {
     leads: [],
   };
@@ -6568,9 +6568,6 @@ export default function (pi: ExtensionAPI): void {
     supervisionSnapshotGeneration = undefined;
     supervisionStale = false;
   };
-  const clearSupervisionRunContext = (): void => {
-    supervisionRunContext = undefined;
-  };
   let pendingChiefAsk:
     { askId: string; question: string; text: string } | undefined;
   let leadInstanceId = randomUUID();
@@ -6578,6 +6575,42 @@ export default function (pi: ExtensionAPI): void {
   let coordinationPublication = Promise.resolve();
   let chiefInboxTimer: ReturnType<typeof setTimeout> | undefined;
   let chiefInboxGeneration = 0;
+  let chiefInboxAbortController: AbortController | undefined;
+  type ChiefStartPreflight = {
+    sessionId: string;
+    sessionGeneration: number;
+    chiefModeGeneration: number;
+  };
+  const chiefStartPreflights: ChiefStartPreflight[] = [];
+  const chiefStartPreflightHeld = (ctx: ExtensionContext): boolean => {
+    if (chiefMode !== "active") return false;
+    const sessionId = ctx.sessionManager.getSessionId();
+    return chiefStartPreflights.some(
+      (preflight) =>
+        preflight.sessionId === sessionId &&
+        preflight.sessionGeneration === sessionGeneration &&
+        preflight.chiefModeGeneration === chiefModeGeneration,
+    );
+  };
+  const clearChiefStartPreflight = (): void => {
+    chiefStartPreflights.length = 0;
+  };
+  const consumeChiefStartPreflight = (ctx: ExtensionContext): void => {
+    if (!chiefStartPreflightHeld(ctx)) return;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const index = chiefStartPreflights.findIndex(
+      (preflight) =>
+        preflight.sessionId === sessionId &&
+        preflight.sessionGeneration === sessionGeneration &&
+        preflight.chiefModeGeneration === chiefModeGeneration,
+    );
+    if (index >= 0) chiefStartPreflights.splice(index, 1);
+  };
+  let prepareSupervisionMessage: (
+    ctx: ExtensionContext,
+  ) => Promise<
+    { customType: string; content: string; display: boolean } | undefined
+  > = async () => undefined;
   let chiefTool: any;
   let refreshSupervisionUI: ((ctx: ExtensionContext) => void) | undefined;
   let clearSupervisionUI: ((removeWidget?: boolean) => void) | undefined;
@@ -6748,9 +6781,9 @@ export default function (pi: ExtensionAPI): void {
         lifecycleError ??= error;
       }
     };
-    clearSupervisionRunContext();
     const lease = chiefLease;
     chiefLease = undefined;
+    clearChiefStartPreflight();
     captureError(() => lease?.release());
     resetSupervisionSnapshot();
     chiefMode = "inactive";
@@ -6766,7 +6799,6 @@ export default function (pi: ExtensionAPI): void {
     lease: ChiefLease,
     generation: number,
   ): void => {
-    clearSupervisionRunContext();
     chiefLease = lease;
     resetSupervisionSnapshot();
     chiefMode = "active";
@@ -6790,9 +6822,9 @@ export default function (pi: ExtensionAPI): void {
         lifecycleError ??= error;
       }
     };
-    clearSupervisionRunContext();
     const lease = chiefLease;
     chiefLease = undefined;
+    clearChiefStartPreflight();
     resetSupervisionSnapshot();
     chiefMode = "suspended";
     captureError(() => lease?.release());
@@ -7200,7 +7232,7 @@ export default function (pi: ExtensionAPI): void {
     const runtime = supervisionRuntime(socket);
     const isCurrent = (): boolean =>
       generation === chiefInboxGeneration &&
-      !controllerAbortController?.signal.aborted;
+      !chiefInboxAbortController?.signal.aborted;
     if (chiefInboxTimer) clearTimeout(chiefInboxTimer);
     const transactions = new Map<
       string,
@@ -7223,9 +7255,10 @@ export default function (pi: ExtensionAPI): void {
         transaction?.generation !== chiefInboxGeneration ||
         transaction.sessionId !== ctx.sessionManager.getSessionId() ||
         transaction.instanceId !== leadInstanceId ||
-        controllerAbortController?.signal.aborted ||
-        controllerAbortController?.signal !== transaction.signal ||
+        chiefInboxAbortController?.signal.aborted ||
+        chiefInboxAbortController?.signal !== transaction.signal ||
         chiefMode !== transaction.role ||
+        (transaction.role === "active" && chiefStartPreflightHeld(ctx)) ||
         (transaction.role === "inactive" && !leadCoordinationHealthy)
       )
         throw new Error(`Stale inbox transaction (${phase})`);
@@ -7236,7 +7269,7 @@ export default function (pi: ExtensionAPI): void {
       return {
         runtime,
         sessionId: ctx.sessionManager.getSessionId(),
-        signal: controllerAbortController?.signal,
+        signal: chiefInboxAbortController?.signal,
         cleanupError: (error: unknown) => {
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         },
@@ -7262,7 +7295,7 @@ export default function (pi: ExtensionAPI): void {
               sessionId: ctx.sessionManager.getSessionId(),
               instanceId: leadInstanceId,
               role: chiefMode,
-              signal: controllerAbortController?.signal,
+              signal: chiefInboxAbortController?.signal,
             };
             transactions.set(record.id, token);
             return token;
@@ -7307,10 +7340,41 @@ export default function (pi: ExtensionAPI): void {
         },
       };
     };
+    const drainInbox = async (initial = false): Promise<number> => {
+      const sessionId = ctx.sessionManager.getSessionId();
+      if (chiefStartPreflightHeld(ctx)) return 0;
+      if (
+        chiefMode === "active" &&
+        ctx.isIdle() &&
+        listChiefMessagePaths(runtime, sessionId).some(
+          (path) =>
+            !chiefMessageQuarantined(
+              runtime,
+              sessionId,
+              basename(path, ".json"),
+            ),
+        )
+      ) {
+        const message = await prepareSupervisionMessage(ctx);
+        if (
+          message &&
+          isCurrent() &&
+          isCurrentChief(ctx) &&
+          !chiefStartPreflightHeld(ctx) &&
+          ctx.isIdle()
+        )
+          pi.sendMessage(message, { triggerTurn: false });
+      }
+
+      if (!isCurrent() || chiefStartPreflightHeld(ctx)) return 0;
+      if (initial) return drainChiefInbox(inboxOptions(false));
+      const active = chiefMode === "active";
+      return drainChiefInbox(inboxOptions(active, active));
+    };
     const schedule = (): void => {
       if (
         generation !== chiefInboxGeneration ||
-        controllerAbortController?.signal.aborted
+        chiefInboxAbortController?.signal.aborted
       )
         return;
       chiefInboxTimer = setTimeout(() => {
@@ -7320,9 +7384,7 @@ export default function (pi: ExtensionAPI): void {
         void Promise.resolve()
           .then(() => {
             if (!isCurrent()) return;
-            return drainChiefInbox(
-              inboxOptions(chiefMode === "active", chiefMode === "active"),
-            );
+            return drainInbox();
           })
           .catch(() => {})
           .finally(schedule);
@@ -7331,7 +7393,7 @@ export default function (pi: ExtensionAPI): void {
     };
     void reconcilePendingAsk(ctx, runtime, isCurrent)
       .catch(() => {})
-      .then(() => drainChiefInbox(inboxOptions(false)))
+      .then(() => drainInbox(true))
       .catch(() => {})
       .finally(schedule);
   };
@@ -7425,7 +7487,6 @@ export default function (pi: ExtensionAPI): void {
       startSupervisionUI?.(ctx);
     } catch (error) {
       chiefActivationRollback = true;
-      clearSupervisionRunContext();
       try {
         clearSupervisionUI?.();
       } catch {
@@ -7441,6 +7502,7 @@ export default function (pi: ExtensionAPI): void {
       resetSupervisionSnapshot();
       chiefMode = "inactive";
       chiefLease = undefined;
+      clearChiefStartPreflight();
       try {
         reconcileRoleTools();
       } catch {
@@ -7857,12 +7919,58 @@ export default function (pi: ExtensionAPI): void {
       }
       return refreshed;
     };
+    prepareSupervisionMessage = async (ctx: ExtensionContext) => {
+      if (!isCurrentChief(ctx)) return;
+
+      const generation = currentSupervisionGeneration(ctx);
+      const isCurrent = (): boolean =>
+        isCurrentChief(ctx) && currentSupervisionGeneration(ctx) === generation;
+
+      try {
+        await refreshSupervision(ctx, isCurrent);
+        if (!isCurrent()) return;
+
+        const status = supervisionSnapshotStatus(ctx);
+        const content = formatSupervisionContext(
+          status === "unavailable" ? undefined : supervisionSnapshot,
+          { status },
+        );
+        const previous = [
+          ...buildContextEntries(
+            ctx.sessionManager.getBranch() as SessionEntry[],
+          ),
+        ]
+          .reverse()
+          .find(
+            (entry) =>
+              entry.type === "custom_message" &&
+              entry.customType === SUPERVISION_CONTEXT_TYPE,
+          );
+        if (previous?.content === content) return;
+
+        return {
+          customType: SUPERVISION_CONTEXT_TYPE,
+          content,
+          display: false,
+        };
+      } catch {
+        // Automatic supervision observation must never prevent a Chief run.
+        return;
+      }
+    };
     if (controllerScope)
-      pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
+      pi.on("before_agent_start", async (event: any, ctx: ExtensionContext) => {
         if (controllerScope.kind === "lead" && isCurrentChief(ctx)) {
           pi.setActiveTools([...CHIEF_TOOLS]);
+          chiefStartPreflights.push({
+            sessionId: ctx.sessionManager.getSessionId(),
+            sessionGeneration,
+            chiefModeGeneration,
+          });
+          const message = await prepareSupervisionMessage(ctx);
           return {
             systemPrompt: chiefSystemPrompt(event.systemPromptOptions),
+            ...(message ? { message } : {}),
           };
         }
         const roster = startupDefinitionRoster;
@@ -7880,93 +7988,12 @@ export default function (pi: ExtensionAPI): void {
             `agent definitions after configuration changes.`,
         };
       });
-    pi.on("agent_start", async (_event: unknown, ctx: ExtensionContext) => {
-      clearSupervisionRunContext();
+    pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) => {
+      if (controllerScope.kind === "lead") consumeChiefStartPreflight(ctx);
       if (controllerScope.kind === "lead") {
         leadAgentStartedAt = Date.now();
         leadSettled = false;
       }
-      if (!isCurrentChief(ctx)) return;
-      const roleGeneration = chiefModeGeneration;
-      const sessionEpoch = sessionGeneration;
-      const sessionId = ctx.sessionManager.getSessionId();
-      const chiefSessionId = chiefLease.descriptor.piSessionId;
-      if (chiefSessionId !== sessionId) return;
-      try {
-        const refreshed = await refreshSupervision(
-          ctx,
-          () =>
-            chiefMode === "active" &&
-            chiefModeGeneration === roleGeneration &&
-            sessionEpoch === sessionGeneration &&
-            ctx.sessionManager.getSessionId() === sessionId &&
-            chiefLease?.descriptor.piSessionId === chiefSessionId,
-        );
-        if (
-          chiefMode !== "active" ||
-          chiefModeGeneration !== roleGeneration ||
-          sessionEpoch !== sessionGeneration ||
-          ctx.sessionManager.getSessionId() !== sessionId ||
-          chiefLease?.descriptor.piSessionId !== chiefSessionId
-        )
-          return;
-        const status = refreshed
-          ? "fresh"
-          : currentSupervisionSnapshotKnown(ctx)
-            ? "stale"
-            : "unavailable";
-        supervisionRunContext = {
-          content: formatSupervisionContext(supervisionSnapshot, { status }),
-          timestamp: Date.now(),
-          sessionId,
-        };
-      } catch {
-        // Supervision-state observation must never block the triggering chief message.
-        if (
-          chiefMode === "active" &&
-          chiefModeGeneration === roleGeneration &&
-          sessionEpoch === sessionGeneration &&
-          ctx.sessionManager.getSessionId() === sessionId &&
-          chiefLease?.descriptor.piSessionId === chiefSessionId
-        )
-          supervisionRunContext = {
-            content: formatSupervisionContext(
-              currentSupervisionSnapshotKnown(ctx)
-                ? supervisionSnapshot
-                : undefined,
-              {
-                status: currentSupervisionSnapshotKnown(ctx)
-                  ? "stale"
-                  : "unavailable",
-              },
-            ),
-            timestamp: Date.now(),
-            sessionId,
-          };
-      }
-    });
-    pi.on("context", (event: any, ctx: ExtensionContext) => {
-      if (
-        !isCurrentChief(ctx) ||
-        !supervisionRunContext ||
-        ctx.sessionManager.getSessionId() !== supervisionRunContext.sessionId
-      )
-        return;
-      return {
-        messages: [
-          ...event.messages,
-          {
-            role: "custom",
-            customType: "pi-herdsman-supervision-context",
-            content: supervisionRunContext.content,
-            display: false,
-            timestamp: supervisionRunContext.timestamp,
-          },
-        ],
-      };
-    });
-    pi.on("agent_end", () => {
-      clearSupervisionRunContext();
     });
     refreshSupervisionUI = (ctx) => void refreshSupervision(ctx);
     clearNormalUI = () => {
@@ -10524,8 +10551,8 @@ export default function (pi: ExtensionAPI): void {
       void refreshStatus(ctx, generation);
     };
     pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
-      clearSupervisionRunContext();
       startupDefinitionRoster = undefined;
+      clearChiefStartPreflight();
       ++sessionGeneration;
       const previousChiefMode = chiefMode;
       const previousLeadContext = leadContext;
@@ -10625,8 +10652,10 @@ export default function (pi: ExtensionAPI): void {
         }
       }
       controllerAbortController?.abort();
+      chiefInboxAbortController?.abort();
       pendingStarts.clear();
       controllerAbortController = new AbortController();
+      chiefInboxAbortController = new AbortController();
       const sessionSignal = controllerAbortController.signal;
       if (controllerScope.kind === "lead") {
         if (
@@ -10731,6 +10760,7 @@ export default function (pi: ExtensionAPI): void {
     });
     pi.on("session_shutdown", async () => {
       ++sessionGeneration;
+      clearChiefStartPreflight();
       startupDefinitionRoster = undefined;
       ++chiefInboxGeneration;
       if (chiefInboxTimer) clearTimeout(chiefInboxTimer);
@@ -10761,8 +10791,10 @@ export default function (pi: ExtensionAPI): void {
         enterLead(undefined, false);
       }
       controllerAbortController?.abort();
+      chiefInboxAbortController?.abort();
       pendingStarts.clear();
       controllerAbortController = undefined;
+      chiefInboxAbortController = undefined;
       ++statusGeneration;
       controllerSessionActive = false;
       if (statusTimer) clearInterval(statusTimer);

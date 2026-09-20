@@ -68,13 +68,19 @@ version, and exact Pi session ID before returning evidence. A pending ask is
 separate attention state: it projects as `needs_you`, exposes the bounded
 question and ask ID, and adds `reply`.
 
+The automatic `<supervision_state>` is a hidden Pi custom message hard-bounded
+to 16 KiB. A changed refresh appends a new snapshot; a byte-identical refresh
+may omit the duplicate. The latest active snapshot supersedes earlier
+snapshots. Pi's ordinary branch and compaction rules determine which persisted
+snapshots participate in current model context.
+
 The `staff list` representation contains `lead` (the exact full Pi session ID),
 `display_name` (a presentation-only label), identity fields, `runtime_state`,
 `needs_you`, optional pending-ask fields, `agent_counts`, and
 `available_actions`. `agent_counts` contains `active`, `blocked`, and `total`;
 `active` counts `working`, `settling`, and `starting` descendants. The automatic
-`<supervision_state>` context is state-only and hard-bounded to 16 KiB; it uses
-`leads`, `agent_counts`, and `agents`, not inspect terminal/process evidence.
+snapshot is state-only and uses `leads`, `agent_counts`, and `agents`, not
+inspect terminal/process evidence.
 Oversized output is truncated only at complete lead records and identifies
 omitted state. Use `staff list` when a fresh complete roster is required.
 
