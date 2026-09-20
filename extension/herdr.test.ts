@@ -7,7 +7,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, type Socket } from "node:net";
 import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dirname, join } from "node:path";
@@ -176,9 +176,12 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
       ? `\\\\.\\pipe\\pi-herdsman-${randomUUID()}`
       : join(tmpdir(), `pi-herdsman-${randomUUID()}.sock`);
   const server = createServer();
+  const sockets = new Set<Socket>();
   let connections = 0;
   let request: any;
   server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
     connections++;
     let buffer = "";
     socket.setEncoding("utf8");
@@ -197,25 +200,43 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
   const controller = new AbortController();
   let changes = 0;
-  watchHerdrLifecycle(socketPath, controller.signal, () => changes++);
-  await new Promise((resolve) => setTimeout(resolve, 1_100));
-  assert.equal(request.method, "events.subscribe");
-  assert.deepEqual(
-    request.params.subscriptions.map((entry: any) => entry.type),
-    [
-      "pane.closed",
-      "pane.exited",
-      "pane.moved",
-      "tab.closed",
-      "workspace.closed",
-    ],
-  );
-  assert.equal(connections, 2);
-  assert.equal(changes, 3);
-  controller.abort();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (globalThis.process.platform !== "win32")
-    rmSync(socketPath, { force: true });
+  let ready!: () => void;
+  let timeout!: ReturnType<typeof setTimeout>;
+  const reconnected = new Promise<void>((resolve, reject) => {
+    ready = resolve;
+    timeout = setTimeout(
+      () => reject(new Error("lifecycle watcher did not resubscribe")),
+      5_000,
+    );
+    timeout.unref();
+  });
+  try {
+    watchHerdrLifecycle(socketPath, controller.signal, () => {
+      changes++;
+      if (changes >= 3 && connections >= 2) ready();
+    });
+    await reconnected;
+    assert.equal(request.method, "events.subscribe");
+    assert.deepEqual(
+      request.params.subscriptions.map((entry: any) => entry.type),
+      [
+        "pane.closed",
+        "pane.exited",
+        "pane.moved",
+        "tab.closed",
+        "workspace.closed",
+      ],
+    );
+    assert.equal(connections, 2);
+    assert.equal(changes, 3);
+  } finally {
+    clearTimeout(timeout);
+    controller.abort();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (globalThis.process.platform !== "win32")
+      rmSync(socketPath, { force: true });
+  }
 });
 
 test("lead metadata is display-only and carries current name and ask", () => {
