@@ -1351,9 +1351,13 @@ function readPersistedSessionEntries(
 }
 
 function persistedTranscriptReady(target: PersistedTranscriptTarget): boolean {
+  if (!target.piSessionId || !target.piSessionFile) return false;
+
   try {
-    readPersistedSessionEntries(target);
-    return true;
+    const file = statSync(target.piSessionFile, {
+      throwIfNoEntry: false,
+    });
+    return !!file?.isFile() && file.size > 0;
   } catch {
     return false;
   }
@@ -1791,10 +1795,7 @@ function supervisedSessionFile(
 
   try {
     if (session.kind === "path") {
-      const path = realpathSync(session.value);
-      return SessionManager.open(path).getSessionId() === sessionId
-        ? path
-        : undefined;
+      return realpathSync(session.value);
     }
     if (typeof agent?.cwd !== "string" || !agent.cwd) return undefined;
     const path = SessionManager.findById(agent.cwd, sessionId);

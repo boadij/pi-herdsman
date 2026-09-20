@@ -690,7 +690,17 @@ test("staff transcript requires exact persisted evidence and revalidates the lea
     assertToolResult(malformed);
     assert.deepEqual(
       (malformed.details?.leads as any[])[0]?.available_actions,
-      ["inspect", "message"],
+      ["inspect", "transcript", "message"],
+    );
+    await assert.rejects(
+      tool.execute(
+        "transcript",
+        { action: "transcript", lead: leadId },
+        undefined,
+        undefined,
+        context,
+      ),
+      /Persisted Pi session is missing a matching current session header/,
     );
     writeFileSync(
       leadPath,

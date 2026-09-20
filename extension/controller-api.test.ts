@@ -3878,7 +3878,7 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       undefined,
       fakeContext(pi.entries),
     );
-    assert.equal(mismatched.details.error.category, "agent_busy");
+    assert.equal(mismatched.details.error.category, "target_not_found");
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     nativeSessions.delete(identity.piSessionId);
