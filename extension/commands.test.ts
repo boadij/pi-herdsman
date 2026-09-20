@@ -69,6 +69,30 @@ import support, {
   writeAgentState,
 } from "./support.ts";
 const { readConfig, updateConfig } = await import("./config.ts");
+function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
+  let fixture: ReturnType<typeof fakePi>;
+  const initialTools = Array.isArray(options.activeTools)
+    ? options.activeTools
+    : [];
+  fixture = fakePi({
+    ...options,
+    allTools: () =>
+      [
+        ...new Set([
+          ...initialTools,
+          "read",
+          "bash",
+          "grep",
+          "foreign_tool",
+          "agent",
+          "chief",
+          "staff",
+          ...fixture.tools.map((tool) => tool.name),
+        ]),
+      ].map((name) => ({ name })),
+  });
+  return fixture;
+}
 test("partial supervision registration is rolled back when host restoration fails", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
@@ -78,7 +102,7 @@ test("partial supervision registration is rolled back when host restoration fail
     `supervision-registration-rollback-${randomUUID()}.sock`,
   );
   const entries: unknown[] = [];
-  const pi = fakePi({
+  const pi = fakeChiefPi({
     activeTools: ["read", "bash"],
     autoActivateRegisteredTools: true,
     entries,
@@ -124,7 +148,7 @@ test("Chief shutdown releases its lease when ordinary tool restoration fails", a
     `supervision-suspend-failure-${randomUUID()}.sock`,
   );
   const entries: unknown[] = [];
-  const pi = fakePi({ activeTools: ["read", "bash"], entries });
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"], entries });
   const context = fakeContext(entries) as any;
   context.mode = "rpc";
   context.ui.notify = () => undefined;
@@ -161,7 +185,7 @@ test("Chief shutdown releases its lease when ordinary tool restoration fails", a
   delete process.env.HERDR_PANE_ID;
 });
 
-test("Chief activation keeps its baseline when activation rollback also fails", async () => {
+test("Chief activation keeps its durable baseline when rollback restoration fails", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -170,7 +194,7 @@ test("Chief activation keeps its baseline when activation rollback also fails", 
     `supervision-activation-rollback-${randomUUID()}.sock`,
   );
   const entries: unknown[] = [];
-  const pi = fakePi({ activeTools: ["read", "bash"], entries });
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"], entries });
   const context = fakeContext(entries) as any;
   context.mode = "rpc";
   const notices: string[] = [];
@@ -180,7 +204,7 @@ test("Chief activation keeps its baseline when activation rollback also fails", 
   const baseline = pi.pi.getActiveTools();
   const setActiveTools = pi.pi.setActiveTools;
   let activationAttempted = false;
-  let failures = 2;
+  let failures = 1;
   pi.pi.setActiveTools = (next: string[]) => {
     if (next.includes("staff")) {
       activationAttempted = true;
@@ -215,7 +239,7 @@ test("Chief activation keeps its baseline when activation rollback also fails", 
   delete process.env.HERDR_PANE_ID;
 });
 
-test("Chief session-start restoration failure does not skip role recovery", async () => {
+test("Chief survives transcript-backed tool restoration after session tree", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -224,7 +248,7 @@ test("Chief session-start restoration failure does not skip role recovery", asyn
     `supervision-start-restore-${randomUUID()}.sock`,
   );
   const entries: unknown[] = [];
-  const pi = fakePi({ activeTools: ["read", "bash"], entries });
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"], entries });
   const context = fakeContext(entries) as any;
   context.mode = "rpc";
   context.ui.notify = () => undefined;
@@ -232,28 +256,9 @@ test("Chief session-start restoration failure does not skip role recovery", asyn
   await pi.events.get("session_start")![0](undefined, context);
   const baseline = pi.pi.getActiveTools();
   await pi.commandOptions.get("chief").handler("", context);
-  const setActiveTools = pi.pi.setActiveTools;
-  let failRestore = true;
-  pi.pi.setActiveTools = (next: string[]) => {
-    if (failRestore && next.join("|") === baseline.join("|")) {
-      failRestore = false;
-      throw new Error("session-start restoration failed");
-    }
-    setActiveTools(next);
-  };
-
-  await pi.events.get("session_start")![0](undefined, context);
-
+  pi.pi.setActiveTools(baseline);
+  pi.events.get("session_tree")![0](undefined, context);
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
-  assert.ok(
-    entries.some(
-      (entry: any) =>
-        entry.customType === "pi_herdsman_role_error" &&
-        entry.data.error.includes("session-start restoration failed"),
-    ),
-  );
-  await pi.commandOptions.get("chief").handler("leave", context);
-  assert.deepEqual(pi.pi.getActiveTools(), baseline);
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
   delete process.env.HERDR_PANE_ID;
@@ -268,7 +273,7 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
     `supervision-leave-restore-${randomUUID()}.sock`,
   );
   const entries: unknown[] = [];
-  const pi = fakePi({ activeTools: ["read", "bash"], entries });
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"], entries });
   const context = fakeContext(entries) as any;
   context.mode = "rpc";
   context.ui.notify = () => undefined;
@@ -289,11 +294,11 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
   await pi.commandOptions.get("chief").handler("leave", context);
 
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
-  assert.ok(
-    entries.some(
-      (entry: any) =>
-        entry.customType === "pi-herdsman-role" && entry.data.role === "lead",
-    ),
+  assert.deepEqual(
+    entries
+      .filter((entry: any) => entry.customType === "pi-herdsman-role")
+      .at(-1)?.data,
+    { role: "lead", leadTools: baseline },
   );
   const lease = claimChiefLease({
     piSessionId: context.sessionManager.getSessionId(),
@@ -318,7 +323,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
     `supervision-lead-restore-${randomUUID()}.sock`,
   );
   const entries: unknown[] = [];
-  const pi = fakePi({ activeTools: ["read", "bash"], entries });
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"], entries });
   t.after(async () => {
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -337,7 +342,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
   entries.push({
     type: "custom",
     customType: "pi-herdsman-role",
-    data: { role: "lead" },
+    data: { role: "lead", leadTools: baseline },
   });
   const setActiveTools = pi.pi.setActiveTools;
   let failRestore = true;
@@ -372,7 +377,7 @@ test("lead session-start continues when chief lease release fails", async () => 
     `supervision-release-failure-${randomUUID()}.sock`,
   );
   const entries: unknown[] = [];
-  const pi = fakePi({ activeTools: ["read", "bash"], entries });
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"], entries });
   const context = fakeContext(entries) as any;
   context.mode = "rpc";
   context.ui.notify = () => undefined;
@@ -383,7 +388,10 @@ test("lead session-start continues when chief lease release fails", async () => 
   entries.push({
     type: "custom",
     customType: "pi-herdsman-role",
-    data: { role: "lead" },
+    data: {
+      role: "lead",
+      leadTools: ["read", "bash", "agent", "chief"],
+    },
   });
   const runtime = supervisionRuntime();
   const owner = realFs.readdirSync(runtime.lock)[0];
@@ -549,7 +557,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
     },
   };
   const entries: unknown[] = [];
-  const pi = fakePi({
+  const pi = fakeChiefPi({
     activeTools: ["agent", "chief", "read"],
     autoActivateRegisteredTools: true,
     entries,
@@ -639,7 +647,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
     },
     updatedAt: Date.now(),
   });
-  assert.deepEqual(pi.pi.getActiveTools(), ["read", "agent", "chief"]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["agent", "chief", "read"]);
   await pi.commandOptions.get("chief").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
   assert.ok(widgetKeys.includes("pi-herdsman"));
@@ -699,7 +707,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   );
   confirmLeave = true;
   await pi.commandOptions.get("chief").handler("leave", context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["read", "agent", "chief"]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["agent", "chief", "read"]);
   assert.match(confirmations[1], /Supervised leads will not be changed/);
   const baseline = pi.pi.getActiveTools();
   const setActiveTools = pi.pi.setActiveTools;
@@ -712,7 +720,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   assert.ok(notices.includes("tool activation failed"));
 });
 
-test("Chief shutdown restores tools before a fresh runtime resumes", async () => {
+test("Lead resume repairs stale staff from its durable displaced loadout", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -722,8 +730,8 @@ test("Chief shutdown restores tools before a fresh runtime resumes", async () =>
   );
   const entries: unknown[] = [];
   const ordinaryTools = ["read", "bash", "agent", "chief"];
-  const pi = fakePi({
-    activeTools: ["agent", "chief", "read", "bash"],
+  const pi = fakeChiefPi({
+    activeTools: ordinaryTools,
     entries,
   });
   const context = fakeContext(entries) as any;
@@ -734,11 +742,15 @@ test("Chief shutdown restores tools before a fresh runtime resumes", async () =>
   await pi.commandOptions.get("chief").handler("", context);
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
 
-  await pi.events.get("session_shutdown")![0]();
+  await pi.commandOptions.get("chief").handler("leave", context);
   assert.deepEqual(pi.pi.getActiveTools(), ordinaryTools);
+  const role = entries
+    .filter((entry: any) => entry.customType === "pi-herdsman-role")
+    .at(-1) as any;
+  assert.deepEqual(role.data, { role: "lead", leadTools: ordinaryTools });
 
-  const reloaded = fakePi({
-    activeTools: pi.pi.getActiveTools(),
+  const reloaded = fakeChiefPi({
+    activeTools: ["staff"],
     entries: [...entries],
   });
   const reloadedContext = fakeContext(reloaded.entries) as any;
@@ -746,13 +758,32 @@ test("Chief shutdown restores tools before a fresh runtime resumes", async () =>
   reloadedContext.ui.notify = () => undefined;
   registerExtension!(reloaded.pi as never);
   await reloaded.events.get("session_start")![0](undefined, reloadedContext);
-  assert.deepEqual(reloaded.pi.getActiveTools(), ["staff"]);
-  await reloaded.commandOptions.get("chief").handler("leave", reloadedContext);
   assert.deepEqual(reloaded.pi.getActiveTools(), ordinaryTools);
 
   await reloaded.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
   delete process.env.HERDR_PANE_ID;
+});
+
+test("ordinary branch tool state wins over an older lead checkpoint", async () => {
+  setLeadEnvironment();
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: {
+        role: "lead",
+        leadTools: ["read", "bash", "agent", "chief"],
+      },
+    },
+  ];
+  const branchTools = ["read", "grep", "agent", "chief"];
+  const pi = fakeChiefPi({ entries, activeTools: branchTools });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  await pi.events.get("session_start")![0](undefined, context);
+  assert.deepEqual(pi.pi.getActiveTools(), branchTools);
+  await pi.events.get("session_shutdown")?.[0]();
 });
 
 async function openChiefOverview(
@@ -789,7 +820,7 @@ async function openChiefOverview(
         },
       ]
     : [];
-  const pi = fakePi({
+  const pi = fakeChiefPi({
     activeTools: ["agent", "chief", "read"],
     entries: [],
     exec: (_command, args) => {
@@ -1046,7 +1077,7 @@ test("active chief shutdown clears its role before releasing the lease", async (
     tmpdir(),
     `supervision-${randomUUID()}.sock`,
   );
-  const pi = fakePi({
+  const pi = fakeChiefPi({
     exec: (_command, args) =>
       isApiSnapshot(args)
         ? {
@@ -1089,7 +1120,7 @@ test("Chief resume rejects a persisted pending chief ask without activation", as
     {
       type: "custom",
       customType: "pi-herdsman-role",
-      data: { role: "chief" },
+      data: { role: "chief", leadTools: ["agent", "chief"] },
     },
     {
       type: "custom",
@@ -1103,7 +1134,7 @@ test("Chief resume rejects a persisted pending chief ask without activation", as
       },
     },
   ];
-  const pi = fakePi({ entries, activeTools: ["agent", "chief"] });
+  const pi = fakeChiefPi({ entries, activeTools: ["agent", "chief"] });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   context.ui.notify = () => undefined;
@@ -1139,10 +1170,13 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     {
       type: "custom",
       customType: "pi-herdsman-role",
-      data: { role: "chief" },
+      data: {
+        role: "chief",
+        leadTools: ["read", "bash", "foreign_tool", "agent", "chief"],
+      },
     },
   ];
-  const pi = fakePi({
+  const pi = fakeChiefPi({
     entries,
     activeTools: ["read", "bash", "foreign_tool"],
     exec: (_command, args) =>
@@ -1162,7 +1196,13 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
   await pi.events.get("session_start")![0](undefined, context);
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
   await pi.commandOptions.get("chief").handler("leave", context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["read", "bash", "foreign_tool"]);
+  assert.deepEqual(pi.pi.getActiveTools(), [
+    "read",
+    "bash",
+    "foreign_tool",
+    "agent",
+    "chief",
+  ]);
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
   delete process.env.HERDR_TAB_ID;
@@ -1182,7 +1222,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
     {
       type: "custom",
       customType: "pi-herdsman-role",
-      data: { role: "chief" },
+      data: { role: "chief", leadTools: ["agent", "chief"] },
     },
   ];
   const incumbent = claimChiefLease({
@@ -1192,7 +1232,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
     workspaceId: "incumbent-workspace",
   });
   try {
-    const pi = fakePi({ entries, activeTools: ["agent", "chief"] });
+    const pi = fakeChiefPi({ entries, activeTools: ["agent", "chief"] });
     registerExtension!(pi.pi as never);
     const context = fakeContext(entries) as any;
     context.ui.notify = () => undefined;

@@ -34,7 +34,7 @@ import {
   readLeadCoordinationState,
   readChiefDescriptor,
   serializeSupervision,
-  sessionLeadRole,
+  sessionLeadRoleState,
   writeChiefMessage,
   writeChiefAskMessage,
   removeChiefMessage,
@@ -315,19 +315,40 @@ test("ask correlation ignores ephemeral lead instance IDs", () => {
   );
 });
 
-test("append-only lead role recovery parses only the latest matching entry", () => {
-  const malformed = {
-    type: "custom",
-    customType: "pi-herdsman-role",
-    data: { role: "invalid" },
-  };
+test("lead role state requires a canonical durable tool baseline", () => {
   const valid = {
     type: "custom",
     customType: "pi-herdsman-role",
-    data: { role: "lead" },
+    data: { role: "lead", leadTools: ["read", "bash", "agent", "chief"] },
   };
-  assert.throws(() => sessionLeadRole([valid, malformed]), /invalid/);
-  assert.equal(sessionLeadRole([malformed, valid]), "lead");
+  assert.equal(sessionLeadRoleState([]), undefined);
+  const parsed = sessionLeadRoleState([valid]);
+  assert.deepEqual(parsed, valid.data);
+  assert.notEqual(parsed?.leadTools, valid.data.leadTools);
+  assert.deepEqual(
+    sessionLeadRoleState([
+      { ...valid, data: { role: "chief", leadTools: [] } },
+    ]),
+    { role: "chief", leadTools: [] },
+  );
+  for (const data of [
+    undefined,
+    [],
+    { role: "lead" },
+    { role: "invalid", leadTools: [] },
+    { role: "lead", leadTools: "read" },
+    { role: "lead", leadTools: ["read", "read"] },
+    { role: "lead", leadTools: [""] },
+    { role: "lead", leadTools: [1] },
+    { ...valid.data, extra: true },
+  ]) {
+    const malformed = { ...valid, data };
+    assert.throws(
+      () => sessionLeadRoleState([valid, malformed]),
+      /invalid pi-herdsman-role/,
+    );
+    assert.deepEqual(sessionLeadRoleState([malformed, valid]), valid.data);
+  }
 });
 
 test("supervision authority is coordination state, not metadata", () => {
@@ -372,7 +393,7 @@ test("supervision authority is coordination state, not metadata", () => {
   );
 });
 
-test("every observed live lead state exposes inspect and message", () => {
+test("live lead actions advertise transcript only with proven internal evidence", () => {
   const agent = {
     sessionId: "lead",
     sessionKind: "id" as const,
@@ -380,17 +401,21 @@ test("every observed live lead state exposes inspect and message", () => {
     paneId: "pane",
     tabId: "tab",
   };
-  for (const runtimeState of ["idle", "working", "blocked"] as const) {
+  for (const piSessionFile of [undefined, "/tmp/lead.jsonl"]) {
     const snapshot = projectSupervision({
-      agents: [{ ...agent, runtimeState }],
+      agents: [{ ...agent, piSessionFile }],
       managedAgents: [],
       coordinationStates: [state("lead")],
     });
     assert.deepEqual(snapshot.leads[0]?.availableActions, [
       "inspect",
+      ...(piSessionFile ? ["transcript"] : []),
       "message",
     ]);
-    assert.equal(snapshot.leads[0]?.runtimeState, runtimeState);
+    assert.equal(snapshot.leads[0]?.piSessionFile, piSessionFile);
+    const serialized = JSON.stringify(serializeSupervision(snapshot));
+    assert.equal(serialized.includes("piSessionFile"), false);
+    assert.equal(serialized.includes("/tmp/lead.jsonl"), false);
   }
 });
 
@@ -625,25 +650,79 @@ test("validated agent evidence aggregates descendants without identity matching"
         ownerSessionId: "a",
         workspaceId: "w",
         paneId: "b",
+        runtimeState: "settling",
+      },
+      {
+        piSessionId: "c",
+        ownerSessionId: "b",
+        workspaceId: "w",
+        paneId: "c",
         runtimeState: "blocked",
       },
     ],
   });
   assert.deepEqual(snapshot.leads[0].agentCounts, {
-    working: 1,
+    active: 2,
     blocked: 1,
-    total: 2,
+    total: 3,
   });
   const serialized = serializeSupervision(snapshot).leads[0];
   assert.deepEqual(serialized.agent_counts, {
-    working: 1,
+    active: 2,
     blocked: 1,
-    total: 2,
+    total: 3,
   });
   assert.deepEqual(serialized.agents, [
     { id: "a", label: "a", state: "working" },
-    { id: "b", label: "b", state: "blocked" },
+    { id: "b", label: "b", state: "settling" },
+    { id: "c", label: "c", state: "blocked" },
   ]);
+});
+
+test("supervision preserves lifecycle evidence and counts only active states", () => {
+  for (const runtimeState of [
+    "idle",
+    "working",
+    "blocked",
+    "settling",
+    "starting",
+    "done",
+    "unknown",
+    "lost",
+  ] as const) {
+    const snapshot = projectSupervision({
+      agents: [
+        {
+          sessionId: "lead",
+          sessionKind: "id",
+          workspaceId: "w",
+          paneId: "p",
+          tabId: "t",
+          runtimeState,
+        },
+      ],
+      coordinationStates: [state("lead")],
+      managedAgents: [
+        {
+          piSessionId: "child",
+          ownerSessionId: "lead",
+          workspaceId: "w",
+          paneId: "child",
+          runtimeState,
+        },
+      ],
+    });
+    const serialized = serializeSupervision(snapshot).leads[0];
+    assert.equal(serialized.runtime_state, runtimeState);
+    assert.equal(serialized.agents[0].state, runtimeState);
+    assert.deepEqual(serialized.agent_counts, {
+      active: Number(
+        ["working", "settling", "starting"].includes(runtimeState),
+      ),
+      blocked: Number(runtimeState === "blocked"),
+      total: 1,
+    });
+  }
 });
 
 test("supervision excludes descendants of ambiguous agent owners", () => {
@@ -682,7 +761,7 @@ test("supervision excludes descendants of ambiguous agent owners", () => {
     ],
   });
   assert.deepEqual(snapshot.leads[0].agentCounts, {
-    working: 0,
+    active: 0,
     blocked: 0,
     total: 0,
   });

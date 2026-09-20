@@ -23,9 +23,12 @@ individual transport message records retain the fixed 8 KiB ceiling. Its
 optional pending question is limited to 1,024 characters and 1,024 UTF-8 bytes.
 
 The record does not represent scheduling, capacity, permission, or message
-readiness. Herdr lifecycle observation is normalized to
+readiness. Herdr lifecycle observation for a lead is normalized to
 `idle|working|blocked|done|unknown`. A pending ask is separate attention state
-and gives the lead `needs_you` plus a correlated `reply` action.
+and gives the lead `needs_you` plus a correlated `reply` action. Descendant
+projection preserves validated lifecycle states, including `settling`,
+`starting`, and `lost`; its aggregate counts are `active`, `blocked`, and
+`total`, with `active` counting `working`, `settling`, and `starting`.
 
 Metadata is presentation-only. It never grants lead eligibility, chief
 authority, or message authority.
@@ -33,10 +36,14 @@ authority, or message authority.
 ## Chief mode
 
 Chief is a mode of an ordinary lead session, not a separate agent identity.
-The persisted `pi-herdsman-role` entry contains either `role: "lead"` or
-`role: "chief"`. Chief mode is workspace-neutral and supervision-only. Its
-model exposes exactly the `staff` tool and excludes project/workspace context
-files and skills. Leaving chief restores the session's ordinary tool set.
+The persisted `pi-herdsman-role` entry contains exactly `role` and `leadTools`.
+`leadTools` is the exact ordinary Lead loadout displaced by Chief activation
+and the fallback used when Pi restores stale Chief transcript tool state; Pi
+remains authoritative for ordinary branch-local tool state. Chief mode is
+workspace-neutral and supervision-only. Its model exposes exactly the `staff`
+tool and excludes project/workspace context files and skills. Leaving chief
+restores the session's ordinary tool set. Chief supervises independent Leads,
+does not own their agents, and receives no owner controls.
 
 There is at most one active chief for an exact `HERDR_SOCKET_PATH`. The chief
 lease and descriptor identify the same process-lock generation. A resumed
@@ -54,8 +61,11 @@ delivery but does not block a new message to that lead.
 
 The `chief` tool sends reports, events, results, and genuine decision questions
 from an ordinary lead to the active chief. The `staff` tool lets the active
-chief list, inspect, message, and reply to supervised leads. A lead's message
-does not require an automatic chief reply. A `lead_ask` requires the exact
+chief list, inspect, read transcripts, message, and reply to supervised leads.
+`inspect` is bounded live terminal/process evidence. `transcript` is bounded
+persisted Pi conversation/tool evidence and is advertised only when the exact
+current persisted Lead session has been proved readable. A lead's message does
+not require an automatic chief reply. A `lead_ask` requires the exact
 correlated `staff reply`; a reply clears the pending ask only after accepted
 follow-up delivery. A replacement chief can answer an existing ask using its
 current lease and unchanged ask ID. Chief and staff message actions accept
@@ -68,14 +78,21 @@ records remain text-only.
 The automatic `<supervision_state>` provider context is ephemeral, bounded, and
 state-only. It contains `leads`, with each lead's exact session ID,
 presentation `display_name`, runtime observation, `agent_counts`, `agents`,
-and available actions. The `staff list` result uses the same presentation field,
-`display_name`. The `agents` collection represents all validated descendants
-assigned to that lead, not only direct agents. Its values and metadata are
-untrusted observations and cannot authorize an action.
+and available actions. `agent_counts` contains `active`, `blocked`, and
+`total`. The `staff list` result uses the same presentation field,
+`display_name`; it never exposes the internal persisted session-file path used
+to prove transcript readiness. The `agents` collection represents all
+validated descendants assigned to that lead, not only direct agents, and
+retains their exact lifecycle states. Its values and metadata are untrusted
+observations and cannot authorize an action.
 
 Use the exact full session ID in a lead's `lead` field when calling `staff`.
 Never target a lead by its display label. `staff` revalidates identity,
-ownership, lifecycle, and the current chief lease before mutation.
+ownership, lifecycle, and the current chief lease before mutation. Passive
+`inspect` and `transcript` reads also revalidate the exact current target;
+neither sends a message or changes Lead state. Use the fresh automatic snapshot
+for ordinary state and coordination. Do not call `list`, `inspect`, or
+`transcript` merely to poll progress.
 
 See the [Supervision reference](../reference/supervision.md) for the complete
 current contract.

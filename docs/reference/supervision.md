@@ -9,9 +9,12 @@ metadata are not.
 ## Role, lease, and lead state
 
 `/chief` is available to an eligible lead. The session role is persisted as
-`customType: "pi-herdsman-role"` with `role: "lead"` or `"chief"`. A malformed
-role fails closed and records a durable error. There is at most one active
-chief for an exact `HERDR_SOCKET_PATH`; its descriptor is bound to the exact
+`customType: "pi-herdsman-role"` with exactly `role: "lead"|"chief"` and a
+`leadTools` array. `leadTools` is the exact ordinary Lead loadout displaced by
+Chief activation and the fallback for stale Chief transcript tool state; Pi
+remains authoritative for ordinary branch-local tool state. A malformed role
+fails closed and records a durable error. There is at most one active chief
+for an exact `HERDR_SOCKET_PATH`; its descriptor is bound to the exact
 process-lock claim and Pi session identity.
 
 Every lead has one private atomic record in the supervision runtime's `leads/`
@@ -41,13 +44,16 @@ ceiling. Questions are limited to 1,024
 characters and 1,024 UTF-8 bytes.
 
 The record does not represent scheduling, capacity, permission, or message
-readiness. Herdr lifecycle observation is normalized to
-`idle|working|blocked|done|unknown`.
+readiness. Herdr lifecycle observation for a lead is normalized to
+`idle|working|blocked|done|unknown`. Validated descendant lifecycle states are
+preserved, including `settling`, `starting`, and `lost`.
 
 Chief is a mode of a lead session. While active, its model has exactly the
 `staff` tool. Project/workspace context files and skills are excluded from
 chief model context; workspace-specific work remains the responsibility of
-supervised leads. `/chief leave` restores the session's ordinary tools.
+supervised leads. Chief supervises independent Leads, does not own their
+agents, and receives no owner controls. `/chief leave` restores the session's
+ordinary tools.
 
 ## Lead projection and actions
 
@@ -55,13 +61,15 @@ An eligible lead requires one exact live recognized Pi agent, a matching lead
 record, and no chief or validated managed agent identity. A lead's observed
 runtime state is informational. Every exact-identity-verified live lead has
 `inspect` and `message`, whether it is idle, working, blocked, done, or unknown.
-A pending ask is separate attention state: it projects as `needs_you`, exposes
-the bounded question and ask ID, and adds `reply`.
+A proved readable persisted exact Pi session adds `transcript`. A pending ask
+is separate attention state: it projects as `needs_you`, exposes the bounded
+question and ask ID, and adds `reply`.
 
 The `staff list` representation contains `lead` (the exact full Pi session ID),
 `display_name` (a presentation-only label), identity fields, `runtime_state`,
-`needs_you`, optional pending-ask fields, `agent_counts`, optional
-`last_activity`, and `available_actions`. The automatic
+`needs_you`, optional pending-ask fields, `agent_counts`, and
+`available_actions`. `agent_counts` contains `active`, `blocked`, and `total`;
+`active` counts `working`, `settling`, and `starting` descendants. The automatic
 `<supervision_state>` context is state-only and hard-bounded to 16 KiB; it uses
 `leads`, `agent_counts`, and `agents`, not inspect terminal/process evidence.
 Oversized output is truncated only at complete lead records and identifies
@@ -158,10 +166,12 @@ snapshot or returned by `staff list`; never use `display_name`.
 
 For general state questions and ordinary messages or replies, use the fresh
 automatic supervision snapshot directly; do not call `staff list`, `inspect`,
-or another read command first. The `message` and `reply` actions perform their
-own authoritative validation. Use `list` when the snapshot is stale or
-unavailable, an immediately refreshed roster is materially necessary, or
-diagnosis is required. Use `inspect` only when deeper lead evidence is needed.
+or `transcript` merely to poll progress. The `message` and `reply` actions
+perform their own authoritative validation. Use `list` when the snapshot is
+stale or unavailable, an immediately refreshed roster is materially necessary,
+or diagnosis is required. Use `inspect` only when bounded live terminal/process
+evidence matters. Use `transcript` only when bounded persisted Pi
+conversation/tool evidence materially matters.
 
 ### `list`
 
@@ -187,6 +197,26 @@ separately bounded process evidence. The public
 `recent_output_truncated` boolean is true only when that local byte cap
 truncates the terminal output and false otherwise. It does not expose persisted
 Pi session-message history.
+
+### `transcript`
+
+```json
+{
+  "action": "transcript",
+  "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>"
+}
+```
+
+Transcript is read-only and requires an active chief, an eligible exact lead,
+and a currently readable persisted Pi session proved by exact session ID and
+current session header. It returns the same bounded persisted Pi
+conversation/tool projection used by the agent transcript action: visible user,
+assistant, tool-call, tool-result, compaction, and branch-summary evidence;
+reasoning, system messages, extension entries, and control markers are
+excluded. The transcript is bounded to 16 KiB, with individual tool results
+bounded to 4 KiB. The internal session-file path is never returned by staff
+list, automatic supervision context, or the transcript result. Reading it does
+not send a message or change Lead state.
 
 ### `message`
 
@@ -228,8 +258,12 @@ chief, `/chief` opens the interactive overview. `/chief leave` leaves chief
 mode and removes the widget.
 
 The active chief gets a width-aware compact leads-only ambient widget and a
-native `/chief` overview with peek and focus. Leads are ordered by needs-you,
-working, blocked, idle/done, then unknown. The ambient widget uses
+native `/chief` overview with peek and focus. Leads are ordered by attention,
+working, blocked, idle/done, then unknown. Attention is rendered separately
+from lifecycle: `!` means `needs_you`, `●` means working, `◐` means blocked,
+`◌` means settling or starting, `○` means idle or done, `?` means unknown,
+and `×` means lost. An idle or done lead with active delegated descendants
+uses `◉`; `◐` never means attention. The ambient widget uses
 presentation-only tree branches for visible lead rows, while the native
 overview stays flat. Human supervision peek renders at most 40 lines after
 width-safe presentation of its state, recent output, agents, and process

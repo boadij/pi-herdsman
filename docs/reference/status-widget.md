@@ -13,10 +13,12 @@ overview, peek, and focus behavior is documented in the
 [supervision reference](supervision.md). The two widgets are never combined.
 
 The ambient supervision rows use `├─` for non-final visible leads and `└─` for the
-final visible lead. Lead state glyphs remain separate (`◐` needs you, `●` lead
-working, `◉` idle/done with working descendants, and `○` otherwise). Workspace
-labels are presentation text inside each lead row, not additional hierarchy
-nodes. The widget always retains
+final visible lead. Selection, attention, and lifecycle remain separate: `>`
+means selected, `!` means `needs_you`, `●` means working, `◐` means blocked,
+`◌` means settling or starting, `○` means idle or done, `?` means unknown, and
+`×` means lost. An idle or done lead with active delegated descendants uses
+`◉`. Workspace labels are presentation text inside each lead row, not
+additional hierarchy nodes. The widget always retains
 attention leads, caps ordinary leads, and shows omitted leads in a final
 `└─ … N more · /chief` row.
 

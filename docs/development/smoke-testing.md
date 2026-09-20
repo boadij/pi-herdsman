@@ -262,6 +262,9 @@ substitutes for these checks.
 | ------------------------------------------------------------------------------------------------------------------------------------ | ------- |
 | Normal lead has `agent` and `chief`, not `staff`                                                                                     | NOT RUN |
 | Active Chief has exactly `staff`, not lead controller tools                                                                          | NOT RUN |
+| Active Chief remains exactly `staff` after `/tree` restores a pre-Chief Lead branch                                                  | NOT RUN |
+| Leaving Chief persists `role` plus exact `leadTools`; resume repairs stale restored `staff` before another model turn                | NOT RUN |
+| A legitimate ordinary branch loadout is preserved instead of being overwritten by an older `leadTools` checkpoint                    | NOT RUN |
 | Persisted Chief resume collision becomes suspended                                                                                   | NOT RUN |
 | Ordinary losing `/chief` collision remains a lead with its tools and offers Focus/Cancel                                             | NOT RUN |
 | Delegating agent and agent retain their current role tools                                                                           | NOT RUN |
@@ -279,6 +282,8 @@ substitutes for these checks.
 | Duplicate live agents, coordination records, or agent evidence fail closed                                                           | NOT RUN |
 | Target disappearance or replacement between list and action is rejected                                                              | NOT RUN |
 | Inspect a lead and compare bounded peek evidence                                                                                     | NOT RUN |
+| Read `staff transcript` only when exact persisted evidence is advertised; persisted content is bounded and read-only                 | NOT RUN |
+| `staff inspect` exposes live terminal/process evidence while `staff transcript` exposes persisted conversation/tool evidence         | NOT RUN |
 | Focus a lead after exact revalidation                                                                                                | NOT RUN |
 | Chief `message` to idle, working, or blocked leads                                                                                   | NOT RUN |
 | Two Chief messages queue and arrive once and in order                                                                                | NOT RUN |
@@ -303,6 +308,9 @@ substitutes for these checks.
 | Queued inbox records are ordered by `createdAt`, then ID                                                                             | NOT RUN |
 | Resume with a free or occupied lease                                                                                                 | NOT RUN |
 | Confirm `/chief leave` without mutating supervised leads                                                                             | NOT RUN |
+| Suspended Chief retains no Herdsman authority tools                                                                                  | NOT RUN |
+| Descendant `working`, `settling`, and `blocked` states remain exact; counts report `active`, `blocked`, and `total`                  | NOT RUN |
+| Chief rows separate `!` attention from lifecycle: `●` working, `◐` blocked, `?` unknown, and `◉` delegated active descendants        | NOT RUN |
 | Empty-roster Escape closes the native custom UI                                                                                      | NOT RUN |
 | Empty-roster Ctrl+C closes the native custom UI                                                                                      | NOT RUN |
 | Real terminal arrow sequences navigate the visual order                                                                              | NOT RUN |
