@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  # Temporary PR #93 Windows hang isolation; remove after collecting diagnostics.
+  windows-herdr-diagnostic-pr93:
+    name: "Windows Herdr diagnostic (PR #93)"
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 93
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.19.0
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm test -- extension/herdr.test.ts
+
   validate:
     strategy:
       matrix:
