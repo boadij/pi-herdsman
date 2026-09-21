@@ -2112,13 +2112,9 @@ test("peer list rendering distinguishes self from peers", () => {
 
   assert.equal(
     renderedText(
-      renderCoordinationResult(
-        "peer",
-        result,
-        {},
-        presentationTheme,
-        { args: { action: "list" } },
-      ),
+      renderCoordinationResult("peer", result, {}, presentationTheme, {
+        args: { action: "list" },
+      }),
     ),
     "peer · 1 peer",
   );

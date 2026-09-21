@@ -7092,10 +7092,10 @@ export default function (pi: ExtensionAPI): void {
         const workspaceLabel =
           provenance.repoName && provenance.branch
             ? `${provenance.repoName}/${provenance.branch}`
-            : provenance.workspaceLabel ??
+            : (provenance.workspaceLabel ??
               (provenance.workspaceCwd
                 ? basename(provenance.workspaceCwd)
-                : workspaceId);
+                : workspaceId));
         const enriched: PeerLeadRecord = {
           ...record,
           ...(provenance.repoName ? { repo: provenance.repoName } : {}),
@@ -7411,10 +7411,7 @@ export default function (pi: ExtensionAPI): void {
     )
       return false;
     const target = await livePeerLead(ctx, record.toSessionId);
-    return (
-      !!target &&
-      target.piSessionId === record.toSessionId
-    );
+    return !!target && target.piSessionId === record.toSessionId;
   };
   const queuePeerRecord = async (
     text: string,
@@ -10036,7 +10033,9 @@ export default function (pi: ExtensionAPI): void {
                 workspace_label: record.workspaceLabel ?? "",
               }));
             return {
-              content: [{ type: "text", text: JSON.stringify({ self, peers }) }],
+              content: [
+                { type: "text", text: JSON.stringify({ self, peers }) },
+              ],
               details: { ok: true, action: "list", self, peers },
             };
           }

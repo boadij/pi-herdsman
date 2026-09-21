@@ -1061,8 +1061,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     validNativeIdentity(record.tabId) &&
     validNativeIdentity(record.workspaceId) &&
     metadata.every(
-      (key) =>
-        !Object.hasOwn(record, key) || validNativeIdentity(record[key]),
+      (key) => !Object.hasOwn(record, key) || validNativeIdentity(record[key]),
     ) &&
     !!claim &&
     Object.keys(claim).length === 2 &&

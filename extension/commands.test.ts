@@ -178,10 +178,7 @@ test("Chief leave restores minimal peer presence before provenance resolves", as
             id: AGENT_ID,
             result: {
               workspace: {
-                label:
-                  call === 1
-                    ? "stale-generation"
-                    : "fresh-generation",
+                label: call === 1 ? "stale-generation" : "fresh-generation",
               },
             },
           }),
@@ -226,16 +223,13 @@ test("Chief leave restores minimal peer presence before provenance resolves", as
     assert.equal(restored.workspaceLabel, undefined);
 
     releaseProvenance.resolve();
-    await waitForTestCondition(
-      () => {
-        const current = readPeerLeadRecord(runtime, sessionId);
-        return (
-          current?.claim.id === restored.claim.id &&
-          current.workspaceLabel === "fresh-generation"
-        );
-      },
-      "stale Chief-generation provenance replaced the restored peer presence",
-    );
+    await waitForTestCondition(() => {
+      const current = readPeerLeadRecord(runtime, sessionId);
+      return (
+        current?.claim.id === restored.claim.id &&
+        current.workspaceLabel === "fresh-generation"
+      );
+    }, "stale Chief-generation provenance replaced the restored peer presence");
     assert.equal(
       readPeerLeadRecord(runtime, sessionId)?.workspaceLabel,
       "fresh-generation",
@@ -316,7 +310,9 @@ test("queued peer traffic stays durable through Chief mode and drains after leav
     );
     assert.equal(listCoordinationMessagePaths(runtime, receiverId).length, 1);
 
-    await receiver.commandOptions.get("chief").handler("leave", receiverContext);
+    await receiver.commandOptions
+      .get("chief")
+      .handler("leave", receiverContext);
     await delivered.promise;
     await Promise.resolve();
     const peerDeliveries = receiver.sentMessageCalls.filter((call) =>
@@ -411,7 +407,9 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
       await delivered.promise;
       await Promise.resolve();
       const deliveries = receiver.sentMessageCalls.filter((call) =>
-        String((call.message as any)?.content ?? "").includes("sender survived"),
+        String((call.message as any)?.content ?? "").includes(
+          "sender survived",
+        ),
       );
       assert.equal(deliveries.length, 1);
       assert.deepEqual(listCoordinationMessagePaths(runtime, targetId), []);

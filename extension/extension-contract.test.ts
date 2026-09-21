@@ -569,9 +569,7 @@ test("peer list and message use global peer presence, not caller inventory", asy
     assert.deepEqual(
       {
         self: payload.self,
-        peers: [...payload.peers].sort((a, b) =>
-          a.lead.localeCompare(b.lead),
-        ),
+        peers: [...payload.peers].sort((a, b) => a.lead.localeCompare(b.lead)),
       },
       {
         self: senderId,
@@ -753,18 +751,15 @@ test("peer provenance enrichment never replaces the Lead cwd", async () => {
 
     await starting;
     releaseWorktree.resolve();
-    await waitForTestCondition(
-      () => {
-        const record = readPeerLeadRecord(runtime, sessionId);
-        return (
-          record?.cwd === context.cwd &&
-          record.repo === "pi-herdsman" &&
-          record.branch === "feature/linked" &&
-          record.workspaceLabel === "pi-herdsman/feature/linked"
-        );
-      },
-      "linked-worktree provenance did not enrich peer presence",
-    );
+    await waitForTestCondition(() => {
+      const record = readPeerLeadRecord(runtime, sessionId);
+      return (
+        record?.cwd === context.cwd &&
+        record.repo === "pi-herdsman" &&
+        record.branch === "feature/linked" &&
+        record.workspaceLabel === "pi-herdsman/feature/linked"
+      );
+    }, "linked-worktree provenance did not enrich peer presence");
     const enriched = readPeerLeadRecord(runtime, sessionId);
     assert.equal(enriched?.cwd, context.cwd);
     assert.equal(enriched?.repo, "pi-herdsman");
@@ -1092,9 +1087,12 @@ test("stale peer publication cannot replace a same-session lifecycle generation"
     const starting = sessionStart(undefined, context);
     await provenanceStarted.promise;
     const shuttingDown = sessionShutdown();
-    replacementLease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
-      name: "replacement peer presence",
-    });
+    replacementLease = acquireProcessLock(
+      peerLeadLockPath(runtime, sessionId),
+      {
+        name: "replacement peer presence",
+      },
+    );
     const replacement = {
       version: 1 as const,
       piSessionId: sessionId,
