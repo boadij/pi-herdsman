@@ -5,6 +5,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   ModelSelectEvent,
+  ProjectedSessionEntry,
   SessionBeforeCompactEvent,
   SessionEntry,
   ThinkingLevelSelectEvent,
@@ -15,7 +16,7 @@ import {
   StringEnum,
 } from "@earendil-works/pi-ai";
 import {
-  buildContextEntries,
+  buildSessionProjection,
   CURRENT_SESSION_VERSION,
   DynamicBorder,
   getAgentDir,
@@ -1388,50 +1389,52 @@ function persistedTranscriptReady(target: PersistedTranscriptTarget): boolean {
   }
 }
 
-function formatPersistedTranscript(entries: readonly SessionEntry[]): {
+function formatPersistedTranscript(entries: readonly ProjectedSessionEntry[]): {
   text: string;
   truncated: boolean;
 } {
   const blocks: string[] = [];
   let truncated = false;
 
-  for (const entry of entries) {
-    if (entry.type === "compaction") {
-      if (entry.summary.trim())
-        blocks.push(`compaction summary:\n${entry.summary.trim()}`);
+  for (const { sourceEntry, messages } of entries) {
+    if (sourceEntry.type === "compaction") {
+      if (sourceEntry.summary.trim())
+        blocks.push(`compaction summary:\n${sourceEntry.summary.trim()}`);
       continue;
     }
-    if (entry.type === "branch_summary") {
-      if (entry.summary.trim())
-        blocks.push(`branch summary:\n${entry.summary.trim()}`);
+    if (sourceEntry.type === "branch_summary") {
+      if (sourceEntry.summary.trim())
+        blocks.push(`branch summary:\n${sourceEntry.summary.trim()}`);
       continue;
     }
-    if (entry.type !== "message") continue;
 
-    const message = entry.message as any;
-    if (message.role === "user") {
-      const text = contentText(message.content, "").trim();
-      if (text && !parseControlMarker(text)) blocks.push(`user:\n${text}`);
-      continue;
-    }
-    if (message.role === "assistant") {
-      for (const part of message.content ?? []) {
-        if (part.type === "text" && part.text.trim()) {
-          blocks.push(`assistant:\n${part.text.trim()}`);
-        } else if (part.type === "toolCall") {
-          blocks.push(`tool ${part.name}:\n${JSON.stringify(part.arguments)}`);
-        }
+    for (const message of messages) {
+      if (message.role === "user") {
+        const text = contentText(message.content, "").trim();
+        if (text && !parseControlMarker(text)) blocks.push(`user:\n${text}`);
+        continue;
       }
-      continue;
-    }
-    if (message.role === "toolResult") {
-      const result = truncateTranscriptToolResult(
-        contentText(message.content, "").trim(),
-      );
-      truncated ||= result.truncated;
-      blocks.push(
-        `tool result ${message.toolName}${message.isError ? " [error]" : ""}:${result.text ? `\n${result.text}` : ""}`,
-      );
+      if (message.role === "assistant") {
+        for (const part of message.content ?? []) {
+          if (part.type === "text" && part.text.trim()) {
+            blocks.push(`assistant:\n${part.text.trim()}`);
+          } else if (part.type === "toolCall") {
+            blocks.push(
+              `tool ${part.name}:\n${JSON.stringify(part.arguments)}`,
+            );
+          }
+        }
+        continue;
+      }
+      if (message.role === "toolResult") {
+        const result = truncateTranscriptToolResult(
+          contentText(message.content, "").trim(),
+        );
+        truncated ||= result.truncated;
+        blocks.push(
+          `tool result ${message.toolName}${message.isError ? " [error]" : ""}:${result.text ? `\n${result.text}` : ""}`,
+        );
+      }
     }
   }
 
@@ -1445,7 +1448,7 @@ function readPersistedTranscript(target: PersistedTranscriptTarget): {
   const entries = readPersistedSessionEntries(target);
 
   const formatted = formatPersistedTranscript(
-    buildContextEntries(entries.slice(1) as SessionEntry[]),
+    buildSessionProjection(entries.slice(1) as SessionEntry[]).entries,
   );
   const bounded = truncateTail(formatted.text, {
     maxBytes: TRANSCRIPT_MAX_BYTES,
@@ -8121,17 +8124,21 @@ export default function (pi: ExtensionAPI): void {
           { status },
         );
         const previous = [
-          ...buildContextEntries(
-            ctx.sessionManager.getBranch() as SessionEntry[],
-          ),
+          ...buildSessionProjection(ctx.sessionManager.getBranch()).entries,
         ]
           .reverse()
           .find(
             (entry) =>
-              entry.type === "custom_message" &&
-              entry.customType === SUPERVISION_CONTEXT_TYPE,
+              entry.sourceEntry.type === "custom_message" &&
+              entry.sourceEntry.customType === SUPERVISION_CONTEXT_TYPE &&
+              entry.messages.length > 0,
           );
-        if (previous?.content === content) return;
+        const previousMessage = previous?.messages[0];
+        if (
+          previousMessage &&
+          contentText(previousMessage.content, "") === content
+        )
+          return;
 
         return {
           customType: SUPERVISION_CONTEXT_TYPE,
@@ -10143,13 +10150,13 @@ export default function (pi: ExtensionAPI): void {
       requestStatusRefresh?.();
     };
     if (processRole !== "managed-agent")
-      pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
+      pi.on("agent_settled", async (_event: unknown, ctx: ExtensionContext) => {
         settlePendingAsks(pi, ctx, controllerAbortController?.signal);
         if (controllerScope.kind === "lead") {
           leadSettled = true;
           maybeFinishHerdRun(ctx);
         }
-        void settlePersistedResults(
+        await settlePersistedResults(
           pi,
           ctx,
           controllerAbortController?.signal,
@@ -12317,10 +12324,10 @@ export default function (pi: ExtensionAPI): void {
     flush();
     if (pendingResult && !retryTimer) retryTimer = setInterval(flush, 250);
   };
-  pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("agent_settled", async (_event: unknown, ctx: ExtensionContext) => {
     settleCurrentAgent(ctx);
     if (delegationEnabled)
-      void settlePersistedResults(
+      await settlePersistedResults(
         pi,
         ctx,
         controllerAbortController?.signal,

@@ -1181,6 +1181,22 @@ test("Chief supervision context is persistent, deduplicated, and compaction-awar
     const second = await beforeStart();
     assert.equal(second?.message, undefined);
 
+    branch.push({
+      type: "context_edit",
+      id: "snapshot-edit",
+      parentId: "snapshot-1",
+      timestamp: new Date().toISOString(),
+      targetId: "snapshot-1",
+      replacement: null,
+    });
+    const afterOmission = await beforeStart();
+    assert.equal(
+      afterOmission?.message?.customType,
+      "pi-herdsman-supervision-context",
+    );
+    assert.equal(afterOmission?.message?.display, false);
+    assert.match(String(afterOmission?.message?.content), /status="fresh"/);
+
     branch.splice(
       0,
       branch.length,
