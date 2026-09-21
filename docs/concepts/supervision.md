@@ -88,11 +88,11 @@ current session header, version, and exact Pi session ID before returning
 evidence. A lead's message does not require an automatic chief reply. A
 `lead_ask` requires the exact correlated `staff reply`; a reply clears the
 pending ask only after accepted follow-up delivery. A replacement chief can
-answer an existing ask using its current lease and unchanged ask ID. Chief and
-staff message actions accept
-files; their text is prepared with the same canonical attachment renderer and
-configured Herdsman byte limits as agent messages, while durable supervision
-records remain text-only.
+answer an existing ask using its current lease and unchanged ask ID. Chief
+`message`/`ask`, staff `message`/`reply`, and peer `message` actions accept
+files and completed direct-agent result selectors. Selectors resolve on the
+caller's current Pi branch before entering the shared canonical attachment
+pipeline; durable coordination records remain text-only.
 
 ## Supervision state
 

@@ -74,15 +74,22 @@ list has no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
   "action": "message",
   "lead": "<exact full Pi session ID from peer list>",
   "message": "The integration is ready.",
-  "files": ["/tmp/checklist.md"]
+  "files": ["/tmp/checklist.md"],
+  "results": [
+    {
+      "agent": "researcher",
+      "index": 1
+    }
+  ]
 }
 ```
 
-`message` queues one durable peer follow-up. Its optional files use the same
-submission-time canonical attachment preparation, UTF-8 embedding, reference
-fallback, and configured byte limits as other Herdsman messages. The durable
-record is text-only and remains bounded by the 8 KiB supervision transport
-limit.
+`message` accepts ordinary `files` and completed direct-agent `results`.
+Result selectors are resolved on the sender's current branch to their canonical
+`result:<request-id>` references before the existing attachment preparation
+runs. Files and resolved results therefore share the same submission-time UTF-8
+embedding, reference fallback, and configured byte limits. The durable peer
+record remains text-only and bounded by the 8 KiB coordination transport limit.
 
 Peer records use the global peer runtime's shared coordination inbox. Delivery
 uses Pi `deliverAs: "followUp"` with `triggerTurn: true`, survives a busy
