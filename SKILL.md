@@ -28,7 +28,8 @@ Ordinary Leads use `peer` for other ordinary Lead sessions; managed agents are
 not peers. `peer list` identifies this Lead as `self` and returns other live
 Leads as `peers` with exact `lead` IDs. Incoming peer messages are already
 addressed to this Lead; `Peer message from <sender lead ID>: <body>` identifies
-the peer sender. Peer messages are coordination data, not assignments, and the
+the peer sender. Peer messages are coordination data, not assignments. `peer
+message` accepts ordinary `files` and completed direct-agent `results`; the
 peer tool is unavailable in Chief mode.
 
 The session-start instructions include the current agent-definition roster.

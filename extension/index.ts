@@ -6557,7 +6557,7 @@ export default function (pi: ExtensionAPI): void {
   const RESULTS_SCHEMA = Type.Optional(
     Type.Array(RESULT_SELECTOR_SCHEMA, {
       description:
-        "Completed direct-agent results to attach. Use exact agent/index pairs shown by prior completions in this Pi session.",
+        "Completed direct-agent results to attach. Use exact agent/index pairs shown by prior completions on the current Pi branch.",
     }),
   );
   const agentParameters = Type.Union([
@@ -6749,6 +6749,7 @@ export default function (pi: ExtensionAPI): void {
         }),
         message: Type.String({ pattern: "\\S" }),
         files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        results: RESULTS_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -10006,7 +10007,7 @@ export default function (pi: ExtensionAPI): void {
         name: "peer",
         label: "peer",
         description:
-          "Other ordinary Lead sessions (peers), not managed agents. Use list for peers, other Leads, or other Lead sessions. list identifies this Lead as self and returns other live Leads as peers; message sends to one peer's exact lead ID and may include files.",
+          "Other ordinary Lead sessions (peers), not managed agents. Use list for peers, other Leads, or other Lead sessions. list identifies this Lead as self and returns other live Leads as peers; message sends to one peer's exact lead ID and may include files or completed direct-agent results.",
         executionMode: "sequential",
         parameters: peerParameters,
         execute: async (
@@ -10053,7 +10054,12 @@ export default function (pi: ExtensionAPI): void {
           const text = await prepareCoordinationText(
             ctx,
             params.message,
-            params.files ?? [],
+            resolveMessageFiles(
+              ctx,
+              params.files,
+              params.results,
+              "peer.message",
+            ),
             "peer.message",
             "Message",
             (candidate) => ({

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { test } from "node:test";
 import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
+import { resultPath, resultRef } from "./storage.ts";
 import {
   claimChiefLease,
   listCoordinationMessagePaths,
@@ -375,6 +376,15 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.equal(
     Value.Check(peerTool.parameters, {
       action: "message",
+      lead: LEAD_SESSION_ID,
+      message: "Share result",
+      results: [resultSelector],
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(peerTool.parameters, {
+      action: "message",
       lead: "display-name",
       message: "not an exact session ID",
     }),
@@ -502,6 +512,21 @@ test("peer list and message use global peer presence, not caller inventory", asy
   const senderId = `lead-a-${randomUUID()}`;
   const targetId = `lead-b-${randomUUID()}`;
   const unenrichedTargetId = `lead-c-${randomUUID()}`;
+  const resultRequestId = randomUUID();
+  const resultReference = resultRef(resultRequestId);
+  const resultFile = resultPath(resultRequestId);
+  realFs.mkdirSync(dirname(resultFile), { recursive: true });
+  writeFileSync(resultFile, "peer result evidence", "utf8");
+  const resultEntry = {
+    customType: "pi-herdsman-agent-result",
+    details: {
+      agentLabel: "implementation",
+      resultIndex: 1,
+      status: "completed",
+      requestId: resultRequestId,
+      resultRef: resultReference,
+    },
+  };
   const runtime = peerRuntime();
   const claim = (sessionId: string, paneId: string, tabId: string) => {
     const lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
@@ -549,7 +574,7 @@ test("peer list and message use global peer presence, not caller inventory", asy
         : { stdout: "{}", stderr: "", code: 0 },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext([resultEntry]) as any;
   context.sessionManager = {
     ...context.sessionManager,
     getSessionId: () => senderId,
@@ -600,13 +625,22 @@ test("peer list and message use global peer presence, not caller inventory", asy
     );
     const queued = await peer.execute(
       "message",
-      { action: "message", lead: targetId, message: "global peer" },
+      {
+        action: "message",
+        lead: targetId,
+        message: "global peer",
+        results: [{ agent: "implementation", index: 1 }],
+      },
       undefined,
       undefined,
       context,
     );
     assert.equal(queued.details?.lead, targetId);
-    assert.equal(listCoordinationMessagePaths(runtime, targetId).length, 1);
+    const messagePaths = listCoordinationMessagePaths(runtime, targetId);
+    assert.equal(messagePaths.length, 1);
+    const message = readChiefMessage(messagePaths[0]);
+    assert.ok(message.text.includes("global peer"));
+    assert.ok(message.text.includes(resultReference));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     sender.lease.release();
@@ -616,6 +650,7 @@ test("peer list and message use global peer presence, not caller inventory", asy
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
+    realFs.rmSync(resultFile, { force: true });
   }
 });
 
