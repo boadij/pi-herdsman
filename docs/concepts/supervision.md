@@ -64,23 +64,22 @@ The `chief` tool sends reports, events, results, and genuine decision questions
 from an ordinary lead to the active chief. The `staff` tool lets the active
 chief list, inspect, read transcripts, message, and reply to supervised leads.
 The Lead-only `peer` tool lists ordinary live Leads and sends durable messages
-to an exact full Pi session ID. Peer presence and peer inboxes use the
-user-global `runtime/peers-v1` runtime rather than the socket-scoped Chief
-runtime, allowing ordinary Leads on different Herdr sockets to discover and
-message one another. Peer presence is private, process-lock generation-bound,
-and published only by ordinary Leads; Chief and suspended sessions are absent.
-Peer reachability uses the global peer record and its exact live process-lock
-claim; Herdr inventory and presentation metadata are not authority. Publication
-makes a best-effort final reread of the sender and target immediately before
-the atomic inbox write. Presentation-only enrichment does not invalidate a
-message, and a replacement claim observed by that reread rejects it. The
-target's held presence lock and the inbox message lock are separate, however,
-so a replacement can race after the reread and still leave a durable queued
-message. Delivery revalidates the current ordinary-Lead receiver record and
-structural target invariants, so a queued message survives sender shutdown.
-Peer inboxes are not drained while a receiver is Chief or lacks valid current
-peer presence; queued messages remain for ordinary-Lead delivery after Chief
-leave. Peer list metadata is presentation-only.
+to an exact full Pi session ID. Its list result is `{ self, peers[] }`: `self`
+is excluded from `peers`, and each peer exposes only `lead`, `name`, `cwd`,
+`repo`, `branch`, and `workspace_label`. The exact full `lead` is the sole
+target handle; the other fields are presentation metadata. Incoming peer
+content is `Peer message from <sender>: <message>` because recipient
+verification is already performed.
+
+Peer presence and inboxes use the user-global `runtime/peers-v1` runtime,
+allowing ordinary Leads on different Herdr sockets to discover and message one
+another. Peer records are process-lock generation-bound and published only by
+ordinary Leads; Chief and suspended sessions are absent. The peer record and
+its exact live process-lock claim provide reachability authority, not Herdr
+inventory or presentation metadata. Publication rechecks sender and target
+before the atomic write, and delivery revalidates the current ordinary-Lead
+receiver and target. Queued messages survive sender shutdown and remain queued
+while the receiver is Chief or lacks valid peer presence.
 `inspect` is bounded live terminal/process evidence. `transcript` is bounded
 persisted Pi conversation/tool evidence. A non-empty persisted session candidate
 adds `transcript` to `available_actions`; `available_actions` is advisory

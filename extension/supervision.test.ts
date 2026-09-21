@@ -451,7 +451,8 @@ test("generic coordination transport orders and renders peer messages", async ()
     sent.map((value) => value.details.id),
     [older.id, newer.id],
   );
-  assert.match(sent[0].content, /From peer lead-a to lead lead-b: older/);
+  assert.match(sent[0].content, /^Peer message from lead-a: older$/);
+  assert.doesNotMatch(sent[0].content, /to lead lead-b/);
   assert.deepEqual(listCoordinationMessagePaths(runtime, "lead-b"), []);
   assert.equal(removeCoordinationMessage, removeChiefMessage);
 });
@@ -508,10 +509,8 @@ test("peer presence and inbox transport are shared across socket runtimes", asyn
       1,
     );
     assert.equal(sent[0].details.id, record.id);
-    assert.match(
-      sent[0].content,
-      /From peer lead-a to lead lead-b: shared peer inbox/,
-    );
+    assert.match(sent[0].content, /^Peer message from lead-a: shared peer inbox$/);
+    assert.doesNotMatch(sent[0].content, /to lead lead-b/);
     assert.deepEqual(listCoordinationMessagePaths(peersA, "lead-b"), []);
   } finally {
     removePeerLeadRecord(peersA, peerA.record.piSessionId, peerA.record);

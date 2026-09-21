@@ -44,11 +44,30 @@ The Lead-only `peer` tool has two actions:
 { "action": "list" }
 ```
 
-returns current ordinary live Leads. Each result's `lead` is the exact full Pi
-session ID to use for messaging. Results may include the presentation name,
-cwd, repository, branch, workspace label, and `pane_id`, `tab_id`, and
-`workspace_id` provenance. These fields are presentation metadata only; a
-display label is not a target.
+returns the current ordinary live Leads other than this Lead. The result keeps
+this Lead separate from the peers:
+
+```json
+{
+  "self": "<this Lead's exact full Pi session ID>",
+  "peers": [
+    {
+      "lead": "<exact full Pi session ID>",
+      "name": "workspace/api",
+      "cwd": "/work/api",
+      "repo": "api",
+      "branch": "feature/peer",
+      "workspace_label": "api"
+    }
+  ]
+}
+```
+
+`self` is never repeated in `peers`. Each peer has a `lead`, `name`, `cwd`,
+`repo`, `branch`, and `workspace_label`; presentation metadata may be empty.
+Only the exact full `lead` ID is a messaging target. Names, paths, branches,
+and workspace labels are display metadata, not target handles. The model-facing
+list has no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
 
 ```json
 {
@@ -80,6 +99,12 @@ message is retained while its receiver is Chief and is delivered after that
 session returns to ordinary Lead. Shutdown aborts
 in-flight delivery and removes the sender's presence before releasing its
 process lock.
+
+The recipient receives the message content as
+`Peer message from <sender lead ID>: <message>`. It is already addressed to the
+receiving Lead; the sender ID identifies the peer that sent it. Delivery still
+verifies the current ordinary-Lead receiver record and target structure before
+injecting that content.
 
 Peer transport shares the existing atomic, bounded, quarantined coordination
 inbox implementation with Chief traffic. Chief records retain their existing

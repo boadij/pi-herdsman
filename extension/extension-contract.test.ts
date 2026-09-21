@@ -294,6 +294,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     agentDescription,
     /list, inspect, or transcript merely for progress, steer merely for status, sleep, poll/,
   );
+  assert.doesNotMatch(agentDescription, /\bpeers?\b/i);
   assert.match(agentDescription, /steer.*non-preemptively/);
   assert.match(agentDescription, /interrupt.*preemptive/);
   assert.match(
@@ -357,12 +358,11 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     { argsComplete: true },
   );
   assert.match(renderedPeerCall.render(160).join("\n"), /^peer message/);
-  assert.match(peerTool.description, /exact full lead session ID/);
-  assert.match(peerTool.description, /ordinary live Leads/);
   assert.match(
     peerTool.description,
-    /Do not target display labels or managed agents/,
+    /ordinary Lead sessions \(peers\), not managed agents/,
   );
+  assert.match(peerTool.description, /list identifies this Lead as self/);
   assert.equal(Value.Check(peerTool.parameters, { action: "list" }), true);
   assert.equal(
     Value.Check(peerTool.parameters, {
@@ -558,20 +558,24 @@ test("peer list and message use global peer presence, not caller inventory", asy
       undefined,
       context,
     );
-    assert.deepEqual(JSON.parse(listed.content[0].text).peers, [
-      {
-        lead: targetId,
-        session_id: targetId,
-        name: "Target Lead",
-        cwd: "/workspaces/target",
-        repo: "pi-herdsman",
-        branch: "feature/peer",
-        workspace_label: "pi-herdsman/feature/peer",
-        pane_id: "lead-b-pane",
-        tab_id: "lead-b-tab",
-        workspace_id: WORKSPACE,
-      },
-    ]);
+    const payload = JSON.parse(listed.content[0].text);
+    assert.deepEqual(payload, {
+      self: senderId,
+      peers: [
+        {
+          lead: targetId,
+          name: "Target Lead",
+          cwd: "/workspaces/target",
+          repo: "pi-herdsman",
+          branch: "feature/peer",
+          workspace_label: "pi-herdsman/feature/peer",
+        },
+      ],
+    });
+    assert.equal(
+      payload.peers.some((peer: { lead: string }) => peer.lead === senderId),
+      false,
+    );
     const queued = await peer.execute(
       "message",
       { action: "message", lead: targetId, message: "global peer" },

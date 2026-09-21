@@ -24,10 +24,12 @@ conflict, follow runtime.
 
 Coordinate managed agents.
 
-Ordinary Leads may use the peer tool to list current ordinary live Leads and
-send durable follow-up messages to an exact full Pi session ID. Peer messages
-are coordination data, not assignments; do not target display labels or
-managed agents. The peer tool is unavailable in Chief mode.
+Ordinary Leads use `peer` for other ordinary Lead sessions; managed agents are
+not peers. `peer list` identifies this Lead as `self` and returns other live
+Leads as `peers` with exact `lead` IDs. Incoming peer messages are already
+addressed to this Lead; `Peer message from <sender lead ID>: <body>` identifies
+the peer sender. Peer messages are coordination data, not assignments, and the
+peer tool is unavailable in Chief mode.
 
 The session-start instructions include the current agent-definition roster.
 Use list for live agent state, ownership, or a refreshed definition roster
@@ -358,23 +360,6 @@ Chief supervises independent leads and never changes ownership. Use `chief`
 exact artifact paths. Use `chief` `ask` only when a genuine chief decision is
 required, make it the only and final coordination call of the turn, do not guess,
 and wait for the reply. Descendants use `ask_owner`, not `chief`.
-
-Ordinary Leads may use the Lead-only `peer` tool to list current ordinary live
-Leads and send durable follow-up messages to an exact full Pi session ID.
-Presence is private and bound to the Lead's global peer record and exact live
-process-lock generation; Chief and suspended sessions do not publish it. Peer
-messages are coordination data, not assignments, and accept the same canonical
-attachment preparation as other Herdsman messages. Make a best-effort final
-reread of the expected sender and target generations immediately before
-publication; presentation-only enrichment does not invalidate a message, and
-an observed replacement process-lock claim rejects it. The reread and inbox
-write use separate process locks, so a replacement can still race after the
-reread. Delivery revalidates the current ordinary-Lead receiver record and
-structural target invariants, so sender shutdown does not invalidate an already
-queued message.
-Peer inboxes remain queued while the receiver is Chief and drain after it
-returns to ordinary Lead with valid peer presence. Peer delivery uses a
-follow-up with `triggerTurn` and does not change ownership.
 
 `chief` is available only to an ordinary lead. Its actions are `message` and
 `ask`; a valid chief is required and a rejected call does not mutate state.

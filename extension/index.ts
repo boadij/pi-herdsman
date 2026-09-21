@@ -273,19 +273,6 @@ function formatMessageLimit(bytes: number): string {
 }
 const AGENT_OPERATIONAL_DESCRIPTION = `Coordinate managed agents.
 
-Ordinary Leads may use the peer tool to list current ordinary live Leads and
-send durable follow-up messages to an exact full Pi session ID. Peer reachability
-comes from the global peer record and its exact live process-lock claim, not a
-caller-local Herdr inventory; list metadata is presentation-only. Peer messages
-are coordination data, not assignments; do not target display labels or
-managed agents. Publication makes a best-effort final reread of the captured
-sender and target generations immediately before writing; presentation-only
-enrichment does not invalidate a message, and an observed replacement
-process-lock claim rejects it. The reread and inbox write use separate process
-locks, so a replacement can still race after the reread. A queued peer message
-survives sender shutdown and remains queued while its receiver is Chief. The
-peer tool is unavailable in Chief mode.
-
 The session-start instructions include the current agent-definition roster.
 Use list for live agent state, ownership, or a refreshed definition roster
 after configuration changes.
@@ -10022,7 +10009,7 @@ export default function (pi: ExtensionAPI): void {
         name: "peer",
         label: "peer",
         description:
-          "Lead-only peer coordination. Use list for current ordinary live Leads, then message an exact full lead session ID for meaningful reports or requests. Peer messages are durable follow-ups and accept the same canonical file attachments as other coordination messages. Do not target display labels or managed agents.",
+          "Other ordinary Lead sessions (peers), not managed agents. Use list for peers, other Leads, or other Lead sessions. list identifies this Lead as self and returns other live Leads as peers; message sends to one peer's exact lead ID and may include files.",
         executionMode: "sequential",
         parameters: peerParameters,
         execute: async (
@@ -10037,28 +10024,20 @@ export default function (pi: ExtensionAPI): void {
           if (!peerValidator.Check(params))
             throw invalidRequestInput("peer", "Invalid peer action");
           if (params.action === "list") {
-            const peers = [];
-            for (const record of listPeerLeadRecords(peerRuntime())) {
-              if (record.piSessionId === ctx.sessionManager.getSessionId())
-                continue;
-              const live = await livePeerLead(ctx, record.piSessionId);
-              if (!live) continue;
-              peers.push({
-                lead: live.piSessionId,
-                session_id: live.piSessionId,
-                name: live.name ?? `lead-${live.piSessionId.slice(0, 8)}`,
-                cwd: live.cwd ?? "",
-                repo: live.repo ?? "",
-                branch: live.branch ?? "",
-                workspace_label: live.workspaceLabel ?? live.workspaceId,
-                pane_id: live.paneId,
-                tab_id: live.tabId,
-                workspace_id: live.workspaceId,
-              });
-            }
+            const self = ctx.sessionManager.getSessionId();
+            const peers = listPeerLeadRecords(peerRuntime())
+              .filter((record) => record.piSessionId !== self)
+              .map((record) => ({
+                lead: record.piSessionId,
+                name: record.name ?? `lead-${record.piSessionId.slice(0, 8)}`,
+                cwd: record.cwd ?? "",
+                repo: record.repo ?? "",
+                branch: record.branch ?? "",
+                workspace_label: record.workspaceLabel ?? record.workspaceId,
+              }));
             return {
-              content: [{ type: "text", text: JSON.stringify({ peers }) }],
-              details: { ok: true, action: "list", peers },
+              content: [{ type: "text", text: JSON.stringify({ self, peers }) }],
+              details: { ok: true, action: "list", self, peers },
             };
           }
           const sender = await livePeerLead(

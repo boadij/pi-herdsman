@@ -2066,12 +2066,21 @@ function expandedResultLines(
   if (action === "list" && (tool === "staff" || tool === "peer")) {
     if (tool === "peer") {
       const peers = Array.isArray(details.peers) ? details.peers : [];
+      const self = value(details.self) || "unknown";
       lines.push(
         "",
-        `peer ${peers.length} leads`,
+        `self ${self}`,
+        `peers ${peers.length}`,
         ...peers.flatMap((peer: any) =>
           peer && typeof peer === "object"
-            ? [`  ${value(peer.lead) || value(peer.session_id) || "lead"}`]
+            ? (() => {
+                const lead = value(peer.lead) || "lead";
+                const name = value(peer.name) || lead;
+                const branch = value(peer.branch);
+                return [
+                  `  ${name} · lead: ${lead}${branch ? ` · branch: ${branch}` : ""}`,
+                ];
+              })()
             : [],
         ),
       );
@@ -2282,7 +2291,11 @@ export function renderCoordinationResult(
   if (tool === "peer" && action === "list") {
     const peers = Array.isArray(details.peers) ? details.peers : [];
     return new WidthSafeText(
-      humanText(theme, "toolTitle", `peer ${peers.length} leads`),
+      humanText(
+        theme,
+        "toolTitle",
+        `peer · ${peers.length} peer${peers.length === 1 ? "" : "s"}`,
+      ),
       0,
       0,
     );

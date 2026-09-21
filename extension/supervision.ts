@@ -757,7 +757,7 @@ function deliveredMessageContent(record: CoordinationMessageRecord): string {
     record.kind === "chief_message" || record.kind === "chief_reply"
       ? `From chief ${record.fromSessionId} to lead ${record.leadSessionId}: `
       : record.kind === "peer_message"
-        ? `From peer ${record.fromSessionId} to lead ${record.toSessionId}: `
+        ? `Peer message from ${record.fromSessionId}: `
         : `From lead ${record.leadSessionId} to chief ${record.toSessionId}: `;
   return Buffer.from(`${prefix}${record.text}`, "utf8")
     .subarray(0, COORDINATION_MESSAGE_MAX_BYTES)
