@@ -2526,10 +2526,8 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     assert.equal(readFileSync(expected, "utf8"), text);
     assertPosixMode(expected, 0o600);
     assertPosixMode(dirname(expected), 0o700);
-    assert.match(
-      result.content,
-      new RegExp(`^Result ref: ${result.resultRef}`),
-    );
+    assert.equal(result.content, text);
+    assert.equal(result.content.includes(result.resultRef!), false);
     assert.equal(result.content.includes(herdsmanDataRoot()), false);
     const retry = truncateModelText(text, {
       ...options,
@@ -2567,7 +2565,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     assert.equal(first.truncated, true);
     assert.ok(Buffer.byteLength(first.content) <= 50 * 1024);
     assert.ok(first.content.split("\n").length <= 2000);
-    assert.match(first.content, new RegExp(`Result ref: ${first.resultRef}`));
+    assert.equal(first.content.includes(first.resultRef!), false);
   }
 
   {
@@ -2580,7 +2578,10 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     });
     assert.equal(result.resultRef, undefined);
     assert.equal(result.persistenceError, "Result file could not be saved.");
-    assert.match(result.content, /Result file could not be saved/);
+    assert.equal(
+      result.content,
+      "Result file could not be saved.\n\nprivate result",
+    );
   }
 });
 
@@ -2706,7 +2707,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const expanded = renderCompletionMessage(
       {
         content:
-          "Agent result · agent=agent · definition=reviewer · request=req · status=completed\n\nResult ref: result:550e8400-e29b-41d4-a716-446655440000\n\nOutput truncated after 2000 lines.",
+          "Agent result · agent=agent · result=2 · definition=reviewer · session=session-id · status=completed\n\nOutput truncated after 2000 lines.",
         details: {
           requestId: "req",
           agentLabel: "agent",
@@ -2715,6 +2716,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
           elapsedMs: 1_000,
           contextUsage: { tokens: 42, contextWindow: 100, percent: 42 },
           fullOutputPath: "/tmp/full-output",
+          resultIndex: 2,
           resultRef: "result:550e8400-e29b-41d4-a716-446655440000",
           truncated: true,
         },
@@ -2731,9 +2733,10 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     assert.match(expandedText, /elapsed: 1s/);
     assert.match(expandedText, /context: 42%/);
     assert.match(expandedText, /full output: \/tmp\/full-output/);
+    assert.match(expandedText, /result: agent #2/);
     assert.match(
       expandedText,
-      /result ref: result:550e8400-e29b-41d4-a716-446655440000/,
+      /canonical result: result:550e8400-e29b-41d4-a716-446655440000/,
     );
     assert.match(expandedText, /Output truncated after 2000 lines/);
     assert.equal(
@@ -2835,8 +2838,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     ]) {
       const rendered = renderCompletionMessage(
         {
-          content:
-            "Result ref: result:550e8400-e29b-41d4-a716-446655440000\n\ncompleted",
+          content: "completed",
           details: {
             requestId: "req",
             agentLabel: "reviewer:auth-review",

@@ -452,7 +452,7 @@ test("missing result ref returns the actionable result-ref error", () => {
         "Task",
       ),
     {
-      message: `Unknown result ref: ${input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
+      message: `Unknown result ref: ${input}. Canonical result references are opaque; use only exact references already supplied as file evidence.`,
     },
   );
 });
@@ -478,7 +478,7 @@ test("missing result ref during the second read returns the actionable result-re
           "Task",
         ),
       {
-        message: `Unknown result ref: ${input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
+        message: `Unknown result ref: ${input}. Canonical result references are opaque; use only exact references already supplied as file evidence.`,
       },
     );
   } finally {

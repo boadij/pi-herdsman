@@ -27,6 +27,10 @@ and the selected definition does not already provide that skill. Ordinary
 relevant source, documentation, configuration, and evidence files remain
 attachable.
 
+`files` remains a homogeneous `string[]` for ordinary paths and already-known
+canonical result references. Put direct-agent result selectors in the separate
+`results` array; do not put selector objects inside `files`.
+
 Example:
 
 ```json
@@ -34,10 +38,7 @@ Example:
   "action": "delegate",
   "definition": "reviewer",
   "task": "Review the implementation against the approved plan.",
-  "files": [
-    ".pi-herdsman/plan.md",
-    "result:550e8400-e29b-41d4-a716-446655440000"
-  ]
+  "files": [".pi-herdsman/plan.md"]
 }
 ```
 
@@ -216,11 +217,33 @@ definition overrides still apply.
 
 ## Result handoff
 
-Successful agent completion exposes a canonical `resultRef` such as
-`result:550e8400-e29b-41d4-a716-446655440000`.
+A direct-agent completion that has a reusable persisted result exposes a small
+per-agent result index. Pass required direct-agent results through `results`
+using the exact agent label and result index shown by the completion:
 
-Pass the exact result reference directly through `files` rather than copying a
-large result or reconstructing its physical path:
+```json
+{
+  "action": "delegate",
+  "definition": "reviewer",
+  "task": "Compare both implementation passes.",
+  "results": [
+    { "agent": "global-peer-fix", "index": 1 },
+    { "agent": "global-peer-fix", "index": 2 }
+  ]
+}
+```
+
+`results` resolves only against matching completion entries on the caller's
+current Pi branch. The index is scoped to the logical agent label: the first
+reusable completion from `global-peer-fix` is index 1, a continued generation
+is index 2, and both remain independently attachable. The resolved result is
+converted internally to its canonical `result:<request-id>` reference before
+entering the ordinary file pipeline.
+
+`files` remains the separate channel for ordinary files and already-known
+canonical result references. Pass an exact canonical reference through
+`files` when it was supplied as file evidence, especially for a transitive
+handoff:
 
 ```json
 {
@@ -231,11 +254,12 @@ large result or reconstructing its physical path:
 }
 ```
 
-`files` accepts ordinary readable regular local file paths and result
-references. A result reference resolves internally to the normal private
-result file under Pi Herdsman's durable data directory; it is still validated,
-canonicalized, and deduplicated like any other file. Copy the exact reference
-returned by completion. Do not guess or reconstruct the underlying path.
+`files` accepts ordinary readable regular local file paths and canonical
+`result:<request-id>` references. A canonical result reference resolves
+internally to the normal private result file under Pi Herdsman's durable data
+directory; it is still validated, canonicalized, and deduplicated like any
+other file. Preserve the exact reference already supplied as evidence. Do not
+guess or reconstruct the underlying path.
 Completion results live under Pi's agent data directory
 (`~/.pi/agent/pi-herdsman/results` by default, respecting Pi's configured agent
 directory) rather than the OS temporary directory, so result handoffs are not
