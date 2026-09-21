@@ -7049,29 +7049,7 @@ export default function (pi: ExtensionAPI): void {
     removePeerPresence();
     const name =
       pi.getSessionName()?.trim() ||
-      ctx.sessionManager.getSessionName()?.trim() ||
-      `lead-${sessionId.slice(0, 8)}`;
-    let provenance: WorkspaceProvenance = { workspaceCwd: ctx.cwd };
-    try {
-      provenance =
-        (await workspacePresentationProvenance(
-          pi,
-          ctx,
-          [workspaceId],
-          new Map([[workspaceId, ctx.cwd]]),
-          ctx.signal,
-        )).get(workspaceId) ?? provenance;
-    } catch {
-      // Presentation provenance is best effort; presence authority is the lock.
-    }
-    if (!isCurrent()) return;
-    const workspaceLabel =
-      provenance.repoName && provenance.branch
-        ? `${provenance.repoName}/${provenance.branch}`
-        : provenance.workspaceLabel ??
-          (provenance.workspaceCwd
-            ? basename(provenance.workspaceCwd)
-            : workspaceId);
+      ctx.sessionManager.getSessionName()?.trim();
     let lease: ReturnType<typeof acquireProcessLock> | undefined;
     try {
       const runtime = peerRuntime();
@@ -7089,11 +7067,8 @@ export default function (pi: ExtensionAPI): void {
         paneId,
         tabId,
         workspaceId,
-        name,
-        cwd: provenance.workspaceCwd ?? ctx.cwd,
-        ...(provenance.repoName ? { repo: provenance.repoName } : {}),
-        ...(provenance.branch ? { branch: provenance.branch } : {}),
-        workspaceLabel,
+        ...(name ? { name } : {}),
+        cwd: ctx.cwd,
         claim: lease.claim,
         updatedAt: Date.now(),
       };
@@ -7104,6 +7079,49 @@ export default function (pi: ExtensionAPI): void {
       writePeerLeadRecord(runtime, record);
       peerPresenceLease = lease;
       peerPresenceRecord = record;
+      void (async () => {
+        let provenance: WorkspaceProvenance;
+        try {
+          provenance =
+            (
+              await workspacePresentationProvenance(
+                pi,
+                ctx,
+                [workspaceId],
+                new Map([[workspaceId, ctx.cwd]]),
+                ctx.signal,
+              )
+            ).get(workspaceId) ?? {};
+        } catch {
+          return;
+        }
+        if (!isCurrent() || peerPresenceRecord !== record) return;
+        const workspaceLabel =
+          provenance.repoName && provenance.branch
+            ? `${provenance.repoName}/${provenance.branch}`
+            : provenance.workspaceLabel ??
+              (provenance.workspaceCwd
+                ? basename(provenance.workspaceCwd)
+                : workspaceId);
+        const enriched: PeerLeadRecord = {
+          ...record,
+          ...(provenance.repoName ? { repo: provenance.repoName } : {}),
+          ...(provenance.branch ? { branch: provenance.branch } : {}),
+          workspaceLabel,
+          updatedAt: Date.now(),
+        };
+        if (!isCurrent() || peerPresenceRecord !== record) return;
+        try {
+          const current = readPeerLeadRecord(peerRuntime(), sessionId);
+          if (!current || !samePeerLeadRecord(current, record)) return;
+          if (!isCurrent() || peerPresenceRecord !== record) return;
+          writePeerLeadRecord(peerRuntime(), enriched);
+          peerPresenceRecord = enriched;
+        } catch (error) {
+          if (isCurrent() && peerPresenceRecord === record)
+            appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        }
+      })();
     } catch (error) {
       try {
         lease?.release();

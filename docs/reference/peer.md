@@ -12,9 +12,13 @@ An ordinary Lead publishes one private `PeerLeadRecord` under the
 user-global `runtime/peers-v1/peers/` directory beneath the Herdsman data root.
 This peer runtime is independent of the socket-scoped supervision runtime, so
 ordinary Leads attached to different Herdr sockets share peer discovery and
-transport. The record contains the exact Pi session, Herdr pane, tab,
-workspace, presentation name, cwd, repository, branch, workspace label, and the
-`{ pid, id }` claim for that Lead's per-session process lock. The record is
+transport. The record publishes the exact Pi session, Herdr pane, tab,
+workspace, and current Lead cwd with the `{ pid, id }` claim for that Lead's
+per-session process lock immediately. The current session name, repository,
+branch, and workspace label are optional presentation metadata; repository,
+branch, and workspace label are enriched asynchronously without delaying Lead
+startup or Chief leave. Peer cwd is always the Lead's current `ctx.cwd`, never
+a Herdr provenance or source-checkout path. The record is
 valid only while the record's claim is the exact live process-lock generation.
 Missing, malformed, duplicate, replaced, or dead-lock evidence is ignored.
 Chief and suspended Lead sessions do not publish peer presence. Enumeration
@@ -37,8 +41,8 @@ The Lead-only `peer` tool has two actions:
 ```
 
 returns current ordinary live Leads. Each result's `lead` is the exact full Pi
-session ID to use for messaging. Results include the presentation name, cwd,
-repository, branch, workspace label, and `pane_id`, `tab_id`, and
+session ID to use for messaging. Results may include the presentation name,
+cwd, repository, branch, workspace label, and `pane_id`, `tab_id`, and
 `workspace_id` provenance. These fields are presentation metadata only; a
 display label is not a target.
 

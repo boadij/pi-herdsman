@@ -150,6 +150,106 @@ test("ordinary Lead peer presence disappears in Chief mode and on shutdown", asy
   }
 });
 
+test("Chief leave restores minimal peer presence before provenance resolves", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `peer-chief-leave-provenance-${randomUUID()}.sock`,
+  );
+  const sessionId = randomUUID();
+  const runtime = peerRuntime();
+  const startupProvenance = testGate<void>();
+  const leaveProvenance = testGate<void>();
+  const releaseProvenance = testGate<void>();
+  let provenanceCalls = 0;
+  const entries: unknown[] = [];
+  const pi = fakeChiefPi({
+    entries,
+    exec: async (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get") {
+        const call = ++provenanceCalls;
+        if (call === 1) startupProvenance.resolve();
+        if (call === 2) leaveProvenance.resolve();
+        await releaseProvenance.promise;
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                label:
+                  call === 1
+                    ? "stale-generation"
+                    : "fresh-generation",
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  const context = fakeContext(entries) as any;
+  context.ui.notify = () => undefined;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  registerExtension!(pi.pi as never);
+  const sessionStart = pi.events.get("session_start")![0];
+  const sessionShutdown = pi.events.get("session_shutdown")![0];
+  try {
+    const starting = sessionStart(undefined, context);
+    await startupProvenance.promise;
+    await starting;
+
+    const initial = readPeerLeadRecord(runtime, sessionId);
+    assert.ok(initial);
+    assert.equal(initial.repo, undefined);
+    assert.equal(initial.branch, undefined);
+    assert.equal(initial.workspaceLabel, undefined);
+
+    await pi.commandOptions.get("chief").handler("", context);
+    const leaving = pi.commandOptions.get("chief").handler("leave", context);
+    await leaveProvenance.promise;
+    await leaving;
+
+    const restored = readPeerLeadRecord(runtime, sessionId);
+    assert.ok(restored);
+    assert.notEqual(restored.claim.id, initial.claim.id);
+    assert.equal(restored.cwd, context.cwd);
+    assert.equal(restored.repo, undefined);
+    assert.equal(restored.branch, undefined);
+    assert.equal(restored.workspaceLabel, undefined);
+
+    releaseProvenance.resolve();
+    await waitForTestCondition(
+      () => {
+        const current = readPeerLeadRecord(runtime, sessionId);
+        return (
+          current?.claim.id === restored.claim.id &&
+          current.workspaceLabel === "fresh-generation"
+        );
+      },
+      "stale Chief-generation provenance replaced the restored peer presence",
+    );
+    assert.equal(
+      readPeerLeadRecord(runtime, sessionId)?.workspaceLabel,
+      "fresh-generation",
+    );
+  } finally {
+    releaseProvenance.resolve();
+    await sessionShutdown();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("queued peer traffic stays durable through Chief mode and drains after leave", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `peer-chief-backpressure-${randomUUID()}.sock`);

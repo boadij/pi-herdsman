@@ -592,6 +592,165 @@ test("peer list and message use global peer presence, not caller inventory", asy
   }
 });
 
+test("Lead startup publishes minimal peer presence before provenance resolves", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `peer-startup-provenance-${randomUUID()}.sock`,
+  );
+  const sessionId = randomUUID();
+  const runtime = peerRuntime();
+  const provenanceStarted = testGate<void>();
+  const releaseProvenance = testGate<void>();
+  const pi = fakePi({
+    exec: async (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get") {
+        provenanceStarted.resolve();
+        await releaseProvenance.promise;
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.cwd = "/active/lead-checkout";
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  const sessionStart = pi.events.get("session_start")![0];
+  const sessionShutdown = pi.events.get("session_shutdown")![0];
+  try {
+    const starting = sessionStart(undefined, context);
+    await provenanceStarted.promise;
+
+    const record = readPeerLeadRecord(runtime, sessionId);
+    assert.ok(record);
+    assert.deepEqual(Object.keys(record).sort(), [
+      "claim",
+      "cwd",
+      "paneId",
+      "piSessionId",
+      "tabId",
+      "updatedAt",
+      "version",
+      "workspaceId",
+    ]);
+    assert.equal(record.cwd, context.cwd);
+    assert.equal(record.repo, undefined);
+    assert.equal(record.branch, undefined);
+    assert.equal(record.workspaceLabel, undefined);
+
+    await starting;
+    releaseProvenance.resolve();
+  } finally {
+    releaseProvenance.resolve();
+    await sessionShutdown();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("peer provenance enrichment never replaces the Lead cwd", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `peer-linked-worktree-${randomUUID()}.sock`,
+  );
+  const sessionId = randomUUID();
+  const runtime = peerRuntime();
+  const worktreeStarted = testGate<void>();
+  const releaseWorktree = testGate<void>();
+  const pi = fakePi({
+    exec: async (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                label: "linked-workspace",
+                worktree: {
+                  checkout_path: "/source/checkout",
+                  repo_name: "pi-herdsman",
+                },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "worktree" && args[1] === "list") {
+        worktreeStarted.resolve();
+        await releaseWorktree.promise;
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: { source_checkout_path: "/source/checkout" },
+              worktrees: [
+                { open_workspace_id: WORKSPACE, branch: "feature/linked" },
+              ],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.cwd = "/active/linked-checkout";
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  const sessionStart = pi.events.get("session_start")![0];
+  const sessionShutdown = pi.events.get("session_shutdown")![0];
+  try {
+    const starting = sessionStart(undefined, context);
+    await worktreeStarted.promise;
+    const minimal = readPeerLeadRecord(runtime, sessionId);
+    assert.equal(minimal?.cwd, context.cwd);
+    assert.equal(minimal?.repo, undefined);
+
+    await starting;
+    releaseWorktree.resolve();
+    await waitForTestCondition(
+      () => {
+        const record = readPeerLeadRecord(runtime, sessionId);
+        return (
+          record?.cwd === context.cwd &&
+          record.repo === "pi-herdsman" &&
+          record.branch === "feature/linked" &&
+          record.workspaceLabel === "pi-herdsman/feature/linked"
+        );
+      },
+      "linked-worktree provenance did not enrich peer presence",
+    );
+    const enriched = readPeerLeadRecord(runtime, sessionId);
+    assert.equal(enriched?.cwd, context.cwd);
+    assert.equal(enriched?.repo, "pi-herdsman");
+    assert.equal(enriched?.branch, "feature/linked");
+    assert.equal(enriched?.workspaceLabel, "pi-herdsman/feature/linked");
+  } finally {
+    releaseWorktree.resolve();
+    await sessionShutdown();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
 test("peer publication rejects sender and target generation replacement during attachment preparation", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-a-pane";
