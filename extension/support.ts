@@ -91,6 +91,7 @@ realFs.writeFileSync(
 );
 const {
   buildContextEntries: nativeBuildContextEntries,
+  buildSessionProjection: nativeBuildSessionProjection,
   CURRENT_SESSION_VERSION: nativeCurrentSessionVersion,
   parseFrontmatter: nativeParseFrontmatter,
   parseSessionEntries: nativeParseSessionEntries,
@@ -223,6 +224,7 @@ mock.module("@earendil-works/pi-coding-agent", {
     truncateLine: (text: string) => ({ text, wasTruncated: false }),
     CONFIG_DIR_NAME: ".pi",
     buildContextEntries: nativeBuildContextEntries,
+    buildSessionProjection: nativeBuildSessionProjection,
     CURRENT_SESSION_VERSION: nativeCurrentSessionVersion,
     getAgentDir: () => PI_AGENT_ROOT,
     parseFrontmatter: nativeParseFrontmatter,

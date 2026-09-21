@@ -3724,6 +3724,49 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
     );
 
     session.contextEntries = [
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "original user evidence" }],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "abandoned assistant evidence" }],
+        },
+      },
+      {
+        type: "context_edit",
+        targetId: "entry-0",
+        replacement: {
+          content: [{ type: "text", text: "replacement user evidence" }],
+        },
+      },
+      {
+        type: "context_edit",
+        targetId: "entry-1",
+        replacement: null,
+      },
+    ];
+    writeSession();
+    const edited = await pi.tools[0]!.execute(
+      "id",
+      { action: "transcript", agent: label },
+      undefined,
+      undefined,
+      fakeContext(pi.entries),
+    );
+    assert.match(edited.details.transcript, /replacement user evidence/);
+    assert.doesNotMatch(edited.details.transcript, /original user evidence/);
+    assert.doesNotMatch(
+      edited.details.transcript,
+      /abandoned assistant evidence/,
+    );
+
+    session.contextEntries = [
       ...session.contextEntries,
       {
         type: "message",

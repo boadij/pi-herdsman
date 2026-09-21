@@ -2060,7 +2060,10 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       { message: { role: "assistant", content: "ALPHA" } },
       childResultContext,
     );
-    childAgent.events.get("agent_settled")![0](undefined, childResultContext);
+    await childAgent.events.get("agent_settled")![0](
+      undefined,
+      childResultContext,
+    );
     assert.equal(readResult(childMailbox, childRequestId)?.text, "ALPHA");
     assert.equal(
       readAgentState(childMailbox)?.completedRequestId,
@@ -2093,7 +2096,10 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       { message: { role: "assistant", content: "Parent completed." } },
       parentResultContext,
     );
-    parentAgent.events.get("agent_settled")![0](undefined, parentResultContext);
+    await parentAgent.events.get("agent_settled")![0](
+      undefined,
+      parentResultContext,
+    );
     assert.equal(
       readResult(parentMailbox, parentRequestId)?.text,
       "Parent completed.",
