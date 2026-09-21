@@ -10033,7 +10033,7 @@ export default function (pi: ExtensionAPI): void {
                 cwd: record.cwd ?? "",
                 repo: record.repo ?? "",
                 branch: record.branch ?? "",
-                workspace_label: record.workspaceLabel ?? record.workspaceId,
+                workspace_label: record.workspaceLabel ?? "",
               }));
             return {
               content: [{ type: "text", text: JSON.stringify({ self, peers }) }],

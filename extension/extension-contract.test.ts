@@ -501,6 +501,7 @@ test("peer list and message use global peer presence, not caller inventory", asy
   );
   const senderId = `lead-a-${randomUUID()}`;
   const targetId = `lead-b-${randomUUID()}`;
+  const unenrichedTargetId = `lead-c-${randomUUID()}`;
   const runtime = peerRuntime();
   const claim = (sessionId: string, paneId: string, tabId: string) => {
     const lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
@@ -528,7 +529,12 @@ test("peer list and message use global peer presence, not caller inventory", asy
     return { lease, record };
   };
   const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
-  let target = claim(targetId, "lead-b-pane", "lead-b-tab");
+  const target = claim(targetId, "lead-b-pane", "lead-b-tab");
+  const unenrichedTarget = claim(
+    unenrichedTargetId,
+    "lead-c-pane",
+    "lead-c-tab",
+  );
   const pi = fakePi({
     exec: (_command, args) =>
       isAgentList(args) || isApiSnapshot(args)
@@ -558,20 +564,38 @@ test("peer list and message use global peer presence, not caller inventory", asy
       undefined,
       context,
     );
-    const payload = JSON.parse(listed.content[0].text);
-    assert.deepEqual(payload, {
-      self: senderId,
-      peers: [
-        {
-          lead: targetId,
-          name: "Target Lead",
-          cwd: "/workspaces/target",
-          repo: "pi-herdsman",
-          branch: "feature/peer",
-          workspace_label: "pi-herdsman/feature/peer",
-        },
-      ],
-    });
+    const modelJson = listed.content[0].text;
+    const payload = JSON.parse(modelJson);
+    assert.deepEqual(
+      {
+        self: payload.self,
+        peers: [...payload.peers].sort((a, b) =>
+          a.lead.localeCompare(b.lead),
+        ),
+      },
+      {
+        self: senderId,
+        peers: [
+          {
+            lead: targetId,
+            name: "Target Lead",
+            cwd: "/workspaces/target",
+            repo: "pi-herdsman",
+            branch: "feature/peer",
+            workspace_label: "pi-herdsman/feature/peer",
+          },
+          {
+            lead: unenrichedTargetId,
+            name: `lead-${unenrichedTargetId.slice(0, 8)}`,
+            cwd: "",
+            repo: "",
+            branch: "",
+            workspace_label: "",
+          },
+        ].sort((a, b) => a.lead.localeCompare(b.lead)),
+      },
+    );
+    assert.equal(modelJson.includes(WORKSPACE), false);
     assert.equal(
       payload.peers.some((peer: { lead: string }) => peer.lead === senderId),
       false,
@@ -589,6 +613,7 @@ test("peer list and message use global peer presence, not caller inventory", asy
     pi.events.get("session_shutdown")?.[0]();
     sender.lease.release();
     target.lease.release();
+    unenrichedTarget.lease.release();
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_SOCKET_PATH;
