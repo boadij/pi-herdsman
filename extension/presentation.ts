@@ -75,6 +75,7 @@ export interface CompletionMessageDetails {
     percent: number | null;
   };
   truncated: boolean;
+  resultIndex?: number;
   resultRef?: string;
   fullOutputPath?: string;
   resultPersistenceError?: string;
@@ -2361,9 +2362,10 @@ export function truncateModelText(
     : undefined;
   const ref = path ? resultRef(options.requestId ?? options.key) : undefined;
   const persistenceError = completion && !path;
-  const displayText = completion
-    ? `${ref ? `Result ref: ${ref}` : "Result file could not be saved."}\n\n${text}`
-    : text;
+  const displayText =
+    completion && persistenceError
+      ? `Result file could not be saved.\n\n${text}`
+      : text;
   const truncate = options.keep === "tail" ? truncateTail : truncateHead;
   let result = truncate(displayText, {
     maxBytes: DEFAULT_MAX_BYTES,
@@ -2470,7 +2472,6 @@ export function renderCompletionMessage(
   const heading = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${theme.bold(label)}${failed ? " failed" : " completed"}${definition ? humanText(theme, "muted", definition) : ""}`;
   const humanContent = (message.content ?? "")
     .replace(/^Agent result · [^\n]*\n\n/u, "")
-    .replace(/^Result ref: [^\n]*\n\n/u, "")
     .replace(/^Result file could not be saved\.\n\n/u, "");
   const content = new Container();
   if (options.expanded) {
@@ -2485,7 +2486,10 @@ export function renderCompletionMessage(
         ? [`context: ${Math.round(d.contextUsage.percent)}%`]
         : []),
       ...(d?.fullOutputPath ? [`full output: ${d.fullOutputPath}`] : []),
-      ...(d?.resultRef ? [`result ref: ${d.resultRef}`] : []),
+      ...(d?.resultIndex !== undefined
+        ? [`result: ${d.agentLabel} #${d.resultIndex}`]
+        : []),
+      ...(d?.resultRef ? [`canonical result: ${d.resultRef}`] : []),
       ...(d?.resultPersistenceError
         ? [
             humanText(

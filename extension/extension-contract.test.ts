@@ -186,6 +186,54 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   const agentTool = lead.tools.find((tool) => tool.name === "agent");
   const chiefTool = lead.tools.find((tool) => tool.name === "chief");
   assert.ok(agentTool);
+  const resultSelector = { agent: "implementation", index: 1 };
+  for (const request of [
+    {
+      action: "delegate",
+      definition: "agent",
+      task: "review",
+      results: [resultSelector],
+    },
+    {
+      action: "continue",
+      session: "/tmp/session.jsonl",
+      task: "continue",
+      results: [resultSelector],
+    },
+    {
+      action: "steer",
+      agent: "implementation",
+      message: "continue",
+      results: [resultSelector],
+    },
+    {
+      action: "interrupt",
+      agent: "implementation",
+      message: "stop",
+      results: [resultSelector],
+    },
+    {
+      action: "reply",
+      agent: "implementation",
+      message: "answer",
+      results: [resultSelector],
+    },
+  ])
+    assert.equal(
+      Value.Check(agentTool.parameters, request),
+      true,
+      request.action,
+    );
+  assert.equal(
+    Value.Check(agentTool.parameters, {
+      action: "delegate",
+      definition: "agent",
+      task: "review",
+      files: [{ agent: "implementation", index: 1 }],
+    }),
+    false,
+    "files remains a homogeneous string array",
+  );
   const agentDescription = agentTool.description.replaceAll(/\s+/g, " ");
   assert.match(
     agentDescription,
@@ -200,6 +248,11 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     agentDescription,
     /After starting an agent assignment or receiving an agent result or attention event, reassess the remaining work/,
   );
+  assert.match(
+    agentDescription,
+    /fresh delegation; pass its result\/handoff and relevant files instead\./,
+  );
+  assert.doesNotMatch(agentDescription, /resultRef\/handoff/);
   assert.match(
     agentDescription,
     /another concrete, necessary objective is independent of active agent assignments/,
@@ -263,6 +316,22 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.equal(typeof agentTool?.renderResult, "function");
   assert.equal(typeof chiefTool?.renderCall, "function");
   assert.equal(typeof chiefTool?.renderResult, "function");
+  assert.equal(
+    Value.Check(chiefTool.parameters, {
+      action: "message",
+      message: "progress",
+      results: [resultSelector],
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(chiefTool.parameters, {
+      action: "ask",
+      question: "decision needed",
+      results: [resultSelector],
+    }),
+    true,
+  );
   assert.deepEqual(
     lead.messageRenderers.map(({ customType }) => customType).sort(),
     [
@@ -340,6 +409,25 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.equal(tool.label, "staff");
   assert.equal(typeof tool.renderCall, "function");
   assert.equal(typeof tool.renderResult, "function");
+  assert.equal(
+    Value.Check(tool.parameters, {
+      action: "message",
+      lead: LEAD_SESSION_ID,
+      message: "Please continue",
+      results: [{ agent: "implementation", index: 1 }],
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(tool.parameters, {
+      action: "reply",
+      lead: LEAD_SESSION_ID,
+      askId: "ask-1",
+      message: "Here is the decision",
+      results: [{ agent: "implementation", index: 1 }],
+    }),
+    true,
+  );
   const renderedStaffCall = tool.renderCall(
     { action: "message", lead: "lead-bbbbbbbbb", message: "Please continue" },
     {

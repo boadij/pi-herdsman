@@ -146,7 +146,12 @@ extra fields. Both actions require a currently valid chief; descendants use
 Use `message` for meaningful progress, reports, results, warnings, and
 completion. It queues one bounded `chief_message` and does not change lead
 coordination state.
-`message` accepts an optional `files` array. Files use the same submission-time
+`message` accepts optional `files` and `results` arrays. `results` selects
+reusable direct-agent results by the exact agent label and result index shown by
+a completion, resolved against the calling Pi session's current branch. Chief
+normally owns no direct agents, so a selector generally has no matching
+completion; canonical result references already supplied as file evidence can
+still be forwarded through `files`. Files use the same submission-time
 canonicalization, UTF-8 embedding, reference fallback, and configured byte
 limits as agent messages.
 
@@ -156,11 +161,13 @@ limits as agent messages.
 {
   "action": "ask",
   "question": "Should the release include the endpoint?",
-  "files": ["/tmp/evidence.md"]
+  "files": ["/tmp/evidence.md"],
+  "results": [{ "agent": "implementation", "index": 1 }]
 }
 ```
 
-Use `ask` only when a chief decision is genuinely required. One pending ask is
+`ask` accepts optional `files` and `results` arrays with the same semantics as
+`message`. Use `ask` only when a chief decision is genuinely required. One pending ask is
 allowed per lead. The call durably records its ask ID and clean question, then
 queues the prepared text. The prepared text, including attachment rendering, is
 persisted before publication so reconciliation can deliver it after a failed
@@ -237,13 +244,17 @@ not send a message or change Lead state.
   "action": "message",
   "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>",
   "message": "Run checks.",
-  "files": ["/tmp/checklist.md"]
+  "files": ["/tmp/checklist.md"],
+  "results": [{ "agent": "implementation", "index": 1 }]
 }
 ```
 
 The exact lead must currently expose `message`. Atomic creation of one bounded
 `chief_message` record queues a follow-up and does not wait for completion.
-`staff message` accepts optional `files`.
+`staff message` accepts optional `files` and `results`. Result selectors use the
+same exact label/index and current-branch rules as chief actions; Chief does
+not normally own direct agents, so canonical result references supplied as
+evidence remain the usual cross-session forwarding form through `files`.
 
 ### `reply`
 
@@ -253,13 +264,14 @@ The exact lead must currently expose `message`. Atomic creation of one bounded
   "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>",
   "askId": "<exact pending ask ID>",
   "message": "Proceed.",
-  "files": ["/tmp/decision.md"]
+  "files": ["/tmp/decision.md"],
+  "results": [{ "agent": "implementation", "index": 1 }]
 }
 ```
 
 The exact lead, unchanged pending ask ID, current lead identity, and chief
 lease must validate. The pending ask is cleared only after accepted delivery.
-`staff reply` accepts optional `files`. Lead activity returns asynchronously;
+`staff reply` accepts optional `files` and `results`. Lead activity returns asynchronously;
 continue only independent chief work, otherwise end the turn and do not poll.
 
 ## UI and failure rules

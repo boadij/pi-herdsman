@@ -19,15 +19,19 @@ this infrastructure capability.
 ```json
 {
   "question": "Should I use option A or option B?",
-  "files": [".pi-herdsman/options.md", "diagram.png"]
+  "files": [".pi-herdsman/options.md", "diagram.png"],
+  "results": [{ "agent": "researcher", "index": 1 }]
 }
 ```
 
 `question` must contain non-whitespace text.
 `files` supplies supporting evidence using the same rules as `agent`: complete
 strict UTF-8 text may be embedded, while other files are canonical local
-references and are not copied or snapshotted. Relative paths use the agent's
-working directory. This does not weaken the sole-final-tool-call rule.
+references and are not copied or snapshotted. `results` optionally selects
+reusable direct-agent results by the exact agent label and result index shown by
+the completion; it resolves against the calling agent's current Pi branch.
+Relative paths use the agent's working directory. This does not weaken the
+sole-final-tool-call rule.
 
 ## Turn rule
 

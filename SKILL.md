@@ -85,7 +85,7 @@ If several tightly coupled phases are already known, put them in one bounded
 assignment when practical. If genuinely new follow-up work emerges after
 completion and previous context is valuable, continue the exact returned session
 only when the completion is not marked retired. A retired session requires a
-fresh delegation; pass its resultRef/handoff and relevant files instead.
+fresh delegation; pass this result/handoff plus the relevant files instead.
 Each active delegated assignment has one executor: that agent. Do not repeat
 its assigned work locally or delegate substantially overlapping work elsewhere.
 
@@ -143,12 +143,15 @@ later dependent assignments when approved scope or decisions change because
 embedded text is snapshotted at submission time while referenced files are not
 copied.
 
-Agent completions may return a resultRef such as result:<request-id>. Pass that
-exact resultRef through files for dependent work; do not reconstruct or guess
-the underlying filesystem path. Prefer passing it or a coordination artifact
-through files instead of copying large results into a task. ask_owner
-may also include files when the owner needs supporting evidence. files does not
-add runtime capability.
+Completed direct agents may expose a numbered reusable result. Pass required
+direct-agent results through `results` using the exact agent label and result
+index shown by the completion.
+
+`files` remains a homogeneous `string[]` for ordinary files and canonical
+`result:<request-id>` references already supplied as file evidence. Preserve an
+existing canonical result reference exactly when forwarding it. Put structured
+direct-agent selectors in `results`, not `files`. `files` does not add runtime
+capability.
 
 Require concise handoffs containing relevant inspected or changed files,
 validation performed, findings or decisions, unresolved risks or blockers,
@@ -201,8 +204,8 @@ message evidence. Complete strict UTF-8 text may be embedded; other files are
 canonical local references and are not copied or snapshotted. Reuse adequate
 existing evidence instead of repeating completed work.
 Do not overlap writers in a worktree or file-ownership boundary. For dependent
-work, copy resultRef values exactly through files rather than reconstructing
-physical result paths or copying large results into assignments.
+work, preserve exact canonical result references through `files` rather than
+reconstructing physical result paths or copying large results into assignments.
 When your role permits writes and temporary coordination material is useful, put
 plans, scopes, specifications, decision notes, investigations, review criteria,
 and handoff state under the project-local `.pi-herdsman/` directory. Reuse and
@@ -278,9 +281,11 @@ escalation.
 
 ## Handoffs
 
-Prefer `files: [result:<request-id>]` for a dependent agent instead of copying
-a large completion into a new task. Copy the exact resultRef returned by the
-completion; do not reconstruct its physical path.
+Use `results: [{ agent, index }]` for reusable persisted results from completed
+direct agents. Use the exact agent label and result index shown by the
+completion. Use `files` for ordinary files and canonical `result:<request-id>`
+references already supplied as file evidence; preserve those references
+exactly and do not reconstruct their physical paths.
 
 A concise handoff should include:
 
@@ -351,6 +356,11 @@ and wait for the reply. Descendants use `ask_owner`, not `chief`.
 
 `chief` is available only to an ordinary lead. Its actions are `message` and
 `ask`; a valid chief is required and a rejected call does not mutate state.
+Chief and staff message/ask/reply actions accept the same optional `results`
+selectors as agent messages. Resolve them by exact direct-agent label and
+result index on the caller's current branch; Chief normally owns no direct
+agents, so preserve already-supplied canonical result references through
+`files` when forwarding evidence.
 Questions are limited to 1,024 characters and 1,024 UTF-8 bytes. Channel
 message records are bounded to 8 KiB, so multibyte content can hit the byte limit
 first. Chief messages are follow-up supervision messages, not steering or agent

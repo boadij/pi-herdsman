@@ -12,6 +12,7 @@ import type {
   ManagedAgentState,
 } from "./mailbox.ts";
 import { OperationError } from "./errors.ts";
+import { resultPath, resultRef } from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -132,6 +133,159 @@ test("project agent discovery is gated by Pi project trust", async () => {
     for (const name of ["project-only.md", "standalone-global.md", "scout.md"])
       realFs.rmSync(join(PI_AGENTS_DIR, name), { force: true });
     setLeadEnvironment();
+  }
+});
+
+test("structured results attach persisted output and preserve canonical file refs", async () => {
+  setLeadEnvironment();
+  const requestId = randomUUID();
+  const canonical = resultRef(requestId);
+  const resultFile = resultPath(requestId);
+  const resultText = "persisted implementation review";
+  realFs.mkdirSync(resolve(resultFile, ".."), { recursive: true });
+  realFs.writeFileSync(resultFile, resultText, "utf8");
+  const entries: unknown[] = [
+    {
+      customType: "pi-herdsman-agent-result",
+      details: {
+        agentLabel: "implementation",
+        resultIndex: 1,
+        requestId,
+        resultRef: canonical,
+        status: "completed",
+      },
+    },
+  ];
+  const label = `selector-${randomUUID().slice(0, 8)}`;
+  let assignedText = "";
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    (text) => {
+      assignedText = text;
+    },
+  );
+  const pi = fakePi({ entries, exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      {
+        action: "delegate",
+        definition: "agent",
+        label,
+        task: "Review supplied implementation.",
+        files: [canonical],
+        results: [{ agent: "implementation", index: 1 }],
+      },
+      undefined,
+      undefined,
+      fakeContext(entries),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.match(assignedText, new RegExp(`<file name="${canonical}"`));
+    assert.match(assignedText, /persisted implementation review/);
+    assert.equal(
+      assignedText.match(new RegExp(`<file name="${canonical}"`, "g"))?.length,
+      1,
+      "canonical refs supplied through files and results should deduplicate in the existing pipeline",
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(resultFile, { force: true });
+  }
+});
+
+test("structured result selectors resolve only on the active branch", async () => {
+  setLeadEnvironment();
+  const requestId = randomUUID();
+  const resultEntry = {
+    customType: "pi-herdsman-agent-result",
+    details: {
+      agentLabel: "implementation",
+      resultIndex: 2,
+      requestId,
+      resultRef: resultRef(requestId),
+      status: "completed",
+    },
+  };
+  const entries: unknown[] = [resultEntry];
+  const pi = fakePi({ entries });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      {
+        action: "delegate",
+        definition: "agent",
+        task: "must not start",
+        results: [{ agent: "implementation", index: 2 }],
+      },
+      undefined,
+      undefined,
+      fakeContext(entries, []),
+    );
+    assert.equal(result.details.error.category, "target_not_found");
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("conflicting duplicate result mappings fail closed", async () => {
+  setLeadEnvironment();
+  const firstRequestId = randomUUID();
+  const secondRequestId = randomUUID();
+  const entries: unknown[] = [
+    {
+      customType: "pi-herdsman-agent-result",
+      details: {
+        agentLabel: "implementation",
+        resultIndex: 1,
+        requestId: firstRequestId,
+        resultRef: resultRef(firstRequestId),
+        status: "completed",
+      },
+    },
+    {
+      customType: "pi-herdsman-agent-result",
+      details: {
+        agentLabel: "implementation",
+        resultIndex: 1,
+        requestId: secondRequestId,
+        resultRef: resultRef(secondRequestId),
+        status: "completed",
+      },
+    },
+  ];
+  const pi = fakePi({ entries });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      {
+        action: "delegate",
+        definition: "agent",
+        task: "must not guess",
+        results: [{ agent: "implementation", index: 1 }],
+      },
+      undefined,
+      undefined,
+      fakeContext(entries),
+    );
+    assert.equal(result.details.error.category, "target_ambiguous");
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
   }
 });
 

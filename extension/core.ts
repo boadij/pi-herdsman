@@ -39,7 +39,7 @@ type RegularFile = {
 function failUnknownResultRef(input: string, operation: string): never {
   fail(
     "invalid_request",
-    `Unknown result ref: ${input}. Result refs are opaque identifiers; copy the exact Result ref returned by the agent completion.`,
+    `Unknown result ref: ${input}. Canonical result references are opaque; use only exact references already supplied as file evidence.`,
     operation,
   );
 }
