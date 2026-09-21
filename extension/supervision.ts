@@ -1105,6 +1105,17 @@ export function samePeerLeadRecord(
   );
 }
 
+export function samePeerLeadGeneration(
+  actual: PeerLeadRecord,
+  expected: PeerLeadRecord,
+): boolean {
+  return (
+    actual.piSessionId === expected.piSessionId &&
+    actual.claim.pid === expected.claim.pid &&
+    actual.claim.id === expected.claim.id
+  );
+}
+
 export function readPeerLeadRecord(
   runtime: PeerRuntime,
   piSessionId: string,

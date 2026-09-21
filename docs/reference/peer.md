@@ -27,10 +27,14 @@ or dead records; one stale record does not hide later live peers.
 
 Presence is observation, not permission. The global peer record and its exact
 live process-lock claim are the reachability authority; Herdr inventory and
-presentation metadata are not. Peer publication validates the sender and
-target generations immediately before writing. Delivery validates the current
-ordinary-Lead target generation and target structure only. Managed agents,
-Chief sessions, display labels, and metadata are never peer targets.
+presentation metadata are not. Peer publication makes a best-effort final
+reread of the captured sender and target generations immediately before
+writing. Presentation-only enrichment does not invalidate a message, and a
+replacement process-lock claim observed by that reread rejects it. The target's
+held presence lock and the inbox message lock are separate, so a replacement
+can race after the reread. Delivery validates the current ordinary-Lead target
+record and target structure only. Managed agents, Chief sessions, display
+labels, and metadata are never peer targets.
 
 ## `peer`
 
@@ -63,13 +67,17 @@ limit.
 
 Peer records use the global peer runtime's shared coordination inbox. Delivery
 uses Pi `deliverAs: "followUp"` with `triggerTurn: true`, survives a busy
-receiver, and is retried after transient delivery failure. Publication accepts
-a message only after the exact expected sender and target records are reread
-unchanged immediately before the atomic write. A queued message remains valid
-after the sender exits; delivery only revalidates the current ordinary-Lead
-receiver generation, so sender shutdown does not strand an already published
-message. A queued peer message is retained while its receiver is Chief and is
-delivered after that session returns to ordinary Lead. Shutdown aborts
+receiver, and is retried after transient delivery failure. Publication makes a
+best-effort final reread of the sender and target immediately before the atomic
+write and rejects the message when that reread observes a changed captured
+process-lock generation. Presentation metadata may be enriched independently
+and does not invalidate publication. Because the reread and inbox write use
+separate process locks, a replacement racing after the reread may still leave a
+durable message; delivery validates the current ordinary-Lead receiver record
+and target structure. A queued message remains valid after the sender exits, so
+sender shutdown does not strand an already published message. A queued peer
+message is retained while its receiver is Chief and is delivered after that
+session returns to ordinary Lead. Shutdown aborts
 in-flight delivery and removes the sender's presence before releasing its
 process lock.
 

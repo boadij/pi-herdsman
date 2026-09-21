@@ -858,6 +858,125 @@ test("peer publication rejects sender and target generation replacement during a
   }
 });
 
+test("peer publication tolerates sender and target presentation enrichment during attachment preparation", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-a-pane";
+  process.env.HERDR_TAB_ID = "lead-a-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `peer-presentation-race-${randomUUID()}.sock`,
+  );
+  const attachment = join(tmpdir(), `peer-attachment-${randomUUID()}.md`);
+  writeFileSync(attachment, "attachment evidence\n", "utf8");
+  const configPath = join(PI_AGENT_ROOT, "pi-herdsman", "config.json");
+  realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman"), { recursive: true });
+  writeFileSync(configPath, "{}", "utf8");
+  const senderId = `lead-a-${randomUUID()}`;
+  const targetId = `lead-b-${randomUUID()}`;
+  const runtime = peerRuntime();
+  const claim = (sessionId: string, paneId: string, tabId: string) => {
+    const lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
+      name: "Lead peer presence",
+    });
+    const record = {
+      version: 1 as const,
+      piSessionId: sessionId,
+      paneId,
+      tabId,
+      workspaceId: WORKSPACE,
+      name: `${sessionId} Lead`,
+      cwd: "/workspaces/peer",
+      repo: "pi-herdsman",
+      branch: "feature/peer",
+      workspaceLabel: "pi-herdsman/feature/peer",
+      claim: lease.claim,
+      updatedAt: Date.now(),
+    };
+    writePeerLeadRecord(runtime, record);
+    return { lease, record };
+  };
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => senderId,
+  };
+  try {
+    const peer = pi.tools.find((tool) => tool.name === "peer");
+    assert.ok(peer);
+    for (const enriched of ["sender", "target"] as const) {
+      const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
+      const target = claim(targetId, "lead-b-pane", "lead-b-tab");
+      let messageId: string | undefined;
+      try {
+        const preparationReached = testGate<void>();
+        let reached = false;
+        support.configReadHook = () => {
+          if (!reached) {
+            reached = true;
+            preparationReached.resolve();
+          }
+        };
+        const pending = peer.execute(
+          "message",
+          {
+            action: "message",
+            lead: targetId,
+            message: "presentation enrichment queues",
+            files: [attachment],
+          },
+          undefined,
+          undefined,
+          context,
+        );
+        await preparationReached.promise;
+
+        const current = enriched === "sender" ? sender : target;
+        const updated = {
+          ...current.record,
+          name: `${current.record.name} enriched`,
+          repo: "pi-herdsman-enriched",
+          branch: "feature/enriched",
+          workspaceLabel: "pi-herdsman/feature/enriched",
+          updatedAt: current.record.updatedAt + 1,
+        };
+        writePeerLeadRecord(runtime, updated);
+        assert.deepEqual(
+          readPeerLeadRecord(runtime, current.record.piSessionId),
+          updated,
+        );
+
+        const queued = await pending;
+        assert.equal(queued.details?.lead, targetId);
+        messageId = queued.details?.id as string;
+        assert.equal(listCoordinationMessagePaths(runtime, targetId).length, 1);
+        const message = readChiefMessage(
+          listCoordinationMessagePaths(runtime, targetId)[0],
+        );
+        assert.equal(message.fromSessionId, senderId);
+        assert.equal(message.toSessionId, targetId);
+      } finally {
+        support.configReadHook = undefined;
+        if (messageId) removeChiefMessage(runtime, targetId, messageId);
+        sender.lease.release();
+        target.lease.release();
+        removePeerLeadRecord(runtime, senderId);
+        removePeerLeadRecord(runtime, targetId);
+      }
+    }
+  } finally {
+    support.configReadHook = undefined;
+    pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(configPath, { force: true });
+    realFs.rmSync(attachment, { force: true });
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
 test("session shutdown prevents pending peer presence publication", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";

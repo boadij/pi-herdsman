@@ -364,10 +364,14 @@ Leads and send durable follow-up messages to an exact full Pi session ID.
 Presence is private and bound to the Lead's global peer record and exact live
 process-lock generation; Chief and suspended sessions do not publish it. Peer
 messages are coordination data, not assignments, and accept the same canonical
-attachment preparation as other Herdsman messages. Revalidate the expected
-sender and target records immediately before publication. Delivery revalidates
-only the current ordinary-Lead receiver generation and structural target
-invariants, so sender shutdown does not invalidate an already queued message.
+attachment preparation as other Herdsman messages. Make a best-effort final
+reread of the expected sender and target generations immediately before
+publication; presentation-only enrichment does not invalidate a message, and
+an observed replacement process-lock claim rejects it. The reread and inbox
+write use separate process locks, so a replacement can still race after the
+reread. Delivery revalidates the current ordinary-Lead receiver record and
+structural target invariants, so sender shutdown does not invalidate an already
+queued message.
 Peer inboxes remain queued while the receiver is Chief and drain after it
 returns to ordinary Lead with valid peer presence. Peer delivery uses a
 follow-up with `triggerTurn` and does not change ownership.

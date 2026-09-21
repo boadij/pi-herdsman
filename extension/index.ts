@@ -176,6 +176,7 @@ import {
   listPeerLeadRecords,
   removePeerLeadRecord,
   samePeerLeadRecord,
+  samePeerLeadGeneration,
   writePeerLeadRecord,
   drainCoordinationInbox,
 } from "./supervision.ts";
@@ -277,8 +278,13 @@ send durable follow-up messages to an exact full Pi session ID. Peer reachabilit
 comes from the global peer record and its exact live process-lock claim, not a
 caller-local Herdr inventory; list metadata is presentation-only. Peer messages
 are coordination data, not assignments; do not target display labels or
-managed agents. A queued peer message survives sender shutdown and remains
-queued while its receiver is Chief. The peer tool is unavailable in Chief mode.
+managed agents. Publication makes a best-effort final reread of the captured
+sender and target generations immediately before writing; presentation-only
+enrichment does not invalidate a message, and an observed replacement
+process-lock claim rejects it. The reread and inbox write use separate process
+locks, so a replacement can still race after the reread. A queued peer message
+survives sender shutdown and remains queued while its receiver is Chief. The
+peer tool is unavailable in Chief mode.
 
 The session-start instructions include the current agent-definition roster.
 Use list for live agent state, ownership, or a refreshed definition roster
@@ -7453,12 +7459,15 @@ export default function (pi: ExtensionAPI): void {
     if (
       !sender ||
       !target ||
-      !samePeerLeadRecord(sender, expectedSender) ||
-      !samePeerLeadRecord(target, expectedTarget)
+      !samePeerLeadGeneration(sender, expectedSender) ||
+      !samePeerLeadGeneration(target, expectedTarget)
     )
       throw new Error(
         "Peer sender or target changed before the message was queued",
       );
+    // Best effort only: the target's held presence lock and the inbox
+    // message lock are independent process locks, so replacement can race
+    // after this reread and before durable publication.
     const record: ChiefMessageRecord = {
       version: 1,
       id: recordId,

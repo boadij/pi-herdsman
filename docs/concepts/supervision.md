@@ -71,9 +71,13 @@ message one another. Peer presence is private, process-lock generation-bound,
 and published only by ordinary Leads; Chief and suspended sessions are absent.
 Peer reachability uses the global peer record and its exact live process-lock
 claim; Herdr inventory and presentation metadata are not authority. Publication
-rereads the expected sender and target records immediately before the atomic
-write. Delivery revalidates only the current ordinary-Lead receiver generation
-and structural target invariants, so a queued message survives sender shutdown.
+makes a best-effort final reread of the sender and target immediately before
+the atomic inbox write. Presentation-only enrichment does not invalidate a
+message, and a replacement claim observed by that reread rejects it. The
+target's held presence lock and the inbox message lock are separate, however,
+so a replacement can race after the reread and still leave a durable queued
+message. Delivery revalidates the current ordinary-Lead receiver record and
+structural target invariants, so a queued message survives sender shutdown.
 Peer inboxes are not drained while a receiver is Chief or lacks valid current
 peer presence; queued messages remain for ordinary-Lead delivery after Chief
 leave. Peer list metadata is presentation-only.
