@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/boadij/pi-herdsman/compare/v0.12.0...v0.12.1) (2026-09-21)
+
+
+### Fixes
+
+* support peer result selectors ([#105](https://github.com/boadij/pi-herdsman/issues/105)) ([76a07ae](https://github.com/boadij/pi-herdsman/commit/76a07ae41ac2af79d7a90d6902adc289f95979d8))
+
 ## [0.12.0](https://github.com/boadij/pi-herdsman/compare/v0.11.1...v0.12.0) (2026-09-21)
 
 
