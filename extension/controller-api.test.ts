@@ -2698,7 +2698,7 @@ test("registered lead exposes only explicit live controls", async () => {
   registerExtension!(accepting.pi as never);
   assert.deepEqual(
     accepting.tools.map((candidate) => candidate.name),
-    ["agent", "chief"],
+    ["agent", "chief", "peer"],
   );
   assert.equal(
     accepting.tools.some((candidate) => candidate.name === "subagent"),

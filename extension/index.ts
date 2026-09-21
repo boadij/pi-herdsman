@@ -131,7 +131,11 @@ import {
   type HerdrSessionSnapshot,
 } from "./herdr.ts";
 import { reportLeadMetadata } from "./herdr.ts";
-import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
+import {
+  acquireProcessLock,
+  claimProcessLock,
+  ProcessLockOccupiedError,
+} from "./lock.ts";
 import {
   claimChiefLease,
   chiefMessagePath,
@@ -141,19 +145,20 @@ import {
   quarantineChiefMessage,
   chiefMessageQuarantined,
   listChiefMessagePaths,
-  drainChiefInbox,
   supervisionRuntime,
   readChiefDescriptor,
   readChiefMessage,
   writeChiefMessage,
+  writeCoordinationMessage,
   writeChiefAskMessage,
   chiefMessageBytes,
-  CHIEF_MESSAGE_MAX_BYTES,
+  COORDINATION_MESSAGE_MAX_BYTES,
   sessionLeadRoleState,
   type ChiefLease,
   type ChiefDescriptor,
   type ChiefMessageKind,
   type ChiefMessageRecord,
+  type PeerLeadRecord,
   type WorkspaceProvenance,
   projectSupervision,
   readLeadCoordinationState,
@@ -165,6 +170,15 @@ import {
   sameChiefDescriptor,
   validLeadCoordinationQuestion,
   normalizeHerdrLifecycleState,
+  peerLeadLockPath,
+  peerRuntime,
+  readPeerLeadRecord,
+  listPeerLeadRecords,
+  removePeerLeadRecord,
+  samePeerLeadRecord,
+  samePeerLeadGeneration,
+  writePeerLeadRecord,
+  drainCoordinationInbox,
 } from "./supervision.ts";
 import {
   fail,
@@ -1194,7 +1208,7 @@ async function messageLimits(
     mailbox: { bytes: config.mailboxPayloadLimitBytes },
   };
 }
-async function prepareSupervisionText(
+async function prepareCoordinationText(
   ctx: ExtensionContext,
   text: string,
   files: readonly string[],
@@ -1205,7 +1219,10 @@ async function prepareSupervisionText(
   const limits = await messageLimits(ctx);
   return prepareMessageInput(text, files, ctx.cwd, operation, heading, {
     inlineLimitBytes: limits.inline.bytes,
-    mailboxLimitBytes: Math.min(limits.mailbox.bytes, CHIEF_MESSAGE_MAX_BYTES),
+    mailboxLimitBytes: Math.min(
+      limits.mailbox.bytes,
+      COORDINATION_MESSAGE_MAX_BYTES,
+    ),
     serializedBytes: (candidate) => chiefMessageBytes(recordForText(candidate)),
   }).text;
 }
@@ -6717,6 +6734,26 @@ export default function (pi: ExtensionAPI): void {
     ),
   ]);
   const staffValidator = Compile(staffParameters);
+  const peerParameters = Type.Union([
+    Type.Object(
+      { action: StringEnum(["list"] as const) },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["message"] as const),
+        lead: Type.String({
+          pattern: PI_SESSION_ID_PATTERN,
+          description:
+            "The lead is the exact full Pi session ID returned by peer list; never use a display label.",
+        }),
+        message: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      },
+      { additionalProperties: false },
+    ),
+  ]);
+  const peerValidator = Compile(peerParameters);
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
   let chiefMode: ChiefMode = "inactive";
@@ -6760,6 +6797,10 @@ export default function (pi: ExtensionAPI): void {
     { askId: string; question: string; text: string } | undefined;
   let leadInstanceId = randomUUID();
   let leadCoordinationHealthy = true;
+  let peerPresenceLease: ReturnType<typeof acquireProcessLock> | undefined;
+  let peerPresenceRecord: PeerLeadRecord | undefined;
+  let peerPresenceGeneration = 0;
+  let peerPresencePublication = Promise.resolve();
   let coordinationPublication = Promise.resolve();
   let chiefInboxTimer: ReturnType<typeof setTimeout> | undefined;
   let chiefInboxGeneration = 0;
@@ -6800,6 +6841,7 @@ export default function (pi: ExtensionAPI): void {
     { customType: string; content: string; display: boolean } | undefined
   > = async () => undefined;
   let chiefTool: any;
+  let peerTool: any;
   let refreshSupervisionUI: ((ctx: ExtensionContext) => void) | undefined;
   let clearSupervisionUI: ((removeWidget?: boolean) => void) | undefined;
   let requestSupervisionWidgetRender: (() => void) | undefined;
@@ -6821,7 +6863,7 @@ export default function (pi: ExtensionAPI): void {
         unknown: boolean;
       }>)
     | undefined;
-  const ownedTools = new Set(["agent", "chief", "staff"]);
+  const ownedTools = new Set(["agent", "chief", "peer", "staff"]);
   let leadTools: string[] | undefined;
   const registeredToolNames = (): Set<string> =>
     new Set(pi.getAllTools().map((tool) => tool.name));
@@ -6831,7 +6873,7 @@ export default function (pi: ExtensionAPI): void {
     for (const name of tools)
       if (name !== "staff" && registered.has(name) && !next.includes(name))
         next.push(name);
-    for (const name of ["agent", "chief"])
+    for (const name of ["agent", "chief", "peer"])
       if (registered.has(name) && !next.includes(name)) next.push(name);
     return next;
   };
@@ -6958,9 +7000,140 @@ export default function (pi: ExtensionAPI): void {
       return false;
     }
   };
+  const removePeerPresence = (): void => {
+    const record = peerPresenceRecord;
+    peerPresenceRecord = undefined;
+    if (!record) {
+      peerPresenceLease?.release();
+      peerPresenceLease = undefined;
+      return;
+    }
+    try {
+      removePeerLeadRecord(peerRuntime(), record.piSessionId, record);
+    } catch (error) {
+      if (leadContext)
+        appendDurableError(pi, leadContext, "pi_herdsman_state_error", error);
+    }
+    try {
+      peerPresenceLease?.release();
+    } catch (error) {
+      if (leadContext)
+        appendDurableError(pi, leadContext, "pi_herdsman_state_error", error);
+    }
+    peerPresenceLease = undefined;
+  };
+  const publishPeerPresence = async (
+    ctx: ExtensionContext,
+    expectedGeneration: number,
+  ): Promise<void> => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const isCurrent = (): boolean =>
+      expectedGeneration === peerPresenceGeneration &&
+      !ctx.signal?.aborted &&
+      processRole === "lead" &&
+      chiefMode === "inactive" &&
+      leadCoordinationHealthy &&
+      ctx.sessionManager.getSessionId() === sessionId;
+    if (!isCurrent()) return;
+    const paneId = process.env.HERDR_PANE_ID;
+    const tabId = process.env.HERDR_TAB_ID;
+    const workspaceId = process.env.HERDR_WORKSPACE_ID;
+    if (!paneId || !tabId || !workspaceId) return;
+    removePeerPresence();
+    const name =
+      pi.getSessionName()?.trim() ||
+      ctx.sessionManager.getSessionName()?.trim();
+    let lease: ReturnType<typeof acquireProcessLock> | undefined;
+    try {
+      const runtime = peerRuntime();
+      if (!isCurrent()) return;
+      lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
+        name: "Lead peer presence",
+      });
+      if (!isCurrent()) {
+        lease.release();
+        return;
+      }
+      const record: PeerLeadRecord = {
+        version: 1,
+        piSessionId: sessionId,
+        paneId,
+        tabId,
+        workspaceId,
+        ...(name ? { name } : {}),
+        cwd: ctx.cwd,
+        claim: lease.claim,
+        updatedAt: Date.now(),
+      };
+      if (!isCurrent()) {
+        lease.release();
+        return;
+      }
+      writePeerLeadRecord(runtime, record);
+      peerPresenceLease = lease;
+      peerPresenceRecord = record;
+      void (async () => {
+        let provenance: WorkspaceProvenance;
+        try {
+          provenance =
+            (
+              await workspacePresentationProvenance(
+                pi,
+                ctx,
+                [workspaceId],
+                new Map([[workspaceId, ctx.cwd]]),
+                ctx.signal,
+              )
+            ).get(workspaceId) ?? {};
+        } catch {
+          return;
+        }
+        if (!isCurrent() || peerPresenceRecord !== record) return;
+        const workspaceLabel =
+          provenance.repoName && provenance.branch
+            ? `${provenance.repoName}/${provenance.branch}`
+            : (provenance.workspaceLabel ??
+              (provenance.workspaceCwd
+                ? basename(provenance.workspaceCwd)
+                : workspaceId));
+        const enriched: PeerLeadRecord = {
+          ...record,
+          ...(provenance.repoName ? { repo: provenance.repoName } : {}),
+          ...(provenance.branch ? { branch: provenance.branch } : {}),
+          workspaceLabel,
+          updatedAt: Date.now(),
+        };
+        if (!isCurrent() || peerPresenceRecord !== record) return;
+        try {
+          const current = readPeerLeadRecord(peerRuntime(), sessionId);
+          if (!current || !samePeerLeadRecord(current, record)) return;
+          if (!isCurrent() || peerPresenceRecord !== record) return;
+          writePeerLeadRecord(peerRuntime(), enriched);
+          peerPresenceRecord = enriched;
+        } catch (error) {
+          if (isCurrent() && peerPresenceRecord === record)
+            appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        }
+      })();
+    } catch (error) {
+      try {
+        lease?.release();
+      } catch {}
+      peerPresenceLease = undefined;
+      appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+    }
+  };
+  const schedulePeerPresence = (ctx: ExtensionContext): Promise<void> => {
+    const expectedGeneration = peerPresenceGeneration;
+    peerPresencePublication = peerPresencePublication
+      .catch(() => {})
+      .then(() => publishPeerPresence(ctx, expectedGeneration));
+    return peerPresencePublication;
+  };
   // Keep role side effects together; coordination state remains authoritative
   // only while the session is an ordinary, healthy lead.
   const enterLead = (ctx?: ExtensionContext, persist = true): void => {
+    ++peerPresenceGeneration;
     let lifecycleError: unknown;
     const captureError = (operation: () => void): void => {
       try {
@@ -6975,6 +7148,7 @@ export default function (pi: ExtensionAPI): void {
     captureError(() => lease?.release());
     resetSupervisionSnapshot();
     chiefMode = "inactive";
+    if (ctx && leadCoordinationHealthy) void schedulePeerPresence(ctx);
     captureError(reconcileRoleTools);
     if (persist) captureError(() => persistRole("lead"));
     if (leadCoordinationHealthy) captureError(() => persistChiefState());
@@ -6987,6 +7161,8 @@ export default function (pi: ExtensionAPI): void {
     lease: ChiefLease,
     generation: number,
   ): void => {
+    ++peerPresenceGeneration;
+    removePeerPresence();
     chiefLease = lease;
     resetSupervisionSnapshot();
     chiefMode = "active";
@@ -7002,6 +7178,7 @@ export default function (pi: ExtensionAPI): void {
     publishLeadRole(ctx, "active", generation);
   };
   const enterSuspended = (ctx?: ExtensionContext): void => {
+    ++peerPresenceGeneration;
     let lifecycleError: unknown;
     const captureError = (operation: () => void): void => {
       try {
@@ -7015,6 +7192,7 @@ export default function (pi: ExtensionAPI): void {
     clearChiefStartPreflight();
     resetSupervisionSnapshot();
     chiefMode = "suspended";
+    removePeerPresence();
     captureError(() => lease?.release());
     captureError(reconcileRoleTools);
     captureError(() => persistRole("chief"));
@@ -7190,6 +7368,103 @@ export default function (pi: ExtensionAPI): void {
         herdrSessionId(agent) === sessionId &&
         !!readLeadCoordinationState(supervisionRuntime(), sessionId),
     );
+  };
+  const livePeerLead = async (
+    _ctx: ExtensionContext,
+    sessionId: string,
+  ): Promise<PeerLeadRecord | undefined> => {
+    try {
+      return readPeerLeadRecord(peerRuntime(), sessionId);
+    } catch {
+      return undefined;
+    }
+  };
+  const currentPeerPresenceValid = (ctx: ExtensionContext): boolean => {
+    if (
+      chiefMode !== "inactive" ||
+      !leadCoordinationHealthy ||
+      !peerPresenceLease ||
+      !peerPresenceRecord ||
+      peerPresenceRecord.piSessionId !== ctx.sessionManager.getSessionId()
+    )
+      return false;
+    try {
+      const current = readPeerLeadRecord(
+        peerRuntime(),
+        peerPresenceRecord.piSessionId,
+      );
+      return !!current && samePeerLeadRecord(current, peerPresenceRecord);
+    } catch {
+      return false;
+    }
+  };
+  const authorizePeerRecord = async (
+    record: ChiefMessageRecord,
+    ctx: ExtensionContext,
+  ): Promise<boolean> => {
+    if (
+      chiefMode !== "inactive" ||
+      record.kind !== "peer_message" ||
+      record.toSessionId !== ctx.sessionManager.getSessionId() ||
+      record.fromSessionId === record.toSessionId ||
+      record.leadSessionId !== record.fromSessionId
+    )
+      return false;
+    const target = await livePeerLead(ctx, record.toSessionId);
+    return !!target && target.piSessionId === record.toSessionId;
+  };
+  const queuePeerRecord = async (
+    text: string,
+    targetSessionId: string,
+    ctx: ExtensionContext,
+    expectedSender: PeerLeadRecord,
+    expectedTarget: PeerLeadRecord,
+    recordId = randomUUID(),
+    createdAt = Date.now(),
+  ): Promise<ChiefMessageRecord> => {
+    if (controllerScope?.kind !== "lead" || chiefMode !== "inactive")
+      throw new Error("Peer is available only to ordinary leads");
+    if (
+      expectedSender.piSessionId !== ctx.sessionManager.getSessionId() ||
+      expectedTarget.piSessionId !== targetSessionId ||
+      expectedSender.piSessionId === expectedTarget.piSessionId
+    )
+      throw new Error("Peer sender or target is invalid");
+    let sender: PeerLeadRecord | undefined;
+    let target: PeerLeadRecord | undefined;
+    try {
+      sender = readPeerLeadRecord(peerRuntime(), expectedSender.piSessionId);
+      target = readPeerLeadRecord(peerRuntime(), expectedTarget.piSessionId);
+    } catch {
+      throw new Error(
+        "Peer target was not found or is no longer an ordinary live lead",
+      );
+    }
+    if (
+      !sender ||
+      !target ||
+      !samePeerLeadGeneration(sender, expectedSender) ||
+      !samePeerLeadGeneration(target, expectedTarget)
+    )
+      throw new Error(
+        "Peer sender or target changed before the message was queued",
+      );
+    // Best effort only: the target's held presence lock and the inbox
+    // message lock are independent process locks, so replacement can race
+    // after this reread and before durable publication.
+    const record: ChiefMessageRecord = {
+      version: 1,
+      id: recordId,
+      leaseId: sender.claim.id,
+      kind: "peer_message",
+      fromSessionId: sender.piSessionId,
+      toSessionId: target.piSessionId,
+      leadSessionId: sender.piSessionId,
+      text,
+      createdAt,
+    };
+    writeCoordinationMessage(record, peerRuntime());
+    return record;
   };
   const currentChiefAuthority = async (ctx: ExtensionContext) => {
     const descriptor = currentChief();
@@ -7418,6 +7693,7 @@ export default function (pi: ExtensionAPI): void {
     const socket = process.env.HERDR_SOCKET_PATH;
     if (!socket) return;
     const runtime = supervisionRuntime(socket);
+    const peerInboxRuntime = peerRuntime();
     const isCurrent = (): boolean =>
       generation === chiefInboxGeneration &&
       !chiefInboxAbortController?.signal.aborted;
@@ -7452,10 +7728,14 @@ export default function (pi: ExtensionAPI): void {
         throw new Error(`Stale inbox transaction (${phase})`);
       if (transaction.role === "inactive") assertCurrentLeadCoordination(ctx);
     };
-    const inboxOptions = (verifyLease: boolean, verifyLiveChief = true) => {
+    const inboxOptions = (
+      verifyLease: boolean,
+      verifyLiveChief = true,
+      inboxRuntime = runtime,
+    ) => {
       if (!isCurrent()) throw new Error("Stale inbox transaction (options)");
       return {
-        runtime,
+        runtime: inboxRuntime,
         sessionId: ctx.sessionManager.getSessionId(),
         signal: chiefInboxAbortController?.signal,
         cleanupError: (error: unknown) => {
@@ -7463,6 +7743,8 @@ export default function (pi: ExtensionAPI): void {
         },
         isDelivered: (id: string) => messageDelivered(ctx, id),
         isAuthorized: async (record: ChiefMessageRecord) => {
+          if (record.kind === "peer_message")
+            return authorizePeerRecord(record, ctx);
           if (verifyLease) {
             const chief = await currentChiefAuthority(ctx);
             if (!chief) throw new Error("Chief lease could not be verified");
@@ -7555,9 +7837,21 @@ export default function (pi: ExtensionAPI): void {
       }
 
       if (!isCurrent() || chiefStartPreflightHeld(ctx)) return 0;
-      if (initial) return drainChiefInbox(inboxOptions(false));
+      if (initial) {
+        const chief = await drainCoordinationInbox(inboxOptions(false));
+        if (!currentPeerPresenceValid(ctx)) return chief;
+        const peer = await drainCoordinationInbox(
+          inboxOptions(false, true, peerInboxRuntime),
+        );
+        return chief + peer;
+      }
       const active = chiefMode === "active";
-      return drainChiefInbox(inboxOptions(active, active));
+      const chief = await drainCoordinationInbox(inboxOptions(active, active));
+      if (!currentPeerPresenceValid(ctx)) return chief;
+      const peer = await drainCoordinationInbox(
+        inboxOptions(active, active, peerInboxRuntime),
+      );
+      return chief + peer;
     };
     const schedule = (): void => {
       if (
@@ -7704,6 +7998,7 @@ export default function (pi: ExtensionAPI): void {
       try {
         persistRole("lead");
         if (leadCoordinationHealthy) persistChiefState();
+        if (leadCoordinationHealthy) void schedulePeerPresence(ctx);
       } catch {
         // The activation error remains authoritative if role persistence also
         // fails; the next startup will resolve the durable role state.
@@ -7739,6 +8034,9 @@ export default function (pi: ExtensionAPI): void {
     if (leadContext)
       await publishLeadRole(leadContext, "suspended", chiefModeGeneration);
     enterLead(leadContext);
+    await peerPresencePublication;
+    if (leadContext && process.env.HERDR_SOCKET_PATH)
+      startChiefInbox(leadContext);
     if (leadContext) startNormalUI?.(leadContext);
     return "Chief mode left.";
   };
@@ -7778,6 +8076,13 @@ export default function (pi: ExtensionAPI): void {
       }
       if (event.toolName === "staff" && !staffValidator.Check(event.input)) {
         const error = invalidRequestInput("staff", "Invalid staff action");
+        return {
+          block: true,
+          reason: error.detail.message,
+        };
+      }
+      if (event.toolName === "peer" && !peerValidator.Check(event.input)) {
+        const error = invalidRequestInput("peer", "Invalid peer action");
         return {
           block: true,
           reason: error.detail.message,
@@ -9498,7 +9803,7 @@ export default function (pi: ExtensionAPI): void {
               if (!chief) throw new Error(chiefUnavailableMessage());
               const recordId = randomUUID();
               const createdAt = Date.now();
-              const text = await prepareSupervisionText(
+              const text = await prepareCoordinationText(
                 ctx,
                 params.message,
                 resolveMessageFiles(
@@ -9624,7 +9929,7 @@ export default function (pi: ExtensionAPI): void {
                 chief.leaseId,
               );
               const createdAt = Date.now();
-              const text = await prepareSupervisionText(
+              const text = await prepareCoordinationText(
                 ctx,
                 params.question,
                 resolveMessageFiles(
@@ -9696,6 +10001,101 @@ export default function (pi: ExtensionAPI): void {
           renderCoordinationCall("chief", args, theme, context),
         renderResult: (result: any, options: any, theme: any, context: any) =>
           renderCoordinationResult("chief", result, options, theme, context),
+      };
+      peerTool = {
+        name: "peer",
+        label: "peer",
+        description:
+          "Other ordinary Lead sessions (peers), not managed agents. Use list for peers, other Leads, or other Lead sessions. list identifies this Lead as self and returns other live Leads as peers; message sends to one peer's exact lead ID and may include files.",
+        executionMode: "sequential",
+        parameters: peerParameters,
+        execute: async (
+          _id: string,
+          params: any,
+          _signal: AbortSignal | undefined,
+          _update: unknown,
+          ctx: ExtensionContext,
+        ) => {
+          if (controllerScope.kind !== "lead" || chiefMode !== "inactive")
+            throw new Error("Peer is available only to ordinary leads");
+          if (!peerValidator.Check(params))
+            throw invalidRequestInput("peer", "Invalid peer action");
+          if (params.action === "list") {
+            const self = ctx.sessionManager.getSessionId();
+            const peers = listPeerLeadRecords(peerRuntime())
+              .filter((record) => record.piSessionId !== self)
+              .map((record) => ({
+                lead: record.piSessionId,
+                name: record.name ?? `lead-${record.piSessionId.slice(0, 8)}`,
+                cwd: record.cwd ?? "",
+                repo: record.repo ?? "",
+                branch: record.branch ?? "",
+                workspace_label: record.workspaceLabel ?? "",
+              }));
+            return {
+              content: [
+                { type: "text", text: JSON.stringify({ self, peers }) },
+              ],
+              details: { ok: true, action: "list", self, peers },
+            };
+          }
+          const sender = await livePeerLead(
+            ctx,
+            ctx.sessionManager.getSessionId(),
+          );
+          const target = await livePeerLead(ctx, params.lead);
+          if (!sender || !target)
+            throw new Error(
+              "Peer target was not found or is no longer an ordinary live lead",
+            );
+          const recordId = randomUUID();
+          const createdAt = Date.now();
+          const text = await prepareCoordinationText(
+            ctx,
+            params.message,
+            params.files ?? [],
+            "peer.message",
+            "Message",
+            (candidate) => ({
+              version: 1,
+              id: recordId,
+              leaseId: sender.claim.id,
+              kind: "peer_message",
+              fromSessionId: sender.piSessionId,
+              toSessionId: target.piSessionId,
+              leadSessionId: sender.piSessionId,
+              text: candidate,
+              createdAt,
+            }),
+          );
+          const record = await queuePeerRecord(
+            text,
+            target.piSessionId,
+            ctx,
+            sender,
+            target,
+            recordId,
+            createdAt,
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Peer message queued for ${record.toSessionId}.`,
+              },
+            ],
+            details: {
+              ok: true,
+              action: "message",
+              lead: record.toSessionId,
+              id: record.id,
+            },
+          };
+        },
+        renderCall: (args: unknown, theme: any, context: any) =>
+          renderCoordinationCall("peer", args, theme, context),
+        renderResult: (result: any, options: any, theme: any, context: any) =>
+          renderCoordinationResult("peer", result, options, theme, context),
       };
       const staffTool = {
         name: "staff",
@@ -9883,7 +10283,7 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Lead ask ID is no longer pending");
           const recordId = randomUUID();
           const createdAt = Date.now();
-          const text = await prepareSupervisionText(
+          const text = await prepareCoordinationText(
             ctx,
             params.message,
             resolveMessageFiles(
@@ -10763,6 +11163,7 @@ export default function (pi: ExtensionAPI): void {
       startupDefinitionRoster = undefined;
       clearChiefStartPreflight();
       ++sessionGeneration;
+      ++peerPresenceGeneration;
       const previousChiefMode = chiefMode;
       const previousLeadContext = leadContext;
       ++chiefModeGeneration;
@@ -10859,6 +11260,8 @@ export default function (pi: ExtensionAPI): void {
             appendDurableError(pi, ctx, "pi_herdsman_role_error", error);
           }
         }
+        if (chiefMode === "inactive" && leadCoordinationHealthy)
+          await schedulePeerPresence(ctx);
       }
       controllerAbortController?.abort();
       chiefInboxAbortController?.abort();
@@ -10969,6 +11372,7 @@ export default function (pi: ExtensionAPI): void {
     });
     pi.on("session_shutdown", async () => {
       ++sessionGeneration;
+      ++peerPresenceGeneration;
       clearChiefStartPreflight();
       startupDefinitionRoster = undefined;
       ++chiefInboxGeneration;
@@ -10978,6 +11382,7 @@ export default function (pi: ExtensionAPI): void {
       if (controllerScope.kind === "lead" && chiefMode === "active")
         enterSuspended(leadContext);
       else if (controllerScope.kind === "lead") {
+        removePeerPresence();
         // Invalidate before aborting inbox transactions. A late callback must
         // not be able to republish this lead generation during teardown.
         try {
@@ -11188,8 +11593,10 @@ export default function (pi: ExtensionAPI): void {
       renderResult: (result: any, options: any, theme: any, context: any) =>
         renderCoordinationResult("agent", result, options, theme, context),
     });
-    if (controllerScope.kind === "lead" && process.env.HERDR_PANE_ID)
+    if (controllerScope.kind === "lead" && process.env.HERDR_PANE_ID) {
       pi.registerTool(chiefTool);
+      pi.registerTool(peerTool);
+    }
   }
   if (processRole !== "managed-agent") return;
   agentControllerReady = false;

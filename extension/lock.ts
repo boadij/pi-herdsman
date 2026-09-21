@@ -51,6 +51,53 @@ function publishClaim(
   }
 }
 
+export function readLiveProcessLock(
+  path: string,
+  name = "process lock",
+): ProcessLockClaim {
+  const verifyMessage = `Unable to verify ${name}`;
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(path);
+  } catch (error) {
+    throw new Error(verifyMessage, { cause: error });
+  }
+  if (entries.length !== 1) throw new Error(verifyMessage);
+
+  const owner = entries[0];
+  let claim: unknown;
+  try {
+    claim = JSON.parse(fs.readFileSync(join(path, owner), "utf8"));
+  } catch (error) {
+    throw new Error(verifyMessage, { cause: error });
+  }
+  if (!claim || typeof claim !== "object" || Array.isArray(claim))
+    throw new Error(verifyMessage);
+  const parsed = claim as { pid?: unknown; id?: unknown };
+  if (
+    Object.keys(parsed).length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(parsed, "pid") ||
+    !Object.prototype.hasOwnProperty.call(parsed, "id") ||
+    typeof parsed.pid !== "number" ||
+    !Number.isInteger(parsed.pid) ||
+    parsed.pid <= 0 ||
+    typeof parsed.id !== "string" ||
+    !parsed.id ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      parsed.id,
+    ) ||
+    owner !== `${parsed.pid}-${parsed.id}`
+  )
+    throw new Error(verifyMessage);
+
+  try {
+    process.kill(parsed.pid, 0);
+  } catch (error) {
+    throw new Error(verifyMessage, { cause: error });
+  }
+  return { pid: parsed.pid, id: parsed.id };
+}
+
 export function acquireProcessLock(
   path: string,
   options: ProcessLockOptions = {},

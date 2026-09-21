@@ -2090,6 +2090,69 @@ test("chief and staff coordination renderers share semantic status language", ()
   assert.doesNotMatch(staffList, /last activity/);
 });
 
+test("peer list rendering distinguishes self from peers", () => {
+  const result = {
+    content: [{ type: "text", text: "model-facing prose" }],
+    details: {
+      ok: true,
+      action: "list",
+      self: "lead-self",
+      peers: [
+        {
+          lead: "lead-other",
+          name: "workspace/api",
+          cwd: "/work/api",
+          repo: "api",
+          branch: "feature/peer",
+          workspace_label: "api",
+        },
+      ],
+    },
+  };
+
+  assert.equal(
+    renderedText(
+      renderCoordinationResult("peer", result, {}, presentationTheme, {
+        args: { action: "list" },
+      }),
+    ),
+    "peer · 1 peer",
+  );
+
+  assert.equal(
+    renderedText(
+      renderCoordinationResult(
+        "peer",
+        result,
+        { expanded: true },
+        presentationTheme,
+        { args: { action: "list" } },
+      ),
+    ),
+    "peer\n\nself lead-self\npeers 1\n  workspace/api · lead: lead-other · branch: feature/peer",
+  );
+
+  assert.equal(
+    renderedText(
+      renderCoordinationResult(
+        "peer",
+        {
+          details: {
+            ok: true,
+            action: "list",
+            self: "lead-self",
+            peers: [{ session_id: "stale-session" }],
+          },
+        },
+        { expanded: true },
+        presentationTheme,
+        { args: { action: "list" } },
+      ),
+    ),
+    "peer\n\nself lead-self\npeers 1\n  lead · lead: lead",
+  );
+});
+
 test("widget never exceeds its width", (t) => {
   {
     const widget = new StatusWidget();
