@@ -153,7 +153,7 @@ tools, extensions, skills, and instructions.
 ## Requirements
 
 - [herdr](https://github.com/herdrdev/herdr) `>=0.9.1`
-- Pi `>=0.84.2 <0.86.0` (supported)
+- Pi `>=0.87.0 <0.88.0` (supported)
 - Node `>=22.19.0`
 
 CI validates Node 22.19.0 with the locked dependency set.

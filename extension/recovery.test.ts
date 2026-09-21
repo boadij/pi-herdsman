@@ -1739,7 +1739,7 @@ test("settlement redelivers an unpersisted child result in the same session", as
       false,
     );
 
-    pi.events.get("agent_settled")![0](undefined, context);
+    await pi.events.get("agent_settled")![0](undefined, context);
 
     await waitForTestCondition(
       () => deliveries === 2,
@@ -1754,7 +1754,7 @@ test("settlement redelivers an unpersisted child result in the same session", as
     assert.equal(deliveries, 2);
     assert.deepEqual(lifecycle.closeOrder, [label]);
 
-    pi.events.get("agent_settled")![0](undefined, context);
+    await pi.events.get("agent_settled")![0](undefined, context);
     await Promise.resolve();
     assert.equal(deliveries, 2);
   } finally {
