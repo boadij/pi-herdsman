@@ -2208,7 +2208,7 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
   const callsBeforeSettlement = agent.calls.length;
   assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
   completionMetadataStarted = true;
-  await agent.events.get("agent_settled")![0](undefined, context);
+  agent.events.get("agent_settled")![0](undefined, context);
   await waitForTestCondition(
     () =>
       agent.callResults
