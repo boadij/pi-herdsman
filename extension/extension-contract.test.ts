@@ -5,16 +5,20 @@ import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { test } from "node:test";
 import { Value } from "typebox/value";
+import { acquireProcessLock } from "./lock.ts";
 import {
   claimChiefLease,
   invalidateLeadCoordinationState,
+  listChiefMessagePaths,
   removeChiefMessage,
   readChiefMessage,
-  listChiefMessagePaths,
   writeChiefMessage,
   supervisionRuntime,
   readLeadCoordinationState,
   writeLeadCoordinationState,
+  peerLeadLockPath,
+  peerRuntime,
+  writePeerLeadRecord,
 } from "./supervision.ts";
 import type {
   AskRecord,
@@ -77,6 +81,7 @@ function assertToolResult(result: any): asserts result is {
 const REGISTERED_ROLE_TOOLS = [
   { name: "agent" },
   { name: "chief" },
+  { name: "peer" },
   { name: "staff" },
 ];
 
@@ -174,6 +179,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.deepEqual(lead.tools.map((tool) => tool.name).sort(), [
     "agent",
     "chief",
+    "peer",
   ]);
   assert.equal(
     lead.tools.find((tool) => tool.name === "chief")?.label,
@@ -185,7 +191,9 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   const agentTool = lead.tools.find((tool) => tool.name === "agent");
   const chiefTool = lead.tools.find((tool) => tool.name === "chief");
+  const peerTool = lead.tools.find((tool) => tool.name === "peer");
   assert.ok(agentTool);
+  assert.ok(peerTool);
   const resultSelector = { agent: "implementation", index: 1 };
   for (const request of [
     {
@@ -332,6 +340,60 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     }),
     true,
   );
+  assert.equal(peerTool.label, "peer");
+  assert.equal(peerTool.executionMode, "sequential");
+  assert.equal(typeof peerTool.renderCall, "function");
+  assert.equal(typeof peerTool.renderResult, "function");
+  const renderedPeerCall = peerTool.renderCall(
+    { action: "message", lead: LEAD_SESSION_ID, message: "Please coordinate" },
+    {
+      fg: (_color: string, value: string) => value,
+      bold: (text: string) => text,
+    },
+    { argsComplete: true },
+  );
+  assert.match(renderedPeerCall.render(160).join("\n"), /^peer message/);
+  assert.match(peerTool.description, /exact full lead session ID/);
+  assert.match(peerTool.description, /ordinary live Leads/);
+  assert.match(
+    peerTool.description,
+    /Do not target display labels or managed agents/,
+  );
+  assert.equal(Value.Check(peerTool.parameters, { action: "list" }), true);
+  assert.equal(
+    Value.Check(peerTool.parameters, {
+      action: "message",
+      lead: LEAD_SESSION_ID,
+      message: "Please coordinate this result",
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(peerTool.parameters, {
+      action: "message",
+      lead: "display-name",
+      message: "not an exact session ID",
+    }),
+    true,
+    "peer session IDs intentionally accept the canonical full identity pattern",
+  );
+  assert.equal(
+    Value.Check(peerTool.parameters, {
+      action: "message",
+      lead: "lead/session",
+      message: "slash is not a session ID",
+    }),
+    false,
+  );
+  assert.equal(
+    Value.Check(peerTool.parameters, {
+      action: "message",
+      lead: LEAD_SESSION_ID,
+      message: "legacy target name",
+      target: "display-name",
+    }),
+    false,
+  );
   assert.deepEqual(
     lead.messageRenderers.map(({ customType }) => customType).sort(),
     [
@@ -378,6 +440,156 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.match(notices[0]!, /inactive because .*not running inside Herdr/);
   assert.match(notices[0]!, /herdr\n  pi/);
   assert.match(notices[0]!, /herdr integration install pi/);
+});
+
+test("managed agents receive no peer tool and Chiefs expose only staff actively", async () => {
+  const mailbox = setAgentEnvironment("peer-exclusion-agent");
+  const managed = fakePi();
+  registerExtension!(managed.pi as never);
+  assert.equal(
+    managed.tools.some((tool) => tool.name === "peer"),
+    false,
+  );
+  managed.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
+
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `peer-chief-surface-${randomUUID()}.sock`,
+  );
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { role: "chief", leadTools: ["agent", "chief", "peer"] },
+    },
+  ];
+  const chief = fakePi({
+    entries,
+    activeTools: ["agent", "chief", "peer"],
+    allTools: REGISTERED_ROLE_TOOLS,
+  });
+  registerExtension!(chief.pi as never);
+  const context = fakeContext(entries) as any;
+  try {
+    await chief.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(chief.pi.getActiveTools(), ["staff"]);
+    assert.equal(chief.pi.getActiveTools().includes("peer"), false);
+  } finally {
+    await chief.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("peer message publication revalidates a replaced target generation", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-a-pane";
+  process.env.HERDR_TAB_ID = "lead-a-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `peer-target-race-${randomUUID()}.sock`,
+  );
+  const senderId = `lead-a-${randomUUID()}`;
+  const targetId = `lead-b-${randomUUID()}`;
+  const runtime = peerRuntime();
+  const claim = (sessionId: string, paneId: string, tabId: string) => {
+    const lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
+      name: "Lead peer presence",
+    });
+    const record = {
+      version: 1 as const,
+      piSessionId: sessionId,
+      paneId,
+      tabId,
+      workspaceId: WORKSPACE,
+      claim: lease.claim,
+      updatedAt: Date.now(),
+    };
+    writePeerLeadRecord(runtime, record);
+    return { lease, record };
+  };
+  const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
+  let target = claim(targetId, "lead-b-pane", "lead-b-tab");
+  const agents = [
+    {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: senderId,
+      },
+      pane_id: "lead-a-pane",
+      tab_id: "lead-a-tab",
+      workspace_id: WORKSPACE,
+    },
+    {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: targetId,
+      },
+      pane_id: "lead-b-pane",
+      tab_id: "lead-b-tab",
+      workspace_id: WORKSPACE,
+    },
+  ];
+  let inventoryCalls = 0;
+  const pi = fakePi({
+    exec: (_command, args) => {
+      if (isAgentList(args) || isApiSnapshot(args)) {
+        inventoryCalls++;
+        if (inventoryCalls === 8) {
+          target.lease.release();
+          target = claim(targetId, "lead-b-pane", "lead-b-tab");
+        }
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents, snapshot: { agents, panes: agents } },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => senderId,
+  };
+  try {
+    const peer = pi.tools.find((tool) => tool.name === "peer");
+    assert.ok(peer);
+    await assert.rejects(
+      peer.execute(
+        "message",
+        { action: "message", lead: targetId, message: "must not queue" },
+        undefined,
+        undefined,
+        context,
+      ),
+      /sender or target changed before the message was queued/,
+    );
+    assert.deepEqual(listChiefMessagePaths(supervisionRuntime(), targetId), []);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    sender.lease.release();
+    target.lease.release();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
 });
 
 test("active chief describes authoritative remote ask projection", async () => {
@@ -2279,7 +2491,7 @@ test("malformed persisted role fails closed without authoritative lead state", a
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["agent"]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["agent", "peer"]);
   assert.equal(
     readLeadCoordinationState(
       supervisionRuntime(),

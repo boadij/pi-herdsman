@@ -107,7 +107,7 @@ mock.module("node:fs", {
 const {
   chiefMessagePath,
   claimChiefLease,
-  drainChiefInbox,
+  drainCoordinationInbox,
   supervisionRuntime,
   quarantineChiefMessage,
   writeChiefMessage,
@@ -175,7 +175,7 @@ test(
     failUnlink = true;
     failureDirectory = dirname(path);
     try {
-      await drainChiefInbox({
+      await drainCoordinationInbox({
         runtime,
         sessionId: "lead",
         isAuthorized: () => true,
@@ -202,7 +202,7 @@ test(
     failMarkerUnlink = true;
     failureDirectory = dirname(path);
     try {
-      await drainChiefInbox({
+      await drainCoordinationInbox({
         runtime,
         sessionId: "lead",
         isAuthorized: () => true,
@@ -240,7 +240,7 @@ test(
     directoryFsyncCount = 0;
     failureDirectory = dirname(path);
     try {
-      await drainChiefInbox({
+      await drainCoordinationInbox({
         runtime,
         sessionId: "lead",
         isAuthorized: () => true,
@@ -318,7 +318,7 @@ test(
     lastDirectoryFsyncError = undefined;
     failureDirectory = dirname(path);
     try {
-      await drainChiefInbox({
+      await drainCoordinationInbox({
         runtime,
         sessionId: "lead",
         isAuthorized: () => true,
@@ -368,7 +368,7 @@ test(
     failUnlink = true;
     failureDirectory = dirname(path);
     try {
-      await drainChiefInbox({
+      await drainCoordinationInbox({
         runtime,
         sessionId: "lead",
         isAuthorized: () => false,

@@ -1531,7 +1531,7 @@ export function formatToolModelResult(
     ...cleanup,
   ].join("\n");
 }
-type CoordinationTool = "agent" | "chief" | "staff";
+type CoordinationTool = "agent" | "chief" | "peer" | "staff";
 
 function humanText(theme: any, color: string, text: string): string {
   return theme?.fg ? theme.fg(color, text) : text;
@@ -1702,7 +1702,7 @@ function renderExpandedCoordinationCall(
       if (args.session) fields.push(["session", args.session]);
       if (args.timeoutMs) fields.push(["timeout", args.timeoutMs]);
     } else if (args.agent) fields.push(["agent", args.agent]);
-  } else if (tool === "staff") {
+  } else if (tool === "staff" || tool === "peer") {
     if (args.lead) fields.push(["lead", args.lead]);
     if (args.askId) fields.push(["ask", args.askId]);
   }
@@ -1774,7 +1774,7 @@ export function renderCoordinationCall(
   else if (tool === "agent" && action === "continue")
     target = value(context?.state?.agentLabel);
   else if (tool === "agent") target = value(a.agent);
-  else if (tool === "staff")
+  else if (tool === "staff" || tool === "peer")
     target = action === "list" ? "" : shortIdentity(a.lead);
   const definition =
     tool === "agent"
@@ -1988,7 +1988,9 @@ function expandedResultLines(
     action === "list"
       ? tool === "staff"
         ? "staff"
-        : "agents"
+        : tool === "peer"
+          ? "peer"
+          : "agents"
       : action === "inspect"
         ? `inspect ${display}`
         : action === "delegate" || action === "continue"
@@ -2061,7 +2063,20 @@ function expandedResultLines(
           ]
         : []),
     );
-  if (action === "list" && tool === "staff") {
+  if (action === "list" && (tool === "staff" || tool === "peer")) {
+    if (tool === "peer") {
+      const peers = Array.isArray(details.peers) ? details.peers : [];
+      lines.push(
+        "",
+        `peer ${peers.length} leads`,
+        ...peers.flatMap((peer: any) =>
+          peer && typeof peer === "object"
+            ? [`  ${value(peer.lead) || value(peer.session_id) || "lead"}`]
+            : [],
+        ),
+      );
+      return lines;
+    }
     const leads = Array.isArray(details.leads) ? details.leads : [];
     lines.push(
       "",
@@ -2260,6 +2275,14 @@ export function renderCoordinationResult(
         waiting ? "?" : "✓",
         waiting ? "waiting for Chief" : "sent to Chief",
       ),
+      0,
+      0,
+    );
+  }
+  if (tool === "peer" && action === "list") {
+    const peers = Array.isArray(details.peers) ? details.peers : [];
+    return new WidthSafeText(
+      humanText(theme, "toolTitle", `peer ${peers.length} leads`),
       0,
       0,
     );

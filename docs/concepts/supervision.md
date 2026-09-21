@@ -52,8 +52,9 @@ loses an activation race remains an ordinary lead.
 
 ## Communication
 
-Chief transport records are bounded, atomic inbox messages bound to exact
-sender, target lead session, and chief lease. Chief messages use Pi follow-up
+Chief and peer transport records are bounded, atomic inbox messages bound to
+exact sender, target lead session, and chief lease or Lead process-lock
+generation. Chief messages use Pi follow-up
 delivery and may remain queued while a lead is working. Records are ordered by
 `createdAt` and ID, survive same-session restart, and are retried after
 transient delivery failures. An individual quarantined record is excluded from
@@ -62,6 +63,14 @@ delivery but does not block a new message to that lead.
 The `chief` tool sends reports, events, results, and genuine decision questions
 from an ordinary lead to the active chief. The `staff` tool lets the active
 chief list, inspect, read transcripts, message, and reply to supervised leads.
+The Lead-only `peer` tool lists ordinary live Leads and sends durable messages
+to an exact full Pi session ID. Peer presence and peer inboxes use the
+user-global `runtime/peers-v1` runtime rather than the socket-scoped Chief
+runtime, allowing ordinary Leads on different Herdr sockets to discover and
+message one another. Peer presence is private, process-lock generation-bound,
+and published only by ordinary Leads; Chief and suspended sessions are absent.
+Peer delivery requires both exact target and exact live sender generations and
+uses follow-up delivery with `triggerTurn`.
 `inspect` is bounded live terminal/process evidence. `transcript` is bounded
 persisted Pi conversation/tool evidence. A non-empty persisted session candidate
 adds `transcript` to `available_actions`; `available_actions` is advisory

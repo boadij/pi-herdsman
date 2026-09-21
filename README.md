@@ -137,10 +137,12 @@ Pi Herdsman deliberately separates three responsibilities:
   coordination.
 - **Pi** owns each session and turn state.
 
-The model-facing tools are `agent`, `chief`, `staff`, and `ask_owner`.
+The model-facing tools are `agent`, `chief`, `peer`, `staff`, and `ask_owner`.
 `agent` manages owned assignments, `chief` sends messages or asks to the chief,
-`staff` lets the chief supervise leads, and `ask_owner` lets an agent ask its
-exact owner. Leads use `chief.message` and `chief.ask`; the active chief uses
+`peer` lets ordinary leads message independent ordinary leads, `staff` lets the
+chief supervise leads, and `ask_owner` lets an agent ask its exact owner. Leads
+use `chief.message` and `chief.ask`; ordinary leads use `peer.list` and
+`peer.message` with exact Pi session IDs; the active chief uses
 `staff.message` and `staff.reply` with exact lead session IDs. Agent labels are
 not continuation handles: exact Pi session IDs are the continuation selector.
 A continued session reuses its saved logical label. Exact herdr identifiers are

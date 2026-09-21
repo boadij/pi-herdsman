@@ -11,18 +11,30 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { acquireProcessLock } from "./lock.ts";
 import { test } from "node:test";
 import {
   chiefMessagePath,
   chiefMessageBytes,
-  CHIEF_MESSAGE_MAX_BYTES,
+  COORDINATION_INBOX_SCAN_LIMIT,
+  COORDINATION_MESSAGE_MAX_BYTES,
   chiefMessageQuarantined,
   chiefAskQueued,
   chiefAskMessageId,
   chiefLeaseIsHeld,
   claimChiefLease,
-  drainChiefInbox,
+  coordinationMessageBytes,
+  coordinationMessagePath,
+  drainCoordinationInbox,
+  listCoordinationMessagePaths,
+  listPeerLeadRecords,
+  peerLeadLockPath,
+  peerRuntime,
+  readCoordinationMessage,
+  readPeerLeadRecord,
+  removePeerLeadRecord,
+  removeCoordinationMessage,
   supervisionRuntime,
   invalidateLeadCoordinationState,
   LEAD_STATE_MAX_BYTES,
@@ -36,12 +48,15 @@ import {
   serializeSupervision,
   sessionLeadRoleState,
   writeChiefMessage,
+  writeCoordinationMessage,
+  writePeerLeadRecord,
   writeChiefAskMessage,
   removeChiefMessage,
   writeLeadCoordinationState,
   validLeadCoordinationQuestion,
   type ChiefMessageRecord,
   type LeadCoordinationState,
+  type PeerLeadRecord,
 } from "./supervision.ts";
 
 const socket = () =>
@@ -87,6 +102,29 @@ const askMessage = (
     text: "question",
     ...extra,
   });
+
+function peerRecord(
+  runtime: ReturnType<typeof peerRuntime>,
+  piSessionId = `lead-${id()}`,
+  extra: Partial<PeerLeadRecord> = {},
+): { record: PeerLeadRecord; release: () => void } {
+  const lease = acquireProcessLock(peerLeadLockPath(runtime, piSessionId), {
+    name: "Lead peer presence",
+  });
+  return {
+    record: {
+      version: 1,
+      piSessionId,
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId: "workspace",
+      claim: lease.claim,
+      updatedAt: 1,
+      ...extra,
+    },
+    release: lease.release,
+  };
+}
 
 test("lead ask publication is idempotent and retains the first record", () => {
   const runtime = supervisionRuntime(socket());
@@ -191,25 +229,304 @@ test("chief message admission accepts exactly 8 KiB and rejects the next byte", 
   const prefix = "é\t".repeat(32);
   const recordFor = (suffix: string) => message({ text: prefix + suffix });
   let low = 0;
-  let high = CHIEF_MESSAGE_MAX_BYTES;
+  let high = COORDINATION_MESSAGE_MAX_BYTES;
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
     if (
       chiefMessageBytes(recordFor("x".repeat(middle))) <=
-      CHIEF_MESSAGE_MAX_BYTES
+      COORDINATION_MESSAGE_MAX_BYTES
     )
       low = middle;
     else high = middle - 1;
   }
   const exact = recordFor("x".repeat(low));
   const over = recordFor("x".repeat(low + 1));
-  assert.equal(chiefMessageBytes(exact), CHIEF_MESSAGE_MAX_BYTES);
-  assert.equal(chiefMessageBytes(over), CHIEF_MESSAGE_MAX_BYTES + 1);
+  assert.equal(chiefMessageBytes(exact), COORDINATION_MESSAGE_MAX_BYTES);
+  assert.equal(chiefMessageBytes(over), COORDINATION_MESSAGE_MAX_BYTES + 1);
   writeChiefMessage(exact, runtime);
   assert.throws(
     () => writeChiefMessage(over, runtime),
     /Chief message record is too large/,
   );
+});
+
+test("peer lead presence requires a live generation and excludes corruption", () => {
+  const runtime = peerRuntime(socket());
+  const fixture = peerRecord(runtime, "lead-presence");
+  const path = join(
+    runtime.peers,
+    `${createHash("sha256").update("lead-presence").digest("hex")}.json`,
+  );
+  try {
+    assert.equal(writePeerLeadRecord(runtime, fixture.record), path);
+    assert.deepEqual(
+      readPeerLeadRecord(runtime, "lead-presence"),
+      fixture.record,
+    );
+    assert.deepEqual(listPeerLeadRecords(runtime), [fixture.record]);
+    assertPosixMode(path, 0o600);
+
+    writeFileSync(path, "not-json", "utf8");
+    assert.throws(
+      () => readPeerLeadRecord(runtime, "lead-presence"),
+      /Unable to read peer lead record/,
+    );
+    assert.deepEqual(listPeerLeadRecords(runtime), []);
+  } finally {
+    unlinkSync(path);
+    fixture.release();
+  }
+});
+
+test("peer lead presence rejects a changed or missing process-lock generation", () => {
+  const runtime = peerRuntime(socket());
+  const fixture = peerRecord(runtime, "lead-generation");
+  writePeerLeadRecord(runtime, fixture.record);
+  fixture.release();
+  assert.throws(
+    () => readPeerLeadRecord(runtime, "lead-generation"),
+    /Unable to (read peer lead record|verify process lock)/,
+  );
+  assert.deepEqual(listPeerLeadRecords(runtime), []);
+  unlinkSync(
+    join(
+      runtime.peers,
+      `${createHash("sha256").update("lead-generation").digest("hex")}.json`,
+    ),
+  );
+});
+
+test("peer lead enumeration excludes arbitrary and duplicate JSON", () => {
+  const runtime = peerRuntime(socket());
+  const fixture = peerRecord(runtime, "lead-enumeration");
+  const arbitraryPath = join(runtime.peers, "arbitrary.json");
+  const duplicatePath = join(
+    runtime.peers,
+    `${createHash("sha256").update("duplicate-name").digest("hex")}.json`,
+  );
+  try {
+    writePeerLeadRecord(runtime, fixture.record);
+    writeFileSync(arbitraryPath, JSON.stringify(fixture.record));
+    writeFileSync(duplicatePath, JSON.stringify(fixture.record));
+    assert.deepEqual(listPeerLeadRecords(runtime), [fixture.record]);
+  } finally {
+    removePeerLeadRecord(runtime, fixture.record.piSessionId, fixture.record);
+    fixture.release();
+    unlinkSync(arbitraryPath);
+    unlinkSync(duplicatePath);
+  }
+});
+
+test("peer lead enumeration is bounded", () => {
+  const runtime = peerRuntime(socket());
+  const fixtures = Array.from(
+    { length: COORDINATION_INBOX_SCAN_LIMIT + 1 },
+    (_, index) => peerRecord(runtime, `lead-enumeration-${index}`),
+  );
+  try {
+    for (const fixture of fixtures)
+      writePeerLeadRecord(runtime, fixture.record);
+
+    const records = listPeerLeadRecords(runtime);
+    const expected = fixtures
+      .map((fixture) => ({
+        filename: `${createHash("sha256")
+          .update(fixture.record.piSessionId)
+          .digest("hex")}.json`,
+        record: fixture.record,
+      }))
+      .sort((a, b) => a.filename.localeCompare(b.filename))
+      .slice(0, COORDINATION_INBOX_SCAN_LIMIT)
+      .map(({ record }) => record);
+    assert.equal(records.length, COORDINATION_INBOX_SCAN_LIMIT);
+    assert.deepEqual(records, expected);
+  } finally {
+    for (const fixture of fixtures) {
+      removePeerLeadRecord(runtime, fixture.record.piSessionId, fixture.record);
+      fixture.release();
+    }
+  }
+});
+
+test("peer message records use strict validation and the shared UTF-8 bound", () => {
+  const runtime = supervisionRuntime(socket());
+  const record = message({
+    kind: "peer_message",
+    fromSessionId: "lead-a",
+    toSessionId: "lead-b",
+    leadSessionId: "lead-a",
+    text: "peer update",
+  });
+  const path = writeCoordinationMessage(record, runtime);
+  assert.deepEqual(readCoordinationMessage(path), record);
+  assert.equal(
+    coordinationMessagePath(runtime, record.toSessionId, record.id),
+    path,
+  );
+  assert.equal(coordinationMessageBytes(record), chiefMessageBytes(record));
+  assert.throws(
+    () =>
+      writeCoordinationMessage({ ...record, kind: "peer" } as never, runtime),
+    /Invalid Chief message record/,
+  );
+  assert.throws(
+    () => writeCoordinationMessage({ ...record, askId: id() }, runtime),
+    /Invalid Chief message record/,
+  );
+
+  const prefix = "é\t".repeat(32);
+  const recordFor = (suffix: string) =>
+    message({ kind: "peer_message", text: prefix + suffix });
+  let low = 0;
+  let high = COORDINATION_MESSAGE_MAX_BYTES;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (
+      coordinationMessageBytes(recordFor("x".repeat(middle))) <=
+      COORDINATION_MESSAGE_MAX_BYTES
+    )
+      low = middle;
+    else high = middle - 1;
+  }
+  const exact = recordFor("x".repeat(low));
+  const over = recordFor("x".repeat(low + 1));
+  assert.equal(coordinationMessageBytes(exact), COORDINATION_MESSAGE_MAX_BYTES);
+  assert.equal(
+    coordinationMessageBytes(over),
+    COORDINATION_MESSAGE_MAX_BYTES + 1,
+  );
+  writeCoordinationMessage(exact, runtime);
+  assert.throws(
+    () => writeCoordinationMessage(over, runtime),
+    /Chief message record is too large/,
+  );
+});
+
+test("generic coordination transport orders and renders peer messages", async () => {
+  const runtime = supervisionRuntime(socket());
+  const older = message({
+    id: id(),
+    kind: "peer_message",
+    fromSessionId: "lead-a",
+    toSessionId: "lead-b",
+    leadSessionId: "lead-a",
+    text: "older",
+    createdAt: 1,
+  });
+  const newer = { ...older, id: id(), text: "newer", createdAt: 2 };
+  writeCoordinationMessage(newer, runtime);
+  writeCoordinationMessage(older, runtime);
+  const sent: any[] = [];
+  assert.equal(
+    await drainCoordinationInbox({
+      runtime,
+      sessionId: "lead-b",
+      isAuthorized: (candidate) => candidate.kind === "peer_message",
+      isDelivered: () => false,
+      sendMessage: (value) => sent.push(value),
+    }),
+    2,
+  );
+  assert.deepEqual(
+    sent.map((value) => value.details.id),
+    [older.id, newer.id],
+  );
+  assert.match(sent[0].content, /From peer lead-a to lead lead-b: older/);
+  assert.deepEqual(listCoordinationMessagePaths(runtime, "lead-b"), []);
+  assert.equal(removeCoordinationMessage, removeChiefMessage);
+});
+
+test("peer presence and inbox transport are shared across socket runtimes", async () => {
+  const socketA = socket();
+  const socketB = socket();
+  const runtimeA = supervisionRuntime(socketA);
+  const runtimeB = supervisionRuntime(socketB);
+  const peersA = peerRuntime(socketA);
+  const peersB = peerRuntime(socketB);
+  const peerA = peerRecord(peersA, "lead-a");
+  const peerB = peerRecord(peersB, "lead-b");
+  try {
+    assert.notEqual(runtimeA.root, runtimeB.root);
+    assert.equal(peersA.root, peersB.root);
+    writePeerLeadRecord(peersA, peerA.record);
+    writePeerLeadRecord(peersB, peerB.record);
+    assert.deepEqual(
+      listPeerLeadRecords(peersB)
+        .map((record) => record.piSessionId)
+        .sort(),
+      ["lead-a", "lead-b"],
+    );
+
+    const chiefRecord = message({ toSessionId: "chief-b" });
+    writeChiefMessage(chiefRecord, runtimeA);
+    assert.deepEqual(listChiefMessagePaths(runtimeB, "chief-b"), []);
+    assert.deepEqual(listChiefMessagePaths(runtimeA, "chief-b"), [
+      chiefMessagePath(runtimeA, "chief-b", chiefRecord.id),
+    ]);
+
+    const record = message({
+      kind: "peer_message",
+      fromSessionId: "lead-a",
+      toSessionId: "lead-b",
+      leadSessionId: "lead-a",
+      leaseId: peerA.record.claim.id,
+      text: "shared peer inbox",
+    });
+    writeCoordinationMessage(record, peersA);
+    const sent: any[] = [];
+    assert.equal(
+      await drainCoordinationInbox({
+        runtime: peersB,
+        sessionId: "lead-b",
+        isAuthorized: (candidate) =>
+          candidate.kind === "peer_message" &&
+          candidate.fromSessionId === "lead-a" &&
+          candidate.toSessionId === "lead-b",
+        isDelivered: () => false,
+        sendMessage: (value) => sent.push(value),
+      }),
+      1,
+    );
+    assert.equal(sent[0].details.id, record.id);
+    assert.match(
+      sent[0].content,
+      /From peer lead-a to lead lead-b: shared peer inbox/,
+    );
+    assert.deepEqual(listCoordinationMessagePaths(peersA, "lead-b"), []);
+  } finally {
+    removePeerLeadRecord(peersA, peerA.record.piSessionId, peerA.record);
+    removePeerLeadRecord(peersB, peerB.record.piSessionId, peerB.record);
+    peerA.release();
+    peerB.release();
+  }
+});
+
+test("peer receiver authorization rejects a self-addressed record", async () => {
+  const runtime = peerRuntime(socket());
+  const record = message({
+    kind: "peer_message",
+    fromSessionId: "lead-self",
+    toSessionId: "lead-self",
+    leadSessionId: "lead-self",
+  });
+  writeCoordinationMessage(record, runtime);
+  const sent: any[] = [];
+  assert.equal(
+    await drainCoordinationInbox({
+      runtime,
+      sessionId: "lead-self",
+      isAuthorized: (candidate) =>
+        candidate.kind === "peer_message" &&
+        candidate.toSessionId === "lead-self" &&
+        candidate.fromSessionId !== candidate.toSessionId &&
+        candidate.leadSessionId === candidate.fromSessionId,
+      isDelivered: () => false,
+      sendMessage: (value) => sent.push(value),
+    }),
+    0,
+  );
+  assert.deepEqual(sent, []);
+  assert.deepEqual(listCoordinationMessagePaths(runtime, "lead-self"), []);
 });
 
 test("lead coordination state is strict, private, bounded, and atomic", () => {
@@ -281,7 +598,7 @@ test("queued traffic remains correlated to the exact lead session after restart"
   const original = message({ leadSessionId: "lead", fromSessionId: "lead" });
   writeChiefMessage(original, runtime);
   let delivered = 0;
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: original.toSessionId,
     isAuthorized: (record) =>
@@ -600,7 +917,7 @@ test("lead session binds queued traffic and invalidation removes authority", () 
   const current = state("lead", { instanceId: id() });
   writeLeadCoordinationState(runtime, current);
   let delivered = false;
-  return drainChiefInbox({
+  return drainCoordinationInbox({
     runtime,
     sessionId: "chief",
     isAuthorized: (candidate) => candidate.leadSessionId === "lead",
@@ -871,7 +1188,7 @@ test("inbox draining skips quarantined messages and retains the record", async (
   quarantineChiefMessage(runtime, record.toSessionId, record.id);
   let authorized = 0;
   let sent = false;
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: record.toSessionId,
     isAuthorized: () => {
@@ -898,7 +1215,7 @@ test("inbox rechecks quarantine immediately before delivery", async () => {
   const record = message();
   writeChiefMessage(record, runtime);
   let sent = false;
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: record.toSessionId,
     isAuthorized: () => true,
@@ -932,7 +1249,7 @@ test("inbox rechecks quarantine before accepting an already-delivered record", a
   const record = message();
   writeChiefMessage(record, runtime);
   let accepted = false;
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: record.toSessionId,
     isAuthorized: () => true,
@@ -968,7 +1285,7 @@ test("inbox orders valid records by createdAt and retains transient failures", a
   assert.equal(listChiefMessagePaths(runtime, "chief").length, 3);
   const seen: string[] = [];
   const cleared: string[] = [];
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: "chief",
     isAuthorized: () => {
@@ -984,7 +1301,7 @@ test("inbox orders valid records by createdAt and retains transient failures", a
   });
   assert.equal(listChiefMessagePaths(runtime, "chief").length, 3);
   assert.equal(cleared.length, 3);
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: "chief",
     isAuthorized: () => true,
@@ -1024,7 +1341,7 @@ test("terminal authorization rejection deletes, and sender is model-visible", as
   });
   writeChiefMessage(record, runtime);
   let content = "";
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: "chief",
     isAuthorized: () => true,
@@ -1036,7 +1353,7 @@ test("terminal authorization rejection deletes, and sender is model-visible", as
   assert.match(content, /^From lead api\/backend to chief chief: hello$/);
   const rejected = message();
   writeChiefMessage(rejected, runtime);
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: "chief",
     isAuthorized: () => false,
@@ -1051,7 +1368,7 @@ test("in-flight authorization cleanup becomes a no-op after invalidation", async
   const record = message();
   writeChiefMessage(record, runtime);
   let rejected = false;
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: "chief",
     isAuthorized: () => false,
@@ -1094,14 +1411,14 @@ test("both directions identify the actual sender and target in bounded content",
   writeChiefMessage(leadAsk, runtime);
   writeChiefMessage(chiefReply, runtime);
   const content: string[] = [];
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: "chief-session",
     isAuthorized: () => true,
     isDelivered: () => false,
     sendMessage: (payload) => content.push((payload as any).content),
   });
-  await drainChiefInbox({
+  await drainCoordinationInbox({
     runtime,
     sessionId: "lead-session",
     isAuthorized: () => true,
