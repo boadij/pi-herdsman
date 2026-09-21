@@ -1737,6 +1737,23 @@ function renderExpandedCoordinationCall(
     content.addChild(new Spacer(1));
     content.addChild(new WidthSafeText(["files:", ...files].join("\n"), 0, 0));
   }
+  const results = Array.isArray(args.results)
+    ? args.results.flatMap((selector) => {
+        if (!selector || typeof selector !== "object") return [];
+        const item = selector as Record<string, unknown>;
+        const agent = value(item.agent);
+        const index = item.index;
+        return agent && Number.isSafeInteger(index) && index > 0
+          ? [`  ${agent} #${index}`]
+          : [];
+      })
+    : [];
+  if (results.length) {
+    content.addChild(new Spacer(1));
+    content.addChild(
+      new WidthSafeText(["results:", ...results].join("\n"), 0, 0),
+    );
+  }
   const box = createWidthSafeBox(0, 0, (line) => line);
   box.addChild(content);
   return box;
