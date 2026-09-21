@@ -1566,6 +1566,10 @@ test("coordination results keep collapsed identity bounded and expose structured
     label: "release-review",
     task,
     files,
+    results: [
+      { agent: "message-scout", index: 2 },
+      { agent: "researcher", index: 1 },
+    ],
   };
   const result = {
     content: [{ type: "text", text: "model-facing prose must not be parsed" }],
@@ -1595,12 +1599,18 @@ test("coordination results keep collapsed identity bounded and expose structured
     pane,
     task,
     ...files,
+    "message-scout #2",
+    "researcher #1",
     "model-facing prose",
   ])
     assert.doesNotMatch(
       collapsed,
       new RegExp(hidden.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),
     );
+  const compactCall = renderedText(
+    renderCoordinationCall("agent", args, presentationTheme),
+  );
+  assert.doesNotMatch(compactCall, /results:|message-scout #2|researcher #1/);
   const expanded = renderedText(
     renderCoordinationResult(
       "agent",
@@ -1617,7 +1627,9 @@ test("coordination results keep collapsed identity bounded and expose structured
   );
   assert.ok(
     expandedCall.includes(`task:\n${task}`) &&
-      expandedCall.includes("files:\n  one.md\n  two.md") &&
+      expandedCall.includes(
+        "files:\n  one.md\n  two.md\n\nresults:\n  message-scout #2\n  researcher #1",
+      ) &&
       !expanded.includes(`task:\n${task}`) &&
       !expanded.includes("files:\n"),
   );
