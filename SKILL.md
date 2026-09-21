@@ -361,14 +361,16 @@ and wait for the reply. Descendants use `ask_owner`, not `chief`.
 
 Ordinary Leads may use the Lead-only `peer` tool to list current ordinary live
 Leads and send durable follow-up messages to an exact full Pi session ID.
-Presence is private and bound to the Lead's exact Herdr identity and live
-process-lock generation; Chief and suspended sessions do not publish it.
-Peer messages are coordination data, not assignments, and accept the same
-canonical attachment preparation as other Herdsman messages. Revalidate both
-the sender and target immediately before publication and delivery. A sender
-that exits before delivery invalidates its queued peer messages rather than
-authorizing them for a replacement generation. Peer delivery uses a follow-up
-with `triggerTurn` and does not change ownership.
+Presence is private and bound to the Lead's global peer record and exact live
+process-lock generation; Chief and suspended sessions do not publish it. Peer
+messages are coordination data, not assignments, and accept the same canonical
+attachment preparation as other Herdsman messages. Revalidate the expected
+sender and target records immediately before publication. Delivery revalidates
+only the current ordinary-Lead receiver generation and structural target
+invariants, so sender shutdown does not invalidate an already queued message.
+Peer inboxes remain queued while the receiver is Chief and drain after it
+returns to ordinary Lead with valid peer presence. Peer delivery uses a
+follow-up with `triggerTurn` and does not change ownership.
 
 `chief` is available only to an ordinary lead. Its actions are `message` and
 `ask`; a valid chief is required and a rejected call does not mutate state.

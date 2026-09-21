@@ -13,17 +13,20 @@ user-global `runtime/peers-v1/peers/` directory beneath the Herdsman data root.
 This peer runtime is independent of the socket-scoped supervision runtime, so
 ordinary Leads attached to different Herdr sockets share peer discovery and
 transport. The record contains the exact Pi session, Herdr pane, tab,
-workspace, and the `{ pid, id }` claim for that Lead's per-session process
-lock. The record is valid only while the record's claim is the exact live
-process-lock generation. Missing, malformed, duplicate, replaced, or dead-lock
-evidence is ignored. Chief and suspended Lead sessions do not publish peer
-presence. Peer enumeration scans at most 32 canonical record entries per
-request.
+workspace, presentation name, cwd, repository, branch, workspace label, and the
+`{ pid, id }` claim for that Lead's per-session process lock. The record is
+valid only while the record's claim is the exact live process-lock generation.
+Missing, malformed, duplicate, replaced, or dead-lock evidence is ignored.
+Chief and suspended Lead sessions do not publish peer presence. Enumeration
+scans every canonical filename in the global registry, then filters malformed
+or dead records; one stale record does not hide later live peers.
 
-Presence is observation, not permission. Peer actions revalidate the sender,
-target, exact Herdr identity, ordinary Lead role, and process-lock generation
-immediately before publication or delivery. Managed agents, Chief sessions,
-display labels, and metadata are never peer targets.
+Presence is observation, not permission. The global peer record and its exact
+live process-lock claim are the reachability authority; Herdr inventory and
+presentation metadata are not. Peer publication validates the sender and
+target generations immediately before writing. Delivery validates the current
+ordinary-Lead target generation and target structure only. Managed agents,
+Chief sessions, display labels, and metadata are never peer targets.
 
 ## `peer`
 
@@ -34,8 +37,10 @@ The Lead-only `peer` tool has two actions:
 ```
 
 returns current ordinary live Leads. Each result's `lead` is the exact full Pi
-session ID to use for messaging; `pane_id`, `tab_id`, and `workspace_id` are
-identity evidence. A display label is not a target.
+session ID to use for messaging. Results include the presentation name, cwd,
+repository, branch, workspace label, and `pane_id`, `tab_id`, and
+`workspace_id` provenance. These fields are presentation metadata only; a
+display label is not a target.
 
 ```json
 {
@@ -54,12 +59,15 @@ limit.
 
 Peer records use the global peer runtime's shared coordination inbox. Delivery
 uses Pi `deliverAs: "followUp"` with `triggerTurn: true`, survives a busy
-receiver, and is retried after transient delivery failure. A queued message is
-accepted only while both the exact target and the exact live sender generation
-remain ordinary Leads. If the sender exits or its process-lock generation is
-replaced, the queued message is rejected rather than attributed to a later
-session generation. Shutdown aborts in-flight delivery and removes the
-sender's presence before releasing its process lock.
+receiver, and is retried after transient delivery failure. Publication accepts
+a message only after the exact expected sender and target records are reread
+unchanged immediately before the atomic write. A queued message remains valid
+after the sender exits; delivery only revalidates the current ordinary-Lead
+receiver generation, so sender shutdown does not strand an already published
+message. A queued peer message is retained while its receiver is Chief and is
+delivered after that session returns to ordinary Lead. Shutdown aborts
+in-flight delivery and removes the sender's presence before releasing its
+process lock.
 
 Peer transport shares the existing atomic, bounded, quarantined coordination
 inbox implementation with Chief traffic. Chief records retain their existing

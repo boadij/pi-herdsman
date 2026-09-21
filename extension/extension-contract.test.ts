@@ -8,8 +8,11 @@ import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
 import {
   claimChiefLease,
+  listCoordinationMessagePaths,
   invalidateLeadCoordinationState,
   listChiefMessagePaths,
+  readPeerLeadRecord,
+  removePeerLeadRecord,
   removeChiefMessage,
   readChiefMessage,
   writeChiefMessage,
@@ -55,6 +58,7 @@ import support, {
   resetAgentMailbox,
   setLeadEnvironment,
   setAgentEnvironment,
+  testGate,
   skillBlock,
   startupExecutor,
   testTmpRoot,
@@ -487,7 +491,7 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
   }
 });
 
-test("peer message publication revalidates a replaced target generation", async () => {
+test("peer list and message use global peer presence, not caller inventory", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-a-pane";
   process.env.HERDR_TAB_ID = "lead-a-tab";
@@ -508,6 +512,15 @@ test("peer message publication revalidates a replaced target generation", async 
       paneId,
       tabId,
       workspaceId: WORKSPACE,
+      ...(sessionId === targetId
+        ? {
+            name: "Target Lead",
+            cwd: "/workspaces/target",
+            repo: "pi-herdsman",
+            branch: "feature/peer",
+            workspaceLabel: "pi-herdsman/feature/peer",
+          }
+        : {}),
       claim: lease.claim,
       updatedAt: Date.now(),
     };
@@ -516,50 +529,18 @@ test("peer message publication revalidates a replaced target generation", async 
   };
   const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
   let target = claim(targetId, "lead-b-pane", "lead-b-tab");
-  const agents = [
-    {
-      agent_session: {
-        source: "herdr:pi",
-        agent: "pi",
-        kind: "id",
-        value: senderId,
-      },
-      pane_id: "lead-a-pane",
-      tab_id: "lead-a-tab",
-      workspace_id: WORKSPACE,
-    },
-    {
-      agent_session: {
-        source: "herdr:pi",
-        agent: "pi",
-        kind: "id",
-        value: targetId,
-      },
-      pane_id: "lead-b-pane",
-      tab_id: "lead-b-tab",
-      workspace_id: WORKSPACE,
-    },
-  ];
-  let inventoryCalls = 0;
   const pi = fakePi({
-    exec: (_command, args) => {
-      if (isAgentList(args) || isApiSnapshot(args)) {
-        inventoryCalls++;
-        if (inventoryCalls === 8) {
-          target.lease.release();
-          target = claim(targetId, "lead-b-pane", "lead-b-tab");
-        }
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: { agents, snapshot: { agents, panes: agents } },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      }
-      return { stdout: "{}", stderr: "", code: 0 };
-    },
+    exec: (_command, args) =>
+      isAgentList(args) || isApiSnapshot(args)
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { agents: [], snapshot: { agents: [], panes: [] } },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
   });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
@@ -570,21 +551,262 @@ test("peer message publication revalidates a replaced target generation", async 
   try {
     const peer = pi.tools.find((tool) => tool.name === "peer");
     assert.ok(peer);
-    await assert.rejects(
-      peer.execute(
-        "message",
-        { action: "message", lead: targetId, message: "must not queue" },
-        undefined,
-        undefined,
-        context,
-      ),
-      /sender or target changed before the message was queued/,
+    const listed = await peer.execute(
+      "list",
+      { action: "list" },
+      undefined,
+      undefined,
+      context,
     );
-    assert.deepEqual(listChiefMessagePaths(supervisionRuntime(), targetId), []);
+    assert.deepEqual(JSON.parse(listed.content[0].text).peers, [
+      {
+        lead: targetId,
+        session_id: targetId,
+        name: "Target Lead",
+        cwd: "/workspaces/target",
+        repo: "pi-herdsman",
+        branch: "feature/peer",
+        workspace_label: "pi-herdsman/feature/peer",
+        pane_id: "lead-b-pane",
+        tab_id: "lead-b-tab",
+        workspace_id: WORKSPACE,
+      },
+    ]);
+    const queued = await peer.execute(
+      "message",
+      { action: "message", lead: targetId, message: "global peer" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(queued.details?.lead, targetId);
+    assert.equal(listCoordinationMessagePaths(runtime, targetId).length, 1);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     sender.lease.release();
     target.lease.release();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("peer publication rejects sender and target generation replacement during attachment preparation", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-a-pane";
+  process.env.HERDR_TAB_ID = "lead-a-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `peer-generation-race-${randomUUID()}.sock`,
+  );
+  const attachment = join(tmpdir(), `peer-attachment-${randomUUID()}.md`);
+  writeFileSync(attachment, "attachment evidence\n", "utf8");
+  const configPath = join(PI_AGENT_ROOT, "pi-herdsman", "config.json");
+  realFs.mkdirSync(join(PI_AGENT_ROOT, "pi-herdsman"), { recursive: true });
+  writeFileSync(configPath, "{}", "utf8");
+  const senderId = `lead-a-${randomUUID()}`;
+  const targetId = `lead-b-${randomUUID()}`;
+  const runtime = peerRuntime();
+  const claim = (sessionId: string, paneId: string, tabId: string) => {
+    const lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
+      name: "Lead peer presence",
+    });
+    const record = {
+      version: 1 as const,
+      piSessionId: sessionId,
+      paneId,
+      tabId,
+      workspaceId: WORKSPACE,
+      claim: lease.claim,
+      updatedAt: Date.now(),
+    };
+    writePeerLeadRecord(runtime, record);
+    return { lease, record };
+  };
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => senderId,
+  };
+  try {
+    const peer = pi.tools.find((tool) => tool.name === "peer");
+    assert.ok(peer);
+    for (const replaced of ["sender", "target"] as const) {
+      const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
+      const target = claim(targetId, "lead-b-pane", "lead-b-tab");
+      const expectedSender = sender.record;
+      const expectedTarget = target.record;
+      const preparationReached = testGate<void>();
+      let reached = false;
+      support.configReadHook = () => {
+        if (!reached) {
+          reached = true;
+          preparationReached.resolve();
+        }
+      };
+      const pending = peer.execute(
+        "message",
+        {
+          action: "message",
+          lead: targetId,
+          message: "must not queue",
+          files: [attachment],
+        },
+        undefined,
+        undefined,
+        context,
+      );
+      await preparationReached.promise;
+      const current = replaced === "sender" ? sender : target;
+      current.lease.release();
+      const replacement = claim(
+        current.record.piSessionId,
+        current.record.paneId,
+        current.record.tabId,
+      );
+      await assert.rejects(
+        pending,
+        /sender or target changed before the message was queued/,
+      );
+      assert.deepEqual(
+        readPeerLeadRecord(runtime, senderId),
+        replaced === "sender" ? replacement.record : expectedSender,
+      );
+      assert.deepEqual(
+        readPeerLeadRecord(runtime, targetId),
+        replaced === "target" ? replacement.record : expectedTarget,
+      );
+      assert.deepEqual(listCoordinationMessagePaths(runtime, targetId), []);
+      replacement.lease.release();
+      sender.lease.release();
+      target.lease.release();
+      removePeerLeadRecord(runtime, senderId);
+      removePeerLeadRecord(runtime, targetId);
+      support.configReadHook = undefined;
+    }
+  } finally {
+    support.configReadHook = undefined;
+    pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(configPath, { force: true });
+    realFs.rmSync(attachment, { force: true });
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("session shutdown prevents pending peer presence publication", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `peer-shutdown-race-${randomUUID()}.sock`,
+  );
+  const sessionId = randomUUID();
+  const runtime = peerRuntime();
+  const provenanceStarted = testGate<void>();
+  const releaseProvenance = testGate<void>();
+  const pi = fakePi({
+    exec: async (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get") {
+        provenanceStarted.resolve();
+        await releaseProvenance.promise;
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  const sessionStart = pi.events.get("session_start")![0];
+  const sessionShutdown = pi.events.get("session_shutdown")![0];
+  try {
+    const starting = sessionStart(undefined, context);
+    await provenanceStarted.promise;
+    const shuttingDown = sessionShutdown();
+    releaseProvenance.resolve();
+    await Promise.all([starting, shuttingDown]);
+    await sessionShutdown();
+
+    assert.equal(readPeerLeadRecord(runtime, sessionId), undefined);
+    const lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
+      name: "test peer presence",
+    });
+    lease.release();
+  } finally {
+    releaseProvenance.resolve();
+    await sessionShutdown();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("stale peer publication cannot replace a same-session lifecycle generation", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `peer-replacement-race-${randomUUID()}.sock`,
+  );
+  const sessionId = randomUUID();
+  const runtime = peerRuntime();
+  const provenanceStarted = testGate<void>();
+  const releaseProvenance = testGate<void>();
+  const pi = fakePi({
+    exec: async (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get") {
+        provenanceStarted.resolve();
+        await releaseProvenance.promise;
+      }
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  const sessionStart = pi.events.get("session_start")![0];
+  const sessionShutdown = pi.events.get("session_shutdown")![0];
+  let replacementLease: ReturnType<typeof acquireProcessLock> | undefined;
+  try {
+    const starting = sessionStart(undefined, context);
+    await provenanceStarted.promise;
+    const shuttingDown = sessionShutdown();
+    replacementLease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
+      name: "replacement peer presence",
+    });
+    const replacement = {
+      version: 1 as const,
+      piSessionId: sessionId,
+      paneId: "replacement-pane",
+      tabId: "replacement-tab",
+      workspaceId: WORKSPACE,
+      claim: replacementLease.claim,
+      updatedAt: Date.now(),
+    };
+    writePeerLeadRecord(runtime, replacement);
+    releaseProvenance.resolve();
+    await Promise.all([starting, shuttingDown]);
+
+    assert.deepEqual(readPeerLeadRecord(runtime, sessionId), replacement);
+  } finally {
+    releaseProvenance.resolve();
+    await sessionShutdown();
+    removePeerLeadRecord(runtime, sessionId);
+    replacementLease?.release();
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_SOCKET_PATH;

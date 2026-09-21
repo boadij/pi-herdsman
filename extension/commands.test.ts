@@ -11,15 +11,20 @@ import type {
   ResultRecord,
   ManagedAgentState,
 } from "./mailbox.ts";
-import { claimProcessLock } from "./lock.ts";
+import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import {
   claimChiefLease,
+  listCoordinationMessagePaths,
   listPeerLeadRecords,
+  peerLeadLockPath,
   peerRuntime,
   readPeerLeadRecord,
+  removePeerLeadRecord,
   supervisionRuntime,
   readLeadCoordinationState,
   writeLeadCoordinationState,
+  writeCoordinationMessage,
+  writePeerLeadRecord,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
 import support, {
@@ -141,6 +146,187 @@ test("ordinary Lead peer presence disappears in Chief mode and on shutdown", asy
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("queued peer traffic stays durable through Chief mode and drains after leave", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `peer-chief-backpressure-${randomUUID()}.sock`);
+  const receiverId = `receiver-${randomUUID()}`;
+  const senderId = `sender-${randomUUID()}`;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.HERDR_PANE_ID = "receiver-pane";
+  process.env.HERDR_TAB_ID = "receiver-tab";
+  const delivered = testGate<void>();
+  const receiver = fakeChiefPi({
+    sendMessage: (message) => {
+      if (String((message as any)?.content ?? "").includes("queued peer")) {
+        const waitForRemoval = () =>
+          listCoordinationMessagePaths(runtime, receiverId).length === 0
+            ? delivered.resolve()
+            : queueMicrotask(waitForRemoval);
+        queueMicrotask(waitForRemoval);
+      }
+    },
+    activeTools: ["read", "bash"],
+  });
+  const receiverContext = fakeContext() as any;
+  receiverContext.sessionManager = {
+    ...receiverContext.sessionManager,
+    getSessionId: () => receiverId,
+  };
+  const runtime = peerRuntime();
+  const senderLease = acquireProcessLock(peerLeadLockPath(runtime, senderId), {
+    name: "Lead peer presence",
+  });
+  const senderRecord = {
+    version: 1 as const,
+    piSessionId: senderId,
+    paneId: "sender-pane",
+    tabId: "sender-tab",
+    workspaceId: WORKSPACE,
+    claim: senderLease.claim,
+    updatedAt: Date.now(),
+  };
+  writePeerLeadRecord(runtime, senderRecord);
+  registerExtension!(receiver.pi as never);
+  try {
+    await receiver.events.get("session_start")![0](undefined, receiverContext);
+    assert.ok(readPeerLeadRecord(runtime, receiverId));
+    const record = {
+      version: 1 as const,
+      id: randomUUID(),
+      leaseId: senderRecord.claim.id,
+      kind: "peer_message" as const,
+      fromSessionId: senderId,
+      toSessionId: receiverId,
+      leadSessionId: senderId,
+      text: "queued peer",
+      createdAt: Date.now(),
+    };
+    writeCoordinationMessage(record, runtime);
+
+    await receiver.commandOptions.get("chief").handler("", receiverContext);
+    assert.equal(
+      receiver.sentMessageCalls.filter((call) =>
+        String((call.message as any)?.content ?? "").includes("queued peer"),
+      ).length,
+      0,
+    );
+    assert.equal(listCoordinationMessagePaths(runtime, receiverId).length, 1);
+
+    await receiver.commandOptions.get("chief").handler("leave", receiverContext);
+    await delivered.promise;
+    await Promise.resolve();
+    const peerDeliveries = receiver.sentMessageCalls.filter((call) =>
+      String((call.message as any)?.content ?? "").includes("queued peer"),
+    );
+    assert.equal(peerDeliveries.length, 1);
+    assert.deepEqual(listCoordinationMessagePaths(runtime, receiverId), []);
+  } finally {
+    await receiver.events.get("session_shutdown")?.[0]();
+    removePeerLeadRecord(runtime, senderId);
+    senderLease.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("peer delivery survives sender shutdown and is accepted exactly once", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `peer-sender-shutdown-${randomUUID()}.sock`);
+  const senderId = `sender-${randomUUID()}`;
+  const targetId = `target-${randomUUID()}`;
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.HERDR_PANE_ID = "sender-pane";
+  process.env.HERDR_TAB_ID = "sender-tab";
+  const sender = fakeChiefPi({ activeTools: ["read", "bash"] });
+  const senderContext = fakeContext() as any;
+  senderContext.sessionManager = {
+    ...senderContext.sessionManager,
+    getSessionId: () => senderId,
+  };
+  registerExtension!(sender.pi as never);
+  const runtime = peerRuntime();
+  const targetLease = acquireProcessLock(peerLeadLockPath(runtime, targetId), {
+    name: "Lead peer presence",
+  });
+  const targetRecord = {
+    version: 1 as const,
+    piSessionId: targetId,
+    paneId: "target-pane",
+    tabId: "target-tab",
+    workspaceId: WORKSPACE,
+    claim: targetLease.claim,
+    updatedAt: Date.now(),
+  };
+  writePeerLeadRecord(runtime, targetRecord);
+  try {
+    await sender.events.get("session_start")![0](undefined, senderContext);
+    const peer = sender.tools.find((tool) => tool.name === "peer");
+    assert.ok(peer);
+    const queued = await peer.execute(
+      "message",
+      { action: "message", lead: targetId, message: "sender survived" },
+      undefined,
+      undefined,
+      senderContext,
+    );
+    assert.equal(queued.details?.lead, targetId);
+    await sender.events.get("session_shutdown")![0]();
+    assert.equal(readPeerLeadRecord(runtime, senderId), undefined);
+
+    targetLease.release();
+    process.env.HERDR_PANE_ID = "target-pane";
+    process.env.HERDR_TAB_ID = "target-tab";
+    const delivered = testGate<void>();
+    const receiver = fakeChiefPi({
+      sendMessage: (message) => {
+        if (
+          String((message as any)?.content ?? "").includes("sender survived")
+        ) {
+          const waitForRemoval = () =>
+            listCoordinationMessagePaths(runtime, targetId).length === 0
+              ? delivered.resolve()
+              : queueMicrotask(waitForRemoval);
+          queueMicrotask(waitForRemoval);
+        }
+      },
+      activeTools: ["read", "bash"],
+    });
+    const receiverContext = fakeContext() as any;
+    receiverContext.sessionManager = {
+      ...receiverContext.sessionManager,
+      getSessionId: () => targetId,
+    };
+    registerExtension!(receiver.pi as never);
+    try {
+      await receiver.events.get("session_start")![0](
+        undefined,
+        receiverContext,
+      );
+      await delivered.promise;
+      await Promise.resolve();
+      const deliveries = receiver.sentMessageCalls.filter((call) =>
+        String((call.message as any)?.content ?? "").includes("sender survived"),
+      );
+      assert.equal(deliveries.length, 1);
+      assert.deepEqual(listCoordinationMessagePaths(runtime, targetId), []);
+    } finally {
+      await receiver.events.get("session_shutdown")?.[0]();
+    }
+  } finally {
+    removePeerLeadRecord(runtime, senderId);
+    removePeerLeadRecord(runtime, targetId);
+    try {
+      targetLease.release();
+    } catch {}
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
     setLeadEnvironment();
   }
 });

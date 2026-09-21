@@ -317,15 +317,23 @@ test("peer lead enumeration excludes arbitrary and duplicate JSON", () => {
   }
 });
 
-test("peer lead enumeration is bounded", () => {
+test("peer lead enumeration scans every canonical record before liveness filtering", () => {
   const runtime = peerRuntime(socket());
   const fixtures = Array.from(
     { length: COORDINATION_INBOX_SCAN_LIMIT + 1 },
     (_, index) => peerRecord(runtime, `lead-enumeration-${index}`),
   );
+  const malformedPath = join(runtime.peers, `${"0".repeat(64)}.json`);
+  const dead = peerRecord(runtime, "dead-0");
+  const deadFilename = `${createHash("sha256")
+    .update(dead.record.piSessionId)
+    .digest("hex")}.json`;
   try {
     for (const fixture of fixtures)
       writePeerLeadRecord(runtime, fixture.record);
+    writeFileSync(malformedPath, "not-json", "utf8");
+    writePeerLeadRecord(runtime, dead.record);
+    dead.release();
 
     const records = listPeerLeadRecords(runtime);
     const expected = fixtures
@@ -336,15 +344,27 @@ test("peer lead enumeration is bounded", () => {
         record: fixture.record,
       }))
       .sort((a, b) => a.filename.localeCompare(b.filename))
-      .slice(0, COORDINATION_INBOX_SCAN_LIMIT)
       .map(({ record }) => record);
-    assert.equal(records.length, COORDINATION_INBOX_SCAN_LIMIT);
+    assert.equal(records.length, fixtures.length);
     assert.deepEqual(records, expected);
+    assert.ok(
+      deadFilename <
+        `${createHash("sha256")
+          .update(expected[0]!.piSessionId)
+          .digest("hex")}.json`,
+    );
+    assert.ok(
+      records.some(
+        (record) => record.piSessionId === fixtures.at(-1)!.record.piSessionId,
+      ),
+    );
   } finally {
     for (const fixture of fixtures) {
       removePeerLeadRecord(runtime, fixture.record.piSessionId, fixture.record);
       fixture.release();
     }
+    removePeerLeadRecord(runtime, dead.record.piSessionId);
+    unlinkSync(malformedPath);
   }
 });
 

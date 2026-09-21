@@ -974,6 +974,11 @@ export type PeerLeadRecord = Readonly<{
   paneId: string;
   tabId: string;
   workspaceId: string;
+  name?: string;
+  cwd?: string;
+  repo?: string;
+  branch?: string;
+  workspaceLabel?: string;
   claim: ProcessLockClaim;
   updatedAt: number;
 }>;
@@ -1027,8 +1032,20 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     record.claim && typeof record.claim === "object"
       ? (record.claim as Record<string, unknown>)
       : undefined;
+  const metadata = ["name", "cwd", "repo", "branch", "workspaceLabel"];
   return (
-    Object.keys(record).length === 7 &&
+    Object.keys(record).every((key) =>
+      [
+        "version",
+        "piSessionId",
+        "paneId",
+        "tabId",
+        "workspaceId",
+        "claim",
+        "updatedAt",
+        ...metadata,
+      ].includes(key),
+    ) &&
     [
       "version",
       "piSessionId",
@@ -1043,6 +1060,10 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     validNativeIdentity(record.paneId) &&
     validNativeIdentity(record.tabId) &&
     validNativeIdentity(record.workspaceId) &&
+    metadata.every(
+      (key) =>
+        !Object.hasOwn(record, key) || validNativeIdentity(record[key]),
+    ) &&
     !!claim &&
     Object.keys(claim).length === 2 &&
     Number.isInteger(claim.pid) &&
@@ -1073,6 +1094,11 @@ export function samePeerLeadRecord(
     actual.paneId === expected.paneId &&
     actual.tabId === expected.tabId &&
     actual.workspaceId === expected.workspaceId &&
+    actual.name === expected.name &&
+    actual.cwd === expected.cwd &&
+    actual.repo === expected.repo &&
+    actual.branch === expected.branch &&
+    actual.workspaceLabel === expected.workspaceLabel &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.updatedAt === expected.updatedAt
@@ -1168,10 +1194,11 @@ export function listPeerLeadRecords(
   return entries
     .filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry))
     .sort()
-    .slice(0, COORDINATION_INBOX_SCAN_LIMIT)
     .flatMap((entry) => {
       try {
-        const text = readFileSync(join(runtime.peers, entry), "utf8");
+        const path = join(runtime.peers, entry);
+        if (statSync(path).size > PEER_LEAD_RECORD_MAX_BYTES) return [];
+        const text = readFileSync(path, "utf8");
         const value = JSON.parse(text);
         if (
           !validPeerLeadRecord(value) ||

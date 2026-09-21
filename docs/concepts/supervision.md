@@ -69,8 +69,14 @@ user-global `runtime/peers-v1` runtime rather than the socket-scoped Chief
 runtime, allowing ordinary Leads on different Herdr sockets to discover and
 message one another. Peer presence is private, process-lock generation-bound,
 and published only by ordinary Leads; Chief and suspended sessions are absent.
-Peer delivery requires both exact target and exact live sender generations and
-uses follow-up delivery with `triggerTurn`.
+Peer reachability uses the global peer record and its exact live process-lock
+claim; Herdr inventory and presentation metadata are not authority. Publication
+rereads the expected sender and target records immediately before the atomic
+write. Delivery revalidates only the current ordinary-Lead receiver generation
+and structural target invariants, so a queued message survives sender shutdown.
+Peer inboxes are not drained while a receiver is Chief or lacks valid current
+peer presence; queued messages remain for ordinary-Lead delivery after Chief
+leave. Peer list metadata is presentation-only.
 `inspect` is bounded live terminal/process evidence. `transcript` is bounded
 persisted Pi conversation/tool evidence. A non-empty persisted session candidate
 adds `transcript` to `available_actions`; `available_actions` is advisory
