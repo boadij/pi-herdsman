@@ -1197,7 +1197,7 @@ test("message limits do not consult project trust", async () => {
   }
 });
 
-test("ask_owner eligibility permits only ask-blocked direct-agent escalation", async () => {
+test("ask_owner eligibility permits no children or only ask-blocked children", async () => {
   const cases = [
     { name: "no child", children: [], allowed: true },
     {
