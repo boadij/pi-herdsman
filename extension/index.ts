@@ -3370,6 +3370,8 @@ function resolveMessageFiles(
   operation: string,
 ): string[] {
   if (!files?.length) return [];
+  if (!files.some((file) => file.startsWith("result:") && file.includes("#")))
+    return [...files];
 
   const branch = ctx.sessionManager.getBranch();
   return files.map((file) => {
