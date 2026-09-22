@@ -199,37 +199,37 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   const peerTool = lead.tools.find((tool) => tool.name === "peer");
   assert.ok(agentTool);
   assert.ok(peerTool);
-  const resultSelector = { agent: "implementation", index: 1 };
+  const resultRef = "result:implementation#1";
   for (const request of [
     {
       action: "delegate",
       definition: "agent",
       task: "review",
-      results: [resultSelector],
+      files: [resultRef],
     },
     {
       action: "continue",
       session: "/tmp/session.jsonl",
       task: "continue",
-      results: [resultSelector],
+      files: [resultRef],
     },
     {
       action: "steer",
       agent: "implementation",
       message: "continue",
-      results: [resultSelector],
+      files: [resultRef],
     },
     {
       action: "interrupt",
       agent: "implementation",
       message: "stop",
-      results: [resultSelector],
+      files: [resultRef],
     },
     {
       action: "reply",
       agent: "implementation",
       message: "answer",
-      results: [resultSelector],
+      files: [resultRef],
     },
   ])
     assert.equal(
@@ -246,6 +246,16 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     }),
     false,
     "files remains a homogeneous string array",
+  );
+  assert.equal(
+    Value.Check(agentTool.parameters, {
+      action: "delegate",
+      definition: "agent",
+      task: "review",
+      results: [{ agent: "implementation", index: 1 }],
+    }),
+    false,
+    "results is no longer public API",
   );
   const agentDescription = agentTool.description.replaceAll(/\s+/g, " ");
   assert.match(
@@ -264,6 +274,14 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.match(
     agentDescription,
     /fresh delegation; pass its result\/handoff and relevant files instead\./,
+  );
+  assert.match(
+    agentDescription,
+    /Agent completions may expose reusable refs such as `result:researcher#1`/,
+  );
+  assert.match(
+    agentDescription,
+    /copy its exact ref into `files` instead of restating or summarizing its evidence/,
   );
   assert.doesNotMatch(agentDescription, /resultRef\/handoff/);
   assert.match(
@@ -334,7 +352,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     Value.Check(chiefTool.parameters, {
       action: "message",
       message: "progress",
-      results: [resultSelector],
+      files: [resultRef],
     }),
     true,
   );
@@ -342,9 +360,17 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     Value.Check(chiefTool.parameters, {
       action: "ask",
       question: "decision needed",
-      results: [resultSelector],
+      files: [resultRef],
     }),
     true,
+  );
+  assert.equal(
+    Value.Check(chiefTool.parameters, {
+      action: "message",
+      message: "progress",
+      results: [{ agent: "implementation", index: 1 }],
+    }),
+    false,
   );
   assert.equal(peerTool.label, "peer");
   assert.equal(peerTool.executionMode, "sequential");
@@ -378,9 +404,18 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       action: "message",
       lead: LEAD_SESSION_ID,
       message: "Share result",
-      results: [resultSelector],
+      files: [resultRef],
     }),
     true,
+  );
+  assert.equal(
+    Value.Check(peerTool.parameters, {
+      action: "message",
+      lead: LEAD_SESSION_ID,
+      message: "Share result",
+      results: [{ agent: "implementation", index: 1 }],
+    }),
+    false,
   );
   assert.equal(
     Value.Check(peerTool.parameters, {
@@ -629,7 +664,7 @@ test("peer list and message use global peer presence, not caller inventory", asy
         action: "message",
         lead: targetId,
         message: "global peer",
-        results: [{ agent: "implementation", index: 1 }],
+        files: ["result:implementation#1"],
       },
       undefined,
       undefined,
@@ -1188,7 +1223,7 @@ test("active chief describes authoritative remote ask projection", async () => {
       action: "message",
       lead: LEAD_SESSION_ID,
       message: "Please continue",
-      results: [{ agent: "implementation", index: 1 }],
+      files: ["result:implementation#1"],
     }),
     true,
   );
@@ -1198,9 +1233,18 @@ test("active chief describes authoritative remote ask projection", async () => {
       lead: LEAD_SESSION_ID,
       askId: "ask-1",
       message: "Here is the decision",
-      results: [{ agent: "implementation", index: 1 }],
+      files: ["result:implementation#1"],
     }),
     true,
+  );
+  assert.equal(
+    Value.Check(tool.parameters, {
+      action: "message",
+      lead: LEAD_SESSION_ID,
+      message: "Please continue",
+      results: [{ agent: "implementation", index: 1 }],
+    }),
+    false,
   );
   const renderedStaffCall = tool.renderCall(
     { action: "message", lead: "lead-bbbbbbbbb", message: "Please continue" },

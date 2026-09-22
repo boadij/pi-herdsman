@@ -74,20 +74,15 @@ list has no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
   "action": "message",
   "lead": "<exact full Pi session ID from peer list>",
   "message": "The integration is ready.",
-  "files": ["/tmp/checklist.md"],
-  "results": [
-    {
-      "agent": "researcher",
-      "index": 1
-    }
-  ]
+  "files": ["/tmp/checklist.md", "result:researcher#1"]
 }
 ```
 
-`message` accepts ordinary `files` and completed direct-agent `results`.
-Result selectors are resolved on the sender's current branch to their canonical
-`result:<request-id>` references before the existing attachment preparation
-runs. Files and resolved results therefore share the same submission-time UTF-8
+`message` accepts ordinary files, reusable direct-agent refs such as
+`result:researcher#1`, and canonical `result:<request-id>` refs already supplied
+as evidence. A semantic ref is resolved on the sender's current branch to its
+canonical result reference before the existing attachment preparation runs.
+Files and resolved refs therefore share the same submission-time UTF-8
 embedding, reference fallback, and configured byte limits. The durable peer
 record remains text-only and bounded by the 8 KiB coordination transport limit.
 

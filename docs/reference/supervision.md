@@ -146,14 +146,15 @@ extra fields. Both actions require a currently valid chief; descendants use
 Use `message` for meaningful progress, reports, results, warnings, and
 completion. It queues one bounded `chief_message` and does not change lead
 coordination state.
-`message` accepts optional `files` and `results` arrays. `results` selects
-reusable direct-agent results by the exact agent label and result index shown by
-a completion, resolved against the calling Pi session's current branch. Chief
-normally owns no direct agents, so a selector generally has no matching
-completion; canonical result references already supplied as file evidence can
-still be forwarded through `files`. Files use the same submission-time
-canonicalization, UTF-8 embedding, reference fallback, and configured byte
-limits as agent messages.
+`message` accepts optional `files`, including ordinary paths, reusable direct
+refs such as `result:implementation#1`, and canonical `result:<request-id>` refs
+already supplied as evidence. A direct ref resolves by exact agent label and
+index against the calling Pi session's current branch before ordinary file
+preparation. Chief normally owns no direct agents, so a branch-local semantic
+ref may not exist in the Chief session; canonical result references already
+supplied as file evidence can still be forwarded through `files`. Files use the
+same submission-time canonicalization, UTF-8 embedding, reference fallback, and
+configured byte limits as agent messages.
 
 ### `ask`
 
@@ -161,18 +162,18 @@ limits as agent messages.
 {
   "action": "ask",
   "question": "Should the release include the endpoint?",
-  "files": ["/tmp/evidence.md"],
-  "results": [{ "agent": "implementation", "index": 1 }]
+  "files": ["/tmp/evidence.md", "result:implementation#1"]
 }
 ```
 
-`ask` accepts optional `files` and `results` arrays with the same semantics as
-`message`. Use `ask` only when a chief decision is genuinely required. One pending ask is
-allowed per lead. The call durably records its ask ID and clean question, then
-queues the prepared text. The prepared text, including attachment rendering, is
-persisted before publication so reconciliation can deliver it after a failed
-initial publication. It must be the only tool call in the turn; call it last,
-do not guess, and wait for the reply.
+`ask` accepts optional `files` with the same ordinary, semantic-ref, and
+canonical-ref semantics as `message`. Use `ask` only when a chief decision is
+genuinely required. One pending ask is allowed per lead. The call durably
+records its ask ID and clean question, then queues the prepared text. The
+prepared text, including attachment rendering, is persisted before publication
+so reconciliation can deliver it after a failed initial publication. It must be
+the only tool call in the turn; call it last, do not guess, and wait for the
+reply.
 
 ## `staff`
 
@@ -244,17 +245,17 @@ not send a message or change Lead state.
   "action": "message",
   "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>",
   "message": "Run checks.",
-  "files": ["/tmp/checklist.md"],
-  "results": [{ "agent": "implementation", "index": 1 }]
+  "files": ["/tmp/checklist.md", "result:implementation#1"]
 }
 ```
 
 The exact lead must currently expose `message`. Atomic creation of one bounded
 `chief_message` record queues a follow-up and does not wait for completion.
-`staff message` accepts optional `files` and `results`. Result selectors use the
-same exact label/index and current-branch rules as chief actions; Chief does
-not normally own direct agents, so canonical result references supplied as
-evidence remain the usual cross-session forwarding form through `files`.
+`staff message` accepts optional `files`, including ordinary paths, reusable
+direct refs, and canonical result refs. Semantic refs use the same exact
+label/index and current-branch rules as chief actions; Chief does not normally
+own direct agents, so canonical result references supplied as evidence remain
+the usual cross-session forwarding form through `files`.
 
 ### `reply`
 
@@ -264,15 +265,15 @@ evidence remain the usual cross-session forwarding form through `files`.
   "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>",
   "askId": "<exact pending ask ID>",
   "message": "Proceed.",
-  "files": ["/tmp/decision.md"],
-  "results": [{ "agent": "implementation", "index": 1 }]
+  "files": ["/tmp/decision.md", "result:implementation#1"]
 }
 ```
 
 The exact lead, unchanged pending ask ID, current lead identity, and chief
 lease must validate. The pending ask is cleared only after accepted delivery.
-`staff reply` accepts optional `files` and `results`. Lead activity returns asynchronously;
-continue only independent chief work, otherwise end the turn and do not poll.
+`staff reply` accepts optional `files` with the same ordinary, semantic-ref, and
+canonical-ref semantics. Lead activity returns asynchronously; continue only
+independent chief work, otherwise end the turn and do not poll.
 
 ## UI and failure rules
 

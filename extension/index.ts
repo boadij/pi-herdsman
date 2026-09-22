@@ -407,14 +407,15 @@ later dependent assignments when approved scope or decisions change because
 embedded text is snapshotted at submission time while referenced files are not
 copied.
 
-Completed direct agents may expose a numbered reusable result. Pass required
-direct-agent results through \`results\` using the exact agent label and result
-index shown by the completion.
+Pass relevant files and completed agent results through \`files\`. Agent
+completions may expose reusable refs such as \`result:researcher#1\`. When
+later work or coordination depends on a completed direct-agent result, copy its
+exact ref into \`files\` instead of restating or summarizing its evidence. Do
+not attach unrelated results.
 
-\`files\` remains for ordinary files and canonical \`result:<request-id>\`
-references already supplied as file evidence. Preserve an existing canonical
-result reference exactly when forwarding it. \`files\` does not add runtime
-capability.
+Canonical \`result:<request-id>\` references already supplied as file evidence
+may also be forwarded through \`files\`; preserve them exactly. \`files\` does
+not add runtime capability.
 
 Require concise handoffs containing relevant inspected or changed files,
 validation performed, findings or decisions, unresolved risks or blockers,
@@ -497,9 +498,9 @@ evidence. Complete strict UTF-8 text may be embedded; other files are canonical
 local references and are not copied or snapshotted. Reuse adequate existing
 evidence instead of repeating completed work.
 Do not overlap writers in a worktree or file-ownership boundary. For dependent
-work, preserve existing canonical result:<request-id> references exactly through
-\`files\` rather than reconstructing physical result paths or copying large
-results into assignments.
+work, pass reusable direct-agent result refs through \`files\`. Preserve
+canonical result:<request-id> refs already supplied as file evidence exactly
+when forwarding them.
 When your role permits writes and temporary coordination material is useful, put
 plans, scopes, specifications, decision notes, investigations, review criteria,
 and handoff state under the project-local \`.pi-herdsman/\` directory. Reuse and update
@@ -567,10 +568,6 @@ async function visibleAgentDefinitionMetadata(
       )
     : definitions;
 }
-type ResultSelector = {
-  agent: string;
-  index: number;
-};
 type Params =
   | { action: "list" }
   | {
@@ -580,7 +577,6 @@ type Params =
       cwd?: string;
       task: string;
       files?: string[];
-      results?: ResultSelector[];
       fork?: string;
       timeoutMs?: number;
     }
@@ -589,7 +585,6 @@ type Params =
       session: string;
       task: string;
       files?: string[];
-      results?: ResultSelector[];
       timeoutMs?: number;
     }
   | {
@@ -597,14 +592,12 @@ type Params =
       agent: string;
       message: string;
       files?: string[];
-      results?: ResultSelector[];
     }
   | {
       action: "reply";
       agent: string;
       message: string;
       files?: string[];
-      results?: ResultSelector[];
     }
   | { action: "close"; agent: string }
   | { action: "inspect"; agent: string }
@@ -628,7 +621,6 @@ function parseRequest(p: Params): Params {
       agent: p.agent!,
       message: p.message!,
       ...(p.files ? { files: p.files } : {}),
-      ...(p.results !== undefined ? { results: p.results } : {}),
     };
   }
   if (p.action === "reply") {
@@ -640,7 +632,6 @@ function parseRequest(p: Params): Params {
       agent: p.agent!,
       message: p.message!,
       ...(p.files ? { files: p.files } : {}),
-      ...(p.results !== undefined ? { results: p.results } : {}),
     };
   }
   if (p.action === "close") {
@@ -673,7 +664,6 @@ function parseRequest(p: Params): Params {
       ...(p.label !== undefined ? { label: p.label } : {}),
       ...(p.cwd !== undefined ? { cwd: p.cwd } : {}),
       ...(p.files !== undefined ? { files: p.files } : {}),
-      ...(p.results !== undefined ? { results: p.results } : {}),
       ...(p.fork !== undefined ? { fork: p.fork } : {}),
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
     };
@@ -698,7 +688,6 @@ function parseRequest(p: Params): Params {
       session: p.session,
       task: p.task!,
       ...(p.files !== undefined ? { files: p.files } : {}),
-      ...(p.results !== undefined ? { results: p.results } : {}),
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
     };
   }
@@ -3378,17 +3367,29 @@ function canonicalResultRef(
 function resolveMessageFiles(
   ctx: ExtensionContext,
   files: readonly string[] | undefined,
-  results: readonly ResultSelector[] | undefined,
   operation: string,
 ): string[] {
-  if (!results?.length) return [...(files ?? [])];
+  if (!files?.length) return [];
 
   const branch = ctx.sessionManager.getBranch();
-  const resolved = results.map(({ agent, index }) => {
-    if (!validAgentLabel(agent) || !Number.isSafeInteger(index) || index < 1)
+  return files.map((file) => {
+    if (!file.startsWith("result:") || !file.includes("#")) return file;
+
+    const value = file.slice("result:".length);
+    const separator = value.lastIndexOf("#");
+    const agent = value.slice(0, separator);
+    const rawIndex = value.slice(separator + 1);
+    const index = Number(rawIndex);
+
+    if (
+      !validAgentLabel(agent) ||
+      !Number.isSafeInteger(index) ||
+      index < 1 ||
+      String(index) !== rawIndex
+    )
       fail(
         "invalid_request",
-        "Result selectors require a valid agent label and positive integer index",
+        `Invalid result ref: ${file}. Copy the exact result ref shown by the agent completion.`,
         operation,
       );
 
@@ -3404,7 +3405,7 @@ function resolveMessageFiles(
     if (!matches.length)
       fail(
         "target_not_found",
-        `Result ${index} from agent ${agent} is not available on the current branch`,
+        `Result ref ${file} is not available on the current branch`,
         operation,
       );
 
@@ -3415,14 +3416,12 @@ function resolveMessageFiles(
     if (refs.size !== 1)
       fail(
         "target_ambiguous",
-        `Result ${index} from agent ${agent} resolves to conflicting canonical results`,
+        `Result ref ${file} resolves to conflicting canonical results`,
         operation,
       );
 
     return refs.values().next().value!;
   });
-
-  return [...(files ?? []), ...resolved];
 }
 async function deliverResultUnsafe(
   pi: ExtensionAPI,
@@ -3478,6 +3477,10 @@ async function deliverResultUnsafe(
     const resultIndex = completion.resultRef
       ? nextAgentResultIndex(entries, result.agentLabel)
       : undefined;
+    const reusableResultRef =
+      resultIndex === undefined
+        ? undefined
+        : `result:${result.agentLabel}#${resultIndex}`;
     if (completion.persistenceError) {
       appendDurableError(
         pi,
@@ -3510,7 +3513,6 @@ async function deliverResultUnsafe(
     const completionHeader = [
       "Agent result",
       `agent=${result.agentLabel}`,
-      ...(resultIndex !== undefined ? [`result=${resultIndex}`] : []),
       `definition=${runtime.agentDefinition}`,
       `session=${runtime.piSessionId ?? "?"}`,
       `status=${result.status}`,
@@ -3520,6 +3522,7 @@ async function deliverResultUnsafe(
         customType: "pi-herdsman-agent-result",
         content: [
           completionHeader,
+          ...(reusableResultRef ? [`Result ref: ${reusableResultRef}`] : []),
           completion.content,
           ...(retirementGuidance ? [retirementGuidance] : []),
           ...(delegationStatus ? [delegationStatus.content] : []),
@@ -5767,7 +5770,7 @@ async function actionUnsafe(
     const prepareAssignmentInput = (assignmentLabel: string) =>
       prepareMessageInput(
         p.task,
-        resolveMessageFiles(ctx, p.files, p.results, p.action),
+        resolveMessageFiles(ctx, p.files, p.action),
         ctx.cwd,
         p.action,
         "Task",
@@ -6033,7 +6036,7 @@ async function actionUnsafe(
       // authoritative final envelope identity is known.
       assignmentInput = prepareMessageInput(
         p.task,
-        resolveMessageFiles(ctx, p.files, p.results, p.action),
+        resolveMessageFiles(ctx, p.files, p.action),
         ctx.cwd,
         p.action,
         "Task",
@@ -6335,7 +6338,7 @@ async function actionUnsafe(
     const replyRequestId = randomUUID();
     const replyInput = prepareMessageInput(
       p.message,
-      resolveMessageFiles(ctx, p.files, p.results, "reply"),
+      resolveMessageFiles(ctx, p.files, "reply"),
       ctx.cwd,
       "reply",
       "Reply",
@@ -6381,7 +6384,7 @@ async function actionUnsafe(
   const controlAction = p.action;
   const messageInput = prepareMessageInput(
     p.message,
-    resolveMessageFiles(ctx, p.files, p.results, controlAction),
+    resolveMessageFiles(ctx, p.files, controlAction),
     ctx.cwd,
     controlAction,
     controlAction === "interrupt" ? "Interrupt" : "Steer",
@@ -6575,26 +6578,18 @@ export default function (pi: ExtensionAPI): void {
             allowedAgentDefinitions: new Set(allowedAgentDefinitions),
           }
         : undefined;
-  const RESULT_SELECTOR_SCHEMA = Type.Object(
-    {
-      agent: Type.String({
-        pattern: AGENT_LABEL_PATTERN.source,
+  const FILES_SCHEMA = Type.Optional(
+    Type.Array(
+      Type.String({
+        minLength: 1,
         description:
-          "Exact logical agent label shown by the completed direct-agent result.",
+          'Readable regular local file path or exact result ref such as "result:researcher#1".',
       }),
-      index: Type.Integer({
-        minimum: 1,
-        maximum: Number.MAX_SAFE_INTEGER,
-        description: "Reusable result index shown by that agent completion.",
-      }),
-    },
-    { additionalProperties: false },
-  );
-  const RESULTS_SCHEMA = Type.Optional(
-    Type.Array(RESULT_SELECTOR_SCHEMA, {
-      description:
-        "Completed direct-agent results to attach. Use exact agent/index pairs shown by prior completions on the current Pi branch.",
-    }),
+      {
+        description:
+          "Supporting evidence. Copy result refs exactly as shown by agent completions. Files do not grant runtime capabilities.",
+      },
+    ),
   );
   const agentParameters = Type.Union([
     Type.Object(
@@ -6642,20 +6637,7 @@ export default function (pi: ExtensionAPI): void {
             description: "Total startup budget in milliseconds.",
           }),
         ),
-        files: Type.Optional(
-          Type.Array(
-            Type.String({
-              description:
-                "Readable regular local file path or result:<request-id>.",
-              minLength: 1,
-            }),
-            {
-              description:
-                "Supporting files for delegation, steering, interrupting, replying, or ask_owner. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path, result:<request-id>, and byte size. Files do not grant capabilities.",
-            },
-          ),
-        ),
-        results: RESULTS_SCHEMA,
+        files: FILES_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -6671,20 +6653,7 @@ export default function (pi: ExtensionAPI): void {
           description: "Non-empty task for the historical session.",
           pattern: "\\S",
         }),
-        files: Type.Optional(
-          Type.Array(
-            Type.String({
-              description:
-                "Readable regular local file path or result:<request-id>.",
-              minLength: 1,
-            }),
-            {
-              description:
-                "Supporting files for the continuation assignment. Complete strict UTF-8 text may be embedded when it fits; other files are represented by canonical local path, result:<request-id>, and byte size. Files do not grant capabilities.",
-            },
-          ),
-        ),
-        results: RESULTS_SCHEMA,
+        files: FILES_SCHEMA,
         timeoutMs: Type.Optional(
           Type.Integer({
             minimum: STARTUP_TIMEOUT_MIN,
@@ -6699,8 +6668,7 @@ export default function (pi: ExtensionAPI): void {
         action: StringEnum(["steer", "interrupt"] as const),
         agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
         message: Type.String({ pattern: "\\S" }),
-        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-        results: RESULTS_SCHEMA,
+        files: FILES_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -6709,8 +6677,7 @@ export default function (pi: ExtensionAPI): void {
         action: StringEnum(["reply"] as const),
         agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
         message: Type.String({ pattern: "\\S" }),
-        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-        results: RESULTS_SCHEMA,
+        files: FILES_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -6748,8 +6715,7 @@ export default function (pi: ExtensionAPI): void {
             "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
         }),
         message: Type.String({ pattern: "\\S" }),
-        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-        results: RESULTS_SCHEMA,
+        files: FILES_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -6763,8 +6729,7 @@ export default function (pi: ExtensionAPI): void {
         }),
         askId: Type.String({ pattern: "\\S" }),
         message: Type.String({ pattern: "\\S" }),
-        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-        results: RESULTS_SCHEMA,
+        files: FILES_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -6784,8 +6749,7 @@ export default function (pi: ExtensionAPI): void {
             "The lead is the exact full Pi session ID returned by peer list; never use a display label.",
         }),
         message: Type.String({ pattern: "\\S" }),
-        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-        results: RESULTS_SCHEMA,
+        files: FILES_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -9797,8 +9761,7 @@ export default function (pi: ExtensionAPI): void {
             {
               action: StringEnum(["message"] as const),
               message: Type.String({ minLength: 1 }),
-              files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-              results: RESULTS_SCHEMA,
+              files: FILES_SCHEMA,
             },
             { additionalProperties: false },
           ),
@@ -9806,8 +9769,7 @@ export default function (pi: ExtensionAPI): void {
             {
               action: StringEnum(["ask"] as const),
               question: Type.String({ minLength: 1, maxLength: 1024 }),
-              files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
-              results: RESULTS_SCHEMA,
+              files: FILES_SCHEMA,
             },
             { additionalProperties: false },
           ),
@@ -9825,9 +9787,9 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Invalid chief action");
           const allowed =
             params.action === "message"
-              ? ["action", "message", "files", "results"]
+              ? ["action", "message", "files"]
               : params.action === "ask"
-                ? ["action", "question", "files", "results"]
+                ? ["action", "question", "files"]
                 : [];
           if (
             !allowed.length ||
@@ -9850,12 +9812,7 @@ export default function (pi: ExtensionAPI): void {
               const text = await prepareCoordinationText(
                 ctx,
                 params.message,
-                resolveMessageFiles(
-                  ctx,
-                  params.files,
-                  params.results,
-                  "chief.message",
-                ),
+                resolveMessageFiles(ctx, params.files, "chief.message"),
                 "chief.message",
                 "Message",
                 (candidate) => ({
@@ -9980,12 +9937,7 @@ export default function (pi: ExtensionAPI): void {
               const text = await prepareCoordinationText(
                 ctx,
                 params.question,
-                resolveMessageFiles(
-                  ctx,
-                  params.files,
-                  params.results,
-                  "chief.ask",
-                ),
+                resolveMessageFiles(ctx, params.files, "chief.ask"),
                 "chief.ask",
                 "Question",
                 (candidate) => ({
@@ -10054,7 +10006,7 @@ export default function (pi: ExtensionAPI): void {
         name: "peer",
         label: "peer",
         description:
-          "Other ordinary Lead sessions (peers), not managed agents. Use list for peers, other Leads, or other Lead sessions. list identifies this Lead as self and returns other live Leads as peers; message sends to one peer's exact lead ID and may include files or completed direct-agent results.",
+          "Other ordinary Lead sessions (peers), not managed agents. Use list for peers, other Leads, or other Lead sessions. list identifies this Lead as self and returns other live Leads as peers; message sends to one peer's exact lead ID and may include ordinary files or exact reusable direct-agent result refs through files.",
         executionMode: "sequential",
         parameters: peerParameters,
         execute: async (
@@ -10101,12 +10053,7 @@ export default function (pi: ExtensionAPI): void {
           const text = await prepareCoordinationText(
             ctx,
             params.message,
-            resolveMessageFiles(
-              ctx,
-              params.files,
-              params.results,
-              "peer.message",
-            ),
+            resolveMessageFiles(ctx, params.files, "peer.message"),
             "peer.message",
             "Message",
             (candidate) => ({
@@ -10339,12 +10286,7 @@ export default function (pi: ExtensionAPI): void {
           const text = await prepareCoordinationText(
             ctx,
             params.message,
-            resolveMessageFiles(
-              ctx,
-              params.files,
-              params.results,
-              `staff.${params.action}`,
-            ),
+            resolveMessageFiles(ctx, params.files, `staff.${params.action}`),
             `staff.${params.action}`,
             params.action === "message" ? "Message" : "Reply",
             (candidate) => ({
@@ -11948,19 +11890,7 @@ export default function (pi: ExtensionAPI): void {
           minLength: 1,
           description: "Non-empty decision question required to continue.",
         }),
-        files: Type.Optional(
-          Type.Array(
-            Type.String({
-              description:
-                "Readable regular local file path or result:<request-id>.",
-            }),
-            {
-              description:
-                "Supporting files, including result:<request-id>. Complete strict UTF-8 text may be embedded when it fits; other files are canonical local references. Files do not grant capabilities.",
-            },
-          ),
-        ),
-        results: RESULTS_SCHEMA,
+        files: FILES_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -11969,7 +11899,6 @@ export default function (pi: ExtensionAPI): void {
       params: {
         question: string;
         files?: string[];
-        results?: ResultSelector[];
       },
       _signal: AbortSignal | undefined,
       _update: unknown,
@@ -12001,7 +11930,7 @@ export default function (pi: ExtensionAPI): void {
         piSessionId: state.piSessionId,
         question: prepareMessageInput(
           params.question,
-          resolveMessageFiles(ctx, params.files, params.results, "ask_owner"),
+          resolveMessageFiles(ctx, params.files, "ask_owner"),
           state.cwd,
           "ask_owner",
           "Question",

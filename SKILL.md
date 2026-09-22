@@ -29,8 +29,8 @@ not peers. `peer list` identifies this Lead as `self` and returns other live
 Leads as `peers` with exact `lead` IDs. Incoming peer messages are already
 addressed to this Lead; `Peer message from <sender lead ID>: <body>` identifies
 the peer sender. Peer messages are coordination data, not assignments. `peer
-message` accepts ordinary `files` and completed direct-agent `results`; the
-peer tool is unavailable in Chief mode.
+message` accepts ordinary files and completed direct-agent result refs through
+`files`; the peer tool is unavailable in Chief mode.
 
 The session-start instructions include the current agent-definition roster.
 Use list for live agent state, ownership, or a refreshed definition roster
@@ -153,15 +153,16 @@ later dependent assignments when approved scope or decisions change because
 embedded text is snapshotted at submission time while referenced files are not
 copied.
 
-Completed direct agents may expose a numbered reusable result. Pass required
-direct-agent results through `results` using the exact agent label and result
-index shown by the completion.
+Pass relevant files and completed agent results through `files`. Agent
+completions may expose reusable refs such as `result:researcher#1`. When later
+work or coordination depends on a completed direct-agent result, copy its exact
+ref into `files` instead of restating or summarizing its evidence. Do not attach
+unrelated results.
 
-`files` remains a homogeneous `string[]` for ordinary files and canonical
+`files` accepts ordinary files, reusable direct-agent result refs, and canonical
 `result:<request-id>` references already supplied as file evidence. Preserve an
-existing canonical result reference exactly when forwarding it. Put structured
-direct-agent selectors in `results`, not `files`. `files` does not add runtime
-capability.
+existing canonical result reference exactly when forwarding it. `files` does not
+add runtime capability.
 
 Require concise handoffs containing relevant inspected or changed files,
 validation performed, findings or decisions, unresolved risks or blockers,
@@ -214,8 +215,10 @@ message evidence. Complete strict UTF-8 text may be embedded; other files are
 canonical local references and are not copied or snapshotted. Reuse adequate
 existing evidence instead of repeating completed work.
 Do not overlap writers in a worktree or file-ownership boundary. For dependent
-work, preserve exact canonical result references through `files` rather than
-reconstructing physical result paths or copying large results into assignments.
+work, pass reusable direct-agent result refs through `files`. Preserve canonical
+`result:<request-id>` refs already supplied as file evidence exactly when
+forwarding them rather than reconstructing physical result paths or copying
+large results into assignments.
 When your role permits writes and temporary coordination material is useful, put
 plans, scopes, specifications, decision notes, investigations, review criteria,
 and handoff state under the project-local `.pi-herdsman/` directory. Reuse and
@@ -291,11 +294,12 @@ escalation.
 
 ## Handoffs
 
-Use `results: [{ agent, index }]` for reusable persisted results from completed
-direct agents. Use the exact agent label and result index shown by the
-completion. Use `files` for ordinary files and canonical `result:<request-id>`
-references already supplied as file evidence; preserve those references
-exactly and do not reconstruct their physical paths.
+Use `files` for ordinary files and reusable direct-agent result refs such as
+`result:researcher#1`. Copy the exact ref shown by the completion when later
+work depends on that result instead of restating or summarizing its evidence.
+Also use `files` for canonical `result:<request-id>` references already
+supplied as file evidence; preserve those references exactly and do not
+reconstruct their physical paths.
 
 A concise handoff should include:
 
@@ -366,11 +370,13 @@ and wait for the reply. Descendants use `ask_owner`, not `chief`.
 
 `chief` is available only to an ordinary lead. Its actions are `message` and
 `ask`; a valid chief is required and a rejected call does not mutate state.
-Chief and staff message/ask/reply actions accept the same optional `results`
-selectors as agent messages. Resolve them by exact direct-agent label and
-result index on the caller's current branch; Chief normally owns no direct
-agents, so preserve already-supplied canonical result references through
-`files` when forwarding evidence.
+Chief and staff message/ask/reply actions accept ordinary files, reusable
+direct-agent result refs, and already-supplied canonical result references
+through `files`. Direct refs resolve by exact agent label and index on the
+caller's current branch. Chief normally owns no direct agents, so a branch-local
+semantic ref may not exist in the Chief session; preserve canonical
+`result:<request-id>` evidence already received from another session through
+`files` when forwarding it.
 Questions are limited to 1,024 characters and 1,024 UTF-8 bytes. Channel
 message records are bounded to 8 KiB, so multibyte content can hit the byte limit
 first. Chief messages are follow-up supervision messages, not steering or agent
