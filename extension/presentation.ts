@@ -1737,23 +1737,6 @@ function renderExpandedCoordinationCall(
     content.addChild(new Spacer(1));
     content.addChild(new WidthSafeText(["files:", ...files].join("\n"), 0, 0));
   }
-  const results = Array.isArray(args.results)
-    ? args.results.flatMap((selector) => {
-        if (!selector || typeof selector !== "object") return [];
-        const item = selector as Record<string, unknown>;
-        const agent = value(item.agent);
-        const index = item.index;
-        return agent && Number.isSafeInteger(index) && index > 0
-          ? [`  ${agent} #${index}`]
-          : [];
-      })
-    : [];
-  if (results.length) {
-    content.addChild(new Spacer(1));
-    content.addChild(
-      new WidthSafeText(["results:", ...results].join("\n"), 0, 0),
-    );
-  }
   const box = createWidthSafeBox(0, 0, (line) => line);
   box.addChild(content);
   return box;
@@ -2525,6 +2508,7 @@ export function renderCompletionMessage(
   const heading = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${theme.bold(label)}${failed ? " failed" : " completed"}${definition ? humanText(theme, "muted", definition) : ""}`;
   const humanContent = (message.content ?? "")
     .replace(/^Agent result · [^\n]*\n\n/u, "")
+    .replace(/^Result ref: result:[^\n]+\n\n/u, "")
     .replace(/^Result file could not be saved\.\n\n/u, "");
   const content = new Container();
   if (options.expanded) {
@@ -2540,9 +2524,8 @@ export function renderCompletionMessage(
         : []),
       ...(d?.fullOutputPath ? [`full output: ${d.fullOutputPath}`] : []),
       ...(d?.resultIndex !== undefined
-        ? [`result: ${d.agentLabel} #${d.resultIndex}`]
+        ? [`result ref: result:${d.agentLabel}#${d.resultIndex}`]
         : []),
-      ...(d?.resultRef ? [`canonical result: ${d.resultRef}`] : []),
       ...(d?.resultPersistenceError
         ? [
             humanText(

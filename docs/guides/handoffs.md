@@ -27,9 +27,10 @@ and the selected definition does not already provide that skill. Ordinary
 relevant source, documentation, configuration, and evidence files remain
 attachable.
 
-`files` remains a homogeneous `string[]` for ordinary paths and already-known
-canonical result references. Put direct-agent result selectors in the separate
-`results` array; do not put selector objects inside `files`.
+`files` is the single evidence channel. It accepts ordinary paths, reusable
+direct-agent result refs such as `result:researcher#1`, and already-known
+canonical result references. Copy the exact result ref shown by a completion
+into `files` when later work depends on that result.
 
 Example:
 
@@ -217,33 +218,30 @@ definition overrides still apply.
 
 ## Result handoff
 
-A direct-agent completion that has a reusable persisted result exposes a small
-per-agent result index. Pass required direct-agent results through `results`
-using the exact agent label and result index shown by the completion:
+A direct-agent completion that has a reusable persisted result exposes an exact
+ref such as `result:global-peer-fix#1`. Pass relevant direct-agent results
+through `files` using the exact refs shown by the completions:
 
 ```json
 {
   "action": "delegate",
   "definition": "reviewer",
   "task": "Compare both implementation passes.",
-  "results": [
-    { "agent": "global-peer-fix", "index": 1 },
-    { "agent": "global-peer-fix", "index": 2 }
-  ]
+  "files": ["result:global-peer-fix#1", "result:global-peer-fix#2"]
 }
 ```
 
-`results` resolves only against matching completion entries on the caller's
-current Pi branch. The index is scoped to the logical agent label: the first
-reusable completion from `global-peer-fix` is index 1, a continued generation
-is index 2, and both remain independently attachable. The resolved result is
-converted internally to its canonical `result:<request-id>` reference before
-entering the ordinary file pipeline.
+`result:<agent>#<index>` is a branch-local reusable direct-result ref. It
+resolves only against matching completion entries on the caller's current Pi
+branch. The index is scoped to the logical agent label: the first reusable
+completion from `global-peer-fix` is index 1, a continued generation is index
+2, and both remain independently attachable. Indexes are not reused after
+historical branch rewinds. Each semantic ref is converted internally to its
+canonical `result:<request-id>` reference before entering the ordinary file
+pipeline.
 
-`files` remains the separate channel for ordinary files and already-known
-canonical result references. Pass an exact canonical reference through
-`files` when it was supplied as file evidence, especially for a transitive
-handoff:
+Pass an exact canonical reference through `files` when it was supplied as file
+evidence, especially for a transitive handoff:
 
 ```json
 {
@@ -254,12 +252,14 @@ handoff:
 }
 ```
 
-`files` accepts ordinary readable regular local file paths and canonical
-`result:<request-id>` references. A canonical result reference resolves
-internally to the normal private result file under Pi Herdsman's durable data
-directory; it is still validated, canonicalized, and deduplicated like any
-other file. Preserve the exact reference already supplied as evidence. Do not
-guess or reconstruct the underlying path.
+`files` accepts ordinary readable regular local file paths, reusable direct
+refs in the form `result:<agent>#<index>`, and canonical
+`result:<request-id>` references. Semantic refs resolve against the caller's
+current Pi branch before becoming canonical references. A canonical result
+reference resolves internally to the normal private result file under Pi
+Herdsman's durable data directory; it is still validated, canonicalized, and
+deduplicated like any other file. Preserve the exact reference already supplied
+as evidence. Do not guess or reconstruct the underlying path.
 Completion results live under Pi's agent data directory
 (`~/.pi/agent/pi-herdsman/results` by default, respecting Pi's configured agent
 directory) rather than the OS temporary directory, so result handoffs are not

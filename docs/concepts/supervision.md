@@ -92,10 +92,12 @@ evidence. A lead's message does not require an automatic chief reply. A
 `lead_ask` requires the exact correlated `staff reply`; a reply clears the
 pending ask only after accepted follow-up delivery. A replacement chief can
 answer an existing ask using its current lease and unchanged ask ID. Chief
-`message`/`ask`, staff `message`/`reply`, and peer `message` actions accept
-files and completed direct-agent result selectors. Selectors resolve on the
-caller's current Pi branch before entering the shared canonical attachment
-pipeline; durable coordination records remain text-only.
+`message`/`ask`, staff `message`/`reply`, and peer `message` actions accept one
+`files` evidence channel containing ordinary paths, reusable direct-agent refs
+such as `result:<agent>#<index>`, or canonical `result:<request-id>` refs already
+supplied as evidence. Direct refs resolve on the caller's current Pi branch
+before entering the shared canonical attachment pipeline; durable coordination
+records remain text-only.
 
 ## Supervision state
 

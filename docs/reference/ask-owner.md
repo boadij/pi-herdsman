@@ -19,19 +19,19 @@ this infrastructure capability.
 ```json
 {
   "question": "Should I use option A or option B?",
-  "files": [".pi-herdsman/options.md", "diagram.png"],
-  "results": [{ "agent": "researcher", "index": 1 }]
+  "files": [".pi-herdsman/options.md", "diagram.png", "result:researcher#1"]
 }
 ```
 
 `question` must contain non-whitespace text.
-`files` supplies supporting evidence using the same rules as `agent`: complete
-strict UTF-8 text may be embedded, while other files are canonical local
-references and are not copied or snapshotted. `results` optionally selects
-reusable direct-agent results by the exact agent label and result index shown by
-the completion; it resolves against the calling agent's current Pi branch.
-Relative paths use the agent's working directory. This does not weaken the
-sole-final-tool-call rule.
+`files` supplies supporting evidence using the same rules as `agent`: ordinary
+paths, exact reusable direct-agent refs such as `result:researcher#1`, and
+canonical `result:<request-id>` refs already supplied as evidence are accepted.
+Complete strict UTF-8 text may be embedded, while other files are canonical
+local references and are not copied or snapshotted. A direct-result ref is
+resolved against the calling managed agent's current Pi branch before ordinary
+attachment preparation. Relative paths use the agent's working directory. This
+does not weaken the sole-final-tool-call rule.
 
 ## Turn rule
 

@@ -1553,23 +1553,19 @@ test("partial Markdown coordination calls remain useful and retain the partial h
   });
 });
 
-test("coordination results keep collapsed identity bounded and expose structured evidence when expanded", () => {
+test("coordination results keep collapsed identity bounded and render evidence through files", () => {
   const session = "session-1234567890-full";
   const request = "request-1234567890-full";
   const pane = "pane-1234567890-full";
   const task =
     "A complete task that must remain available in the expanded view";
-  const files = ["one.md", "two.md"];
+  const files = ["one.md", "result:message-scout#2", "result:researcher#1"];
   const args = {
     action: "delegate",
     definition: "researcher",
     label: "release-review",
     task,
     files,
-    results: [
-      { agent: "message-scout", index: 2 },
-      { agent: "researcher", index: 1 },
-    ],
   };
   const result = {
     content: [{ type: "text", text: "model-facing prose must not be parsed" }],
@@ -1599,8 +1595,6 @@ test("coordination results keep collapsed identity bounded and expose structured
     pane,
     task,
     ...files,
-    "message-scout #2",
-    "researcher #1",
     "model-facing prose",
   ])
     assert.doesNotMatch(
@@ -1610,7 +1604,7 @@ test("coordination results keep collapsed identity bounded and expose structured
   const compactCall = renderedText(
     renderCoordinationCall("agent", args, presentationTheme),
   );
-  assert.doesNotMatch(compactCall, /results:|message-scout #2|researcher #1/);
+  assert.doesNotMatch(compactCall, /results:/);
   const expanded = renderedText(
     renderCoordinationResult(
       "agent",
@@ -1628,8 +1622,9 @@ test("coordination results keep collapsed identity bounded and expose structured
   assert.ok(
     expandedCall.includes(`task:\n${task}`) &&
       expandedCall.includes(
-        "files:\n  one.md\n  two.md\n\nresults:\n  message-scout #2\n  researcher #1",
+        "files:\n  one.md\n  result:message-scout#2\n  result:researcher#1",
       ) &&
+      !expandedCall.includes("results:") &&
       !expanded.includes(`task:\n${task}`) &&
       !expanded.includes("files:\n"),
   );
@@ -2782,7 +2777,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const expanded = renderCompletionMessage(
       {
         content:
-          "Agent result · agent=agent · result=2 · definition=reviewer · session=session-id · status=completed\n\nOutput truncated after 2000 lines.",
+          "Agent result · agent=agent · definition=reviewer · session=session-id · status=completed\n\nResult ref: result:agent#2\n\nOutput truncated after 2000 lines.",
         details: {
           requestId: "req",
           agentLabel: "agent",
@@ -2808,16 +2803,13 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     assert.match(expandedText, /elapsed: 1s/);
     assert.match(expandedText, /context: 42%/);
     assert.match(expandedText, /full output: \/tmp\/full-output/);
-    assert.match(expandedText, /result: agent #2/);
-    assert.match(
-      expandedText,
-      /canonical result: result:550e8400-e29b-41d4-a716-446655440000/,
-    );
+    assert.match(expandedText, /result ref: result:agent#2/);
+    assert.doesNotMatch(expandedText, /canonical result:/);
+    assert.equal(expandedText.match(/result:agent#2/g)?.length, 1);
     assert.match(expandedText, /Output truncated after 2000 lines/);
-    assert.equal(
-      expandedText.match(/result:550e8400-e29b-41d4-a716-446655440000/g)
-        ?.length,
-      1,
+    assert.doesNotMatch(
+      expandedText,
+      /result:550e8400-e29b-41d4-a716-446655440000/,
     );
 
     const failed = renderCompletionMessage(

@@ -2704,7 +2704,11 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
     assert.match(launched[0].contents[1]!, /ask_owner/);
     assert.match(
       launched[0].contents[1]!.replaceAll(/\s+/g, " ").trim(),
-      /canonical result:<request-id> references exactly through\s+`files`/,
+      /canonical result:<request-id> refs already supplied as file evidence exactly\s+when forwarding them/,
+    );
+    assert.match(
+      launched[0].contents[1]!,
+      /pass reusable direct-agent result refs through `files`/,
     );
     assert.match(
       launched[0].contents[1]!,
@@ -2712,7 +2716,7 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
     );
     assert.match(
       launched[0].contents[1]!,
-      /preserve existing canonical result:<request-id> references exactly through\s+`files`/,
+      /Preserve\s+canonical result:<request-id> refs already supplied as file evidence exactly\s+when forwarding them/,
     );
     assert.match(assignedText, /fresh task/);
     assert.equal(realFs.existsSync(mailbox), true);

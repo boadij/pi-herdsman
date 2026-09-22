@@ -31,7 +31,7 @@ controllers.
 ```
 
 Allowed fields are `action`, `definition`, `task`, optional `label`, `cwd`,
-`files`, `results`, `fork`, and `timeoutMs`. The definition is resolved from
+`files`, `fork`, and `timeoutMs`. The definition is resolved from
 the effective roster and delegating agent controllers may use only their allowlisted
 definitions. Project definitions still require trusted project approval.
 `fork`, when supplied, is an exact saved Pi session path or full UUID used as
@@ -49,7 +49,7 @@ assignment. The terminal result is delivered once and the agent is cleaned up.
 }
 ```
 
-Allowed fields are `action`, `session`, `task`, optional `files`, `results`, and
+Allowed fields are `action`, `session`, `task`, optional `files`, and
 `timeoutMs`. The exact saved session path or full UUID supplies its cwd,
 definition identity, and historical Pi context. Continuation always creates a new agent generation
 for one assignment with a live label; it never assigns work to an existing
@@ -243,15 +243,17 @@ observation path. Transcript is read-only and does not change agent state.
 ## `files` and `timeoutMs`
 
 `files` is valid on `delegate`, `continue`, `steer`, `interrupt`, and `reply`; it is not
-valid on `list`, `close`, `inspect`, or `transcript`. `results` is also valid on
-those five message-producing actions. Each selector uses the exact direct-agent
-label and reusable result index shown in a completion and resolves against the
-calling Pi session's current branch; see [Result handoff](../guides/handoffs.md).
-Paths are resolved from the controller cwd, checked as readable regular files,
-canonicalized with `realpath`, and embedded only when the exact message limit
-permits. Otherwise they remain canonical references. `files` remains a
-`string[]` for ordinary paths and already-known canonical
-`result:<request-id>` references.
+valid on `list`, `close`, `inspect`, or `transcript`. It accepts ordinary paths,
+reusable direct-agent refs such as `result:researcher#1`, and canonical
+`result:<request-id>` refs already supplied as evidence. Semantic refs use the
+exact direct-agent label and index shown in a completion and resolve against the
+calling Pi session's current branch before ordinary file preparation; see
+[Result handoff](../guides/handoffs.md).
+Ordinary paths are resolved from the controller cwd, checked as readable regular
+files, canonicalized with `realpath`, and embedded only when the exact message
+limit permits. Otherwise they remain canonical references. Semantic direct refs
+are resolved on the current branch, while canonical `result:<request-id>` refs
+remain logical result references. `files` is a `string[]` for all three forms.
 
 `timeoutMs` is valid on `delegate` and `continue` and must be an integer
 from `5001` through `300000`. The startup budget reserves one bounded diagnostic
@@ -279,8 +281,7 @@ evidence files remain attachable.
   "action": "steer",
   "agent": "implementer-1",
   "message": "Also update the focused regression.",
-  "files": [".pi-herdsman/review.md"],
-  "results": [{ "agent": "reviewer", "index": 1 }]
+  "files": [".pi-herdsman/review.md", "result:reviewer#1"]
 }
 ```
 
@@ -355,14 +356,20 @@ non-actionable.
 
 An accepted delegated task remains the internal mailbox `kind: "task"` request
 and has one correlated final result. Delivery goes to the exact owning Pi
-session and occurs exactly once. Model-visible completion wording uses
-`agent=<agent>`, a reusable `result=<index>` when the persisted result is
-attachable, `definition=<definition>`, `session=<id>`, and status. Details
-retain durable `agentLabel`, `resultIndex` when present, `agentDefinition`,
-`piSessionId`, `piSessionFile`, canonical result references, elapsed time,
-context usage, truncation, and persistence-error evidence. The agent is cleaned
-up after the terminal result is delivered; the Pi session remains available for
-continuation.
+session and occurs exactly once. A persisted reusable completion's
+model-visible wording is:
+
+```text
+Agent result · agent=<agent> · definition=<definition> · session=<id> · status=completed
+
+Result ref: result:<agent>#<index>
+```
+
+Details retain durable `agentLabel`, `resultIndex` when present,
+`agentDefinition`, `piSessionId`, `piSessionFile`, canonical result references,
+elapsed time, context usage, truncation, and persistence-error evidence. The
+agent is cleaned up after the terminal result is delivered; the Pi session
+remains available for continuation.
 
 Tool failures return structured details for normal public errors. See
 [Errors](errors.md), [agent states](agent-states.md), and

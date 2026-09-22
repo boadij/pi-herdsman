@@ -136,7 +136,7 @@ test("project agent discovery is gated by Pi project trust", async () => {
   }
 });
 
-test("structured results attach persisted output and preserve canonical file refs", async () => {
+test("semantic result refs attach persisted output and preserve canonical file refs", async () => {
   setLeadEnvironment();
   const requestId = randomUUID();
   const canonical = resultRef(requestId);
@@ -176,8 +176,7 @@ test("structured results attach persisted output and preserve canonical file ref
         definition: "agent",
         label,
         task: "Review supplied implementation.",
-        files: [canonical],
-        results: [{ agent: "implementation", index: 1 }],
+        files: ["result:implementation#1", canonical],
       },
       undefined,
       undefined,
@@ -189,7 +188,7 @@ test("structured results attach persisted output and preserve canonical file ref
     assert.equal(
       assignedText.match(new RegExp(`<file name="${canonical}"`, "g"))?.length,
       1,
-      "canonical refs supplied through files and results should deduplicate in the existing pipeline",
+      "semantic and canonical refs supplied through files should deduplicate in the existing pipeline",
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -199,7 +198,7 @@ test("structured results attach persisted output and preserve canonical file ref
   }
 });
 
-test("structured result selectors resolve only on the active branch", async () => {
+test("semantic result refs resolve only on the active branch", async () => {
   setLeadEnvironment();
   const requestId = randomUUID();
   const resultEntry = {
@@ -222,13 +221,34 @@ test("structured result selectors resolve only on the active branch", async () =
         action: "delegate",
         definition: "agent",
         task: "must not start",
-        results: [{ agent: "implementation", index: 2 }],
+        files: ["result:implementation#2"],
       },
       undefined,
       undefined,
       fakeContext(entries, []),
     );
     assert.equal(result.details.error.category, "target_not_found");
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+    const malformed = await pi.tools[0].execute(
+      "id",
+      {
+        action: "delegate",
+        definition: "agent",
+        task: "must not start",
+        files: ["result:implementation#01"],
+      },
+      undefined,
+      undefined,
+      fakeContext(entries, []),
+    );
+    assert.equal(malformed.details.error.category, "invalid_request");
+    assert.equal(
+      malformed.details.error.message,
+      "Invalid result ref: result:implementation#01. Copy the exact result ref shown by the agent completion.",
+    );
     assert.equal(
       pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
       false,
@@ -273,7 +293,7 @@ test("conflicting duplicate result mappings fail closed", async () => {
         action: "delegate",
         definition: "agent",
         task: "must not guess",
-        results: [{ agent: "implementation", index: 1 }],
+        files: ["result:implementation#1"],
       },
       undefined,
       undefined,

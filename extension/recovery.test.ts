@@ -1383,9 +1383,10 @@ test("recovery requires the official session and retries one failed delivery", a
   assert.match(
     delivered,
     new RegExp(
-      `^Agent result · agent=${label} · result=2 · definition=agent · session=${identity.piSessionId} · status=completed`,
+      `^Agent result · agent=${label} · definition=agent · session=${identity.piSessionId} · status=completed`,
     ),
   );
+  assert.match(delivered, new RegExp(`Result ref: result:${label}#2`));
   assert.equal(deliveredDetails.agentLabel, label);
   assert.equal(deliveredDetails.agentDefinition, "agent");
   assert.equal(deliveredDetails.resultIndex, 2);
@@ -1466,7 +1467,7 @@ test("in-place branch history does not reuse a result index", async () => {
     assert.equal(delivered?.details.resultIndex, 3);
     assert.match(
       String(delivered?.content),
-      /agent=branched-result-agent · result=3/,
+      /Result ref: result:branched-result-agent#3/,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
