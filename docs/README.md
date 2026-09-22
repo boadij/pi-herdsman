@@ -62,6 +62,7 @@ Maintainer-only material stays separate from both product paths:
 - [Validation](development/validation.md)
 - [Smoke testing](development/smoke-testing.md)
 - [Documentation maintenance](development/documentation.md)
+- [Instruction and interface design](development/instruction-interface-design.md)
 
 The repository directories still group pages by content type (`concepts`,
 `guides`, `reference`, and `development`). The documentation index is
@@ -94,6 +95,7 @@ before choosing the material relevant to them.
 | Error categories                      | [Errors](reference/errors.md)                                   |
 | Repository checks                     | [Validation](development/validation.md)                         |
 | Live acceptance                       | [Smoke testing](development/smoke-testing.md)                   |
+| Instruction and interface design     | [Instruction and interface design](development/instruction-interface-design.md) |
 
 When another page needs one of these subjects, it summarizes only enough to
 establish context and links to the canonical page instead of restating the full

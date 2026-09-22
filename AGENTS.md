@@ -11,6 +11,14 @@ behavior.
   guidance for removed behavior.
 - Document only verified current semantics and known limitations.
 
+## Instruction and interface design
+
+Repository changes must follow the principles in
+[Instruction and interface design](docs/development/instruction-interface-design.md).
+
+Apply them across runtime behavior, model-facing instructions, tools, schemas,
+state, validation, documentation, tests, and public interfaces.
+
 ## Runtime / skill instruction synchronization
 
 The runtime operational contract must be self-contained. Loading root
