@@ -63,6 +63,7 @@ import {
   readAgentState,
   listAgentStates,
   listAgentStateIssues,
+  scanAgentStates,
   removeRequest,
   removeAsk,
   removeResult,
@@ -7882,16 +7883,19 @@ export default function (pi: ExtensionAPI): void {
   const activationGuard = (sessionId: string): void => {
     if (!leadCoordinationHealthy)
       throw new Error("Lead coordination state is unavailable");
-    const owned = listAgentStates().some(
-      ({ state }) => state.ownerSessionId === sessionId,
-    );
-    // An unresolved mailbox cannot be safely attributed, so fail closed.
-    if (pendingChiefAsk || owned || listAgentStateIssues().length)
+
+    if (pendingChiefAsk)
+      throw new Error("Cannot activate chief while a chief ask is pending");
+
+    const { states, issues } = scanAgentStates();
+
+    if (issues.length)
       throw new Error(
-        pendingChiefAsk
-          ? "Cannot activate chief while a chief ask is pending"
-          : "Cannot activate chief while owned agent work exists",
+        "Cannot activate chief while managed mailbox state is unresolved",
       );
+
+    if (states.some(({ state }) => state.ownerSessionId === sessionId))
+      throw new Error("Cannot activate chief while owned agent work exists");
   };
   let supervisionToolRegistered = false;
   let chiefActivationRollback = false;

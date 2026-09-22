@@ -53,7 +53,9 @@ Chief is a mode of a lead session. While active, its model has exactly the
 chief model context; workspace-specific work remains the responsibility of
 supervised leads. Chief supervises independent Leads, does not own their
 agents, and receives no owner controls. `/chief leave` restores the session's
-ordinary tools.
+ordinary tools. Activating Chief mode also fails closed while managed mailbox
+state is unresolved, because the Lead cannot safely prove that it owns no
+managed agent work.
 
 ## Lead projection and actions
 
