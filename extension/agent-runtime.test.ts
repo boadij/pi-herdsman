@@ -1647,7 +1647,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     assert.ok(
       unresolvedStatus.endsWith(
         "Delegation status: 1 active direct agent; 1 pending direct result; 2 direct agent assignments remain unresolved. " +
-          "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
+          "When agent work is unresolved, handle required agent control, then do only concrete work independent of unresolved agent assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not poll, duplicate delegated work, or invent work merely to remain active.",
       ),
     );
     assert.equal(
@@ -1691,7 +1691,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     assert.ok(
       String((pi.sentMessageCalls[1].message as any).content).endsWith(
         "Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved. " +
-          "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
+          "When agent work is unresolved, handle required agent control, then do only concrete work independent of unresolved agent assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not poll, duplicate delegated work, or invent work merely to remain active.",
       ),
     );
     assert.equal(

@@ -205,7 +205,7 @@ test("combined status reports a completed agent as pending, not active", async (
           (message as any).details.unresolvedDirectChildCount === 1 &&
           String((message as any).content).endsWith(
             "Delegation status: 0 active direct agents; 1 pending direct result; 1 direct agent assignment remains unresolved. " +
-              "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
+              "When agent work is unresolved, handle required agent control, then do only concrete work independent of unresolved agent assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not poll, duplicate delegated work, or invent work merely to remain active.",
           ),
       ),
       true,
@@ -1738,7 +1738,7 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
     assert.ok(
       String((recovered.sentMessageCalls[0]?.message as any).content).endsWith(
         "Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved. " +
-          "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
+          "When agent work is unresolved, handle required agent control, then do only concrete work independent of unresolved agent assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not poll, duplicate delegated work, or invent work merely to remain active.",
       ),
     );
     assert.equal(

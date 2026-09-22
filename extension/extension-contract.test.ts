@@ -203,7 +203,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     [
       "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.",
       "For agent handoffs, `task`/`files` carry assignment evidence and `fork`/`continue` carry selected Pi history; do not assume the caller's conversation or attachments are inherited.",
-      "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
+      "When agent work is unresolved, handle required agent control, then do only concrete work independent of unresolved agent assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not poll, duplicate delegated work, or invent work merely to remain active.",
     ],
   );
   assert.equal(

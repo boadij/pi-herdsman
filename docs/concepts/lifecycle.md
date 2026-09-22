@@ -93,8 +93,8 @@ event, the owner reassesses the remaining work:
 
 After control, delegation, or local parallel work, the owner reassesses again.
 Once further useful progress depends on active agents, or no other concrete,
-necessary independent work remains, it ends the turn. Agent results,
-clarifications, and recovery attention resume the session automatically.
+necessary independent work remains, it ends the turn. Agent results or attention
+will resume the session automatically.
 
 The owner does not invent side work merely because agents are running. It does
 not poll, sleep, inspect or transcript merely for progress, send status steering, or use

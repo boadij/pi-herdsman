@@ -32,8 +32,10 @@ Use these high-salience rules for the model-facing agent boundary:
   `fork`/`continue` carry selected Pi history; do not assume the caller's
   conversation or attachments are inherited.
 - When agent work is unresolved, handle required agent control, then do only
-  concrete independent work or end the turn without concluding; do not poll,
-  duplicate delegated work, or invent work merely to remain active.
+  concrete work independent of unresolved agent assignments or end the turn
+  without concluding; agent results or attention will resume the session
+  automatically. Do not poll, duplicate delegated work, or invent work merely
+  to remain active.
 
 Ordinary Leads use `peer` for other ordinary Lead sessions; managed agents are
 not peers. `peer list` identifies this Lead as `self` and returns other live
