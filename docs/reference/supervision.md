@@ -58,7 +58,9 @@ ordinary tools.
 ## Lead projection and actions
 
 An eligible lead requires one exact live recognized Pi agent, a matching lead
-record, and no chief or validated managed agent identity. A lead's observed
+record, no chief or validated managed agent identity, and no unresolved managed
+mailbox state. Unresolved mailbox state fails closed because ownership cannot be
+attributed safely. A lead's observed
 runtime state is informational. Every exact-identity-verified live lead has
 `inspect` and `message`, whether it is idle, working, blocked, done, or unknown.
 A non-empty persisted session candidate adds `transcript` to

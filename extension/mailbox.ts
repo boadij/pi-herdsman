@@ -153,7 +153,7 @@ function boundedDiagnostic(error: unknown): string {
     : text;
 }
 
-function scanAgentStates(): {
+export function scanAgentStates(): {
   states: Array<{ path: string; state: ManagedAgentState }>;
   issues: ManagedAgentStateIssue[];
 } {

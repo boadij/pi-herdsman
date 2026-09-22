@@ -1776,6 +1776,39 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
   }
 });
 
+test("chief activation reports unresolved mailbox state instead of owned work", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const mailbox = agentMailboxPath(
+    WORKSPACE,
+    `chief-activation-invalid-state-${randomUUID()}`,
+  );
+  const notices: string[] = [];
+  realFs.mkdirSync(mailbox, { recursive: true });
+  realFs.writeFileSync(join(mailbox, "state.json"), "not json");
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.ui.notify = (message: string) => notices.push(message);
+
+  try {
+    const command = pi.commandOptions.get("chief");
+    assert.ok(command);
+
+    await command.handler("", context);
+
+    assert.equal(notices.length, 1);
+    assert.match(notices[0]!, /managed mailbox state is unresolved/);
+    assert.doesNotMatch(notices[0]!, /owned agent work exists/);
+    assert.notDeepEqual(pi.pi.getActiveTools(), ["staff"]);
+  } finally {
+    realFs.rmSync(mailbox, { recursive: true, force: true });
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("a replacement chief never falls back to the previous session supervision", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
