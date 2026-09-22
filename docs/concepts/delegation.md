@@ -89,8 +89,20 @@ Do not:
 - continue work that depends on an active agent result;
 - inspect, transcript, list, or steer active agents merely to check progress or completion.
 
-Direct ownership grants lifecycle and control authority. It does not make the
-owner a second executor of an active delegated assignment.
+Each unresolved unit of work has exactly one executor.
+
+Delegating a scope transfers execution ownership of that scope to the delegated
+agent until the assignment resolves. The delegator retains responsibility for
+coordination and may continue work it still owns, but it does not execute the
+delegated scope or assign substantially overlapping work elsewhere.
+
+After delegation succeeds, the delegated scope is no longer part of the
+controller's execution scope. The controller may continue only concrete,
+necessary work clearly outside that scope that it still owns; otherwise it ends
+the turn and waits for automatic result or attention delivery.
+
+After the assignment resolves, the delegator may integrate, validate,
+synthesize, or assign follow-up work from the result.
 
 A useful parallel pattern is:
 
