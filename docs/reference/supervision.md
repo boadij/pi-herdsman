@@ -171,8 +171,8 @@ limits as agent messages.
 allowed per lead. The call durably records its ask ID and clean question, then
 queues the prepared text. The prepared text, including attachment rendering, is
 persisted before publication so reconciliation can deliver it after a failed
-initial publication. It is a terminating coordination call: make it the final
-tool call of the turn and wait rather than guessing.
+initial publication. It must be the only tool call in the turn; call it last,
+do not guess, and wait for the reply.
 
 ## `staff`
 

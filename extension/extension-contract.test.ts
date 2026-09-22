@@ -1661,7 +1661,17 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
     },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext(
+    [],
+    [
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: "chief" }],
+        },
+      },
+    ],
+  ) as any;
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const tool = pi.tools.find((candidate) => candidate.name === "chief");
@@ -2391,10 +2401,19 @@ test("registered lead and replacement chief exchange messages and asks", async (
   const lead = fakePi({ exec });
   registerExtension!(lead.pi as never);
   const leadContext = fakeContext() as any;
+  let leadToolBatch = ["chief"];
   leadContext.sessionManager = {
     ...leadContext.sessionManager,
     getSessionId: () => leadId,
     getSessionFile: () => "/tmp/contract-lead.jsonl",
+    getBranch: () => [
+      {
+        message: {
+          role: "assistant",
+          content: leadToolBatch.map((name) => ({ type: "toolCall", name })),
+        },
+      },
+    ],
   };
   await lead.events.get("session_start")![0](undefined, leadContext);
 
@@ -2649,6 +2668,37 @@ test("registered lead and replacement chief exchange messages and asks", async (
       chiefLeadStateEntriesBeforeDelivery,
     );
 
+    const beforeMixedBatchAskState = readLeadCoordinationState(
+      supervisionRuntime(),
+      leadId,
+    );
+    const beforeMixedBatchAskMessages = listChiefMessagePaths(
+      supervisionRuntime(),
+      chiefId,
+    );
+    leadToolBatch = ["chief", "agent"];
+    await assert.rejects(
+      leadTool.execute(
+        "ask",
+        {
+          action: "ask",
+          question: "This mixed batch must not be published.",
+        },
+        undefined,
+        undefined,
+        leadContext,
+      ),
+      /Call chief ask alone as the final tool call of the turn/,
+    );
+    assert.deepEqual(
+      readLeadCoordinationState(supervisionRuntime(), leadId),
+      beforeMixedBatchAskState,
+    );
+    assert.deepEqual(
+      listChiefMessagePaths(supervisionRuntime(), chiefId),
+      beforeMixedBatchAskMessages,
+    );
+    leadToolBatch = ["chief"];
     const ask = await leadTool.execute(
       "ask",
       {
@@ -2661,6 +2711,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
       leadContext,
     );
     assertToolResult(ask);
+    assert.equal((ask as any).terminate, true);
     const askId = ask.details.askId as string;
     const state = readLeadCoordinationState(supervisionRuntime(), leadId);
     assert.equal(state?.pendingAsk?.askId, askId);
@@ -3158,7 +3209,7 @@ test("chief guidance carries the lead coordination contract", () => {
   const description = tool.description.replaceAll(/\s+/g, " ");
   for (const expected of [
     /meaningful progress, results, warnings, and completion, including exact artifact paths/,
-    /ask when a chief decision is genuinely required, make it the only and final coordination call of the turn, do not guess, and wait for the reply/,
+    /ask when a chief decision is genuinely required; call ask alone as the final tool call of the turn, then stop and wait for the reply/,
     /Chief messages arrive as follow-ups/,
     /Questions are limited to 1,024 characters and 1,024 UTF-8 bytes; channel message records are bounded to 8 KiB, so multibyte content can hit the byte limit first/,
     /Descendants use ask_owner, never chief/,
