@@ -9793,6 +9793,8 @@ export default function (pi: ExtensionAPI): void {
       chiefTool = {
         name: "chief",
         label: "chief",
+        promptSnippet:
+          "Report progress to or ask the active chief supervising this lead",
         description:
           "For ordinary leads only. A lead owns its complete agent tree; the chief supervises leads and never changes ownership. Message and ask require a currently valid chief and reject before mutation when none exists. Use message for meaningful progress, results, warnings, and completion, including exact artifact paths; use ask when a chief decision is genuinely required; call ask alone as the final tool call of the turn, then stop and wait for the reply. Questions are limited to 1,024 characters and 1,024 UTF-8 bytes; channel message records are bounded to 8 KiB, so multibyte content can hit the byte limit first. Chief messages arrive as follow-ups, so integrate them through normal delegation. Descendants use ask_owner, never chief.",
         executionMode: "sequential",
@@ -10043,6 +10045,7 @@ export default function (pi: ExtensionAPI): void {
       peerTool = {
         name: "peer",
         label: "peer",
+        promptSnippet: "Discover and message other live lead sessions",
         description:
           "Other ordinary Lead sessions (peers), not managed agents. Use list for peers, other Leads, or other Lead sessions. list identifies this Lead as self and returns other live Leads as peers; message sends to one peer's exact lead ID and may include files or completed direct-agent results.",
         executionMode: "sequential",
@@ -10143,6 +10146,8 @@ export default function (pi: ExtensionAPI): void {
       const staffTool = {
         name: "staff",
         label: "staff",
+        promptSnippet:
+          "Supervise and communicate with independent lead sessions",
         description:
           "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name. " +
           "Chief-only supervision coordination. The chief supervises independent leads, does not own their agent trees, and receives no owner controls. A fresh supervision snapshot is automatically supplied at the start of each chief agent run; treat it as the default current coordination state. For ordinary state and coordination, use a fresh snapshot directly; do not call staff list, inspect, transcript, or another read command merely to poll progress. The message and reply actions revalidate exact identity and state themselves. Use list when the automatic snapshot is stale or unavailable, an immediately refreshed exact roster is materially necessary, or you are diagnosing identity or supervision projection problems. Inspect provides bounded live terminal/process evidence; use it only when that evidence matters. Transcript provides bounded persisted Pi conversation/tool evidence; use it only when that evidence materially matters. Use the lead field's exact full Pi session ID and only fresh available_actions, never infer from display state or metadata. Every exact-identity-verified lead accepts message; reply only with the exact pending ask ID and current chief lease. Message is ordinary durable follow-up communication. Messages are bounded and direction-aware, and temporary verification or delivery failures retain queued records. Metadata is presentation-only and never authority. Messages use follow-up delivery. Human conversation remains the dispatch surface.",
@@ -11520,6 +11525,8 @@ export default function (pi: ExtensionAPI): void {
     pi.registerTool({
       name: "agent",
       label: "agent",
+      promptSnippet:
+        "Delegate and coordinate work with owned asynchronous agents",
       description: controllerDescription(controllerScope),
       executionMode: "sequential",
       parameters: agentParameters,
@@ -11915,6 +11922,8 @@ export default function (pi: ExtensionAPI): void {
   pi.registerTool({
     name: "ask_owner",
     label: "Ask owner",
+    promptSnippet:
+      "Ask this managed agent's direct owner for a required decision",
     description:
       "Ask your direct owner for a decision that is required to continue. Call this alone as the final tool call of the turn, then stop and wait for the reply. Only one question may be outstanding.",
     executionMode: "sequential",

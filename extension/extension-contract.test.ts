@@ -194,6 +194,18 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     lead.tools.find((tool) => tool.name === "agent")?.label,
     "agent",
   );
+  assert.equal(
+    lead.tools.find((tool) => tool.name === "agent")?.promptSnippet,
+    "Delegate and coordinate work with owned asynchronous agents",
+  );
+  assert.equal(
+    lead.tools.find((tool) => tool.name === "chief")?.promptSnippet,
+    "Report progress to or ask the active chief supervising this lead",
+  );
+  assert.equal(
+    lead.tools.find((tool) => tool.name === "peer")?.promptSnippet,
+    "Discover and message other live lead sessions",
+  );
   const agentTool = lead.tools.find((tool) => tool.name === "agent");
   const chiefTool = lead.tools.find((tool) => tool.name === "chief");
   const peerTool = lead.tools.find((tool) => tool.name === "peer");
@@ -463,6 +475,10 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
   assert.equal(
     managed.tools.some((tool) => tool.name === "peer"),
     false,
+  );
+  assert.equal(
+    managed.tools.find((tool) => tool.name === "ask_owner")?.promptSnippet,
+    "Ask this managed agent's direct owner for a required decision",
   );
   managed.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
@@ -1181,6 +1197,10 @@ test("active chief describes authoritative remote ask projection", async () => {
   const tool = pi.tools.find((candidate) => candidate.name === "staff");
   assert.ok(tool);
   assert.equal(tool.label, "staff");
+  assert.equal(
+    tool.promptSnippet,
+    "Supervise and communicate with independent lead sessions",
+  );
   assert.equal(typeof tool.renderCall, "function");
   assert.equal(typeof tool.renderResult, "function");
   assert.equal(
