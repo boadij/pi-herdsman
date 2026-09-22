@@ -150,6 +150,134 @@ test("ordinary Lead peer presence disappears in Chief mode and on shutdown", asy
   }
 });
 
+test("coordination failure withdraws peer presence and recovery republishes a fresh generation", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `peer-presence-health-${randomUUID()}.sock`,
+  );
+  const chiefId = `chief-${randomUUID()}`;
+  const descriptorIdentity = {
+    piSessionId: chiefId,
+    paneId: "chief-pane",
+    tabId: "chief-tab",
+    workspaceId: WORKSPACE,
+  };
+  const chiefAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: chiefId,
+    },
+    pane_id: descriptorIdentity.paneId,
+    tab_id: descriptorIdentity.tabId,
+    workspace_id: descriptorIdentity.workspaceId,
+    cwd: "/tmp",
+  };
+  const lease = claimChiefLease(descriptorIdentity);
+  const entries: unknown[] = [];
+  const pi = fakeChiefPi({
+    entries,
+    exec: (command, args) => {
+      if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (isAgentList(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [chiefAgent] },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "agent" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agent: chiefAgent },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  const context = fakeContext(
+    [],
+    [
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: "chief" }],
+        },
+      },
+    ],
+  ) as any;
+  context.ui.notify = () => undefined;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+
+    const sessionId = context.sessionManager.getSessionId();
+    const initial = readPeerLeadRecord(peerRuntime(), sessionId);
+    assert.ok(initial);
+
+    const appendEntry = pi.pi.appendEntry;
+    let leadStateAttempts = 0;
+    let rollbackObservedWithdrawal = false;
+    pi.pi.appendEntry = (customType: string, data: unknown) => {
+      if (customType === "pi-herdsman-lead-state") {
+        leadStateAttempts++;
+        if (leadStateAttempts === 1)
+          throw new Error("injected lead coordination failure");
+        if (leadStateAttempts === 2) {
+          rollbackObservedWithdrawal =
+            readPeerLeadRecord(peerRuntime(), sessionId) === undefined;
+          assert.equal(
+            rollbackObservedWithdrawal,
+            true,
+            "unhealthy Lead remained globally discoverable",
+          );
+        }
+      }
+      appendEntry(customType, data);
+    };
+
+    const chief = pi.tools.find((tool) => tool.name === "chief");
+    assert.ok(chief);
+    await assert.rejects(
+      chief.execute(
+        "ask",
+        { action: "ask", question: "Which path?" },
+        undefined,
+        undefined,
+        context,
+      ),
+      /Lead coordination state is unavailable/,
+    );
+    assert.equal(leadStateAttempts, 2);
+    assert.equal(rollbackObservedWithdrawal, true);
+
+    await waitForTestCondition(
+      () => !!readPeerLeadRecord(peerRuntime(), sessionId),
+      "healthy Lead did not republish peer presence",
+    );
+
+    const recovered = readPeerLeadRecord(peerRuntime(), sessionId);
+    assert.ok(recovered);
+    assert.notEqual(recovered.claim.id, initial.claim.id);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    lease.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("Chief leave restores minimal peer presence before provenance resolves", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";

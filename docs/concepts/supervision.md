@@ -80,6 +80,9 @@ inventory or presentation metadata. Publication rechecks sender and target
 before the atomic write, and delivery revalidates the current ordinary-Lead
 receiver and target. Queued messages survive sender shutdown and remain queued
 while the receiver is Chief or lacks valid peer presence.
+Local Lead coordination health gates both the socket-scoped coordination record
+and global peer presence. When coordination becomes unhealthy, both current
+projections are withdrawn; durable queued messages are retained.
 `inspect` is bounded live terminal/process evidence. `transcript` is bounded
 persisted Pi conversation/tool evidence. A non-empty persisted session candidate
 adds `transcript` to `available_actions`; `available_actions` is advisory

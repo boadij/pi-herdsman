@@ -24,6 +24,9 @@ Missing, malformed, duplicate, replaced, or dead-lock evidence is ignored.
 Chief and suspended Lead sessions do not publish peer presence. Enumeration
 scans every canonical filename in the global registry, then filters malformed
 or dead records; one stale record does not hide later live peers.
+An ordinary Lead withdraws peer presence whenever its current Lead coordination
+generation becomes unhealthy. Successful durable recovery republishes a fresh
+presence generation rather than reviving the prior claim.
 
 Presence is observation, not permission. The global peer record and its exact
 live process-lock claim are the reachability authority; Herdr inventory and

@@ -7000,7 +7000,7 @@ export default function (pi: ExtensionAPI): void {
       });
       return persistLeadCoordination();
     } catch (error) {
-      leadCoordinationHealthy = false;
+      markLeadCoordinationUnhealthy();
       if (leadContext)
         appendDurableError(pi, leadContext, "pi_herdsman_state_error", error);
       return false;
@@ -7009,6 +7009,7 @@ export default function (pi: ExtensionAPI): void {
   const persistLeadCoordination = (): boolean => {
     if (controllerScope?.kind !== "lead" || chiefMode !== "inactive")
       return true;
+    const wasHealthy = leadCoordinationHealthy;
     try {
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
@@ -7018,20 +7019,10 @@ export default function (pi: ExtensionAPI): void {
         updatedAt: Date.now(),
       });
       leadCoordinationHealthy = true;
+      if (!wasHealthy && leadContext) void schedulePeerPresence(leadContext);
       return true;
     } catch (error) {
-      leadCoordinationHealthy = false;
-      try {
-        const sessionId = leadContext?.sessionManager.getSessionId();
-        if (sessionId)
-          invalidateLeadCoordinationState(
-            supervisionRuntime(),
-            sessionId,
-            leadInstanceId,
-          );
-      } catch {
-        // Fail closed even when invalidation itself cannot be confirmed.
-      }
+      markLeadCoordinationUnhealthy();
       if (leadContext)
         appendDurableError(pi, leadContext, "pi_herdsman_state_error", error);
       return false;
@@ -7058,6 +7049,28 @@ export default function (pi: ExtensionAPI): void {
         appendDurableError(pi, leadContext, "pi_herdsman_state_error", error);
     }
     peerPresenceLease = undefined;
+  };
+  const markLeadCoordinationUnhealthy = (
+    ctx: ExtensionContext | undefined = leadContext,
+  ): void => {
+    leadCoordinationHealthy = false;
+
+    // Invalidate queued publication/enrichment before health can recover.
+    ++peerPresenceGeneration;
+    removePeerPresence();
+
+    const sessionId = ctx?.sessionManager.getSessionId();
+    if (!sessionId) return;
+
+    try {
+      invalidateLeadCoordinationState(
+        supervisionRuntime(),
+        sessionId,
+        leadInstanceId,
+      );
+    } catch (error) {
+      appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+    }
   };
   const publishPeerPresence = async (
     ctx: ExtensionContext,
@@ -7288,22 +7301,13 @@ export default function (pi: ExtensionAPI): void {
     }
     if (malformed) {
       pendingChiefAsk = undefined;
-      leadCoordinationHealthy = false;
+      markLeadCoordinationUnhealthy(ctx);
       appendDurableError(
         pi,
         ctx,
         "pi_herdsman_state_error",
         new Error("invalid pi-herdsman-lead-state entry"),
       );
-      try {
-        invalidateLeadCoordinationState(
-          supervisionRuntime(),
-          ctx.sessionManager.getSessionId(),
-          leadInstanceId,
-        );
-      } catch (error) {
-        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
-      }
       return;
     }
     persistLeadCoordination();
@@ -7649,7 +7653,7 @@ export default function (pi: ExtensionAPI): void {
         // The coordination state is already invalid, so quarantine before
         // surfacing the failure. This prevents retry from using the failed
         // write as a stranded intent.
-        leadCoordinationHealthy = false;
+        markLeadCoordinationUnhealthy(ctx);
         appendDurableError(pi, ctx, "pi_herdsman_state_error", cleanupError);
         try {
           quarantineChiefMessage(runtime, record.toSessionId, record.id);
@@ -9889,7 +9893,7 @@ export default function (pi: ExtensionAPI): void {
                       record,
                     );
                   } catch (cleanupError) {
-                    leadCoordinationHealthy = false;
+                    markLeadCoordinationUnhealthy(ctx);
                     try {
                       quarantineChiefMessage(
                         supervisionRuntime(),
@@ -9902,20 +9906,6 @@ export default function (pi: ExtensionAPI): void {
                         ctx,
                         "pi_herdsman_state_error",
                         quarantineError,
-                      );
-                    }
-                    try {
-                      invalidateLeadCoordinationState(
-                        supervisionRuntime(),
-                        ctx.sessionManager.getSessionId(),
-                        leadInstanceId,
-                      );
-                    } catch (invalidateError) {
-                      appendDurableError(
-                        pi,
-                        ctx,
-                        "pi_herdsman_state_error",
-                        invalidateError,
                       );
                     }
                     appendDurableError(
@@ -10008,7 +9998,7 @@ export default function (pi: ExtensionAPI): void {
                   throw new Error("Lead coordination state is unavailable");
               } catch (error) {
                 pendingChiefAsk = previous;
-                if (!persistChiefState()) leadCoordinationHealthy = false;
+                persistChiefState();
                 throw error;
               }
               const record = await queueChiefRecord(
@@ -11299,21 +11289,7 @@ export default function (pi: ExtensionAPI): void {
           persistRole("lead");
           // Do not publish the state restored above: malformed role history
           // leaves coordination unhealthy until a clean session state exists.
-          leadCoordinationHealthy = false;
-          try {
-            invalidateLeadCoordinationState(
-              supervisionRuntime(),
-              ctx.sessionManager.getSessionId(),
-              leadInstanceId,
-            );
-          } catch (invalidationError) {
-            appendDurableError(
-              pi,
-              ctx,
-              "pi_herdsman_state_error",
-              invalidationError,
-            );
-          }
+          markLeadCoordinationUnhealthy(ctx);
           // Keep ordinary agent control, but do not expose chief
           // while the persisted role record is unresolved.
           enterLead(ctx, false);
