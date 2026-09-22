@@ -75,6 +75,7 @@ export interface CompletionMessageDetails {
     percent: number | null;
   };
   truncated: boolean;
+  resultIndex?: number;
   resultRef?: string;
   fullOutputPath?: string;
   resultPersistenceError?: string;
@@ -1530,7 +1531,7 @@ export function formatToolModelResult(
     ...cleanup,
   ].join("\n");
 }
-type CoordinationTool = "agent" | "chief" | "staff";
+type CoordinationTool = "agent" | "chief" | "peer" | "staff";
 
 function humanText(theme: any, color: string, text: string): string {
   return theme?.fg ? theme.fg(color, text) : text;
@@ -1701,7 +1702,7 @@ function renderExpandedCoordinationCall(
       if (args.session) fields.push(["session", args.session]);
       if (args.timeoutMs) fields.push(["timeout", args.timeoutMs]);
     } else if (args.agent) fields.push(["agent", args.agent]);
-  } else if (tool === "staff") {
+  } else if (tool === "staff" || tool === "peer") {
     if (args.lead) fields.push(["lead", args.lead]);
     if (args.askId) fields.push(["ask", args.askId]);
   }
@@ -1736,6 +1737,23 @@ function renderExpandedCoordinationCall(
     content.addChild(new Spacer(1));
     content.addChild(new WidthSafeText(["files:", ...files].join("\n"), 0, 0));
   }
+  const results = Array.isArray(args.results)
+    ? args.results.flatMap((selector) => {
+        if (!selector || typeof selector !== "object") return [];
+        const item = selector as Record<string, unknown>;
+        const agent = value(item.agent);
+        const index = item.index;
+        return agent && Number.isSafeInteger(index) && index > 0
+          ? [`  ${agent} #${index}`]
+          : [];
+      })
+    : [];
+  if (results.length) {
+    content.addChild(new Spacer(1));
+    content.addChild(
+      new WidthSafeText(["results:", ...results].join("\n"), 0, 0),
+    );
+  }
   const box = createWidthSafeBox(0, 0, (line) => line);
   box.addChild(content);
   return box;
@@ -1756,7 +1774,7 @@ export function renderCoordinationCall(
   else if (tool === "agent" && action === "continue")
     target = value(context?.state?.agentLabel);
   else if (tool === "agent") target = value(a.agent);
-  else if (tool === "staff")
+  else if (tool === "staff" || tool === "peer")
     target = action === "list" ? "" : shortIdentity(a.lead);
   const definition =
     tool === "agent"
@@ -1970,7 +1988,9 @@ function expandedResultLines(
     action === "list"
       ? tool === "staff"
         ? "staff"
-        : "agents"
+        : tool === "peer"
+          ? "peer"
+          : "agents"
       : action === "inspect"
         ? `inspect ${display}`
         : action === "delegate" || action === "continue"
@@ -2043,7 +2063,29 @@ function expandedResultLines(
           ]
         : []),
     );
-  if (action === "list" && tool === "staff") {
+  if (action === "list" && (tool === "staff" || tool === "peer")) {
+    if (tool === "peer") {
+      const peers = Array.isArray(details.peers) ? details.peers : [];
+      const self = value(details.self) || "unknown";
+      lines.push(
+        "",
+        `self ${self}`,
+        `peers ${peers.length}`,
+        ...peers.flatMap((peer: any) =>
+          peer && typeof peer === "object"
+            ? (() => {
+                const lead = value(peer.lead) || "lead";
+                const name = value(peer.name) || lead;
+                const branch = value(peer.branch);
+                return [
+                  `  ${name} · lead: ${lead}${branch ? ` · branch: ${branch}` : ""}`,
+                ];
+              })()
+            : [],
+        ),
+      );
+      return lines;
+    }
     const leads = Array.isArray(details.leads) ? details.leads : [];
     lines.push(
       "",
@@ -2246,6 +2288,18 @@ export function renderCoordinationResult(
       0,
     );
   }
+  if (tool === "peer" && action === "list") {
+    const peers = Array.isArray(details.peers) ? details.peers : [];
+    return new WidthSafeText(
+      humanText(
+        theme,
+        "toolTitle",
+        `peer · ${peers.length} peer${peers.length === 1 ? "" : "s"}`,
+      ),
+      0,
+      0,
+    );
+  }
   if (action === "list") {
     const leads = Array.isArray(details.leads) ? details.leads : [];
     const active = leads.filter(
@@ -2361,9 +2415,10 @@ export function truncateModelText(
     : undefined;
   const ref = path ? resultRef(options.requestId ?? options.key) : undefined;
   const persistenceError = completion && !path;
-  const displayText = completion
-    ? `${ref ? `Result ref: ${ref}` : "Result file could not be saved."}\n\n${text}`
-    : text;
+  const displayText =
+    completion && persistenceError
+      ? `Result file could not be saved.\n\n${text}`
+      : text;
   const truncate = options.keep === "tail" ? truncateTail : truncateHead;
   let result = truncate(displayText, {
     maxBytes: DEFAULT_MAX_BYTES,
@@ -2470,7 +2525,6 @@ export function renderCompletionMessage(
   const heading = `${humanText(theme, failed ? "error" : "success", failed ? "✗" : "✓")} ${theme.bold(label)}${failed ? " failed" : " completed"}${definition ? humanText(theme, "muted", definition) : ""}`;
   const humanContent = (message.content ?? "")
     .replace(/^Agent result · [^\n]*\n\n/u, "")
-    .replace(/^Result ref: [^\n]*\n\n/u, "")
     .replace(/^Result file could not be saved\.\n\n/u, "");
   const content = new Container();
   if (options.expanded) {
@@ -2485,7 +2539,10 @@ export function renderCompletionMessage(
         ? [`context: ${Math.round(d.contextUsage.percent)}%`]
         : []),
       ...(d?.fullOutputPath ? [`full output: ${d.fullOutputPath}`] : []),
-      ...(d?.resultRef ? [`result ref: ${d.resultRef}`] : []),
+      ...(d?.resultIndex !== undefined
+        ? [`result: ${d.agentLabel} #${d.resultIndex}`]
+        : []),
+      ...(d?.resultRef ? [`canonical result: ${d.resultRef}`] : []),
       ...(d?.resultPersistenceError
         ? [
             humanText(

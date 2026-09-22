@@ -1,4 +1,5 @@
 import { deepEqual, equal, throws } from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -13,6 +14,7 @@ import {
   acquireProcessLock,
   claimProcessLock,
   ProcessLockOccupiedError,
+  readLiveProcessLock,
 } from "./lock.ts";
 
 function temporaryPath(): string {
@@ -102,6 +104,70 @@ test("empty lock directories fail closed", () => {
     throws(() => claimProcessLock(path), /Unable to verify/);
   } finally {
     rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("readLiveProcessLock returns a valid live claim", () => {
+  const path = temporaryPath();
+  try {
+    const lease = acquireProcessLock(path);
+    deepEqual(readLiveProcessLock(path), lease.claim);
+    lease.release();
+  } finally {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("readLiveProcessLock rejects a dead PID", () => {
+  const path = temporaryPath();
+  const id = randomUUID();
+  try {
+    mkdirSync(path, 0o700);
+    writeFileSync(
+      join(path, `2147483647-${id}`),
+      JSON.stringify({ pid: 2147483647, id }),
+    );
+    throws(() => readLiveProcessLock(path), /Unable to verify/);
+  } finally {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("readLiveProcessLock rejects a malformed owner", () => {
+  const path = temporaryPath();
+  const id = randomUUID();
+  try {
+    mkdirSync(path, 0o700);
+    writeFileSync(
+      join(path, `${process.pid}-${id}`),
+      JSON.stringify({ pid: process.pid, id, unexpected: true }),
+    );
+    throws(() => readLiveProcessLock(path), /Unable to verify/);
+  } finally {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("readLiveProcessLock rejects empty and multiple owners", () => {
+  for (const owners of [
+    [],
+    [`${process.pid}-${randomUUID()}`, `${process.pid}-${randomUUID()}`],
+  ]) {
+    const path = temporaryPath();
+    try {
+      mkdirSync(path, 0o700);
+      for (const owner of owners)
+        writeFileSync(
+          join(path, owner),
+          JSON.stringify({
+            pid: process.pid,
+            id: owner.slice(owner.indexOf("-") + 1),
+          }),
+        );
+      throws(() => readLiveProcessLock(path), /Unable to verify/);
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
   }
 });
 

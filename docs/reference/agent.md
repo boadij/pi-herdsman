@@ -31,7 +31,7 @@ controllers.
 ```
 
 Allowed fields are `action`, `definition`, `task`, optional `label`, `cwd`,
-`files`, `fork`, and `timeoutMs`. The definition is resolved from
+`files`, `results`, `fork`, and `timeoutMs`. The definition is resolved from
 the effective roster and delegating agent controllers may use only their allowlisted
 definitions. Project definitions still require trusted project approval.
 `fork`, when supplied, is an exact saved Pi session path or full UUID used as
@@ -49,7 +49,7 @@ assignment. The terminal result is delivered once and the agent is cleaned up.
 }
 ```
 
-Allowed fields are `action`, `session`, `task`, optional `files`, and
+Allowed fields are `action`, `session`, `task`, optional `files`, `results`, and
 `timeoutMs`. The exact saved session path or full UUID supplies its cwd,
 definition identity, and historical Pi context. Continuation always creates a new agent generation
 for one assignment with a live label; it never assigns work to an existing
@@ -66,7 +66,7 @@ required.
 When `contextRetirement` is enabled, `continue` is rejected for a retired
 managed-agent session. A `delegate` with `fork` is also rejected when its
 source is a retired managed-agent session; delegate a fresh agent and pass the
-previous handoff/resultRef and relevant files instead. Retired results
+previous handoff/result and relevant files instead. Retired results
 explicitly instruct the controller to delegate a fresh agent.
 
 The saved session's logical label is inherited exactly for the continued
@@ -237,9 +237,15 @@ observation path. Transcript is read-only and does not change agent state.
 ## `files` and `timeoutMs`
 
 `files` is valid on `delegate`, `continue`, `steer`, `interrupt`, and `reply`; it is not
-valid on `list`, `close`, `inspect`, or `transcript`. Paths are resolved from the controller cwd, checked
-as readable regular files, canonicalized with `realpath`, and embedded only
-when the exact message limit permits. Otherwise they remain canonical references.
+valid on `list`, `close`, `inspect`, or `transcript`. `results` is also valid on
+those five message-producing actions. Each selector uses the exact direct-agent
+label and reusable result index shown in a completion and resolves against the
+calling Pi session's current branch; see [Result handoff](../guides/handoffs.md).
+Paths are resolved from the controller cwd, checked as readable regular files,
+canonicalized with `realpath`, and embedded only when the exact message limit
+permits. Otherwise they remain canonical references. `files` remains a
+`string[]` for ordinary paths and already-known canonical
+`result:<request-id>` references.
 
 `timeoutMs` is valid on `delegate` and `continue` and must be an integer
 from `5001` through `300000`. The startup budget reserves one bounded diagnostic
@@ -267,7 +273,8 @@ evidence files remain attachable.
   "action": "steer",
   "agent": "implementer-1",
   "message": "Also update the focused regression.",
-  "files": [".pi-herdsman/review.md"]
+  "files": [".pi-herdsman/review.md"],
+  "results": [{ "agent": "reviewer", "index": 1 }]
 }
 ```
 
@@ -338,9 +345,10 @@ after a fresh absence proof; `unknown` presence remains non-actionable.
 An accepted delegated task remains the internal mailbox `kind: "task"` request
 and has one correlated final result. Delivery goes to the exact owning Pi
 session and occurs exactly once. Model-visible completion wording uses
-`agent=<agent>`, `definition=<definition>`, `session=<id>`,
-`request=<id>`, and status. Details retain durable `agentLabel`,
-`agentDefinition`, `piSessionId`, `piSessionFile`, result references, elapsed time,
+`agent=<agent>`, a reusable `result=<index>` when the persisted result is
+attachable, `definition=<definition>`, `session=<id>`, and status. Details
+retain durable `agentLabel`, `resultIndex` when present, `agentDefinition`,
+`piSessionId`, `piSessionFile`, canonical result references, elapsed time,
 context usage, truncation, and persistence-error evidence. The agent is cleaned
 up after the terminal result is delivered; the Pi session remains available for
 continuation.

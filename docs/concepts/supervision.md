@@ -52,8 +52,9 @@ loses an activation race remains an ordinary lead.
 
 ## Communication
 
-Chief transport records are bounded, atomic inbox messages bound to exact
-sender, target lead session, and chief lease. Chief messages use Pi follow-up
+Chief and peer transport records are bounded, atomic inbox messages bound to
+exact sender, target lead session, and chief lease or Lead process-lock
+generation. Chief messages use Pi follow-up
 delivery and may remain queued while a lead is working. Records are ordered by
 `createdAt` and ID, survive same-session restart, and are retried after
 transient delivery failures. An individual quarantined record is excluded from
@@ -62,6 +63,23 @@ delivery but does not block a new message to that lead.
 The `chief` tool sends reports, events, results, and genuine decision questions
 from an ordinary lead to the active chief. The `staff` tool lets the active
 chief list, inspect, read transcripts, message, and reply to supervised leads.
+The Lead-only `peer` tool lists ordinary live Leads and sends durable messages
+to an exact full Pi session ID. Its list result is `{ self, peers[] }`: `self`
+is excluded from `peers`, and each peer exposes only `lead`, `name`, `cwd`,
+`repo`, `branch`, and `workspace_label`. The exact full `lead` is the sole
+target handle; the other fields are presentation metadata. Incoming peer
+content is `Peer message from <sender>: <message>` because recipient
+verification is already performed.
+
+Peer presence and inboxes use the user-global `runtime/peers-v1` runtime,
+allowing ordinary Leads on different Herdr sockets to discover and message one
+another. Peer records are process-lock generation-bound and published only by
+ordinary Leads; Chief and suspended sessions are absent. The peer record and
+its exact live process-lock claim provide reachability authority, not Herdr
+inventory or presentation metadata. Publication rechecks sender and target
+before the atomic write, and delivery revalidates the current ordinary-Lead
+receiver and target. Queued messages survive sender shutdown and remain queued
+while the receiver is Chief or lacks valid peer presence.
 `inspect` is bounded live terminal/process evidence. `transcript` is bounded
 persisted Pi conversation/tool evidence. A non-empty persisted session candidate
 adds `transcript` to `available_actions`; `available_actions` is advisory
@@ -70,11 +88,11 @@ current session header, version, and exact Pi session ID before returning
 evidence. A lead's message does not require an automatic chief reply. A
 `lead_ask` requires the exact correlated `staff reply`; a reply clears the
 pending ask only after accepted follow-up delivery. A replacement chief can
-answer an existing ask using its current lease and unchanged ask ID. Chief and
-staff message actions accept
-files; their text is prepared with the same canonical attachment renderer and
-configured Herdsman byte limits as agent messages, while durable supervision
-records remain text-only.
+answer an existing ask using its current lease and unchanged ask ID. Chief
+`message`/`ask`, staff `message`/`reply`, and peer `message` actions accept
+files and completed direct-agent result selectors. Selectors resolve on the
+caller's current Pi branch before entering the shared canonical attachment
+pipeline; durable coordination records remain text-only.
 
 ## Supervision state
 

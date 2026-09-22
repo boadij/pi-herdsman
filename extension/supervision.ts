@@ -13,7 +13,11 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
-import { acquireProcessLock, type ProcessLockClaim } from "./lock.ts";
+import {
+  acquireProcessLock,
+  readLiveProcessLock,
+  type ProcessLockClaim,
+} from "./lock.ts";
 import { herdsmanDataRoot } from "./storage.ts";
 
 export type LeadRole = "lead" | "chief";
@@ -86,7 +90,14 @@ export type ChiefLease = {
 };
 
 export type ChiefMessageKind =
-  "chief_message" | "lead_message" | "lead_ask" | "chief_reply";
+  | "chief_message"
+  | "lead_message"
+  | "lead_ask"
+  | "chief_reply"
+  | "peer_message";
+
+/** Shared durable transport record used by Chief and Lead peer traffic. */
+export type CoordinationMessageKind = ChiefMessageKind;
 
 export type ChiefMessageRecord = {
   version: 1;
@@ -100,6 +111,8 @@ export type ChiefMessageRecord = {
   text: string;
   createdAt: number;
 };
+
+export type CoordinationMessageRecord = ChiefMessageRecord;
 
 export type ChiefInboxDrainOptions = {
   runtime: SupervisionRuntime;
@@ -125,8 +138,10 @@ export type ChiefInboxDrainOptions = {
   };
 };
 
-export const CHIEF_MESSAGE_MAX_BYTES = 8 * 1024;
-export const CHIEF_INBOX_SCAN_LIMIT = 32;
+export type CoordinationInboxDrainOptions = ChiefInboxDrainOptions;
+
+export const COORDINATION_MESSAGE_MAX_BYTES = 8 * 1024;
+export const COORDINATION_INBOX_SCAN_LIMIT = 32;
 const CHIEF_DESCRIPTOR_MAX_BYTES = 2048;
 
 const UUID =
@@ -136,6 +151,7 @@ const MESSAGE_KINDS = new Set<ChiefMessageKind>([
   "lead_message",
   "lead_ask",
   "chief_reply",
+  "peer_message",
 ]);
 
 function validSession(value: unknown): value is string {
@@ -199,7 +215,7 @@ export function chiefMessageBytes(record: ChiefMessageRecord): number {
 
 function assertMessage(value: unknown): asserts value is ChiefMessageRecord {
   if (!validMessage(value)) throw new Error("Invalid Chief message record");
-  if (chiefMessageBytes(value) > CHIEF_MESSAGE_MAX_BYTES)
+  if (chiefMessageBytes(value) > COORDINATION_MESSAGE_MAX_BYTES)
     throw new Error("Chief message record is too large");
 }
 
@@ -489,7 +505,7 @@ function writeChiefMessageUnlocked(
 function conclusivelyMalformedChiefMessage(path: string): boolean {
   let content: string;
   try {
-    if (statSync(path).size > CHIEF_MESSAGE_MAX_BYTES) return true;
+    if (statSync(path).size > COORDINATION_MESSAGE_MAX_BYTES) return true;
     content = readFileSync(path, "utf8");
   } catch {
     return false;
@@ -517,7 +533,7 @@ export function readChiefMessage(path: string): ChiefMessageRecord {
   } catch (error) {
     throw new Error("Unable to read Chief message", { cause: error });
   }
-  if (size > CHIEF_MESSAGE_MAX_BYTES)
+  if (size > COORDINATION_MESSAGE_MAX_BYTES)
     throw new Error("Chief message record is too large");
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -533,7 +549,7 @@ export function readChiefMessage(path: string): ChiefMessageRecord {
 export function listChiefMessagePaths(
   runtime: SupervisionRuntime,
   toSessionId: string,
-  limit = CHIEF_INBOX_SCAN_LIMIT,
+  limit = COORDINATION_INBOX_SCAN_LIMIT,
 ): string[] {
   if (!Number.isInteger(limit) || limit < 0)
     throw new Error("Invalid inbox limit");
@@ -567,7 +583,7 @@ export function listChiefMessagePaths(
         a.record.id.localeCompare(b.record.id)
       );
     })
-    .slice(0, Math.min(limit, CHIEF_INBOX_SCAN_LIMIT))
+    .slice(0, Math.min(limit, COORDINATION_INBOX_SCAN_LIMIT))
     .map(({ path }) => path);
 }
 
@@ -736,18 +752,20 @@ export function chiefAskQueued(
   });
 }
 
-function deliveredMessageContent(record: ChiefMessageRecord): string {
+function deliveredMessageContent(record: CoordinationMessageRecord): string {
   const prefix =
     record.kind === "chief_message" || record.kind === "chief_reply"
       ? `From chief ${record.fromSessionId} to lead ${record.leadSessionId}: `
-      : `From lead ${record.leadSessionId} to chief ${record.toSessionId}: `;
+      : record.kind === "peer_message"
+        ? `Peer message from ${record.fromSessionId}: `
+        : `From lead ${record.leadSessionId} to chief ${record.toSessionId}: `;
   return Buffer.from(`${prefix}${record.text}`, "utf8")
-    .subarray(0, CHIEF_MESSAGE_MAX_BYTES)
+    .subarray(0, COORDINATION_MESSAGE_MAX_BYTES)
     .toString("utf8");
 }
 
 /** Drain only this session's inbox. Files remain when Pi rejects delivery. */
-export async function drainChiefInbox(
+export async function drainCoordinationInbox(
   options: ChiefInboxDrainOptions,
 ): Promise<number> {
   let delivered = 0;
@@ -920,6 +938,13 @@ export async function drainChiefInbox(
   return delivered;
 }
 
+export const coordinationMessagePath = chiefMessagePath;
+export const readCoordinationMessage = readChiefMessage;
+export const listCoordinationMessagePaths = listChiefMessagePaths;
+export const writeCoordinationMessage = writeChiefMessage;
+export const removeCoordinationMessage = removeChiefMessage;
+export const coordinationMessageBytes = chiefMessageBytes;
+
 function socketPath(): string {
   const value = process.env.HERDR_SOCKET_PATH;
   if (!value) throw new Error("HERDR_SOCKET_PATH is required");
@@ -937,6 +962,265 @@ export function supervisionRuntime(socket = socketPath()): SupervisionRuntime {
     inbox: join(root, "inbox"),
     leads: join(root, "leads"),
   };
+}
+
+export type PeerRuntime = SupervisionRuntime & {
+  peers: string;
+};
+
+export type PeerLeadRecord = Readonly<{
+  version: 1;
+  piSessionId: string;
+  paneId: string;
+  tabId: string;
+  workspaceId: string;
+  name?: string;
+  cwd?: string;
+  repo?: string;
+  branch?: string;
+  workspaceLabel?: string;
+  claim: ProcessLockClaim;
+  updatedAt: number;
+}>;
+
+const PEER_LEAD_RECORD_MAX_BYTES = 4096;
+
+export function peerRuntime(_socket?: string): PeerRuntime {
+  const root = join(herdsmanDataRoot(), "runtime", "peers-v1");
+  return {
+    root,
+    lock: join(root, "chief.lock"),
+    descriptor: join(root, "chief.json"),
+    inbox: join(root, "inbox"),
+    leads: join(root, "leads"),
+    peers: join(root, "peers"),
+  };
+}
+
+function peerDirectory(runtime: PeerRuntime): string {
+  mkdirSync(runtime.root, { recursive: true, mode: 0o700 });
+  chmodSync(runtime.root, 0o700);
+  mkdirSync(runtime.peers, { recursive: true, mode: 0o700 });
+  chmodSync(runtime.peers, 0o700);
+  return runtime.peers;
+}
+
+export function peerLeadRecordPath(
+  runtime: PeerRuntime,
+  piSessionId: string,
+): string {
+  if (!validSession(piSessionId)) throw new Error("Invalid peer session ID");
+  return join(runtime.peers, peerLeadRecordFilename(piSessionId));
+}
+
+function peerLeadRecordFilename(piSessionId: string): string {
+  if (!validSession(piSessionId)) throw new Error("Invalid peer session ID");
+  return `${createHash("sha256").update(piSessionId).digest("hex")}.json`;
+}
+
+export function peerLeadLockPath(
+  runtime: PeerRuntime,
+  piSessionId: string,
+): string {
+  return `${peerLeadRecordPath(runtime, piSessionId)}.lock`;
+}
+
+function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  const claim =
+    record.claim && typeof record.claim === "object"
+      ? (record.claim as Record<string, unknown>)
+      : undefined;
+  const metadata = ["name", "cwd", "repo", "branch", "workspaceLabel"];
+  return (
+    Object.keys(record).every((key) =>
+      [
+        "version",
+        "piSessionId",
+        "paneId",
+        "tabId",
+        "workspaceId",
+        "claim",
+        "updatedAt",
+        ...metadata,
+      ].includes(key),
+    ) &&
+    [
+      "version",
+      "piSessionId",
+      "paneId",
+      "tabId",
+      "workspaceId",
+      "claim",
+      "updatedAt",
+    ].every((key) => Object.hasOwn(record, key)) &&
+    record.version === 1 &&
+    validSession(record.piSessionId) &&
+    validNativeIdentity(record.paneId) &&
+    validNativeIdentity(record.tabId) &&
+    validNativeIdentity(record.workspaceId) &&
+    metadata.every(
+      (key) => !Object.hasOwn(record, key) || validNativeIdentity(record[key]),
+    ) &&
+    !!claim &&
+    Object.keys(claim).length === 2 &&
+    Number.isInteger(claim.pid) &&
+    (claim.pid as number) > 0 &&
+    typeof claim.id === "string" &&
+    UUID.test(claim.id) &&
+    Number.isInteger(record.updatedAt) &&
+    (record.updatedAt as number) >= 0
+  );
+}
+
+function livePeerClaim(
+  runtime: PeerRuntime,
+  piSessionId: string,
+): ProcessLockClaim {
+  const claim = readLiveProcessLock(peerLeadLockPath(runtime, piSessionId));
+  if (!claim) throw new Error("Peer lead process is not live");
+  return claim;
+}
+
+export function samePeerLeadRecord(
+  actual: PeerLeadRecord,
+  expected: PeerLeadRecord,
+): boolean {
+  return (
+    actual.version === expected.version &&
+    actual.piSessionId === expected.piSessionId &&
+    actual.paneId === expected.paneId &&
+    actual.tabId === expected.tabId &&
+    actual.workspaceId === expected.workspaceId &&
+    actual.name === expected.name &&
+    actual.cwd === expected.cwd &&
+    actual.repo === expected.repo &&
+    actual.branch === expected.branch &&
+    actual.workspaceLabel === expected.workspaceLabel &&
+    actual.claim.pid === expected.claim.pid &&
+    actual.claim.id === expected.claim.id &&
+    actual.updatedAt === expected.updatedAt
+  );
+}
+
+export function samePeerLeadGeneration(
+  actual: PeerLeadRecord,
+  expected: PeerLeadRecord,
+): boolean {
+  return (
+    actual.piSessionId === expected.piSessionId &&
+    actual.claim.pid === expected.claim.pid &&
+    actual.claim.id === expected.claim.id
+  );
+}
+
+export function readPeerLeadRecord(
+  runtime: PeerRuntime,
+  piSessionId: string,
+): PeerLeadRecord | undefined {
+  const path = peerLeadRecordPath(runtime, piSessionId);
+  let value: unknown;
+  try {
+    const text = readFileSync(path, "utf8");
+    if (Buffer.byteLength(text, "utf8") > PEER_LEAD_RECORD_MAX_BYTES)
+      throw new Error("peer lead record too large");
+    value = JSON.parse(text);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error("Unable to read peer lead record", { cause: error });
+  }
+  if (!validPeerLeadRecord(value) || value.piSessionId !== piSessionId)
+    throw new Error("Unable to read peer lead record");
+  const claim = livePeerClaim(runtime, piSessionId);
+  if (claim.pid !== value.claim.pid || claim.id !== value.claim.id)
+    throw new Error("Peer lead process-lock generation changed");
+  return value;
+}
+
+export function writePeerLeadRecord(
+  runtime: PeerRuntime,
+  record: PeerLeadRecord,
+): string {
+  if (!validPeerLeadRecord(record)) throw new Error("Invalid peer lead record");
+  const live = livePeerClaim(runtime, record.piSessionId);
+  if (live.pid !== record.claim.pid || live.id !== record.claim.id)
+    throw new Error("Peer lead process-lock generation changed");
+  const directory = peerDirectory(runtime);
+  const path = peerLeadRecordPath(runtime, record.piSessionId);
+  const content = `${JSON.stringify(record)}\n`;
+  if (Buffer.byteLength(content, "utf8") > PEER_LEAD_RECORD_MAX_BYTES)
+    throw new Error("Peer lead record is too large");
+  const temporary = join(directory, `.${basename(path)}.${randomUUID()}.tmp`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(temporary, "wx", 0o600);
+    writeFileSync(fd, content, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(temporary, path);
+    chmodSync(path, 0o600);
+    fsyncDirectory(directory);
+    return path;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    try {
+      unlinkSync(temporary);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
+export function removePeerLeadRecord(
+  runtime: PeerRuntime,
+  piSessionId: string,
+  expected?: PeerLeadRecord,
+): void {
+  const path = peerLeadRecordPath(runtime, piSessionId);
+  try {
+    if (expected) {
+      const current = readPeerLeadRecord(runtime, piSessionId);
+      if (!current || !samePeerLeadRecord(current, expected)) return;
+    }
+    unlinkSync(path);
+    fsyncDirectory(dirname(path));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+export function listPeerLeadRecords(
+  runtime: PeerRuntime = peerRuntime(),
+): PeerLeadRecord[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(runtime.peers);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new Error("Unable to scan peer lead records", { cause: error });
+  }
+  return entries
+    .filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry))
+    .sort()
+    .flatMap((entry) => {
+      try {
+        const path = join(runtime.peers, entry);
+        if (statSync(path).size > PEER_LEAD_RECORD_MAX_BYTES) return [];
+        const text = readFileSync(path, "utf8");
+        const value = JSON.parse(text);
+        if (
+          !validPeerLeadRecord(value) ||
+          peerLeadRecordFilename(value.piSessionId) !== entry
+        )
+          return [];
+        const record = readPeerLeadRecord(runtime, value.piSessionId);
+        return record ? [record] : [];
+      } catch {
+        return [];
+      }
+    });
 }
 
 function validDescriptor(value: unknown): value is ChiefDescriptor {
@@ -1230,7 +1514,7 @@ export type ValidatedManagedAgentEvidence = {
   agentLabel?: string;
 };
 
-export const LEAD_STATE_MAX_BYTES = CHIEF_MESSAGE_MAX_BYTES * 2;
+export const LEAD_STATE_MAX_BYTES = COORDINATION_MESSAGE_MAX_BYTES * 2;
 /** Fits the complete coordination record, including JSON and UTF-8 overhead. */
 export const LEAD_STATE_MAX_QUESTION_CHARS = 1024;
 export const LEAD_STATE_MAX_QUESTION_BYTES = 1024;

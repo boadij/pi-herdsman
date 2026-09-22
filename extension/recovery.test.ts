@@ -12,7 +12,7 @@ import type {
   ManagedAgentState,
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
-import { resultPath } from "./storage.ts";
+import { resultPath, resultRef } from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -166,6 +166,16 @@ test("combined status reports a completed agent as pending, not active", async (
     assert.deepEqual(
       new Set(statuses.map((details) => details.agentLabel)),
       new Set(["status-trigger-child", "status-pending-child"]),
+    );
+    assert.deepEqual(
+      Object.fromEntries(
+        statuses.map((details) => [details.agentLabel, details.resultIndex]),
+      ),
+      {
+        "status-trigger-child": 1,
+        "status-pending-child": 1,
+      },
+      "result indexes are scoped to each logical agent label",
     );
     assert.equal(
       statuses.filter(
@@ -1318,7 +1328,18 @@ test("recovery requires the official session and retries one failed delivery", a
   let deliveredDetails: any;
   const transientFailures = 5;
   let successful = 0;
-  const entries: unknown[] = [];
+  const previousRequestId = randomUUID();
+  const entries: unknown[] = [
+    {
+      customType: "pi-herdsman-agent-result",
+      details: {
+        ...resultEntryDetails(removalState, previousRequestId),
+        status: "completed",
+        resultIndex: 1,
+        resultRef: resultRef(previousRequestId),
+      },
+    },
+  ];
   const recovering = fakePi({
     entries,
     exec: lifecycle.exec,
@@ -1359,20 +1380,100 @@ test("recovery requires the official session and retries one failed delivery", a
   for (let index = 0; index < 5; index++)
     await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(recovering.sentUsers.length, 0);
-  assert.match(delivered, new RegExp(`Result ref: result:${REQUEST_ID}`));
   assert.match(
     delivered,
     new RegExp(
-      `^Agent result · agent=${label} · definition=agent · session=${identity.piSessionId} · request=${REQUEST_ID} · status=completed`,
+      `^Agent result · agent=${label} · result=2 · definition=agent · session=${identity.piSessionId} · status=completed`,
     ),
   );
   assert.equal(deliveredDetails.agentLabel, label);
   assert.equal(deliveredDetails.agentDefinition, "agent");
+  assert.equal(deliveredDetails.resultIndex, 2);
+  assert.equal(deliveredDetails.resultRef, `result:${REQUEST_ID}`);
   assert.equal(readResult(mailbox, REQUEST_ID), undefined);
   assert.deepEqual(lifecycle.closeOrder, [label]);
   recovering.events.get("session_shutdown")?.[0]();
   t.mock.timers.reset();
   realFs.rmSync(identity.piSessionFile, { force: true });
+});
+
+test("in-place branch history does not reuse a result index", async () => {
+  setLeadEnvironment();
+  const label = "branched-result-agent";
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(testTmpRoot, `${label}.jsonl`),
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  const state = {
+    ...managedState(label, undefined, identity),
+    completedRequestId: REQUEST_ID,
+  };
+  realFs.writeFileSync(identity.piSessionFile, "{}", "utf8");
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, state);
+  writeResult(mailbox, {
+    version: 4,
+    runId: state.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    status: "completed",
+    text: "new branch result",
+    completedAt: Date.now(),
+  });
+  const firstRequestId = randomUUID();
+  const secondRequestId = randomUUID();
+  const first = {
+    customType: "pi-herdsman-agent-result",
+    details: {
+      ...resultEntryDetails(state, firstRequestId),
+      status: "completed",
+      resultIndex: 1,
+      resultRef: resultRef(firstRequestId),
+    },
+  };
+  const abandoned = {
+    customType: "pi-herdsman-agent-result",
+    details: {
+      ...resultEntryDetails(state, secondRequestId),
+      status: "completed",
+      resultIndex: 2,
+      resultRef: resultRef(secondRequestId),
+    },
+  };
+  const entries: unknown[] = [first, abandoned];
+  let delivered: any;
+  const lifecycle = cascadeExecutor([state]);
+  const pi = fakePi({
+    entries,
+    exec: lifecycle.exec,
+    sendMessage: (message) => {
+      if ((message as any).customType === "pi-herdsman-agent-result")
+        delivered = message;
+      entries.push(message);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](
+      undefined,
+      fakeContext(entries, [first]),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(delivered?.details.resultIndex, 3);
+    assert.match(
+      String(delivered?.content),
+      /agent=branched-result-agent · result=3/,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(identity.piSessionFile, { force: true });
+    realFs.rmSync(resultPath(REQUEST_ID), { force: true });
+  }
 });
 
 test("completed and failed one-shot agents converge after durable delivery", async (t) => {
@@ -1739,7 +1840,7 @@ test("settlement redelivers an unpersisted child result in the same session", as
       false,
     );
 
-    pi.events.get("agent_settled")![0](undefined, context);
+    await pi.events.get("agent_settled")![0](undefined, context);
 
     await waitForTestCondition(
       () => deliveries === 2,
@@ -1754,7 +1855,7 @@ test("settlement redelivers an unpersisted child result in the same session", as
     assert.equal(deliveries, 2);
     assert.deepEqual(lifecycle.closeOrder, [label]);
 
-    pi.events.get("agent_settled")![0](undefined, context);
+    await pi.events.get("agent_settled")![0](undefined, context);
     await Promise.resolve();
     assert.equal(deliveries, 2);
   } finally {

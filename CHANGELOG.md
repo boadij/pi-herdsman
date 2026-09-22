@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.12.1](https://github.com/boadij/pi-herdsman/compare/v0.12.0...v0.12.1) (2026-09-21)
+
+
+### Fixes
+
+* support peer result selectors ([#105](https://github.com/boadij/pi-herdsman/issues/105)) ([76a07ae](https://github.com/boadij/pi-herdsman/commit/76a07ae41ac2af79d7a90d6902adc289f95979d8))
+
+## [0.12.0](https://github.com/boadij/pi-herdsman/compare/v0.11.1...v0.12.0) (2026-09-21)
+
+
+### Features
+
+* add cross-runtime lead peer coordination ([#99](https://github.com/boadij/pi-herdsman/issues/99)) ([f0c14ac](https://github.com/boadij/pi-herdsman/commit/f0c14acef540d82c65d6ba2a5fbabfb82371387c))
+
+
+### Fixes
+
+* add stable agent result handles ([#103](https://github.com/boadij/pi-herdsman/issues/103)) ([b27e706](https://github.com/boadij/pi-herdsman/commit/b27e706d27ba6c44a04f6ccf622c4619e57d9004))
+* align session lifecycle with Pi 0.87 ([#101](https://github.com/boadij/pi-herdsman/issues/101)) ([5d4e6ab](https://github.com/boadij/pi-herdsman/commit/5d4e6abce559719278a8a0e3df53429ffe7eb749))
+* render result handles in coordination calls ([#104](https://github.com/boadij/pi-herdsman/issues/104)) ([569ae3b](https://github.com/boadij/pi-herdsman/commit/569ae3b52cef7381f433db34e87261daa2b782c9))
+
 ## [0.11.1](https://github.com/boadij/pi-herdsman/compare/v0.11.0...v0.11.1) (2026-09-20)
 
 

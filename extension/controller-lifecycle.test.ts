@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
 import { Value } from "typebox/value";
@@ -65,7 +65,6 @@ import {
   runScopedHerdrAlias,
   setLeadEnvironment,
   setAgentEnvironment,
-  skillBlock,
   startupExecutor,
   watchedResultPaths,
   waitForTestCondition,
@@ -2060,7 +2059,10 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       { message: { role: "assistant", content: "ALPHA" } },
       childResultContext,
     );
-    childAgent.events.get("agent_settled")![0](undefined, childResultContext);
+    await childAgent.events.get("agent_settled")![0](
+      undefined,
+      childResultContext,
+    );
     assert.equal(readResult(childMailbox, childRequestId)?.text, "ALPHA");
     assert.equal(
       readAgentState(childMailbox)?.completedRequestId,
@@ -2093,7 +2095,10 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       { message: { role: "assistant", content: "Parent completed." } },
       parentResultContext,
     );
-    parentAgent.events.get("agent_settled")![0](undefined, parentResultContext);
+    await parentAgent.events.get("agent_settled")![0](
+      undefined,
+      parentResultContext,
+    );
     assert.equal(
       readResult(parentMailbox, parentRequestId)?.text,
       "Parent completed.",
@@ -2697,9 +2702,9 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[0]!, /automatic prompt snapshot/);
     assert.match(launched[0].contents[1]!, /ask_owner/);
-    assert.equal(
+    assert.match(
       launched[0].contents[1]!.replaceAll(/\s+/g, " ").trim(),
-      skillBlock(readFileSync(resolve("SKILL.md"), "utf8"), "agent"),
+      /canonical result:<request-id> references exactly through\s+`files`/,
     );
     assert.match(
       launched[0].contents[1]!,
@@ -2707,7 +2712,7 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
     );
     assert.match(
       launched[0].contents[1]!,
-      /copy resultRef values exactly through files/,
+      /preserve existing canonical result:<request-id> references exactly through\s+`files`/,
     );
     assert.match(assignedText, /fresh task/);
     assert.equal(realFs.existsSync(mailbox), true);

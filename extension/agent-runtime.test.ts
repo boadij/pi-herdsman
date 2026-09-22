@@ -561,7 +561,7 @@ test("registered agent writes state, handles input, and settles one result", asy
   const started = readAgentState(mailbox);
   assert.equal(started?.agentLabel, "registered-agent");
   assert.equal(started?.activeRequestId, undefined);
-  agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0](undefined, context);
   const idleAfterStartup = readAgentState(mailbox);
   assert.equal(idleAfterStartup?.activeRequestId, undefined);
   assert.equal(idleAfterStartup?.completedRequestId, undefined);
@@ -614,8 +614,8 @@ test("registered agent writes state, handles input, and settles one result", asy
     { message: { role: "assistant", content: "done" } },
     context,
   );
-  agent.events.get("agent_settled")![0](undefined, context);
-  agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0](undefined, context);
   const result = readResult(mailbox, request.requestId);
   assert.equal(result?.status, "completed");
   assert.equal(result?.text, "done");
@@ -653,7 +653,7 @@ test("result persistence waits for the assignment lock", async () => {
   );
   const release = claimProcessLock(assignmentLockPathForTest(mailbox));
   try {
-    agent.events.get("agent_settled")![0](undefined, context);
+    await agent.events.get("agent_settled")![0](undefined, context);
     assert.equal(readResult(mailbox, request.requestId), undefined);
     assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
   } finally {
@@ -703,7 +703,7 @@ test("assignment-lock contention does not consume result write attempts", async 
     support.failNextMailboxWrite = false;
   });
   try {
-    agent.events.get("agent_settled")![0](undefined, context);
+    await agent.events.get("agent_settled")![0](undefined, context);
     for (let attempt = 0; attempt < 10; attempt++) {
       t.mock.timers.tick(250);
       await Promise.resolve();
@@ -765,7 +765,7 @@ test("result persistence does not recreate a removed mailbox", async () => {
     context,
   );
   realFs.rmSync(mailbox, { recursive: true, force: true });
-  agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0](undefined, context);
   assert.equal(realFs.existsSync(mailbox), false);
   assert.equal(readResult(mailbox, request.requestId), undefined);
   agent.events.get("session_shutdown")?.[0]();
@@ -847,7 +847,7 @@ test("agent bounds result persistence failure and exposes owner recovery evidenc
   realFs.mkdirSync(join(mailbox, `result-${request.requestId}.json`));
   t.mock.timers.enable({ apis: ["setInterval"] });
   t.after(() => t.mock.timers.reset());
-  agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0](undefined, context);
   for (let attempt = 0; attempt < 7; attempt++) {
     t.mock.timers.tick(250);
     await Promise.resolve();
@@ -1104,7 +1104,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     readPendingAsk(mailbox, waiting!)?.question ?? "",
     /registered-ask-options\.md/,
   );
-  agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0](undefined, context);
   assert.equal(readResult(mailbox, assignment.requestId), undefined);
 
   const reply: RequestRecord = {
@@ -1138,7 +1138,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     { message: { role: "assistant", content: "ALPHA" } },
     context,
   );
-  agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0](undefined, context);
   assert.equal(readResult(mailbox, assignment.requestId)?.text, "ALPHA");
   realFs.rmSync(askFile, { force: true });
 });
@@ -1575,7 +1575,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       context,
     );
     const settle = pi.events.get("agent_settled")![0];
-    settle(undefined, context);
+    await settle(undefined, context);
     assert.equal(readResult(parentMailbox, parentRequestId), undefined);
     assert.equal(
       readAgentState(parentMailbox)?.activeRequestId,
@@ -1692,7 +1692,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       customType: "pi-herdsman-agent-result",
       details: resultEntryDetails(childOne, childOne.activeRequestId!),
     });
-    settle(undefined, context);
+    await settle(undefined, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sent.length, 1);
@@ -1743,19 +1743,15 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       ),
       false,
     );
-    settle(undefined, context);
-    await waitForTestCondition(
-      () => pi.sent.length === 3,
-      "settlement did not redeliver child two",
-      1_000,
-    );
+    await settle(undefined, context);
+    assert.equal(pi.sent.length, 3);
     entries.push({
       message: {
         customType: "pi-herdsman-agent-result",
         details: resultEntryDetails(childTwo, childTwo.activeRequestId!),
       },
     });
-    settle(undefined, context);
+    await settle(undefined, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     // The parent observes durable child delivery but does not own child
@@ -1790,7 +1786,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       customType: "pi-herdsman-agent-result",
       details: resultEntryDetails(childThree, thirdRequestId),
     });
-    settle(undefined, context);
+    await settle(undefined, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sent.length, 4);
@@ -1840,7 +1836,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       /Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved\./,
     );
     assert.equal(earlyResultStatus, "failed");
-    settle(undefined, context);
+    await settle(undefined, context);
     assert.equal(
       pi.sent.filter(
         (message: any) =>
@@ -1915,7 +1911,7 @@ test("startup and completion metadata omit unavailable model and thinking values
     context,
   );
   const callsBeforeSettlement = agent.calls.length;
-  agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0](undefined, context);
   await new Promise((resolve) => setImmediate(resolve));
 
   const completion = agent.calls
@@ -1988,7 +1984,7 @@ test("startup and completion metadata preserve available model and thinking valu
     context,
   );
   const callsBeforeSettlement = agent.calls.length;
-  agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0](undefined, context);
   await new Promise((resolve) => setTimeout(resolve, 10));
   const laterCalls = agent.calls.slice(callsBeforeSettlement);
   assert.equal(

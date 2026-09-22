@@ -1566,6 +1566,10 @@ test("coordination results keep collapsed identity bounded and expose structured
     label: "release-review",
     task,
     files,
+    results: [
+      { agent: "message-scout", index: 2 },
+      { agent: "researcher", index: 1 },
+    ],
   };
   const result = {
     content: [{ type: "text", text: "model-facing prose must not be parsed" }],
@@ -1595,12 +1599,18 @@ test("coordination results keep collapsed identity bounded and expose structured
     pane,
     task,
     ...files,
+    "message-scout #2",
+    "researcher #1",
     "model-facing prose",
   ])
     assert.doesNotMatch(
       collapsed,
       new RegExp(hidden.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),
     );
+  const compactCall = renderedText(
+    renderCoordinationCall("agent", args, presentationTheme),
+  );
+  assert.doesNotMatch(compactCall, /results:|message-scout #2|researcher #1/);
   const expanded = renderedText(
     renderCoordinationResult(
       "agent",
@@ -1617,7 +1627,9 @@ test("coordination results keep collapsed identity bounded and expose structured
   );
   assert.ok(
     expandedCall.includes(`task:\n${task}`) &&
-      expandedCall.includes("files:\n  one.md\n  two.md") &&
+      expandedCall.includes(
+        "files:\n  one.md\n  two.md\n\nresults:\n  message-scout #2\n  researcher #1",
+      ) &&
       !expanded.includes(`task:\n${task}`) &&
       !expanded.includes("files:\n"),
   );
@@ -2078,6 +2090,69 @@ test("chief and staff coordination renderers share semantic status language", ()
   assert.doesNotMatch(staffList, /last activity/);
 });
 
+test("peer list rendering distinguishes self from peers", () => {
+  const result = {
+    content: [{ type: "text", text: "model-facing prose" }],
+    details: {
+      ok: true,
+      action: "list",
+      self: "lead-self",
+      peers: [
+        {
+          lead: "lead-other",
+          name: "workspace/api",
+          cwd: "/work/api",
+          repo: "api",
+          branch: "feature/peer",
+          workspace_label: "api",
+        },
+      ],
+    },
+  };
+
+  assert.equal(
+    renderedText(
+      renderCoordinationResult("peer", result, {}, presentationTheme, {
+        args: { action: "list" },
+      }),
+    ),
+    "peer · 1 peer",
+  );
+
+  assert.equal(
+    renderedText(
+      renderCoordinationResult(
+        "peer",
+        result,
+        { expanded: true },
+        presentationTheme,
+        { args: { action: "list" } },
+      ),
+    ),
+    "peer\n\nself lead-self\npeers 1\n  workspace/api · lead: lead-other · branch: feature/peer",
+  );
+
+  assert.equal(
+    renderedText(
+      renderCoordinationResult(
+        "peer",
+        {
+          details: {
+            ok: true,
+            action: "list",
+            self: "lead-self",
+            peers: [{ session_id: "stale-session" }],
+          },
+        },
+        { expanded: true },
+        presentationTheme,
+        { args: { action: "list" } },
+      ),
+    ),
+    "peer\n\nself lead-self\npeers 1\n  lead · lead: lead",
+  );
+});
+
 test("widget never exceeds its width", (t) => {
   {
     const widget = new StatusWidget();
@@ -2526,10 +2601,8 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     assert.equal(readFileSync(expected, "utf8"), text);
     assertPosixMode(expected, 0o600);
     assertPosixMode(dirname(expected), 0o700);
-    assert.match(
-      result.content,
-      new RegExp(`^Result ref: ${result.resultRef}`),
-    );
+    assert.equal(result.content, text);
+    assert.equal(result.content.includes(result.resultRef!), false);
     assert.equal(result.content.includes(herdsmanDataRoot()), false);
     const retry = truncateModelText(text, {
       ...options,
@@ -2567,7 +2640,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     assert.equal(first.truncated, true);
     assert.ok(Buffer.byteLength(first.content) <= 50 * 1024);
     assert.ok(first.content.split("\n").length <= 2000);
-    assert.match(first.content, new RegExp(`Result ref: ${first.resultRef}`));
+    assert.equal(first.content.includes(first.resultRef!), false);
   }
 
   {
@@ -2580,7 +2653,10 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     });
     assert.equal(result.resultRef, undefined);
     assert.equal(result.persistenceError, "Result file could not be saved.");
-    assert.match(result.content, /Result file could not be saved/);
+    assert.equal(
+      result.content,
+      "Result file could not be saved.\n\nprivate result",
+    );
   }
 });
 
@@ -2706,7 +2782,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     const expanded = renderCompletionMessage(
       {
         content:
-          "Agent result · agent=agent · definition=reviewer · request=req · status=completed\n\nResult ref: result:550e8400-e29b-41d4-a716-446655440000\n\nOutput truncated after 2000 lines.",
+          "Agent result · agent=agent · result=2 · definition=reviewer · session=session-id · status=completed\n\nOutput truncated after 2000 lines.",
         details: {
           requestId: "req",
           agentLabel: "agent",
@@ -2715,6 +2791,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
           elapsedMs: 1_000,
           contextUsage: { tokens: 42, contextWindow: 100, percent: 42 },
           fullOutputPath: "/tmp/full-output",
+          resultIndex: 2,
           resultRef: "result:550e8400-e29b-41d4-a716-446655440000",
           truncated: true,
         },
@@ -2731,9 +2808,10 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     assert.match(expandedText, /elapsed: 1s/);
     assert.match(expandedText, /context: 42%/);
     assert.match(expandedText, /full output: \/tmp\/full-output/);
+    assert.match(expandedText, /result: agent #2/);
     assert.match(
       expandedText,
-      /result ref: result:550e8400-e29b-41d4-a716-446655440000/,
+      /canonical result: result:550e8400-e29b-41d4-a716-446655440000/,
     );
     assert.match(expandedText, /Output truncated after 2000 lines/);
     assert.equal(
@@ -2835,8 +2913,7 @@ test("Completion rendering preserves details, failures, elapsed time, and width 
     ]) {
       const rendered = renderCompletionMessage(
         {
-          content:
-            "Result ref: result:550e8400-e29b-41d4-a716-446655440000\n\ncompleted",
+          content: "completed",
           details: {
             requestId: "req",
             agentLabel: "reviewer:auth-review",

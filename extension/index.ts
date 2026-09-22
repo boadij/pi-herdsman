@@ -5,6 +5,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   ModelSelectEvent,
+  ProjectedSessionEntry,
   SessionBeforeCompactEvent,
   SessionEntry,
   ThinkingLevelSelectEvent,
@@ -15,7 +16,7 @@ import {
   StringEnum,
 } from "@earendil-works/pi-ai";
 import {
-  buildContextEntries,
+  buildSessionProjection,
   CURRENT_SESSION_VERSION,
   DynamicBorder,
   getAgentDir,
@@ -37,7 +38,7 @@ import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
-import { herdsmanTempRoot } from "./storage.ts";
+import { herdsmanTempRoot, resultRef } from "./storage.ts";
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import {
@@ -130,7 +131,11 @@ import {
   type HerdrSessionSnapshot,
 } from "./herdr.ts";
 import { reportLeadMetadata } from "./herdr.ts";
-import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
+import {
+  acquireProcessLock,
+  claimProcessLock,
+  ProcessLockOccupiedError,
+} from "./lock.ts";
 import {
   claimChiefLease,
   chiefMessagePath,
@@ -140,19 +145,20 @@ import {
   quarantineChiefMessage,
   chiefMessageQuarantined,
   listChiefMessagePaths,
-  drainChiefInbox,
   supervisionRuntime,
   readChiefDescriptor,
   readChiefMessage,
   writeChiefMessage,
+  writeCoordinationMessage,
   writeChiefAskMessage,
   chiefMessageBytes,
-  CHIEF_MESSAGE_MAX_BYTES,
+  COORDINATION_MESSAGE_MAX_BYTES,
   sessionLeadRoleState,
   type ChiefLease,
   type ChiefDescriptor,
   type ChiefMessageKind,
   type ChiefMessageRecord,
+  type PeerLeadRecord,
   type WorkspaceProvenance,
   projectSupervision,
   readLeadCoordinationState,
@@ -164,6 +170,15 @@ import {
   sameChiefDescriptor,
   validLeadCoordinationQuestion,
   normalizeHerdrLifecycleState,
+  peerLeadLockPath,
+  peerRuntime,
+  readPeerLeadRecord,
+  listPeerLeadRecords,
+  removePeerLeadRecord,
+  samePeerLeadRecord,
+  samePeerLeadGeneration,
+  writePeerLeadRecord,
+  drainCoordinationInbox,
 } from "./supervision.ts";
 import {
   fail,
@@ -332,7 +347,7 @@ If several tightly coupled phases are already known, put them in one bounded
 assignment when practical. If genuinely new follow-up work emerges after
 completion and previous context is valuable, continue the exact returned session
 only when the completion is not marked retired. A retired session requires a
-fresh delegation; pass its resultRef/handoff and relevant files instead.
+fresh delegation; pass its result/handoff and relevant files instead.
 Each active delegated assignment has one executor: that agent. Do not repeat
 its assigned work locally or delegate substantially overlapping work elsewhere.
 
@@ -390,12 +405,14 @@ later dependent assignments when approved scope or decisions change because
 embedded text is snapshotted at submission time while referenced files are not
 copied.
 
-Agent completions may return a resultRef such as result:<request-id>. Pass that
-exact resultRef through files for dependent work; do not reconstruct or guess
-the underlying filesystem path. Prefer passing it or a coordination artifact
-through files instead of copying large results into a task. ask_owner
-may also include files when the owner needs supporting evidence. files does not
-add runtime capability.
+Completed direct agents may expose a numbered reusable result. Pass required
+direct-agent results through \`results\` using the exact agent label and result
+index shown by the completion.
+
+\`files\` remains for ordinary files and canonical \`result:<request-id>\`
+references already supplied as file evidence. Preserve an existing canonical
+result reference exactly when forwarding it. \`files\` does not add runtime
+capability.
 
 Require concise handoffs containing relevant inspected or changed files,
 validation performed, findings or decisions, unresolved risks or blockers,
@@ -478,8 +495,9 @@ evidence. Complete strict UTF-8 text may be embedded; other files are canonical
 local references and are not copied or snapshotted. Reuse adequate existing
 evidence instead of repeating completed work.
 Do not overlap writers in a worktree or file-ownership boundary. For dependent
-work, copy resultRef values exactly through files rather than reconstructing
-physical result paths or copying large results into assignments.
+work, preserve existing canonical result:<request-id> references exactly through
+\`files\` rather than reconstructing physical result paths or copying large
+results into assignments.
 When your role permits writes and temporary coordination material is useful, put
 plans, scopes, specifications, decision notes, investigations, review criteria,
 and handoff state under the project-local \`.pi-herdsman/\` directory. Reuse and update
@@ -547,6 +565,10 @@ async function visibleAgentDefinitionMetadata(
       )
     : definitions;
 }
+type ResultSelector = {
+  agent: string;
+  index: number;
+};
 type Params =
   | { action: "list" }
   | {
@@ -556,6 +578,7 @@ type Params =
       cwd?: string;
       task: string;
       files?: string[];
+      results?: ResultSelector[];
       fork?: string;
       timeoutMs?: number;
     }
@@ -564,6 +587,7 @@ type Params =
       session: string;
       task: string;
       files?: string[];
+      results?: ResultSelector[];
       timeoutMs?: number;
     }
   | {
@@ -571,8 +595,15 @@ type Params =
       agent: string;
       message: string;
       files?: string[];
+      results?: ResultSelector[];
     }
-  | { action: "reply"; agent: string; message: string; files?: string[] }
+  | {
+      action: "reply";
+      agent: string;
+      message: string;
+      files?: string[];
+      results?: ResultSelector[];
+    }
   | { action: "close"; agent: string }
   | { action: "inspect"; agent: string }
   | { action: "transcript"; agent: string };
@@ -595,6 +626,7 @@ function parseRequest(p: Params): Params {
       agent: p.agent!,
       message: p.message!,
       ...(p.files ? { files: p.files } : {}),
+      ...(p.results !== undefined ? { results: p.results } : {}),
     };
   }
   if (p.action === "reply") {
@@ -606,6 +638,7 @@ function parseRequest(p: Params): Params {
       agent: p.agent!,
       message: p.message!,
       ...(p.files ? { files: p.files } : {}),
+      ...(p.results !== undefined ? { results: p.results } : {}),
     };
   }
   if (p.action === "close") {
@@ -638,6 +671,7 @@ function parseRequest(p: Params): Params {
       ...(p.label !== undefined ? { label: p.label } : {}),
       ...(p.cwd !== undefined ? { cwd: p.cwd } : {}),
       ...(p.files !== undefined ? { files: p.files } : {}),
+      ...(p.results !== undefined ? { results: p.results } : {}),
       ...(p.fork !== undefined ? { fork: p.fork } : {}),
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
     };
@@ -662,6 +696,7 @@ function parseRequest(p: Params): Params {
       session: p.session,
       task: p.task!,
       ...(p.files !== undefined ? { files: p.files } : {}),
+      ...(p.results !== undefined ? { results: p.results } : {}),
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
     };
   }
@@ -1173,7 +1208,7 @@ async function messageLimits(
     mailbox: { bytes: config.mailboxPayloadLimitBytes },
   };
 }
-async function prepareSupervisionText(
+async function prepareCoordinationText(
   ctx: ExtensionContext,
   text: string,
   files: readonly string[],
@@ -1184,7 +1219,10 @@ async function prepareSupervisionText(
   const limits = await messageLimits(ctx);
   return prepareMessageInput(text, files, ctx.cwd, operation, heading, {
     inlineLimitBytes: limits.inline.bytes,
-    mailboxLimitBytes: Math.min(limits.mailbox.bytes, CHIEF_MESSAGE_MAX_BYTES),
+    mailboxLimitBytes: Math.min(
+      limits.mailbox.bytes,
+      COORDINATION_MESSAGE_MAX_BYTES,
+    ),
     serializedBytes: (candidate) => chiefMessageBytes(recordForText(candidate)),
   }).text;
 }
@@ -1368,50 +1406,52 @@ function persistedTranscriptReady(target: PersistedTranscriptTarget): boolean {
   }
 }
 
-function formatPersistedTranscript(entries: readonly SessionEntry[]): {
+function formatPersistedTranscript(entries: readonly ProjectedSessionEntry[]): {
   text: string;
   truncated: boolean;
 } {
   const blocks: string[] = [];
   let truncated = false;
 
-  for (const entry of entries) {
-    if (entry.type === "compaction") {
-      if (entry.summary.trim())
-        blocks.push(`compaction summary:\n${entry.summary.trim()}`);
+  for (const { sourceEntry, messages } of entries) {
+    if (sourceEntry.type === "compaction") {
+      if (sourceEntry.summary.trim())
+        blocks.push(`compaction summary:\n${sourceEntry.summary.trim()}`);
       continue;
     }
-    if (entry.type === "branch_summary") {
-      if (entry.summary.trim())
-        blocks.push(`branch summary:\n${entry.summary.trim()}`);
+    if (sourceEntry.type === "branch_summary") {
+      if (sourceEntry.summary.trim())
+        blocks.push(`branch summary:\n${sourceEntry.summary.trim()}`);
       continue;
     }
-    if (entry.type !== "message") continue;
 
-    const message = entry.message as any;
-    if (message.role === "user") {
-      const text = contentText(message.content, "").trim();
-      if (text && !parseControlMarker(text)) blocks.push(`user:\n${text}`);
-      continue;
-    }
-    if (message.role === "assistant") {
-      for (const part of message.content ?? []) {
-        if (part.type === "text" && part.text.trim()) {
-          blocks.push(`assistant:\n${part.text.trim()}`);
-        } else if (part.type === "toolCall") {
-          blocks.push(`tool ${part.name}:\n${JSON.stringify(part.arguments)}`);
-        }
+    for (const message of messages) {
+      if (message.role === "user") {
+        const text = contentText(message.content, "").trim();
+        if (text && !parseControlMarker(text)) blocks.push(`user:\n${text}`);
+        continue;
       }
-      continue;
-    }
-    if (message.role === "toolResult") {
-      const result = truncateTranscriptToolResult(
-        contentText(message.content, "").trim(),
-      );
-      truncated ||= result.truncated;
-      blocks.push(
-        `tool result ${message.toolName}${message.isError ? " [error]" : ""}:${result.text ? `\n${result.text}` : ""}`,
-      );
+      if (message.role === "assistant") {
+        for (const part of message.content ?? []) {
+          if (part.type === "text" && part.text.trim()) {
+            blocks.push(`assistant:\n${part.text.trim()}`);
+          } else if (part.type === "toolCall") {
+            blocks.push(
+              `tool ${part.name}:\n${JSON.stringify(part.arguments)}`,
+            );
+          }
+        }
+        continue;
+      }
+      if (message.role === "toolResult") {
+        const result = truncateTranscriptToolResult(
+          contentText(message.content, "").trim(),
+        );
+        truncated ||= result.truncated;
+        blocks.push(
+          `tool result ${message.toolName}${message.isError ? " [error]" : ""}:${result.text ? `\n${result.text}` : ""}`,
+        );
+      }
     }
   }
 
@@ -1425,7 +1465,7 @@ function readPersistedTranscript(target: PersistedTranscriptTarget): {
   const entries = readPersistedSessionEntries(target);
 
   const formatted = formatPersistedTranscript(
-    buildContextEntries(entries.slice(1) as SessionEntry[]),
+    buildSessionProjection(entries.slice(1) as SessionEntry[]).entries,
   );
   const bounded = truncateTail(formatted.text, {
     maxBytes: TRANSCRIPT_MAX_BYTES,
@@ -1626,7 +1666,7 @@ export async function resolveAssignmentSession(
   if (readConfig().contextRetirement && retiredManagedSession(manager))
     throw new AssignmentSessionResolutionError(
       `Managed agent session ${manager.getSessionId()} is retired after context pressure. ` +
-        "Delegate a fresh agent and pass the previous handoff/resultRef and relevant files.",
+        "Delegate a fresh agent and pass the previous result/handoff and relevant files.",
     );
   const cwd = manager.getCwd();
   return {
@@ -3225,18 +3265,133 @@ function resultDeliveryExpectation(
     piSessionFile: source.piSessionFile,
   };
 }
+function agentResultDetails(
+  entry: unknown,
+): Record<string, unknown> | undefined {
+  if (!entry || typeof entry !== "object") return undefined;
+
+  const record = entry as Record<string, unknown>;
+  const message =
+    record.message && typeof record.message === "object"
+      ? (record.message as Record<string, unknown>)
+      : record;
+
+  if (message.customType !== "pi-herdsman-agent-result") return undefined;
+
+  const details =
+    message.details && typeof message.details === "object"
+      ? message.details
+      : record.details;
+
+  return details && typeof details === "object" && !Array.isArray(details)
+    ? (details as Record<string, unknown>)
+    : undefined;
+}
+function nextAgentResultIndex(
+  entries: readonly unknown[],
+  agentLabel: string,
+): number {
+  let max = 0;
+
+  for (const entry of entries) {
+    const details = agentResultDetails(entry);
+    if (details?.agentLabel !== agentLabel) continue;
+
+    const index = details.resultIndex;
+    if (typeof index === "number" && Number.isSafeInteger(index) && index > max)
+      max = index;
+  }
+
+  return max + 1;
+}
 function hasDeliveredResult(
   entries: readonly unknown[],
   expected: ResultDeliveryExpectation,
 ): boolean {
-  return entries.some((entry: any) => {
-    const message = entry?.message ?? entry;
-    if (message?.customType !== "pi-herdsman-agent-result") return false;
-    return deliveryIdentityMatches(
-      message?.details ?? entry?.details,
-      expected,
-    );
+  return entries.some((entry) => {
+    const details = agentResultDetails(entry);
+    return !!details && deliveryIdentityMatches(details, expected);
   });
+}
+function canonicalResultRef(
+  details: Record<string, unknown>,
+  operation: string,
+): string {
+  if (
+    details.status !== "completed" ||
+    typeof details.requestId !== "string" ||
+    typeof details.resultRef !== "string"
+  )
+    fail("internal_failure", "Result metadata is incomplete", operation);
+
+  let expected: string;
+  try {
+    expected = resultRef(details.requestId);
+  } catch {
+    fail(
+      "internal_failure",
+      "Result metadata contains an invalid request identity",
+      operation,
+    );
+  }
+
+  if (details.resultRef !== expected)
+    fail(
+      "internal_failure",
+      "Result metadata contains an inconsistent canonical reference",
+      operation,
+    );
+
+  return expected;
+}
+function resolveMessageFiles(
+  ctx: ExtensionContext,
+  files: readonly string[] | undefined,
+  results: readonly ResultSelector[] | undefined,
+  operation: string,
+): string[] {
+  if (!results?.length) return [...(files ?? [])];
+
+  const branch = ctx.sessionManager.getBranch();
+  const resolved = results.map(({ agent, index }) => {
+    if (!validAgentLabel(agent) || !Number.isSafeInteger(index) || index < 1)
+      fail(
+        "invalid_request",
+        "Result selectors require a valid agent label and positive integer index",
+        operation,
+      );
+
+    const matches = branch
+      .map(agentResultDetails)
+      .filter(
+        (details): details is Record<string, unknown> =>
+          !!details &&
+          details.agentLabel === agent &&
+          details.resultIndex === index,
+      );
+
+    if (!matches.length)
+      fail(
+        "target_not_found",
+        `Result ${index} from agent ${agent} is not available on the current branch`,
+        operation,
+      );
+
+    const refs = new Set(
+      matches.map((details) => canonicalResultRef(details, operation)),
+    );
+
+    if (refs.size !== 1)
+      fail(
+        "target_ambiguous",
+        `Result ${index} from agent ${agent} resolves to conflicting canonical results`,
+        operation,
+      );
+
+    return refs.values().next().value!;
+  });
+
+  return [...(files ?? []), ...resolved];
 }
 async function deliverResultUnsafe(
   pi: ExtensionAPI,
@@ -3289,6 +3444,9 @@ async function deliverResultUnsafe(
           : {}),
       },
     );
+    const resultIndex = completion.resultRef
+      ? nextAgentResultIndex(entries, result.agentLabel)
+      : undefined;
     if (completion.persistenceError) {
       appendDurableError(
         pi,
@@ -3311,18 +3469,26 @@ async function deliverResultUnsafe(
       })();
     const retirementGuidance = sessionRetired
       ? "Session retired after context pressure. Do not continue or fork this session. " +
-        "For follow-up, delegate a fresh agent and pass this handoff/resultRef plus the relevant files."
+        "For follow-up, delegate a fresh agent and pass this result/handoff plus the relevant files."
       : undefined;
     const delegationStatus = delegationStatusForResult(
       runtime,
       result.requestId,
       entries,
     );
+    const completionHeader = [
+      "Agent result",
+      `agent=${result.agentLabel}`,
+      ...(resultIndex !== undefined ? [`result=${resultIndex}`] : []),
+      `definition=${runtime.agentDefinition}`,
+      `session=${runtime.piSessionId ?? "?"}`,
+      `status=${result.status}`,
+    ].join(" · ");
     pi.sendMessage(
       {
         customType: "pi-herdsman-agent-result",
         content: [
-          `Agent result · agent=${result.agentLabel} · definition=${runtime.agentDefinition} · session=${runtime.piSessionId ?? "?"} · request=${result.requestId} · status=${result.status}`,
+          completionHeader,
           completion.content,
           ...(retirementGuidance ? [retirementGuidance] : []),
           ...(delegationStatus ? [delegationStatus.content] : []),
@@ -3348,7 +3514,12 @@ async function deliverResultUnsafe(
           ...(elapsedMs !== undefined ? { elapsedMs } : {}),
           contextUsage: result.contextUsage,
           truncated: completion.truncated,
-          ...(completion.resultRef ? { resultRef: completion.resultRef } : {}),
+          ...(completion.resultRef
+            ? {
+                resultRef: completion.resultRef,
+                resultIndex,
+              }
+            : {}),
           ...(completion.fullOutputPath
             ? { fullOutputPath: completion.fullOutputPath }
             : {}),
@@ -5410,7 +5581,7 @@ async function actionUnsafe(
             )
               throw new AssignmentSessionResolutionError(
                 `Managed agent session ${manager.getSessionId()} is retired after context pressure. ` +
-                  "Delegate a fresh agent without fork and pass the previous handoff/resultRef and relevant files.",
+                  "Delegate a fresh agent without fork and pass the previous handoff/result and relevant files.",
               );
             return fork.path;
           })
@@ -5550,21 +5721,28 @@ async function actionUnsafe(
         p.action,
       );
     const prepareAssignmentInput = (assignmentLabel: string) =>
-      prepareMessageInput(p.task, p.files ?? [], ctx.cwd, p.action, "Task", {
-        inlineLimitBytes: limits.inline.bytes,
-        fits: (text) =>
-          prospectiveAssignmentFits(
-            assignment!.runId,
-            assignment!.ownerSessionId,
-            assignment!.workspaceId,
-            assignmentLabel,
-            text,
-            "",
-            assignment!.createdAt,
-            assignment!.requestId,
-            limits.mailbox.bytes,
-          ),
-      });
+      prepareMessageInput(
+        p.task,
+        resolveMessageFiles(ctx, p.files, p.results, p.action),
+        ctx.cwd,
+        p.action,
+        "Task",
+        {
+          inlineLimitBytes: limits.inline.bytes,
+          fits: (text) =>
+            prospectiveAssignmentFits(
+              assignment!.runId,
+              assignment!.ownerSessionId,
+              assignment!.workspaceId,
+              assignmentLabel,
+              text,
+              "",
+              assignment!.createdAt,
+              assignment!.requestId,
+              limits.mailbox.bytes,
+            ),
+        },
+      );
     // The label is knowable until a mailbox collision changes it; only Herdr's
     // pane identity remains unknown until startup returns.
     assignmentInput = prepareAssignmentInput(label);
@@ -5811,7 +5989,7 @@ async function actionUnsafe(
       // authoritative final envelope identity is known.
       assignmentInput = prepareMessageInput(
         p.task,
-        p.files ?? [],
+        resolveMessageFiles(ctx, p.files, p.results, p.action),
         ctx.cwd,
         p.action,
         "Task",
@@ -6113,7 +6291,7 @@ async function actionUnsafe(
     const replyRequestId = randomUUID();
     const replyInput = prepareMessageInput(
       p.message,
-      p.files ?? [],
+      resolveMessageFiles(ctx, p.files, p.results, "reply"),
       ctx.cwd,
       "reply",
       "Reply",
@@ -6159,7 +6337,7 @@ async function actionUnsafe(
   const controlAction = p.action;
   const messageInput = prepareMessageInput(
     p.message,
-    p.files ?? [],
+    resolveMessageFiles(ctx, p.files, p.results, controlAction),
     ctx.cwd,
     controlAction,
     controlAction === "interrupt" ? "Interrupt" : "Steer",
@@ -6353,6 +6531,27 @@ export default function (pi: ExtensionAPI): void {
             allowedAgentDefinitions: new Set(allowedAgentDefinitions),
           }
         : undefined;
+  const RESULT_SELECTOR_SCHEMA = Type.Object(
+    {
+      agent: Type.String({
+        pattern: AGENT_LABEL_PATTERN.source,
+        description:
+          "Exact logical agent label shown by the completed direct-agent result.",
+      }),
+      index: Type.Integer({
+        minimum: 1,
+        maximum: Number.MAX_SAFE_INTEGER,
+        description: "Reusable result index shown by that agent completion.",
+      }),
+    },
+    { additionalProperties: false },
+  );
+  const RESULTS_SCHEMA = Type.Optional(
+    Type.Array(RESULT_SELECTOR_SCHEMA, {
+      description:
+        "Completed direct-agent results to attach. Use exact agent/index pairs shown by prior completions on the current Pi branch.",
+    }),
+  );
   const agentParameters = Type.Union([
     Type.Object(
       { action: StringEnum(["list"] as const) },
@@ -6412,6 +6611,7 @@ export default function (pi: ExtensionAPI): void {
             },
           ),
         ),
+        results: RESULTS_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -6440,6 +6640,7 @@ export default function (pi: ExtensionAPI): void {
             },
           ),
         ),
+        results: RESULTS_SCHEMA,
         timeoutMs: Type.Optional(
           Type.Integer({
             minimum: STARTUP_TIMEOUT_MIN,
@@ -6455,6 +6656,7 @@ export default function (pi: ExtensionAPI): void {
         agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
         message: Type.String({ pattern: "\\S" }),
         files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        results: RESULTS_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -6464,6 +6666,7 @@ export default function (pi: ExtensionAPI): void {
         agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
         message: Type.String({ pattern: "\\S" }),
         files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        results: RESULTS_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -6502,6 +6705,7 @@ export default function (pi: ExtensionAPI): void {
         }),
         message: Type.String({ pattern: "\\S" }),
         files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        results: RESULTS_SCHEMA,
       },
       { additionalProperties: false },
     ),
@@ -6516,11 +6720,33 @@ export default function (pi: ExtensionAPI): void {
         askId: Type.String({ pattern: "\\S" }),
         message: Type.String({ pattern: "\\S" }),
         files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        results: RESULTS_SCHEMA,
       },
       { additionalProperties: false },
     ),
   ]);
   const staffValidator = Compile(staffParameters);
+  const peerParameters = Type.Union([
+    Type.Object(
+      { action: StringEnum(["list"] as const) },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: StringEnum(["message"] as const),
+        lead: Type.String({
+          pattern: PI_SESSION_ID_PATTERN,
+          description:
+            "The lead is the exact full Pi session ID returned by peer list; never use a display label.",
+        }),
+        message: Type.String({ pattern: "\\S" }),
+        files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+        results: RESULTS_SCHEMA,
+      },
+      { additionalProperties: false },
+    ),
+  ]);
+  const peerValidator = Compile(peerParameters);
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
   let chiefMode: ChiefMode = "inactive";
@@ -6564,6 +6790,10 @@ export default function (pi: ExtensionAPI): void {
     { askId: string; question: string; text: string } | undefined;
   let leadInstanceId = randomUUID();
   let leadCoordinationHealthy = true;
+  let peerPresenceLease: ReturnType<typeof acquireProcessLock> | undefined;
+  let peerPresenceRecord: PeerLeadRecord | undefined;
+  let peerPresenceGeneration = 0;
+  let peerPresencePublication = Promise.resolve();
   let coordinationPublication = Promise.resolve();
   let chiefInboxTimer: ReturnType<typeof setTimeout> | undefined;
   let chiefInboxGeneration = 0;
@@ -6604,6 +6834,7 @@ export default function (pi: ExtensionAPI): void {
     { customType: string; content: string; display: boolean } | undefined
   > = async () => undefined;
   let chiefTool: any;
+  let peerTool: any;
   let refreshSupervisionUI: ((ctx: ExtensionContext) => void) | undefined;
   let clearSupervisionUI: ((removeWidget?: boolean) => void) | undefined;
   let requestSupervisionWidgetRender: (() => void) | undefined;
@@ -6625,7 +6856,7 @@ export default function (pi: ExtensionAPI): void {
         unknown: boolean;
       }>)
     | undefined;
-  const ownedTools = new Set(["agent", "chief", "staff"]);
+  const ownedTools = new Set(["agent", "chief", "peer", "staff"]);
   let leadTools: string[] | undefined;
   const registeredToolNames = (): Set<string> =>
     new Set(pi.getAllTools().map((tool) => tool.name));
@@ -6635,7 +6866,7 @@ export default function (pi: ExtensionAPI): void {
     for (const name of tools)
       if (name !== "staff" && registered.has(name) && !next.includes(name))
         next.push(name);
-    for (const name of ["agent", "chief"])
+    for (const name of ["agent", "chief", "peer"])
       if (registered.has(name) && !next.includes(name)) next.push(name);
     return next;
   };
@@ -6762,9 +6993,140 @@ export default function (pi: ExtensionAPI): void {
       return false;
     }
   };
+  const removePeerPresence = (): void => {
+    const record = peerPresenceRecord;
+    peerPresenceRecord = undefined;
+    if (!record) {
+      peerPresenceLease?.release();
+      peerPresenceLease = undefined;
+      return;
+    }
+    try {
+      removePeerLeadRecord(peerRuntime(), record.piSessionId, record);
+    } catch (error) {
+      if (leadContext)
+        appendDurableError(pi, leadContext, "pi_herdsman_state_error", error);
+    }
+    try {
+      peerPresenceLease?.release();
+    } catch (error) {
+      if (leadContext)
+        appendDurableError(pi, leadContext, "pi_herdsman_state_error", error);
+    }
+    peerPresenceLease = undefined;
+  };
+  const publishPeerPresence = async (
+    ctx: ExtensionContext,
+    expectedGeneration: number,
+  ): Promise<void> => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const isCurrent = (): boolean =>
+      expectedGeneration === peerPresenceGeneration &&
+      !ctx.signal?.aborted &&
+      processRole === "lead" &&
+      chiefMode === "inactive" &&
+      leadCoordinationHealthy &&
+      ctx.sessionManager.getSessionId() === sessionId;
+    if (!isCurrent()) return;
+    const paneId = process.env.HERDR_PANE_ID;
+    const tabId = process.env.HERDR_TAB_ID;
+    const workspaceId = process.env.HERDR_WORKSPACE_ID;
+    if (!paneId || !tabId || !workspaceId) return;
+    removePeerPresence();
+    const name =
+      pi.getSessionName()?.trim() ||
+      ctx.sessionManager.getSessionName()?.trim();
+    let lease: ReturnType<typeof acquireProcessLock> | undefined;
+    try {
+      const runtime = peerRuntime();
+      if (!isCurrent()) return;
+      lease = acquireProcessLock(peerLeadLockPath(runtime, sessionId), {
+        name: "Lead peer presence",
+      });
+      if (!isCurrent()) {
+        lease.release();
+        return;
+      }
+      const record: PeerLeadRecord = {
+        version: 1,
+        piSessionId: sessionId,
+        paneId,
+        tabId,
+        workspaceId,
+        ...(name ? { name } : {}),
+        cwd: ctx.cwd,
+        claim: lease.claim,
+        updatedAt: Date.now(),
+      };
+      if (!isCurrent()) {
+        lease.release();
+        return;
+      }
+      writePeerLeadRecord(runtime, record);
+      peerPresenceLease = lease;
+      peerPresenceRecord = record;
+      void (async () => {
+        let provenance: WorkspaceProvenance;
+        try {
+          provenance =
+            (
+              await workspacePresentationProvenance(
+                pi,
+                ctx,
+                [workspaceId],
+                new Map([[workspaceId, ctx.cwd]]),
+                ctx.signal,
+              )
+            ).get(workspaceId) ?? {};
+        } catch {
+          return;
+        }
+        if (!isCurrent() || peerPresenceRecord !== record) return;
+        const workspaceLabel =
+          provenance.repoName && provenance.branch
+            ? `${provenance.repoName}/${provenance.branch}`
+            : (provenance.workspaceLabel ??
+              (provenance.workspaceCwd
+                ? basename(provenance.workspaceCwd)
+                : workspaceId));
+        const enriched: PeerLeadRecord = {
+          ...record,
+          ...(provenance.repoName ? { repo: provenance.repoName } : {}),
+          ...(provenance.branch ? { branch: provenance.branch } : {}),
+          workspaceLabel,
+          updatedAt: Date.now(),
+        };
+        if (!isCurrent() || peerPresenceRecord !== record) return;
+        try {
+          const current = readPeerLeadRecord(peerRuntime(), sessionId);
+          if (!current || !samePeerLeadRecord(current, record)) return;
+          if (!isCurrent() || peerPresenceRecord !== record) return;
+          writePeerLeadRecord(peerRuntime(), enriched);
+          peerPresenceRecord = enriched;
+        } catch (error) {
+          if (isCurrent() && peerPresenceRecord === record)
+            appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        }
+      })();
+    } catch (error) {
+      try {
+        lease?.release();
+      } catch {}
+      peerPresenceLease = undefined;
+      appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+    }
+  };
+  const schedulePeerPresence = (ctx: ExtensionContext): Promise<void> => {
+    const expectedGeneration = peerPresenceGeneration;
+    peerPresencePublication = peerPresencePublication
+      .catch(() => {})
+      .then(() => publishPeerPresence(ctx, expectedGeneration));
+    return peerPresencePublication;
+  };
   // Keep role side effects together; coordination state remains authoritative
   // only while the session is an ordinary, healthy lead.
   const enterLead = (ctx?: ExtensionContext, persist = true): void => {
+    ++peerPresenceGeneration;
     let lifecycleError: unknown;
     const captureError = (operation: () => void): void => {
       try {
@@ -6779,6 +7141,7 @@ export default function (pi: ExtensionAPI): void {
     captureError(() => lease?.release());
     resetSupervisionSnapshot();
     chiefMode = "inactive";
+    if (ctx && leadCoordinationHealthy) void schedulePeerPresence(ctx);
     captureError(reconcileRoleTools);
     if (persist) captureError(() => persistRole("lead"));
     if (leadCoordinationHealthy) captureError(() => persistChiefState());
@@ -6791,6 +7154,8 @@ export default function (pi: ExtensionAPI): void {
     lease: ChiefLease,
     generation: number,
   ): void => {
+    ++peerPresenceGeneration;
+    removePeerPresence();
     chiefLease = lease;
     resetSupervisionSnapshot();
     chiefMode = "active";
@@ -6806,6 +7171,7 @@ export default function (pi: ExtensionAPI): void {
     publishLeadRole(ctx, "active", generation);
   };
   const enterSuspended = (ctx?: ExtensionContext): void => {
+    ++peerPresenceGeneration;
     let lifecycleError: unknown;
     const captureError = (operation: () => void): void => {
       try {
@@ -6819,6 +7185,7 @@ export default function (pi: ExtensionAPI): void {
     clearChiefStartPreflight();
     resetSupervisionSnapshot();
     chiefMode = "suspended";
+    removePeerPresence();
     captureError(() => lease?.release());
     captureError(reconcileRoleTools);
     captureError(() => persistRole("chief"));
@@ -6994,6 +7361,103 @@ export default function (pi: ExtensionAPI): void {
         herdrSessionId(agent) === sessionId &&
         !!readLeadCoordinationState(supervisionRuntime(), sessionId),
     );
+  };
+  const livePeerLead = async (
+    _ctx: ExtensionContext,
+    sessionId: string,
+  ): Promise<PeerLeadRecord | undefined> => {
+    try {
+      return readPeerLeadRecord(peerRuntime(), sessionId);
+    } catch {
+      return undefined;
+    }
+  };
+  const currentPeerPresenceValid = (ctx: ExtensionContext): boolean => {
+    if (
+      chiefMode !== "inactive" ||
+      !leadCoordinationHealthy ||
+      !peerPresenceLease ||
+      !peerPresenceRecord ||
+      peerPresenceRecord.piSessionId !== ctx.sessionManager.getSessionId()
+    )
+      return false;
+    try {
+      const current = readPeerLeadRecord(
+        peerRuntime(),
+        peerPresenceRecord.piSessionId,
+      );
+      return !!current && samePeerLeadRecord(current, peerPresenceRecord);
+    } catch {
+      return false;
+    }
+  };
+  const authorizePeerRecord = async (
+    record: ChiefMessageRecord,
+    ctx: ExtensionContext,
+  ): Promise<boolean> => {
+    if (
+      chiefMode !== "inactive" ||
+      record.kind !== "peer_message" ||
+      record.toSessionId !== ctx.sessionManager.getSessionId() ||
+      record.fromSessionId === record.toSessionId ||
+      record.leadSessionId !== record.fromSessionId
+    )
+      return false;
+    const target = await livePeerLead(ctx, record.toSessionId);
+    return !!target && target.piSessionId === record.toSessionId;
+  };
+  const queuePeerRecord = async (
+    text: string,
+    targetSessionId: string,
+    ctx: ExtensionContext,
+    expectedSender: PeerLeadRecord,
+    expectedTarget: PeerLeadRecord,
+    recordId = randomUUID(),
+    createdAt = Date.now(),
+  ): Promise<ChiefMessageRecord> => {
+    if (controllerScope?.kind !== "lead" || chiefMode !== "inactive")
+      throw new Error("Peer is available only to ordinary leads");
+    if (
+      expectedSender.piSessionId !== ctx.sessionManager.getSessionId() ||
+      expectedTarget.piSessionId !== targetSessionId ||
+      expectedSender.piSessionId === expectedTarget.piSessionId
+    )
+      throw new Error("Peer sender or target is invalid");
+    let sender: PeerLeadRecord | undefined;
+    let target: PeerLeadRecord | undefined;
+    try {
+      sender = readPeerLeadRecord(peerRuntime(), expectedSender.piSessionId);
+      target = readPeerLeadRecord(peerRuntime(), expectedTarget.piSessionId);
+    } catch {
+      throw new Error(
+        "Peer target was not found or is no longer an ordinary live lead",
+      );
+    }
+    if (
+      !sender ||
+      !target ||
+      !samePeerLeadGeneration(sender, expectedSender) ||
+      !samePeerLeadGeneration(target, expectedTarget)
+    )
+      throw new Error(
+        "Peer sender or target changed before the message was queued",
+      );
+    // Best effort only: the target's held presence lock and the inbox
+    // message lock are independent process locks, so replacement can race
+    // after this reread and before durable publication.
+    const record: ChiefMessageRecord = {
+      version: 1,
+      id: recordId,
+      leaseId: sender.claim.id,
+      kind: "peer_message",
+      fromSessionId: sender.piSessionId,
+      toSessionId: target.piSessionId,
+      leadSessionId: sender.piSessionId,
+      text,
+      createdAt,
+    };
+    writeCoordinationMessage(record, peerRuntime());
+    return record;
   };
   const currentChiefAuthority = async (ctx: ExtensionContext) => {
     const descriptor = currentChief();
@@ -7222,6 +7686,7 @@ export default function (pi: ExtensionAPI): void {
     const socket = process.env.HERDR_SOCKET_PATH;
     if (!socket) return;
     const runtime = supervisionRuntime(socket);
+    const peerInboxRuntime = peerRuntime();
     const isCurrent = (): boolean =>
       generation === chiefInboxGeneration &&
       !chiefInboxAbortController?.signal.aborted;
@@ -7256,10 +7721,14 @@ export default function (pi: ExtensionAPI): void {
         throw new Error(`Stale inbox transaction (${phase})`);
       if (transaction.role === "inactive") assertCurrentLeadCoordination(ctx);
     };
-    const inboxOptions = (verifyLease: boolean, verifyLiveChief = true) => {
+    const inboxOptions = (
+      verifyLease: boolean,
+      verifyLiveChief = true,
+      inboxRuntime = runtime,
+    ) => {
       if (!isCurrent()) throw new Error("Stale inbox transaction (options)");
       return {
-        runtime,
+        runtime: inboxRuntime,
         sessionId: ctx.sessionManager.getSessionId(),
         signal: chiefInboxAbortController?.signal,
         cleanupError: (error: unknown) => {
@@ -7267,6 +7736,8 @@ export default function (pi: ExtensionAPI): void {
         },
         isDelivered: (id: string) => messageDelivered(ctx, id),
         isAuthorized: async (record: ChiefMessageRecord) => {
+          if (record.kind === "peer_message")
+            return authorizePeerRecord(record, ctx);
           if (verifyLease) {
             const chief = await currentChiefAuthority(ctx);
             if (!chief) throw new Error("Chief lease could not be verified");
@@ -7359,9 +7830,21 @@ export default function (pi: ExtensionAPI): void {
       }
 
       if (!isCurrent() || chiefStartPreflightHeld(ctx)) return 0;
-      if (initial) return drainChiefInbox(inboxOptions(false));
+      if (initial) {
+        const chief = await drainCoordinationInbox(inboxOptions(false));
+        if (!currentPeerPresenceValid(ctx)) return chief;
+        const peer = await drainCoordinationInbox(
+          inboxOptions(false, true, peerInboxRuntime),
+        );
+        return chief + peer;
+      }
       const active = chiefMode === "active";
-      return drainChiefInbox(inboxOptions(active, active));
+      const chief = await drainCoordinationInbox(inboxOptions(active, active));
+      if (!currentPeerPresenceValid(ctx)) return chief;
+      const peer = await drainCoordinationInbox(
+        inboxOptions(active, active, peerInboxRuntime),
+      );
+      return chief + peer;
     };
     const schedule = (): void => {
       if (
@@ -7508,6 +7991,7 @@ export default function (pi: ExtensionAPI): void {
       try {
         persistRole("lead");
         if (leadCoordinationHealthy) persistChiefState();
+        if (leadCoordinationHealthy) void schedulePeerPresence(ctx);
       } catch {
         // The activation error remains authoritative if role persistence also
         // fails; the next startup will resolve the durable role state.
@@ -7543,6 +8027,9 @@ export default function (pi: ExtensionAPI): void {
     if (leadContext)
       await publishLeadRole(leadContext, "suspended", chiefModeGeneration);
     enterLead(leadContext);
+    await peerPresencePublication;
+    if (leadContext && process.env.HERDR_SOCKET_PATH)
+      startChiefInbox(leadContext);
     if (leadContext) startNormalUI?.(leadContext);
     return "Chief mode left.";
   };
@@ -7582,6 +8069,13 @@ export default function (pi: ExtensionAPI): void {
       }
       if (event.toolName === "staff" && !staffValidator.Check(event.input)) {
         const error = invalidRequestInput("staff", "Invalid staff action");
+        return {
+          block: true,
+          reason: error.detail.message,
+        };
+      }
+      if (event.toolName === "peer" && !peerValidator.Check(event.input)) {
+        const error = invalidRequestInput("peer", "Invalid peer action");
         return {
           block: true,
           reason: error.detail.message,
@@ -7928,17 +8422,21 @@ export default function (pi: ExtensionAPI): void {
           { status },
         );
         const previous = [
-          ...buildContextEntries(
-            ctx.sessionManager.getBranch() as SessionEntry[],
-          ),
+          ...buildSessionProjection(ctx.sessionManager.getBranch()).entries,
         ]
           .reverse()
           .find(
             (entry) =>
-              entry.type === "custom_message" &&
-              entry.customType === SUPERVISION_CONTEXT_TYPE,
+              entry.sourceEntry.type === "custom_message" &&
+              entry.sourceEntry.customType === SUPERVISION_CONTEXT_TYPE &&
+              entry.messages.length > 0,
           );
-        if (previous?.content === content) return;
+        const previousMessage = previous?.messages[0];
+        if (
+          previousMessage &&
+          contentText(previousMessage.content, "") === content
+        )
+          return;
 
         return {
           customType: SUPERVISION_CONTEXT_TYPE,
@@ -9249,6 +9747,7 @@ export default function (pi: ExtensionAPI): void {
               action: StringEnum(["message"] as const),
               message: Type.String({ minLength: 1 }),
               files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+              results: RESULTS_SCHEMA,
             },
             { additionalProperties: false },
           ),
@@ -9257,6 +9756,7 @@ export default function (pi: ExtensionAPI): void {
               action: StringEnum(["ask"] as const),
               question: Type.String({ minLength: 1, maxLength: 1024 }),
               files: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+              results: RESULTS_SCHEMA,
             },
             { additionalProperties: false },
           ),
@@ -9274,9 +9774,9 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Invalid chief action");
           const allowed =
             params.action === "message"
-              ? ["action", "message", "files"]
+              ? ["action", "message", "files", "results"]
               : params.action === "ask"
-                ? ["action", "question", "files"]
+                ? ["action", "question", "files", "results"]
                 : [];
           if (
             !allowed.length ||
@@ -9296,10 +9796,15 @@ export default function (pi: ExtensionAPI): void {
               if (!chief) throw new Error(chiefUnavailableMessage());
               const recordId = randomUUID();
               const createdAt = Date.now();
-              const text = await prepareSupervisionText(
+              const text = await prepareCoordinationText(
                 ctx,
                 params.message,
-                params.files ?? [],
+                resolveMessageFiles(
+                  ctx,
+                  params.files,
+                  params.results,
+                  "chief.message",
+                ),
                 "chief.message",
                 "Message",
                 (candidate) => ({
@@ -9417,10 +9922,15 @@ export default function (pi: ExtensionAPI): void {
                 chief.leaseId,
               );
               const createdAt = Date.now();
-              const text = await prepareSupervisionText(
+              const text = await prepareCoordinationText(
                 ctx,
                 params.question,
-                params.files ?? [],
+                resolveMessageFiles(
+                  ctx,
+                  params.files,
+                  params.results,
+                  "chief.ask",
+                ),
                 "chief.ask",
                 "Question",
                 (candidate) => ({
@@ -9484,6 +9994,106 @@ export default function (pi: ExtensionAPI): void {
           renderCoordinationCall("chief", args, theme, context),
         renderResult: (result: any, options: any, theme: any, context: any) =>
           renderCoordinationResult("chief", result, options, theme, context),
+      };
+      peerTool = {
+        name: "peer",
+        label: "peer",
+        description:
+          "Other ordinary Lead sessions (peers), not managed agents. Use list for peers, other Leads, or other Lead sessions. list identifies this Lead as self and returns other live Leads as peers; message sends to one peer's exact lead ID and may include files or completed direct-agent results.",
+        executionMode: "sequential",
+        parameters: peerParameters,
+        execute: async (
+          _id: string,
+          params: any,
+          _signal: AbortSignal | undefined,
+          _update: unknown,
+          ctx: ExtensionContext,
+        ) => {
+          if (controllerScope.kind !== "lead" || chiefMode !== "inactive")
+            throw new Error("Peer is available only to ordinary leads");
+          if (!peerValidator.Check(params))
+            throw invalidRequestInput("peer", "Invalid peer action");
+          if (params.action === "list") {
+            const self = ctx.sessionManager.getSessionId();
+            const peers = listPeerLeadRecords(peerRuntime())
+              .filter((record) => record.piSessionId !== self)
+              .map((record) => ({
+                lead: record.piSessionId,
+                name: record.name ?? `lead-${record.piSessionId.slice(0, 8)}`,
+                cwd: record.cwd ?? "",
+                repo: record.repo ?? "",
+                branch: record.branch ?? "",
+                workspace_label: record.workspaceLabel ?? "",
+              }));
+            return {
+              content: [
+                { type: "text", text: JSON.stringify({ self, peers }) },
+              ],
+              details: { ok: true, action: "list", self, peers },
+            };
+          }
+          const sender = await livePeerLead(
+            ctx,
+            ctx.sessionManager.getSessionId(),
+          );
+          const target = await livePeerLead(ctx, params.lead);
+          if (!sender || !target)
+            throw new Error(
+              "Peer target was not found or is no longer an ordinary live lead",
+            );
+          const recordId = randomUUID();
+          const createdAt = Date.now();
+          const text = await prepareCoordinationText(
+            ctx,
+            params.message,
+            resolveMessageFiles(
+              ctx,
+              params.files,
+              params.results,
+              "peer.message",
+            ),
+            "peer.message",
+            "Message",
+            (candidate) => ({
+              version: 1,
+              id: recordId,
+              leaseId: sender.claim.id,
+              kind: "peer_message",
+              fromSessionId: sender.piSessionId,
+              toSessionId: target.piSessionId,
+              leadSessionId: sender.piSessionId,
+              text: candidate,
+              createdAt,
+            }),
+          );
+          const record = await queuePeerRecord(
+            text,
+            target.piSessionId,
+            ctx,
+            sender,
+            target,
+            recordId,
+            createdAt,
+          );
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Peer message queued for ${record.toSessionId}.`,
+              },
+            ],
+            details: {
+              ok: true,
+              action: "message",
+              lead: record.toSessionId,
+              id: record.id,
+            },
+          };
+        },
+        renderCall: (args: unknown, theme: any, context: any) =>
+          renderCoordinationCall("peer", args, theme, context),
+        renderResult: (result: any, options: any, theme: any, context: any) =>
+          renderCoordinationResult("peer", result, options, theme, context),
       };
       const staffTool = {
         name: "staff",
@@ -9671,10 +10281,15 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Lead ask ID is no longer pending");
           const recordId = randomUUID();
           const createdAt = Date.now();
-          const text = await prepareSupervisionText(
+          const text = await prepareCoordinationText(
             ctx,
             params.message,
-            params.files ?? [],
+            resolveMessageFiles(
+              ctx,
+              params.files,
+              params.results,
+              `staff.${params.action}`,
+            ),
             `staff.${params.action}`,
             params.action === "message" ? "Message" : "Reply",
             (candidate) => ({
@@ -9933,13 +10548,13 @@ export default function (pi: ExtensionAPI): void {
       requestStatusRefresh?.();
     };
     if (processRole !== "managed-agent")
-      pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
+      pi.on("agent_settled", async (_event: unknown, ctx: ExtensionContext) => {
         settlePendingAsks(pi, ctx, controllerAbortController?.signal);
         if (controllerScope.kind === "lead") {
           leadSettled = true;
           maybeFinishHerdRun(ctx);
         }
-        void settlePersistedResults(
+        await settlePersistedResults(
           pi,
           ctx,
           controllerAbortController?.signal,
@@ -10546,6 +11161,7 @@ export default function (pi: ExtensionAPI): void {
       startupDefinitionRoster = undefined;
       clearChiefStartPreflight();
       ++sessionGeneration;
+      ++peerPresenceGeneration;
       const previousChiefMode = chiefMode;
       const previousLeadContext = leadContext;
       ++chiefModeGeneration;
@@ -10642,6 +11258,8 @@ export default function (pi: ExtensionAPI): void {
             appendDurableError(pi, ctx, "pi_herdsman_role_error", error);
           }
         }
+        if (chiefMode === "inactive" && leadCoordinationHealthy)
+          await schedulePeerPresence(ctx);
       }
       controllerAbortController?.abort();
       chiefInboxAbortController?.abort();
@@ -10752,6 +11370,7 @@ export default function (pi: ExtensionAPI): void {
     });
     pi.on("session_shutdown", async () => {
       ++sessionGeneration;
+      ++peerPresenceGeneration;
       clearChiefStartPreflight();
       startupDefinitionRoster = undefined;
       ++chiefInboxGeneration;
@@ -10761,6 +11380,7 @@ export default function (pi: ExtensionAPI): void {
       if (controllerScope.kind === "lead" && chiefMode === "active")
         enterSuspended(leadContext);
       else if (controllerScope.kind === "lead") {
+        removePeerPresence();
         // Invalidate before aborting inbox transactions. A late callback must
         // not be able to republish this lead generation during teardown.
         try {
@@ -10971,8 +11591,10 @@ export default function (pi: ExtensionAPI): void {
       renderResult: (result: any, options: any, theme: any, context: any) =>
         renderCoordinationResult("agent", result, options, theme, context),
     });
-    if (controllerScope.kind === "lead" && process.env.HERDR_PANE_ID)
+    if (controllerScope.kind === "lead" && process.env.HERDR_PANE_ID) {
       pi.registerTool(chiefTool);
+      pi.registerTool(peerTool);
+    }
   }
   if (processRole !== "managed-agent") return;
   agentControllerReady = false;
@@ -11254,12 +11876,17 @@ export default function (pi: ExtensionAPI): void {
             },
           ),
         ),
+        results: RESULTS_SCHEMA,
       },
       { additionalProperties: false },
     ),
     execute: async (
       _id: string,
-      params: { question: string; files?: string[] },
+      params: {
+        question: string;
+        files?: string[];
+        results?: ResultSelector[];
+      },
       _signal: AbortSignal | undefined,
       _update: unknown,
       ctx: ExtensionContext,
@@ -11290,7 +11917,7 @@ export default function (pi: ExtensionAPI): void {
         piSessionId: state.piSessionId,
         question: prepareMessageInput(
           params.question,
-          params.files ?? [],
+          resolveMessageFiles(ctx, params.files, params.results, "ask_owner"),
           state.cwd,
           "ask_owner",
           "Question",
@@ -12102,10 +12729,10 @@ export default function (pi: ExtensionAPI): void {
     flush();
     if (pendingResult && !retryTimer) retryTimer = setInterval(flush, 250);
   };
-  pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
+  pi.on("agent_settled", async (_event: unknown, ctx: ExtensionContext) => {
     settleCurrentAgent(ctx);
     if (delegationEnabled)
-      void settlePersistedResults(
+      await settlePersistedResults(
         pi,
         ctx,
         controllerAbortController?.signal,
