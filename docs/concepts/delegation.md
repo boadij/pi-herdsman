@@ -117,10 +117,11 @@ merely to keep the controller active. For the full turn-navigation model, see
 
 An agent may ask its exact direct owner through `ask_owner`.
 
-A delegating agent may ask its own direct owner when its unresolved direct
-agents are themselves validly blocked on owner questions. Ordinary active
-agent work or an undelivered agent result still blocks escalation. Questions
-are not automatically forwarded through an ownership chain.
+A delegating agent with no unresolved direct-agent work follows normal
+`ask_owner` eligibility. If unresolved direct agents exist, every unresolved
+child must itself be validly blocked on an owner question. Ordinary active work
+or an undelivered result still blocks escalation. Questions are not
+automatically forwarded through an ownership chain.
 
 ## Closing
 

@@ -435,10 +435,11 @@ agents are leaves. Keep tightly coupled work local; delegate bounded
 independent or unfamiliar work when useful. Reuse adequate supplied evidence
 rather than rediscovering it. Integrate direct agent results before completing.
 The lead retains architecture, approved scope, acceptance, and final-decision
-  authority. Delegate only to definitions listed in your effective agents field.
-Escalate to your direct owner only when unresolved direct-agent work is waiting
-on an owner answer; ordinary active or pending-result agent work still blocks
-that escalation.`;
+authority. Delegate only to definitions listed in your effective agents field.
+ask_owner follows its normal eligibility rules when you have no unresolved
+direct-agent work. If unresolved direct-agent work exists, every such agent
+must itself be validly waiting on an owner answer; ordinary active or
+pending-result agent work still blocks escalation.`;
 const CHIEF_ROLE_CHARTER = `## Chief role
 You are the active chief. You are workspace-neutral and supervise
 verified top-level Pi sessions across this Herdr runtime. Your only

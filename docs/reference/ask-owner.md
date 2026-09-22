@@ -54,9 +54,11 @@ An agent can ask only while it has a valid active assignment and:
 - has no unacknowledged owner request;
 - has no ordinary unresolved direct-agent work.
 
-A delegation-enabled agent may ask its own owner when its unresolved direct
-agents are themselves validly blocked on owner questions. Ordinary active
-agents and pending agent results still block escalation.
+For a delegation-enabled agent, direct-agent state adds one gate:
+
+- no unresolved direct-agent work leaves normal `ask_owner` eligibility unchanged;
+- if unresolved direct agents exist, every unresolved child must have a valid pending `ask_owner`;
+- ordinary active children, pending results, result errors, or unverifiable child asks block escalation.
 
 ## Durable effect
 

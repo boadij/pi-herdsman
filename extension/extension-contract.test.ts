@@ -3341,6 +3341,25 @@ test("delegating agents receive only their allowed definition roster", async () 
     .find((tool) => tool.name === "agent")!
     .execute("list", { action: "list" }, undefined, undefined, context);
   assert.deepEqual(roster, listResult.details.agent_definitions);
+  const description = pi.tools
+    .find((tool) => tool.name === "agent")!
+    .description.replaceAll(/\s+/g, " ");
+  assert.match(
+    description,
+    /ask_owner follows its normal eligibility rules when you have no unresolved direct-agent work/,
+  );
+  assert.match(
+    description,
+    /every such agent must itself be validly waiting on an owner answer/,
+  );
+  assert.match(
+    description,
+    /ordinary active or pending-result agent work still blocks escalation/,
+  );
+  assert.doesNotMatch(
+    description,
+    /Escalate to your direct owner only when unresolved direct-agent work/,
+  );
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
   setLeadEnvironment();
