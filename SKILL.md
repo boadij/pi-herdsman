@@ -359,7 +359,7 @@ Ordinary leads own their complete herd, including every agent beneath them. The
 Chief supervises independent leads and never changes ownership. Use `chief`
 `message` for meaningful progress, warnings, results, or completion, including
 exact artifact paths. Use `chief` `ask` only when a genuine chief decision is
-required, make it the only and final coordination call of the turn, do not guess,
+required, make it the only tool call of the turn, call it last, do not guess,
 and wait for the reply. Descendants use `ask_owner`, not `chief`.
 
 `chief` is available only to an ordinary lead. Its actions are `message` and

@@ -2011,7 +2011,10 @@ function validateManagedAgentIdentity(
     );
   return state;
 }
-function currentTurnIsSoleAskOwner(ctx: ExtensionContext): boolean {
+function currentTurnIsSoleToolCall(
+  ctx: ExtensionContext,
+  name: string,
+): boolean {
   const branch = ctx.sessionManager.getBranch();
   const entry = branch.at(-1) as { message?: unknown } | undefined;
   const message = entry?.message as
@@ -2022,8 +2025,7 @@ function currentTurnIsSoleAskOwner(ctx: ExtensionContext): boolean {
     (part) => (part as { type?: unknown }).type === "toolCall",
   );
   return (
-    toolCalls.length === 1 &&
-    (toolCalls[0] as { name?: unknown }).name === "ask_owner"
+    toolCalls.length === 1 && (toolCalls[0] as { name?: unknown }).name === name
   );
 }
 function validateAgentControllerIdentity(
@@ -9739,7 +9741,7 @@ export default function (pi: ExtensionAPI): void {
         name: "chief",
         label: "chief",
         description:
-          "For ordinary leads only. A lead owns its complete agent tree; the chief supervises leads and never changes ownership. Message and ask require a currently valid chief and reject before mutation when none exists. Use message for meaningful progress, results, warnings, and completion, including exact artifact paths; use ask when a chief decision is genuinely required, make it the only and final coordination call of the turn, do not guess, and wait for the reply. Questions are limited to 1,024 characters and 1,024 UTF-8 bytes; channel message records are bounded to 8 KiB, so multibyte content can hit the byte limit first. Chief messages arrive as follow-ups, so integrate them through normal delegation. Descendants use ask_owner, never chief.",
+          "For ordinary leads only. A lead owns its complete agent tree; the chief supervises leads and never changes ownership. Message and ask require a currently valid chief and reject before mutation when none exists. Use message for meaningful progress, results, warnings, and completion, including exact artifact paths; use ask when a chief decision is genuinely required; call ask alone as the final tool call of the turn, then stop and wait for the reply. Questions are limited to 1,024 characters and 1,024 UTF-8 bytes; channel message records are bounded to 8 KiB, so multibyte content can hit the byte limit first. Chief messages arrive as follow-ups, so integrate them through normal delegation. Descendants use ask_owner, never chief.",
         executionMode: "sequential",
         parameters: Type.Union([
           Type.Object(
@@ -9901,6 +9903,10 @@ export default function (pi: ExtensionAPI): void {
             if (!validLeadCoordinationQuestion(params.question))
               throw new Error(
                 "Question must be non-empty and at most 1,024 characters and 1,024 UTF-8 bytes",
+              );
+            if (!currentTurnIsSoleToolCall(ctx, "chief"))
+              throw new Error(
+                "Call chief ask alone as the final tool call of the turn, with no other tool calls, then wait for the reply.",
               );
             const releaseCoordinationPublication =
               await enterCoordinationPublication();
@@ -11893,7 +11899,7 @@ export default function (pi: ExtensionAPI): void {
     ) => {
       if (typeof params.question !== "string" || !params.question.trim())
         throw new Error("Question must contain non-whitespace text");
-      if (!currentTurnIsSoleAskOwner(ctx))
+      if (!currentTurnIsSoleToolCall(ctx, "ask_owner"))
         throw new Error(
           "Call ask_owner alone as the final tool call of the turn, with no other tool calls, then wait for the reply.",
         );
