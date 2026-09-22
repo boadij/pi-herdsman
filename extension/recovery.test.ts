@@ -4832,6 +4832,60 @@ test("lost managed agents remain visible and repeatedly notify their owner", asy
   }
 });
 
+test("live agents with an unread durable result do not advertise close", async () => {
+  setLeadEnvironment();
+  const label = "live-result-agent";
+  const state = {
+    ...managedState(label, undefined, recoveryIdentity(label)),
+    completedRequestId: REQUEST_ID,
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, state);
+  writeResult(mailbox, {
+    version: 4,
+    runId: state.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    status: "completed",
+    text: "durable result",
+    completedAt: Date.now(),
+  });
+  const pi = fakePi({ exec: cascadeExecutor([state]).exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const listed = await pi.tools[0].execute(
+      "id",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    const agent = listed.details.agents.find(
+      (candidate: any) => candidate.agent === label,
+    );
+    assert.equal(agent.state, "settling");
+    assert.deepEqual(agent.available_actions, ["inspect"]);
+
+    const closed = await pi.tools[0].execute(
+      "id",
+      { action: "close", agent: label },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(closed.details.error.category, "target_ambiguous");
+    assert.ok(readAgentState(mailbox));
+    assert.ok(readResult(mailbox, REQUEST_ID));
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("lost agents with an unread durable result cannot be closed", async () => {
   setLeadEnvironment();
   const label = "lost-result-agent";
