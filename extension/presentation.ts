@@ -2780,6 +2780,7 @@ export function renderAgentLostMessage(
           typeof action === "string" && action.length > 0,
       )
     : [];
+  const closeAvailable = availableActions.includes("close");
   const nextReminder =
     typeof details.nextReminderMs === "number" &&
     Number.isFinite(details.nextReminderMs) &&
@@ -2804,11 +2805,17 @@ export function renderAgentLostMessage(
           : []),
         ...(value(details.paneId) ? [`pane: ${value(details.paneId)}`] : []),
         "",
-        "Close this lost generation before replacing or continuing it.",
+        ...(closeAvailable
+          ? ["Close this lost generation before replacing or continuing it."]
+          : [
+              "Close is not currently available; resolve the condition blocking its close preflight before replacing or continuing it.",
+            ]),
       ]
     : [
         statusLine(theme, "error", "×", `${label} lost`),
-        "  assignment remains unresolved · close before replacing or continuing",
+        closeAvailable
+          ? "  assignment remains unresolved · close before replacing or continuing"
+          : "  assignment remains unresolved · close unavailable; resolve the blocking close-preflight condition first",
       ];
   return renderMessageBox(
     new WidthSafeText(lines.join("\n"), 0, 0),

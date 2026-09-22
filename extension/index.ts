@@ -318,9 +318,11 @@ for intentional teardown or abandonment.
 A lost agent is a managed assignment whose exact physical execution is proven
 gone before a durable terminal result resolved it. Loss is not completion or
 task failure. Treat the assignment as unresolved. When transcript is listed,
-use it only when the last persisted work materially affects recovery. Use close
-to abandon the lost generation before replacing it or continuing its saved
-session. Unknown evidence remains fail-closed and is not proof of loss.
+use it only when the last persisted work materially affects recovery. When
+\`close\` is listed, use it to abandon the lost generation before replacing it or
+continuing its saved session. If \`close\` is absent, resolve the condition
+blocking its close preflight first. Unknown evidence remains fail-closed and is
+not proof of loss.
 
 End your turn with unresolved agent work only when that work can still make
 progress without you, or Herdsman is reconciling a durable transition that can
@@ -10705,6 +10707,7 @@ export default function (pi: ExtensionAPI): void {
       if (signal.aborted || !ctx.isIdle()) return false;
       try {
         if (signal.aborted || !ctx.isIdle()) return false;
+        const closeAvailable = availableActions.includes("close");
         pi.sendMessage(
           {
             customType: "pi-herdsman-agent-lost",
@@ -10715,7 +10718,13 @@ export default function (pi: ExtensionAPI): void {
               `Next reminder if unresolved: ~${formatAttentionDuration(nextReminderMs)}`,
               "",
               "Use transcript only when persisted work materially affects the recovery decision.",
-              "Close this lost generation before replacing it or continuing its saved session.",
+              ...(closeAvailable
+                ? [
+                    "Close this lost generation before replacing it or continuing its saved session.",
+                  ]
+                : [
+                    "Close is not currently available; resolve the condition blocking its close preflight before replacing or continuing it.",
+                  ]),
               "Physical disappearance is not task completion.",
             ].join("\n"),
             display: true,

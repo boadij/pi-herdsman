@@ -77,9 +77,11 @@ for intentional teardown or abandonment.
 A lost agent is a managed assignment whose exact physical execution is proven
 gone before a durable terminal result resolved it. Loss is not completion or
 task failure. Treat the assignment as unresolved. When transcript is listed,
-use it only when the last persisted work materially affects recovery. Use close
-to abandon the lost generation before replacing it or continuing its saved
-session. Unknown evidence remains fail-closed and is not proof of loss.
+use it only when the last persisted work materially affects recovery. When
+`close` is listed, use it to abandon the lost generation before replacing it or
+continuing its saved session. If `close` is absent, resolve the condition
+blocking its close preflight first. Unknown evidence remains fail-closed and is
+not proof of loss.
 
 Never guess identities, paths, sessions, or control state. Treat unknown or
 conflicting evidence as unresolved. Keep one writer per worktree or file-

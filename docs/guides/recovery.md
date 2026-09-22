@@ -95,10 +95,11 @@ exact details.
 `lost` means the expected physical execution is proven gone before a durable
 terminal result resolved the assignment. The durable mailbox remains owned and
 the assignment remains unresolved; loss is not completion or task failure.
-Only the direct owner may use `close` to abandon the lost generation. Close it
-before replacing it or continuing its saved session. Herdsman never
-redelegates or continues it automatically. Moved or conflicting evidence is
-`unknown`, not `lost`, and remains fail-closed.
+Only the direct owner may use `close` to abandon the lost generation. When
+`close` is listed, use it before replacing it or continuing its saved session.
+If `close` is absent, resolve the condition blocking its close preflight first.
+Herdsman never redelegates or continues it automatically. Moved or conflicting
+evidence is `unknown`, not `lost`, and remains fail-closed.
 
 ## Inactivity advisory
 
