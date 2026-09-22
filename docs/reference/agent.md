@@ -30,12 +30,14 @@ controllers.
 }
 ```
 
-Allowed fields are `action`, `definition`, `task`, optional `label`, `cwd`,
-`files`, `fork`, and `timeoutMs`. The definition is resolved from
-the effective roster and delegating agent controllers may use only their allowlisted
-definitions. Project definitions still require trusted project approval.
-`fork`, when supplied, is an exact saved Pi session path or full UUID used as
-the source for a new derived context; otherwise a new Pi session is launched.
+Allowed fields are `action`, `definition`, `task`, optional `label`, `files`,
+`fork`, and `timeoutMs`. Fresh delegation runs in the calling controller's cwd.
+The definition is resolved from the effective roster and delegating agent
+controllers may use only their allowlisted definitions. Project definitions
+still require trusted project approval. `fork`, when supplied, is an exact
+saved Pi session path or full UUID used as the source for a new derived
+context. It supplies historical context only; the fresh agent still runs in the
+calling controller's cwd. Otherwise a new Pi session is launched.
 Each accepted definition delegation creates one agent generation for one
 assignment. The terminal result is delivered once and the agent is cleaned up.
 

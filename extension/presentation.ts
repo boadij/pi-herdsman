@@ -1695,7 +1695,6 @@ function renderExpandedCoordinationCall(
     if (action === "delegate") {
       if (args.definition) fields.push(["definition", args.definition]);
       if (args.label) fields.push(["label", args.label]);
-      if (args.cwd) fields.push(["cwd", displayHomePath(String(args.cwd))]);
       if (args.timeoutMs) fields.push(["timeout", args.timeoutMs]);
       if (args.fork) fields.push(["fork", args.fork]);
     } else if (action === "continue") {

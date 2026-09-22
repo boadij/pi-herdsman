@@ -4523,7 +4523,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
     },
   });
   const context = fakeContext() as any;
-  context.cwd = "/tmp/lead-cwd";
+  context.cwd = requestedCwd;
   context.mode = "tui";
   context.hasUI = true;
   let widget: StatusWidget | undefined;
@@ -4549,7 +4549,6 @@ test("fresh assignment refreshes the widget after validation", async () => {
         definition: "agent",
         label,
         task: "fresh task",
-        cwd: requestedCwd,
       },
       undefined,
       undefined,
@@ -4595,7 +4594,6 @@ test("fresh assignment refreshes the widget after validation", async () => {
       },
       { discoveryCwds: [requestedCwd], splitForMismatchedCwd: false },
     );
-    context.cwd = requestedCwd;
     const getIndexes = pi.calls.flatMap((args, index) =>
       args[0] === "agent" && args[1] === "get" ? [index] : [],
     );

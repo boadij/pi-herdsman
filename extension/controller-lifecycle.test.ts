@@ -4035,7 +4035,7 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
     { action: "delegate", agent: "agent", timeoutMs: 5001, task: "work" },
     { action: "delegate", agent: "agent", message: "wrong", task: "work" },
     { action: "delegate", definition: "agent", label: " ", task: "work" },
-    { action: "delegate", definition: "agent", cwd: "\t", task: "work" },
+    { action: "delegate", definition: "agent", cwd: "/other", task: "work" },
     { action: "delegate", definition: "agent", fork: "\n", task: "work" },
     {
       action: "delegate",

@@ -1228,7 +1228,6 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
         action: "delegate",
         definition: "researcher",
         label: "release-review",
-        cwd: join(homedir(), "project"),
         timeoutMs: 300000,
         task: "Find why the release PR is missing",
         files: ["investigation.md"],
@@ -1239,7 +1238,6 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
   );
   assert.match(expanded, /definition: researcher/);
   assert.match(expanded, /label: release-review/);
-  assert.match(expanded, /cwd: ~\/project/);
   assert.match(expanded, /timeout: 300000/);
   assert.match(expanded, /task:\nFind why the release PR is missing/);
   assert.match(expanded, /files:\n  investigation\.md/);
