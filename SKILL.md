@@ -27,18 +27,18 @@ Coordinate managed agents.
 Use these high-salience rules for the model-facing agent boundary:
 
 - Use agent for genuinely independent or context-heavy work; keep small,
-  tightly coupled work local. Once work is delegated, that agent is the sole
-  executor for its assigned scope; do not perform or delegate overlapping
-  work.
+  tightly coupled work local.
+- Each unresolved unit of work has one executor. Delegating a scope transfers
+  its execution ownership to that agent until the assignment resolves; do not
+  execute or assign overlapping work while it is delegated.
 - For agent handoffs, `task`/`files` carry assignment evidence and
   `fork`/`continue` carry selected Pi history; do not assume the caller's
   conversation or attachments are inherited.
 - When agent work is unresolved, handle required agent control, then continue
-  only necessary work outside unresolved assignments or end the turn
-  without concluding; agent results or attention will resume the session
-  automatically. Do not check progress with list, inspect, transcript, status
-  requests, steering, sleep, or other waiting mechanisms, and do not invent
-  work merely to remain active.
+  only necessary work you still own or end the turn without concluding; agent
+  results or attention will resume the session automatically. Do not check
+  progress with list, inspect, transcript, status requests, steering, sleep, or
+  other waiting mechanisms, and do not invent work merely to remain active.
 
 Ordinary Leads use `peer` for other ordinary Lead sessions; managed agents are
 not peers. `peer list` identifies this Lead as `self` and returns other live
@@ -182,8 +182,9 @@ of duplicating work.
 
 <!-- pi-herdsman-runtime-delegating-agent:start -->
 
-Delegating transfers execution ownership of the assigned scope to that agent
-until the assignment resolves. Do not perform or assign overlapping work.
+Each unresolved unit of work has one executor. Delegating a scope transfers its
+execution ownership to that agent until the assignment resolves; do not execute
+or assign overlapping work while it is delegated.
 Integrate direct agent results after resolution.
 Own only the assigned objective and your direct permitted agents. Agent-started
 agents are leaves. Keep tightly coupled work local; delegate bounded independent

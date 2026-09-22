@@ -77,9 +77,16 @@ restart recovery. The agent then runs independently in its managed Pi session
 while the owner remains available for other useful work and, for a lead Pi
 session, continued user interaction.
 
-Each active delegated assignment has one executor: that agent. The owner retains
-lifecycle and control authority but does not repeat the delegated assignment
-locally or assign substantially overlapping work elsewhere.
+During an active delegated assignment, the delegated agent is its executor. The
+owner retains lifecycle and control authority; see [Delegation](delegation.md)
+for the execution-ownership boundary.
+
+Result delivery resolves that delegated execution ownership and enables the
+owner to integrate the result before reassessing the remaining work.
+
+After starting an assignment, remove its delegated scope from the controller's
+execution scope immediately. Continue only necessary work the controller still
+owns; otherwise end the turn.
 
 After starting an agent assignment or receiving an agent result or attention
 event, the owner reassesses the remaining work:
@@ -87,8 +94,8 @@ event, the owner reassesses the remaining work:
 1. Handle required agent control when needed.
 2. Delegate another concrete, necessary objective when it is independent of
    active assignments and an authorized agent is the right owner.
-3. Continue only necessary work outside unresolved delegated scopes when the
-   owner is the right owner and doing it now materially advances the task.
+3. Continue only necessary work the controller still owns when the controller
+   is the right owner and doing it now materially advances the task.
 4. Otherwise end the turn.
 
 After control, delegation, or local parallel work, the owner reassesses again.

@@ -273,11 +273,13 @@ function formatMessageLimit(bytes: number): string {
   return `${bytes / 1024} KiB · ≈${tokens.toLocaleString("en-US")} tokens`;
 }
 const AGENT_DELEGATION_GUIDANCE =
-  "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local. Once work is delegated, that agent is the sole executor for its assigned scope; do not perform or delegate overlapping work.";
+  "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.";
+const AGENT_EXECUTION_OWNERSHIP_GUIDANCE =
+  "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.";
 const AGENT_HANDOFF_GUIDANCE =
   "For agent handoffs, `task`/`files` carry assignment evidence and `fork`/`continue` carry selected Pi history; do not assume the caller's conversation or attachments are inherited.";
 const AGENT_UNRESOLVED_GUIDANCE =
-  "When agent work is unresolved, handle required agent control, then continue only necessary work outside unresolved assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms, and do not invent work merely to remain active.";
+  "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms, and do not invent work merely to remain active.";
 const AGENT_OPERATIONAL_DESCRIPTION = `Coordinate managed agents.
 
 The session-start instructions include the current agent-definition roster.
@@ -338,10 +340,8 @@ and final decisions. Decompose only as far as useful. Assign each independent
 objective to the narrowest capable owner and let delegation-enabled agents own
 their permitted supporting agents. Reuse adequate existing evidence instead
 of duplicating work.`;
-const DELEGATING_AGENT_SCOPE_DESCRIPTION = `Own only the assigned objective and your direct permitted agents. Agent-started
-agents are leaves. Delegating transfers execution ownership of the assigned
-scope to that agent until the assignment resolves. Do not perform or assign
-overlapping work. Keep tightly coupled work local; delegate bounded independent
+const DELEGATING_AGENT_SCOPE_DESCRIPTION = `Own only the non-delegated remainder of the assigned objective and your direct permitted agents. Agent-started
+agents are leaves. ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE} Keep tightly coupled work local; delegate bounded independent
 or unfamiliar work when useful. Reuse adequate supplied evidence rather than
 rediscovering it. Integrate direct agent results after resolution.
 The lead retains architecture, approved scope, acceptance, and final-decision
@@ -4837,7 +4837,7 @@ function delegationStatusMessage({
       : `${unresolvedDirectChildCount} direct agent assignment${unresolvedDirectChildCount === 1 ? "" : "s"} remain${unresolvedDirectChildCount === 1 ? "s" : ""} unresolved`;
   const status = `Delegation status: ${active}; ${pending}; ${unresolved}.`;
   return unresolvedDirectChildCount > 0
-    ? `${status} ${AGENT_UNRESOLVED_GUIDANCE}`
+    ? `${status} ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE} ${AGENT_UNRESOLVED_GUIDANCE}`
     : status;
 }
 function delegationStatusForResult(
@@ -11377,6 +11377,7 @@ export default function (pi: ExtensionAPI): void {
         "Delegate and coordinate work with owned asynchronous agents",
       promptGuidelines: [
         AGENT_DELEGATION_GUIDANCE,
+        AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
         AGENT_HANDOFF_GUIDANCE,
         AGENT_UNRESOLVED_GUIDANCE,
       ],
@@ -11422,7 +11423,7 @@ export default function (pi: ExtensionAPI): void {
               pi.sendMessage(
                 {
                   customType: "pi-herdsman-delegation-guidance",
-                  content: AGENT_UNRESOLVED_GUIDANCE,
+                  content: `${AGENT_EXECUTION_OWNERSHIP_GUIDANCE} ${AGENT_UNRESOLVED_GUIDANCE}`,
                   display: false,
                 },
                 { triggerTurn: true, deliverAs: "steer" },

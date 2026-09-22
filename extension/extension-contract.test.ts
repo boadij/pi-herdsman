@@ -201,9 +201,10 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.deepEqual(
     lead.tools.find((tool) => tool.name === "agent")?.promptGuidelines,
     [
-      "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local. Once work is delegated, that agent is the sole executor for its assigned scope; do not perform or delegate overlapping work.",
+      "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.",
+      "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.",
       "For agent handoffs, `task`/`files` carry assignment evidence and `fork`/`continue` carry selected Pi history; do not assume the caller's conversation or attachments are inherited.",
-      "When agent work is unresolved, handle required agent control, then continue only necessary work outside unresolved assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms, and do not invent work merely to remain active.",
+      "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms, and do not invent work merely to remain active.",
     ],
   );
   assert.equal(
@@ -3388,6 +3389,12 @@ test("delegating agents receive only their allowed definition roster", async () 
     description,
     /ordinary active or pending-result agent work still blocks escalation/,
   );
+  assert.match(description, /Own only the non-delegated remainder/);
+  assert.match(
+    description,
+    /Each unresolved unit of work has one executor\. Delegating a scope transfers its execution ownership to that agent until the assignment resolves\. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work\. Continue only concrete, necessary work clearly outside the delegated scope that you still own\./,
+  );
+  assert.doesNotMatch(description, /sole executor/);
   assert.doesNotMatch(
     description,
     /Escalate to your direct owner only when unresolved direct-agent work/,
