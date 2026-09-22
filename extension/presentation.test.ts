@@ -3147,7 +3147,7 @@ test("ask, stale, and lost custom messages preserve attention semantics and iden
       requestId: "request-id",
       piSessionId: "session-id",
       paneId: "pane-id",
-      availableActions: ["transcript", "close"],
+      availableActions: ["transcript"],
       nextReminderMs: 150000,
     },
   };
@@ -3155,11 +3155,20 @@ test("ask, stale, and lost custom messages preserve attention semantics and iden
     renderAgentLostMessage(lost, { expanded: false }, presentationTheme),
   );
   assert.match(collapsedLost, /× researcher lost/);
+  assert.match(
+    collapsedLost,
+    /assignment remains unresolved · close unavailable; resolve the blocking close-preflight condition first/,
+  );
   assert.doesNotMatch(collapsedLost, /actions:|next reminder:/);
   const expandedLost = renderedText(
     renderAgentLostMessage(lost, { expanded: true }, presentationTheme),
   );
-  assert.match(expandedLost, /actions: transcript · close/);
+  assert.match(expandedLost, /actions: transcript/);
+  assert.match(
+    expandedLost,
+    /Close is not currently available; resolve the condition blocking its close preflight/,
+  );
+  assert.doesNotMatch(expandedLost, /Close this lost generation/);
   assert.match(expandedLost, /next reminder: ~2m 30s/);
   assert.match(expandedLost, /request: request-id/);
 });

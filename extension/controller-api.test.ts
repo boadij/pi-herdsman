@@ -3223,7 +3223,6 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     assert.deepEqual(ownerAsk.details.agents[0].available_actions, [
       "inspect",
       "reply",
-      "close",
     ]);
     removeAsk(parentMailbox, ownerAskId);
     writeAgentState(parentMailbox, parent);

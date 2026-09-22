@@ -4933,6 +4933,67 @@ test("lost managed agents remain visible and repeatedly notify their owner", asy
   }
 });
 
+test("lost parent health attention omits close when a descendant has an unread durable result", async () => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState(
+      "lost-health-result-parent",
+      undefined,
+      recoveryIdentity("lost-health-result-parent"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+  };
+  const child = {
+    ...managedState(
+      "lost-health-result-child",
+      undefined,
+      recoveryIdentity("lost-health-result-child"),
+    ),
+    ownerSessionId: parent.piSessionId,
+    piSessionId: CHILD_SESSION_ID,
+    completedRequestId: REQUEST_ID,
+  };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(childMailbox);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(childMailbox, child);
+  writeResult(childMailbox, {
+    version: 4,
+    runId: child.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: child.ownerSessionId,
+    workspaceId: child.workspaceId,
+    agentLabel: child.agentLabel,
+    paneId: child.paneId,
+    status: "completed",
+    text: "child durable result",
+    completedAt: Date.now(),
+  });
+  const pi = fakePi({ exec: cascadeExecutor([child]).exec });
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
+    for (let index = 0; index < 5; index++)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const attention = pi.sent.find(
+      (message: any) => message.customType === "pi-herdsman-agent-lost",
+    ) as any;
+    assert.equal(attention?.details.agentLabel, parent.agentLabel);
+    assert.equal(attention?.details.availableActions.includes("close"), false);
+    assert.doesNotMatch(
+      String(attention?.content),
+      /Close this lost generation/,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+  }
+});
+
 test("live agents with an unread durable result do not advertise close", async () => {
   setLeadEnvironment();
   const label = "live-result-agent";
@@ -4969,21 +5030,71 @@ test("live agents with an unread durable result do not advertise close", async (
       (candidate: any) => candidate.agent === label,
     );
     assert.equal(agent.state, "settling");
-    assert.deepEqual(agent.available_actions, ["inspect"]);
+    assert.equal(agent.available_actions.includes("close"), false);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
 
-    const closed = await pi.tools[0].execute(
+test("lead list hides close when a descendant has an unread durable result", async () => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState(
+      "cascade-result-parent",
+      undefined,
+      recoveryIdentity("cascade-result-parent"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+  };
+  const child = {
+    ...managedState(
+      "cascade-result-child",
+      undefined,
+      recoveryIdentity("cascade-result-child"),
+    ),
+    ownerSessionId: parent.piSessionId,
+    piSessionId: CHILD_SESSION_ID,
+    completedRequestId: REQUEST_ID,
+  };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(childMailbox);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(childMailbox, child);
+  writeResult(childMailbox, {
+    version: 4,
+    runId: child.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: child.ownerSessionId,
+    workspaceId: child.workspaceId,
+    agentLabel: child.agentLabel,
+    paneId: child.paneId,
+    status: "completed",
+    text: "child durable result",
+    completedAt: Date.now(),
+  });
+  const pi = fakePi({
+    exec: cascadeExecutor([parent, child]).exec,
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
       "id",
-      { action: "close", agent: label },
+      { action: "list" },
       undefined,
       undefined,
       fakeContext(),
     );
-    assert.equal(closed.details.error.category, "target_ambiguous");
-    assert.ok(readAgentState(mailbox));
-    assert.ok(readResult(mailbox, REQUEST_ID));
+    const listedParent = result.details.agents.find(
+      (agent: any) => agent.agent === parent.agentLabel,
+    );
+    assert.equal(listedParent.available_actions.includes("close"), false);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
-    resetAgentMailbox(mailbox);
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
   }
 });
 
@@ -5200,15 +5311,14 @@ test("a lost parent retains its live child ancestry and closes child-first", asy
       undefined,
       fakeContext(),
     );
+    const parentRow = listed.details.agents.find(
+      (agent: any) => agent.agent === parent.agentLabel,
+    );
     const childRow = listed.details.agents.find(
       (agent: any) => agent.agent === child.agentLabel,
     );
-    assert.equal(
-      listed.details.agents.find(
-        (agent: any) => agent.agent === parent.agentLabel,
-      )?.state,
-      "lost",
-    );
+    assert.equal(parentRow?.state, "lost");
+    assert.equal(parentRow?.available_actions.includes("close"), true);
     assert.equal(childRow?.parent_label, parent.agentLabel);
 
     const closed = await pi.tools[0].execute(

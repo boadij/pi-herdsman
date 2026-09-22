@@ -109,17 +109,23 @@ records. Each actionable live agent record includes:
 | `cleanup_error`, `result_error`, `diagnostic`, `tokens`         | Bounded recovery and presentation evidence when present.                                                                                                                                  |
 
 `available_actions` is authoritative model guidance for the current snapshot.
-Do not infer eligibility from `state`. Active work may list `steer`; a valid
-correlated pending `ask_owner` may list `reply`; exact direct ownership may list
-`close`. A currently working agent may list `interrupt`; a delegating agent
-blocked while waiting on children may still list `steer` but not `interrupt`.
+Do not infer eligibility from `state`.
+`close` is listed only when the current snapshot passes the applicable close
+preflight. For a Lead-owned delegating agent, that preflight covers the complete
+owned descendant cascade because closing the parent closes that cascade
+child-first. Invocation always reacquires current evidence and revalidates
+identity, ownership, mailbox state, durable results, and lifecycle before
+mutation. Active work may list `steer`; a valid correlated pending `ask_owner`
+may list `reply`. A currently working agent may list `interrupt`; a delegating
+agent blocked while waiting on children may still list `steer` but not
+`interrupt`.
 `available_actions` never lists `delegate` or `continue`: these are
 controller operations, not controls on an already-live agent. An agent cannot
 receive a second assignment. Directly owned live agents may expose the
-applicable live controls, including `close`; directly owned live records expose
-`transcript` when their materialized persisted Pi session file exists, and
-directly owned proven `lost` records expose `transcript` when their materialized
-persisted Pi session file exists plus `close`. Unknown records and non-direct descendants expose
+applicable live controls; directly owned live or proven `lost` records expose
+`transcript` when their materialized persisted Pi session file exists. Directly
+owned live or proven `lost` records may expose `close` when the applicable close
+preflight currently succeeds. Unknown records and non-direct descendants expose
 no mutation actions. Every operation rechecks identity, ownership, mailbox
 state, and lifecycle immediately before mutation.
 The public record does not expose `steerable`.
@@ -333,12 +339,17 @@ See [`ask_owner` API](ask-owner.md).
 { "action": "close", "agent": "implementer-1" }
 ```
 
-Only `action` and `agent` are accepted. Close requires exact direct ownership.
-Closing abandons a
-pending owner question; closing a delegating agent cascades through directly
-owned agents first. Cleanup remains fail-closed when exact identity or ownership
-cannot be proved. A direct owner may also close a proven `lost` generation
-after a fresh absence proof; `unknown` presence remains non-actionable.
+Only `action` and `agent` are accepted. Close requires exact direct ownership
+and a current applicable close preflight. For a Lead-owned parent, that
+preflight covers the complete owned descendant cascade because closing the
+parent closes that cascade child-first. Invocation always reacquires current
+evidence and revalidates identity, ownership, mailbox state, durable results,
+and lifecycle before mutation. Closing abandons a pending owner question;
+closing a delegating agent cascades through directly owned agents first. Cleanup
+remains fail-closed when exact identity or ownership cannot be proved. A direct
+owner may also close a proven `lost` generation after a fresh absence proof when
+the applicable close preflight succeeds; `unknown` presence remains
+non-actionable.
 
 ## Result delivery and errors
 

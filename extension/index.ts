@@ -318,9 +318,11 @@ for intentional teardown or abandonment.
 A lost agent is a managed assignment whose exact physical execution is proven
 gone before a durable terminal result resolved it. Loss is not completion or
 task failure. Treat the assignment as unresolved. When transcript is listed,
-use it only when the last persisted work materially affects recovery. Use close
-to abandon the lost generation before replacing it or continuing its saved
-session. Unknown evidence remains fail-closed and is not proof of loss.
+use it only when the last persisted work materially affects recovery. When
+\`close\` is listed, use it to abandon the lost generation before replacing it or
+continuing its saved session. If \`close\` is absent, resolve the condition
+blocking its close preflight first. Unknown evidence remains fail-closed and is
+not proof of loss.
 
 End your turn with unresolved agent work only when that work can still make
 progress without you, or Herdsman is reconciling a durable transition that can
@@ -3046,60 +3048,80 @@ function visibleAgentSnapshots(
   return visible;
 }
 
-function listedAgentRecords(
-  visible: VisibleManagedAgentSnapshot[],
+function listedAgentRecord(
+  view: ManagedAgentSnapshotView,
+  snapshot: VisibleManagedAgentSnapshot,
   ownerSessionId: string,
   scope: ControllerScope | undefined,
-): Record<string, unknown>[] {
-  return visible.map(({ listed, state, presence, parentLabel }) => {
-    const direct = state.ownerSessionId === ownerSessionId;
-    const transcriptAvailable = persistedTranscriptReady(state);
-    const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
-    const durableResultPending = hasDurableResult(mailbox, state);
-    const actions: string[] = [];
-    if (direct && presence.kind === "lost" && !durableResultPending) {
-      if (transcriptAvailable) actions.push("transcript");
-      actions.push("close");
-    } else if (presence.kind === "live" && direct && !listed.recovery_only) {
-      actions.push("inspect");
-      if (transcriptAvailable) actions.push("transcript");
-      if (listed.steerable === true) actions.push("steer");
-      if (listed.state === "working" && !state.pendingAskId)
-        actions.push("interrupt");
-      if (state.pendingAskId) {
-        try {
-          const ask = readPendingAsk(mailbox, state);
-          if (
-            ask?.askId === state.pendingAskId &&
-            ask.requestId === state.activeRequestId &&
-            ask.runId === state.runId &&
-            ask.ownerSessionId === state.ownerSessionId &&
-            ask.workspaceId === state.workspaceId &&
-            ask.agentLabel === state.agentLabel &&
-            ask.paneId === state.paneId &&
-            ask.piSessionId === state.piSessionId
-          )
-            actions.push("reply");
-        } catch {}
+  unresolvedMailboxState: boolean,
+): Record<string, unknown> {
+  const { listed, state, presence, parentLabel } = snapshot;
+  const direct = state.ownerSessionId === ownerSessionId;
+  const transcriptAvailable = persistedTranscriptReady(state);
+  const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
+  let closeAvailable = false;
+
+  if (direct && (presence.kind === "live" || presence.kind === "lost")) {
+    try {
+      if (scope?.kind === "lead") {
+        if (!unresolvedMailboxState) {
+          const plan = managedAgentCascadePlanFromSnapshot(view, state);
+          assertManagedAgentCascadeSafe([plan.parent, ...plan.descendants]);
+          closeAvailable = true;
+        }
+      } else {
+        assertManagedAgentCascadeSafe([snapshot]);
+        closeAvailable = true;
       }
-      if (!durableResultPending) actions.push("close");
+    } catch {
+      // Destructive actions are advertised only when current evidence proves
+      // their existing preflight succeeds.
     }
-    const {
-      label: _label,
-      steerable: _steerable,
-      agent_session: _agentSession,
-      ...publicAgent
-    } = listed;
-    return {
-      ...publicAgent,
-      agent: listed.label,
-      available_actions: actions,
-      ...(cleanupErrors.has(listed.label)
-        ? { cleanup_error: cleanupErrors.get(listed.label) }
-        : {}),
-      ...(parentLabel ? { parent_label: parentLabel } : {}),
-    };
-  });
+  }
+
+  const actions: string[] = [];
+  if (direct && presence.kind === "lost") {
+    if (transcriptAvailable) actions.push("transcript");
+    if (closeAvailable) actions.push("close");
+  } else if (presence.kind === "live" && direct && !listed.recovery_only) {
+    actions.push("inspect");
+    if (transcriptAvailable) actions.push("transcript");
+    if (listed.steerable === true) actions.push("steer");
+    if (listed.state === "working" && !state.pendingAskId)
+      actions.push("interrupt");
+    if (state.pendingAskId) {
+      try {
+        const ask = readPendingAsk(mailbox, state);
+        if (
+          ask?.askId === state.pendingAskId &&
+          ask.requestId === state.activeRequestId &&
+          ask.runId === state.runId &&
+          ask.ownerSessionId === state.ownerSessionId &&
+          ask.workspaceId === state.workspaceId &&
+          ask.agentLabel === state.agentLabel &&
+          ask.paneId === state.paneId &&
+          ask.piSessionId === state.piSessionId
+        )
+          actions.push("reply");
+      } catch {}
+    }
+    if (closeAvailable) actions.push("close");
+  }
+  const {
+    label: _label,
+    steerable: _steerable,
+    agent_session: _agentSession,
+    ...publicAgent
+  } = listed;
+  return {
+    ...publicAgent,
+    agent: listed.label,
+    available_actions: actions,
+    ...(cleanupErrors.has(listed.label)
+      ? { cleanup_error: cleanupErrors.get(listed.label) }
+      : {}),
+    ...(parentLabel ? { parent_label: parentLabel } : {}),
+  };
 }
 
 async function agentSnapshotView(
@@ -3196,13 +3218,20 @@ async function list(
   signal?: AbortSignal,
   scope?: ControllerScope,
 ): Promise<Record<string, unknown>> {
+  const view = await agentSnapshotView(pi, ctx, scope, signal);
+  const unknownAgents = scope?.kind === "lead" ? unknownAgentRecords() : [];
+  const ownerSessionId = ctx.sessionManager.getSessionId();
   const agents = [
-    ...listedAgentRecords(
-      (await agentSnapshotView(pi, ctx, scope, signal)).visible,
-      ctx.sessionManager.getSessionId(),
-      scope,
+    ...view.visible.map((snapshot) =>
+      listedAgentRecord(
+        view,
+        snapshot,
+        ownerSessionId,
+        scope,
+        unknownAgents.length > 0,
+      ),
     ),
-    ...(scope?.kind === "lead" ? unknownAgentRecords() : []),
+    ...unknownAgents,
   ];
   return {
     ok: true,
@@ -4655,6 +4684,17 @@ async function managedAgentCascadePlan(
     true,
     inventory,
   );
+  const plan = managedAgentCascadePlanFromSnapshot(snapshot, parent);
+  assertManagedAgentCascadeSafe(
+    [plan.parent, ...plan.descendants],
+    deliveredRootResultId,
+  );
+  return plan;
+}
+function managedAgentCascadePlanFromSnapshot(
+  snapshot: Awaited<ReturnType<typeof managedAgentSnapshots>>,
+  parent: ManagedAgentState,
+): ManagedAgentCascadePlan {
   assertUniqueDurableIdentities(snapshot.mailboxes.map(({ state }) => state));
   const findSnapshot = (candidate: ManagedAgentState): ManagedAgentSnapshot => {
     const matches = snapshot.agents.filter(({ state }) =>
@@ -4694,11 +4734,6 @@ async function managedAgentCascadePlan(
     }
   };
   visit(parent);
-
-  assertManagedAgentCascadeSafe(
-    [parentSnapshot, ...descendants],
-    deliveredRootResultId,
-  );
   return { parent: parentSnapshot, descendants };
 }
 function assertManagedAgentCascadeSafe(
@@ -5464,9 +5499,16 @@ async function actionUnsafe(
         "Agent belongs to another owner session",
         "transcript",
       );
+    const unresolvedMailboxState =
+      scope?.kind === "lead" && listAgentStateIssues().length > 0;
     const availableActions =
-      (listedAgentRecords([candidate], ownerSessionId, scope)[0]
-        ?.available_actions as string[] | undefined) ?? [];
+      (listedAgentRecord(
+        view,
+        candidate,
+        ownerSessionId,
+        scope,
+        unresolvedMailboxState,
+      ).available_actions as string[] | undefined) ?? [];
     if (!availableActions.includes("transcript")) {
       if (candidate.presence.kind === "unknown")
         fail(
@@ -8858,10 +8900,17 @@ export default function (pi: ExtensionAPI): void {
         signal,
         true,
       );
-      const listed = listedAgentRecords(
-        view.visible,
-        ctx.sessionManager.getSessionId(),
-        controllerScope,
+      const ownerSessionId = ctx.sessionManager.getSessionId();
+      const unresolvedMailboxState =
+        controllerScope?.kind === "lead" && listAgentStateIssues().length > 0;
+      const listed = view.visible.map((snapshot) =>
+        listedAgentRecord(
+          view,
+          snapshot,
+          ownerSessionId,
+          controllerScope,
+          unresolvedMailboxState,
+        ),
       );
       const agents = listed.map((agent) => {
         const runtime = runtimes.get(agent.agent as string);
@@ -10603,10 +10652,17 @@ export default function (pi: ExtensionAPI): void {
     };
     const currentAvailableActions = (
       agent: ManagedAgentSnapshot,
+      view: ManagedAgentSnapshotView,
       ownerSessionId: string,
+      unresolvedMailboxState: boolean,
     ): string[] =>
-      (listedAgentRecords([agent], ownerSessionId, controllerScope)[0]
-        ?.available_actions as string[] | undefined) ?? [];
+      (listedAgentRecord(
+        view,
+        agent,
+        ownerSessionId,
+        controllerScope,
+        unresolvedMailboxState,
+      ).available_actions as string[] | undefined) ?? [];
     const publishAgentLoss = (
       ctx: ExtensionContext,
       state: ManagedAgentState,
@@ -10657,6 +10713,7 @@ export default function (pi: ExtensionAPI): void {
       if (signal.aborted || !ctx.isIdle()) return false;
       try {
         if (signal.aborted || !ctx.isIdle()) return false;
+        const closeAvailable = availableActions.includes("close");
         pi.sendMessage(
           {
             customType: "pi-herdsman-agent-lost",
@@ -10667,7 +10724,13 @@ export default function (pi: ExtensionAPI): void {
               `Next reminder if unresolved: ~${formatAttentionDuration(nextReminderMs)}`,
               "",
               "Use transcript only when persisted work materially affects the recovery decision.",
-              "Close this lost generation before replacing it or continuing its saved session.",
+              ...(closeAvailable
+                ? [
+                    "Close this lost generation before replacing it or continuing its saved session.",
+                  ]
+                : [
+                    "Close is not currently available; resolve the condition blocking its close preflight before replacing or continuing it.",
+                  ]),
               "Physical disappearance is not task completion.",
             ].join("\n"),
             display: true,
@@ -10704,6 +10767,16 @@ export default function (pi: ExtensionAPI): void {
       const snapshot = await managedAgentSnapshots(pi, ctx, signal);
       if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
         return;
+      const view: ManagedAgentSnapshotView = {
+        ...snapshot,
+        visible: visibleAgentSnapshots(
+          snapshot,
+          controllerScope,
+          ownerSessionId,
+        ),
+      };
+      const unresolvedMailboxState =
+        controllerScope?.kind === "lead" && listAgentStateIssues().length > 0;
       const now = Date.now();
       const ownedRuns = new Set(
         snapshot.agents
@@ -10718,7 +10791,12 @@ export default function (pi: ExtensionAPI): void {
           return;
         const { state, listed } = agent;
         if (state.ownerSessionId !== ownerSessionId) continue;
-        const availableActions = currentAvailableActions(agent, ownerSessionId);
+        const availableActions = currentAvailableActions(
+          agent,
+          view,
+          ownerSessionId,
+          unresolvedMailboxState,
+        );
         if (state.resultError) {
           const error = state.resultError;
           const episode = `result-error:${error.failedAt}:${error.requestId}`;

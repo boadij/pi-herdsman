@@ -21,8 +21,10 @@ from `state` alone. `steer` means active work accepts cooperative steering,
 `interrupt` means a currently working Pi operation may be preempted,
 superseding earlier undelivered steering with replacement direction, `reply`
 means a
-correlated pending `ask_owner` is valid, and `close` means exact direct ownership
-permits teardown. `available_actions` never includes
+correlated pending `ask_owner` is valid, and `close` means exact direct
+ownership and the current applicable close preflight permit teardown. For a
+Lead-owned parent, that preflight includes its owned descendant cascade.
+`available_actions` never includes
 `delegate`; an agent generation handles one assignment only. Every operation
 revalidates identity, ownership, mailbox state, and lifecycle immediately before
 mutation.
@@ -32,11 +34,11 @@ steering when `steer` is listed, but it cannot expose `interrupt` without a
 currently working Pi operation. Stale or inactive fields are advisory and do
 not automatically authorize or recommend interrupt. Descendant visibility does not imply authority;
 records outside the controller's direct ownership can have an empty action list.
-Directly owned live records may expose the applicable live controls, including
-`close`; directly owned live or proven `lost` records may also expose the
-read-only `transcript` action when a materialized persisted Pi session file
-exists. Unknown
-records and non-direct descendants remain fail-closed with no actions.
+Directly owned live records may expose the applicable live controls; directly
+owned live or proven `lost` records may expose `close` when the applicable close
+preflight currently succeeds. They may also expose the read-only `transcript`
+action when a materialized persisted Pi session file exists. Unknown records and
+non-direct descendants remain fail-closed with no actions.
 
 ## `blocked` and owner questions
 
@@ -73,8 +75,9 @@ When exact physical evidence changes, re-evaluate the record from fresh state.
 
 `lost` is different: a coherent Herdr inventory proves the expected pane,
 session, and run-scoped alias are absent. It is not completion or task failure;
-use direct-owner `close` to abandon the unresolved generation. Lost attention
-may repeat for the direct owner while the assignment remains unresolved.
+use direct-owner `close` to abandon the unresolved generation when the
+applicable close preflight succeeds. Lost attention may repeat for the direct
+owner while the assignment remains unresolved.
 
 ## Result precedence and actions
 
@@ -83,11 +86,11 @@ absence and projects as `settling` while delivery or recovery converges. A
 failed inventory never proves `lost`; relocated or conflicting evidence is
 `unknown`.
 
-| Record    | Direct-owner actions                                                                                                                                                  |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `live`    | `inspect`, `transcript` when a materialized persisted Pi session file exists, eligible `steer`, `interrupt` while state is `working`, eligible `reply`, plus `close`. |
-| `lost`    | `transcript` when a materialized persisted Pi session file exists, plus `close`.                                                                                      |
-| `unknown` | None.                                                                                                                                                                 |
+| Record    | Direct-owner actions                                                                                                       |
+| --------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `live`    | `inspect`, eligible `transcript`, `steer`, `interrupt`, `reply`, and `close` when the applicable close preflight succeeds. |
+| `lost`    | eligible `transcript` and `close` when the applicable close preflight succeeds.                                            |
+| `unknown` | None.                                                                                                                      |
 
 Owned descendants remain visible through proven durable ancestry but do not gain
 direct control from that visibility.
