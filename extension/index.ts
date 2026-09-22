@@ -11472,6 +11472,10 @@ export default function (pi: ExtensionAPI): void {
       label: "agent",
       promptSnippet:
         "Delegate and coordinate work with owned asynchronous agents",
+      promptGuidelines: [
+        "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.",
+        "When agent work is unresolved, handle required agent control, then continue only concrete independent work or end the turn; do not poll agent for progress or duplicate delegated work.",
+      ],
       description: controllerDescription(controllerScope),
       executionMode: "sequential",
       parameters: agentParameters,

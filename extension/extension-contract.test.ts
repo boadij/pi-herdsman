@@ -198,6 +198,13 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     lead.tools.find((tool) => tool.name === "agent")?.promptSnippet,
     "Delegate and coordinate work with owned asynchronous agents",
   );
+  assert.deepEqual(
+    lead.tools.find((tool) => tool.name === "agent")?.promptGuidelines,
+    [
+      "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.",
+      "When agent work is unresolved, handle required agent control, then continue only concrete independent work or end the turn; do not poll agent for progress or duplicate delegated work.",
+    ],
+  );
   assert.equal(
     lead.tools.find((tool) => tool.name === "chief")?.promptSnippet,
     "Report progress to or ask the active chief supervising this lead",
