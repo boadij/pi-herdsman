@@ -5,24 +5,35 @@ description: Optional reinforcement and strategy for orchestrating managed agent
 
 # Pi Herdsman
 
-Pi Herdsman injects the complete operational contract into active leads and
-managed agents at runtime. Loading this skill is optional and is never required
-for correct operation.
+Pi Herdsman injects the operational contract into active leads and managed
+agents at runtime. Loading this skill is optional and is never required for
+correct operation.
 
-This skill intentionally repeats the mandatory runtime operational instructions
-so they remain salient in long model contexts, then adds strategy, rationale,
-examples, and deeper product guidance.
-
-The active runtime contract is authoritative. Loading this skill does not grant
-tools, change capabilities, alter lifecycle semantics, or introduce requirements
-that do not exist at runtime. If this skill and the active runtime contract ever
-conflict, follow runtime.
+This skill reinforces high-salience runtime invariants and adds strategy,
+rationale, examples, and deeper product guidance. The active runtime contract
+remains authoritative. Loading this skill does not grant tools, change
+capabilities, alter lifecycle semantics, or introduce requirements that do not
+exist at runtime. A behavioral invariant may be reinforced at multiple
+model-facing decision points when timing or salience materially affects
+reliability; those projections preserve one meaning rather than defining
+independent rules.
 
 ## Runtime controller contract
 
 <!-- pi-herdsman-runtime-controller:start -->
 
 Coordinate managed agents.
+
+Use these high-salience rules for the model-facing agent boundary:
+
+- Use agent for genuinely independent or context-heavy work; keep small,
+  tightly coupled work local.
+- For agent handoffs, `task`/`files` carry assignment evidence and
+  `fork`/`continue` carry selected Pi history; do not assume the caller's
+  conversation or attachments are inherited.
+- When agent work is unresolved, handle required agent control, then do only
+  concrete independent work or end the turn without concluding; do not poll,
+  duplicate delegated work, or invent work merely to remain active.
 
 Ordinary Leads use `peer` for other ordinary Lead sessions; managed agents are
 not peers. `peer list` identifies this Lead as `self` and returns other live
@@ -88,37 +99,9 @@ conflicting evidence as unresolved. Keep one writer per worktree or file-
 ownership boundary. Use a capable definition or report blocked when a required
 runtime capability is unavailable.
 
-Delegate genuinely independent or context-heavy work. Prefer agents for broad
-file inspection, large logs or command output, and dataset analysis. Keep small,
-tightly coupled work local.
-If several tightly coupled phases are already known, put them in one bounded
-assignment when practical. If genuinely new follow-up work emerges after
-completion and previous context is valuable, continue the exact returned session
-only when the completion is not marked retired. A retired session requires a
-fresh delegation; pass this result/handoff plus the relevant files instead.
-Each active delegated assignment has one executor: that agent. Do not repeat
-its assigned work locally or delegate substantially overlapping work elsewhere.
-
-After starting an agent assignment or receiving an agent result or attention
-event, reassess the remaining work. Handle required agent control when needed.
-If another concrete, necessary objective is independent of active agent
-assignments and an authorized agent is the right owner, delegate it. If a
-concrete, necessary independent objective is best handled locally and doing it
-now materially advances the task, do that work, then reassess.
-
-If further useful progress depends on active agents, or no other concrete,
-necessary independent work remains, end your turn without concluding the task.
-Agent results or attention will resume this session automatically. Do not
-conclude or produce the final synthesis while unresolved agent work remains.
-Do not invent side work, broaden scope, perform speculative or precautionary
-exploration, list, inspect, or transcript merely for progress, steer merely for status, sleep,
-poll, or otherwise keep the turn alive while agent results are pending.
-
 If list reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before
 starting another assignment; follow the stored recovery nextAction.
-
-Before delegate, continue, steer, interrupt, or reply, make the message self-contained.
 
 Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md,
 GEMINI.md, or equivalents merely because they exist. Rely on normal project or
@@ -133,16 +116,17 @@ Skills are separate. Attach a required SKILL.md only when the task needs it and
 the selected definition does not already provide that skill. Ordinary relevant
 source, documentation, configuration, and evidence files remain attachable.
 
-Complete strict UTF-8 text is embedded when it fits;
-other files are canonical local references with byte size. Embedded text is
-snapshotted; referenced files are not copied or snapshotted. files transfers
-inline content or canonical references, not tools or runtime capabilities.
-Assume the recipient has no prior knowledge of this conversation, task history,
-live environment, current state, sibling work, or unstated assumptions. Include
-the objective and deliverable, relevant facts and evidence, exact identities and
-paths, scope and non-goals, constraints and authority, dependencies, acceptance
-and validation, expected handoff, and what to do if blocked. For delegated work,
-use files for large evidence and explain what each file contains.
+Complete strict UTF-8 text is embedded when it fits; other files are canonical
+local references with byte size. Embedded text is snapshotted; referenced files
+are not copied or snapshotted. files transfers inline content or canonical
+references, not tools or runtime capabilities.
+
+For agent handoffs, task text and `files` carry assignment-specific evidence.
+`fork` and `continue` are the public mechanisms that deliberately select saved
+Pi history. Do not assume the caller's conversation or caller-side attachments
+are inherited by another agent session.
+
+Pass relevant evidence explicitly through `files`; omit unrelated evidence.
 
 Use the project-local `.pi-herdsman/` directory as the default workspace for
 temporary coordination artifacts such as plans, scopes, specifications,

@@ -136,56 +136,14 @@ test("parent delegates two same-definition children with exact ownership", async
         agentMailboxPath(WORKSPACE, started.details.agent as string),
       );
     }
-    const guidance = pi.sentMessageCalls.find(
+    const guidance = pi.sentMessageCalls.filter(
       ({ message }) =>
         (message as any).customType === "pi-herdsman-delegation-guidance",
     );
-    assert.ok(guidance);
-    const guidanceContent = String((guidance.message as any).content);
-    assert.match(guidanceContent, /Reassess the remaining work/);
-    assert.match(
-      guidanceContent,
-      /another concrete, necessary objective is independent of active agent assignments/,
-    );
-    assert.match(
-      guidanceContent,
-      /an authorized agent is the right owner, delegate it/,
-    );
-    assert.match(
-      guidanceContent,
-      /best handled locally and doing it now materially advances the task/,
-    );
-    assert.match(
-      guidanceContent,
-      /Otherwise end your turn without concluding the task/,
-    );
-    assert.match(
-      guidanceContent,
-      /agent results or attention will resume this session automatically/i,
-    );
-    assert.match(
-      guidanceContent,
-      /Do not conclude or produce the final synthesis while unresolved agent work remains/,
-    );
-    assert.match(guidanceContent, /Do not invent side work/);
-    assert.match(
-      guidanceContent,
-      /repeat delegated work, create substantially overlapping assignments/,
-    );
-    assert.match(
-      guidanceContent,
-      /poll, sleep, inspect or transcript for progress, steer for status/,
-    );
-    assert.doesNotMatch(
-      guidanceContent,
-      /Delegate any other useful independent work now/,
-    );
+    assert.equal(guidance.length, 1);
     assert.equal(
-      pi.sentMessageCalls.filter(
-        ({ message }) =>
-          (message as any).customType === "pi-herdsman-delegation-guidance",
-      ).length,
-      1,
+      (guidance[0].message as any).content,
+      "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
     );
     const labels = mailboxes.map(
       (mailbox) => readAgentState(mailbox)!.agentLabel,

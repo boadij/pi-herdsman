@@ -272,6 +272,12 @@ function formatMessageLimit(bytes: number): string {
   const tokens = Math.ceil(bytes / TOKEN_ESTIMATE_BYTES);
   return `${bytes / 1024} KiB · ≈${tokens.toLocaleString("en-US")} tokens`;
 }
+const AGENT_DELEGATION_GUIDANCE =
+  "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.";
+const AGENT_HANDOFF_GUIDANCE =
+  "For agent handoffs, `task`/`files` carry assignment evidence and `fork`/`continue` carry selected Pi history; do not assume the caller's conversation or attachments are inherited.";
+const AGENT_UNRESOLVED_GUIDANCE =
+  "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.";
 const AGENT_OPERATIONAL_DESCRIPTION = `Coordinate managed agents.
 
 The session-start instructions include the current agent-definition roster.
@@ -279,154 +285,53 @@ Use list for live agent state, ownership, or a refreshed definition roster
 after configuration changes.
 
 Use delegate to start one bounded assignment from an agent definition.
-Use continue to start one bounded assignment from an exact historical Pi session.
+A delegate fork selects an exact saved Pi session as historical context for a
+fresh derived assignment. Use continue to start one bounded assignment from an
+exact historical managed-agent Pi session.
 
 Each managed agent exists for one assignment only. After its terminal result is
-delivered, Pi Herdsman cleans up that agent automatically. To continue completed
-work with its existing context, use the exact session returned with the result.
-Agent labels control the currently live generation; they are not continuation
-selectors.
-Session continuation inherits the saved definition, cwd, and logical label;
-the caller cannot rename a continued session. The inherited label controls only
-the currently live generation.
+delivered, Pi Herdsman cleans up that live generation. Agent labels identify the
+currently live generation; exact Pi sessions identify historical context and
+continuation.
 
-For a live agent, use only operations currently listed in available_actions.
-State describes what is happening; available_actions describes current control
-eligibility. Every operation revalidates exact state and identity before
-mutation.
+For a live agent, state describes what is happening and available_actions
+describes current control eligibility. Use only currently listed actions. Every
+operation revalidates exact state, identity, and ownership before mutation.
 
-The live-agent control actions are \`steer\`, \`interrupt\`, \`reply\`, and \`close\`;
-these mutate live agent execution and are available only when listed. Read-only \`inspect\`
-captures bounded live terminal/process evidence. Read-only \`transcript\`
-captures bounded persisted Pi conversation and tool evidence when listed.
-Neither changes agent state. A completed agent does not remain available for
-another assignment.
+steer changes active work cooperatively and may wait for the current operation
+to reach a safe boundary.
 
-Use steer only to change active work non-preemptively. Steering does not cancel
-an in-flight model or tool operation; Pi may queue it until the current
-operation reaches a safe boundary.
+interrupt abandons the current in-flight Pi operation, supersedes earlier
+steering Pi has not yet delivered, and continues the same assignment. reply
+answers an exact pending ask_owner question. close intentionally abandons or
+tears down an assignment.
+inspect provides bounded live terminal/process evidence. transcript provides
+bounded persisted Pi conversation/tool evidence. Neither changes agent state.
 
-Use interrupt only when the current in-flight operation itself must be
-abandoned. Interrupt is preemptive: it cancels the current Pi operation,
-supersedes any earlier steering that Pi has not yet delivered, and continues
-the same assignment with the required replacement message. Do not interrupt
-merely because an agent is slow or marked stale; inactivity is advisory and
-does not prove a hang.
+A proven lost agent remains unresolved; physical disappearance is not
+completion. Unknown or conflicting identity remains fail-closed. Follow current
+attention evidence and available_actions rather than guessing identities or
+taking over unresolved delegated work.
 
-Use reply only to answer a valid outstanding ask_owner question. Use close only
-for intentional teardown or abandonment.
+Keep one writer per worktree or file-ownership boundary. Use a capable
+definition or report blocked when required runtime capability is unavailable.
 
-A lost agent is a managed assignment whose exact physical execution is proven
-gone before a durable terminal result resolved it. Loss is not completion or
-task failure. Treat the assignment as unresolved. When transcript is listed,
-use it only when the last persisted work materially affects recovery. When
-\`close\` is listed, use it to abandon the lost generation before replacing it or
-continuing its saved session. If \`close\` is absent, resolve the condition
-blocking its close preflight first. Unknown evidence remains fail-closed and is
-not proof of loss.
+Do not attach agent instruction files such as AGENTS.md, CLAUDE.md, GEMINI.md,
+or equivalents merely because they exist. Rely on normal project or runtime
+discovery unless the task itself requires that file or required instructions
+would not otherwise reach the target. Skills are separate; attach SKILL.md only
+when the task needs it and the selected definition does not already provide
+that skill.
 
-End your turn with unresolved agent work only when that work can still make
-progress without you, or Herdsman is reconciling a durable transition that can
-produce a future result or attention event. If an attention event says your
-action is required, handle it before returning to passive waiting. If an
-inactivity advisory appears healthy or legitimately long-running, leave it
-alone and end the turn; Herdsman will remind you if the condition remains
-unresolved.
-
-Recovery attention is state-specific and may repeat while the same condition
-remains unresolved. Use the event's current evidence and available_actions.
-Transcript is persisted conversation/tool evidence; inspect is live
-terminal/process evidence. Use only currently listed actions.
-
-Never guess identities, paths, sessions, or control state. Treat unknown or
-conflicting evidence as unresolved. Keep one writer per worktree or file-
-ownership boundary. Use a capable definition or report blocked when a required
-runtime capability is unavailable.
-
-Delegate genuinely independent or context-heavy work. Prefer agents for broad
-file inspection, large logs or command output, and dataset analysis. Keep small,
-tightly coupled work local.
-If several tightly coupled phases are already known, put them in one bounded
-assignment when practical. If genuinely new follow-up work emerges after
-completion and previous context is valuable, continue the exact returned session
-only when the completion is not marked retired. A retired session requires a
-fresh delegation; pass its result/handoff and relevant files instead.
-Each active delegated assignment has one executor: that agent. Do not repeat
-its assigned work locally or delegate substantially overlapping work elsewhere.
-
-After starting an agent assignment or receiving an agent result or attention
-event, reassess the remaining work. Handle required agent control when needed.
-If another concrete, necessary objective is independent of active agent
-assignments and an authorized agent is the right owner, delegate it. If a
-concrete, necessary independent objective is best handled locally and doing it
-now materially advances the task, do that work, then reassess.
-
-If further useful progress depends on active agents, or no other concrete,
-necessary independent work remains, end your turn without concluding the task.
-Agent results or attention will resume this session automatically. Do not
-conclude or produce the final synthesis while unresolved agent work remains.
-Do not invent side work, broaden scope, perform speculative or precautionary
-exploration, list, inspect, or transcript merely for progress, steer merely for status, sleep,
-poll, or otherwise keep the turn alive while agent results are pending.
-
-If list reports result_error, do not start a new delegation over unresolved
-work. Resolve mailbox persistence first, then close the exact agent before
-starting another assignment; follow the stored recovery nextAction.
-
-Before delegate, continue, steer, interrupt, or reply, make the message self-contained.
-
-Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md,
-GEMINI.md, or equivalents merely because they exist. Rely on normal project or
-runtime discovery when it supplies those instructions.
-
-Attach an agent instruction file only when the task itself requires inspecting,
-modifying, comparing, or transmitting that file, the user explicitly requests
-it, or its instructions are required and the target would not otherwise receive
-them.
-
-Skills are separate. Attach a required SKILL.md only when the task needs it and
-the selected definition does not already provide that skill. Ordinary relevant
-source, documentation, configuration, and evidence files remain attachable.
-
-Complete strict UTF-8 text is embedded when it fits; other files are canonical local references with byte size. Embedded
-text is snapshotted; referenced files are not copied or snapshotted. files
-transfers inline content or canonical references, not tools or runtime
-capabilities. Assume the
-recipient has no prior knowledge of this conversation, task history, live
-environment, current state, sibling work, or unstated assumptions. Include the
-objective and deliverable, relevant facts and evidence, exact identities and
-paths, scope and non-goals, constraints and authority, dependencies, acceptance
-and validation, expected handoff, and what to do if blocked. For delegated work,
-use files for large evidence and explain what each file contains.
-
-Use the project-local \`.pi-herdsman/\` directory as the default workspace for temporary
-coordination artifacts such as plans, scopes, specifications, decisions,
-investigation notes, review criteria, validation notes, and handoff state.
-Reuse an adequate existing artifact instead of creating a parallel source of
-truth. Prefer one current artifact per coordinated objective. Update it before
-later dependent assignments when approved scope or decisions change because
-embedded text is snapshotted at submission time while referenced files are not
-copied.
-
-Pass relevant files and completed agent results through \`files\`. Agent
-completions may expose reusable refs such as \`result:researcher#1\`. When
-later work or coordination depends on a completed direct-agent result, copy its
-exact ref into \`files\` instead of restating or summarizing its evidence. Do
-not attach unrelated results.
-
-Canonical \`result:<request-id>\` references already supplied as file evidence
-may also be forwarded through \`files\`; preserve them exactly. \`files\` does
-not add runtime capability.
-
-Require concise handoffs containing relevant inspected or changed files,
-validation performed, findings or decisions, unresolved risks or blockers,
-remaining work, and reusable output paths.
+files is the explicit message-evidence channel for ordinary local file paths,
+reusable direct-agent refs such as result:researcher#1, and canonical
+result:<request-id> refs already supplied as evidence. Complete strict UTF-8
+text may be embedded when it fits; otherwise files remain canonical local
+references. Referenced files are not copied or snapshotted. files does not grant
+runtime capabilities. Preserve exact result refs when forwarding them.
 
 Report blocked or failed work and decisions outside delegated authority rather
-than silently retrying, taking over, or broadening scope. Preserve exact identity
-and cleanup evidence on failure. Treat inactivity as advisory, not proof of a hang,
-and do not blindly retry destructive cleanup or silently take over delegated
-work.`;
+than silently broadening scope or taking over unresolved delegated work.`;
 const LEAD_SCOPE_DESCRIPTION = `Own architecture, approved scope, acceptance, integration, conflict resolution,
 and final decisions. Decompose only as far as useful. Assign each independent
 objective to the narrowest capable owner and let delegation-enabled agents own
@@ -4927,11 +4832,10 @@ function delegationStatusMessage({
     unresolvedDirectChildCount === 0
       ? "all direct agent assignments are resolved"
       : `${unresolvedDirectChildCount} direct agent assignment${unresolvedDirectChildCount === 1 ? "" : "s"} remain${unresolvedDirectChildCount === 1 ? "s" : ""} unresolved`;
-  const guidance =
-    unresolvedDirectChildCount === 0
-      ? "You may conclude if your own acceptance criteria are satisfied."
-      : "Handle required agent control if needed, then reassess the remaining work. If another concrete, necessary objective is independent of unresolved agent assignments and an authorized agent is the right owner, delegate it. If a concrete, necessary independent objective is best handled locally and doing it now materially advances the task, do that work, then reassess. Otherwise end your turn; agent results or attention will resume this session automatically. Do not repeat unresolved assignments, invent side work merely to remain active, or conclude or produce the final synthesis while unresolved agent work remains.";
-  return `Delegation status: ${active}; ${pending}; ${unresolved}. ${guidance}`;
+  const status = `Delegation status: ${active}; ${pending}; ${unresolved}.`;
+  return unresolvedDirectChildCount > 0
+    ? `${status} ${AGENT_UNRESOLVED_GUIDANCE}`
+    : status;
 }
 function delegationStatusForResult(
   runtime: Runtime,
@@ -6589,7 +6493,7 @@ export default function (pi: ExtensionAPI): void {
       }),
       {
         description:
-          "Supporting evidence. Copy result refs exactly as shown by agent completions. Files do not grant runtime capabilities.",
+          "File or result evidence transferred with this message. Copy result refs exactly. Files do not grant runtime capabilities.",
       },
     ),
   );
@@ -11469,8 +11373,9 @@ export default function (pi: ExtensionAPI): void {
       promptSnippet:
         "Delegate and coordinate work with owned asynchronous agents",
       promptGuidelines: [
-        "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.",
-        "When agent work is unresolved, handle required agent control, then continue only concrete independent work or end the turn; do not poll agent for progress or duplicate delegated work.",
+        AGENT_DELEGATION_GUIDANCE,
+        AGENT_HANDOFF_GUIDANCE,
+        AGENT_UNRESOLVED_GUIDANCE,
       ],
       description: controllerDescription(controllerScope),
       executionMode: "sequential",
@@ -11514,8 +11419,7 @@ export default function (pi: ExtensionAPI): void {
               pi.sendMessage(
                 {
                   customType: "pi-herdsman-delegation-guidance",
-                  content:
-                    "An agent assignment started. Reassess the remaining work. Handle required agent control if needed. If another concrete, necessary objective is independent of active agent assignments and an authorized agent is the right owner, delegate it. If a concrete, necessary independent objective is best handled locally and doing it now materially advances the task, do that work, then reassess. Otherwise end your turn without concluding the task; agent results or attention will resume this session automatically. Do not conclude or produce the final synthesis while unresolved agent work remains. Do not invent side work, repeat delegated work, create substantially overlapping assignments, poll, sleep, inspect or transcript for progress, steer for status, or otherwise keep the turn alive merely because agents are running.",
+                  content: AGENT_UNRESOLVED_GUIDANCE,
                   display: false,
                 },
                 { triggerTurn: true, deliverAs: "steer" },

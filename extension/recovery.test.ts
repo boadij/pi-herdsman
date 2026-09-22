@@ -203,8 +203,9 @@ test("combined status reports a completed agent as pending, not active", async (
           (message as any).details.activeDirectChildCount === 0 &&
           (message as any).details.pendingDirectResultCount === 1 &&
           (message as any).details.unresolvedDirectChildCount === 1 &&
-          /Delegation status: 0 active direct agents; 1 pending direct result; 1 direct agent assignment remains unresolved\./.test(
-            String((message as any).content),
+          String((message as any).content).endsWith(
+            "Delegation status: 0 active direct agents; 1 pending direct result; 1 direct agent assignment remains unresolved. " +
+              "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
           ),
       ),
       true,
@@ -272,7 +273,7 @@ test("conflicting same-request entries do not suppress an exact combined result"
       },
     },
     {
-      customType: "pi-herdsman-delegation-guidance",
+      customType: "unrelated-custom-message",
       details: {
         ...resultEntryDetails(child, REQUEST_ID),
         paneId: "conflicting-pane",
@@ -295,13 +296,6 @@ test("conflicting same-request entries do not suppress an exact combined result"
   try {
     await pi.events.get("session_start")![0](undefined, context);
     assert.equal(queued, 1);
-    assert.equal(
-      pi.sent.some(
-        (message: any) =>
-          message.customType === "pi-herdsman-delegation-guidance",
-      ),
-      false,
-    );
     assert.ok(readResult(childMailbox, REQUEST_ID));
     assert.deepEqual(
       Object.fromEntries(
@@ -324,14 +318,6 @@ test("conflicting same-request entries do not suppress an exact combined result"
     );
 
     await pi.events.get("agent_settled")![0](undefined, context);
-    assert.equal(
-      pi.sent.filter(
-        (message: any) =>
-          message.customType === "pi-herdsman-delegation-guidance",
-      ).length,
-      0,
-      "a conflicting same-request result must not resolve status",
-    );
     assert.equal(queued, 2, "a conflicting entry must not suppress redelivery");
     assert.ok(readResult(childMailbox, REQUEST_ID));
 
@@ -344,30 +330,25 @@ test("conflicting same-request entries do not suppress an exact combined result"
     await pi.events.get("agent_settled")![0](undefined, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
-    const statuses = pi.sent.filter(
-      (message: any) =>
-        message.customType === "pi-herdsman-delegation-guidance",
-    );
-    assert.equal(statuses.length, 0);
-    assert.match(
-      String((pi.sent[0] as any).content),
-      /Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved\./,
+    assert.ok(
+      String((pi.sent[0] as any).content).endsWith(
+        "Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved.",
+      ),
     );
     assert.equal((pi.sent[0] as any).details.unresolvedDirectChildCount, 0);
     assert.equal((pi.sent[0] as any).details.activeDirectChildCount, 0);
     assert.equal((pi.sent[0] as any).details.pendingDirectResultCount, 0);
     await pi.events.get("agent_settled")![0](undefined, context);
-    assert.equal(
-      pi.sent.filter(
-        (message: any) =>
-          message.customType === "pi-herdsman-delegation-guidance",
-      ).length,
-      0,
-      "an exact persisted result must not create a second status steer",
-    );
     await waitForTestCondition(
       () => readResult(childMailbox, REQUEST_ID) === undefined,
       "exact persisted result did not clean up",
+    );
+    assert.equal(
+      pi.sentMessageCalls.some(
+        ({ message }) =>
+          (message as any).customType === "pi-herdsman-delegation-guidance",
+      ),
+      false,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -1743,20 +1724,22 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
       1,
     );
     assert.equal(
-      recovered.sentMessageCalls.filter(
+      recovered.sentMessageCalls.some(
         ({ message }) =>
           (message as any).customType === "pi-herdsman-delegation-guidance",
-      ).length,
-      0,
+      ),
+      false,
     );
     assert.equal(
       (recovered.sentMessageCalls[0]?.message as any).details
         .unresolvedDirectChildCount,
       1,
     );
-    assert.match(
-      String((recovered.sentMessageCalls[0]?.message as any).content),
-      /Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved\./,
+    assert.ok(
+      String((recovered.sentMessageCalls[0]?.message as any).content).endsWith(
+        "Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved. " +
+          "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
+      ),
     );
     assert.equal(
       (recovered.sentMessageCalls[0]?.message as any).details
@@ -2889,20 +2872,20 @@ test("delivered result remains while agent state is active", async () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.ok(readResult(mailbox, REQUEST_ID));
     assert.equal(
-      pi.sentMessageCalls.filter(
+      pi.sentMessageCalls.some(
         ({ message }) =>
           (message as any).customType === "pi-herdsman-delegation-guidance",
-      ).length,
-      0,
+      ),
+      false,
     );
     await pi.events.get("session_start")![0](undefined, fakeContext(entries));
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(
-      pi.sentMessageCalls.filter(
+      pi.sentMessageCalls.some(
         ({ message }) =>
           (message as any).customType === "pi-herdsman-delegation-guidance",
-      ).length,
-      0,
+      ),
+      false,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();

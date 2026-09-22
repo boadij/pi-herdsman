@@ -85,34 +85,32 @@ Do not mix these procedures into normal user setup.
 
 ### `SKILL.md`
 
-Optional model-facing reinforcement of the self-contained runtime operational
-contract plus deeper strategy, rationale, examples, and recovery guidance.
+Optional model-facing reinforcement of the runtime operational contract plus
+deeper strategy, rationale, examples, and recovery guidance.
 
 It does not own product API schemas or runtime behavior.
 
-## Runtime and skill synchronization
+## Runtime and skill authority
 
-Pi Herdsman has one deliberate instruction duplication.
+Runtime behavior and runtime model contracts own operational semantics.
 
-The runtime controller and managed agent instructions are the authoritative,
-self-contained operational contract. Root `SKILL.md` intentionally mirrors
-those mandatory operational instructions so loading the skill can reinforce
-them in a long model context.
+`SKILL.md` may reinforce high-salience runtime invariants and add strategy,
+rationale, examples, and recovery detail, but it is not a second normative
+owner.
 
-Therefore:
+When runtime guidance changes:
 
-- every mandatory operational rule must exist at runtime;
-- corresponding operational guidance must remain represented in `SKILL.md`;
-- `SKILL.md` may add strategy, rationale, examples, and deeper explanation;
-- no capability or normal workflow may depend on loading `SKILL.md`;
-- runtime wins if the two surfaces conflict;
-- a change to either mirrored runtime or skill instructions requires checking
-  the other side in the same change.
+- update the authoritative runtime contract first;
+- update affected skill or documentation projections;
+- remove obsolete reinforcement rather than preserving historical wording;
+- keep the runtime sufficient when `SKILL.md` is not loaded.
 
-This is intentional reinforcement, not competing authority.
+A behavioral invariant may be reinforced at multiple model-facing decision
+points when timing or salience materially affects reliability. Those projections
+must preserve one meaning and must not evolve into independent rules.
 
-Do not replace it with runtime skill loading, generated prompt files, a prompt
-registry, or another synchronization subsystem.
+Do not add runtime skill loading, prompt generation, or another synchronization
+framework merely to keep prose copies aligned.
 
 ## Style
 

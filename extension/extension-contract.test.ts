@@ -202,7 +202,8 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     lead.tools.find((tool) => tool.name === "agent")?.promptGuidelines,
     [
       "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.",
-      "When agent work is unresolved, handle required agent control, then continue only concrete independent work or end the turn; do not poll agent for progress or duplicate delegated work.",
+      "For agent handoffs, `task`/`files` carry assignment evidence and `fork`/`continue` carry selected Pi history; do not assume the caller's conversation or attachments are inherited.",
+      "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
     ],
   );
   assert.equal(
@@ -279,86 +280,33 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   const agentDescription = agentTool.description.replaceAll(/\s+/g, " ");
   assert.match(
     agentDescription,
-    /Each active delegated assignment has one executor: that agent/,
-  );
-  assert.match(agentDescription, /Do not repeat its assigned work locally/);
-  assert.match(
-    agentDescription,
-    /delegate substantially overlapping work elsewhere/,
+    /files is the explicit message-evidence channel.*result:researcher#1/,
   );
   assert.match(
     agentDescription,
-    /After starting an agent assignment or receiving an agent result or attention event, reassess the remaining work/,
-  );
-  assert.match(
-    agentDescription,
-    /fresh delegation; pass its result\/handoff and relevant files instead\./,
-  );
-  assert.match(
-    agentDescription,
-    /Agent completions may expose reusable refs such as `result:researcher#1`/,
-  );
-  assert.match(
-    agentDescription,
-    /copy its exact ref into `files` instead of restating or summarizing its evidence/,
+    /Preserve exact result refs when forwarding them/,
   );
   assert.doesNotMatch(agentDescription, /resultRef\/handoff/);
-  assert.match(
-    agentDescription,
-    /another concrete, necessary objective is independent of active agent assignments/,
-  );
-  assert.match(
-    agentDescription,
-    /an authorized agent is the right owner, delegate it/,
-  );
-  assert.match(
-    agentDescription,
-    /best handled locally and doing it now materially advances the task/,
-  );
-  assert.match(
-    agentDescription,
-    /no other concrete, necessary independent work remains, end your turn without concluding the task/,
-  );
-  assert.match(
-    agentDescription,
-    /Agent results or attention will resume this session automatically/,
-  );
-  assert.match(
-    agentDescription,
-    /Do not conclude or produce the final synthesis while unresolved agent work remains/,
-  );
-  assert.match(agentDescription, /Do not invent side work/);
-  assert.match(
-    agentDescription,
-    /list, inspect, or transcript merely for progress, steer merely for status, sleep, poll/,
-  );
   assert.doesNotMatch(agentDescription, /\bpeers?\b/i);
-  assert.match(agentDescription, /steer.*non-preemptively/);
-  assert.match(agentDescription, /interrupt.*preemptive/);
+  assert.match(agentDescription, /steer changes active work cooperatively/);
+  assert.match(
+    agentDescription,
+    /interrupt abandons the current in-flight Pi operation/,
+  );
   assert.match(
     agentDescription,
     /interrupt.*supersedes.*earlier steering.*not yet delivered/is,
   );
   assert.match(agentDescription, /same assignment/);
-  assert.match(agentDescription, /Do not.*interrupt merely.*stale/);
-  assert.match(
-    agentDescription,
-    /unresolved agent work only when that work can still make progress without you/,
-  );
-  assert.match(
-    agentDescription,
-    /attention event says your action is required.*handle it before returning to passive waiting/,
-  );
-  assert.match(
-    agentDescription,
-    /Recovery attention is state-specific and may repeat/,
-  );
   assert.match(agentDescription, /available_actions/);
   assert.match(
     agentDescription,
-    /Transcript is persisted conversation\/tool evidence/,
+    /transcript provides bounded persisted Pi conversation\/tool evidence/,
   );
-  assert.match(agentDescription, /inspect is live terminal\/process evidence/);
+  assert.match(
+    agentDescription,
+    /inspect provides bounded live terminal\/process evidence/,
+  );
   assert.doesNotMatch(
     agentDescription,
     /Delegate any other useful independent work now/,

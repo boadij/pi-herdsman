@@ -41,6 +41,30 @@ Runtime instructions are authoritative if surfaces conflict. Do not remove
 useful mirrored guidance from `SKILL.md`, and do not make runtime load, parse,
 or depend on the skill.
 
+## Runtime instruction authority
+
+Runtime behavior and authoritative runtime contracts define Herdsman's
+operational semantics. `SKILL.md`, documentation, examples, and tests project
+those semantics; they do not independently redefine them.
+
+The runtime contract must remain sufficient without loading `SKILL.md`.
+`SKILL.md` may reinforce high-salience invariants and add strategy, rationale,
+examples, and recovery detail.
+
+When changing an invariant:
+
+1. change its authoritative source first;
+2. update only affected projections;
+3. remove obsolete or overlapping reinforcement;
+4. verify that all remaining representations preserve the same meaning.
+
+A behavioral invariant may be reinforced at multiple model-facing decision
+points when timing or salience materially affects reliability. Those projections
+must preserve one meaning and must not evolve into independent rules.
+
+Do not add runtime skill loading, generated prompt files, a prompt registry, or
+another synchronization subsystem merely to keep prose copies aligned.
+
 ## Code map
 
 - `extension/index.ts`: Extension integration and controller/agent lifecycle.

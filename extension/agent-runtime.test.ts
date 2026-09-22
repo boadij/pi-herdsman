@@ -1615,14 +1615,6 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     deliver(childOne, childOneMailbox, "one");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(
-      pi.sent.filter(
-        (message: any) =>
-          message.customType === "pi-herdsman-delegation-guidance",
-      ).length,
-      0,
-      "completion status must not be delivered as a separate steer",
-    );
     assert.equal(pi.sent.length, 1);
     assert.equal(
       (pi.sentMessageCalls[0].message as any).customType,
@@ -1652,37 +1644,11 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     const unresolvedStatus = String(
       (pi.sentMessageCalls[0].message as any).content,
     );
-    assert.match(
-      unresolvedStatus,
-      /Delegation status: 1 active direct agent; 1 pending direct result; 2 direct agent assignments remain unresolved\./,
-    );
-    assert.match(unresolvedStatus, /Handle required agent control if needed/);
-    assert.match(
-      unresolvedStatus,
-      /another concrete, necessary objective is independent of unresolved agent assignments/,
-    );
-    assert.match(
-      unresolvedStatus,
-      /an authorized agent is the right owner, delegate it/,
-    );
-    assert.match(
-      unresolvedStatus,
-      /best handled locally and doing it now materially advances the task/,
-    );
-    assert.match(unresolvedStatus, /Otherwise end your turn/);
-    assert.match(
-      unresolvedStatus,
-      /agent results or attention will resume this session automatically/i,
-    );
-    assert.match(unresolvedStatus, /Do not repeat unresolved assignments/);
-    assert.match(unresolvedStatus, /invent side work merely to remain active/);
-    assert.doesNotMatch(
-      unresolvedStatus,
-      /make useful decisions or take useful actions based on partial agent results/i,
-    );
-    assert.match(
-      unresolvedStatus,
-      /or conclude or produce the final synthesis/i,
+    assert.ok(
+      unresolvedStatus.endsWith(
+        "Delegation status: 1 active direct agent; 1 pending direct result; 2 direct agent assignments remain unresolved. " +
+          "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
+      ),
     );
     assert.equal(
       readResult(childOneMailbox, childOne.activeRequestId!)?.text,
@@ -1722,9 +1688,11 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       (pi.sentMessageCalls[1].message as any).details.pendingDirectResultCount,
       0,
     );
-    assert.match(
-      String((pi.sentMessageCalls[1].message as any).content),
-      /Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved\./,
+    assert.ok(
+      String((pi.sentMessageCalls[1].message as any).content).endsWith(
+        "Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved. " +
+          "When agent work is unresolved, handle required agent control, then do only concrete independent work or end the turn without concluding; do not poll, duplicate delegated work, or invent work merely to remain active.",
+      ),
     );
     assert.equal(
       readResult(childTwoMailbox, childTwo.activeRequestId!)?.text,
@@ -1790,13 +1758,10 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sent.length, 4);
-    assert.match(
-      sentContent(3),
-      /Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved\./,
-    );
-    assert.match(
-      sentContent(3),
-      /You may conclude if your own acceptance criteria are satisfied\./,
+    assert.ok(
+      sentContent(3).endsWith(
+        "Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved.",
+      ),
     );
     assert.equal(
       (pi.sentMessageCalls[3].message as any).details
@@ -1810,10 +1775,6 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     assert.equal(
       (pi.sentMessageCalls[3].message as any).details.pendingDirectResultCount,
       0,
-    );
-    assert.match(
-      sentContent(3),
-      /Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved\./,
     );
     assert.ok(readResult(childThreeMailbox, thirdRequestId));
     earlyResultStatus = readResult(parentMailbox, parentRequestId)?.status;
@@ -1831,20 +1792,8 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       sentContent(1),
       /1 direct agent assignment remains unresolved/,
     );
-    assert.match(
-      sentContent(3),
-      /Delegation status: 0 active direct agents; 0 pending direct results; all direct agent assignments are resolved\./,
-    );
     assert.equal(earlyResultStatus, "failed");
     await settle(undefined, context);
-    assert.equal(
-      pi.sent.filter(
-        (message: any) =>
-          message.customType === "pi-herdsman-delegation-guidance",
-      ).length,
-      0,
-      "completion status must never be published as a separate steer",
-    );
     assert.deepEqual(
       pi.sentMessageCalls.map(({ message }) => (message as any).customType),
       [

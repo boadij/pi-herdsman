@@ -257,6 +257,11 @@ limit permits. Otherwise they remain canonical references. Semantic direct refs
 are resolved on the current branch, while canonical `result:<request-id>` refs
 remain logical result references. `files` is a `string[]` for all three forms.
 
+`files` is explicit per-message evidence. A fresh delegated session does not
+implicitly receive the caller's conversation or caller-side attachments.
+`fork` and `continue` are the mechanisms that deliberately reuse selected saved
+Pi history.
+
 `timeoutMs` is valid on `delegate` and `continue` and must be an integer
 from `5001` through `300000`. The startup budget reserves one bounded diagnostic
 window; it is unrelated to managed-agent Pi shell execution. Direct calls from

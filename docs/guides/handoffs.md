@@ -14,10 +14,19 @@ canonical local references and are not copied or snapshotted.
 
 ## Message `files`
 
-For `delegate`, `continue`, `steer`, `interrupt`, and
-`reply`, make the message self-contained. Do not attach or mention agent
-instruction files such as `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or equivalents
-merely because they exist; rely on normal project or runtime discovery.
+Agent-session context crosses boundaries explicitly.
+
+- task or message text and `files` carry assignment-specific evidence;
+- `fork` and `continue` deliberately select saved Pi history;
+- the caller's conversation and caller-side attachments are not implicitly
+  copied into another agent session.
+
+When a new or updated assignment depends on a caller-visible file, pass that
+file through `files`.
+
+Do not attach or mention agent instruction files such as `AGENTS.md`, `CLAUDE.md`,
+`GEMINI.md`, or equivalents merely because they exist; rely on normal project
+or runtime discovery.
 
 Attach an agent instruction file only when the task requires inspecting,
 modifying, comparing, or transmitting it, the user explicitly requests it, or
