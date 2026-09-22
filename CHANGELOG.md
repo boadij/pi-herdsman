@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.13.0](https://github.com/boadij/pi-herdsman/compare/v0.12.1...v0.13.0) (2026-09-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove delegate cwd override ([#114](https://github.com/boadij/pi-herdsman/issues/114))
+
+### Fixes
+
+* advertise herdsman tools in pi prompt ([#113](https://github.com/boadij/pi-herdsman/issues/113)) ([986ef5a](https://github.com/boadij/pi-herdsman/commit/986ef5a6fe7390ecc069c95521c31bfd7eaddce9))
+* align close availability with preflight ([#109](https://github.com/boadij/pi-herdsman/issues/109)) ([c0f0c59](https://github.com/boadij/pi-herdsman/commit/c0f0c59926bc646a8d900afe5cf69c645b54b0c8))
+* align delegating ask_owner guidance ([#115](https://github.com/boadij/pi-herdsman/issues/115)) ([982c7aa](https://github.com/boadij/pi-herdsman/commit/982c7aa74ae9915e60c82a214b22b7926c4f1fa6))
+* distinguish unresolved mailbox state during chief activation ([#118](https://github.com/boadij/pi-herdsman/issues/118)) ([0c49b81](https://github.com/boadij/pi-herdsman/commit/0c49b8111d744ce46afaf85ad889d7836a8579a9))
+* enforce chief ask finality ([#110](https://github.com/boadij/pi-herdsman/issues/110)) ([3bbf132](https://github.com/boadij/pi-herdsman/commit/3bbf1326c537c7ca62b70aa6eaaa3a922b454aac))
+* **settling:** hide close while result delivery is pending ([#107](https://github.com/boadij/pi-herdsman/issues/107)) ([9e4bb79](https://github.com/boadij/pi-herdsman/commit/9e4bb79664c4eaa96f9cff840a4dcea687cf4904))
+* surface agent orchestration guidelines ([#116](https://github.com/boadij/pi-herdsman/issues/116)) ([0417b55](https://github.com/boadij/pi-herdsman/commit/0417b555c37a97e8de1d95045cbca143090273be))
+* unify agent result handoffs ([#112](https://github.com/boadij/pi-herdsman/issues/112)) ([1fa7685](https://github.com/boadij/pi-herdsman/commit/1fa7685ba661074642fb9d2aa5bfb7300a559029))
+* unify process lock validation ([#117](https://github.com/boadij/pi-herdsman/issues/117)) ([bf60fc1](https://github.com/boadij/pi-herdsman/commit/bf60fc1ca1ede5ab5c3df7d035b43b0da8cdbb4b))
+* withdraw unhealthy peer presence ([#111](https://github.com/boadij/pi-herdsman/issues/111)) ([a8a19df](https://github.com/boadij/pi-herdsman/commit/a8a19df10b3f4ffceb668fd7fff6a293a05b7f22))
+
+
+### Refactoring
+
+* remove delegate cwd override ([#114](https://github.com/boadij/pi-herdsman/issues/114)) ([124a7a6](https://github.com/boadij/pi-herdsman/commit/124a7a6b81b4ee5efba901a030d84e109ab39c28))
+
+
+### Documentation
+
+* codify instruction and interface design principles ([#119](https://github.com/boadij/pi-herdsman/issues/119)) ([61c20be](https://github.com/boadij/pi-herdsman/commit/61c20be77041d8ef5e3f624f6532b5d164e7446c))
+
 ## [0.12.1](https://github.com/boadij/pi-herdsman/compare/v0.12.0...v0.12.1) (2026-09-21)
 
 
