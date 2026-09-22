@@ -201,9 +201,9 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.deepEqual(
     lead.tools.find((tool) => tool.name === "agent")?.promptGuidelines,
     [
-      "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.",
+      "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local. Once work is delegated, that agent is the sole executor for its assigned scope; do not perform or delegate overlapping work.",
       "For agent handoffs, `task`/`files` carry assignment evidence and `fork`/`continue` carry selected Pi history; do not assume the caller's conversation or attachments are inherited.",
-      "When agent work is unresolved, handle required agent control, then do only concrete work independent of unresolved agent assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not poll, duplicate delegated work, or invent work merely to remain active.",
+      "When agent work is unresolved, handle required agent control, then continue only necessary work outside unresolved assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms, and do not invent work merely to remain active.",
     ],
   );
   assert.equal(

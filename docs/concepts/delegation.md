@@ -89,8 +89,12 @@ Do not:
 - continue work that depends on an active agent result;
 - inspect, transcript, list, or steer active agents merely to check progress or completion.
 
-Direct ownership grants lifecycle and control authority. It does not make the
-owner a second executor of an active delegated assignment.
+Each unresolved delegated assignment has one executor: that agent. Direct
+ownership grants lifecycle and control authority, not permission for the
+delegating controller to duplicate or substantially overlap the assigned work
+or to assign overlapping work elsewhere. The controller may continue genuinely
+separate work outside unresolved delegated scopes and integrates the agent's
+result after resolution.
 
 A useful parallel pattern is:
 

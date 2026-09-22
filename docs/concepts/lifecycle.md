@@ -87,8 +87,8 @@ event, the owner reassesses the remaining work:
 1. Handle required agent control when needed.
 2. Delegate another concrete, necessary objective when it is independent of
    active assignments and an authorized agent is the right owner.
-3. Continue concrete, necessary independent work locally when the owner is the
-   right owner and doing it now materially advances the task.
+3. Continue only necessary work outside unresolved delegated scopes when the
+   owner is the right owner and doing it now materially advances the task.
 4. Otherwise end the turn.
 
 After control, delegation, or local parallel work, the owner reassesses again.

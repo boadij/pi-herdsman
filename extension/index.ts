@@ -273,16 +273,17 @@ function formatMessageLimit(bytes: number): string {
   return `${bytes / 1024} KiB · ≈${tokens.toLocaleString("en-US")} tokens`;
 }
 const AGENT_DELEGATION_GUIDANCE =
-  "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.";
+  "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local. Once work is delegated, that agent is the sole executor for its assigned scope; do not perform or delegate overlapping work.";
 const AGENT_HANDOFF_GUIDANCE =
   "For agent handoffs, `task`/`files` carry assignment evidence and `fork`/`continue` carry selected Pi history; do not assume the caller's conversation or attachments are inherited.";
 const AGENT_UNRESOLVED_GUIDANCE =
-  "When agent work is unresolved, handle required agent control, then do only concrete work independent of unresolved agent assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not poll, duplicate delegated work, or invent work merely to remain active.";
+  "When agent work is unresolved, handle required agent control, then continue only necessary work outside unresolved assignments or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms, and do not invent work merely to remain active.";
 const AGENT_OPERATIONAL_DESCRIPTION = `Coordinate managed agents.
 
 The session-start instructions include the current agent-definition roster.
-Use list for live agent state, ownership, or a refreshed definition roster
-after configuration changes.
+Use list when fresh agent state or ownership is materially needed for a concrete
+control or recovery decision, or to refresh the definition roster after
+configuration changes. Do not use list merely to check progress.
 
 Use delegate to start one bounded assignment from an agent definition.
 A delegate fork selects an exact saved Pi session as historical context for a
@@ -338,9 +339,11 @@ objective to the narrowest capable owner and let delegation-enabled agents own
 their permitted supporting agents. Reuse adequate existing evidence instead
 of duplicating work.`;
 const DELEGATING_AGENT_SCOPE_DESCRIPTION = `Own only the assigned objective and your direct permitted agents. Agent-started
-agents are leaves. Keep tightly coupled work local; delegate bounded
-independent or unfamiliar work when useful. Reuse adequate supplied evidence
-rather than rediscovering it. Integrate direct agent results before completing.
+agents are leaves. Delegating transfers execution ownership of the assigned
+scope to that agent until the assignment resolves. Do not perform or assign
+overlapping work. Keep tightly coupled work local; delegate bounded independent
+or unfamiliar work when useful. Reuse adequate supplied evidence rather than
+rediscovering it. Integrate direct agent results after resolution.
 The lead retains architecture, approved scope, acceptance, and final-decision
 authority. Delegate only to definitions listed in your effective agents field.
 ask_owner follows its normal eligibility rules when you have no unresolved
