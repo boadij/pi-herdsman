@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
   controlMarker,
@@ -582,11 +583,12 @@ test("startup claims serialize access and reset preserves the claim", () => {
 });
 test("startup claims recover one valid dead PID and reject malformed claims", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
+  const staleId = randomUUID();
   resetAgentMailbox(path);
   mkdirSync(join(path, ".starting"));
   writeFileSync(
-    join(path, ".starting", "999999-dead"),
-    JSON.stringify({ pid: 999999, id: "dead" }),
+    join(path, ".starting", `2147483647-${staleId}`),
+    JSON.stringify({ pid: 2147483647, id: staleId }),
   );
   const release = claimAgentMailbox(path);
   release();
@@ -598,14 +600,16 @@ test("startup claims recover one valid dead PID and reject malformed claims", ()
 test("stale recovery cannot remove a replacement owner", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const claimDir = join(path, ".starting");
+  const staleId = randomUUID();
+  const freshId = randomUUID();
   resetAgentMailbox(path);
   mkdirSync(claimDir);
   writeFileSync(
-    join(claimDir, "999999-stale"),
-    JSON.stringify({ pid: 999999, id: "stale" }),
+    join(claimDir, `2147483647-${staleId}`),
+    JSON.stringify({ pid: 2147483647, id: staleId }),
   );
-  const freshOwner = `${process.pid}-fresh`;
-  const freshPayload = { pid: process.pid, id: "fresh" };
+  const freshOwner = `${process.pid}-${freshId}`;
+  const freshPayload = { pid: process.pid, id: freshId };
   let staleObserved = false;
   assert.throws(
     () =>

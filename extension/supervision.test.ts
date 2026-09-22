@@ -1500,7 +1500,15 @@ test("Chief lease authority rejects strict malformed lock claims", () => {
         );
       }
       assert.equal(chiefLeaseIsHeld(lease.runtime), false);
-      lease.release();
+      if (malformed === "unexpected") {
+        assert.throws(
+          () => lease.release(),
+          /Unable to verify Chief supervision lease ownership/,
+        );
+        rmSync(lease.runtime.lock, { recursive: true, force: true });
+      } else {
+        lease.release();
+      }
       if (malformed === "missing") {
         assert.equal(
           readFileSync(lease.runtime.descriptor, "utf8").length > 0,
