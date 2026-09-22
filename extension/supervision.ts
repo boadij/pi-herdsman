@@ -15,6 +15,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import {
   acquireProcessLock,
+  isProcessLockClaim,
   readLiveProcessLock,
   type ProcessLockClaim,
 } from "./lock.ts";
@@ -250,8 +251,8 @@ function fsyncDirectory(directory: string): void {
 function withChiefMessageLock<T>(path: string, operation: () => T): T {
   const lock = `${path}.lock`;
   // Publish a verified PID/UUID owner so a crash-held lock can be reclaimed
-  // only after its owner is proven dead. Live, ambiguous, and malformed locks
-  // fail closed and are retried by the caller.
+  // only after its recorded PID no longer exists. Live, ambiguous, and
+  // malformed locks fail closed and are retried by the caller.
   const lease = acquireProcessLock(lock, { name: "Chief message lock" });
   try {
     return operation();
@@ -1028,10 +1029,6 @@ export function peerLeadLockPath(
 function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  const claim =
-    record.claim && typeof record.claim === "object"
-      ? (record.claim as Record<string, unknown>)
-      : undefined;
   const metadata = ["name", "cwd", "repo", "branch", "workspaceLabel"];
   return (
     Object.keys(record).every((key) =>
@@ -1063,12 +1060,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     metadata.every(
       (key) => !Object.hasOwn(record, key) || validNativeIdentity(record[key]),
     ) &&
-    !!claim &&
-    Object.keys(claim).length === 2 &&
-    Number.isInteger(claim.pid) &&
-    (claim.pid as number) > 0 &&
-    typeof claim.id === "string" &&
-    UUID.test(claim.id) &&
+    isProcessLockClaim(record.claim) &&
     Number.isInteger(record.updatedAt) &&
     (record.updatedAt as number) >= 0
   );
@@ -1078,9 +1070,7 @@ function livePeerClaim(
   runtime: PeerRuntime,
   piSessionId: string,
 ): ProcessLockClaim {
-  const claim = readLiveProcessLock(peerLeadLockPath(runtime, piSessionId));
-  if (!claim) throw new Error("Peer lead process is not live");
-  return claim;
+  return readLiveProcessLock(peerLeadLockPath(runtime, piSessionId));
 }
 
 export function samePeerLeadRecord(
@@ -1236,10 +1226,6 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     "createdAt",
   ];
   const optional = ["tabId"];
-  const claim =
-    record.claim && typeof record.claim === "object"
-      ? (record.claim as Record<string, unknown>)
-      : undefined;
   return (
     Object.keys(record).every(
       (key) => keys.includes(key) || optional.includes(key),
@@ -1251,14 +1237,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
       record.leaseId,
     ) &&
-    !!claim &&
-    Object.keys(claim).length === 2 &&
-    Number.isInteger(claim.pid) &&
-    (claim.pid as number) > 0 &&
-    typeof claim.id === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-      claim.id,
-    ) &&
+    isProcessLockClaim(record.claim) &&
     typeof record.piSessionId === "string" &&
     record.piSessionId.length > 0 &&
     record.piSessionId.length <= 512 &&
@@ -1297,30 +1276,7 @@ export function readChiefDescriptor(
 
 export function chiefLeaseIsHeld(runtime: SupervisionRuntime): boolean {
   try {
-    const entries = readdirSync(runtime.lock);
-    if (entries.length !== 1) return false;
-    const owner = entries[0];
-    const claim = JSON.parse(
-      readFileSync(join(runtime.lock, owner), "utf8"),
-    ) as {
-      pid?: unknown;
-      id?: unknown;
-    };
-    if (
-      Object.keys(claim).length !== 2 ||
-      !Object.prototype.hasOwnProperty.call(claim, "pid") ||
-      !Object.prototype.hasOwnProperty.call(claim, "id") ||
-      !Number.isInteger(claim.pid) ||
-      (claim.pid as number) <= 0 ||
-      typeof claim.id !== "string" ||
-      !claim.id ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-        claim.id,
-      ) ||
-      owner !== `${claim.pid}-${claim.id}`
-    )
-      return false;
-    process.kill(claim.pid as number, 0);
+    const claim = readLiveProcessLock(runtime.lock, "Chief supervision lease");
     const descriptor = readChiefDescriptor(runtime.descriptor);
     return (
       descriptor.claim.pid === claim.pid && descriptor.claim.id === claim.id

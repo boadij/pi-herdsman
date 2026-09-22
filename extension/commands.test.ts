@@ -875,7 +875,9 @@ test("lead session-start continues when chief lease release fails", async () => 
     entries.some(
       (entry: any) =>
         entry.customType === "pi_herdsman_role_error" &&
-        entry.data.error.includes("Chief supervision lease ownership changed"),
+        entry.data.error.includes(
+          "Unable to verify Chief supervision lease ownership",
+        ),
     ),
   );
   await pi.events.get("session_shutdown")?.[0]();

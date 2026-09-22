@@ -48,11 +48,12 @@ test("acquireProcessLock returns an exact claim", () => {
 
 test("claim wrapper retains atomic stale recovery after a crash", () => {
   const path = temporaryPath();
+  const id = randomUUID();
   try {
     mkdirSync(path, 0o700);
     writeFileSync(
-      join(path, "999999-stale"),
-      JSON.stringify({ pid: 999999, id: "stale" }),
+      join(path, `2147483647-${id}`),
+      JSON.stringify({ pid: 2147483647, id }),
     );
     throws(
       () =>
@@ -75,12 +76,13 @@ test("claim wrapper retains atomic stale recovery after a crash", () => {
 
 test("stale recovery reports a concurrent claimant as occupied", () => {
   const path = temporaryPath();
+  const id = randomUUID();
   let releaseConcurrent: (() => void) | undefined;
   try {
     mkdirSync(path, 0o700);
     writeFileSync(
-      join(path, "999999-stale"),
-      JSON.stringify({ pid: 999999, id: "stale" }),
+      join(path, `2147483647-${id}`),
+      JSON.stringify({ pid: 2147483647, id }),
     );
     throws(
       () =>
@@ -93,6 +95,22 @@ test("stale recovery reports a concurrent claimant as occupied", () => {
     );
   } finally {
     releaseConcurrent?.();
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+test("stale recovery rejects malformed evidence without touching it", () => {
+  const path = temporaryPath();
+  const owner = "2147483647-stale";
+  try {
+    mkdirSync(path, 0o700);
+    writeFileSync(
+      join(path, owner),
+      JSON.stringify({ pid: 2147483647, id: "stale" }),
+    );
+    throws(() => claimProcessLock(path), /Unable to verify process lock/);
+    deepEqual(readdirSync(path), [owner]);
+  } finally {
     rmSync(path, { recursive: true, force: true });
   }
 });

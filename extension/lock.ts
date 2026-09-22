@@ -8,6 +8,9 @@ export class ProcessLockOccupiedError extends Error {
 
 export type ProcessLockClaim = { pid: number; id: string };
 
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 type ProcessLockLease = { claim: ProcessLockClaim; release: () => void };
 
 type ProcessLockOptions = {
@@ -15,6 +18,39 @@ type ProcessLockOptions = {
   name?: string;
   occupiedMessage?: string;
 };
+
+export function isProcessLockClaim(value: unknown): value is ProcessLockClaim {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const claim = value as Record<string, unknown>;
+  if (
+    Object.keys(claim).length !== 2 ||
+    !Object.hasOwn(claim, "pid") ||
+    !Object.hasOwn(claim, "id") ||
+    !Number.isInteger(claim.pid) ||
+    (claim.pid as number) <= 0 ||
+    typeof claim.id !== "string" ||
+    !UUID.test(claim.id)
+  )
+    return false;
+  return true;
+}
+
+function readProcessLockClaim(path: string, owner: string): ProcessLockClaim {
+  const claim: unknown = JSON.parse(fs.readFileSync(join(path, owner), "utf8"));
+  if (!isProcessLockClaim(claim) || owner !== `${claim.pid}-${claim.id}`)
+    throw new Error("invalid process lock claim");
+  return claim;
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
 
 function publishClaim(
   parent: string,
@@ -65,37 +101,13 @@ export function readLiveProcessLock(
   if (entries.length !== 1) throw new Error(verifyMessage);
 
   const owner = entries[0];
-  let claim: unknown;
   try {
-    claim = JSON.parse(fs.readFileSync(join(path, owner), "utf8"));
+    const claim = readProcessLockClaim(path, owner);
+    if (!processExists(claim.pid)) throw new Error(verifyMessage);
+    return claim;
   } catch (error) {
     throw new Error(verifyMessage, { cause: error });
   }
-  if (!claim || typeof claim !== "object" || Array.isArray(claim))
-    throw new Error(verifyMessage);
-  const parsed = claim as { pid?: unknown; id?: unknown };
-  if (
-    Object.keys(parsed).length !== 2 ||
-    !Object.prototype.hasOwnProperty.call(parsed, "pid") ||
-    !Object.prototype.hasOwnProperty.call(parsed, "id") ||
-    typeof parsed.pid !== "number" ||
-    !Number.isInteger(parsed.pid) ||
-    parsed.pid <= 0 ||
-    typeof parsed.id !== "string" ||
-    !parsed.id ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-      parsed.id,
-    ) ||
-    owner !== `${parsed.pid}-${parsed.id}`
-  )
-    throw new Error(verifyMessage);
-
-  try {
-    process.kill(parsed.pid, 0);
-  } catch (error) {
-    throw new Error(verifyMessage, { cause: error });
-  }
-  return { pid: parsed.pid, id: parsed.id };
 }
 
 export function acquireProcessLock(
@@ -112,9 +124,10 @@ export function acquireProcessLock(
   fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
   fs.chmodSync(parent, 0o700);
   const claimDir = path;
-  const id = randomUUID();
-  const payload = JSON.stringify({ pid: process.pid, id });
-  const ownerPath = join(claimDir, `${process.pid}-${id}`);
+  const claim: ProcessLockClaim = { pid: process.pid, id: randomUUID() };
+  const owner = `${claim.pid}-${claim.id}`;
+  const payload = JSON.stringify(claim);
+  const ownerPath = join(claimDir, owner);
 
   // An empty canonical directory is ambiguous and must not be replaced.
   try {
@@ -126,7 +139,7 @@ export function acquireProcessLock(
   try {
     // Publish the complete claim with one rename.  In particular, never
     // create the canonical directory before its owner record exists.
-    publishClaim(parent, claimDir, `${process.pid}-${id}`, payload);
+    publishClaim(parent, claimDir, owner, payload);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EPERM")
@@ -142,36 +155,19 @@ export function acquireProcessLock(
     }
     if (entries.length !== 1) throw new Error(verifyMessage);
     const observedOwner = entries[0];
-    const observedPath = join(claimDir, observedOwner);
-    let claim: { pid?: unknown; id?: unknown };
+    let staleClaim: ProcessLockClaim;
     try {
-      claim = JSON.parse(fs.readFileSync(observedPath, "utf8")) as {
-        pid?: unknown;
-        id?: unknown;
-      };
+      staleClaim = readProcessLockClaim(claimDir, observedOwner);
     } catch {
       throw new Error(verifyMessage);
     }
-    if (
-      !claim ||
-      typeof claim.pid !== "number" ||
-      !Number.isInteger(claim.pid) ||
-      claim.pid <= 0 ||
-      typeof claim.id !== "string" ||
-      !claim.id ||
-      observedOwner !== `${claim.pid}-${claim.id}`
-    )
-      throw new Error(verifyMessage);
-    let alive = false;
     try {
-      process.kill(claim.pid, 0);
-      alive = true;
-    } catch (probeError) {
-      const code = (probeError as NodeJS.ErrnoException).code;
-      if (code !== "ESRCH")
-        throw new Error(verifyMessage, { cause: probeError });
+      if (processExists(staleClaim.pid))
+        throw new ProcessLockOccupiedError(occupiedMessage);
+    } catch (error) {
+      if (error instanceof ProcessLockOccupiedError) throw error;
+      throw new Error(verifyMessage, { cause: error });
     }
-    if (alive) throw new ProcessLockOccupiedError(occupiedMessage);
     // Move the complete, verified stale claim out of the canonical name in one
     // operation. Never unlink the owner while leaving an empty canonical
     // directory behind.
@@ -183,10 +179,11 @@ export function acquireProcessLock(
       const currentEntries = fs.readdirSync(claimDir);
       if (currentEntries.length !== 1 || currentEntries[0] !== observedOwner)
         throw new ProcessLockOccupiedError(occupiedMessage);
-      const currentClaim = JSON.parse(
-        fs.readFileSync(join(claimDir, observedOwner), "utf8"),
-      ) as { pid?: unknown; id?: unknown };
-      if (currentClaim.pid !== claim.pid || currentClaim.id !== claim.id)
+      const currentClaim = readProcessLockClaim(claimDir, observedOwner);
+      if (
+        currentClaim.pid !== staleClaim.pid ||
+        currentClaim.id !== staleClaim.id
+      )
         throw new ProcessLockOccupiedError(occupiedMessage);
     } catch (error) {
       if (error instanceof ProcessLockOccupiedError) throw error;
@@ -216,12 +213,10 @@ export function acquireProcessLock(
     )
       throw new ProcessLockOccupiedError(occupiedMessage);
     try {
-      const quarantinedClaim = JSON.parse(
-        fs.readFileSync(join(quarantine, observedOwner), "utf8"),
-      ) as { pid?: unknown; id?: unknown };
+      const quarantinedClaim = readProcessLockClaim(quarantine, observedOwner);
       if (
-        quarantinedClaim.pid !== claim.pid ||
-        quarantinedClaim.id !== claim.id
+        quarantinedClaim.pid !== staleClaim.pid ||
+        quarantinedClaim.id !== staleClaim.id
       )
         throw new ProcessLockOccupiedError(occupiedMessage);
     } catch (error) {
@@ -236,7 +231,7 @@ export function acquireProcessLock(
       throw new Error(recoverMessage, { cause: cleanupError });
     }
     try {
-      publishClaim(parent, claimDir, `${process.pid}-${id}`, payload);
+      publishClaim(parent, claimDir, owner, payload);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "EEXIST" || code === "ENOTEMPTY" || code === "EPERM")
@@ -245,9 +240,8 @@ export function acquireProcessLock(
     }
   }
   return {
-    claim: { pid: process.pid, id },
-    release: () =>
-      releaseProcessLock(claimDir, ownerPath, process.pid, id, name),
+    claim,
+    release: () => releaseProcessLock(claimDir, ownerPath, claim, name),
   };
 }
 
@@ -261,21 +255,17 @@ export function claimProcessLock(
 function releaseProcessLock(
   claimDir: string,
   ownerPath: string,
-  pid: number,
-  id: string,
+  claim: ProcessLockClaim,
   name: string,
 ): void {
-  let current: { pid?: unknown; id?: unknown };
+  let current: ProcessLockClaim;
   try {
-    current = JSON.parse(fs.readFileSync(ownerPath, "utf8")) as {
-      pid?: unknown;
-      id?: unknown;
-    };
+    current = readProcessLockClaim(claimDir, basename(ownerPath));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw new Error(`Unable to verify ${name} ownership`);
+    throw new Error(`Unable to verify ${name} ownership`, { cause: error });
   }
-  if (current.pid !== pid || current.id !== id)
+  if (current.pid !== claim.pid || current.id !== claim.id)
     throw new Error(
       `${name[0].toUpperCase()}${name.slice(1)} ownership changed`,
     );
