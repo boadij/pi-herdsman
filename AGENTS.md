@@ -19,28 +19,6 @@ Repository changes must follow the principles in
 Apply them across runtime behavior, model-facing instructions, tools, schemas,
 state, validation, documentation, tests, and public interfaces.
 
-## Runtime / skill instruction synchronization
-
-The runtime operational contract must be self-contained. Loading root
-`SKILL.md` must never be required for a lead session, delegating agent, or
-managed agent to operate Pi Herdsman correctly.
-
-`SKILL.md` intentionally repeats mandatory runtime operational instructions as
-optional reinforcement for long contexts and may add strategy, rationale,
-examples, recovery detail, and product guidance.
-
-When changing mandatory operational behavior or guidance:
-
-1. update the corresponding runtime instructions in `extension/index.ts`;
-2. update the matching mirrored operational section in `SKILL.md` in the same
-   change;
-3. update affected canonical documentation and focused contract tests;
-4. never introduce a mandatory operational requirement only in `SKILL.md`.
-
-Runtime instructions are authoritative if surfaces conflict. Do not remove
-useful mirrored guidance from `SKILL.md`, and do not make runtime load, parse,
-or depend on the skill.
-
 ## Runtime instruction authority
 
 Runtime behavior and authoritative runtime contracts define Herdsman's
