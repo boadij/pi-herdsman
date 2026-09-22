@@ -340,7 +340,7 @@ and final decisions. Decompose only as far as useful. Assign each independent
 objective to the narrowest capable owner and let delegation-enabled agents own
 their permitted supporting agents. Reuse adequate existing evidence instead
 of duplicating work.`;
-const DELEGATING_AGENT_SCOPE_DESCRIPTION = `Own only the non-delegated remainder of the assigned objective and your direct permitted agents. Agent-started
+const DELEGATING_AGENT_SCOPE_DESCRIPTION = `Own the assigned objective and your direct permitted agents. While direct assignments are unresolved, your execution scope is limited to the non-delegated remainder. Agent-started
 agents are leaves. ${AGENT_EXECUTION_OWNERSHIP_GUIDANCE} Keep tightly coupled work local; delegate bounded independent
 or unfamiliar work when useful. Reuse adequate supplied evidence rather than
 rediscovering it. Integrate direct agent results after resolution.

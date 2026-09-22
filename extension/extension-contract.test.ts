@@ -3389,7 +3389,11 @@ test("delegating agents receive only their allowed definition roster", async () 
     description,
     /ordinary active or pending-result agent work still blocks escalation/,
   );
-  assert.match(description, /Own only the non-delegated remainder/);
+  assert.match(description, /Own the assigned objective/);
+  assert.match(
+    description,
+    /execution scope is limited to the non-delegated remainder/,
+  );
   assert.match(
     description,
     /Each unresolved unit of work has one executor\. Delegating a scope transfers its execution ownership to that agent until the assignment resolves\. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work\. Continue only concrete, necessary work clearly outside the delegated scope that you still own\./,
