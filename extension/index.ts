@@ -3052,15 +3052,10 @@ function listedAgentRecords(
   return visible.map(({ listed, state, presence, parentLabel }) => {
     const direct = state.ownerSessionId === ownerSessionId;
     const transcriptAvailable = persistedTranscriptReady(state);
+    const mailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
+    const durableResultPending = hasDurableResult(mailbox, state);
     const actions: string[] = [];
-    if (
-      direct &&
-      presence.kind === "lost" &&
-      !hasDurableResult(
-        agentMailboxPath(state.workspaceId, state.agentLabel),
-        state,
-      )
-    ) {
+    if (direct && presence.kind === "lost" && !durableResultPending) {
       if (transcriptAvailable) actions.push("transcript");
       actions.push("close");
     } else if (presence.kind === "live" && direct && !listed.recovery_only) {
@@ -3071,10 +3066,7 @@ function listedAgentRecords(
         actions.push("interrupt");
       if (state.pendingAskId) {
         try {
-          const ask = readPendingAsk(
-            agentMailboxPath(state.workspaceId, state.agentLabel),
-            state,
-          );
+          const ask = readPendingAsk(mailbox, state);
           if (
             ask?.askId === state.pendingAskId &&
             ask.requestId === state.activeRequestId &&
@@ -3088,7 +3080,7 @@ function listedAgentRecords(
             actions.push("reply");
         } catch {}
       }
-      actions.push("close");
+      if (!durableResultPending) actions.push("close");
     }
     const {
       label: _label,
