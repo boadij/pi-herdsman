@@ -57,7 +57,7 @@ if (process.argv.includes("--dispatch-check")) {
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         },
         convertToLlm: async (messages) => messages,
-        shouldStopAfterTurn: () => true,
+        finishTurn: () => ({ action: "end" }),
       },
       (event) => {
         if (event.type === "tool_execution_end") executionEnd = event;
