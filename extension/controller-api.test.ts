@@ -343,50 +343,6 @@ test("managed agent validates project definitions before publishing state", asyn
   }
 });
 
-test("project agents reject cross-cwd assignment before agent startup", async () => {
-  setLeadEnvironment();
-  const project = realFs.mkdtempSync(
-    join(tmpdir(), "pi-herdsman-assign-project-"),
-  );
-  realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
-  realFs.writeFileSync(
-    join(project, ".pi", "agents", "project-only.md"),
-    "---\nname: project-only\n---\nproject",
-  );
-  const pi = fakePi({
-    exec: (command, args) =>
-      command === "herdr" && args[0] === "--version"
-        ? { stdout: "0.8.0", stderr: "", code: 0 }
-        : { stdout: "{}", stderr: "", code: 0 },
-  });
-  registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
-  context.cwd = project;
-  try {
-    const result = await pi.tools[0].execute(
-      "id",
-      {
-        action: "delegate",
-        definition: "project-only",
-        cwd: "/other",
-        task: "no",
-      },
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(result.details.error.category, "invalid_request");
-    assert.match(result.details.error.message, /belongs to/);
-    assert.equal(
-      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
-      false,
-    );
-  } finally {
-    pi.events.get("session_shutdown")?.[0]();
-    realFs.rmSync(project, { recursive: true, force: true });
-  }
-});
-
 test("trusted same-cwd project assignment launches with native approval", async () => {
   setLeadEnvironment();
   const project = realFs.mkdtempSync(
@@ -501,52 +457,46 @@ test("trusted same-cwd project assignment launches with native approval", async 
   })();
 });
 
-test("untrusted and cross-cwd assignments omit feature approval", async () => {
-  for (const scenario of [
-    { name: "untrusted", projectTrusted: false, cwd: undefined },
-    { name: "cross-cwd", projectTrusted: true, cwd: "/other" },
-  ]) {
-    setLeadEnvironment();
-    const project = realFs.mkdtempSync(
-      join(tmpdir(), `pi-herdsman-approval-${scenario.name}-`),
-    );
-    realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
-    const startArgs: string[][] = [];
-    const startup = startupExecutor(
-      "agent",
-      () => DEFAULT_PI_SESSION_ID,
+test("untrusted assignments omit project approval", async () => {
+  setLeadEnvironment();
+  const project = realFs.mkdtempSync(
+    join(tmpdir(), "pi-herdsman-approval-untrusted-"),
+  );
+  realFs.mkdirSync(join(project, ".pi", "agents"), { recursive: true });
+  const startArgs: string[][] = [];
+  const startup = startupExecutor(
+    "agent",
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    (args) => startArgs.push(args),
+    project,
+    AGENT_ID,
+  );
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.cwd = project;
+  context.isProjectTrusted = () => false;
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      {
+        action: "delegate",
+        definition: "agent",
+        task: "untrusted",
+      },
       undefined,
       undefined,
-      false,
-      (args) => startArgs.push(args),
-      scenario.cwd ?? project,
-      AGENT_ID,
+      context,
     );
-    const pi = fakePi({ exec: startup.exec });
-    registerExtension!(pi.pi as never);
-    const context = fakeContext() as any;
-    context.cwd = project;
-    context.isProjectTrusted = () => scenario.projectTrusted;
-    try {
-      const result = await pi.tools[0].execute(
-        "id",
-        {
-          action: "delegate",
-          definition: "agent",
-          cwd: scenario.cwd,
-          task: scenario.name,
-        },
-        undefined,
-        undefined,
-        context,
-      );
-      assert.equal(result.details.ok, true, JSON.stringify(result.details));
-      assert.equal(startArgs[0]?.includes("--approve"), false);
-    } finally {
-      pi.events.get("session_shutdown")?.[0]();
-      resetAgentMailbox(startup.mailbox);
-      realFs.rmSync(project, { recursive: true, force: true });
-    }
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(startArgs[0]?.includes("--approve"), false);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(project, { recursive: true, force: true });
   }
 });
 
@@ -673,7 +623,7 @@ test("same-cwd managed parents resolve project children", async () => {
   }
 });
 
-test("parent controller readiness, allowlist, and cwd preflight fail closed", async () => {
+test("parent controller readiness and allowlist fail closed", async () => {
   setAgentEnvironment("delegating-parent", ["child"]);
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parent = managedState("delegating-parent");
@@ -734,27 +684,6 @@ test("parent controller readiness, allowlist, and cwd preflight fail closed", as
     );
     assert.equal(unauthorized.details.error.category, "invalid_request");
     assert.equal(unauthorized.details.error.message, "Invalid agent input");
-    const beforeLifecycle = pi.calls.length;
-    const cwdMismatch = await tool.execute(
-      "id",
-      {
-        action: "delegate",
-        definition: "child",
-        cwd: "/other",
-        task: "wrong cwd",
-      },
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(cwdMismatch.details.error.category, "invalid_request");
-    assert.match(cwdMismatch.details.error.message, /delegating agent cwd/);
-    assert.equal(
-      pi.calls
-        .slice(beforeLifecycle)
-        .some((args) => args[0] === "agent" && args[1] === "start"),
-      false,
-    );
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
     resetAgentMailbox(parentMailbox);

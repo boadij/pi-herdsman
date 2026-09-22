@@ -575,7 +575,6 @@ type Params =
       action: "delegate";
       definition: string;
       label?: string;
-      cwd?: string;
       task: string;
       files?: string[];
       fork?: string;
@@ -663,7 +662,6 @@ function parseRequest(p: Params): Params {
       definition: p.definition,
       task: p.task!,
       ...(p.label !== undefined ? { label: p.label } : {}),
-      ...(p.cwd !== undefined ? { cwd: p.cwd } : {}),
       ...(p.files !== undefined ? { files: p.files } : {}),
       ...(p.fork !== undefined ? { fork: p.fork } : {}),
       ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
@@ -5603,7 +5601,7 @@ async function actionUnsafe(
         : undefined;
     await herdrVersion(pi, ctx, signal);
     const agentDefinition = resumed ? resumed.definition : p.definition;
-    const agentCwd = resumed ? resumed.cwd : (p.cwd ?? ctx.cwd);
+    const agentCwd = resumed ? resumed.cwd : ctx.cwd;
     const requestedLabel =
       resumed?.label ?? (p.action === "delegate" ? p.label : undefined);
     const agentContext = await contextAgentDefinitions(ctx);
@@ -6618,12 +6616,6 @@ export default function (pi: ExtensionAPI): void {
             description:
               "Optional logical agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
             pattern: AGENT_LABEL_PATTERN.source,
-          }),
-        ),
-        cwd: Type.Optional(
-          Type.String({
-            description: "Working directory for a fresh agent.",
-            pattern: "\\S",
           }),
         ),
         fork: Type.Optional(
