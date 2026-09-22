@@ -53,14 +53,14 @@ Chief is a mode of a lead session. While active, its model has exactly the
 chief model context; workspace-specific work remains the responsibility of
 supervised leads. Chief supervises independent Leads, does not own their
 agents, and receives no owner controls. `/chief leave` restores the session's
-ordinary tools.
+ordinary tools. Activating Chief mode also fails closed while managed mailbox
+state is unresolved, because the Lead cannot safely prove that it owns no
+managed agent work.
 
 ## Lead projection and actions
 
 An eligible lead requires one exact live recognized Pi agent, a matching lead
-record, no chief or validated managed agent identity, and no unresolved managed
-mailbox state. Unresolved mailbox state fails closed because ownership cannot be
-attributed safely. A lead's observed
+record, and no chief or validated managed agent identity. A lead's observed
 runtime state is informational. Every exact-identity-verified live lead has
 `inspect` and `message`, whether it is idle, working, blocked, done, or unknown.
 A non-empty persisted session candidate adds `transcript` to
