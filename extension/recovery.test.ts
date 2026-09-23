@@ -1628,6 +1628,106 @@ test("one-shot close failure retains the result for exact cleanup retry", async 
   }
 });
 
+test("delivered-result cascade retries descendant mailbox cleanup failure", async (t) => {
+  setLeadEnvironment();
+  const parent = {
+    ...managedState(
+      "cascade-mailbox-retry-parent",
+      undefined,
+      recoveryIdentity("cascade-mailbox-retry-parent"),
+    ),
+    piSessionId: PARENT_SESSION_ID,
+    piSessionFile: join(testTmpRoot, "cascade-mailbox-retry-parent.jsonl"),
+    completedRequestId: REQUEST_ID,
+  };
+  const child = {
+    ...managedState(
+      "cascade-mailbox-retry-child",
+      undefined,
+      recoveryIdentity("cascade-mailbox-retry-child"),
+    ),
+    ownerSessionId: parent.piSessionId,
+    piSessionId: CHILD_SESSION_ID,
+    piSessionFile: join(testTmpRoot, "cascade-mailbox-retry-child.jsonl"),
+  };
+  writeFileSync(parent.piSessionFile, "{}", "utf8");
+  writeFileSync(child.piSessionFile, "{}", "utf8");
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(childMailbox);
+  const obstruction = join(childMailbox, "stubborn-directory");
+  realFs.mkdirSync(obstruction);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(childMailbox, child);
+  writeResult(parentMailbox, {
+    version: 4,
+    runId: parent.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: parent.ownerSessionId,
+    workspaceId: parent.workspaceId,
+    agentLabel: parent.agentLabel,
+    paneId: parent.paneId,
+    status: "completed",
+    text: "delivered parent result",
+    completedAt: Date.now(),
+  });
+  const lifecycle = cascadeExecutor([parent, child]);
+  const entries: unknown[] = [];
+  const pi = fakePi({
+    entries,
+    exec: lifecycle.exec,
+    sendMessage: (message) => {
+      if ((message as any).customType === "pi-herdsman-agent-result")
+        entries.push({
+          customType: "pi-herdsman-agent-result",
+          details: resultEntryDetails(parent, REQUEST_ID),
+        });
+    },
+  });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => t.mock.timers.reset());
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext(entries));
+    for (let index = 0; index < 8; index++)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(lifecycle.closeOrder, [child.agentLabel]);
+    assert.ok(readAgentState(parentMailbox), "root must remain anchored");
+    assert.ok(readResult(parentMailbox, REQUEST_ID));
+    assert.ok(
+      realFs.existsSync(obstruction),
+      "failed descendant mailbox remains",
+    );
+    assert.ok(
+      entries.some(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_cleanup_error" &&
+          /stubborn-directory/.test(String(entry.data?.error)),
+      ),
+    );
+
+    realFs.rmSync(obstruction, { recursive: true, force: true });
+    t.mock.timers.tick(250);
+    for (let index = 0; index < 10; index++)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(lifecycle.closeOrder, [
+      child.agentLabel,
+      parent.agentLabel,
+    ]);
+    assert.equal(readAgentState(parentMailbox), undefined);
+    assert.equal(readResult(parentMailbox, REQUEST_ID), undefined);
+    assert.equal(readAgentState(childMailbox), undefined);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+    realFs.rmSync(parent.piSessionFile!, { force: true });
+    realFs.rmSync(child.piSessionFile!, { force: true });
+  }
+});
+
 test("recovery redelivers an unpersisted child result and then cleans it safely", async () => {
   setLeadEnvironment();
   const child = {
