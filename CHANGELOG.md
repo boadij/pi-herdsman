@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.2](https://github.com/boadij/pi-herdsman/compare/v0.13.1...v0.13.2) (2026-09-23)
+
+
+### Fixes
+
+* attach bounded diagnosis to stale attention ([#126](https://github.com/boadij/pi-herdsman/issues/126)) ([738ec43](https://github.com/boadij/pi-herdsman/commit/738ec43dbdb4ea158fbd13c8987ddef155cb120d))
+* continue interrupted agents after Pi settlement ([#123](https://github.com/boadij/pi-herdsman/issues/123)) ([4389247](https://github.com/boadij/pi-herdsman/commit/43892477bfa4a209b7cee0efdf4c525197d22700))
+* harden managed-agent cleanup lifecycle ([#127](https://github.com/boadij/pi-herdsman/issues/127)) ([3330696](https://github.com/boadij/pi-herdsman/commit/3330696ddee703956fb367ba9d5c077b6740c592))
+
 ## [0.13.1](https://github.com/boadij/pi-herdsman/compare/v0.13.0...v0.13.1) (2026-09-22)
 
 
