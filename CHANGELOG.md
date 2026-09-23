@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.1](https://github.com/boadij/pi-herdsman/compare/v0.13.0...v0.13.1) (2026-09-22)
+
+
+### Refactoring
+
+* consolidate agent handoff contract ([#120](https://github.com/boadij/pi-herdsman/issues/120)) ([b8f58c4](https://github.com/boadij/pi-herdsman/commit/b8f58c46195259e4bc05a9c81e85127646a2f809))
+
+
+### Other Changes
+
+* validate Pi 0.87.1 ([#121](https://github.com/boadij/pi-herdsman/issues/121)) ([0e36eb0](https://github.com/boadij/pi-herdsman/commit/0e36eb0d477997614bc854bac54829cfe3952b90))
+
 ## [0.13.0](https://github.com/boadij/pi-herdsman/compare/v0.12.1...v0.13.0) (2026-09-22)
 
 
