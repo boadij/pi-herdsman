@@ -105,4 +105,27 @@ verify_runtime
 remote 'grep -q persist-package ~/.pi/agent/settings.json && test "$(persist-tool)" = persisted'
 test "$host_fingerprint" = "$(docker exec "$name" ssh-keygen -lf /var/lib/herdsman/ssh/ssh_host_ed25519_key.pub)"
 
+docker exec "$name" sh -c 'printf root-owned-sentinel > /home/herdsman/root-owned-target; chmod 0644 /home/herdsman/root-owned-target'
+test "$(docker exec "$name" stat -c %u /home/herdsman/root-owned-target)" = 0
+target_before="$(docker exec "$name" stat -c '%u:%a' /home/herdsman/root-owned-target):$(docker exec "$name" cat /home/herdsman/root-owned-target)"
+remote 'ln -sf /home/herdsman/root-owned-target ~/.ssh/authorized_keys'
+docker rm -f "$name" >/dev/null
+docker run -d \
+  --name "$name" \
+  -e SSH_AUTHORIZED_KEYS="$(cat "$tmp/id.pub")" \
+  -v "$home:/home/herdsman" \
+  -v "$ssh_state:/var/lib/herdsman/ssh" \
+  "$image" >/dev/null
+sleep 2
+test "$(docker inspect -f '{{.State.Status}}' "$name")" = exited
+test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" -ne 0
+target_after="$(docker run --rm --entrypoint /bin/sh -v "$home:/home/herdsman" "$image" -c 'stat -c "%u:%a" /home/herdsman/root-owned-target; cat /home/herdsman/root-owned-target' | tr '\n' ':')"
+target_after="${target_after%:}"
+test "$target_after" = "$target_before"
+test "$(docker run --rm --entrypoint /bin/sh -v "$home:/home/herdsman" "$image" -c 'stat -c %a /home/herdsman/root-owned-target')" = 644
+docker rm -f "$name" >/dev/null 2>&1 || true
+docker run --rm --user 1000:1000 --entrypoint /bin/sh -v "$home:/home/herdsman" "$image" -c 'rm -f /home/herdsman/.ssh/authorized_keys /home/herdsman/root-owned-target'
+start
+verify_runtime
+
 echo "Container smoke test passed (Pi $expected_pi)."

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing GitHub release tag to retry npm publication
+        description: Existing GitHub release tag to retry release publication
         required: true
         type: string
 
@@ -84,6 +84,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          PACKAGE=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
           test "v$VERSION" = "$RELEASE_TAG"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -91,7 +92,11 @@ jobs:
 
           npm ci
           npm run release:check
-          npm publish
+          if npm view "$PACKAGE@$VERSION" version >/dev/null; then
+            echo "$PACKAGE@$VERSION is already published; skipping npm publish"
+          else
+            npm publish
+          fi
 
       - name: Set up QEMU
         if: ${{ steps.target.outputs.publish == 'true' }}

@@ -16,19 +16,19 @@ if [ ! -s "$host_keys/ssh_host_ed25519_key" ]; then
   ssh-keygen -q -t ed25519 -N '' -f "$host_keys/ssh_host_ed25519_key"
 fi
 
-install -d -m 0700 -o herdsman -g herdsman "$home/.ssh"
+runuser -u herdsman -- install -d -m 0700 "$home/.ssh"
 
-if [ ! -s "$authorized_keys" ]; then
+if ! runuser -u herdsman -- test -s "$authorized_keys"; then
   if [ -z "${SSH_AUTHORIZED_KEYS:-}" ]; then
     echo "SSH_AUTHORIZED_KEYS is required on first start" >&2
     exit 1
   fi
 
-  printf '%s\n' "$SSH_AUTHORIZED_KEYS" > "$authorized_keys"
+  printf '%s\n' "$SSH_AUTHORIZED_KEYS" |
+    runuser -u herdsman -- sh -c 'umask 077; cat > "$1"' sh "$authorized_keys"
 fi
 
-chown herdsman:herdsman "$authorized_keys"
-chmod 0600 "$authorized_keys"
+runuser -u herdsman -- chmod 0600 "$authorized_keys"
 
 runuser -u herdsman -- \
   env HOME="$home" USER=herdsman LOGNAME=herdsman \
