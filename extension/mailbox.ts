@@ -619,9 +619,16 @@ export function removeAgentMailbox(path: string): void {
     throw error;
   }
   for (const name of names) {
-    if (name === ".starting") continue;
+    if (name === ".starting" || name === "state.json") continue;
     try {
       unlinkSync(file(path, name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  if (names.includes("state.json")) {
+    try {
+      unlinkSync(file(path, "state.json"));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }

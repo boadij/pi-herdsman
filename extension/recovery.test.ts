@@ -1695,6 +1695,11 @@ test("delivered-result cascade retries descendant mailbox cleanup failure", asyn
 
     assert.deepEqual(lifecycle.closeOrder, [child.agentLabel]);
     assert.ok(readAgentState(parentMailbox), "root must remain anchored");
+    assert.deepEqual(
+      readAgentState(childMailbox),
+      child,
+      "failed mailbox cleanup must preserve the durable identity anchor",
+    );
     assert.ok(readResult(parentMailbox, REQUEST_ID));
     assert.ok(
       realFs.existsSync(obstruction),
@@ -2535,7 +2540,11 @@ test("close returns a structured nonfatal mailbox cleanup warning", async () => 
     assert.match(result.details.cleanup_error, /mailbox cleanup failed/);
     assert.equal(result.details.cleanup_errors, undefined);
     assert.deepEqual(lifecycle.closeOrder, [parent.agentLabel]);
-    assert.equal(readAgentState(mailbox), undefined);
+    assert.deepEqual(
+      readAgentState(mailbox),
+      parent,
+      "incomplete mailbox cleanup must preserve its durable identity anchor",
+    );
     assert.ok(
       pi.entries.some(
         (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
