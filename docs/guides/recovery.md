@@ -13,17 +13,20 @@ and it is published only when the owner is idle. Read the exact condition and
 the event's current `available_actions` before acting; the eventual action
 rechecks identity, ownership, mailbox state, and lifecycle.
 
-Use this decision sequence:
+For stale attention, use this decision sequence:
 
-1. Need persisted conversation or tool history? Use `transcript`.
-2. Need live terminal or process evidence? Use `inspect`.
-3. Is the work healthy or legitimately long-running? Leave it alone.
-4. Is a cooperative correction needed? Use `steer`.
-5. Must the current operation itself be abandoned? Use `interrupt`; it cancels
+1. Read the bounded evidence supplied with the first stale attention.
+2. If that evidence is absent or insufficient, use one bounded diagnostic read:
+   `transcript` for persisted history or `inspect` for live terminal/process
+   state.
+3. If healthy or legitimately long-running, leave the agent alone.
+4. Use `steer` for cooperative correction.
+5. Use `interrupt` only when the current operation must be abandoned; it cancels
    that operation, supersedes earlier undelivered steering, and continues the
    same assignment.
-6. Is the assignment being abandoned? Use `close`.
-7. Is an owner decision pending? Use `reply` for the exact pending question.
+6. Use `close` only when abandoning the assignment is intended.
+7. Do not repeat reads merely because the same stale episode was reminded
+   again.
 
 Persistent actionable conditions may repeat approximately `5m → 2m30s →
 1m15s → 1m`, with 30-second scan granularity. Reminder state is process-local

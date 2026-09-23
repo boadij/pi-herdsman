@@ -108,6 +108,9 @@ approximately `5m → 2m30s → 1m15s → 1m`, subject to the 30-second health s
 Leave healthy or legitimately long-running work alone. Use `transcript` for
 persisted evidence and `inspect` for live evidence; stale alone does not justify
 `interrupt` or `close`.
+The stale episode is defined by its active request and last qualifying activity;
+first-attention diagnosis is bounded, and repeated reminders do not automatically
+repeat the live capture.
 
 ## See also
 

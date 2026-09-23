@@ -178,7 +178,7 @@ test("managed requests pump through Pi semantic input", async () => {
       },
       {
         content: controlMarker(interrupt.requestId),
-        options: { deliverAs: "followUp" },
+        options: { deliverAs: "steer" },
       },
     ]);
   } finally {
@@ -187,7 +187,7 @@ test("managed requests pump through Pi semantic input", async () => {
   }
 });
 
-test("managed interrupt aborts the current Pi operation and replaces direction", () => {
+test("managed interrupt continues the same assignment after abort settlement", async () => {
   const mailbox = setAgentEnvironment("interrupt-agent");
   const assignmentRequestId = REQUEST_ID;
   const initial = managedState("interrupt-agent", assignmentRequestId);
@@ -227,27 +227,6 @@ test("managed interrupt aborts the current Pi operation and replaces direction",
       text: "Stop this operation and continue differently.",
       createdAt: Date.now(),
     };
-    writeRequest(mailbox, interrupt);
-    const transformed = input()(
-      { text: controlMarker(interrupt.requestId) },
-      context,
-    );
-    assert.equal(aborted, 1);
-    assert.equal(editorText, "manual unsent draft");
-    assert.equal(
-      readAgentState(mailbox)?.lastAck?.requestId,
-      interrupt.requestId,
-    );
-    assert.equal(readAgentState(mailbox)?.activeRequestId, assignmentRequestId);
-    assert.deepEqual(transformed, {
-      action: "transform",
-      text:
-        "Owner interrupt:\n\n" +
-        "Stop this operation and continue differently.\n\n" +
-        "The previous in-flight operation was intentionally aborted. " +
-        "Continue the original assignment using this replacement instruction.",
-    });
-
     const steer: RequestRecord = {
       ...interrupt,
       requestId: randomUUID(),
@@ -260,6 +239,83 @@ test("managed interrupt aborts the current Pi operation and replaces direction",
       input()({ text: controlMarker(steer.requestId) }, context),
       { action: "transform", text: steer.text },
     );
+    assert.equal(aborted, 0);
+
+    writeRequest(mailbox, interrupt);
+    const handled = input()(
+      { text: controlMarker(interrupt.requestId) },
+      context,
+    );
+    assert.equal(aborted, 1);
+    assert.equal(editorText, "manual unsent draft");
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      interrupt.requestId,
+    );
+    assert.equal(readAgentState(mailbox)?.activeRequestId, assignmentRequestId);
+    assert.deepEqual(handled, { action: "handled" });
+
+    const replacementSteer: RequestRecord = {
+      ...steer,
+      requestId: randomUUID(),
+      text: "This steer must be rejected while the interrupt settles.",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, replacementSteer);
+    assert.deepEqual(
+      input()({ text: controlMarker(replacementSteer.requestId) }, context),
+      { action: "handled" },
+    );
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      replacementSteer.requestId,
+    );
+    assert.equal(readAgentState(mailbox)?.lastAck?.accepted, false);
+    assert.equal(readAgentState(mailbox)?.lastAck?.code, "busy");
+    assert.equal(aborted, 1);
+
+    agent.events.get("message_end")![0](
+      {
+        message: {
+          role: "assistant",
+          content: "partial output from the aborted operation",
+          stopReason: "aborted",
+        },
+      },
+      context,
+    );
+    await agent.events.get("agent_settled")![0](undefined, context);
+    assert.equal(readResult(mailbox, assignmentRequestId), undefined);
+    assert.equal(readAgentState(mailbox)?.activeRequestId, assignmentRequestId);
+    assert.equal(readAgentState(mailbox)?.completedRequestId, undefined);
+    assert.deepEqual(agent.sentUserCalls, [
+      {
+        content:
+          "Owner interrupt:\n\n" +
+          "Stop this operation and continue differently.\n\n" +
+          "The previous in-flight operation was intentionally aborted. " +
+          "Continue the original assignment using this replacement instruction.",
+        options: undefined,
+      },
+    ]);
+
+    agent.events.get("message_end")![0](
+      {
+        message: { role: "assistant", content: "completed after interrupt" },
+      },
+      context,
+    );
+    await agent.events.get("agent_settled")![0](undefined, context);
+    assert.equal(readResult(mailbox, assignmentRequestId)?.status, "completed");
+    assert.equal(
+      readResult(mailbox, assignmentRequestId)?.text,
+      "completed after interrupt",
+    );
+    assert.equal(
+      readAgentState(mailbox)?.completedRequestId,
+      assignmentRequestId,
+    );
+
     assert.equal(aborted, 1);
 
     const idleInterrupt: RequestRecord = {
@@ -1648,7 +1704,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       unresolvedStatus.endsWith(
         "Delegation status: 1 active direct agent; 1 pending direct result; 2 direct agent assignments remain unresolved. " +
           "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. " +
-          "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms, and do not invent work merely to remain active.",
+          "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when it is absent or insufficient, perform at most one bounded diagnostic read before returning to passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
       ),
     );
     assert.equal(
@@ -1693,7 +1749,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       String((pi.sentMessageCalls[1].message as any).content).endsWith(
         "Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved. " +
           "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. " +
-          "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms, and do not invent work merely to remain active.",
+          "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when it is absent or insufficient, perform at most one bounded diagnostic read before returning to passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
       ),
     );
     assert.equal(

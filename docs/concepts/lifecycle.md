@@ -107,6 +107,11 @@ The owner does not invent side work merely because agents are running. It does
 not poll, sleep, inspect or transcript merely for progress, send status steering, or use
 another mechanism to keep the turn alive.
 
+Routine progress checking remains prohibited. A stale health-attention event is
+different: it is an unsolicited diagnostic boundary. Use its attached evidence
+first; if that evidence is absent or insufficient, perform at most one bounded
+diagnostic read before passive waiting.
+
 Health reconciliation follows the same boundary. It is event-driven, with a
 30-second fallback scan for durable and physical state that has not emitted a
 separate event. Each scan reconciles fresh mailbox and Herdr evidence for the
@@ -135,14 +140,25 @@ blocked while waiting for direct children is progress-capable and is not the
 same as Herdr reporting that the managed child runtime is blocked.
 
 When attention arrives, the owner handles a required action before ending the
-turn. For evidence, use `transcript` for persisted Pi conversation and tool
-history, and `inspect` for live terminal/process state. Leave healthy or
-legitimately long-running stale work alone. Use `steer` for a cooperative
-non-preemptive correction, `interrupt` to cancel the current operation,
-supersede earlier undelivered steering, and continue the same assignment,
-`close` to abandon an assignment, and
-`reply` only for the exact pending owner question. Do not poll or keep the turn
-alive solely to wait for agent progress.
+turn. For stale attention:
+
+1. Read the bounded evidence supplied with the first stale attention.
+2. If that evidence is absent or insufficient, use one bounded diagnostic read:
+   `transcript` for persisted history or `inspect` for live terminal/process
+   state.
+3. If healthy or legitimately long-running, leave the agent alone.
+4. Use `steer` for a cooperative non-preemptive correction.
+5. Use `interrupt` only when the current operation must be abandoned; it cancels
+   the operation, supersedes earlier undelivered steering, and continues the
+   same assignment.
+6. Use `close` only when abandoning the assignment is intended.
+7. Do not repeat reads merely because the same stale episode was reminded
+   again.
+
+For other attention, use `transcript` for persisted Pi conversation and tool
+history and `inspect` for live terminal/process state as needed. Use `reply` only
+for the exact pending owner question. Do not poll or keep the turn alive solely
+to wait for agent progress.
 
 Conceptually:
 
