@@ -635,10 +635,8 @@ export function removeAgentMailbox(path: string): void {
   }
   try {
     rmdirSync(path);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST")
-      throw error;
+  } catch {
+    // State removal is the logical cleanup commit point; pruning is best effort.
   }
 }
 export function writeAgentState(path: string, state: ManagedAgentState): void {
