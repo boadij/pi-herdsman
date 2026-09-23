@@ -159,6 +159,12 @@ cadence is approximately `5m → 2m30s → 1m15s → 1m` with 30-second scan
 granularity. The first stale advisory remains eligible after ten minutes
 without qualifying execution progress.
 
+The first stale attention for an episode attempts one bounded live inspect
+capture when inspect is currently authorized. The automatic capture has a short
+health-path deadline and does not change agent state. The stale message may
+carry the same live evidence fields exposed by inspect. Repeated reminders for
+the same episode do not automatically capture again.
+
 Generic attention reasons are:
 
 - `result_error`: a terminal result could not be durably persisted; follow the
@@ -185,11 +191,13 @@ first observes that the original ask was successfully delivered. The reminder
 path never duplicates first ask delivery. Unknown is the exception to repeated
 attention: it is one notification per unresolved physical-identity episode.
 
-For recovery evidence, use `transcript` for persisted Pi conversation and tool
-history, and `inspect` for live terminal/process evidence. Use `steer` for a
-cooperative correction. Use `interrupt` only to cancel the current operation;
-it supersedes earlier undelivered steering and continues the same durable
-assignment. Use `close` only when abandoning the
+For stale recovery, use supplied evidence first. If it is absent or
+insufficient, perform at most one bounded diagnostic read: `transcript` for
+persisted conversation/tool history or `inspect` for live terminal/process
+evidence. Do not repeat a read solely because the same stale episode was
+reminded again. Use `steer` for a cooperative correction. Use `interrupt` only
+to cancel the current operation; it supersedes earlier undelivered steering and
+continues the same durable assignment. Use `close` only when abandoning the
 assignment is intended. Do not poll or create another delivery path for health
 attention.
 
