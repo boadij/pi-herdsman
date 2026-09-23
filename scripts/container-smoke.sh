@@ -5,12 +5,13 @@ image=pi-herdsman:smoke
 name="pi-herdsman-smoke-$$"
 home="${name}-home"
 ssh_state="${name}-ssh"
+custom_volume="${name}-identity-home"
 tmp="$(mktemp -d)"
 port=
 
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
-  docker volume rm "$home" "$ssh_state" >/dev/null 2>&1 || true
+  docker volume rm "$home" "$ssh_state" "$custom_volume" >/dev/null 2>&1 || true
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -18,6 +19,19 @@ trap cleanup EXIT
 ssh-keygen -q -t ed25519 -N '' -f "$tmp/id"
 
 docker build --platform linux/amd64 -t "$image" .
+
+default_ids="$(
+  docker run --rm --entrypoint /bin/sh "$image" \
+    -c 'printf "%s:%s" "$(id -u herdsman)" "$(id -g herdsman)"'
+)"
+
+if docker run --rm \
+  -e PUID=0 \
+  "$image" >"$tmp/invalid-id.log" 2>&1; then
+  echo "PUID=0 unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q 'PUID must be a positive decimal integer' "$tmp/invalid-id.log"
 
 expected_pi="$(node -p 'require("./package-lock.json").packages["node_modules/@earendil-works/pi-coding-agent"].version')"
 
@@ -80,6 +94,52 @@ done
 test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" -ne 0
 docker logs "$name" 2>&1 | grep -q 'SSH_AUTHORIZED_KEYS is required on first start'
 docker rm "$name" >/dev/null
+
+if [ "$(uname -s)" = Darwin ]; then
+  # Docker Desktop translates host bind-mount IDs; use a Linux volume for numeric ownership checks.
+  docker volume create "$custom_volume" >/dev/null
+  custom_home="$custom_volume"
+else
+  custom_home="$tmp/custom-home"
+  mkdir "$custom_home"
+fi
+docker run --rm \
+  --entrypoint /bin/sh \
+  -v "$custom_home:/mnt" \
+  "$image" \
+  -c "chown 12345:23456 /mnt
+      : > /mnt/preserved-owner
+      chown $default_ids /mnt/preserved-owner"
+
+docker run -d \
+  --name "$name" \
+  -e PUID=12345 \
+  -e PGID=23456 \
+  -e SSH_AUTHORIZED_KEYS="$(cat "$tmp/id.pub")" \
+  -v "$custom_home:/home/herdsman" \
+  "$image" >/dev/null
+for _ in $(seq 1 30); do
+  if docker exec "$name" pgrep -x sshd >/dev/null 2>&1; then
+    break
+  fi
+
+  if [ "$(docker inspect -f '{{.State.Status}}' "$name")" = exited ]; then
+    docker logs "$name"
+    echo "custom UID/GID container exited during startup" >&2
+    exit 1
+  fi
+
+  sleep 1
+done
+docker exec "$name" pgrep -x sshd >/dev/null
+test "$(docker exec "$name" id -u herdsman)" = 12345
+test "$(docker exec "$name" id -g herdsman)" = 23456
+docker exec "$name" \
+  runuser -u herdsman -- \
+  touch /home/herdsman/custom-owner
+test "$(docker run --rm --entrypoint stat -v "$custom_home:/mnt:ro" "$image" -c '%u:%g' /mnt/custom-owner)" = '12345:23456'
+test "$(docker run --rm --entrypoint stat -v "$custom_home:/mnt:ro" "$image" -c '%u:%g' /mnt/preserved-owner)" = "$default_ids"
+docker rm -f "$name" >/dev/null
 
 start
 verify_runtime
@@ -154,7 +214,12 @@ target_after="${target_after%:}"
 test "$target_after" = "$target_before"
 test "$(docker run --rm --entrypoint /bin/sh -v "$home:/home/herdsman" "$image" -c 'stat -c %a /home/herdsman/root-owned-target')" = 644
 docker rm -f "$name" >/dev/null 2>&1 || true
-docker run --rm --user 1000:1000 --entrypoint /bin/sh -v "$home:/home/herdsman" "$image" -c 'rm -f /home/herdsman/.ssh/authorized_keys /home/herdsman/root-owned-target'
+docker run --rm \
+  --user herdsman \
+  --entrypoint /bin/sh \
+  -v "$home:/home/herdsman" \
+  "$image" \
+  -c 'rm -f /home/herdsman/.ssh/authorized_keys /home/herdsman/root-owned-target'
 start
 verify_runtime
 

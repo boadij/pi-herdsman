@@ -9,6 +9,8 @@ services:
 
     environment:
       SSH_AUTHORIZED_KEYS: ${SSH_AUTHORIZED_KEYS:-}
+      PUID: "${PUID:-}"
+      PGID: "${PGID:-}"
 
     volumes:
       - herdsman-home:/home/herdsman

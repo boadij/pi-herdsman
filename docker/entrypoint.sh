@@ -5,8 +5,49 @@ home=/home/herdsman
 host_keys=/var/lib/herdsman/ssh
 authorized_keys="$home/.ssh/authorized_keys"
 
+current_uid="$(id -u herdsman)"
+current_gid="$(id -g herdsman)"
+puid="${PUID:-$current_uid}"
+pgid="${PGID:-$current_gid}"
+
+validate_id() {
+  name="$1"
+  value="$2"
+
+  case "$value" in
+    ''|0*|*[!0-9]*)
+      echo "$name must be a positive decimal integer" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_id PUID "$puid"
+validate_id PGID "$pgid"
+
+if [ "$pgid" != "$current_gid" ]; then
+  if group="$(getent group "$pgid")"; then
+    echo "PGID $pgid is already used by group ${group%%:*}" >&2
+    exit 1
+  fi
+
+  groupmod -g "$pgid" herdsman
+fi
+
+if [ "$puid" != "$current_uid" ]; then
+  if user="$(getent passwd "$puid")"; then
+    echo "PUID $puid is already used by user ${user%%:*}" >&2
+    exit 1
+  fi
+
+  # ponytail: remap account metadata only; mounted home ownership stays host-managed.
+  usermod -d /nonexistent herdsman
+  usermod -u "$puid" herdsman
+  usermod -d "$home" herdsman
+fi
+
 if ! runuser -u herdsman -- test -w "$home"; then
-  echo "$home must be writable by UID 1000" >&2
+  echo "$home must be writable by herdsman (UID $(id -u herdsman), GID $(id -g herdsman))" >&2
   exit 1
 fi
 

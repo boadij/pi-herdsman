@@ -61,9 +61,30 @@ The default Compose setup persists two volumes:
 - `/var/lib/herdsman/ssh` contains the SSH server host key, preserving server
   identity when the container is replaced.
 
-The home directory must be writable by UID 1000, which is the `herdsman`
-account in the image. Repositories can live under the persistent home, for
-example `~/projects`. Host checkouts can be mounted explicitly when needed.
+The image uses its built-in `herdsman` UID and GID by default. For Linux or NAS
+bind mounts owned by a different host account, set `PUID` and `PGID` to the
+directory owner's numeric IDs:
+
+```sh
+PUID="$(id -u docker-user)" \
+PGID="$(id -g docker-user)" \
+SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" \
+docker compose up -d
+```
+
+You can also set `PUID` and `PGID` in the Compose `.env` file:
+
+```dotenv
+PUID=1035
+PGID=65537
+```
+
+The container remaps the `herdsman` account but does not change ownership of
+the mounted home. Prepare the host directory so the configured IDs can write
+it. Existing volumes are not migrated automatically; startup fails if
+`/home/herdsman` is not writable by the resulting account. Repositories can
+live under the persistent home, for example `~/projects`. Host checkouts can
+be mounted explicitly when needed.
 
 ## Additional tools
 
