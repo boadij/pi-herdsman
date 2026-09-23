@@ -2,9 +2,12 @@
 
 [Documentation index](../README.md)
 
-The Pi Herdsman container provides an SSH-ready Pi, Herdr, and Pi Herdsman
-environment. OpenSSH is the user interface; connect with your own SSH key and
-use Pi and Herdr normally.
+The Pi Herdsman container is a portable, self-hosted execution environment for
+coding agents. It packages Pi, herdr, Pi Herdsman, developer tooling, and
+OpenSSH while keeping mutable user state under `/home/herdsman`.
+
+Use it locally or as a remote coding-agent machine. OpenSSH is the access
+boundary; connect with your own SSH key and use Pi and herdr normally.
 
 Pi sessions automatically receive image-owned environment context from
 `/AGENTS.md`, including persistence boundaries, available tool categories, and
@@ -38,6 +41,28 @@ variable later does not replace an existing authorized-keys file. SSH agent
 forwarding remains available, so `ssh -A` can be used when a session needs
 access to private Git repositories without copying private keys into the
 container.
+
+## Herdr Machines
+
+After normal SSH access works, save the container as a herdr machine from the
+computer running your local herdr client:
+
+```sh
+herdr machine add ssh://herdsman@host:2222 --label my-herd
+```
+
+For a host already configured in `~/.ssh/config`:
+
+```sh
+herdr machine add my-herd --label my-herd
+```
+
+Each machine keeps its own herdr server, sessions, and running processes.
+Connected machine workspaces and agents appear alongside Local in the same
+herdr window, and disconnecting the client does not stop the remote work.
+
+See the [herdr machine documentation](https://herdr.dev/docs/connecting-machines/)
+for machine management and SSH configuration.
 
 ## Updates
 
