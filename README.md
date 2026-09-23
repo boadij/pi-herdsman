@@ -7,15 +7,21 @@
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/boadij/pi-herdsman/actions/workflows/validate.yml)
 [![License](https://img.shields.io/npm/l/pi-herdsman)](LICENSE)
 
-**Asynchronous [Pi](https://github.com/earendil-works/pi) subagents and agent fleet orchestration with nested delegation, parallel execution, and supervision in [herdr](https://github.com/herdrdev/herdr).**
+**Asynchronous [Pi](https://github.com/earendil-works/pi) subagents and agent fleet orchestration for parallel coding agents with nested delegation, background work, and supervision in [herdr](https://github.com/herdrdev/herdr).**
 
 Keep the conversation. Delegate the work.
 
-Pi Herdsman is a Pi extension for asynchronous subagents. Delegate coding
-tasks to managed background agents running in independent Pi sessions while
-the lead conversation stays interactive. Run agents in parallel, nest
-delegation, steer active agents, route questions and results back to their
-owning agent, and supervise multiple leads through one coordinated hierarchy.
+Pi Herdsman is a Pi extension for asynchronous subagents and multi-agent
+coding. Delegate coding tasks to managed background agents running in
+independent Pi sessions while the lead conversation stays interactive. Run
+coding agents in parallel, nest delegation, steer active agents, route
+questions and results back to their owning agent, and supervise multiple leads
+through one coordinated hierarchy.
+
+Use it in an existing Pi/herdr setup or deploy the SSH-ready container as a
+portable remote coding-agent environment. [herdr Machines](https://herdr.dev/docs/connecting-machines/)
+can bring local and remote workspaces and agents into one herdr window over
+normal SSH.
 
 Pi Herdsman calls its managed subagents **agents**.
 
@@ -34,21 +40,13 @@ agents, and a delegation-enabled agent may own permitted agents of its own.
 Agent definitions, models, tools, extensions, and development process remain up
 to you.
 
-Chief supervision is separate from ownership:
-
-```text
-chief
-  ├─ herd A / lead A
-  │  └─ agents...
-  └─ herd B / lead B
-     └─ agents...
-```
-
 ## Demo
 
 ![Pi Herdsman delegating a coding task to an asynchronous subagent while the lead Pi session remains interactive.](docs/assets/demo.gif)
 
 ## Install
+
+### Existing Pi / herdr
 
 ```sh
 pi install npm:pi-herdsman
@@ -66,6 +64,22 @@ Then run Pi in the Herdr pane:
 ```sh
 pi
 ```
+
+### Docker / remote machine
+
+For a self-contained, SSH-ready remote coding-agent environment, see
+[Container deployment](docs/guides/container-deployment.md).
+
+Once normal SSH access works, the same container can be saved as a herdr
+machine:
+
+```sh
+herdr machine add ssh://herdsman@host:2222 --label my-herd
+```
+
+A host defined in normal SSH configuration can be used directly instead.
+
+## Try it
 
 Ask Pi normally:
 
@@ -95,6 +109,16 @@ To supervise independent leads across the current herdr runtime, use:
 
 ```text
 /chief
+```
+
+Chief supervision is separate from ownership:
+
+```text
+chief
+  ├─ herd A / lead A
+  │  └─ agents...
+  └─ herd B / lead B
+     └─ agents...
 ```
 
 Leave chief mode with:
@@ -158,7 +182,8 @@ tools, extensions, skills, and instructions.
 - Pi `>=0.87.0 <0.88.0` (supported)
 - Node `>=22.19.0`
 
-CI validates Node 22.19.0 with the locked dependency set.
+Package CI validates the minimum supported Node 22.19.0 runtime. The container
+separately ships and validates Node 26.
 
 Install or refresh the herdr Pi integration:
 

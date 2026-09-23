@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing GitHub release tag to retry npm publication
+        description: Existing GitHub release tag to retry release publication
         required: true
         type: string
 
@@ -15,6 +15,7 @@ permissions:
   id-token: write
   issues: write
   pull-requests: write
+  packages: write
 
 concurrency:
   group: release
@@ -70,22 +71,56 @@ jobs:
       - uses: actions/setup-node@v6
         if: ${{ steps.target.outputs.publish == 'true' }}
         with:
-          node-version: 24
+          node-version: 26
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - name: Publish released npm version
         if: ${{ steps.target.outputs.publish == 'true' }}
+        id: package
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.target.outputs.tag }}
         run: |
           set -euo pipefail
 
+          PACKAGE=$(node -p "require('./package.json').name")
           VERSION=$(node -p "require('./package.json').version")
           test "v$VERSION" = "$RELEASE_TAG"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
 
           npm ci
           npm run release:check
-          npm publish
+          if npm view "$PACKAGE@$VERSION" version >/dev/null; then
+            echo "$PACKAGE@$VERSION is already published; skipping npm publish"
+          else
+            npm publish
+          fi
+
+      - name: Set up QEMU
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish container
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.package.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest

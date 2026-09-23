@@ -12,7 +12,7 @@ test("release publication uses explicit release identity", () => {
   );
   assert.match(
     workflow,
-    /workflow_dispatch:[\s\S]*tag:[\s\S]*required:\s*true/,
+    /workflow_dispatch:[\s\S]*tag:[\s\S]*description:\s*Existing GitHub release tag to retry release publication[\s\S]*required:\s*true/,
   );
   assert.match(workflow, /steps\.release\.outputs\.release_created/);
   assert.match(workflow, /steps\.release\.outputs\.tag_name/);
@@ -35,5 +35,8 @@ test("release publication uses explicit release identity", () => {
   assert.match(workflow, /test "v\$VERSION" = "\$RELEASE_TAG"/);
   assert.match(workflow, /gh release view "\$RELEASE_TAG"/);
   assert.match(workflow, /npm run release:check/);
-  assert.doesNotMatch(workflow, /\bnpm view\b/);
+  assert.match(
+    workflow,
+    /npm run release:check[\s\S]*if npm view "\$PACKAGE@\$VERSION" version >\/dev\/null; then\s+echo "\$PACKAGE@\$VERSION is already published; skipping npm publish"\s+else\s+npm publish\s+fi[\s\S]*- name: Set up QEMU/,
+  );
 });

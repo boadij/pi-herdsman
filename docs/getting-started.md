@@ -21,6 +21,9 @@ pi install npm:pi-herdsman
 herdr integration install pi
 ```
 
+For an SSH-ready Docker deployment instead, see the
+[container deployment guide](guides/container-deployment.md).
+
 ## 2. Start Herdr and Pi
 
 Start Herdr in your project:

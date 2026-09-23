@@ -1,0 +1,22 @@
+Port 22
+
+HostKey /var/lib/herdsman/ssh/ssh_host_ed25519_key
+
+PermitRootLogin no
+PasswordAuthentication no
+PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+AuthorizedKeysFile .ssh/authorized_keys
+AllowUsers herdsman
+
+UsePAM no
+X11Forwarding no
+
+AcceptEnv LANG LC_*
+
+SetEnv PATH=/home/herdsman/.local/share/mise/shims:/home/herdsman/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+SetEnv NPM_CONFIG_PREFIX=/home/herdsman/.local
+
+Subsystem sftp internal-sftp

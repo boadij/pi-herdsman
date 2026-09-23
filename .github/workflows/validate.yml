@@ -27,3 +27,11 @@ jobs:
           package-manager-cache: false
       - run: npm ci
       - run: npm run validate
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: scripts/container-smoke.sh
+      - run: docker compose config
+      - run: docker compose -f compose.yaml -f compose.tailscale.yaml config

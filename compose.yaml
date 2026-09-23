@@ -1,0 +1,21 @@
+services:
+  herdsman:
+    image: ghcr.io/boadij/pi-herdsman:latest
+    init: true
+    restart: unless-stopped
+
+    ports:
+      - "${HERDSMAN_SSH_PORT:-2222}:22"
+
+    environment:
+      SSH_AUTHORIZED_KEYS: ${SSH_AUTHORIZED_KEYS:-}
+      PUID: "${PUID:-}"
+      PGID: "${PGID:-}"
+
+    volumes:
+      - herdsman-home:/home/herdsman
+      - herdsman-ssh:/var/lib/herdsman/ssh
+
+volumes:
+  herdsman-home:
+  herdsman-ssh:
