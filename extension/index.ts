@@ -10650,7 +10650,7 @@ export default function (pi: ExtensionAPI): void {
           return;
         const { state, listed } = agent;
         if (state.ownerSessionId !== ownerSessionId) continue;
-        const availableActions = currentAvailableActions(
+        let availableActions = currentAvailableActions(
           agent,
           view,
           ownerSessionId,
@@ -10977,7 +10977,9 @@ export default function (pi: ExtensionAPI): void {
         if (signal.aborted || generation !== healthGeneration) return;
         let diagnostic:
           Awaited<ReturnType<typeof captureManagedInspection>> | undefined;
-        if (firstAttention && availableActions.includes("inspect")) {
+        const attemptedDiagnostic =
+          firstAttention && availableActions.includes("inspect");
+        if (attemptedDiagnostic) {
           const diagnosticSignal = AbortSignal.any([
             signal,
             AbortSignal.timeout(STALE_DIAGNOSTIC_TIMEOUT_MS),
@@ -10996,6 +10998,35 @@ export default function (pi: ExtensionAPI): void {
           } catch {
             if (signal.aborted || generation !== healthGeneration) return;
           }
+        }
+        if (attemptedDiagnostic && !diagnostic) {
+          let refreshed: Awaited<ReturnType<typeof managedAgentSnapshots>>;
+          try {
+            refreshed = await managedAgentSnapshots(pi, ctx, signal);
+          } catch {
+            continue;
+          }
+          const refreshedAgent = refreshed.agents.find(
+            (candidate) =>
+              sameManagedAgentIdentity(candidate.state, current) &&
+              candidate.presence.kind === "live",
+          );
+          if (!refreshedAgent || refreshedAgent.listed.state !== "working")
+            continue;
+          const refreshedView: ManagedAgentSnapshotView = {
+            ...refreshed,
+            visible: visibleAgentSnapshots(
+              refreshed,
+              controllerScope,
+              ownerSessionId,
+            ),
+          };
+          availableActions = currentAvailableActions(
+            refreshedAgent,
+            refreshedView,
+            ownerSessionId,
+            unresolvedMailboxState,
+          );
         }
         const latest = currentOwnedState(current, ownerSessionId);
         if (
@@ -11075,7 +11106,6 @@ export default function (pi: ExtensionAPI): void {
                 "",
                 "This is advisory inactivity, not proof of a hang.",
                 "Streaming tool output does not count as qualifying progress.",
-                "Use transcript when persisted conversation/tool history is enough; use inspect only when live terminal/process evidence is needed.",
                 "If the current operation appears healthy or legitimately long-running, leave it alone.",
                 "Use steer for a non-preemptive correction.",
                 "Use interrupt only when the current operation itself must be abandoned; interrupt cancels that operation, supersedes earlier steering Pi has not yet delivered, and continues the same assignment.",

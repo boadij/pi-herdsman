@@ -13,7 +13,7 @@ and it is published only when the owner is idle. Read the exact condition and
 the event's current `available_actions` before acting; the eventual action
 rechecks identity, ownership, mailbox state, and lifecycle.
 
-Use this decision sequence:
+For stale attention, use this decision sequence:
 
 1. Read the bounded evidence supplied with the first stale attention.
 2. If that evidence is absent or insufficient, use one bounded diagnostic read:

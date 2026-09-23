@@ -4280,6 +4280,10 @@ test("delegation parent notifies only its direct stale child", async (t) => {
     /Streaming tool output does not count as qualifying progress/,
   );
   assert.match(advisory.content, /not proof of a hang/);
+  assert.doesNotMatch(
+    advisory.content,
+    /Use transcript when .*; use inspect only/,
+  );
   assert.match(advisory.content, /Bounded live diagnostic/);
   assert.match(advisory.content, /npm test/);
   assert.match(advisory.content, /42 passed/);
@@ -4416,6 +4420,57 @@ test("stale diagnostic failure still publishes advisory without recovery", async
           args[0] === "agent" && ["prompt", "close", "stop"].includes(args[1]!),
       ),
       false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("stale diagnostic failure refreshes physical state before publication", async () => {
+  setLeadEnvironment();
+  const label = "stale-diagnostic-physical-race";
+  const state = {
+    ...managedState(label, REQUEST_ID, recoveryIdentity(label)),
+    lastActivityAt: Date.now() - 11 * 60_000,
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, state);
+  const baseExec = agentControllerExecutor(state);
+  let snapshots = 0;
+  let diagnosisFailed = false;
+  let lifecycle: "working" | "blocked" = "working";
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (command === "herdr" && isApiSnapshot(args)) {
+        snapshots++;
+        const result = baseExec(command, args, options);
+        if (snapshots < 2) return result;
+        const payload = JSON.parse(result.stdout);
+        payload.result.snapshot.agents[0].agent_status = lifecycle;
+        payload.result.snapshot.panes[0].agent_status = lifecycle;
+        return { ...result, stdout: JSON.stringify(payload) };
+      }
+      if (args[0] === "agent" && args[1] === "get") {
+        diagnosisFailed = true;
+        lifecycle = "blocked";
+        return { stdout: "", stderr: "inspection unavailable", code: 1 };
+      }
+      return baseExec(command, args, options);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(diagnosisFailed, true);
+    assert.equal(snapshots, 2, "failure triggers a fresh physical snapshot");
+    assert.equal(
+      pi.sent.filter(
+        (message: any) => message.customType === "pi-herdsman-agent-stale",
+      ).length,
+      0,
+      "a no-longer-working target must not publish stale-working attention",
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
