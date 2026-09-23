@@ -1,0 +1,7 @@
+.git
+.github
+.backlog
+.local
+.pi-herdsman
+node_modules
+dist

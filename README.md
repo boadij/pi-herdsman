@@ -108,6 +108,11 @@ See [supervision](docs/concepts/supervision.md) and the
 
 For the complete walkthrough, see [Getting started](docs/getting-started.md).
 
+### Docker
+
+For a self-contained SSH-ready Pi + Herdr + Pi Herdsman environment, see
+[Container deployment](docs/guides/container-deployment.md).
+
 ## Why Pi Herdsman?
 
 - **Async subagents by default.** Assignments return after acceptance while agents keep
@@ -158,7 +163,8 @@ tools, extensions, skills, and instructions.
 - Pi `>=0.87.0 <0.88.0` (supported)
 - Node `>=22.19.0`
 
-CI validates Node 22.19.0 with the locked dependency set.
+Package CI validates the minimum supported Node 22.19.0 runtime. The container
+separately ships and validates Node 26.
 
 Install or refresh the herdr Pi integration:
 
