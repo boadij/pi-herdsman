@@ -109,10 +109,22 @@ PUID=1035
 PGID=65537
 ```
 
-Then start normally:
+Create `compose.bind-mount.yaml` to replace the home volume with the host
+directory while keeping the SSH server identity in its named volume:
+
+```yaml
+services:
+  herdsman:
+    volumes:
+      - ./data/herdsman-home:/home/herdsman
+      - herdsman-ssh:/var/lib/herdsman/ssh
+```
+
+Start with both Compose files:
 
 ```sh
-SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose up -d
+SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" \
+docker compose -f compose.yaml -f compose.bind-mount.yaml up -d
 ```
 
 OpenSSH requires the home directory to be owned by root or the login user and
@@ -137,22 +149,22 @@ Tools installed with mise persist in the home volume.
 
 ## What persists?
 
-| Path | Contents |
-| --- | --- |
-| `/home/herdsman` | Pi and Herdr state, repositories, config, credentials, SSH state, installed tools |
-| `/var/lib/herdsman/ssh` | SSH server identity |
+| Path                    | Contents                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| `/home/herdsman`        | Pi and Herdr state, repositories, config, credentials, SSH state, installed tools |
+| `/var/lib/herdsman/ssh` | SSH server identity                                                               |
 
 Running processes do not survive a container restart.
 
 ## Defaults
 
-| Setting | Default |
-| --- | --- |
-| SSH port | `2222` |
-| User | `herdsman` |
+| Setting            | Default       |
+| ------------------ | ------------- |
+| SSH port           | `2222`        |
+| User               | `herdsman`    |
 | Tailscale hostname | `pi-herdsman` |
-| Password login | disabled |
-| Root SSH login | disabled |
+| Password login     | disabled      |
+| Root SSH login     | disabled      |
 
 `SSH_AUTHORIZED_KEYS` is required only on first start. Existing authorized keys are not overwritten.
 
