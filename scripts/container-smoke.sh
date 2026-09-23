@@ -118,18 +118,40 @@ docker run --rm \
   -v "$custom_home:/mnt" \
   "$image" \
   -c "chown 12345:23456 /mnt
+      chmod 0775 /mnt
       : > /mnt/preserved-owner
       chown $default_ids /mnt/preserved-owner"
 
+if docker run --rm \
+  -e PUID=12345 \
+  -e PGID=23456 \
+  -e SSH_AUTHORIZED_KEYS="$(cat "$tmp/id.pub")" \
+  -v "$custom_home:/home/herdsman" \
+  "$image" >"$tmp/unsafe-home.log" 2>&1; then
+  echo "group-writable home unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -Fq \
+  '/home/herdsman must be owned by root or UID 12345 and not writable by group or others for SSH public-key authentication (found UID 12345, mode 775)' \
+  "$tmp/unsafe-home.log"
+
+docker run --rm \
+  --entrypoint chmod \
+  -v "$custom_home:/mnt" \
+  "$image" \
+  go-w /mnt
+
 docker run -d \
   --name "$name" \
+  -p 127.0.0.1::22 \
   -e PUID=12345 \
   -e PGID=23456 \
   -e SSH_AUTHORIZED_KEYS="$(cat "$tmp/id.pub")" \
   -v "$custom_home:/home/herdsman" \
   "$image" >/dev/null
+port="$(docker port "$name" 22/tcp | sed 's/.*://')"
 for _ in $(seq 1 30); do
-  if docker exec "$name" pgrep -x sshd >/dev/null 2>&1; then
+  if remote true >/dev/null 2>&1; then
     break
   fi
 
@@ -141,7 +163,7 @@ for _ in $(seq 1 30); do
 
   sleep 1
 done
-docker exec "$name" pgrep -x sshd >/dev/null
+remote true
 test "$(docker exec "$name" id -u herdsman)" = 12345
 test "$(docker exec "$name" id -g herdsman)" = 23456
 docker exec "$name" \

@@ -46,6 +46,16 @@ if [ "$puid" != "$current_uid" ]; then
   usermod -d "$home" herdsman
 fi
 
+home_uid="$(stat -c %u "$home")"
+home_mode="$(stat -c %a "$home")"
+
+# Match OpenSSH StrictModes for the home before starting sshd.
+if { [ "$home_uid" -ne 0 ] && [ "$home_uid" -ne "$puid" ]; } ||
+  [ $((0$home_mode & 022)) -ne 0 ]; then
+  echo "$home must be owned by root or UID $puid and not writable by group or others for SSH public-key authentication (found UID $home_uid, mode $home_mode)" >&2
+  exit 1
+fi
+
 if ! runuser -u herdsman -- test -w "$home"; then
   echo "$home must be writable by herdsman (UID $(id -u herdsman), GID $(id -g herdsman))" >&2
   exit 1
