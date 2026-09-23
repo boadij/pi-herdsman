@@ -4925,6 +4925,22 @@ async function closeManagedAgentCascade(
       );
       try {
         await closeManagedSnapshot(pi, ctx, child, signal, stopReport);
+        if (
+          readAgentState(
+            agentMailboxPath(child.state.workspaceId, child.state.agentLabel),
+          )
+        )
+          fail(
+            "internal_failure",
+            "Descendant mailbox cleanup is unresolved",
+            "close",
+            {
+              ids: {
+                label: child.state.agentLabel,
+                paneId: child.state.paneId,
+              },
+            },
+          );
       } catch (error) {
         throw normalizeCloseFailure(
           error,
