@@ -178,7 +178,7 @@ test("managed requests pump through Pi semantic input", async () => {
       },
       {
         content: controlMarker(interrupt.requestId),
-        options: { deliverAs: "followUp" },
+        options: { deliverAs: "steer" },
       },
     ]);
   } finally {
@@ -187,7 +187,7 @@ test("managed requests pump through Pi semantic input", async () => {
   }
 });
 
-test("managed interrupt aborts the current Pi operation and replaces direction", () => {
+test("managed interrupt continues the same assignment after abort settlement", async () => {
   const mailbox = setAgentEnvironment("interrupt-agent");
   const assignmentRequestId = REQUEST_ID;
   const initial = managedState("interrupt-agent", assignmentRequestId);
@@ -227,27 +227,6 @@ test("managed interrupt aborts the current Pi operation and replaces direction",
       text: "Stop this operation and continue differently.",
       createdAt: Date.now(),
     };
-    writeRequest(mailbox, interrupt);
-    const transformed = input()(
-      { text: controlMarker(interrupt.requestId) },
-      context,
-    );
-    assert.equal(aborted, 1);
-    assert.equal(editorText, "manual unsent draft");
-    assert.equal(
-      readAgentState(mailbox)?.lastAck?.requestId,
-      interrupt.requestId,
-    );
-    assert.equal(readAgentState(mailbox)?.activeRequestId, assignmentRequestId);
-    assert.deepEqual(transformed, {
-      action: "transform",
-      text:
-        "Owner interrupt:\n\n" +
-        "Stop this operation and continue differently.\n\n" +
-        "The previous in-flight operation was intentionally aborted. " +
-        "Continue the original assignment using this replacement instruction.",
-    });
-
     const steer: RequestRecord = {
       ...interrupt,
       requestId: randomUUID(),
@@ -260,6 +239,83 @@ test("managed interrupt aborts the current Pi operation and replaces direction",
       input()({ text: controlMarker(steer.requestId) }, context),
       { action: "transform", text: steer.text },
     );
+    assert.equal(aborted, 0);
+
+    writeRequest(mailbox, interrupt);
+    const handled = input()(
+      { text: controlMarker(interrupt.requestId) },
+      context,
+    );
+    assert.equal(aborted, 1);
+    assert.equal(editorText, "manual unsent draft");
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      interrupt.requestId,
+    );
+    assert.equal(readAgentState(mailbox)?.activeRequestId, assignmentRequestId);
+    assert.deepEqual(handled, { action: "handled" });
+
+    const replacementSteer: RequestRecord = {
+      ...steer,
+      requestId: randomUUID(),
+      text: "This steer must be rejected while the interrupt settles.",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, replacementSteer);
+    assert.deepEqual(
+      input()({ text: controlMarker(replacementSteer.requestId) }, context),
+      { action: "handled" },
+    );
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      replacementSteer.requestId,
+    );
+    assert.equal(readAgentState(mailbox)?.lastAck?.accepted, false);
+    assert.equal(readAgentState(mailbox)?.lastAck?.code, "busy");
+    assert.equal(aborted, 1);
+
+    agent.events.get("message_end")![0](
+      {
+        message: {
+          role: "assistant",
+          content: "partial output from the aborted operation",
+          stopReason: "aborted",
+        },
+      },
+      context,
+    );
+    await agent.events.get("agent_settled")![0](undefined, context);
+    assert.equal(readResult(mailbox, assignmentRequestId), undefined);
+    assert.equal(readAgentState(mailbox)?.activeRequestId, assignmentRequestId);
+    assert.equal(readAgentState(mailbox)?.completedRequestId, undefined);
+    assert.deepEqual(agent.sentUserCalls, [
+      {
+        content:
+          "Owner interrupt:\n\n" +
+          "Stop this operation and continue differently.\n\n" +
+          "The previous in-flight operation was intentionally aborted. " +
+          "Continue the original assignment using this replacement instruction.",
+        options: undefined,
+      },
+    ]);
+
+    agent.events.get("message_end")![0](
+      {
+        message: { role: "assistant", content: "completed after interrupt" },
+      },
+      context,
+    );
+    await agent.events.get("agent_settled")![0](undefined, context);
+    assert.equal(readResult(mailbox, assignmentRequestId)?.status, "completed");
+    assert.equal(
+      readResult(mailbox, assignmentRequestId)?.text,
+      "completed after interrupt",
+    );
+    assert.equal(
+      readAgentState(mailbox)?.completedRequestId,
+      assignmentRequestId,
+    );
+
     assert.equal(aborted, 1);
 
     const idleInterrupt: RequestRecord = {
