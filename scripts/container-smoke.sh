@@ -11,7 +11,17 @@ port=
 
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
-  docker volume rm "$home" "$ssh_state" "$custom_volume" >/dev/null 2>&1 || true
+  docker volume rm "$home" "$ssh_state" >/dev/null 2>&1 || true
+  if [ -n "${custom_volume:-}" ]; then
+    docker volume rm "$custom_volume" >/dev/null 2>&1 || true
+  fi
+  if [ -d "$tmp/custom-home" ] && docker image inspect "$image" >/dev/null 2>&1; then
+    docker run --rm \
+      --entrypoint /bin/sh \
+      -v "$tmp:/cleanup" \
+      "$image" \
+      -c 'rm -rf /cleanup/custom-home' >/dev/null 2>&1 || true
+  fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
