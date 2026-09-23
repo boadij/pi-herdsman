@@ -255,6 +255,25 @@ test("managed interrupt continues the same assignment after abort settlement", a
     assert.equal(readAgentState(mailbox)?.activeRequestId, assignmentRequestId);
     assert.deepEqual(handled, { action: "handled" });
 
+    const replacementSteer: RequestRecord = {
+      ...steer,
+      requestId: randomUUID(),
+      text: "This steer must be rejected while the interrupt settles.",
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, replacementSteer);
+    assert.deepEqual(
+      input()({ text: controlMarker(replacementSteer.requestId) }, context),
+      { action: "handled" },
+    );
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      replacementSteer.requestId,
+    );
+    assert.equal(readAgentState(mailbox)?.lastAck?.accepted, false);
+    assert.equal(readAgentState(mailbox)?.lastAck?.code, "busy");
+    assert.equal(aborted, 1);
+
     agent.events.get("message_end")![0](
       {
         message: {
