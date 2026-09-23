@@ -3101,6 +3101,13 @@ test("ask, stale, and lost custom messages preserve attention semantics and iden
         "close",
       ],
       nextReminderMs: 300000,
+      captured_at: 123,
+      recent_output: "running tests\n42 passed",
+      recent_output_truncated: false,
+      process: {
+        shell_pid: 100,
+        foreground_processes: [{ pid: 101, cmdline: "npm test" }],
+      },
     },
   };
   const collapsedStale = renderedText(
@@ -3117,10 +3124,11 @@ test("ask, stale, and lost custom messages preserve attention semantics and iden
   );
   assert.match(expandedStale, /threshold: 10m/);
   assert.match(expandedStale, /Streaming tool output does not reset progress/);
-  assert.match(
-    expandedStale,
-    /Use transcript for persisted conversation\/tool evidence; use inspect for live terminal\/process evidence/,
-  );
+  assert.match(expandedStale, /foreground:/);
+  assert.match(expandedStale, /npm test/);
+  assert.match(expandedStale, /recent activity:/);
+  assert.match(expandedStale, /42 passed/);
+  assert.match(expandedStale, /supplied diagnostic evidence first/i);
   assert.match(
     expandedStale,
     /actions: inspect · transcript · steer · interrupt · close/,
@@ -3129,6 +3137,7 @@ test("ask, stale, and lost custom messages preserve attention semantics and iden
   assert.match(expandedStale, /session: session-id/);
 
   const compactStale = collapsedStale;
+  assert.doesNotMatch(collapsedStale, /npm test|42 passed|foreground:/);
   assert.doesNotMatch(compactStale, /actions:|next reminder:/);
 
   const lost = {

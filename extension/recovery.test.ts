@@ -206,7 +206,7 @@ test("combined status reports a completed agent as pending, not active", async (
           String((message as any).content).endsWith(
             "Delegation status: 0 active direct agents; 1 pending direct result; 1 direct agent assignment remains unresolved. " +
               "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. " +
-              "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms, and do not invent work merely to remain active.",
+              "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when it is absent or insufficient, perform at most one bounded diagnostic read before returning to passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
           ),
       ),
       true,
@@ -1740,7 +1740,7 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
       String((recovered.sentMessageCalls[0]?.message as any).content).endsWith(
         "Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved. " +
           "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. " +
-          "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms, and do not invent work merely to remain active.",
+          "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when it is absent or insufficient, perform at most one bounded diagnostic read before returning to passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
       ),
     );
     assert.equal(
@@ -3913,8 +3913,17 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
     lastActivityAt: staleAt,
   });
   let attempts = 0;
+  const baseExec = leadExec(label, "working", DEFAULT_PI_SESSION_ID);
   const pi = fakePi({
-    exec: leadExec(label, "working", DEFAULT_PI_SESSION_ID),
+    exec: (command, args, options) => {
+      const result = baseExec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+        const payload = JSON.parse(result.stdout);
+        payload.result.agent.agent_status = "working";
+        return { ...result, stdout: JSON.stringify(payload) };
+      }
+      return result;
+    },
     sendMessage: () => {
       attempts++;
       if (attempts === 1) throw new Error("transient");
@@ -3924,6 +3933,7 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   t.mock.timers.enable({ apis: ["setTimeout"] });
   t.after(() => t.mock.timers.reset());
   await pi.events.get("session_start")![0](undefined, fakeContext());
+  await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   await Promise.resolve();
   assert.equal(attempts, 1, "the controller performs an immediate scan");
@@ -4107,14 +4117,18 @@ test("stale scanner skips every replaced identity field before publication", asy
   }
 });
 
-test("delegation parent notifies only its direct stale child", async () => {
+test("delegation parent notifies only its direct stale child", async (t) => {
   setAgentEnvironment("stale-parent", ["agent"]);
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => t.mock.timers.reset());
   const parent = managedState("stale-parent");
   const child = {
     ...managedState("stale-child", REQUEST_ID, recoveryIdentity("stale-child")),
     ownerSessionId: parent.piSessionId,
     piSessionId: CHILD_SESSION_ID,
-    lastActivityAt: Date.now() - 11 * 60_000,
+    lastActivityAt: now - 11 * 60_000,
   };
   const unrelated = {
     ...managedState(
@@ -4123,7 +4137,7 @@ test("delegation parent notifies only its direct stale child", async () => {
       recoveryIdentity("unrelated-child"),
     ),
     ownerSessionId: PARENT_SESSION_ID,
-    lastActivityAt: Date.now() - 11 * 60_000,
+    lastActivityAt: now - 11 * 60_000,
   };
   for (const state of [parent, child, unrelated])
     writeAgentState(agentMailboxPath(WORKSPACE, state.agentLabel), state);
@@ -4173,11 +4187,64 @@ test("delegation parent notifies only its direct stale child", async () => {
     ],
   });
   const sent: unknown[] = [];
+  const baseExec = agentControllerExecutor(parent, [child, unrelated]);
+  let diagnosticReads = 0;
+  let resumeOnDiagnostic = false;
+  const exec = (command: string, args: string[], options?: any) => {
+    if (
+      command === "herdr" &&
+      args[0] === "agent" &&
+      args[1] === "read" &&
+      args[2] === child.paneId
+    ) {
+      diagnosticReads++;
+      if (resumeOnDiagnostic) {
+        const current = readAgentState(
+          agentMailboxPath(WORKSPACE, child.agentLabel),
+        )!;
+        writeAgentState(agentMailboxPath(WORKSPACE, child.agentLabel), {
+          ...current,
+          lastActivityAt: now,
+          updatedAt: now,
+        });
+        return { stdout: "work resumed", stderr: "", code: 0 };
+      }
+      return {
+        stdout: "npm test\n42 passed, still running",
+        stderr: "",
+        code: 0,
+      };
+    }
+    if (
+      command === "herdr" &&
+      args[0] === "pane" &&
+      args[1] === "process-info" &&
+      args.at(-1) === child.paneId
+    )
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            process_info: {
+              pane_id: child.paneId,
+              shell_pid: 100,
+              foreground_process_group_id: 101,
+              foreground_processes: [
+                { pid: 101, argv0: "node", cmdline: "npm test" },
+              ],
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    return baseExec(command, args, options);
+  };
   process.env.PI_HERDSMAN_RUN_ID = parent.runId;
   process.env.PI_HERDSMAN_OWNER_SESSION_ID = LEAD_SESSION_ID;
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parentPi = fakePi({
-    exec: agentControllerExecutor(parent, [child, unrelated]),
+    exec,
     sendMessage: (message) => sent.push(message),
   });
   registerExtension!(parentPi.pi as never);
@@ -4213,9 +4280,18 @@ test("delegation parent notifies only its direct stale child", async () => {
     /Streaming tool output does not count as qualifying progress/,
   );
   assert.match(advisory.content, /not proof of a hang/);
-  assert.match(
-    advisory.content,
-    /Use transcript when persisted conversation\/tool history is enough; use inspect only when live terminal\/process evidence is needed/,
+  assert.match(advisory.content, /Bounded live diagnostic/);
+  assert.match(advisory.content, /npm test/);
+  assert.match(advisory.content, /42 passed/);
+  assert.match(advisory.content, /untrusted observation/);
+  assert.equal(diagnosticReads, 1);
+  assert.equal(
+    advisory.details.recent_output,
+    "npm test\n42 passed, still running",
+  );
+  assert.equal(
+    advisory.details.process.foreground_processes[0].cmdline,
+    "npm test",
   );
   assert.match(advisory.content, /legitimately long-running/);
   assert.match(advisory.content, /Available actions:/);
@@ -4229,6 +4305,47 @@ test("delegation parent notifies only its direct stale child", async () => {
   assert.equal(advisory.details.ownerSessionId, parent.piSessionId);
   assert.equal(advisory.details.requestId, REQUEST_ID);
   assert.equal(advisory.details.lastActivityAt, child.lastActivityAt);
+
+  parentPi.sent.length = 0;
+  now += 5 * 60_000;
+  t.mock.timers.tick(5 * 60_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  const reminder = parentPi.sent.find(
+    (message: any) => message.customType === "pi-herdsman-agent-stale",
+  ) as any;
+  assert.ok(reminder);
+  assert.equal(diagnosticReads, 1);
+  assert.match(
+    reminder.content,
+    /same stale episode|Do not repeat a diagnostic read/i,
+  );
+
+  const nextEpisode = {
+    ...readAgentState(agentMailboxPath(WORKSPACE, child.agentLabel))!,
+    lastActivityAt: now - 11 * 60_000,
+  };
+  writeAgentState(agentMailboxPath(WORKSPACE, child.agentLabel), nextEpisode);
+  now += 30_000;
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(diagnosticReads, 2);
+  const raceEpisode = {
+    ...readAgentState(agentMailboxPath(WORKSPACE, child.agentLabel))!,
+    lastActivityAt: now - 12 * 60_000,
+  };
+  writeAgentState(agentMailboxPath(WORKSPACE, child.agentLabel), raceEpisode);
+  parentPi.sent.length = 0;
+  resumeOnDiagnostic = true;
+  now += 30_000;
+  t.mock.timers.tick(30_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(diagnosticReads, 3);
+  assert.equal(
+    parentPi.sent.filter(
+      (message: any) => message.customType === "pi-herdsman-agent-stale",
+    ).length,
+    0,
+  );
   parentPi.events.get("session_shutdown")?.[0]();
 
   setLeadEnvironment();
@@ -4256,6 +4373,54 @@ test("delegation parent notifies only its direct stale child", async () => {
     resetAgentMailbox(agentMailboxPath(WORKSPACE, state.agentLabel));
   for (const state of [parent, child, unrelated])
     nativeSessions.delete(state.piSessionFile!);
+});
+
+test("stale diagnostic failure still publishes advisory without recovery", async () => {
+  setLeadEnvironment();
+  const label = "stale-diagnostic-failure";
+  const state = {
+    ...managedState(label, REQUEST_ID, recoveryIdentity(label)),
+    lastActivityAt: Date.now() - 11 * 60_000,
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, state);
+  const calls: [string, string[]][] = [];
+  const baseExec = agentControllerExecutor(state);
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      calls.push([command, args]);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "read")
+        return { stdout: "", stderr: "inspection unavailable", code: 1 };
+      return baseExec(command, args, options);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, fakeContext());
+    await new Promise((resolve) => setImmediate(resolve));
+    const staleMessages = pi.sent.filter(
+      (message: any) => message.customType === "pi-herdsman-agent-stale",
+    ) as any[];
+    assert.equal(staleMessages.length, 1);
+    assert.match(
+      staleMessages[0].content,
+      /Automatic live diagnostic evidence was unavailable/,
+    );
+    assert.match(
+      staleMessages[0].content,
+      /at most one currently available diagnostic read/,
+    );
+    assert.equal(
+      calls.some(
+        ([, args]) =>
+          args[0] === "agent" && ["prompt", "close", "stop"].includes(args[1]!),
+      ),
+      false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
 });
 
 test("stale working parents remain visible while waiting parents project blocked", async (t) => {
@@ -5841,6 +6006,16 @@ test("stale scanner keeps one inventory in flight and retries rejection", async 
           code: 0,
         };
       }
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+        const result = leadExec(
+          state.agentLabel,
+          "working",
+          DEFAULT_PI_SESSION_ID,
+        )(command, args);
+        const payload = JSON.parse(result.stdout);
+        payload.result.agent.agent_status = "working";
+        return { ...result, stdout: JSON.stringify(payload) };
+      }
       return leadExec(
         state.agentLabel,
         "working",
@@ -5856,6 +6031,7 @@ test("stale scanner keeps one inventory in flight and retries rejection", async 
   t.after(() => t.mock.timers.reset());
   await pi.events.get("session_start")![0](undefined, fakeContext());
   await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
   const initialListCalls = listCalls;
   t.mock.timers.tick(30_000);
   await Promise.resolve();
@@ -5871,6 +6047,7 @@ test("stale scanner keeps one inventory in flight and retries rejection", async 
     "the pending inventory remains the sole in-flight scan",
   );
   resolveList();
+  await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   await Promise.resolve();
   assert.equal(sends, 1);
@@ -5917,6 +6094,16 @@ test("stale scanner shutdown invalidates old inventory generation", async (t) =>
           stderr: "",
           code: 0,
         };
+      }
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+        const result = leadExec(
+          state.agentLabel,
+          "working",
+          DEFAULT_PI_SESSION_ID,
+        )(command, args);
+        const payload = JSON.parse(result.stdout);
+        payload.result.agent.agent_status = "working";
+        return { ...result, stdout: JSON.stringify(payload) };
       }
       return leadExec(
         state.agentLabel,

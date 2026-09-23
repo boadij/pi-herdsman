@@ -324,9 +324,12 @@ See [Recovery](docs/guides/recovery.md) for operator procedures and the
 End a turn with unresolved agent work only when that work can still make
 progress without the owner, or Herdsman is reconciling a durable transition
 that can produce a future result or attention event. If an attention event
-requires owner action, handle it before returning to passive waiting. If an
-inactivity advisory appears healthy or legitimately long-running, leave it
-alone and end the turn; Herdsman will reconcile it again.
+requires owner action, handle it before returning to passive waiting. For stale
+inactivity, use evidence attached to the first attention event before judging
+health. If that evidence is absent or insufficient, perform at most one bounded
+diagnostic read before returning to passive waiting. Repeated reminders for the
+same stale episode do not by themselves justify another read. If the evidence
+shows healthy or legitimately long-running work, leave it alone.
 
 Health reconciliation is event-driven with a 30-second fallback scan. Actionable
 health attention is sent only to the exact direct owner and is based on freshly
