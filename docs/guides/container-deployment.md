@@ -88,23 +88,36 @@ Persistent state survives container replacement.
 
 ## Use a host bind mount
 
-For Linux or NAS directories owned by another UID/GID:
+The default Docker-managed volume needs no manual permission setup.
+
+For a Linux or NAS bind mount, prepare the directory for the UID/GID the
+container will use:
 
 ```sh
-PUID="$(id -u docker-user)" \
-PGID="$(id -g docker-user)" \
-SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" \
-docker compose up -d
+PUID=1035
+PGID=65537
+
+mkdir -p ./data/herdsman-home
+sudo chown "$PUID:$PGID" ./data/herdsman-home
+sudo chmod go-w ./data/herdsman-home
 ```
 
-Or in `.env`:
+Set the same IDs in `.env`:
 
 ```dotenv
 PUID=1035
 PGID=65537
 ```
 
-The mounted directory must already be writable by those IDs. Herdsman does not change host file ownership.
+Then start normally:
+
+```sh
+SSH_AUTHORIZED_KEYS="$(cat ~/.ssh/id_ed25519.pub)" docker compose up -d
+```
+
+OpenSSH requires the home directory to be owned by root or the login user and
+not writable by group or others. The container validates this at startup but
+does not change ownership or permissions of host bind mounts.
 
 ## Forward your SSH agent
 
