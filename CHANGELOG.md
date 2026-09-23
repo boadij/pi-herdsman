@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.1](https://github.com/boadij/pi-herdsman/compare/v0.14.0...v0.14.1) (2026-09-23)
+
+
+### Fixes
+
+* fail fast on SSH-unsafe home permissions ([#130](https://github.com/boadij/pi-herdsman/issues/130)) ([398cc0f](https://github.com/boadij/pi-herdsman/commit/398cc0fc82ce47a529f404aa6e32fa7b8c01b769))
+
+
+### CI
+
+* scope validation to affected surfaces ([#129](https://github.com/boadij/pi-herdsman/issues/129)) ([026e1e8](https://github.com/boadij/pi-herdsman/commit/026e1e834af97799c92d6c792919765baf05d7df))
+
 ## [0.14.0](https://github.com/boadij/pi-herdsman/compare/v0.13.2...v0.14.0) (2026-09-23)
 
 
