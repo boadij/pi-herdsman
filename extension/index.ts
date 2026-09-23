@@ -5407,6 +5407,13 @@ async function actionUnsafe(
         label: listed.label as string,
         paneId: listed.pane_id,
       });
+      const cleanup = [...cleanupWarnings.values()].at(-1);
+      if (cleanup)
+        failure.detail.cleanup = {
+          category: "internal_failure",
+          message: cleanup,
+          operation: "close",
+        };
       if (failure.detail.category !== "agent_busy") {
         appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", failure);
       }

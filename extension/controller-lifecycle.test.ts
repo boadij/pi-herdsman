@@ -1114,6 +1114,10 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
       first.details.error.message,
       /Descendant mailbox cleanup is unresolved/,
     );
+    assert.match(
+      first.details.error.cleanup.message,
+      /injected request removal failure/,
+    );
     assert.equal(first.details.error.ids.label, child.agentLabel);
     assert.ok(readAgentState(childMailbox));
     assert.ok(readAgentState(parentMailbox));
