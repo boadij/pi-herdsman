@@ -619,19 +619,24 @@ export function removeAgentMailbox(path: string): void {
     throw error;
   }
   for (const name of names) {
-    if (name === ".starting") continue;
+    if (name === ".starting" || name === "state.json") continue;
     try {
       unlinkSync(file(path, name));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
+  if (names.includes("state.json")) {
+    try {
+      unlinkSync(file(path, "state.json"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
   try {
     rmdirSync(path);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST")
-      throw error;
+  } catch {
+    // State removal is the logical cleanup commit point; pruning is best effort.
   }
 }
 export function writeAgentState(path: string, state: ManagedAgentState): void {

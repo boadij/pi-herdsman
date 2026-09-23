@@ -996,6 +996,162 @@ test("lead close maps assignment-lock contention to agent_busy", async () => {
   }
 });
 
+test("cascade close revalidates the parent generation under its assignment lock", async () => {
+  setLeadEnvironment();
+  const parent = managedState("close-generation-parent");
+  const replacement = {
+    ...managedState(
+      parent.agentLabel,
+      undefined,
+      recoveryIdentity("close-generation-replacement"),
+    ),
+    runId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    piSessionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  writeAgentState(parentMailbox, parent);
+  const lifecycle = cascadeExecutor([parent]);
+  const pi = fakePi({ exec: lifecycle.exec });
+  registerExtension!(pi.pi as never);
+  const parentStatePath = join(parentMailbox, "state.json");
+  let parentStateReads = 0;
+
+  try {
+    support.agentStateReadHook = (path) => {
+      if (path !== parentStatePath) return;
+      parentStateReads++;
+      // The snapshot has captured generation A; replace it after the close
+      // action's targeted state read, before cascade planning begins.
+      if (parentStateReads === 2) {
+        support.agentStateReadHook = undefined;
+        writeAgentState(parentMailbox, replacement);
+      }
+    };
+    const closed = await pi.tools[0].execute(
+      "close-generation-race",
+      { action: "close", agent: parent.agentLabel },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+
+    assert.equal(closed.details.error.category, "target_ambiguous");
+    assert.match(closed.details.error.message, /changed before close/);
+    assert.deepEqual(lifecycle.closeOrder, []);
+    assert.deepEqual(readAgentState(parentMailbox), replacement);
+  } finally {
+    support.agentStateReadHook = undefined;
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(parentMailbox);
+  }
+});
+
+test("cascade close keeps the parent when descendant mailbox cleanup is unresolved", async () => {
+  setLeadEnvironment();
+  const parent = managedState("cleanup-cascade-parent", undefined, {
+    ...defaultFixtureIdentity,
+    paneId: "cleanup-cascade-parent-pane",
+    piSessionId: "11111111-1111-4111-8111-111111111111",
+    piSessionFile: "/tmp/cleanup-cascade-parent.jsonl",
+  });
+  const child = {
+    ...managedState("cleanup-cascade-child", undefined, {
+      ...defaultFixtureIdentity,
+      paneId: "cleanup-cascade-child-pane",
+      piSessionId: "22222222-2222-4222-8222-222222222222",
+      piSessionFile: "/tmp/cleanup-cascade-child.jsonl",
+    }),
+    ownerSessionId: parent.piSessionId,
+  };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  const childMailbox = agentMailboxPath(WORKSPACE, child.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  resetAgentMailbox(childMailbox);
+  writeAgentState(parentMailbox, parent);
+  writeAgentState(childMailbox, child);
+  writeRequest(childMailbox, {
+    version: 4,
+    runId: child.runId,
+    requestId: REQUEST_ID,
+    ownerSessionId: child.ownerSessionId,
+    workspaceId: child.workspaceId,
+    agentLabel: child.agentLabel,
+    paneId: child.paneId,
+    kind: "task",
+    text: "unrelated cleanup artifact",
+    createdAt: Date.now(),
+  });
+  const lifecycle = cascadeExecutor([parent, child]);
+  let childRemovedBeforeParentClose = false;
+  const pi = fakePi({
+    exec: (command, args) => {
+      if (
+        command === "herdr" &&
+        args[0] === "pane" &&
+        args[1] === "close" &&
+        args[2] === parent.paneId
+      ) {
+        assert.equal(readAgentState(childMailbox), undefined);
+        childRemovedBeforeParentClose = true;
+      }
+      return lifecycle.exec(command, args);
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    support.failNextRequestRemoval = true;
+    const first = await pi.tools[0].execute(
+      "close-parent-with-child-cleanup-failure",
+      { action: "close", agent: parent.agentLabel },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(first.details.ok, false);
+    assert.equal(first.details.error.category, "internal_failure");
+    assert.match(
+      first.details.error.message,
+      /Descendant mailbox cleanup is unresolved/,
+    );
+    assert.match(
+      first.details.error.cleanup.message,
+      /injected request removal failure/,
+    );
+    assert.equal(first.details.error.ids.label, child.agentLabel);
+    assert.equal(
+      pi.entries.filter(
+        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+      ).length,
+      1,
+    );
+    assert.ok(readAgentState(childMailbox));
+    assert.ok(readAgentState(parentMailbox));
+    assert.deepEqual(lifecycle.closeOrder, [child.agentLabel]);
+
+    const retried = await pi.tools[0].execute(
+      "retry-parent-close-after-child-cleanup",
+      { action: "close", agent: parent.agentLabel },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(retried.details.ok, true, JSON.stringify(retried.details));
+    assert.equal(readAgentState(childMailbox), undefined);
+    assert.equal(readAgentState(parentMailbox), undefined);
+    assert.deepEqual(lifecycle.closeOrder, [
+      child.agentLabel,
+      parent.agentLabel,
+    ]);
+    assert.equal(childRemovedBeforeParentClose, true);
+  } finally {
+    support.failNextRequestRemoval = false;
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+  }
+});
+
 test("staged fresh assignment bridges pending start through working", async () => {
   const fixture = createStagedAssignmentFixture("staged-bridge-agent");
   try {

@@ -2679,9 +2679,7 @@ test("tool and completion renderers retain structured action details", (t) => {
           details: {
             ok: true,
             agent: "researcher",
-            cleanup_errors: {
-              researcher: "mailbox cleanup failed",
-            },
+            cleanup_error: "mailbox cleanup failed",
           },
         },
         {},
@@ -2692,6 +2690,14 @@ test("tool and completion renderers retain structured action details", (t) => {
     assert.match(
       cleanupWarning,
       /✓ researcher started\n  ! cleanup warning · Ctrl\+O/,
+    );
+    assert.match(
+      formatToolModelResult("close", {
+        ok: true,
+        agent: "researcher",
+        cleanup_error: "mailbox cleanup failed",
+      }),
+      /Cleanup warning: mailbox cleanup failed/,
     );
     assert.match(
       formatToolModelResult("close", {

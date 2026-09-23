@@ -1344,8 +1344,9 @@ export function formatToolModelResult(
 ): string {
   action = value(action) || "agent";
   const definition = value(v.definition);
-  const cleanup =
-    v.cleanup_errors && typeof v.cleanup_errors === "object"
+  const cleanup = value(v.cleanup_error)
+    ? ["", `Cleanup warning: ${value(v.cleanup_error)}`]
+    : v.cleanup_errors && typeof v.cleanup_errors === "object"
       ? ["", "Cleanup warnings:", JSON.stringify(v.cleanup_errors, null, 2)]
       : [];
   if (v.ok === false) {
