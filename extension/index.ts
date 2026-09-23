@@ -11522,6 +11522,7 @@ export default function (pi: ExtensionAPI): void {
   let initialized = false;
   let latest = "";
   let pendingResult: ResultRecord | undefined;
+  let pendingInterruptReplacement: string | undefined;
   let resultWriteAttempts = 0;
   let retryTimer: ReturnType<typeof setInterval> | undefined;
   let stateRetryTimer: ReturnType<typeof setInterval> | undefined;
@@ -11736,8 +11737,7 @@ export default function (pi: ExtensionAPI): void {
         return;
       }
       pi.sendUserMessage(controlMarker(request.requestId), {
-        // Interrupt replacement must outlive the run being aborted.
-        deliverAs: request.kind === "interrupt" ? "followUp" : "steer",
+        deliverAs: "steer",
       });
     } catch (error) {
       if (!requestPumpErrorReported) {
@@ -12267,6 +12267,16 @@ export default function (pi: ExtensionAPI): void {
       );
       return { action: "handled" };
     }
+    if (controlRequest && pendingInterruptReplacement) {
+      acknowledgeAndDiscard(
+        id,
+        false,
+        ctx,
+        "busy",
+        "Agent interrupt is still settling",
+      );
+      return { action: "handled" };
+    }
     if (controlRequest && (pendingResult || pendingStateTransition)) {
       acknowledgeAndDiscard(
         id,
@@ -12349,18 +12359,13 @@ export default function (pi: ExtensionAPI): void {
       if (request.kind === "interrupt") {
         const editorText =
           ctx.mode === "tui" ? ctx.ui.getEditorText() : undefined;
+        pendingInterruptReplacement = `Owner interrupt:\n\n${request.text}\n\nThe previous in-flight operation was intentionally aborted. Continue the original assignment using this replacement instruction.`;
 
         ctx.abort();
 
         if (editorText !== undefined) ctx.ui.setEditorText(editorText);
 
-        return {
-          action: "transform",
-          text:
-            `Owner interrupt:\n\n${request.text}\n\n` +
-            "The previous in-flight operation was intentionally aborted. " +
-            "Continue the original assignment using this replacement instruction.",
-        };
+        return { action: "handled" };
       }
       return { action: "transform", text: request.text };
     }
@@ -12639,6 +12644,13 @@ export default function (pi: ExtensionAPI): void {
     if (pendingResult && !retryTimer) retryTimer = setInterval(flush, 250);
   };
   pi.on("agent_settled", async (_event: unknown, ctx: ExtensionContext) => {
+    if (pendingInterruptReplacement) {
+      const replacement = pendingInterruptReplacement;
+      pendingInterruptReplacement = undefined;
+      latest = "";
+      pi.sendUserMessage(replacement);
+      return;
+    }
     settleCurrentAgent(ctx);
     if (delegationEnabled)
       await settlePersistedResults(
@@ -12648,6 +12660,7 @@ export default function (pi: ExtensionAPI): void {
       ).catch(() => {});
   });
   pi.on("session_shutdown", () => {
+    pendingInterruptReplacement = undefined;
     resetLeafStatus();
     metadataAbortController?.abort();
     metadataAbortController = undefined;
