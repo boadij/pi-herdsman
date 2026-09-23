@@ -6,6 +6,11 @@ The Pi Herdsman container provides an SSH-ready Pi, Herdr, and Pi Herdsman
 environment. OpenSSH is the user interface; connect with your own SSH key and
 use Pi and Herdr normally.
 
+Pi sessions automatically receive image-owned environment context from
+`/AGENTS.md`, including persistence boundaries, available tool categories, and
+how to install additional tools. User and project context files continue to
+layer normally through Pi's native context-file discovery.
+
 ## Direct SSH
 
 Start the service with a public key authorized for the `herdsman` account:

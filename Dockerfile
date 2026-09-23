@@ -116,6 +116,7 @@ RUN set -eu; \
     rm -f /tmp/pi-version
 
 COPY --from=package /package /opt/pi-herdsman
+COPY --chmod=0444 docker/AGENTS.md /AGENTS.md
 COPY docker/entrypoint.sh /usr/local/bin/container-entrypoint
 COPY docker/sshd_config /etc/ssh/sshd_config
 

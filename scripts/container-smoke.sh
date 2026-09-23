@@ -60,6 +60,8 @@ verify_runtime() {
     command -v rg >/dev/null; command -v fd >/dev/null; \
     command -v jq >/dev/null; command -v gh >/dev/null; \
     command -v python3 >/dev/null; command -v git >/dev/null; \
+    test -r /AGENTS.md; \
+    grep -q '^# Pi Herdsman container environment$' /AGENTS.md; \
     grep -q '/opt/pi-herdsman' ~/.pi/agent/settings.json; \
     test -f ~/.pi/agent/extensions/herdr-agent-state.ts; \
     pi --offline --help >/tmp/pi-help 2>&1; \
