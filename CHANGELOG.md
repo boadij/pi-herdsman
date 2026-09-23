@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/boadij/pi-herdsman/compare/v0.13.2...v0.14.0) (2026-09-23)
+
+
+### Features
+
+* add SSH-ready Herdsman container ([#124](https://github.com/boadij/pi-herdsman/issues/124)) ([9bb43d9](https://github.com/boadij/pi-herdsman/commit/9bb43d99b5a0bf5e476add06f26291ed82736819))
+
 ## [0.13.2](https://github.com/boadij/pi-herdsman/compare/v0.13.1...v0.13.2) (2026-09-23)
 
 
