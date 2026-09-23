@@ -41,10 +41,10 @@ jobs:
           if [ "$EVENT_NAME" = "pull_request" ] \
             && git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null \
             && git cat-file -e "$PR_HEAD_SHA^{commit}" 2>/dev/null; then
-            git diff --name-only -z "$PR_BASE_SHA...$PR_HEAD_SHA"
+            git diff --no-renames --name-only -z "$PR_BASE_SHA...$PR_HEAD_SHA"
           elif [ "$EVENT_NAME" = "push" ] \
             && git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
-            git diff --name-only -z "$BEFORE_SHA" "$GITHUB_SHA"
+            git diff --no-renames --name-only -z "$BEFORE_SHA" "$GITHUB_SHA"
           else
             printf '%s\0' "__unknown__"
           fi | node scripts/ci-scope.mjs >> "$GITHUB_OUTPUT"
