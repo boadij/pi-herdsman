@@ -1705,12 +1705,13 @@ test("delivered-result cascade retries descendant mailbox cleanup failure", asyn
       realFs.existsSync(obstruction),
       "failed descendant mailbox remains",
     );
-    assert.ok(
-      entries.some(
+    assert.equal(
+      entries.filter(
         (entry: any) =>
           entry.customType === "pi_herdsman_cleanup_error" &&
           /stubborn-directory/.test(String(entry.data?.error)),
-      ),
+      ).length,
+      1,
     );
 
     realFs.rmSync(obstruction, { recursive: true, force: true });

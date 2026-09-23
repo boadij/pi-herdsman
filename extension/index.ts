@@ -4489,8 +4489,8 @@ async function closeManagedAgent(
     } catch (error) {
       const message = `Agent pane closed but mailbox cleanup failed: ${String(error)}`;
       runtime.cleanupError = message;
-      appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
       if (stopReport?.onCleanupFailure) {
+        appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
         stopReport.onCleanupFailure(runtime.label, message);
         return;
       }
