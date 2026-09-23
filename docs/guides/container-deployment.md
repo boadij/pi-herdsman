@@ -100,6 +100,30 @@ ssh herdsman@pi-herdsman
 Set `TAILSCALE_HOSTNAME` if a different hostname is desired. The overlay uses
 Tailscale networking, not Tailscale SSH.
 
+## Interactive sessions
+
+Interactive SSH logins automatically open Herdr. This also applies when SSH is
+reached through the optional Tailscale sidecar.
+
+Exit Herdr to return to the normal shell.
+
+For interactive Docker access as the normal container user, run:
+
+```sh
+docker exec -it --user herdsman <container> bash
+```
+
+or with Compose:
+
+```sh
+docker compose exec --user herdsman herdsman bash
+```
+
+Bare `docker exec` uses the container's root user and is intended for
+administrative debugging; it does not automatically open Herdr.
+
+Non-interactive SSH commands are unaffected.
+
 ## Container restart behavior
 
 Herdr detach and reattach keep processes alive while the container itself

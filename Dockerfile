@@ -76,6 +76,21 @@ RUN groupmod -n herdsman node \
  && install -d -m 0755 /run/sshd \
  && install -d -m 0700 /var/lib/herdsman/ssh
 
+RUN cat >> /etc/bash.bashrc <<'EOF'
+
+# Open Herdr for direct interactive access. Herdr panes set HERDR_ENV=1.
+if [ "$(id -un)" = herdsman ]; then
+  export HOME=/home/herdsman
+  export USER=herdsman
+  export LOGNAME=herdsman
+  export PATH=/home/herdsman/.local/share/mise/shims:/home/herdsman/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+  if [ -t 0 ] && [ -t 1 ] && [ "${HERDR_ENV:-}" != 1 ] && command -v herdr >/dev/null 2>&1; then
+    herdr
+  fi
+fi
+EOF
+
 COPY --from=mise /usr/local/bin/mise /usr/local/bin/mise
 COPY --from=package /pi-version /tmp/pi-version
 
@@ -122,6 +137,8 @@ COPY docker/sshd_config /etc/ssh/sshd_config
 
 RUN chmod 0755 /usr/local/bin/container-entrypoint \
  && chmod 0600 /etc/ssh/sshd_config
+
+WORKDIR /home/herdsman
 
 EXPOSE 22
 ENTRYPOINT ["/usr/local/bin/container-entrypoint"]

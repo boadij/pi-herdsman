@@ -84,6 +84,36 @@ docker rm "$name" >/dev/null
 start
 verify_runtime
 
+printf '%s\n' \
+  '#!/bin/sh' \
+  'printf "%s:%s:%s\n" "$(id -un)" "$HOME" "$PWD" >> /tmp/herdr-autostart' |
+  remote 'mkdir -p ~/.local/bin; cat > ~/.local/bin/herdr; chmod +x ~/.local/bin/herdr'
+
+docker exec "$name" rm -f /tmp/herdr-autostart
+printf 'exit\n' |
+  ssh -tt -F /dev/null -i "$tmp/id" -p "$port" \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    herdsman@127.0.0.1 >/dev/null 2>&1
+docker exec "$name" grep -qx 'herdsman:/home/herdsman:/home/herdsman' /tmp/herdr-autostart
+
+docker exec "$name" rm -f /tmp/herdr-autostart
+docker exec --user herdsman \
+  -e PATH=/home/herdsman/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  "$name" script -qec 'bash -ic exit' /dev/null >/dev/null
+docker exec "$name" grep -qx 'herdsman:/home/herdsman:/home/herdsman' /tmp/herdr-autostart
+
+docker exec "$name" rm -f /tmp/herdr-autostart
+docker exec --user herdsman -e HERDR_ENV=1 \
+  -e PATH=/home/herdsman/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  "$name" script -qec 'bash -ic exit' /dev/null >/dev/null
+docker exec "$name" test ! -e /tmp/herdr-autostart
+
+remote 'rm -f ~/.local/bin/herdr'
+docker exec "$name" rm -f /tmp/herdr-autostart
+verify_runtime
+
 if ssh -F /dev/null -i "$tmp/id" -p "$port" \
   -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
   root@127.0.0.1 true >/dev/null 2>&1; then
