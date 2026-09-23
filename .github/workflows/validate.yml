@@ -13,7 +13,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      tests: ${{ steps.scope.outputs.tests }}
+      package: ${{ steps.scope.outputs.package }}
+      container: ${{ steps.scope.outputs.container }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.19.0
+          package-manager-cache: false
+      - id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          node scripts/ci-scope.mjs --self-test
+
+          if [ "$EVENT_NAME" = "pull_request" ] \
+            && git cat-file -e "$PR_BASE_SHA^{commit}" 2>/dev/null \
+            && git cat-file -e "$PR_HEAD_SHA^{commit}" 2>/dev/null; then
+            git diff --no-renames --name-only -z "$PR_BASE_SHA...$PR_HEAD_SHA"
+          elif [ "$EVENT_NAME" = "push" ] \
+            && git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+            git diff --no-renames --name-only -z "$BEFORE_SHA" "$GITHUB_SHA"
+          else
+            printf '%s\0' "__unknown__"
+          fi | node scripts/ci-scope.mjs >> "$GITHUB_OUTPUT"
+
   validate:
+    needs: scope
+    if: ${{ needs.scope.outputs.tests == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -26,12 +64,53 @@ jobs:
           node-version: 22.19.0
           package-manager-cache: false
       - run: npm ci
-      - run: npm run validate
+      - run: npm run check
 
-  container:
+  package:
+    needs: scope
+    if: ${{ needs.scope.outputs.package == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - run: scripts/container-smoke.sh
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.19.0
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run build
+      - run: npm run package:audit
+
+  container:
+    needs: scope
+    if: ${{ needs.scope.outputs.container != 'none' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - if: ${{ needs.scope.outputs.container == 'smoke' }}
+        run: scripts/container-smoke.sh
       - run: docker compose config
       - run: docker compose -f compose.yaml -f compose.tailscale.yaml config
+
+  ci:
+    name: CI
+    if: ${{ always() }}
+    needs: [scope, validate, package, container]
+    runs-on: ubuntu-latest
+    env:
+      SCOPE_RESULT: ${{ needs.scope.result }}
+      VALIDATE_RESULT: ${{ needs.validate.result }}
+      PACKAGE_RESULT: ${{ needs.package.result }}
+      CONTAINER_RESULT: ${{ needs.container.result }}
+    steps:
+      - run: |
+          set -euo pipefail
+
+          [ "$SCOPE_RESULT" = "success" ]
+
+          for result in \
+            "$VALIDATE_RESULT" \
+            "$PACKAGE_RESULT" \
+            "$CONTAINER_RESULT"
+          do
+            [ "$result" = "success" ] || [ "$result" = "skipped" ]
+          done
