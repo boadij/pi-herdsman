@@ -996,6 +996,57 @@ test("lead close maps assignment-lock contention to agent_busy", async () => {
   }
 });
 
+test("cascade close revalidates the parent generation under its assignment lock", async () => {
+  setLeadEnvironment();
+  const parent = managedState("close-generation-parent");
+  const replacement = {
+    ...managedState(
+      parent.agentLabel,
+      undefined,
+      recoveryIdentity("close-generation-replacement"),
+    ),
+    runId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    piSessionId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  };
+  const parentMailbox = agentMailboxPath(WORKSPACE, parent.agentLabel);
+  resetAgentMailbox(parentMailbox);
+  writeAgentState(parentMailbox, parent);
+  const lifecycle = cascadeExecutor([parent]);
+  const pi = fakePi({ exec: lifecycle.exec });
+  registerExtension!(pi.pi as never);
+  const parentStatePath = join(parentMailbox, "state.json");
+  let parentStateReads = 0;
+
+  try {
+    support.agentStateReadHook = (path) => {
+      if (path !== parentStatePath) return;
+      parentStateReads++;
+      // The snapshot has captured generation A; replace it after the close
+      // action's targeted state read, before cascade planning begins.
+      if (parentStateReads === 2) {
+        support.agentStateReadHook = undefined;
+        writeAgentState(parentMailbox, replacement);
+      }
+    };
+    const closed = await pi.tools[0].execute(
+      "close-generation-race",
+      { action: "close", agent: parent.agentLabel },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+
+    assert.equal(closed.details.error.category, "target_ambiguous");
+    assert.match(closed.details.error.message, /changed before close/);
+    assert.deepEqual(lifecycle.closeOrder, []);
+    assert.deepEqual(readAgentState(parentMailbox), replacement);
+  } finally {
+    support.agentStateReadHook = undefined;
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(parentMailbox);
+  }
+});
+
 test("staged fresh assignment bridges pending start through working", async () => {
   const fixture = createStagedAssignmentFixture("staged-bridge-agent");
   try {

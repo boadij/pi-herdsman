@@ -773,7 +773,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   );
   assert.match(
     (result.content[0] as { text: string }).text,
-    /Next action: Inspect cleanup_errors before retrying cleanup/,
+    /Next action: Resolve the reported cleanup failure before retrying\./,
   );
   const rendered = pi.tools[0].renderResult(
     { content: result.content, details: result.details },
@@ -798,7 +798,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   );
   assert.match(
     rendered.text,
-    /next: Inspect cleanup_errors before retrying cleanup/,
+    /next: Resolve the reported cleanup failure before retrying\./,
   );
   assert.match(
     rendered.text,
@@ -837,10 +837,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   assert.equal(listed.details.agents.length, 1);
   assert.equal(listed.details.agents[0].state, "lost");
   assert.deepEqual(listed.details.agents[0].available_actions, ["close"]);
-  assert.match(
-    listed.details.cleanup_errors[label],
-    /pane list disappearance proof is unavailable/,
-  );
+  assert.equal(listed.details.cleanup_errors, undefined);
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 });
@@ -1911,6 +1908,19 @@ test("recovered no-live result removal retry never cleans up a replacement", asy
       "the initial removal must fail before the retry is exercised",
     );
 
+    const unresolved = await pi.tools[0].execute(
+      "list-unresolved",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(entries),
+    );
+    const listed = unresolved.details.agents.find(
+      (agent: any) => agent.agent === label,
+    );
+    assert.match(listed.cleanup_error, /injected result removal failure/);
+    assert.equal(unresolved.details.cleanup_errors, undefined);
+
     const callsBeforeRetry = pi.calls.length;
     lifecycle.live.set(label, replacement);
     assert.notEqual(replacement.runId, state.runId);
@@ -1936,19 +1946,26 @@ test("recovered no-live result removal retry never cleans up a replacement", asy
       [],
       "no-live retry must not inspect or clean up the replacement",
     );
-    const listed = await pi.tools[0].execute(
-      "id",
-      { action: "list" },
-      undefined,
-      undefined,
-      fakeContext(entries),
-    );
-    assert.equal(listed.details.cleanup_errors, undefined);
     const callsAfterRetry = pi.calls.length;
     t.mock.timers.tick(1000);
     await Promise.resolve();
     assert.equal(pi.calls.length, callsAfterRetry);
     assert.equal(readResult(mailbox, REQUEST_ID), undefined);
+
+    writeAgentState(mailbox, replacement);
+    const replacementListed = await pi.tools[0].execute(
+      "list-after-label-reuse",
+      { action: "list" },
+      undefined,
+      undefined,
+      fakeContext(entries),
+    );
+    assert.equal(
+      replacementListed.details.agents.find(
+        (agent: any) => agent.agent === label,
+      ).cleanup_error,
+      undefined,
+    );
   } finally {
     support.failNextResultRemoval = false;
     pi.events.get("session_shutdown")?.[0]();
@@ -2416,10 +2433,7 @@ test("close returns a structured nonfatal mailbox cleanup warning", async () => 
     );
     assert.equal(result.details.ok, true);
     assert.match(result.details.cleanup_error, /mailbox cleanup failed/);
-    assert.match(
-      result.details.cleanup_errors[parent.agentLabel],
-      /mailbox cleanup failed/,
-    );
+    assert.equal(result.details.cleanup_errors, undefined);
     assert.deepEqual(lifecycle.closeOrder, [parent.agentLabel]);
     assert.equal(readAgentState(mailbox), undefined);
     assert.ok(

@@ -642,6 +642,7 @@ type Runtime = {
   thinking?: string | null;
   startedAt?: number;
   contextPercent?: number;
+  cleanupError?: string;
 };
 type PendingStart = {
   label: string;
@@ -714,19 +715,12 @@ let metadataPublished: MetadataPublishedState = {
 let metadataDirty = false;
 let metadataFlushActive = false;
 let metadataAbortController: AbortController | undefined;
-const cleanupErrors = new Map<string, string>();
 const REQUEST_CLEANUP_ERROR_PREFIX =
   "Acknowledged request could not be removed:";
-function clearCleanupError(label: string): void {
-  cleanupErrors.delete(label);
-}
-function clearRequestCleanupError(label: string): void {
-  if (cleanupErrors.get(label)?.startsWith(REQUEST_CLEANUP_ERROR_PREFIX))
-    cleanupErrors.delete(label);
-}
-function clearAskDeliveryError(label: string): void {
-  if (cleanupErrors.get(label)?.startsWith("Ask delivery failed"))
-    cleanupErrors.delete(label);
+const RESULT_DELIVERY_ERROR_PREFIX = "Result delivery failed; retrying:";
+function clearRuntimeCleanupError(runtime: Runtime, prefix?: string): void {
+  if (prefix === undefined || runtime.cleanupError?.startsWith(prefix))
+    runtime.cleanupError = undefined;
 }
 const resultDeliveryInFlight = new Set<string>();
 const resultDeliveryRetries = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2475,10 +2469,10 @@ async function submit(
     if (current.lastAck) {
       try {
         removeRequest(runtime.mailboxPath, current.lastAck.requestId);
-        clearRequestCleanupError(runtime.label);
+        clearRuntimeCleanupError(runtime, REQUEST_CLEANUP_ERROR_PREFIX);
       } catch (error) {
         const message = `${REQUEST_CLEANUP_ERROR_PREFIX} ${String(error)}`;
-        cleanupErrors.set(runtime.label, message);
+        runtime.cleanupError = message;
         appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
         fail("internal_failure", message, operation);
       }
@@ -2522,7 +2516,7 @@ async function submit(
       validateIdentity(runtime, state);
     } catch (error) {
       const message = `Acknowledged request identity changed after acknowledgement: ${String(error)}`;
-      cleanupErrors.set(runtime.label, message);
+      runtime.cleanupError = message;
       appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
       if (error instanceof OperationError)
         throw new OperationError({ ...error.detail, operation });
@@ -2563,10 +2557,10 @@ async function submit(
           current.lastAck?.requestId === requestId
         )
           removeRequest(runtime.mailboxPath, requestId);
-        clearRequestCleanupError(runtime.label);
+        clearRuntimeCleanupError(runtime, REQUEST_CLEANUP_ERROR_PREFIX);
       } catch (error) {
         const message = `${REQUEST_CLEANUP_ERROR_PREFIX} ${String(error)}`;
-        cleanupErrors.set(runtime.label, message);
+        runtime.cleanupError = message;
         appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
       } finally {
         release();
@@ -3018,13 +3012,16 @@ function listedAgentRecord(
     agent_session: _agentSession,
     ...publicAgent
   } = listed;
+  const runtime = runtimes.get(state.agentLabel);
+  const cleanupError =
+    runtime && sameManagedAgentIdentity(runtimeIdentityState(runtime), state)
+      ? runtime.cleanupError
+      : undefined;
   return {
     ...publicAgent,
     agent: listed.label,
     available_actions: actions,
-    ...(cleanupErrors.has(listed.label)
-      ? { cleanup_error: cleanupErrors.get(listed.label) }
-      : {}),
+    ...(cleanupError ? { cleanup_error: cleanupError } : {}),
     ...(parentLabel ? { parent_label: parentLabel } : {}),
   };
 }
@@ -3658,33 +3655,18 @@ async function cleanupAfterDeliveredResult(
       throw new Error("agent identity changed before result cleanup");
     if (newerMailboxWorkExists(runtime.mailboxPath, state, result.requestId))
       throw new Error("agent has newer mailbox work");
-    const presence = managedAgentPresence(
-      state,
-      await herdrSessionSnapshot(pi, ctx, signal),
-    );
-    if (presence.kind === "unknown")
-      throw new Error(
-        "Managed agent identity is unresolved during result cleanup",
-      );
     if (!managedAgent)
-      await closeManagedAgentCascade(
-        pi,
-        ctx,
-        presence.kind === "live" ? presence.agent : undefined,
-        state,
-        signal,
-        {
-          deliveredRootResultId: result.requestId,
-        },
-      );
+      await closeManagedAgentCascade(pi, ctx, state, signal, {
+        deliveredRootResultId: result.requestId,
+      });
     else await finalizeDeliveredRoot(pi, ctx, state, result.requestId, signal);
     requestHerdRunFinishCheck?.(ctx);
     return true;
   } catch (error) {
     const message = String(error);
-    if (cleanupErrors.get(runtime.label) !== message)
+    if (runtime.cleanupError !== message)
       appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
-    cleanupErrors.set(runtime.label, message);
+    runtime.cleanupError = message;
     requestStatusRefresh?.();
     return false;
   } finally {
@@ -3694,7 +3676,7 @@ async function cleanupAfterDeliveredResult(
 async function finalizeDeliveredResult(
   pi: ExtensionAPI,
   runtime: Runtime,
-  result: ResultRecord,
+  result: Pick<ResultRecord, "requestId">,
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<boolean> {
@@ -3719,7 +3701,6 @@ async function finalizeDeliveredResult(
   resultDeliveryEvidence.delete(
     resultDeliveryEvidenceKey(runtime, result.requestId),
   );
-  clearCleanupError(runtime.label);
   requestStatusRefresh?.();
   return true;
 }
@@ -3736,6 +3717,7 @@ async function deliverResult(
   resultDeliveryInFlight.add(key);
   try {
     await deliverResultUnsafe(pi, runtime, ctx, result, signal);
+    clearRuntimeCleanupError(runtime, RESULT_DELIVERY_ERROR_PREFIX);
     cancelResultDeliveryRetry(runtime, result.requestId);
   } catch (error) {
     scheduleResultDeliveryRetry(pi, runtime, ctx, result, signal, error);
@@ -3796,10 +3778,7 @@ function scheduleResultDeliveryRetry(
   const key = `${runtime.mailboxPath}:${result.requestId}`;
   const previous = resultDeliveryRetries.get(key);
   if (previous) return;
-  cleanupErrors.set(
-    runtime.label,
-    `Result delivery failed; retrying: ${String(error)}`,
-  );
+  runtime.cleanupError = `${RESULT_DELIVERY_ERROR_PREFIX} ${String(error)}`;
   const timer = setTimeout(() => {
     resultDeliveryRetries.delete(key);
     if (!controllerSessionActive || runtimes.get(runtime.label) !== runtime)
@@ -3824,18 +3803,14 @@ function cancelResultCleanupRetry(runtime: Runtime, requestId: string): void {
 function scheduleResultCleanupRetry(
   pi: ExtensionAPI,
   runtime: Runtime,
-  result: ResultRecord,
+  result: Pick<ResultRecord, "requestId">,
   ctx: ExtensionContext,
   signal: AbortSignal | undefined,
   error?: unknown,
 ): void {
   if (error !== undefined) {
     markRetryAttempted(error);
-    if (!cleanupErrors.has(runtime.label))
-      cleanupErrors.set(
-        runtime.label,
-        `Result cleanup failed; retrying: ${String(error)}`,
-      );
+    runtime.cleanupError = `Result cleanup failed; retrying: ${String(error)}`;
   }
   const key = `${runtime.mailboxPath}:${result.requestId}`;
   if (resultCleanupRetries.has(key)) return;
@@ -4002,7 +3977,7 @@ function deliverAsk(
   try {
     if (!deliverAskUnsafe(pi, runtime, ctx, state, ask)) return;
     cancelAskDeliveryRetry(runtime, ask.askId);
-    clearAskDeliveryError(runtime.label);
+    clearRuntimeCleanupError(runtime, "Ask delivery failed");
   } catch (error) {
     scheduleAskDeliveryRetry(pi, runtime, ctx, state, ask, signal, error);
   } finally {
@@ -4040,10 +4015,7 @@ function scheduleAskDeliveryRetry(
     }
   }, 250);
   askDeliveryRetries.set(key, timer);
-  cleanupErrors.set(
-    runtime.label,
-    `Ask delivery failed; retrying: ${String(error)}`,
-  );
+  runtime.cleanupError = `Ask delivery failed; retrying: ${String(error)}`;
 }
 function deliverPendingAsk(
   pi: ExtensionAPI,
@@ -4130,7 +4102,6 @@ function invalidateCachedRuntime(label: string): void {
   clearResultDeliveryEvidence(runtime);
   runtime.startedAt = undefined;
   runtimes.delete(label);
-  clearCleanupError(label);
 }
 function runtimeIdentityMatches(
   runtime: Runtime,
@@ -4515,10 +4486,9 @@ async function closeManagedAgent(
       );
     try {
       removeAgentMailbox(mailbox);
-      clearCleanupError(runtime.label);
     } catch (error) {
       const message = `Agent pane closed but mailbox cleanup failed: ${String(error)}`;
-      cleanupErrors.set(runtime.label, message);
+      runtime.cleanupError = message;
       appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
       stopReport?.onCleanupFailure?.(runtime.label, message);
       return;
@@ -4530,7 +4500,6 @@ async function closeManagedAgent(
       clearResultDeliveryEvidence(runtime);
       runtime.startedAt = undefined;
       runtimes.delete(runtime.label);
-      clearCleanupError(runtime.label);
     }
     stopReport?.onClosed?.(runtime.label);
   } finally {
@@ -4910,24 +4879,32 @@ function delegationStatusForResult(
 async function closeManagedAgentCascade(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  agent: any,
-  state: ManagedAgentState,
+  expected: ManagedAgentState,
   signal?: AbortSignal,
   options: CloseCascadeOptions = {},
   stopReport?: StopReportCallbacks,
 ): Promise<void> {
-  const release = claimDelegationLock(state.workspaceId, state.piSessionId);
-  const parentMailbox = agentMailboxPath(state.workspaceId, state.agentLabel);
+  const release = claimDelegationLock(
+    expected.workspaceId,
+    expected.piSessionId,
+  );
+  const parentMailbox = agentMailboxPath(
+    expected.workspaceId,
+    expected.agentLabel,
+  );
   let parentRelease: (() => void) | undefined;
   try {
     parentRelease = claimAssignmentLock(parentMailbox, "close", {
-      label: state.agentLabel,
-      paneId: state.paneId,
+      label: expected.agentLabel,
+      paneId: expected.paneId,
     });
+    const current = readAgentState(parentMailbox);
+    if (!current || !sameManagedAgentIdentity(current, expected))
+      fail("target_ambiguous", "Managed agent changed before close", "close");
     const plan = await managedAgentCascadePlan(
       pi,
       ctx,
-      state,
+      current,
       signal,
       options.deliveredRootResultId,
     );
@@ -4949,7 +4926,7 @@ async function closeManagedAgentCascade(
         throw normalizeCloseFailure(
           error,
           { label: child.state.agentLabel, paneId: child.state.paneId },
-          { parentLabel: state.agentLabel },
+          { parentLabel: current.agentLabel },
         );
       }
     }
@@ -4957,7 +4934,7 @@ async function closeManagedAgentCascade(
       await finalizeDeliveredRoot(
         pi,
         ctx,
-        state,
+        current,
         options.deliveredRootResultId,
         signal,
         true,
@@ -4967,7 +4944,7 @@ async function closeManagedAgentCascade(
     const parentSnapshot = (
       await managedAgentSnapshots(pi, ctx, signal)
     ).agents.find(({ state: candidate }) =>
-      sameManagedAgentIdentity(candidate, state),
+      sameManagedAgentIdentity(candidate, current),
     );
     if (!parentSnapshot)
       fail("target_not_found", "Parent agent changed before close", "close");
@@ -4982,8 +4959,8 @@ async function closeManagedAgentCascade(
   } catch (error) {
     throw normalizeCloseFailure(
       error,
-      { label: agent?.label, paneId: agent?.pane_id },
-      { parentLabel: state.agentLabel },
+      { label: expected.agentLabel, paneId: expected.paneId },
+      { parentLabel: expected.agentLabel },
     );
   } finally {
     parentRelease?.();
@@ -5100,7 +5077,6 @@ async function stopOwnedAgents(
       await closeManagedAgentCascade(
         pi,
         ctx,
-        currentAgent.listed,
         currentState,
         signal,
         {},
@@ -5118,7 +5094,6 @@ async function stopOwnedAgents(
           target.state.agentLabel,
           `not closed: ${failure.detail.message}`,
         );
-      cleanupErrors.set(target.state.agentLabel, failure.detail.message);
       appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", failure);
     }
   }
@@ -5398,28 +5373,35 @@ async function actionUnsafe(
         "Agent belongs to another owner session",
         "close",
       );
+    const cleanupWarnings = new Map<string, string>();
+    const stopReport: StopReportCallbacks = {
+      onCleanupFailure: (label, message) => {
+        cleanupWarnings.set(label, message);
+      },
+    };
     try {
       if (directOwner && scope?.kind === "lead")
-        await closeManagedAgentCascade(pi, ctx, listed, state, signal);
-      else await closeManagedSnapshot(pi, ctx, candidate, signal);
+        await closeManagedAgentCascade(pi, ctx, state, signal, {}, stopReport);
+      else await closeManagedSnapshot(pi, ctx, candidate, signal, stopReport);
     } catch (error) {
       const failure = normalizeCloseFailure(error, {
         label: listed.label as string,
         paneId: listed.pane_id,
       });
       if (failure.detail.category !== "agent_busy") {
-        cleanupErrors.set(listed.label as string, failure.detail.message);
         appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", failure);
       }
       throw failure;
     }
+    const warnings = [...cleanupWarnings];
     return {
       ok: true,
       action: "close",
       agent: agentLabel,
       presentation_agent_definition: stateAgentDefinition(state),
-      ...(cleanupErrors.has(listed.label as string)
-        ? { cleanup_error: cleanupErrors.get(listed.label as string) }
+      ...(warnings.length === 1 ? { cleanup_error: warnings[0]![1] } : {}),
+      ...(warnings.length > 1
+        ? { cleanup_errors: Object.fromEntries(warnings) }
         : {}),
     };
   }
@@ -6110,7 +6092,6 @@ async function actionUnsafe(
           cleanup: cleanupCause,
           ids,
         });
-        cleanupErrors.set(label, cleanupDetail);
         appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", cleanupDetail);
       }
       if (rollbackError) {
@@ -6134,7 +6115,7 @@ async function actionUnsafe(
               : startupFailure
                 ? { details: { stage: startupFailure.stage } }
                 : {}),
-            nextAction: "Inspect cleanup_errors before retrying cleanup",
+            nextAction: "Resolve the reported cleanup failure before retrying.",
           },
         );
       }
@@ -6145,7 +6126,6 @@ async function actionUnsafe(
           cleanup: embeddedDetails.cleanup,
           ids,
         });
-        cleanupErrors.set(label, durableDetail);
         appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", durableDetail);
       }
       if (error instanceof OperationError) {
@@ -10450,8 +10430,12 @@ export default function (pi: ExtensionAPI): void {
             sessionSignal,
           );
           if (!cleaned)
-            throw new Error(
-              `Direct agent ${state.agentLabel} cleanup is unresolved`,
+            scheduleResultCleanupRetry(
+              pi,
+              runtime,
+              { requestId },
+              ctx,
+              sessionSignal,
             );
         } catch (error) {
           invalidateCachedRuntime(state.agentLabel);
@@ -11509,7 +11493,6 @@ export default function (pi: ExtensionAPI): void {
       resultDeliveryEvidence.clear();
       askDeliveryInFlight.clear();
       runtimes.clear();
-      cleanupErrors.clear();
     });
     pi.registerTool({
       name: "agent",
@@ -11572,9 +11555,6 @@ export default function (pi: ExtensionAPI): void {
               assignGuidanceSent = true;
             } catch {}
           }
-          if (cleanupErrors.size)
-            (value as Record<string, unknown>).cleanup_errors =
-              Object.fromEntries(cleanupErrors);
           const presentationAgentDefinition =
             typeof value.presentation_agent_definition === "string"
               ? value.presentation_agent_definition
@@ -11858,7 +11838,6 @@ export default function (pi: ExtensionAPI): void {
       removeRequest(mailbox, requestId);
       state = candidate;
       acknowledgementErrorReported = false;
-      clearRequestCleanupError(current.agentLabel);
     } catch (error) {
       if (agentContext) reportAcknowledgementFailure(agentContext, error);
     } finally {
