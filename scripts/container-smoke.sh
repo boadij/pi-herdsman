@@ -100,13 +100,11 @@ docker exec "$name" grep -qx 'herdsman:/home/herdsman:/home/herdsman' /tmp/herdr
 
 docker exec "$name" rm -f /tmp/herdr-autostart
 docker exec --user herdsman \
-  -e PATH=/home/herdsman/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   "$name" script -qec 'bash -ic exit' /dev/null >/dev/null
 docker exec "$name" grep -qx 'herdsman:/home/herdsman:/home/herdsman' /tmp/herdr-autostart
 
 docker exec "$name" rm -f /tmp/herdr-autostart
 docker exec --user herdsman -e HERDR_ENV=1 \
-  -e PATH=/home/herdsman/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   "$name" script -qec 'bash -ic exit' /dev/null >/dev/null
 docker exec "$name" test ! -e /tmp/herdr-autostart
 
