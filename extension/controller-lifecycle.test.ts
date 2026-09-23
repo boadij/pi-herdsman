@@ -1119,6 +1119,12 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
       /injected request removal failure/,
     );
     assert.equal(first.details.error.ids.label, child.agentLabel);
+    assert.equal(
+      pi.entries.filter(
+        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+      ).length,
+      1,
+    );
     assert.ok(readAgentState(childMailbox));
     assert.ok(readAgentState(parentMailbox));
     assert.deepEqual(lifecycle.closeOrder, [child.agentLabel]);

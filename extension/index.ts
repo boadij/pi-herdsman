@@ -5043,6 +5043,7 @@ async function stopOwnedAgents(
     if (!failures.has(label)) failures.set(label, { label, message });
   };
   for (const target of targets) {
+    let cleanupFailureReported = false;
     try {
       const fresh = await managedAgentSnapshots(pi, ctx, signal);
       const current = fresh.agents.filter(
@@ -5090,6 +5091,7 @@ async function stopOwnedAgents(
           if (!closed.includes(label)) closed.push(label);
         },
         onCleanupFailure: (label: string, message: string) => {
+          cleanupFailureReported = true;
           recordFailure(label, message);
         },
       } satisfies StopReportCallbacks;
@@ -5113,7 +5115,8 @@ async function stopOwnedAgents(
           target.state.agentLabel,
           `not closed: ${failure.detail.message}`,
         );
-      appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", failure);
+      if (!cleanupFailureReported)
+        appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", failure);
     }
   }
   const closedLabels = new Set(closed);
@@ -5415,7 +5418,8 @@ async function actionUnsafe(
           operation: "close",
         };
       if (failure.detail.category !== "agent_busy") {
-        appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", failure);
+        if (cleanupWarnings.size === 0)
+          appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", failure);
       }
       throw failure;
     }
