@@ -2595,6 +2595,7 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
     assert.equal(basename(expected), options.requestId);
     assert.equal(extname(basename(expected)), "");
     assert.equal(readFileSync(expected, "utf8"), persistText);
+    assert.doesNotMatch(readFileSync(expected, "utf8"), /"piSessionId":/);
     assertPosixMode(expected, 0o600);
     assertPosixMode(dirname(expected), 0o700);
     assert.equal(result.content, text);

@@ -276,10 +276,10 @@ subject to temporary-directory cleanup.
 
 Persisted reusable completions are self-describing. Herdsman prefixes the
 agent-authored result with source context containing the logical agent label,
-agent definition, and assignment cwd:
+agent definition, assignment cwd, and producing Pi session ID when available:
 
 ```text
-Agent result source: {"agent":"researcher","definition":"scout","cwd":"/project"}
+Agent result source: {"agent":"researcher","definition":"scout","cwd":"/project","piSessionId":"<producing-session-id>"}
 
 <agent-authored result>
 ```

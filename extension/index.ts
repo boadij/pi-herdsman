@@ -3311,6 +3311,9 @@ async function deliverResultUnsafe(
                   agent: result.agentLabel,
                   definition: runtime.agentDefinition,
                   cwd: runtime.cwd,
+                  ...(runtime.piSessionId !== undefined
+                    ? { piSessionId: runtime.piSessionId }
+                    : {}),
                 })}`,
                 result.text!,
               ].join("\n\n"),
