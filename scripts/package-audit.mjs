@@ -32,6 +32,7 @@ const expectedDefinitions = readdirSync(
 ).filter((name) => name.endsWith(".md"));
 const expectedDist = new Set([
   "dist/index.js",
+  "dist/index.js.map",
   ...expectedDefinitions.map((name) => `dist/agent-definitions/${name}`),
 ]);
 for (const path of expectedRoot)

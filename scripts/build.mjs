@@ -12,12 +12,10 @@ await build({
   entryPoints: ["extension/index.ts"],
   outfile: "dist/index.js",
   bundle: true,
-  minify: true,
   platform: "node",
   format: "esm",
   target: "node22",
-  sourcemap: false,
-  legalComments: "none",
+  sourcemap: true,
   external: [
     "@earendil-works/pi-ai",
     "@earendil-works/pi-coding-agent",
