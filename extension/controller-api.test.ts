@@ -2273,6 +2273,107 @@ test("copied fork result history does not invalidate the original owner edge", a
   }
 });
 
+test("historical continuation re-parenting preserves every valid ownership path", async () => {
+  setLeadEnvironment();
+  const parentId = randomUUID();
+  const childId = DEFAULT_PI_SESSION_ID;
+  const outsiderId = randomUUID();
+  const childPath = join(testTmpRoot, `reparented-${childId}.jsonl`);
+  realFs.writeFileSync(childPath, "{}", "utf8");
+  const parentEntries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { sessionId: parentId, definition: "agent", label: "parent" },
+    },
+    ownershipResult(childId, parentId),
+  ];
+  const leadEntries = [ownershipResult(parentId)];
+  nativeSessions.clear();
+  nativeSessions.set(parentId, {
+    id: parentId,
+    path: join(testTmpRoot, `reparent-owner-${parentId}.jsonl`),
+    entries: parentEntries,
+  });
+  nativeSessions.set(childId, {
+    id: childId,
+    path: childPath,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: childId, definition: "agent", label: "child" },
+      },
+    ],
+  });
+  const request = async (
+    action: "continue" | "delegate",
+    entries: unknown[],
+    callerId = LEAD_SESSION_ID,
+  ) => {
+    const startup = startupExecutor("child", () => childId);
+    const pi = fakePi({ exec: startup.exec });
+    registerExtension!(pi.pi as never);
+    try {
+      const context = fakeContext(entries) as any;
+      context.sessionManager.getSessionId = () => callerId;
+      const result = await pi.tools[0].execute(
+        "id",
+        action === "continue"
+          ? { action, session: childId, task: "continue child" }
+          : {
+              action,
+              definition: "agent",
+              label: "child",
+              fork: childPath,
+              task: "fork child",
+            },
+        undefined,
+        undefined,
+        context,
+      );
+      if (result.details.ok && action === "continue")
+        assert.equal(result.details.session_id, childId);
+      return result;
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      startup.stopMailboxConsumer();
+      resetAgentMailbox(startup.mailbox);
+    }
+  };
+  try {
+    const first = await request("continue", leadEntries);
+    assert.equal(first.details.ok, true, JSON.stringify(first.details));
+    // The completed continuation delivers a new result for the same Pi ID
+    // directly to L, without erasing P's older child result.
+    leadEntries.push(ownershipResult(childId));
+    for (const action of ["continue", "delegate"] as const) {
+      const repeated = await request(action, leadEntries);
+      assert.equal(repeated.details.ok, true, JSON.stringify(repeated.details));
+      const unrelated = await request(action, [], outsiderId);
+      assert.equal(unrelated.details.error.category, "invalid_request");
+    }
+    const malformed = ownershipResult(childId, parentId);
+    (malformed.details as any).status = "unknown";
+    parentEntries.push(malformed);
+    assert.equal(
+      (await request("delegate", leadEntries)).details.error.category,
+      "invalid_request",
+    );
+    parentEntries.pop();
+    const childEntries = nativeSessions.get(childId)!.entries;
+    childEntries.push(ownershipResult(parentId, childId));
+    assert.equal(
+      (await request("continue", leadEntries)).details.error.category,
+      "invalid_request",
+    );
+  } finally {
+    nativeSessions.clear();
+    realFs.rmSync(childPath, { force: true });
+  }
+});
+
 test("ordinary Pi fork with copied managed history remains a delegate fork source", async () => {
   setLeadEnvironment();
   const parentId = randomUUID();

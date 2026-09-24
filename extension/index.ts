@@ -1532,18 +1532,20 @@ async function requireOwnedAssignmentSource(
   )
     deny();
   // ponytail: scan durable sessions per assignment; index result edges if this becomes hot.
-  const seen = new Set<string>();
-  let childId = session.id;
-  while (childId !== callerId) {
-    if (seen.has(childId)) deny();
-    seen.add(childId);
+  const visiting = new Set<string>();
+  const visited = new Map<string, boolean>();
+  const candidates = [
+    ...listed,
+    ...(!listed.some((item) => item.id === callerId)
+      ? [{ id: callerId, path: ctx.sessionManager.getSessionFile() ?? "" }]
+      : []),
+  ];
+  const reachesCaller = (childId: string): boolean => {
+    if (childId === callerId) return true;
+    if (visiting.has(childId)) deny();
+    if (visited.has(childId)) return visited.get(childId)!;
+    visiting.add(childId);
     const owners = new Set<string>();
-    const candidates = [
-      ...listed,
-      ...(!listed.some((item) => item.id === callerId)
-        ? [{ id: callerId, path: ctx.sessionManager.getSessionFile() ?? "" }]
-        : []),
-    ];
     for (const candidate of candidates) {
       const ownerEntries =
         candidate.id === callerId
@@ -1578,21 +1580,27 @@ async function requireOwnedAssignmentSource(
         owners.add(candidate.id);
       }
     }
-    if (owners.size !== 1) deny();
-    const [ownerId] = owners;
-    if (listed.filter((item) => item.id === ownerId).length > 1) deny();
-    if (ownerId !== callerId) {
-      const owner = SessionManager.open(
-        listed.find((item) => item.id === ownerId)!.path,
-      );
-      try {
-        if (!sessionAgentIdentity(owner.getEntries(), ownerId)) deny();
-      } catch {
-        deny();
+    let found = false;
+    for (const ownerId of owners) {
+      if (ownerId !== callerId) {
+        const matches = listed.filter((item) => item.id === ownerId);
+        if (matches.length !== 1) deny();
+        const owner = SessionManager.open(matches[0].path);
+        try {
+          if (!sessionAgentIdentity(owner.getEntries(), ownerId)) deny();
+        } catch {
+          deny();
+        }
       }
+      // Evaluate every branch even after finding a path: malformed or cyclic
+      // historical ownership must not be hidden by another valid edge.
+      if (reachesCaller(ownerId)) found = true;
     }
-    childId = ownerId;
-  }
+    visiting.delete(childId);
+    visited.set(childId, found);
+    return found;
+  };
+  if (!reachesCaller(session.id)) deny();
 }
 
 const HERDR_VERSION_PATTERN =
