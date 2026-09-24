@@ -459,7 +459,6 @@ mock.module("typebox", {
         items,
         ...options,
       }),
-      Union: (anyOf: unknown[]) => ({ anyOf }),
     },
   },
 });

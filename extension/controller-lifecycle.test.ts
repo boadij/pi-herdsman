@@ -3933,7 +3933,7 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     {
       label: `${prefix}-missing-agent`,
       params: { action: "delegate" },
-      message: "Delegate requires a definition",
+      message: "Invalid agent input",
     },
     {
       label: `${prefix}-missing-session`,
@@ -3948,7 +3948,7 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     {
       label: `${prefix}-missing-task`,
       params: { action: "delegate", definition: "agent" },
-      message: "Delegate requires a non-empty task",
+      message: "Invalid agent input",
     },
     {
       label: `${prefix}-whitespace-task`,
