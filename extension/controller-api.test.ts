@@ -2273,6 +2273,57 @@ test("copied fork result history does not invalidate the original owner edge", a
   }
 });
 
+test("ordinary Pi fork with copied managed history remains a delegate fork source", async () => {
+  setLeadEnvironment();
+  const parentId = randomUUID();
+  const forkId = randomUUID();
+  const forkPath = join(testTmpRoot, `copied-managed-fork-${forkId}.jsonl`);
+  nativeSessions.clear();
+  nativeSessions.set(forkId, {
+    id: forkId,
+    path: forkPath,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: parentId, definition: "agent", label: "parent" },
+      },
+      ownershipResult(randomUUID(), parentId),
+    ],
+  });
+  const startup = startupExecutor(
+    "copied-fork-target",
+    () => DEFAULT_PI_SESSION_ID,
+  );
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      {
+        action: "delegate",
+        definition: "agent",
+        label: "copied-fork-target",
+        fork: forkId,
+        task: "review the ordinary fork",
+      },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    const start = pi.calls.find(
+      (args) => args[0] === "agent" && args[1] === "start",
+    )!;
+    assert.equal(start[start.indexOf("--fork") + 1], forkPath);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    nativeSessions.clear();
+  }
+});
+
 test("session assignment fails closed on duplicate live representations", async () => {
   setLeadEnvironment();
   const session = {

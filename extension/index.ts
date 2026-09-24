@@ -1505,19 +1505,20 @@ async function requireOwnedAssignmentSource(
 ): Promise<void> {
   const source = SessionManager.open(session.path);
   const entries = source.getEntries();
-  const managed = entries.some(
-    (entry: any) => entry?.customType === AGENT_DEFINITION_ENTRY,
-  );
-  if (!managed && operation === "delegate") return;
   const deny = (): never =>
     fail(
       "invalid_request",
       "Assignment source is outside the caller's proven session ownership tree",
       operation,
     );
+  let identity: AgentSessionIdentity | undefined;
   try {
-    if (!sessionAgentIdentity(entries, session.id)) deny();
+    identity = sessionAgentIdentity(entries, session.id);
   } catch {
+    deny();
+  }
+  if (!identity) {
+    if (operation === "delegate") return;
     deny();
   }
   const callerId = ctx.sessionManager.getSessionId();
