@@ -141,7 +141,10 @@ test("semantic result refs attach persisted output and preserve canonical file r
   const requestId = randomUUID();
   const canonical = resultRef(requestId);
   const resultFile = resultPath(requestId);
-  const resultText = "persisted implementation review";
+  const resultText = [
+    'Agent result source: {"agent":"implementation","definition":"agent","cwd":"/repo"}',
+    "persisted implementation review",
+  ].join("\n\n");
   realFs.mkdirSync(resolve(resultFile, ".."), { recursive: true });
   realFs.writeFileSync(resultFile, resultText, "utf8");
   const entries: unknown[] = [
@@ -184,6 +187,10 @@ test("semantic result refs attach persisted output and preserve canonical file r
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.match(assignedText, new RegExp(`<file name="${canonical}"`));
+    assert.match(
+      assignedText,
+      /Agent result source: \{"agent":"implementation","definition":"agent","cwd":"\/repo"\}/,
+    );
     assert.match(assignedText, /persisted implementation review/);
     assert.equal(
       assignedText.match(new RegExp(`<file name="${canonical}"`, "g"))?.length,

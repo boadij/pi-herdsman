@@ -3304,7 +3304,17 @@ async function deliverResultUnsafe(
         key: result.requestId,
         requestId: result.requestId,
         ...(result.status === "completed"
-          ? { persist: "completion" as const }
+          ? {
+              persist: "completion" as const,
+              persistText: [
+                `Agent result source: ${JSON.stringify({
+                  agent: result.agentLabel,
+                  definition: runtime.agentDefinition,
+                  cwd: runtime.cwd,
+                })}`,
+                result.text!,
+              ].join("\n\n"),
+            }
           : {}),
       },
     );

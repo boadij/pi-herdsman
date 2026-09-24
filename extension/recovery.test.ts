@@ -1366,6 +1366,18 @@ test("recovery requires the official session and retries one failed delivery", a
     ),
   );
   assert.match(delivered, new RegExp(`Result ref: result:${label}#2`));
+  assert.doesNotMatch(delivered, /Agent result source:/);
+  assert.equal(
+    readFileSync(resultPath(REQUEST_ID), "utf8"),
+    [
+      `Agent result source: ${JSON.stringify({
+        agent: label,
+        definition: "agent",
+        cwd: removalState.cwd,
+      })}`,
+      scoutText,
+    ].join("\n\n"),
+  );
   assert.equal(deliveredDetails.agentLabel, label);
   assert.equal(deliveredDetails.agentDefinition, "agent");
   assert.equal(deliveredDetails.resultIndex, 2);
