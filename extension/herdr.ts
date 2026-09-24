@@ -1227,7 +1227,11 @@ export async function startHerdrAgent(
         ],
         {
           signal: options.signal,
-          timeout: Math.min(remaining, childTimeout),
+          // Outlive Herdr's own readiness deadline by the diagnostic window so
+          // its structured failure is the one reported. With the identical
+          // value this command's kill always won the race, and "Herdr command
+          // was killed" replaced Herdr's reason.
+          timeout: Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
         },
       );
     } catch (failure) {
