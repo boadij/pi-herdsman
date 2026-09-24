@@ -194,11 +194,14 @@ test("current error codes replace the legacy label and busy codes", async () => 
   }
 });
 
-test("agent schemas expose explicit assignment actions and reject cross-fields", () => {
+test("agent schema exposes portable structure and runtime rejects cross-fields", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const schema = pi.tools.find((tool) => tool.name === "agent")!.parameters;
+  assert.equal(schema.type, "object");
+  assert.ok(schema.properties);
+  assert.equal(schema.additionalProperties, false);
   assert.equal(
     Value.Check(schema, { action: "inspect", agent: "target" }),
     true,
@@ -210,14 +213,6 @@ test("agent schemas expose explicit assignment actions and reject cross-fields",
   assert.equal(
     Value.Check(schema, { action: "transcript", agent: "target" }),
     true,
-  );
-  assert.equal(
-    Value.Check(schema, {
-      action: "transcript",
-      agent: "target",
-      message: "not allowed",
-    }),
-    false,
   );
   assert.equal(
     Value.Check(schema, {
@@ -236,22 +231,26 @@ test("agent schemas expose explicit assignment actions and reject cross-fields",
     }),
     true,
   );
-  assert.equal(
-    Value.Check(schema, {
+  const toolCall = pi.events.get("tool_call")![0];
+  for (const input of [
+    { action: "transcript", agent: "target", message: "not allowed" },
+    {
       action: "delegate",
       session: "/tmp/session.jsonl",
       task: "continued work",
-    }),
-    false,
-  );
-  assert.equal(
-    Value.Check(schema, {
+    },
+    {
       action: "continue",
       session: "/tmp/session.jsonl",
       label: "renamed-agent",
       task: "continued work",
-    }),
-    false,
-  );
+    },
+  ]) {
+    assert.equal(Value.Check(schema, input), true);
+    assert.deepEqual(
+      await toolCall({ toolName: "agent", input }, fakeContext()),
+      { block: true, reason: "Invalid agent input" },
+    );
+  }
   pi.events.get("session_shutdown")?.[0]();
 });

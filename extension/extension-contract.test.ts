@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { test } from "node:test";
+import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
@@ -81,6 +82,20 @@ function assertToolResult(result: any): asserts result is {
       (part: any) => part?.type === "text" && typeof part.text === "string",
     ),
   );
+}
+
+function assertPortableToolSchema(tool: any): void {
+  assert.equal(tool.parameters?.type, "object");
+  assert.ok(tool.parameters?.properties);
+  assert.equal(tool.parameters?.anyOf, undefined);
+  assert.equal(tool.parameters?.oneOf, undefined);
+  assert.equal(tool.parameters?.allOf, undefined);
+  assert.doesNotThrow(() => makeStrictJsonSchema(tool.parameters));
+  assert.equal(tool.parameters.required?.includes("files") ?? false, false);
+  if (tool.name !== "ask_owner") {
+    assert.ok(tool.parameters.required?.includes("action"), tool.name);
+    assert.ok(tool.parameters.properties.action);
+  }
 }
 
 const REGISTERED_ROLE_TOOLS = [
@@ -220,6 +235,24 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   const peerTool = lead.tools.find((tool) => tool.name === "peer");
   assert.ok(agentTool);
   assert.ok(peerTool);
+  for (const tool of [agentTool, chiefTool, peerTool])
+    assertPortableToolSchema(tool);
+  const toolCall = lead.events.get("tool_call")![0];
+  for (const input of [
+    { action: "list", task: "not valid for list" },
+    { action: "delegate", definition: "agent" },
+  ])
+    assert.deepEqual(
+      await toolCall({ toolName: "agent", input }, fakeContext()),
+      { block: true, reason: "Invalid agent input" },
+    );
+  assert.deepEqual(
+    await toolCall(
+      { toolName: "peer", input: { action: "list", lead: LEAD_SESSION_ID } },
+      fakeContext(),
+    ),
+    { block: true, reason: "Invalid peer action" },
+  );
   const resultRef = "result:implementation#1";
   for (const request of [
     {
@@ -471,6 +504,9 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
     managed.tools.find((tool) => tool.name === "ask_owner")?.promptSnippet,
     "Ask this managed agent's direct owner for a required decision",
   );
+  const askOwnerTool = managed.tools.find((tool) => tool.name === "ask_owner");
+  assert.ok(askOwnerTool);
+  assertPortableToolSchema(askOwnerTool);
   managed.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 
@@ -1187,6 +1223,7 @@ test("active chief describes authoritative remote ask projection", async () => {
   await pi.events.get("session_start")![0](undefined, context);
   const tool = pi.tools.find((candidate) => candidate.name === "staff");
   assert.ok(tool);
+  assertPortableToolSchema(tool);
   assert.equal(tool.label, "staff");
   assert.equal(
     tool.promptSnippet,
@@ -1289,25 +1326,15 @@ test("active chief describes authoritative remote ask projection", async () => {
   ])
     assert.match(description, expected);
   assert.doesNotMatch(description, /\b(steer|interrupt|close)\b/);
-  const schema = JSON.stringify(tool.parameters);
+  const leadSchema = (tool.parameters as any).properties.lead;
   assert.equal(
-    schema.match(
-      /The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name\./g,
-    )?.length,
-    3,
+    leadSchema.pattern,
+    "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$",
   );
-  for (const variant of (tool.parameters as any).anyOf) {
-    const leadSchema = variant.properties?.lead;
-    if (!leadSchema) continue;
-    assert.equal(
-      leadSchema.pattern,
-      "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$",
-    );
-    assert.equal(Value.Check(leadSchema, ""), false);
-    assert.equal(Value.Check(leadSchema, "-"), false);
-    assert.equal(Value.Check(leadSchema, "lead/session"), false);
-    assert.equal(Value.Check(leadSchema, LEAD_SESSION_ID), true);
-  }
+  assert.equal(Value.Check(leadSchema, ""), false);
+  assert.equal(Value.Check(leadSchema, "-"), false);
+  assert.equal(Value.Check(leadSchema, "lead/session"), false);
+  assert.equal(Value.Check(leadSchema, LEAD_SESSION_ID), true);
   assert.equal(
     Value.Check(tool.parameters, {
       action: "inspect",
@@ -2502,6 +2529,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
   assert.ok(leadTool);
   const chiefTool = chief.tools.find((tool) => tool.name === "staff");
   assert.ok(chiefTool);
+  assertPortableToolSchema(chiefTool);
   assert.deepEqual(chief.pi.getActiveTools(), ["staff"]);
   const chiefLeadStateEntriesBeforeDelivery = chiefEntries.filter(
     (entry) => (entry as any).customType === "pi-herdsman-lead-state",
@@ -2510,6 +2538,27 @@ test("registered lead and replacement chief exchange messages and asks", async (
   writeFileSync(attachment, "chief evidence\n", "utf8");
 
   try {
+    assert.deepEqual(
+      await chief.events.get("tool_call")![0](
+        { toolName: "staff", input: { action: "list", lead: leadId } },
+        chiefContext,
+      ),
+      { block: true, reason: "Invalid staff action" },
+    );
+    await assert.rejects(
+      leadTool.execute(
+        "invalid",
+        {
+          action: "message",
+          message: "progress",
+          question: "not valid for message",
+        },
+        undefined,
+        undefined,
+        leadContext,
+      ),
+      /Invalid chief action/,
+    );
     writeAgentState(directAgentMailbox, directAgent);
     writeAgentState(descendantAgentMailbox, descendantAgent);
     const chiefStart = await chief.events.get("before_agent_start")![0](

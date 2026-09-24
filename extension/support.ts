@@ -444,12 +444,22 @@ mock.module("@earendil-works/pi-ai", {
 mock.module("typebox", {
   namedExports: {
     Type: {
-      Object: (properties: unknown, options: unknown = {}) => ({
-        type: "object",
-        properties,
-        ...(options as object),
-      }),
-      Optional: (value: unknown) => value,
+      Object: (
+        properties: Record<string, { "~optional"?: boolean }>,
+        options: unknown = {},
+      ) => {
+        const required = Object.keys(properties).filter(
+          (key) => !properties[key]?.["~optional"],
+        );
+        return {
+          type: "object",
+          ...(required.length ? { required } : {}),
+          properties,
+          ...(options as object),
+        };
+      },
+      Optional: (value: object) =>
+        Object.defineProperty({ ...value }, "~optional", { value: true }),
       String: (options: unknown = {}) => ({ type: "string", ...options }),
       Boolean: (options: unknown = {}) => ({ type: "boolean", ...options }),
       Number: (options: unknown = {}) => ({ type: "number", ...options }),
@@ -459,7 +469,6 @@ mock.module("typebox", {
         items,
         ...options,
       }),
-      Union: (anyOf: unknown[]) => ({ anyOf }),
     },
   },
 });

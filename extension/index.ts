@@ -519,97 +519,16 @@ type Params =
   | { action: "close"; agent: string }
   | { action: "inspect"; agent: string }
   | { action: "transcript"; agent: string };
-function parseRequest(p: Params): Params {
-  if (p.action === "list") {
-    return { action: "list" };
-  }
-  if (p.action === "steer" || p.action === "interrupt") {
-    const label = p.action === "interrupt" ? "Interrupt" : "Steer";
-    if (!p.agent)
-      fail("invalid_request", `${label} requires an agent`, p.action);
-    if (!p.message)
-      fail(
-        "invalid_request",
-        `${label} requires a non-empty message`,
-        p.action,
-      );
-    return {
-      action: p.action,
-      agent: p.agent!,
-      message: p.message!,
-      ...(p.files ? { files: p.files } : {}),
-    };
-  }
-  if (p.action === "reply") {
-    if (!p.agent) fail("invalid_request", "Reply requires an agent", "reply");
-    if (!p.message)
-      fail("invalid_request", "Reply requires a non-empty message", "reply");
-    return {
-      action: "reply",
-      agent: p.agent!,
-      message: p.message!,
-      ...(p.files ? { files: p.files } : {}),
-    };
-  }
-  if (p.action === "close") {
-    if (!p.agent) fail("invalid_request", "Close requires an agent", "close");
-    return { action: "close", agent: p.agent! };
-  }
-  if (p.action === "inspect") {
-    if (!p.agent)
-      fail("invalid_request", "Inspect requires an agent", "inspect");
-    return { action: "inspect", agent: p.agent! };
-  }
-  if (p.action === "transcript") {
-    if (!p.agent)
-      fail("invalid_request", "Transcript requires an agent", "transcript");
-    return { action: "transcript", agent: p.agent! };
-  }
-  if (p.action === "delegate" && "definition" in p) {
-    if ("session" in p || "agent" in p || "message" in p)
-      fail(
-        "invalid_request",
-        "Delegate does not accept session, agent, or message",
-        "delegate",
-      );
-    if (!p.task)
-      fail("invalid_request", "Delegate requires a non-empty task", "delegate");
-    return {
-      action: "delegate",
-      definition: p.definition,
-      task: p.task!,
-      ...(p.label !== undefined ? { label: p.label } : {}),
-      ...(p.files !== undefined ? { files: p.files } : {}),
-      ...(p.fork !== undefined ? { fork: p.fork } : {}),
-      ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
-    };
-  }
-  if (p.action === "continue") {
-    if (
-      "definition" in p ||
-      "agent" in p ||
-      "cwd" in p ||
-      "fork" in p ||
-      "message" in p
-    )
-      fail(
-        "invalid_request",
-        "Continue does not accept definition, agent, cwd, fork, or message",
-        "continue",
-      );
-    if (!p.task)
-      fail("invalid_request", "Continue requires a non-empty task", "continue");
-    return {
-      action: "continue",
-      session: p.session,
-      task: p.task!,
-      ...(p.files !== undefined ? { files: p.files } : {}),
-      ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
-    };
-  }
-  if (p.action !== "delegate")
-    fail("invalid_request", "Unsupported agent action", p.action);
-  fail("invalid_request", "Delegate requires a definition", "delegate");
+function matchesActionFields(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const allowed = ["action", ...required, ...optional];
+  return (
+    required.every((key) => key in value) &&
+    Object.keys(value).every((key) => allowed.includes(key))
+  );
 }
 function invalidRequestInput(
   operation: string,
@@ -6363,7 +6282,7 @@ async function actionUnsafe(
 async function action(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  raw: Params,
+  p: Params,
   signal?: AbortSignal,
   scope?: ControllerScope,
   pendingStarts?: Map<string, PendingStart>,
@@ -6378,7 +6297,6 @@ async function action(
           "Run this action from the lead controller or an authorized delegation-enabled agent controller",
       },
     );
-  const p = parseRequest(raw);
   if (!scope || scope.kind === "lead")
     return actionUnsafe(pi, ctx, p, signal, scope, pendingStarts);
   if (!agentControllerReady)
@@ -6526,164 +6444,193 @@ export default function (pi: ExtensionAPI): void {
       },
     ),
   );
-  const agentParameters = Type.Union([
-    Type.Object(
-      { action: StringEnum(["list"] as const) },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        action: StringEnum(["delegate"] as const),
-        definition:
-          controllerScope?.kind === "managed-agent"
-            ? {
-                ...StringEnum([...controllerScope.allowedAgentDefinitions]),
-                description: "Allowed agent definition for delegation.",
-              }
-            : Type.String({
-                description: "Agent definition for a fresh agent.",
-                pattern: "\\S",
-              }),
-        task: Type.String({ description: "Non-empty task.", pattern: "\\S" }),
-        label: Type.Optional(
-          Type.String({
-            description:
-              "Optional logical agent label matching ^[a-z][a-z0-9_-]{0,31}$.",
-            pattern: AGENT_LABEL_PATTERN.source,
-          }),
-        ),
-        fork: Type.Optional(
-          Type.String({
-            description:
-              "Exact saved Pi session path or full UUID used as context for a fork.",
-            pattern: "\\S",
-          }),
-        ),
-        timeoutMs: Type.Optional(
-          Type.Integer({
-            minimum: STARTUP_TIMEOUT_MIN,
-            maximum: STARTUP_TIMEOUT_MAX,
-            description: "Total startup budget in milliseconds.",
-          }),
-        ),
-        files: FILES_SCHEMA,
-      },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        action: StringEnum(["continue"] as const),
-        session: Type.String({
+  const agentParameters = Type.Object(
+    {
+      action: StringEnum([
+        "list",
+        "delegate",
+        "continue",
+        "steer",
+        "interrupt",
+        "reply",
+        "close",
+        "inspect",
+        "transcript",
+      ] as const),
+      definition: Type.Optional(
+        controllerScope?.kind === "managed-agent"
+          ? {
+              ...StringEnum([...controllerScope.allowedAgentDefinitions]),
+              description: "Required for delegate. Allowed agent definition.",
+            }
+          : Type.String({
+              description:
+                "Required for delegate. Agent definition for a fresh agent.",
+              pattern: "\\S",
+            }),
+      ),
+      task: Type.Optional(
+        Type.String({
+          description: "Required for delegate and continue.",
+          pattern: "\\S",
+        }),
+      ),
+      label: Type.Optional(
+        Type.String({
           description:
-            "Exact saved Pi session path or full UUID used to continue historical context.",
+            "Optional delegate label matching ^[a-z][a-z0-9_-]{0,31}$.",
+          pattern: AGENT_LABEL_PATTERN.source,
+        }),
+      ),
+      session: Type.Optional(
+        Type.String({
+          description:
+            "Required for continue. Exact saved Pi session path or full UUID.",
           pattern: "\\S",
         }),
-        task: Type.String({
-          description: "Non-empty task for the historical session.",
+      ),
+      agent: Type.Optional(
+        Type.String({
+          description:
+            "Required for steer, interrupt, reply, close, inspect, and transcript.",
+          pattern: AGENT_LABEL_PATTERN.source,
+        }),
+      ),
+      message: Type.Optional(
+        Type.String({
+          description: "Required for steer, interrupt, and reply.",
           pattern: "\\S",
         }),
-        files: FILES_SCHEMA,
-        timeoutMs: Type.Optional(
-          Type.Integer({
-            minimum: STARTUP_TIMEOUT_MIN,
-            maximum: STARTUP_TIMEOUT_MAX,
-          }),
-        ),
-      },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        action: StringEnum(["steer", "interrupt"] as const),
-        agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
-        message: Type.String({ pattern: "\\S" }),
-        files: FILES_SCHEMA,
-      },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        action: StringEnum(["reply"] as const),
-        agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
-        message: Type.String({ pattern: "\\S" }),
-        files: FILES_SCHEMA,
-      },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        action: StringEnum(["close", "inspect", "transcript"] as const),
-        agent: Type.String({ pattern: AGENT_LABEL_PATTERN.source }),
-      },
-      { additionalProperties: false },
-    ),
-  ]);
+      ),
+      fork: Type.Optional(
+        Type.String({
+          description:
+            "Optional delegate context: exact saved Pi session path or full UUID.",
+          pattern: "\\S",
+        }),
+      ),
+      timeoutMs: Type.Optional(
+        Type.Integer({
+          minimum: STARTUP_TIMEOUT_MIN,
+          maximum: STARTUP_TIMEOUT_MAX,
+          description: "Optional startup budget for delegate and continue.",
+        }),
+      ),
+      files: FILES_SCHEMA,
+    },
+    { additionalProperties: false },
+  );
   const agentValidator = Compile(agentParameters);
-  const staffParameters = Type.Union([
-    Type.Object(
-      { action: StringEnum(["list"] as const) },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        action: StringEnum(["inspect", "transcript"] as const),
-        lead: Type.String({
+  const isAgentParams = (value: unknown): value is Params => {
+    if (!agentValidator.Check(value)) return false;
+    const p = value as Record<string, unknown>;
+    switch (p.action) {
+      case "list":
+        return matchesActionFields(p, []);
+      case "delegate":
+        return matchesActionFields(
+          p,
+          ["definition", "task"],
+          ["label", "fork", "timeoutMs", "files"],
+        );
+      case "continue":
+        return matchesActionFields(
+          p,
+          ["session", "task"],
+          ["timeoutMs", "files"],
+        );
+      case "steer":
+      case "interrupt":
+      case "reply":
+        return matchesActionFields(p, ["agent", "message"], ["files"]);
+      case "close":
+      case "inspect":
+      case "transcript":
+        return matchesActionFields(p, ["agent"]);
+      default:
+        return false;
+    }
+  };
+  const staffParameters = Type.Object(
+    {
+      action: StringEnum([
+        "list",
+        "inspect",
+        "transcript",
+        "message",
+        "reply",
+      ] as const),
+      lead: Type.Optional(
+        Type.String({
           pattern: PI_SESSION_ID_PATTERN,
           description:
-            "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
+            "Required except for list. Exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
         }),
-      },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        action: StringEnum(["message"] as const),
-        lead: Type.String({
-          pattern: PI_SESSION_ID_PATTERN,
-          description:
-            "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
+      ),
+      askId: Type.Optional(
+        Type.String({
+          pattern: "\\S",
+          description: "Required for reply. Exact pending ask ID.",
         }),
-        message: Type.String({ pattern: "\\S" }),
-        files: FILES_SCHEMA,
-      },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        action: StringEnum(["reply"] as const),
-        lead: Type.String({
-          pattern: PI_SESSION_ID_PATTERN,
-          description:
-            "The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name.",
+      ),
+      message: Type.Optional(
+        Type.String({
+          pattern: "\\S",
+          description: "Required for message and reply.",
         }),
-        askId: Type.String({ pattern: "\\S" }),
-        message: Type.String({ pattern: "\\S" }),
-        files: FILES_SCHEMA,
-      },
-      { additionalProperties: false },
-    ),
-  ]);
+      ),
+      files: FILES_SCHEMA,
+    },
+    { additionalProperties: false },
+  );
   const staffValidator = Compile(staffParameters);
-  const peerParameters = Type.Union([
-    Type.Object(
-      { action: StringEnum(["list"] as const) },
-      { additionalProperties: false },
-    ),
-    Type.Object(
-      {
-        action: StringEnum(["message"] as const),
-        lead: Type.String({
+  const isStaffParams = (value: unknown): boolean => {
+    if (!staffValidator.Check(value)) return false;
+    const p = value as Record<string, unknown>;
+    switch (p.action) {
+      case "list":
+        return matchesActionFields(p, []);
+      case "inspect":
+      case "transcript":
+        return matchesActionFields(p, ["lead"]);
+      case "message":
+        return matchesActionFields(p, ["lead", "message"], ["files"]);
+      case "reply":
+        return matchesActionFields(p, ["lead", "askId", "message"], ["files"]);
+      default:
+        return false;
+    }
+  };
+  const peerParameters = Type.Object(
+    {
+      action: StringEnum(["list", "message"] as const),
+      lead: Type.Optional(
+        Type.String({
           pattern: PI_SESSION_ID_PATTERN,
           description:
-            "The lead is the exact full Pi session ID returned by peer list; never use a display label.",
+            "Required for message. Exact full Pi session ID returned by peer list; never use a display label.",
         }),
-        message: Type.String({ pattern: "\\S" }),
-        files: FILES_SCHEMA,
-      },
-      { additionalProperties: false },
-    ),
-  ]);
+      ),
+      message: Type.Optional(
+        Type.String({ pattern: "\\S", description: "Required for message." }),
+      ),
+      files: FILES_SCHEMA,
+    },
+    { additionalProperties: false },
+  );
   const peerValidator = Compile(peerParameters);
+  const isPeerParams = (value: unknown): boolean => {
+    if (!peerValidator.Check(value)) return false;
+    const p = value as Record<string, unknown>;
+    switch (p.action) {
+      case "list":
+        return matchesActionFields(p, []);
+      case "message":
+        return matchesActionFields(p, ["lead", "message"], ["files"]);
+      default:
+        return false;
+    }
+  };
   let startupDefinitionRoster:
     { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
   let chiefMode: ChiefMode = "inactive";
@@ -8004,21 +7951,21 @@ export default function (pi: ExtensionAPI): void {
         }
       }
       if (!controllerScope) return;
-      if (event.toolName === "agent" && !agentValidator.Check(event.input)) {
+      if (event.toolName === "agent" && !isAgentParams(event.input)) {
         const error = invalidRequestInput("agent", "Invalid agent input");
         return {
           block: true,
           reason: error.detail.message,
         };
       }
-      if (event.toolName === "staff" && !staffValidator.Check(event.input)) {
+      if (event.toolName === "staff" && !isStaffParams(event.input)) {
         const error = invalidRequestInput("staff", "Invalid staff action");
         return {
           block: true,
           reason: error.detail.message,
         };
       }
-      if (event.toolName === "peer" && !peerValidator.Check(event.input)) {
+      if (event.toolName === "peer" && !isPeerParams(event.input)) {
         const error = invalidRequestInput("peer", "Invalid peer action");
         return {
           block: true,
@@ -9694,24 +9641,26 @@ export default function (pi: ExtensionAPI): void {
         description:
           "For ordinary leads only. A lead owns its complete agent tree; the chief supervises leads and never changes ownership. Message and ask require a currently valid chief and reject before mutation when none exists. Use message for meaningful progress, results, warnings, and completion, including exact artifact paths; use ask when a chief decision is genuinely required; call ask alone as the final tool call of the turn, then stop and wait for the reply. Questions are limited to 1,024 characters and 1,024 UTF-8 bytes; channel message records are bounded to 8 KiB, so multibyte content can hit the byte limit first. Chief messages arrive as follow-ups, so integrate them through normal delegation. Descendants use ask_owner, never chief.",
         executionMode: "sequential",
-        parameters: Type.Union([
-          Type.Object(
-            {
-              action: StringEnum(["message"] as const),
-              message: Type.String({ minLength: 1 }),
-              files: FILES_SCHEMA,
-            },
-            { additionalProperties: false },
-          ),
-          Type.Object(
-            {
-              action: StringEnum(["ask"] as const),
-              question: Type.String({ minLength: 1, maxLength: 1024 }),
-              files: FILES_SCHEMA,
-            },
-            { additionalProperties: false },
-          ),
-        ]),
+        parameters: Type.Object(
+          {
+            action: StringEnum(["message", "ask"] as const),
+            message: Type.Optional(
+              Type.String({
+                minLength: 1,
+                description: "Required for message.",
+              }),
+            ),
+            question: Type.Optional(
+              Type.String({
+                minLength: 1,
+                maxLength: 1024,
+                description: "Required for ask.",
+              }),
+            ),
+            files: FILES_SCHEMA,
+          },
+          { additionalProperties: false },
+        ),
         execute: async (
           _id: string,
           params: any,
@@ -9723,17 +9672,13 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Chief is available only to ordinary leads");
           if (!params || typeof params.action !== "string")
             throw new Error("Invalid chief action");
-          const allowed =
+          const validFields =
             params.action === "message"
-              ? ["action", "message", "files"]
+              ? matchesActionFields(params, ["message"], ["files"])
               : params.action === "ask"
-                ? ["action", "question", "files"]
-                : [];
-          if (
-            !allowed.length ||
-            Object.keys(params).some((key) => !allowed.includes(key))
-          )
-            throw new Error("Invalid chief action");
+                ? matchesActionFields(params, ["question"], ["files"])
+                : false;
+          if (!validFields) throw new Error("Invalid chief action");
           if (params.action === "message") {
             if (typeof params.message !== "string" || !params.message.trim())
               throw new Error("Message must contain non-whitespace text");
@@ -9943,7 +9888,7 @@ export default function (pi: ExtensionAPI): void {
         ) => {
           if (controllerScope.kind !== "lead" || chiefMode !== "inactive")
             throw new Error("Peer is available only to ordinary leads");
-          if (!peerValidator.Check(params))
+          if (!isPeerParams(params))
             throw invalidRequestInput("peer", "Invalid peer action");
           if (params.action === "list") {
             const self = ctx.sessionManager.getSessionId();
@@ -10043,7 +9988,7 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Staff is available only to the active chief");
           if (!(await currentChiefAuthority(ctx)))
             throw new Error("Chief lease is no longer active");
-          if (!staffValidator.Check(params))
+          if (!isStaffParams(params))
             throw invalidRequestInput("staff", "Invalid staff action");
           const refresh = async () => loadSupervisionSnapshot(ctx);
           const result = (value: Record<string, unknown>) => {
@@ -11546,7 +11491,7 @@ export default function (pi: ExtensionAPI): void {
         ctx: ExtensionContext,
       ) => {
         try {
-          if (!agentValidator.Check(p))
+          if (!isAgentParams(p))
             throw invalidRequestInput(
               typeof (p as { action?: unknown })?.action === "string"
                 ? (p as { action: string }).action
