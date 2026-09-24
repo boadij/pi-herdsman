@@ -380,6 +380,10 @@ Agent result · agent=<agent> · definition=<definition> · session=<id> · stat
 Result ref: result:<agent>#<index>
 ```
 
+Reusable result artifacts persist the source agent label, definition, and
+assignment cwd with the agent-authored result so later `files` handoffs retain
+their provenance.
+
 Details retain durable `agentLabel`, `resultIndex` when present,
 `agentDefinition`, `piSessionId`, `piSessionFile`, canonical result references,
 elapsed time, context usage, truncation, and persistence-error evidence. The

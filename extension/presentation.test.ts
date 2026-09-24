@@ -2584,14 +2584,17 @@ test("Completion result persistence is deterministic, bounded, and fail-closed",
       persist: "completion" as const,
     };
     const text = "Found three authentication problems.";
-    const result = truncateModelText(text, options);
+    const persistText =
+      'Agent result source: {"agent":"reviewer","definition":"reviewer","cwd":"/repo"}\n\n' +
+      text;
+    const result = truncateModelText(text, { ...options, persistText });
     const expected = resultPath(options.requestId);
     assert.equal(result.truncated, false);
     assert.equal(result.resultRef, `result:${options.requestId}`);
     assert.equal("resultPath" in result, false);
     assert.equal(basename(expected), options.requestId);
     assert.equal(extname(basename(expected)), "");
-    assert.equal(readFileSync(expected, "utf8"), text);
+    assert.equal(readFileSync(expected, "utf8"), persistText);
     assertPosixMode(expected, 0o600);
     assertPosixMode(dirname(expected), 0o700);
     assert.equal(result.content, text);

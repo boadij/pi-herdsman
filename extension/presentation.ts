@@ -2384,13 +2384,14 @@ export function truncateModelText(
     sessionId: string;
     key: string;
     persist?: "completion";
+    persistText?: string;
     requestId?: string;
   },
 ) {
   const completion = options.persist === "completion";
   const path = completion
     ? savePrivateOutput(
-        text,
+        options.persistText ?? text,
         options.sessionId,
         options.requestId ?? options.key,
         "result",
