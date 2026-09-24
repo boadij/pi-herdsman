@@ -1500,6 +1500,111 @@ export async function resolveAssignmentSession(
   };
 }
 
+async function requireOwnedAssignmentSource(
+  ctx: ExtensionContext,
+  session: ManagedSession,
+  operation: "continue" | "delegate",
+): Promise<void> {
+  const source = SessionManager.open(session.path);
+  const entries = source.getEntries();
+  const deny = (): never =>
+    fail(
+      "invalid_request",
+      "Assignment source is outside the caller's proven session ownership tree",
+      operation,
+    );
+  let identity: AgentSessionIdentity | undefined;
+  try {
+    identity = sessionAgentIdentity(entries, session.id);
+  } catch {
+    deny();
+  }
+  if (!identity) {
+    if (operation === "delegate") return;
+    deny();
+  }
+  const callerId = ctx.sessionManager.getSessionId();
+  const listed = await SessionManager.listAll();
+  const sourceMatches = listed.filter((item) => item.id === session.id);
+  if (
+    sourceMatches.length > 1 ||
+    (sourceMatches.length === 1 &&
+      !samePersistedSessionPath(session.path, sourceMatches[0].path) &&
+      !samePersistedSessionPath(sourceMatches[0].path, session.path))
+  )
+    deny();
+  // ponytail: scan durable sessions per assignment; index result edges if this becomes hot.
+  const visiting = new Set<string>();
+  const visited = new Map<string, boolean>();
+  const candidates = [
+    ...listed,
+    ...(!listed.some((item) => item.id === callerId)
+      ? [{ id: callerId, path: ctx.sessionManager.getSessionFile() ?? "" }]
+      : []),
+  ];
+  const reachesCaller = (childId: string): boolean => {
+    if (childId === callerId) return true;
+    if (visiting.has(childId)) deny();
+    if (visited.has(childId)) return visited.get(childId)!;
+    visiting.add(childId);
+    const owners = new Set<string>();
+    for (const candidate of candidates) {
+      const ownerEntries =
+        candidate.id === callerId
+          ? ctx.sessionManager.getEntries()
+          : SessionManager.open(candidate.path).getEntries();
+      for (const entry of ownerEntries) {
+        if (
+          !entry ||
+          typeof entry !== "object" ||
+          entry.type !== "custom_message"
+        )
+          continue;
+        const data = agentResultDetails(entry);
+        if (
+          !data ||
+          data.piSessionId !== childId ||
+          data.ownerSessionId !== candidate.id
+        )
+          continue;
+        if (
+          typeof data.runId !== "string" ||
+          !data.runId.trim() ||
+          typeof data.requestId !== "string" ||
+          !data.requestId.trim() ||
+          typeof data.agentLabel !== "string" ||
+          !data.agentLabel.trim() ||
+          typeof data.agentDefinition !== "string" ||
+          !data.agentDefinition.trim() ||
+          (data.status !== "completed" && data.status !== "failed")
+        )
+          deny();
+        owners.add(candidate.id);
+      }
+    }
+    let found = false;
+    for (const ownerId of owners) {
+      if (ownerId !== callerId) {
+        const matches = listed.filter((item) => item.id === ownerId);
+        if (matches.length !== 1) deny();
+        const owner = SessionManager.open(matches[0].path);
+        try {
+          if (!sessionAgentIdentity(owner.getEntries(), ownerId)) deny();
+        } catch {
+          deny();
+        }
+      }
+      // Evaluate every branch even after finding a path: malformed or cyclic
+      // historical ownership must not be hidden by another valid edge.
+      if (reachesCaller(ownerId)) found = true;
+    }
+    visiting.delete(childId);
+    visited.set(childId, found);
+    return found;
+  };
+  if (!reachesCaller(session.id)) deny();
+}
+
 const HERDR_VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview(?:\.[0-9A-Za-z-]+)?)?$/;
 export function parseHerdrVersion(value: string): RegExpMatchArray | undefined {
@@ -3313,6 +3418,9 @@ async function deliverResultUnsafe(
                   agent: result.agentLabel,
                   definition: runtime.agentDefinition,
                   cwd: runtime.cwd,
+                  ...(runtime.piSessionId !== undefined
+                    ? { piSessionId: runtime.piSessionId }
+                    : {}),
                 })}`,
                 result.text!,
               ].join("\n\n"),
@@ -5504,6 +5612,7 @@ async function actionUnsafe(
         `Agent definition ${agentDefinition} is not allowed for this delegating agent`,
         p.action,
       );
+    if (resumed) await requireOwnedAssignmentSource(ctx, resumed, "continue");
     const forkSource =
       p.action === "delegate" && p.fork
         ? await resolveAssignmentSessionOrFail("delegate", async () => {
@@ -5517,6 +5626,7 @@ async function actionUnsafe(
                 `Managed agent session ${manager.getSessionId()} is retired after context pressure. ` +
                   "Delegate a fresh agent without fork and pass the previous handoff/result and relevant files.",
               );
+            await requireOwnedAssignmentSource(ctx, fork, "delegate");
             return fork.path;
           })
         : undefined;

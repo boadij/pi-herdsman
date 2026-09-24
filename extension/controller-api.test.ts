@@ -66,6 +66,21 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
+const ownershipResult = (child: string, owner = LEAD_SESSION_ID) => ({
+  type: "custom_message",
+  customType: "pi-herdsman-agent-result",
+  content: "",
+  display: true,
+  details: {
+    piSessionId: child,
+    ownerSessionId: owner,
+    runId: randomUUID(),
+    requestId: randomUUID(),
+    agentLabel: "agent",
+    agentDefinition: "agent",
+    status: "completed",
+  },
+});
 
 test("project agent discovery is gated by Pi project trust", async () => {
   setLeadEnvironment();
@@ -142,7 +157,7 @@ test("semantic result refs attach persisted output and preserve canonical file r
   const canonical = resultRef(requestId);
   const resultFile = resultPath(requestId);
   const resultText = [
-    'Agent result source: {"agent":"implementation","definition":"agent","cwd":"/repo"}',
+    'Agent result source: {"agent":"implementation","definition":"agent","cwd":"/repo","piSessionId":"producer-session"}',
     "persisted implementation review",
   ].join("\n\n");
   realFs.mkdirSync(resolve(resultFile, ".."), { recursive: true });
@@ -189,7 +204,7 @@ test("semantic result refs attach persisted output and preserve canonical file r
     assert.match(assignedText, new RegExp(`<file name="${canonical}"`));
     assert.match(
       assignedText,
-      /Agent result source: \{"agent":"implementation","definition":"agent","cwd":"\/repo"\}/,
+      /Agent result source: \{"agent":"implementation","definition":"agent","cwd":"\/repo","piSessionId":"producer-session"\}/,
     );
     assert.match(assignedText, /persisted implementation review/);
     assert.equal(
@@ -1476,7 +1491,7 @@ test("context retirement guards managed forks without changing ordinary forks", 
         },
         undefined,
         undefined,
-        fakeContext(),
+        fakeContext([ownershipResult(retiredId)]),
       );
     } finally {
       pi.events.get("session_shutdown")?.[0]();
@@ -1536,7 +1551,7 @@ test("session continuation inherits the saved label without an override", async 
     nativeSessions.set(source.id, source);
     const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
     const pi = fakePi({ exec: startup.exec });
-    const context = fakeContext() as any;
+    const context = fakeContext([ownershipResult(source.id)]) as any;
     context.model = { provider: "continue-provider", id: "continue-model" };
     context.thinkingLevel = "high";
     registerExtension!(pi.pi as never);
@@ -1615,7 +1630,7 @@ test("session continuation keeps explicit definition execution overrides", async
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext([ownershipResult(sourceId)]) as any;
   context.model = { provider: "controller-provider", id: "controller-model" };
   context.thinkingLevel = "high";
   try {
@@ -1734,7 +1749,7 @@ test("session continuation rejects label overrides and occupied inherited labels
       },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext([ownershipResult(source.id)]),
     );
     assert.equal(result.details.error.category, "agent_label_exists");
     assert.equal(
@@ -2078,6 +2093,338 @@ test("agent assignment uses only an explicit exact fork source", async () => {
   }
 });
 
+test("managed historical sources require durable owner-side ancestry for continue and fork", async () => {
+  setLeadEnvironment();
+  const parentId = randomUUID();
+  const sourceId = randomUUID();
+  const sourcePath = join(testTmpRoot, `owned-source-${sourceId}.jsonl`);
+  realFs.writeFileSync(sourcePath, "{}", "utf8");
+  nativeSessions.clear();
+  nativeSessions.set(parentId, {
+    id: parentId,
+    path: join(testTmpRoot, `owner-${parentId}.jsonl`),
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: parentId, definition: "agent", label: "parent" },
+      },
+      ownershipResult(sourceId, parentId),
+    ],
+  });
+  const sourceEntries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { sessionId: sourceId, definition: "agent", label: "owned-source" },
+    },
+    ownershipResult(parentId, sourceId),
+  ];
+  nativeSessions.set(sourceId, {
+    id: sourceId,
+    path: sourcePath,
+    cwd: "/tmp",
+    entries: sourceEntries,
+  });
+  const parentProof = ownershipResult(parentId);
+  const pi = fakePi({ exec: () => ({ stdout: "0.8.0", stderr: "", code: 0 }) });
+  registerExtension!(pi.pi as never);
+  const request = async (
+    action: "continue" | "delegate",
+    selector: string,
+    entries: unknown[],
+  ) =>
+    pi.tools[0].execute(
+      "id",
+      action === "continue"
+        ? { action, session: selector, task: "follow up" }
+        : { action, definition: "agent", fork: selector, task: "fork" },
+      undefined,
+      undefined,
+      fakeContext(entries),
+    );
+  try {
+    for (const action of ["continue", "delegate"] as const) {
+      for (const selector of [sourceId, sourcePath]) {
+        const recipient = await request(action, selector, [
+          ownershipResult(randomUUID()),
+        ]);
+        assert.equal(recipient.details.error.category, "invalid_request");
+        assert.match(recipient.details.error.message, /ownership tree/);
+        const broken = await request(action, selector, [
+          {
+            ...parentProof,
+            details: {
+              ...parentProof.details,
+              ownerSessionId: randomUUID(),
+            },
+          },
+        ]);
+        assert.equal(broken.details.error.category, "invalid_request");
+      }
+    }
+    const cycle = await request("delegate", sourceId, []);
+    assert.equal(cycle.details.error.category, "invalid_request");
+    sourceEntries.pop();
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+  }
+
+  try {
+    for (const proof of [[parentProof], [ownershipResult(sourceId)]]) {
+      if (proof[0] !== parentProof) nativeSessions.delete(parentId);
+      for (const action of ["continue", "delegate"] as const) {
+        const startup = startupExecutor(
+          "owned-source",
+          () => DEFAULT_PI_SESSION_ID,
+        );
+        const owner = fakePi({ exec: startup.exec });
+        registerExtension!(owner.pi as never);
+        try {
+          const result = await owner.tools[0].execute(
+            "id",
+            action === "continue"
+              ? { action, session: sourceId, task: "follow up" }
+              : {
+                  action,
+                  definition: "agent",
+                  label: "owned-source",
+                  fork: sourcePath,
+                  task: "fork",
+                },
+            undefined,
+            undefined,
+            fakeContext(proof),
+          );
+          assert.equal(result.details.ok, true, JSON.stringify(result.details));
+        } finally {
+          owner.events.get("session_shutdown")?.[0]();
+          startup.stopMailboxConsumer();
+          resetAgentMailbox(startup.mailbox);
+        }
+      }
+    }
+  } finally {
+    nativeSessions.clear();
+    realFs.rmSync(sourcePath, { force: true });
+  }
+});
+
+test("copied fork result history does not invalidate the original owner edge", async () => {
+  setLeadEnvironment();
+  const parentId = randomUUID();
+  const childId = randomUUID();
+  const forkId = randomUUID();
+  const childPath = join(testTmpRoot, `fork-history-child-${childId}.jsonl`);
+  const parentEntries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { sessionId: parentId, definition: "agent", label: "parent" },
+    },
+    ownershipResult(childId, parentId),
+  ];
+  realFs.writeFileSync(childPath, "{}", "utf8");
+  nativeSessions.clear();
+  nativeSessions.set(parentId, {
+    id: parentId,
+    path: join(testTmpRoot, `fork-history-parent-${parentId}.jsonl`),
+    entries: parentEntries,
+  });
+  nativeSessions.set(forkId, {
+    id: forkId,
+    path: join(testTmpRoot, `fork-history-fork-${forkId}.jsonl`),
+    entries: [...parentEntries],
+  });
+  nativeSessions.set(childId, {
+    id: childId,
+    path: childPath,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: childId, definition: "agent", label: "child" },
+      },
+    ],
+  });
+  const startup = startupExecutor("child", () => DEFAULT_PI_SESSION_ID);
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "continue", session: childId, task: "follow up" },
+      undefined,
+      undefined,
+      fakeContext([ownershipResult(parentId)]),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    nativeSessions.clear();
+    realFs.rmSync(childPath, { force: true });
+  }
+});
+
+test("historical continuation re-parenting preserves every valid ownership path", async () => {
+  setLeadEnvironment();
+  const parentId = randomUUID();
+  const childId = DEFAULT_PI_SESSION_ID;
+  const outsiderId = randomUUID();
+  const childPath = join(testTmpRoot, `reparented-${childId}.jsonl`);
+  realFs.writeFileSync(childPath, "{}", "utf8");
+  const parentEntries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { sessionId: parentId, definition: "agent", label: "parent" },
+    },
+    ownershipResult(childId, parentId),
+  ];
+  const leadEntries = [ownershipResult(parentId)];
+  nativeSessions.clear();
+  nativeSessions.set(parentId, {
+    id: parentId,
+    path: join(testTmpRoot, `reparent-owner-${parentId}.jsonl`),
+    entries: parentEntries,
+  });
+  nativeSessions.set(childId, {
+    id: childId,
+    path: childPath,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: childId, definition: "agent", label: "child" },
+      },
+    ],
+  });
+  const request = async (
+    action: "continue" | "delegate",
+    entries: unknown[],
+    callerId = LEAD_SESSION_ID,
+  ) => {
+    const startup = startupExecutor("child", () => childId);
+    const pi = fakePi({ exec: startup.exec });
+    registerExtension!(pi.pi as never);
+    try {
+      const context = fakeContext(entries) as any;
+      context.sessionManager.getSessionId = () => callerId;
+      const result = await pi.tools[0].execute(
+        "id",
+        action === "continue"
+          ? { action, session: childId, task: "continue child" }
+          : {
+              action,
+              definition: "agent",
+              label: "child",
+              fork: childPath,
+              task: "fork child",
+            },
+        undefined,
+        undefined,
+        context,
+      );
+      if (result.details.ok && action === "continue")
+        assert.equal(result.details.session_id, childId);
+      return result;
+    } finally {
+      pi.events.get("session_shutdown")?.[0]();
+      startup.stopMailboxConsumer();
+      resetAgentMailbox(startup.mailbox);
+    }
+  };
+  try {
+    const first = await request("continue", leadEntries);
+    assert.equal(first.details.ok, true, JSON.stringify(first.details));
+    // The completed continuation delivers a new result for the same Pi ID
+    // directly to L, without erasing P's older child result.
+    leadEntries.push(ownershipResult(childId));
+    for (const action of ["continue", "delegate"] as const) {
+      const repeated = await request(action, leadEntries);
+      assert.equal(repeated.details.ok, true, JSON.stringify(repeated.details));
+      const unrelated = await request(action, [], outsiderId);
+      assert.equal(unrelated.details.error.category, "invalid_request");
+    }
+    const malformed = ownershipResult(childId, parentId);
+    (malformed.details as any).status = "unknown";
+    parentEntries.push(malformed);
+    assert.equal(
+      (await request("delegate", leadEntries)).details.error.category,
+      "invalid_request",
+    );
+    parentEntries.pop();
+    const childEntries = nativeSessions.get(childId)!.entries;
+    childEntries.push(ownershipResult(parentId, childId));
+    assert.equal(
+      (await request("continue", leadEntries)).details.error.category,
+      "invalid_request",
+    );
+  } finally {
+    nativeSessions.clear();
+    realFs.rmSync(childPath, { force: true });
+  }
+});
+
+test("ordinary Pi fork with copied managed history remains a delegate fork source", async () => {
+  setLeadEnvironment();
+  const parentId = randomUUID();
+  const forkId = randomUUID();
+  const forkPath = join(testTmpRoot, `copied-managed-fork-${forkId}.jsonl`);
+  nativeSessions.clear();
+  nativeSessions.set(forkId, {
+    id: forkId,
+    path: forkPath,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: parentId, definition: "agent", label: "parent" },
+      },
+      ownershipResult(randomUUID(), parentId),
+    ],
+  });
+  const startup = startupExecutor(
+    "copied-fork-target",
+    () => DEFAULT_PI_SESSION_ID,
+  );
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      {
+        action: "delegate",
+        definition: "agent",
+        label: "copied-fork-target",
+        fork: forkId,
+        task: "review the ordinary fork",
+      },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    const start = pi.calls.find(
+      (args) => args[0] === "agent" && args[1] === "start",
+    )!;
+    assert.equal(start[start.indexOf("--fork") + 1], forkPath);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    nativeSessions.clear();
+  }
+});
+
 test("session assignment fails closed on duplicate live representations", async () => {
   setLeadEnvironment();
   const session = {
@@ -2163,7 +2510,7 @@ test("session assignment fails closed on duplicate live representations", async 
       },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext([ownershipResult(session.id)]),
     );
     assert.equal(result.details.error.category, "target_ambiguous");
     assert.equal(

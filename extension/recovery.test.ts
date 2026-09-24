@@ -1374,6 +1374,7 @@ test("recovery requires the official session and retries one failed delivery", a
         agent: label,
         definition: "agent",
         cwd: removalState.cwd,
+        piSessionId: identity.piSessionId,
       })}`,
       scoutText,
     ].join("\n\n"),
