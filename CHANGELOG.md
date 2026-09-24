@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.2](https://github.com/boadij/pi-herdsman/compare/v0.14.1...v0.14.2) (2026-09-24)
+
+
+### Fixes
+
+* make Herdsman tool schemas provider-safe ([#133](https://github.com/boadij/pi-herdsman/issues/133)) ([97301db](https://github.com/boadij/pi-herdsman/commit/97301db642a4c166d88f73f6547ea15a24aec037))
+
 ## [0.14.1](https://github.com/boadij/pi-herdsman/compare/v0.14.0...v0.14.1) (2026-09-23)
 
 
