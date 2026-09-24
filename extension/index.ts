@@ -1549,18 +1549,14 @@ async function requireOwnedAssignmentSource(
           ? ctx.sessionManager.getEntries()
           : SessionManager.open(candidate.path).getEntries();
       for (const entry of ownerEntries) {
-        if (!entry || typeof entry !== "object") continue;
-        const record = entry as Record<string, unknown>;
-        if (record.type !== "custom_message") continue;
-        const message = record.message;
-        if (!message || typeof message !== "object") continue;
-        const result = message as Record<string, unknown>;
-        if (result.customType !== "pi-herdsman-agent-result") continue;
-        const details = result.details;
-        if (!details || typeof details !== "object" || Array.isArray(details))
+        if (
+          !entry ||
+          typeof entry !== "object" ||
+          entry.type !== "custom_message"
+        )
           continue;
-        const data = details as Record<string, unknown>;
-        if (data.piSessionId !== childId) continue;
+        const data = agentResultDetails(entry);
+        if (!data || data.piSessionId !== childId) continue;
         if (
           data.ownerSessionId !== candidate.id ||
           typeof data.runId !== "string" ||

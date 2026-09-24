@@ -68,17 +68,17 @@ import support, {
 const { updateConfig } = await import("./config.ts");
 const ownershipResult = (child: string, owner = LEAD_SESSION_ID) => ({
   type: "custom_message",
-  message: {
-    customType: "pi-herdsman-agent-result",
-    details: {
-      piSessionId: child,
-      ownerSessionId: owner,
-      runId: randomUUID(),
-      requestId: randomUUID(),
-      agentLabel: "agent",
-      agentDefinition: "agent",
-      status: "completed",
-    },
+  customType: "pi-herdsman-agent-result",
+  content: "",
+  display: true,
+  details: {
+    piSessionId: child,
+    ownerSessionId: owner,
+    runId: randomUUID(),
+    requestId: randomUUID(),
+    agentLabel: "agent",
+    agentDefinition: "agent",
+    status: "completed",
   },
 });
 
@@ -2154,12 +2154,9 @@ test("managed historical sources require durable owner-side ancestry for continu
         const broken = await request(action, selector, [
           {
             ...parentProof,
-            message: {
-              ...parentProof.message,
-              details: {
-                ...parentProof.message.details,
-                ownerSessionId: randomUUID(),
-              },
+            details: {
+              ...parentProof.details,
+              ownerSessionId: randomUUID(),
             },
           },
         ]);
