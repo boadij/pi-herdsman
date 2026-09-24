@@ -1252,7 +1252,7 @@ test("start injects mandatory extensions before definition args and configures t
   assert.ok(providedExtension >= 0);
   assert.ok(herdsmanExtension < providedExtension);
   assert.equal(startArgs[startArgs.indexOf("--timeout") + 1], "300000");
-  assert.equal(execTimeouts[start], 300_000);
+  assert.equal(execTimeouts[start], 302_000);
   assert.equal(
     calls.some(
       (args) =>
@@ -1506,7 +1506,7 @@ test("empty agent start captures one bounded exact-pane diagnostic", async () =>
       Number(start.args[start.args.indexOf("--timeout") + 1]),
       28_000,
     );
-    assert.equal(start.timeout, 28_000);
+    assert.equal(start.timeout, 30_000);
   } finally {
     Date.now = originalDateNow;
   }
@@ -1534,7 +1534,7 @@ test("minimum startup budget keeps the child timeout Herdr-supported", async () 
       Number(start.args[start.args.indexOf("--timeout") + 1]),
       4_000,
     );
-    assert.equal(start.timeout, 4_000);
+    assert.equal(start.timeout, 6_000);
     const reads = calls.filter(
       ({ args }) => args[0] === "pane" && args[1] === "read",
     );

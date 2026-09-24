@@ -99,10 +99,12 @@ import {
   agentDefinitionEnabled,
   agentDefinitionDelegationEnabled,
   agentDefinitionMetadata,
+  configuredModel,
   discoverAgent,
   discoverAgentDefinitions,
   expandAgentBodyFiles,
   projectAgentDefinition,
+  resolveChildModel,
   updateAgentOverride,
   validateAgentDefinitionReferences,
   VALID_THINKING_LEVELS,
@@ -5945,6 +5947,23 @@ async function actionUnsafe(
         )}`,
         "PI_OFFLINE=1",
       ];
+      // Pi reports the providers that extensions registered; a model from one
+      // of them cannot resolve in a child denied extension discovery.
+      // Older registries and test doubles may not expose the list, in which
+      // case nothing counts as extension-provided and the model is inherited
+      // exactly as before this change.
+      const registeredProviderIds = new Set(
+        ctx.modelRegistry?.getRegisteredProviderIds?.() ?? [],
+      );
+      const childModel = resolveChildModel({
+        configured: configuredModel(effectiveDefinition.frontmatter),
+        inherited:
+          p.action === "delegate" && ctx.model
+            ? { provider: ctx.model.provider, token: modelToken(ctx.model) }
+            : undefined,
+        isForeignProvider: (providerId) =>
+          registeredProviderIds.has(providerId),
+      });
       const launchArgs = agentLaunchArgs(effectiveDefinition, {
         ...(effectiveDefinition.body ? { bodyPromptPath: promptPaths[0] } : {}),
         sharedPromptPath: promptPaths[effectiveDefinition.body ? 1 : 0],
@@ -5953,11 +5972,9 @@ async function actionUnsafe(
         approveProject:
           agentContext.projectTrusted && sameCwd(agentCwd, ctx.cwd),
         ...(p.action === "delegate"
-          ? {
-              inheritedModel: ctx.model ? modelToken(ctx.model) : undefined,
-              inheritedThinking: pi.getThinkingLevel(),
-            }
+          ? { inheritedThinking: pi.getThinkingLevel() }
           : {}),
+        modelDecision: childModel,
       });
       started = await startHerdrAgent(pi, ctx, {
         label,

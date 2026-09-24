@@ -2686,7 +2686,9 @@ test("registered delegate ignores an unrelated agent and forwards its child budg
       pi.calls[start]![pi.calls[start]!.indexOf("--timeout") + 1],
     );
     assert.equal(childTimeout, 4000);
-    assert.equal(pi.execOptions[start]?.timeout, 4000);
+    // The command outlives Herdr's readiness deadline by the diagnostic window,
+    // so Herdr's structured failure is reported instead of this command's kill.
+    assert.equal(pi.execOptions[start]?.timeout, 6000);
   } finally {
     Date.now = originalDateNow;
     pi.events.get("session_shutdown")?.[0]();
