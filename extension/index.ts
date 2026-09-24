@@ -1556,9 +1556,13 @@ async function requireOwnedAssignmentSource(
         )
           continue;
         const data = agentResultDetails(entry);
-        if (!data || data.piSessionId !== childId) continue;
         if (
-          data.ownerSessionId !== candidate.id ||
+          !data ||
+          data.piSessionId !== childId ||
+          data.ownerSessionId !== candidate.id
+        )
+          continue;
+        if (
           typeof data.runId !== "string" ||
           !data.runId.trim() ||
           typeof data.requestId !== "string" ||

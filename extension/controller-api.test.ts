@@ -2214,6 +2214,65 @@ test("managed historical sources require durable owner-side ancestry for continu
   }
 });
 
+test("copied fork result history does not invalidate the original owner edge", async () => {
+  setLeadEnvironment();
+  const parentId = randomUUID();
+  const childId = randomUUID();
+  const forkId = randomUUID();
+  const childPath = join(testTmpRoot, `fork-history-child-${childId}.jsonl`);
+  const parentEntries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { sessionId: parentId, definition: "agent", label: "parent" },
+    },
+    ownershipResult(childId, parentId),
+  ];
+  realFs.writeFileSync(childPath, "{}", "utf8");
+  nativeSessions.clear();
+  nativeSessions.set(parentId, {
+    id: parentId,
+    path: join(testTmpRoot, `fork-history-parent-${parentId}.jsonl`),
+    entries: parentEntries,
+  });
+  nativeSessions.set(forkId, {
+    id: forkId,
+    path: join(testTmpRoot, `fork-history-fork-${forkId}.jsonl`),
+    entries: [...parentEntries],
+  });
+  nativeSessions.set(childId, {
+    id: childId,
+    path: childPath,
+    cwd: "/tmp",
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: childId, definition: "agent", label: "child" },
+      },
+    ],
+  });
+  const startup = startupExecutor("child", () => DEFAULT_PI_SESSION_ID);
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
+      "id",
+      { action: "continue", session: childId, task: "follow up" },
+      undefined,
+      undefined,
+      fakeContext([ownershipResult(parentId)]),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(startup.mailbox);
+    nativeSessions.clear();
+    realFs.rmSync(childPath, { force: true });
+  }
+});
+
 test("session assignment fails closed on duplicate live representations", async () => {
   setLeadEnvironment();
   const session = {
