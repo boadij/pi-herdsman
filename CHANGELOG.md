@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.15.0](https://github.com/boadij/pi-herdsman/compare/v0.14.2...v0.15.0) (2026-09-24)
+
+
+### Features
+
+* include agent session IDs in result provenance ([#138](https://github.com/boadij/pi-herdsman/issues/138)) ([de002d2](https://github.com/boadij/pi-herdsman/commit/de002d200f3eeca6a8f7727b16d5b234d2221b90))
+* preserve agent provenance in result handoffs ([#136](https://github.com/boadij/pi-herdsman/issues/136)) ([d4b6373](https://github.com/boadij/pi-herdsman/commit/d4b6373c984f6b5b37f6ae7594d2fb85a394bf82))
+
+
+### Fixes
+
+* **agents:** let delegated children resolve the model they are given ([#139](https://github.com/boadij/pi-herdsman/issues/139)) ([ea62b36](https://github.com/boadij/pi-herdsman/commit/ea62b3606bced1aed77fd1009f84b1368deb1350))
+* **agents:** report Herdr's startup failure instead of our own kill ([#140](https://github.com/boadij/pi-herdsman/issues/140)) ([c2b9d92](https://github.com/boadij/pi-herdsman/commit/c2b9d925852ed5e6a94884db1f2956b49bbfaa15))
+
+
+### Build
+
+* publish debuggable source-mapped bundle ([#135](https://github.com/boadij/pi-herdsman/issues/135)) ([b7ed794](https://github.com/boadij/pi-herdsman/commit/b7ed794b9ad30e8fca6cb5ce976c85d66cff404f))
+
 ## [0.14.2](https://github.com/boadij/pi-herdsman/compare/v0.14.1...v0.14.2) (2026-09-24)
 
 
