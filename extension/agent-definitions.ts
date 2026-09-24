@@ -571,10 +571,54 @@ export function updateAgentOverride(
   }
 }
 
-function configuredModel(frontmatter: Frontmatter): string | undefined {
+export function configuredModel(frontmatter: Frontmatter): string | undefined {
   return typeof frontmatter.model === "string" && frontmatter.model
     ? frontmatter.model
     : undefined;
+}
+
+/**
+ * Which model a delegated child may be launched with.
+ *
+ * Agent definitions opt out of extension discovery (`noExtensions: true`),
+ * which is what keeps a child lean, while delegation hands that child the
+ * spawning controller's model. When that model's provider is registered by an
+ * extension, the two contradict each other and pi exits with
+ * `Model "<id>" not found` about two seconds after launch.
+ *
+ * Pi reports which providers extensions registered, so the model's needs
+ * outrank the definition's preference to stay lean.
+ */
+export type ChildModelDecision =
+  /** Nothing to pass: the child uses its own default. */
+  | { kind: "none" }
+  /**
+   * Pass `--model`. `extensionDiscovery` is true when the model's provider is
+   * registered by an extension, in which case the child must not be launched
+   * with `--no-extensions` or it cannot resolve the model it was given.
+   */
+  | { kind: "use"; model: string; extensionDiscovery: boolean };
+
+export function resolveChildModel(input: {
+  /** Model pinned by the agent definition's frontmatter, passed to Pi as given. */
+  configured?: string;
+  /** The spawning controller's model; Pi already resolved its provider. */
+  inherited?: { provider: string; token: string };
+  /** True when `providerId` is registered by an extension. */
+  isForeignProvider: (providerId: string) => boolean;
+}): ChildModelDecision {
+  // A pinned model is passed through as written: the definition's own extension
+  // policy governs it, so nothing here needs to interpret the value.
+  if (input.configured !== undefined && input.configured.trim() !== "")
+    return { kind: "use", model: input.configured, extensionDiscovery: false };
+  if (input.inherited === undefined) return { kind: "none" };
+  return {
+    kind: "use",
+    model: input.inherited.token,
+    // Only an inherited model needs the exception: a child denied discovery
+    // cannot resolve a model whose provider only an extension supplies.
+    extensionDiscovery: input.isForeignProvider(input.inherited.provider),
+  };
 }
 
 function configuredThinking(agent: AgentDefinition): string | undefined {
@@ -683,6 +727,11 @@ export type AgentLaunchOptions = {
   approveProject?: boolean;
   inheritedModel?: string;
   inheritedThinking?: string;
+  /**
+   * Pre-computed model decision for this child. When omitted, the requested
+   * model (configured, else inherited) is passed through unchanged.
+   */
+  modelDecision?: ChildModelDecision;
 };
 
 export function agentLaunchArgs(
@@ -714,8 +763,17 @@ export function agentLaunchArgs(
     );
   const args: string[] = [];
   if (approveProject) args.push("--approve");
-  const model = configuredModel(frontmatter) ?? inheritedModel;
-  if (model) args.push("--model", model);
+  const requestedModel = configuredModel(frontmatter) ?? inheritedModel;
+  const decision =
+    options.modelDecision ??
+    (requestedModel === undefined
+      ? { kind: "none" as const }
+      : {
+          kind: "use" as const,
+          model: requestedModel,
+          extensionDiscovery: false,
+        });
+  if (decision.kind === "use") args.push("--model", decision.model);
 
   const thinking = configuredThinking(agent) ?? inheritedThinking;
   if (thinking !== undefined) {
@@ -784,7 +842,13 @@ export function agentLaunchArgs(
   if (noSkills) args.push("--no-skills");
   for (const skill of frontmatter.skills ?? []) args.push("--skill", skill);
 
-  if (frontmatter.noExtensions) args.push("--no-extensions");
+  // A model whose provider comes from an extension cannot resolve inside a
+  // child denied extension discovery, so the model's needs outrank the
+  // definition's preference to stay lean.
+  const extensionDiscovery =
+    decision.kind === "use" && decision.extensionDiscovery;
+  if (frontmatter.noExtensions && !extensionDiscovery)
+    args.push("--no-extensions");
   for (const extension of frontmatter.extensions ?? [])
     args.push("--extension", extension);
   return args;

@@ -22,6 +22,7 @@ import {
   inferAgentDefinitionTools,
   mergeFrontmatter,
   projectAgentDefinition,
+  resolveChildModel,
   updateAgentOverride,
   validateAgentDefinitionReferences,
   writePrivatePromptSnapshots,
@@ -1123,6 +1124,37 @@ test("builds exact Pi capability launch arguments", () => {
   ]);
 });
 
+test("drops --no-extensions when the child's model comes from an extension", () => {
+  const definition = {
+    name: "scout",
+    path: "/agents/scout.md",
+    frontmatter: { name: "scout", noExtensions: true },
+    body: "",
+  };
+  const foreign = agentLaunchArgs(definition, {
+    modelDecision: {
+      kind: "use",
+      model: "acme/reasoning/mini",
+      extensionDiscovery: true,
+    },
+  });
+  assert.deepEqual(foreign.slice(0, 2), [
+    "--model",
+    "acme/reasoning/mini",
+  ]);
+  assert.equal(foreign.includes("--no-extensions"), false);
+
+  const lean = agentLaunchArgs(definition, {
+    modelDecision: {
+      kind: "use",
+      model: "vendor-one/chat-large",
+      extensionDiscovery: false,
+    },
+  });
+  assert.deepEqual(lean.slice(0, 2), ["--model", "vendor-one/chat-large"]);
+  assert.equal(lean.includes("--no-extensions"), true);
+});
+
 test("resolves model and thinking fallbacks independently at launch", () => {
   const launch = (frontmatter: Frontmatter, options = {}) =>
     agentLaunchArgs(
@@ -1741,4 +1773,78 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
   );
   assert.equal(enabledReset.changed, true);
   assert.doesNotMatch(readFileSync(disabled.path, "utf8"), /^enabled:/m);
+});
+
+const noForeignProviders = () => false;
+const inheritedModel = (provider: string, token: string) => ({ provider, token });
+
+test("a child with no requested model passes no --model at all", () => {
+  assert.deepEqual(resolveChildModel({ isForeignProvider: noForeignProviders }), {
+    kind: "none",
+  });
+});
+
+test("a blank configured model is treated as no model", () => {
+  assert.deepEqual(
+    resolveChildModel({
+      configured: "   ",
+      isForeignProvider: noForeignProviders,
+    }),
+    { kind: "none" },
+  );
+});
+
+test("a built-in or config provider keeps the child lean", () => {
+  assert.deepEqual(
+    resolveChildModel({
+      inherited: inheritedModel("vendor-one", "vendor-one/chat-large"),
+      isForeignProvider: noForeignProviders,
+    }),
+    {
+      kind: "use",
+      model: "vendor-one/chat-large",
+      extensionDiscovery: false,
+    },
+  );
+});
+
+test("an extension-provided model carries the right to discover extensions", () => {
+  assert.deepEqual(
+    resolveChildModel({
+      inherited: inheritedModel("acme", "acme/reasoning/mini"),
+      isForeignProvider: (id) => id === "acme",
+    }),
+    {
+      kind: "use",
+      model: "acme/reasoning/mini",
+      extensionDiscovery: true,
+    },
+  );
+});
+
+test("a configured model outranks the inherited one and keeps the definition's policy", () => {
+  assert.deepEqual(
+    resolveChildModel({
+      configured: "vendor-two/chat-small",
+      inherited: inheritedModel("acme", "acme/reasoning/mini"),
+      isForeignProvider: (id) => id === "acme",
+    }),
+    {
+      kind: "use",
+      model: "vendor-two/chat-small",
+      extensionDiscovery: false,
+    },
+  );
+});
+
+test("the inherited provider is Pi's resolved provider, not the token's first segment", () => {
+  // Pi reports a provider that the token does not spell out; the decision must
+  // follow Pi rather than re-derive the provider from the string.
+  assert.deepEqual(
+    resolveChildModel({
+      inherited: inheritedModel("acme", "solo-chat"),
+      isForeignProvider: (id) => id === "acme",
+    }),
+    { kind: "use", model: "solo-chat", extensionDiscovery: true },
+  );
 });
