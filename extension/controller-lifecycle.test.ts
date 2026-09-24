@@ -76,6 +76,24 @@ import {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
+const ownedSessionContext = (id: string, label: string) =>
+  fakeContext([
+    {
+      type: "custom_message",
+      message: {
+        customType: "pi-herdsman-agent-result",
+        details: {
+          piSessionId: id,
+          ownerSessionId: LEAD_SESSION_ID,
+          runId: randomUUID(),
+          requestId: randomUUID(),
+          agentLabel: label,
+          agentDefinition: "agent",
+          status: "completed",
+        },
+      },
+    },
+  ]);
 
 test("parent delegates two same-definition children with exact ownership", async () => {
   setAgentEnvironment("multiplicity-parent", ["child"]);
@@ -2404,7 +2422,7 @@ test("historical session with its inherited label rejects an active managed repr
       { action: "continue", session: session.path, task: "must wait" },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(session.id, label),
     );
     assert.equal(result.details.error.category, "agent_busy");
     assert.match(result.details.error.message, /exact Pi session|represented/i);
@@ -2472,7 +2490,7 @@ test("exact requested session IDs remain busy when persisted paths are stale", a
       { action: "continue", session: sessionPath, task: "must wait" },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(session.id, `${name}-agent`),
     );
     assert.equal(result.details.error.category, "agent_busy");
     assert.equal(
@@ -2539,7 +2557,7 @@ test("concurrent session activation permits one generation", async () => {
       { action: "continue", session: session.path, task: "first assignment" },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(session.id, name),
     );
     await entered;
     const second = await pi.tools[0].execute(
@@ -2547,7 +2565,7 @@ test("concurrent session activation permits one generation", async () => {
       { action: "continue", session: session.id, task: "duplicate assignment" },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(session.id, name),
     );
     assert.equal(second.details.error.category, "agent_busy");
     release();
@@ -2755,7 +2773,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
       },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(DEFAULT_PI_SESSION_ID, label),
     );
     assert.equal(result.details.ok, false);
     assert.match(result.details.error.message, /paneId/);
@@ -3098,7 +3116,7 @@ test("fresh and non-live historical assignments reject disabled definitions", as
       },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(session.id, `${historicalName}-agent`),
     );
     assert.equal(result.details.error.category, "invalid_request");
     assert.match(result.details.error.message, /disabled/);
@@ -3229,7 +3247,7 @@ test("session continuation starts a new agent generation with current prompt con
       },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(session.id, name),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(launched[0].contents.length, 3);
@@ -3333,7 +3351,7 @@ test("session continuation ignores an unrelated missing live session path", asyn
       { action: "continue", session: sessionPath, task: "continue" },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(session.id, name),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(result.details.session_id, session.id);
@@ -3421,7 +3439,7 @@ test("session continuation keeps an exact live ID busy despite a missing path ob
       { action: "continue", session: sessionPath, task: "must wait" },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(session.id, name),
     );
     assert.equal(result.details.error.category, "agent_busy");
     assert.equal(
@@ -3512,7 +3530,7 @@ test("session continuation keeps an exact live ID busy despite contradictory liv
       { action: "continue", session: sessionPath, task: "must wait" },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(session.id, name),
     );
     assert.equal(
       result.details.error.category,
@@ -3613,7 +3631,7 @@ test("session continuation ignores removed secondary session fields", async () =
       { action: "continue", session: sessionPath, task: "must wait" },
       undefined,
       undefined,
-      fakeContext(),
+      ownedSessionContext(session.id, name),
     );
     assert.equal(result.details.error.category, "agent_busy");
     assert.equal(
@@ -3694,7 +3712,7 @@ test("session continuation fails closed on an unrelated malformed persisted mail
         { action: "continue", session: sessionPath, task: "must fail closed" },
         undefined,
         undefined,
-        fakeContext(),
+        ownedSessionContext(session.id, label),
       ),
       (error: unknown) => {
         assert.match(String(error), /could not canonicalize/);

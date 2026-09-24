@@ -66,6 +66,21 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
+const ownershipResult = (child: string, owner = LEAD_SESSION_ID) => ({
+  type: "custom_message",
+  message: {
+    customType: "pi-herdsman-agent-result",
+    details: {
+      piSessionId: child,
+      ownerSessionId: owner,
+      runId: randomUUID(),
+      requestId: randomUUID(),
+      agentLabel: "agent",
+      agentDefinition: "agent",
+      status: "completed",
+    },
+  },
+});
 
 test("project agent discovery is gated by Pi project trust", async () => {
   setLeadEnvironment();
@@ -1476,7 +1491,7 @@ test("context retirement guards managed forks without changing ordinary forks", 
         },
         undefined,
         undefined,
-        fakeContext(),
+        fakeContext([ownershipResult(retiredId)]),
       );
     } finally {
       pi.events.get("session_shutdown")?.[0]();
@@ -1536,7 +1551,7 @@ test("session continuation inherits the saved label without an override", async 
     nativeSessions.set(source.id, source);
     const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
     const pi = fakePi({ exec: startup.exec });
-    const context = fakeContext() as any;
+    const context = fakeContext([ownershipResult(source.id)]) as any;
     context.model = { provider: "continue-provider", id: "continue-model" };
     context.thinkingLevel = "high";
     registerExtension!(pi.pi as never);
@@ -1615,7 +1630,7 @@ test("session continuation keeps explicit definition execution overrides", async
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  const context = fakeContext() as any;
+  const context = fakeContext([ownershipResult(sourceId)]) as any;
   context.model = { provider: "controller-provider", id: "controller-model" };
   context.thinkingLevel = "high";
   try {
@@ -1734,7 +1749,7 @@ test("session continuation rejects label overrides and occupied inherited labels
       },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext([ownershipResult(source.id)]),
     );
     assert.equal(result.details.error.category, "agent_label_exists");
     assert.equal(
@@ -2078,6 +2093,130 @@ test("agent assignment uses only an explicit exact fork source", async () => {
   }
 });
 
+test("managed historical sources require durable owner-side ancestry for continue and fork", async () => {
+  setLeadEnvironment();
+  const parentId = randomUUID();
+  const sourceId = randomUUID();
+  const sourcePath = join(testTmpRoot, `owned-source-${sourceId}.jsonl`);
+  realFs.writeFileSync(sourcePath, "{}", "utf8");
+  nativeSessions.clear();
+  nativeSessions.set(parentId, {
+    id: parentId,
+    path: join(testTmpRoot, `owner-${parentId}.jsonl`),
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: { sessionId: parentId, definition: "agent", label: "parent" },
+      },
+      ownershipResult(sourceId, parentId),
+    ],
+  });
+  const sourceEntries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { sessionId: sourceId, definition: "agent", label: "owned-source" },
+    },
+    ownershipResult(parentId, sourceId),
+  ];
+  nativeSessions.set(sourceId, {
+    id: sourceId,
+    path: sourcePath,
+    cwd: "/tmp",
+    entries: sourceEntries,
+  });
+  const parentProof = ownershipResult(parentId);
+  const pi = fakePi({ exec: () => ({ stdout: "0.8.0", stderr: "", code: 0 }) });
+  registerExtension!(pi.pi as never);
+  const request = async (
+    action: "continue" | "delegate",
+    selector: string,
+    entries: unknown[],
+  ) =>
+    pi.tools[0].execute(
+      "id",
+      action === "continue"
+        ? { action, session: selector, task: "follow up" }
+        : { action, definition: "agent", fork: selector, task: "fork" },
+      undefined,
+      undefined,
+      fakeContext(entries),
+    );
+  try {
+    for (const action of ["continue", "delegate"] as const) {
+      for (const selector of [sourceId, sourcePath]) {
+        const recipient = await request(action, selector, [
+          ownershipResult(randomUUID()),
+        ]);
+        assert.equal(recipient.details.error.category, "invalid_request");
+        assert.match(recipient.details.error.message, /ownership tree/);
+        const broken = await request(action, selector, [
+          {
+            ...parentProof,
+            message: {
+              ...parentProof.message,
+              details: {
+                ...parentProof.message.details,
+                ownerSessionId: randomUUID(),
+              },
+            },
+          },
+        ]);
+        assert.equal(broken.details.error.category, "invalid_request");
+      }
+    }
+    const cycle = await request("delegate", sourceId, []);
+    assert.equal(cycle.details.error.category, "invalid_request");
+    sourceEntries.pop();
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+  }
+
+  try {
+    for (const proof of [[parentProof], [ownershipResult(sourceId)]]) {
+      if (proof[0] !== parentProof) nativeSessions.delete(parentId);
+      for (const action of ["continue", "delegate"] as const) {
+        const startup = startupExecutor(
+          "owned-source",
+          () => DEFAULT_PI_SESSION_ID,
+        );
+        const owner = fakePi({ exec: startup.exec });
+        registerExtension!(owner.pi as never);
+        try {
+          const result = await owner.tools[0].execute(
+            "id",
+            action === "continue"
+              ? { action, session: sourceId, task: "follow up" }
+              : {
+                  action,
+                  definition: "agent",
+                  label: "owned-source",
+                  fork: sourcePath,
+                  task: "fork",
+                },
+            undefined,
+            undefined,
+            fakeContext(proof),
+          );
+          assert.equal(result.details.ok, true, JSON.stringify(result.details));
+        } finally {
+          owner.events.get("session_shutdown")?.[0]();
+          startup.stopMailboxConsumer();
+          resetAgentMailbox(startup.mailbox);
+        }
+      }
+    }
+  } finally {
+    nativeSessions.clear();
+    realFs.rmSync(sourcePath, { force: true });
+  }
+});
+
 test("session assignment fails closed on duplicate live representations", async () => {
   setLeadEnvironment();
   const session = {
@@ -2163,7 +2302,7 @@ test("session assignment fails closed on duplicate live representations", async 
       },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext([ownershipResult(session.id)]),
     );
     assert.equal(result.details.error.category, "target_ambiguous");
     assert.equal(

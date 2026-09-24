@@ -288,8 +288,10 @@ This context is part of the durable result artifact, so it survives semantic-ref
 resolution and transitive canonical-ref forwarding through `files`. For a
 reference-only result, the provenance is available with the body when the
 referenced artifact is read; it is not separately embedded. The context is
-informational model evidence, not lifecycle or authorization state. The normal
-completion shown to the owning session remains unchanged.
+informational model evidence, not authorization: an exact session ID or path
+does not authorize `continue` or a managed-session `delegate.fork` without
+durable ownership ancestry. The normal completion shown to the owning session
+remains unchanged.
 
 Oversized non-completion registered-tool output may additionally expose
 `full_output_path` when overflow persistence succeeds. Model-visible content
