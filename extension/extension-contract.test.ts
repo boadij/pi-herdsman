@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { test } from "node:test";
+import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
@@ -89,6 +90,12 @@ function assertPortableToolSchema(tool: any): void {
   assert.equal(tool.parameters?.anyOf, undefined);
   assert.equal(tool.parameters?.oneOf, undefined);
   assert.equal(tool.parameters?.allOf, undefined);
+  assert.doesNotThrow(() => makeStrictJsonSchema(tool.parameters));
+  assert.equal(tool.parameters.required?.includes("files") ?? false, false);
+  if (tool.name !== "ask_owner") {
+    assert.ok(tool.parameters.required?.includes("action"), tool.name);
+    assert.ok(tool.parameters.properties.action);
+  }
 }
 
 const REGISTERED_ROLE_TOOLS = [
