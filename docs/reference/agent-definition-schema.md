@@ -107,7 +107,7 @@ available actions; disabling a definition does not mutate that assignment.
 | `noSkills`              | boolean                                                               | skills disabled unless `inheritSkills: true`                           | Controls Pi native skill discovery; explicit `skills` values are still passed separately.              |
 | `inheritSkills`         | boolean                                                               | does not enable by itself unless `true`                                | `true` changes omitted `noSkills` default so native skills remain available. Explicit `noSkills` wins. |
 | `skills`                | array of non-empty strings                                            | no explicit skill arguments                                            | Each value is passed unchanged as a Pi skill path/resource.                                            |
-| `noExtensions`          | boolean                                                               | Pi normal extension policy                                             | `true` emits `--no-extensions`. Required herdr agent infrastructure remains injected by the launcher.  |
+| `noExtensions`          | boolean                                                               | Pi normal extension policy                                             | `true` emits `--no-extensions`, except when the launched model needs extension discovery. Launcher-injected herdr infrastructure remains. |
 | `extensions`            | array of non-empty strings                                            | no extra extension arguments                                           | Each value is passed unchanged to Pi.                                                                  |
 | `agents`                | array of unique non-empty definition names                            | no direct agents                                                       | Names direct definitions this agent may delegate to; every name must exist.                            |
 | `inheritProjectContext` | boolean                                                               | `true` only for definition name `delegate`; otherwise `false`          | Controls project context-file inheritance.                                                             |
@@ -164,6 +164,15 @@ Pi Herdsman agent and Herdr-state extensions remain mandatory infrastructure.
 Explicit `extensions` entries remain separate launch inputs and are passed to
 Pi normally. Launcher-injected infrastructure remains separate from the
 definition's extension and tool policy.
+
+One launch-derived exception applies, and only to an inherited model. Fresh
+delegation inherits the spawning controller's model, and when that model's
+provider is registered by an extension, discovery stays available for that
+launch even when `noExtensions` is `true`, because a child denied discovery
+cannot resolve a model whose provider only an extension supplies. A model
+pinned in the definition is passed to Pi as written and keeps the definition's
+own extension policy, so a definition that pins such a model must set
+`noExtensions: false` itself.
 
 ## Tool inference for `agents`
 
