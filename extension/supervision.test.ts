@@ -955,12 +955,13 @@ test("Manager asks and project results use the one durable inbox", async () => {
     askId: id(),
   });
   writeChiefAskMessage(ask, runtime);
+  const resultId = id();
   const result = message({
     kind: "report_result",
     fromSessionId: "lead",
     toSessionId: "manager",
     leadSessionId: "lead",
-    text: `result:${id()}`,
+    text: `Result ref: result:${resultId}\n\nI'm live`,
   });
   writeChiefMessage(result, runtime);
   const received: string[] = [];
@@ -977,6 +978,9 @@ test("Manager asks and project results use the one durable inbox", async () => {
     "From manager manager to chief chief: hello",
     `Result from lead lead to manager manager: ${result.text}`,
   ]);
+  assert.match(received[1]!, new RegExp(`result:${resultId}`));
+  assert.match(received[1]!, /Result from lead lead to manager manager:/);
+  assert.match(received[1]!, /I'm live/);
 });
 
 test("supervision authority is coordination state, not metadata", () => {

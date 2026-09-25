@@ -1310,6 +1310,17 @@ function formatPersistedTranscript(entries: readonly ProjectedSessionEntry[]): {
   return { text: blocks.join("\n\n"), truncated };
 }
 
+function projectResultNotification(id: string, content: string): string {
+  const bounded = truncateTail(content, { maxBytes: 5 * 1024 }).content;
+  return `Result ref: ${resultRef(id)}\n\n${bounded}`;
+}
+
+function projectResultId(text: string): string {
+  return text.startsWith("result:")
+    ? text.slice(7)
+    : (/^Result ref: result:([0-9a-f-]{36})\n\n/.exec(text)?.[1] ?? "");
+}
+
 function readPersistedTranscript(target: PersistedTranscriptTarget): {
   transcript: string;
   truncated: boolean;
@@ -8013,9 +8024,7 @@ export default function (pi: ExtensionAPI): void {
       )
         return false;
       if (record.kind === "report_result") {
-        const id = record.text.startsWith("result:")
-          ? record.text.slice(7)
-          : "";
+        const id = projectResultId(record.text);
         const assignment = listProjectAssignments(
           supervisionRuntime(),
           manager.workspaceId,
@@ -8376,10 +8385,15 @@ export default function (pi: ExtensionAPI): void {
               managerLease.descriptor.leaseId
             )
               throw new Error("Manager lease changed during result delivery");
+            const assignmentId = projectResultId(record.text);
+            if (!assignmentId)
+              throw new Error(
+                "Manager result notification has no assignment ref",
+              );
             removeProjectAssignment(
               supervisionRuntime(),
               managerLease.descriptor.workspaceId,
-              record.text.slice(7),
+              assignmentId,
             );
             return;
           }
@@ -9070,7 +9084,10 @@ export default function (pi: ExtensionAPI): void {
                 const record = readChiefMessage(path);
                 return (
                   record.kind === "report_result" &&
-                  record.text === resultRef(assignment.id) &&
+                  (record.text === resultRef(assignment.id) ||
+                    record.text.startsWith(
+                      `Result ref: ${resultRef(assignment.id)}\n\n`,
+                    )) &&
                   record.leaseId === chief.leaseId
                 );
               } catch {
@@ -9089,7 +9106,10 @@ export default function (pi: ExtensionAPI): void {
                 fromSessionId: assignment.leadSessionId,
                 toSessionId: chief.piSessionId,
                 leadSessionId: assignment.leadSessionId,
-                text: resultRef(assignment.id),
+                text: projectResultNotification(
+                  assignment.id,
+                  readFileSync(canonicalResultPath(assignment.id), "utf8"),
+                ),
                 createdAt: Date.now(),
               });
           }
@@ -11630,7 +11650,7 @@ export default function (pi: ExtensionAPI): void {
               fromSessionId: provenance.piSessionId,
               toSessionId: manager.piSessionId,
               leadSessionId: provenance.piSessionId,
-              text: resultRef(assignment.id),
+              text: projectResultNotification(assignment.id, persisted.content),
               createdAt: Date.now(),
             });
             return {

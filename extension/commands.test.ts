@@ -806,6 +806,21 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
       "Manager did not receive the durable Lead result",
       1800,
     );
+    const resultNotification = pi.sent.find(
+      (message: any) => message?.customType === "pi-herdsman-report_result",
+    );
+    assert.ok(resultNotification);
+    assert.match(
+      String(resultNotification.content),
+      new RegExp(
+        `Result from lead ${childSession} to manager ${LEAD_SESSION_ID}:`,
+      ),
+    );
+    assert.match(
+      String(resultNotification.content),
+      new RegExp(`Result ref: ${resultRef(assignment!.id)}`),
+    );
+    assert.match(String(resultNotification.content), /Finished implementation/);
     assert.deepEqual(
       listProjectAssignments(supervisionRuntime(), WORKSPACE),
       [],
@@ -813,6 +828,10 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
     assert.match(
       readFileSync(resultPath(assignment!.id), "utf8"),
       new RegExp(`"branch":"herdsman/${assignment!.id}"`),
+    );
+    assert.match(
+      readFileSync(resultPath(assignment!.id), "utf8"),
+      /Finished implementation/,
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();

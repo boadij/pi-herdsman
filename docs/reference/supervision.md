@@ -53,7 +53,7 @@ Only a Lead with exactly one active project assignment targeting its exact sessi
 }
 ```
 
-`supervisor.result` persists `result:<assignment-id>` before notifying the current Manager. The canonical artifact includes assignment ID, cwd, Pi session ID, Herdr workspace ID, and branch when known, followed by the result and prepared evidence. Runtime idle is not a substitute. The durable artifact remains after Manager acceptance removes the assignment. An unassigned Lead or a Manager cannot call `result`.
+`supervisor.result` persists `result:<assignment-id>` before notifying the current Manager. The notification includes that durable reference and bounded canonical result content, so normal result retrieval does not require live inspection. The canonical artifact includes assignment ID, cwd, Pi session ID, Herdr workspace ID, and branch when known, followed by the result and prepared evidence. Runtime idle is not a substitute. The durable artifact remains after Manager acceptance removes the assignment. An unassigned Lead or a Manager cannot call `result`.
 
 ## `staff`: one edge downward
 
