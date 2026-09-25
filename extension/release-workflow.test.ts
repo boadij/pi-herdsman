@@ -111,4 +111,8 @@ test("PR preview publication isolates publish credentials from PR code", () => {
     publish,
     /npm publish[\s\S]*--tag "\$TAG"[\s\S]*--ignore-scripts/,
   );
+  assert.match(
+    publish,
+    /REGISTRY="https:\/\/registry\.npmjs\.org"[\s\S]*npm publish[\s\S]*--registry "\$REGISTRY"/,
+  );
 });

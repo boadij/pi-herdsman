@@ -71,7 +71,6 @@ jobs:
           set -euo pipefail
 
           VERSION="0.0.0-pr.$PR.g$HEAD_SHA"
-          TAG="pr-$PR"
 
           test "$(node -p "require('./package.json').name")" = "pi-herdsman"
 
@@ -126,6 +125,7 @@ jobs:
 
           VERSION="0.0.0-pr.$PR.g$SHA"
           TAG="pr-$PR"
+          REGISTRY="https://registry.npmjs.org"
 
           TARBALLS=(package/*.tgz)
           [ "${#TARBALLS[@]}" -eq 1 ]
@@ -135,11 +135,12 @@ jobs:
           test "$(node -p "require('./manifest/package/package.json').name")" = "$PACKAGE"
           test "$(node -p "require('./manifest/package/package.json').version")" = "$VERSION"
 
-          if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
-            test "$(npm view "$PACKAGE@$TAG" version)" = "$VERSION"
+          if npm view "$PACKAGE@$VERSION" version --registry "$REGISTRY" >/dev/null 2>&1; then
+            test "$(npm view "$PACKAGE@$TAG" version --registry "$REGISTRY")" = "$VERSION"
             echo "$PACKAGE@$VERSION is already published; skipping npm publish"
           else
             npm publish "${TARBALLS[0]}" \
+              --registry "$REGISTRY" \
               --tag "$TAG" \
               --ignore-scripts
           fi
