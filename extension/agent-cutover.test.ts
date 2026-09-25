@@ -241,7 +241,7 @@ test("agent schema exposes portable structure and canonicalizes action fields", 
   const tool = pi.tools.find((candidate) => candidate.name === "agent")!;
   const prepareArguments = tool.prepareArguments;
   assert.equal(typeof prepareArguments, "function");
-  const preparedInput = {
+  const rawInput = {
     action: "delegate",
     definition: "agent",
     task: "inspect",
@@ -249,7 +249,16 @@ test("agent schema exposes portable structure and canonicalizes action fields", 
     agent: null,
     message: null,
   };
-  prepareArguments(preparedInput);
+  const preparedInput = prepareArguments(rawInput);
+  assert.deepEqual(rawInput, {
+    action: "delegate",
+    definition: "agent",
+    task: "inspect",
+    session: null,
+    agent: null,
+    message: null,
+  });
+  assert.notEqual(preparedInput, rawInput);
   assert.deepEqual(preparedInput, {
     action: "delegate",
     definition: "agent",

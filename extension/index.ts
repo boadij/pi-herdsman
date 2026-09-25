@@ -567,14 +567,14 @@ function projectActionInput(
   fieldsByAction: Record<string, readonly string[]>,
 ): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const input = value as Record<string, unknown>;
+  const input = { ...(value as Record<string, unknown>) };
   const action = String(input.action);
   if (!Object.prototype.hasOwnProperty.call(fieldsByAction, action))
-    return value;
+    return input;
   const fields = fieldsByAction[action];
   const knownFields = new Set(Object.values(fieldsByAction).flat());
   for (const key of knownFields) if (!fields.includes(key)) delete input[key];
-  return value;
+  return input;
 }
 type Runtime = {
   label: string;
