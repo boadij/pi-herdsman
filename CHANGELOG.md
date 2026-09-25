@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.16.0](https://github.com/boadij/pi-herdsman/compare/v0.15.0...v0.16.0) (2026-09-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* agent delegate no longer accepts fork or timeoutMs, and agent continue no longer accepts timeoutMs. Use continue for an existing managed-agent session and task/files for explicit fresh-agent handoffs.
+
+### Fixes
+
+* canonicalize agent tool inputs ([#148](https://github.com/boadij/pi-herdsman/issues/148)) ([4c728a9](https://github.com/boadij/pi-herdsman/commit/4c728a9db7a12c5e5e97b2abe8eaaa037e15c8a1))
+* **container:** suppress npm update notices ([#145](https://github.com/boadij/pi-herdsman/issues/145)) ([7faf5a3](https://github.com/boadij/pi-herdsman/commit/7faf5a311fc20b49ac8a45cb83f73f40db1061ce))
+
+
+### Documentation
+
+* add contribution guidelines ([c827b0b](https://github.com/boadij/pi-herdsman/commit/c827b0bea1742753f19eed63efa66b48ba90c42c))
+
 ## [0.15.0](https://github.com/boadij/pi-herdsman/compare/v0.14.2...v0.15.0) (2026-09-24)
 
 
