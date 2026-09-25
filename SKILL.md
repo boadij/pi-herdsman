@@ -412,20 +412,35 @@ own escalation to Chief is a separate decision, never an automatic forward.
 Managed Agents use `ask_owner` to their exact owner, not `supervisor`.
 
 Only explicit Manager `staff.delegate` starts or recovers delegation; reads
-never resume external mutations. An unresolved creation/start blocks an
-unrelated delegate request rather than being reused for new task intent. It
-creates a Lead in a linked-worktree workspace and a durable assignment. It
-retains a requested branch or derives `herdsman/<assignment-id>`, persists the
-chosen base ref token (default `HEAD`) before Herdr creation, and reuses the
-exact token on every recovery. Token stability does not freeze a moving ref;
-Herdr 0.9.1 exposes no public ref-to-immutable-commit resolver or resolved
-commit output. If creation is ambiguous, reconcile by persisted branch, base,
-and Herdr topology; use Herdr `worktree open --workspace
-<primary-workspace-id> --branch ... --no-focus` when the branch exists but is
-not open. Never create a second
-branch/workspace for the assignment. Herdr determines the workspace path and label. Manager
-may also supervise manually created Leads in the same worktree group. An
-assigned Lead reports completion via
+never resume external mutations. Assignment ID is the sole recovery key:
+recover only with the exact `staff.delegate assignment=<id>`, omitting `task`,
+`branch`, `base`, and `files`. An unrelated branch may be delegated while
+another assignment is unresolved. Each branch may have at most one nonterminal
+assignment (`creating`, `starting`, `active`, or `settling`). A same-branch
+`creating` or `starting` conflict directs recovery through
+`staff.delegate assignment=<id>`. An `active` or `settling` conflict directs
+you to `staff list` and identifies the existing Lead session when available;
+do not recommend recovering those phases with `staff.delegate`.
+Manager `staff.list` shows each assignment's branch but not its task text.
+
+Fresh delegation rejects branches already owned by a nonterminal assignment or
+present in authoritative Herdr worktree topology; it never adopts an existing
+worktree or its Lead. Recovery by assignment ID reconciles only that persisted
+assignment. During explicit recovery only, remove an assignment with persisted
+placement when authoritative Herdr topology proves the worktree is absent;
+uncertain topology fails closed. Reads never perform this cleanup. It creates a
+Lead in a linked-worktree workspace and durable
+assignment. It retains a requested branch or derives
+`herdsman/<assignment-id>`, persists the chosen base ref token (default `HEAD`)
+before Herdr creation, and reuses the exact token on every recovery. Token
+stability does not freeze a moving ref; Herdr 0.9.1 exposes no public
+ref-to-immutable-commit resolver or resolved commit output. If creation is
+ambiguous, reconcile by persisted branch, base, and Herdr topology; use Herdr
+`worktree open --workspace <primary-workspace-id> --branch ... --no-focus`
+when the branch exists but is not open. Never create a second branch/workspace
+for the assignment. Herdr determines the workspace path and label. Manager may
+also supervise manually created Leads in the same worktree group. An assigned
+Lead reports completion via
 `supervisor.result`, which persists provenance and a reusable
 `result:<assignment-id>` before notifying Manager. Idle is not completion.
 Manager-created Leads launch with Pi's `--no-approve` policy, which ignores

@@ -173,6 +173,7 @@ import {
   listManagerDescriptors,
   sameManagerDescriptor,
   writeProjectAssignment,
+  readProjectAssignment,
   listProjectAssignments,
   removeProjectAssignment,
   type ChiefDescriptor,
@@ -6790,6 +6791,24 @@ export default function (pi: ExtensionAPI): void {
   const activeRole = (): SessionRole =>
     chiefMode === "inactive" ? controllerRole : "chief";
   let roleSuspended = false;
+  const projectDelegationLocks = new Map<string, Promise<void>>();
+  const withProjectDelegationLock = async <T>(
+    key: string,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const previous = projectDelegationLocks.get(key);
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => (release = resolve));
+    projectDelegationLocks.set(key, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (projectDelegationLocks.get(key) === current)
+        projectDelegationLocks.delete(key);
+    }
+  };
   let managerLease: ManagerLease | undefined;
   let chiefLease: ChiefLease | undefined;
   let leadContext: ExtensionContext | undefined;
@@ -9207,6 +9226,25 @@ export default function (pi: ExtensionAPI): void {
       ctx: ExtensionContext,
       signal?: AbortSignal,
     ) => {
+      const workspaceId = managerLease?.descriptor.workspaceId;
+      if (!workspaceId) throw new Error("Manager lease is no longer active");
+      const runtime = supervisionRuntime();
+      const persisted = params.assignment
+        ? readProjectAssignment(runtime, workspaceId, params.assignment)
+        : undefined;
+      const freshId = persisted ? undefined : randomUUID();
+      const branch =
+        persisted?.branch ?? params.branch ?? `herdsman/${freshId}`;
+      return withProjectDelegationLock(`${workspaceId}\0${branch}`, () =>
+        delegateProjectLeadLocked(params, ctx, signal, freshId),
+      );
+    };
+    const delegateProjectLeadLocked = async (
+      params: any,
+      ctx: ExtensionContext,
+      signal?: AbortSignal,
+      freshId?: string,
+    ) => {
       const manager = await currentManager(ctx);
       if (
         !manager ||
@@ -9228,19 +9266,17 @@ export default function (pi: ExtensionAPI): void {
           "Manager workspace is not the primary workspace of its Herdr worktree group",
         );
       const primaryWorkspaceId = group.primaryWorkspaceId;
-      const unresolved = listProjectAssignments(
-        supervisionRuntime(),
-        manager.workspaceId,
-      ).find(
-        (assignment) =>
-          assignment.repoKey === manager.repoKey &&
-          (assignment.phase === "creating" || assignment.phase === "starting"),
-      );
-      if (unresolved && params.assignment !== unresolved.id)
-        throw new Error(
-          `Assignment ${unresolved.id} is unresolved on branch ${unresolved.branch ?? "unknown"}; inspect it before requesting another delegation`,
-        );
-      if (params.assignment && params.assignment !== unresolved?.id)
+      const runtime = supervisionRuntime();
+      const assignments = listProjectAssignments(runtime, manager.workspaceId);
+      const unresolved = params.assignment
+        ? readProjectAssignment(runtime, manager.workspaceId, params.assignment)
+        : undefined;
+      if (
+        params.assignment &&
+        (!unresolved ||
+          unresolved.repoKey !== manager.repoKey ||
+          !["creating", "starting"].includes(unresolved.phase))
+      )
         throw new Error("The requested assignment is not unresolved here");
       if (
         unresolved &&
@@ -9249,11 +9285,49 @@ export default function (pi: ExtensionAPI): void {
         throw new Error(
           "Resume the exact unresolved assignment without changing its request",
         );
-      const id = unresolved?.id ?? randomUUID();
+      const id = unresolved?.id ?? freshId!;
+      const branch = unresolved?.branch ?? params.branch ?? `herdsman/${id}`;
+      if (!unresolved) {
+        const owner = assignments.find(
+          (candidate) =>
+            candidate.repoKey === manager.repoKey &&
+            candidate.branch === branch &&
+            ["creating", "starting", "active", "settling"].includes(
+              candidate.phase,
+            ),
+        );
+        if (owner) {
+          if (owner.phase === "creating" || owner.phase === "starting")
+            throw new Error(
+              `Branch ${branch} belongs to unresolved assignment ${owner.id}. Resume it with staff.delegate assignment=${owner.id}.`,
+            );
+          throw new Error(
+            `Branch ${branch} is owned by ${owner.phase} assignment ${owner.id}${owner.leadSessionId ? ` (Lead session ${owner.leadSessionId})` : ""}. Check staff list; do not delegate this branch again.`,
+          );
+        }
+      }
+      const topology = await runHerdr(
+        pi,
+        ctx,
+        ["worktree", "list", "--workspace", primaryWorkspaceId],
+        { signal },
+      );
+      if (
+        topology?.source?.source_workspace_id !== primaryWorkspaceId ||
+        topology?.source?.repo_key !== manager.repoKey ||
+        !Array.isArray(topology?.worktrees)
+      )
+        throw new Error("Herdr worktree topology is not authoritative");
+      const branchWorktrees = topology.worktrees.filter(
+        (worktree: any) => worktree?.branch === branch,
+      );
+      if (!unresolved && branchWorktrees.length)
+        throw new Error(
+          `Herdr worktree already exists for branch ${branch}; fresh delegation cannot adopt it`,
+        );
       let assignment: ProjectAssignment;
       if (unresolved) assignment = unresolved;
       else {
-        const branch = params.branch ?? `herdsman/${id}`;
         const base = params.base ?? "HEAD";
         const createdAt = Date.now();
         const text = await prepareCoordinationText(
@@ -9292,7 +9366,7 @@ export default function (pi: ExtensionAPI): void {
           createdAt,
           updatedAt: createdAt,
         };
-        writeProjectAssignment(supervisionRuntime(), assignment);
+        writeProjectAssignment(runtime, assignment);
       }
       try {
         let workspaceId = assignment.workspaceId;
@@ -9305,15 +9379,9 @@ export default function (pi: ExtensionAPI): void {
         const hasExactPlacement = [workspaceId, paneId, tabId].every(
           (value) => typeof value === "string" && value,
         );
-        const topology = await runHerdr(
-          pi,
-          ctx,
-          ["worktree", "list", "--workspace", primaryWorkspaceId],
-          { signal },
+        const matchingWorktrees = topology.worktrees.filter(
+          (worktree: any) => worktree?.branch === assignment.branch,
         );
-        const matchingWorktrees = (
-          Array.isArray(topology?.worktrees) ? topology.worktrees : []
-        ).filter((worktree: any) => worktree?.branch === assignment.branch);
         if (matchingWorktrees.length > 1)
           throw new Error(
             `Multiple Herdr worktrees match assignment branch ${assignment.branch}`,
@@ -9391,6 +9459,16 @@ export default function (pi: ExtensionAPI): void {
               "Herdr created a worktree on a different branch than the persisted assignment",
             );
         } else {
+          if (unresolved && hasPlacement) {
+            removeProjectAssignment(
+              runtime,
+              manager.workspaceId,
+              assignment.id,
+            );
+            throw new Error(
+              `Assignment ${assignment.id} was abandoned because its persisted worktree no longer exists.`,
+            );
+          }
           throw new Error(
             "Persisted project assignment placement is not present in Herdr topology",
           );
@@ -9553,6 +9631,15 @@ export default function (pi: ExtensionAPI): void {
           leadSessionId,
           updatedAt: Date.now(),
         };
+        if (
+          listProjectAssignments(runtime, manager.workspaceId).some(
+            (candidate) =>
+              candidate.id !== assignment.id &&
+              candidate.phase === "active" &&
+              candidate.leadSessionId === leadSessionId,
+          )
+        )
+          throw new Error("Lead already belongs to another active assignment");
         writeProjectAssignment(supervisionRuntime(), assignment);
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
@@ -11596,6 +11683,9 @@ export default function (pi: ExtensionAPI): void {
                     ).map((assignment) => ({
                       id: assignment.id,
                       phase: assignment.phase,
+                      ...(assignment.branch
+                        ? { branch: assignment.branch }
+                        : {}),
                       ...(assignment.workspaceId
                         ? { workspace_id: assignment.workspaceId }
                         : {}),

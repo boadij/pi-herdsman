@@ -18,6 +18,7 @@ import {
   listChiefMessagePaths,
   readChiefMessage,
   supervisionRuntime,
+  writeProjectAssignment,
   writeLeadCoordinationState,
 } from "./supervision.ts";
 import support, {
@@ -171,13 +172,13 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       return respond({
         source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
         worktrees: topologyCreated
-          ? [
-              {
+          ? listProjectAssignments(supervisionRuntime(), WORKSPACE).map(
+              (assignment) => ({
                 ...(openCalls ? { open_workspace_id: childWorkspace } : {}),
-                branch: `herdsman/${listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id}`,
+                branch: assignment.branch,
                 path: "/tmp/manager-child",
-              },
-            ]
+              }),
+            )
           : [],
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "open") {
@@ -244,7 +245,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       const assignment = listProjectAssignments(
         supervisionRuntime(),
         WORKSPACE,
-      )[0]!;
+      ).find((item) => item.phase === "starting")!;
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
         role: "lead",
@@ -329,17 +330,66 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       ctx,
     );
     assert.equal(staffList.details.ok, true);
+    assert.equal(staffList.details.assignments[0].branch, pending.branch);
     assert.equal(createCalls, 1, "roster reads must not retry creation");
     assert.equal(pending.phase, "creating");
     await assert.rejects(
       staff.execute(
         "delegate",
-        { action: "delegate", task: "different task" },
+        {
+          action: "delegate",
+          task: "duplicate branch",
+          branch: pending.branch,
+        },
         undefined,
         undefined,
         ctx,
       ),
-      /is unresolved[\s\S]*inspect it/,
+      new RegExp(
+        `belongs to unresolved assignment ${pending.id}.*staff\\.delegate assignment=${pending.id}`,
+      ),
+    );
+    for (const phase of ["starting", "settling"] as const) {
+      writeProjectAssignment(supervisionRuntime(), {
+        ...pending,
+        phase,
+        updatedAt: Math.max(Date.now(), pending.createdAt),
+      });
+      await assert.rejects(
+        staff.execute(
+          "delegate",
+          {
+            action: "delegate",
+            task: "duplicate branch",
+            branch: pending.branch,
+          },
+          undefined,
+          undefined,
+          ctx,
+        ),
+        phase === "starting"
+          ? /belongs to unresolved assignment/
+          : /owned by settling assignment.*Check staff list/,
+      );
+    }
+    writeProjectAssignment(supervisionRuntime(), pending);
+    await assert.rejects(
+      staff.execute(
+        "delegate",
+        {
+          action: "delegate",
+          task: "independent branch",
+          branch: "smoke/manager2",
+        },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      /transport closed/,
+    );
+    assert.equal(
+      listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+      2,
     );
     delayReadiness = true;
     const retryPromise = staff.execute(
@@ -360,16 +410,20 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     assert.equal(retry.details.ok, true, JSON.stringify(retry.details));
     assert.equal(retry.details.assignment, pending.id);
     assert.equal(retry.details.session, childSession);
-    assert.equal(createCalls, 1);
+    assert.equal(createCalls, 2);
     assert.equal(openCalls, 1);
     assert.equal(
-      listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
+      listProjectAssignments(supervisionRuntime(), WORKSPACE).find(
+        (item) => item.id === pending.id,
+      )?.phase,
       "active",
     );
     await pi.commandOptions.get("manager").handler("leave", ctx);
     assert.ok(pi.pi.getActiveTools().includes("staff"));
     assert.equal(
-      listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
+      listProjectAssignments(supervisionRuntime(), WORKSPACE).find(
+        (item) => item.id === pending.id,
+      )?.phase,
       "active",
       "Manager leave must retain assignment ownership until completion",
     );
@@ -381,7 +435,16 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
 });
 
 async function runManagerStartupScenario(
-  mode: "success" | "missing-state" | "conflict" | "managed-agent" | "recovery",
+  mode:
+    | "success"
+    | "missing-state"
+    | "conflict"
+    | "managed-agent"
+    | "recovery"
+    | "preexisting"
+    | "stale-placement"
+    | "invalid-topology"
+    | "concurrent",
 ): Promise<void> {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
@@ -400,6 +463,8 @@ async function runManagerStartupScenario(
   let createCalls = 0;
   let openCalls = 0;
   let startCalls = 0;
+  let worktreeListCalls = 0;
+  let invalidTopologyCall = Number.POSITIVE_INFINITY;
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
@@ -429,19 +494,28 @@ async function runManagerStartupScenario(
           },
         },
       });
-    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
+      worktreeListCalls++;
       return respond({
-        source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
-        worktrees: created
-          ? [
-              {
-                branch: `herdsman/${listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id}`,
-                path: childPath,
-                open_workspace_id: childWorkspace,
-              },
-            ]
-          : [],
+        source:
+          mode === "invalid-topology" &&
+          worktreeListCalls === invalidTopologyCall
+            ? { source_workspace_id: "wrong-workspace", repo_key: "repo-key" }
+            : { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+        worktrees:
+          mode === "preexisting"
+            ? [{ branch: "smoke/existing", path: childPath }]
+            : created
+              ? listProjectAssignments(supervisionRuntime(), WORKSPACE).map(
+                  (assignment) => ({
+                    branch: assignment.branch,
+                    path: childPath,
+                    open_workspace_id: childWorkspace,
+                  }),
+                )
+              : [],
       });
+    }
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
       createCalls++;
       created = true;
@@ -595,14 +669,66 @@ async function runManagerStartupScenario(
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     const staff = pi.tools.find((tool) => tool.name === "staff")!;
-    const execute = () =>
+    const staleId = randomUUID();
+    if (mode === "stale-placement" || mode === "invalid-topology")
+      writeProjectAssignment(supervisionRuntime(), {
+        version: 1,
+        id: staleId,
+        primaryWorkspaceId: WORKSPACE,
+        repoKey: "repo-key",
+        branch: "smoke/vanished",
+        base: "HEAD",
+        text: "recover vanished placement",
+        phase: "starting",
+        workspaceId: childWorkspace,
+        paneId: "old-pane",
+        tabId: "old-tab",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    const execute = () => (
+      (invalidTopologyCall = worktreeListCalls + 4),
       staff.execute(
         "delegate",
-        { action: "delegate", task: "deliver the fresh assignment" },
+        {
+          action: "delegate",
+          ...(!["stale-placement", "invalid-topology"].includes(mode)
+            ? { task: "deliver the fresh assignment" }
+            : {}),
+          ...(mode === "preexisting" ? { branch: "smoke/existing" } : {}),
+          ...(mode === "concurrent" ? { branch: "smoke/concurrent" } : {}),
+          ...(["stale-placement", "invalid-topology"].includes(mode)
+            ? { assignment: staleId }
+            : {}),
+        },
         undefined,
         undefined,
         ctx,
+      )
+    );
+    if (mode === "concurrent") {
+      const results = await Promise.allSettled([execute(), execute()]);
+      assert.equal(
+        results.filter((result) => result.status === "fulfilled").length,
+        1,
       );
+      assert.equal(
+        results.filter(
+          (result) =>
+            result.status === "rejected" &&
+            /belongs to unresolved assignment|owned by active assignment/.test(
+              String(result.reason),
+            ),
+        ).length,
+        1,
+      );
+      assert.equal(createCalls, 1);
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+        1,
+      );
+      return;
+    }
     if (mode === "missing-state") {
       const now = Date.now.bind(Date);
       try {
@@ -626,6 +752,43 @@ async function runManagerStartupScenario(
       assert.equal(startCalls, 1);
       assert.equal(started, true);
       assert.equal(startupObservations, 2);
+      return;
+    }
+    if (mode === "preexisting") {
+      await assert.rejects(execute(), /worktree already exists/);
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+        0,
+      );
+      assert.equal(createCalls, 0);
+      assert.equal(startCalls, 0);
+      return;
+    }
+    if (mode === "stale-placement") {
+      await assert.rejects(
+        execute(),
+        new RegExp(`Assignment ${staleId} was abandoned`),
+      );
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+        0,
+      );
+      assert.equal(createCalls, 0);
+      assert.equal(startCalls, 0);
+      return;
+    }
+    if (mode === "invalid-topology") {
+      await assert.rejects(execute(), /topology is not authoritative/);
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+        1,
+      );
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+        staleId,
+      );
+      assert.equal(createCalls, 0);
+      assert.equal(startCalls, 0);
       return;
     }
     if (mode === "conflict" || mode === "managed-agent")
@@ -658,6 +821,48 @@ async function runManagerStartupScenario(
     assert.equal(started, true);
     if (mode === "success") {
       assert.equal(assignment.paneId, "child-pane");
+      await assert.rejects(
+        staff.execute(
+          "delegate",
+          {
+            action: "delegate",
+            task: "duplicate active branch",
+            branch: assignment.branch,
+          },
+          undefined,
+          undefined,
+          ctx,
+        ),
+        (error: Error) => {
+          assert.match(error.message, /owned by active assignment/);
+          assert.match(error.message, new RegExp(assignment.id));
+          assert.match(error.message, new RegExp(childSession));
+          assert.match(error.message, /Check staff list/);
+          assert.doesNotMatch(error.message, /staff\.delegate assignment=/);
+          return true;
+        },
+      );
+      await assert.rejects(
+        staff.execute(
+          "delegate",
+          {
+            action: "delegate",
+            task: "distinct branch but same Lead",
+            branch: "smoke/other-lead",
+          },
+          undefined,
+          undefined,
+          ctx,
+        ),
+        /Lead already belongs to another active assignment/,
+      );
+      assert.equal(createCalls, 2);
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE).filter(
+          (item) => item.phase === "active",
+        ).length,
+        1,
+      );
       const messages = listChiefMessagePaths(
         supervisionRuntime(),
         childSession,
@@ -688,6 +893,14 @@ test("Manager startup rejects managed Agent identity without Lead state", () =>
   runManagerStartupScenario("managed-agent"));
 test("Manager recovery waits on existing exact Pi without restarting it", () =>
   runManagerStartupScenario("recovery"));
+test("Manager never adopts a preexisting branch worktree for fresh delegation", () =>
+  runManagerStartupScenario("preexisting"));
+test("Manager retires only an explicitly recovered assignment with vanished placement", () =>
+  runManagerStartupScenario("stale-placement"));
+test("Manager serializes simultaneous same-branch delegation", () =>
+  runManagerStartupScenario("concurrent"));
+test("Manager retains placement when recovery topology is not authoritative", () =>
+  runManagerStartupScenario("invalid-topology"));
 
 test("project agent discovery is gated by Pi project trust", async () => {
   setLeadEnvironment();

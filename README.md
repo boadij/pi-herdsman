@@ -191,7 +191,9 @@ Manager resumes its Manager profile and supervision UI without loading the Lead
 Agent roster or recovering Lead-owned Agents. Manager leave is blocked while
 assignments or pending asks on either supervision edge remain. See the
 [supervision reference](docs/reference/supervision.md) for delegation recovery
-and worktree/base-token guarantees.
+and worktree/base-token guarantees. Independent branches can be delegated while
+another branch has an unresolved assignment; each branch has at most one
+nonterminal assignment, and recovery is selected only by its assignment ID.
 
 Bundled definitions are portable defaults, not required workflow stages. Global
 definitions can override them or add new roles with your preferred models,
