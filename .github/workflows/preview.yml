@@ -1,0 +1,161 @@
+name: Publish PR Preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Open same-repository PR number
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: npm-preview-pr-${{ inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+
+    steps:
+      - id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+
+          case "$PR" in
+            ''|*[!0-9]*)
+              echo "PR must be a positive integer" >&2
+              exit 1
+              ;;
+          esac
+
+          [ "$PR" -gt 0 ]
+
+          IFS=$'\t' read -r STATE HEAD_REPO HEAD_SHA < <(
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" \
+              --jq '[.state, .head.repo.full_name, .head.sha] | @tsv'
+          )
+
+          [ "$STATE" = "open" ]
+          [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ steps.target.outputs.sha }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - run: npm ci
+
+      - id: package
+        env:
+          PR: ${{ inputs.pr }}
+          HEAD_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          VERSION="0.0.0-pr.$PR.g$HEAD_SHA"
+
+          test "$(node -p "require('./package.json').name")" = "pi-herdsman"
+
+          npm --no-git-tag-version version "$VERSION"
+          npm run release:check
+
+          test "$(node -p "require('./package.json').name")" = "pi-herdsman"
+          test "$(node -p "require('./package.json').version")" = "$VERSION"
+
+          mkdir -p "$RUNNER_TEMP/npm-preview"
+          npm pack \
+            --ignore-scripts \
+            --pack-destination "$RUNNER_TEMP/npm-preview" \
+            >/dev/null
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-preview
+          path: ${{ runner.temp }}/npm-preview/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: npm-preview
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-preview
+          path: package
+
+      - name: Publish preview
+        env:
+          PACKAGE: pi-herdsman
+          PR: ${{ inputs.pr }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          VERSION="0.0.0-pr.$PR.g$SHA"
+          TAG="pr-$PR"
+          REGISTRY="https://registry.npmjs.org"
+
+          TARBALLS=(package/*.tgz)
+          [ "${#TARBALLS[@]}" -eq 1 ]
+
+          mkdir manifest
+          tar -xzf "${TARBALLS[0]}" -C manifest package/package.json
+          test "$(node -p "require('./manifest/package/package.json').name")" = "$PACKAGE"
+          test "$(node -p "require('./manifest/package/package.json').version")" = "$VERSION"
+
+          if npm view "$PACKAGE@$VERSION" version --registry "$REGISTRY" >/dev/null 2>&1; then
+            test "$(npm view "$PACKAGE@$TAG" version --registry "$REGISTRY")" = "$VERSION"
+            echo "$PACKAGE@$VERSION is already published; skipping npm publish"
+          else
+            npm publish "${TARBALLS[0]}" \
+              --registry "$REGISTRY" \
+              --tag "$TAG" \
+              --ignore-scripts
+          fi
+
+          {
+            echo "### npm PR preview"
+            echo
+            echo "- PR: #$PR"
+            echo "- Commit: \`$SHA\`"
+            echo "- Version: \`$VERSION\`"
+            echo "- Tag: \`$TAG\`"
+            echo
+            echo "\`pi install npm:$PACKAGE@$TAG\`"
+            echo
+            echo "Exact build:"
+            echo
+            echo "\`pi install npm:$PACKAGE@$VERSION\`"
+          } >> "$GITHUB_STEP_SUMMARY"
