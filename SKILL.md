@@ -428,8 +428,14 @@ present in authoritative Herdr worktree topology; it never adopts an existing
 worktree or its Lead. Recovery by assignment ID reconciles only that persisted
 assignment. During explicit recovery only, remove an assignment with persisted
 placement when authoritative Herdr topology proves the worktree is absent;
-uncertain topology fails closed. Reads never perform this cleanup. It creates a
-Lead in a linked-worktree workspace and durable
+the abandonment message confirms the branch reservation is released and a
+fresh delegation may be retried. Uncertain topology fails closed. Reads never
+perform this cleanup. Launch each Manager-created Lead with its assignment UUID
+as Pi's `--session-id`. Verify Lead coordination state under that ID and
+cross-check Herdr's session identity when resolvable; an initial session path
+whose JSONL file has not yet been created does not block startup verification.
+Keep `--no-approve`: delegation must not implicitly trust project-local files.
+New delegation creates a Lead in a linked-worktree workspace and durable
 assignment. It retains a requested branch or derives
 `herdsman/<assignment-id>`, persists the chosen base ref token (default `HEAD`)
 before Herdr creation, and reuses the exact token on every recovery. Token

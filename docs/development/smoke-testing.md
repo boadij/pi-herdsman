@@ -278,9 +278,13 @@ Minimum live sequence:
    verify it remains an ordinary Lead with no automatic elevation.
 4. Delegate a disposable branch/task with Manager `staff.delegate`; verify
    Herdr creates a linked-worktree workspace in the same group and Pi starts
-   in its pane only after the shell is ready. Also verify a delayed shell does
-   not trigger an early `agent start`. Verify Manager-created Pi receives
-   `--no-approve` (not `--approve`). Inspect the live Pi pane/process during
+   in its pane only after the shell is ready. Verify Manager-created Pi receives
+   `--session-id <assignment-id>` and `--no-approve` (not `--approve`). Also
+   verify a delayed shell does not trigger an early `agent start`. Exercise
+   startup while Herdr reports a path whose initial session JSONL does not yet
+   exist: Lead coordination state under the assignment ID should complete
+   verification without waiting for that file, and a resolvable Herdr session
+   identity must match the assignment ID. Inspect the live Pi pane/process during
    startup, especially when trust-gated project resources are present: confirm
    whether Pi starts without loading those local resources or presents a trust
    decision. Manager must not implicitly approve the linked-worktree path. If
@@ -299,8 +303,10 @@ Minimum live sequence:
    transcript, message, and reply remain observational and never resume
    creation or remove assignments. During explicit recovery, verify a
    persisted placement is retired only when authoritative Herdr topology proves
-   its worktree absent; uncertain topology fails closed. Confirm retries reuse
-   the exact persisted base ref token (default `HEAD`), but do not imply that
+   its worktree absent. Confirm the abandonment result says the branch
+   reservation was released and permits a fresh delegation retry; uncertain
+   topology fails closed. Confirm retries reuse the exact persisted base ref
+   token (default `HEAD`), but do not imply that
    the token freezes a moving ref or identifies an immutable commit.
    Also verify that a conflict with an `active` or `settling` assignment directs
    the Manager to `staff list`, identifies the existing Lead session when
@@ -340,6 +346,8 @@ Minimum live sequence:
 | Manager cannot own Agents or perform local implementation; `/manager leave` restores Lead profile and `agent`                                                                           | NOT RUN |
 | Lead has `agent`, `supervisor`, `peer`, and no `staff`; Agent has no `peer`                                                                                                             | NOT RUN |
 | Manager `staff.delegate` creates a linked-worktree workspace in the same group and starts Pi in the exact pane                                                                          | NOT RUN |
+| Manager Lead uses the assignment UUID as Pi `--session-id`; Lead state verifies under that ID without waiting for the initial session JSONL path to exist; resolvable Herdr ID matches  | NOT RUN |
+| Missing persisted worktree on explicit recovery reports the branch reservation released and allows fresh delegation                                                                     | NOT RUN |
 | Requested branch is retained; omitted branch is derived from assignment ID, persisted before creation, and passed explicitly to Herdr                                                   | NOT RUN |
 | Exact base ref token (default `HEAD`) is persisted with branch and reused on recovery; moving refs are not described as frozen commits                                                  | NOT RUN |
 | Different branches can be delegated independently while another assignment is unresolved; same branch has at most one creating/starting/active/settling assignment                      | NOT RUN |

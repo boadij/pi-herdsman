@@ -9467,7 +9467,7 @@ export default function (pi: ExtensionAPI): void {
               assignment.id,
             );
             throw new Error(
-              `Assignment ${assignment.id} was abandoned because its persisted worktree no longer exists.`,
+              `Assignment ${assignment.id} was abandoned because its persisted worktree no longer exists. Its branch reservation was released; retry a fresh delegation if desired.`,
             );
           }
           throw new Error(
@@ -9490,6 +9490,45 @@ export default function (pi: ExtensionAPI): void {
         };
         writeProjectAssignment(supervisionRuntime(), assignment);
         let lead: any;
+        const verifyLeadCandidate = (candidate: any): boolean => {
+          const reported = sessionIdentity(candidate?.agent_session);
+          if (!reported)
+            throw new Error(
+              "Exact-pane Pi candidate has no Herdr session identity",
+            );
+          const resolvedSessionId = herdrSessionId(candidate);
+          if (resolvedSessionId && resolvedSessionId !== assignment.id)
+            throw new Error(
+              "Herdr session identity does not match the Manager assignment",
+            );
+          if (reported.kind === "path" && !resolvedSessionId) {
+            try {
+              statSync(reported.value);
+              throw new Error(
+                "Herdr session path exists but does not resolve to the expected session",
+              );
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+                throw error;
+            }
+          }
+          const state = readLeadCoordinationState(
+            supervisionRuntime(),
+            assignment.id,
+          );
+          const managed = scanAgentStates().states.some(
+            ({ state }) => state.piSessionId === assignment.id,
+          );
+          if (
+            managed ||
+            (state &&
+              (state.role !== "lead" || state.piSessionId !== assignment.id))
+          )
+            throw new Error(
+              "Existing session in new worktree has a conflicting role or identity",
+            );
+          return state?.role === "lead" && state.piSessionId === assignment.id;
+        };
         const currentInventory = await herdrSessionSnapshot(pi, ctx, signal);
         const currentCandidates = currentInventory.agents.filter(
           (agent: any) =>
@@ -9501,24 +9540,7 @@ export default function (pi: ExtensionAPI): void {
         if (currentCandidates.length > 1)
           throw new Error("Ambiguous Lead session in new worktree");
         if (currentCandidates.length === 1) {
-          const sessionId = herdrSessionId(currentCandidates[0]);
-          const state =
-            sessionId &&
-            readLeadCoordinationState(supervisionRuntime(), sessionId);
-          const managed =
-            sessionId &&
-            scanAgentStates().states.some(
-              ({ state }) => state.piSessionId === sessionId,
-            );
-          if (
-            managed ||
-            (state &&
-              (state.role !== "lead" || state.piSessionId !== sessionId))
-          )
-            throw new Error(
-              "Existing session in new worktree has a conflicting role or identity",
-            );
-          if (state?.role === "lead" && state.piSessionId === sessionId)
+          if (verifyLeadCandidate(currentCandidates[0]))
             lead = currentCandidates[0];
         }
         if (!lead) {
@@ -9546,7 +9568,7 @@ export default function (pi: ExtensionAPI): void {
               label: `lead-${id.slice(0, 8)}`,
               runId: id,
               extensionPath: HERDSMAN_EXTENSION_PATH,
-              agentArgs: ["--no-approve"],
+              agentArgs: ["--session-id", assignment.id, "--no-approve"],
               signal,
             });
           }
@@ -9572,27 +9594,12 @@ export default function (pi: ExtensionAPI): void {
             herdrSessionReported = Boolean(candidates[0]?.agent_session);
             const sessionId = herdrSessionId(candidates[0]);
             sessionIdResolved = Boolean(sessionId);
-            if (sessionId) {
-              const state = readLeadCoordinationState(
-                supervisionRuntime(),
-                sessionId,
-              );
-              leadStateObserved = Boolean(state);
-              const managed = scanAgentStates().states.some(
-                ({ state }) => state.piSessionId === sessionId,
-              );
-              if (
-                managed ||
-                (state &&
-                  (state.role !== "lead" || state.piSessionId !== sessionId))
-              )
-                throw new Error(
-                  "Existing session in new worktree has a conflicting role or identity",
-                );
-              if (state?.role === "lead" && state.piSessionId === sessionId) {
-                lead = candidates[0];
-                break;
-              }
+            leadStateObserved = Boolean(
+              readLeadCoordinationState(supervisionRuntime(), assignment.id),
+            );
+            if (verifyLeadCandidate(candidates[0])) {
+              lead = candidates[0];
+              break;
             }
           }
           try {
@@ -9614,16 +9621,16 @@ export default function (pi: ExtensionAPI): void {
           }
           await delay(250, undefined, { signal });
         }
-        const leadSessionId = lead && herdrSessionId(lead);
+        const leadSessionId = lead && assignment.id;
         if (!leadSessionId) {
           const readiness = !piProcessSeen
             ? "No Pi process or exact-pane Herdr session was observed"
             : !herdrSessionReported
               ? "Pi process seen in the exact pane, but Herdr never reported a Pi session identity"
-              : !sessionIdResolved
-                ? "Herdr reported a Pi session, but its session ID could not be resolved"
-                : !leadStateObserved
-                  ? "Herdr session reported, but Herdsman Lead coordination state was never published"
+              : !leadStateObserved
+                ? "Herdr session reported, but Herdsman Lead coordination state was never published"
+                : !sessionIdResolved
+                  ? "Lead state was present but Herdr's session path is not yet materialized"
                   : "Lead coordination state was present but not a valid Lead identity";
           let processInfo = "unavailable";
           try {

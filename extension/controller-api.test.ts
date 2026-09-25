@@ -123,7 +123,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     `delegate-recovery-${randomUUID()}.sock`,
   );
   const childWorkspace = `child-${randomUUID()}`;
-  const childSession = `lead-${randomUUID()}`;
+  let childSession = "";
   let topologyCreated = false;
   let createCalls = 0;
   let openCalls = 0;
@@ -246,6 +246,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
         supervisionRuntime(),
         WORKSPACE,
       ).find((item) => item.phase === "starting")!;
+      childSession = assignment.id;
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
         role: "lead",
@@ -441,6 +442,8 @@ async function runManagerStartupScenario(
     | "missing-herdr-session"
     | "conflict"
     | "managed-agent"
+    | "unmaterialized-path"
+    | "mismatched-session"
     | "recovery"
     | "preexisting"
     | "stale-placement"
@@ -455,7 +458,8 @@ async function runManagerStartupScenario(
     `delegate-fresh-${randomUUID()}.sock`,
   );
   const childWorkspace = `child-${randomUUID()}`;
-  const childSession = `lead-${randomUUID()}`;
+  let childSession = "";
+  const childSessionPath = join(tmpdir(), `lead-${randomUUID()}.jsonl`);
   const childPath = "/tmp/manager-fresh-child";
   let created = false;
   let shellReady = false;
@@ -606,6 +610,15 @@ async function runManagerStartupScenario(
         supervisionRuntime(),
         WORKSPACE,
       )[0]!;
+      childSession = starting.id;
+      assert.equal(args[args.indexOf("--session-id") + 1], starting.id);
+      assert.deepEqual(
+        args.slice(
+          args.indexOf("--session-id"),
+          args.indexOf("--session-id") + 3,
+        ),
+        ["--session-id", starting.id, "--no-approve"],
+      );
       assert.equal(starting.workspaceId, childWorkspace);
       assert.equal(starting.tabId, "child-tab");
       assert.equal(starting.paneId, "child-pane");
@@ -623,6 +636,12 @@ async function runManagerStartupScenario(
       });
     }
     if (command === "herdr" && isApiSnapshot(args)) {
+      const currentAssignment = listProjectAssignments(
+        supervisionRuntime(),
+        WORKSPACE,
+      )[0];
+      if (!childSession && currentAssignment)
+        childSession = currentAssignment.id;
       if (started) startupObservations++;
       if (
         started &&
@@ -665,12 +684,23 @@ async function runManagerStartupScenario(
             mode !== "missing-herdr-session"
               ? [
                   {
-                    agent_session: {
-                      source: "herdr:pi",
-                      agent: "pi",
-                      kind: "id",
-                      value: childSession,
-                    },
+                    agent_session:
+                      mode === "unmaterialized-path"
+                        ? {
+                            source: "herdr:pi",
+                            agent: "pi",
+                            kind: "path",
+                            value: childSessionPath,
+                          }
+                        : {
+                            source: "herdr:pi",
+                            agent: "pi",
+                            kind: "id",
+                            value:
+                              mode === "mismatched-session"
+                                ? randomUUID()
+                                : childSession,
+                          },
                     workspace_id: childWorkspace,
                     pane_id: "child-pane",
                     tab_id: "child-tab",
@@ -800,7 +830,9 @@ async function runManagerStartupScenario(
     if (mode === "stale-placement") {
       await assert.rejects(
         execute(),
-        new RegExp(`Assignment ${staleId} was abandoned`),
+        new RegExp(
+          `Assignment ${staleId} was abandoned[\\s\\S]*branch reservation was released; retry a fresh delegation`,
+        ),
       );
       assert.equal(
         listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
@@ -824,8 +856,17 @@ async function runManagerStartupScenario(
       assert.equal(startCalls, 0);
       return;
     }
-    if (mode === "conflict" || mode === "managed-agent")
-      await assert.rejects(execute(), /conflicting role or identity/);
+    if (
+      mode === "conflict" ||
+      mode === "managed-agent" ||
+      mode === "mismatched-session"
+    )
+      await assert.rejects(
+        execute(),
+        mode === "mismatched-session"
+          ? /Herdr session identity does not match the Manager assignment/
+          : /conflicting role or identity/,
+      );
     else {
       const result = await execute();
       assert.equal(result.details.ok, true);
@@ -837,9 +878,11 @@ async function runManagerStartupScenario(
     )[0]!;
     assert.equal(
       assignment.phase,
-      mode === "conflict" || mode === "managed-agent" ? "starting" : "active",
+      ["conflict", "managed-agent", "mismatched-session"].includes(mode)
+        ? "starting"
+        : "active",
     );
-    if (mode !== "conflict" && mode !== "managed-agent") {
+    if (!["conflict", "managed-agent", "mismatched-session"].includes(mode)) {
       assert.equal(assignment.workspaceId, childWorkspace);
       assert.equal(assignment.tabId, "child-tab");
       assert.equal(assignment.paneId, "child-pane");
@@ -887,7 +930,7 @@ async function runManagerStartupScenario(
           undefined,
           ctx,
         ),
-        /Lead already belongs to another active assignment/,
+        /Herdr session identity does not match the Manager assignment/,
       );
       assert.equal(createCalls, 2);
       assert.equal(
@@ -909,6 +952,10 @@ async function runManagerStartupScenario(
         ),
       );
     }
+    if (mode === "unmaterialized-path") {
+      assert.equal(realFs.existsSync(childSessionPath), false);
+      assert.equal(assignment.leadSessionId, assignment.id);
+    }
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -926,6 +973,10 @@ test("Manager startup rejects conflicting role promptly", () =>
   runManagerStartupScenario("conflict"));
 test("Manager startup rejects managed Agent identity without Lead state", () =>
   runManagerStartupScenario("managed-agent"));
+test("Manager accepts Lead state while Herdr reports a not-yet-created session path", () =>
+  runManagerStartupScenario("unmaterialized-path"));
+test("Manager rejects a resolvable Herdr session ID that differs from its assignment", () =>
+  runManagerStartupScenario("mismatched-session"));
 test("Manager recovery waits on existing exact Pi without restarting it", () =>
   runManagerStartupScenario("recovery"));
 test("Manager never adopts a preexisting branch worktree for fresh delegation", () =>

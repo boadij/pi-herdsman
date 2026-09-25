@@ -548,7 +548,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
     `delegate-project-${randomUUID()}.sock`,
   );
   const childWorkspace = `child-${randomUUID()}`;
-  const childSession = `lead-${randomUUID()}`;
+  let childSession = `lead-${randomUUID()}`;
   let created = false;
   let started = false;
   const respond = (result: unknown) => ({
@@ -639,6 +639,15 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
       return respond({});
     if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
       started = true;
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        WORKSPACE,
+      ).find((item) => item.phase === "starting");
+      assert.ok(assignment);
+      const sessionIdIndex = args.indexOf("--session-id");
+      assert.notEqual(sessionIdIndex, -1);
+      childSession = args[sessionIdIndex + 1]!;
+      assert.equal(childSession, assignment.id);
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
         role: "lead",
@@ -716,6 +725,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
     )[0];
     assert.equal(assignment?.phase, "active");
     assert.equal(assignment?.leadSessionId, childSession);
+    assert.equal(assignment?.leadSessionId, assignment?.id);
     assert.equal(assignment?.branch, `herdsman/${assignment?.id}`);
     assert.equal(assignment?.workspaceId, childWorkspace);
     assert.equal(assignment?.paneId, "child-pane");
