@@ -17,7 +17,7 @@ canonical local references and are not copied or snapshotted.
 Agent-session context crosses boundaries explicitly.
 
 - task or message text and `files` carry assignment-specific evidence;
-- `fork` and `continue` deliberately select saved Pi history;
+- `continue` resumes an exact managed-agent Pi session;
 - the caller's conversation and caller-side attachments are not implicitly
   copied into another agent session.
 
@@ -289,8 +289,8 @@ resolution and transitive canonical-ref forwarding through `files`. For a
 reference-only result, the provenance is available with the body when the
 referenced artifact is read; it is not separately embedded. The context is
 informational model evidence, not authorization: an exact session ID or path
-does not authorize `continue` or a managed-session `delegate.fork` without
-durable ownership ancestry. The normal completion shown to the owning session
+does not authorize `continue` without durable ownership ancestry. The normal
+completion shown to the owning session
 remains unchanged.
 
 Oversized non-completion registered-tool output may additionally expose

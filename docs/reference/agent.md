@@ -16,7 +16,12 @@ inspect
 transcript
 ```
 
-Unknown fields and unsupported selector combinations fail with `invalid_request`.
+Schema-known fields for another action are projected away before schema
+validation and ignored. Unknown fields and values that do not match the tool
+schema may be rejected by Pi before Herdsman's hook runs. For inputs that reach
+the hook, semantically invalid property values and missing fields required by
+the selected action fail with `invalid_request`; action-required semantic
+errors terminate the call there.
 The tool is registered only for the lead controller and authorized delegating agent
 controllers.
 
@@ -26,18 +31,19 @@ controllers.
 {
   "action": "delegate",
   "definition": "implementer",
+  "label": "approved-change",
   "task": "Implement the approved change"
 }
 ```
 
-Allowed fields are `action`, `definition`, `task`, optional `label`, `files`,
-`fork`, and `timeoutMs`. Fresh delegation runs in the calling controller's cwd.
+Allowed fields are `action`, `definition`, `task`, and optional `label` and
+`files`. The optional `label` must match `^[a-z][a-z0-9_-]{0,31}$` and sets
+the requested logical agent label; an existing live-label collision fails.
+Fresh delegation runs in the calling controller's cwd.
 The definition is resolved from the effective roster and delegating agent
 controllers may use only their allowlisted definitions. Project definitions
-still require trusted project approval. `fork`, when supplied, is an exact
-saved Pi session path or full UUID used as the source for a new derived
-context. It supplies historical context only; the fresh agent still runs in the
-calling controller's cwd. Otherwise a new Pi session is launched.
+still require trusted project approval. A fresh delegation starts a new Pi
+session.
 Each accepted definition delegation creates one agent generation for one
 assignment. The terminal result is delivered once and the agent is cleaned up.
 
@@ -51,33 +57,32 @@ assignment. The terminal result is delivered once and the agent is cleaned up.
 }
 ```
 
-Allowed fields are `action`, `session`, `task`, optional `files`, and
-`timeoutMs`. The exact saved session path or full UUID supplies its cwd,
-definition identity, and historical Pi context. Continuation always creates a new agent generation
-for one assignment with a live label; it never assigns work to an existing
-agent. `continue` does not accept `cwd` or `fork`; the cwd comes from the saved
-session. The saved definition is resolved again from current configuration and
-must currently be enabled and authorized; its current effective configuration
+Allowed fields are `action`, `session`, `task`, and optional `files`. The exact
+saved session path or full UUID supplies its cwd, definition identity, and
+historical Pi context. Continuation always creates a new agent generation for
+one assignment with a live label; it never assigns work to an existing agent.
+The cwd comes from the saved session. The saved definition is resolved again
+from current configuration and must currently be enabled and authorized; its
+current effective configuration
 is used for the new generation. Omitted model and thinking fields restore the
 saved session settings, while explicit definition fields override them.
 Concurrent or otherwise conflicting managed representations of the exact
 session fail closed. The controller's own active Pi session cannot be continued
-to itself; use `delegate` with `fork` when a separate derived context is
-required.
+to itself.
 
 When `contextRetirement` is enabled, `continue` is rejected for a retired
-managed-agent session. A `delegate` with `fork` is also rejected when its
-source is a retired managed-agent session; delegate a fresh agent and pass the
-previous handoff/result and relevant files instead. Retired results
-explicitly instruct the controller to delegate a fresh agent.
+managed-agent session; delegate a fresh agent and pass the previous
+handoff/result and relevant files instead. Retired results explicitly instruct
+the controller to delegate a fresh agent.
 
-The saved session's logical label is inherited exactly for the continued
-generation. A caller cannot provide a continuation label; if the inherited
-label is occupied, continuation fails with `agent_label_exists`.
+Fresh delegate assignments receive an automatically chosen logical label when
+no label is supplied. The saved session's logical label is inherited exactly
+for the continued generation; if that label is occupied, continuation fails
+with `agent_label_exists`.
 
-Successful `delegate` results use `action: "delegate"`; successful `continue`
-results use `action: "continue"`. Both include `agent`, `definition`, request,
-session, and startup evidence where available. Both return after atomic
+Successful delegate and continue results preserve their respective action
+names. They include `agent`, `definition`, request, session, and startup
+evidence where available. All return after atomic
 recording for controller restart recovery, not completion. A terminal result
 makes the exact session identity
 prominent for a later `continue` call.
@@ -250,10 +255,11 @@ without a corresponding tool result. That absence does not itself prove that
 the tool is still running. `inspect` remains the live terminal/process
 observation path. Transcript is read-only and does not change agent state.
 
-## `files` and `timeoutMs`
+## `files`
 
-`files` is valid on `delegate`, `continue`, `steer`, `interrupt`, and `reply`; it is not
-valid on `list`, `close`, `inspect`, or `transcript`. It accepts ordinary paths,
+`files` is valid on `delegate`, `continue`, `steer`, `interrupt`, and `reply`;
+it is not valid on `list`, `close`, `inspect`, or `transcript`. It accepts
+ordinary paths,
 reusable direct-agent refs such as `result:researcher#1`, and canonical
 `result:<request-id>` refs already supplied as evidence. Semantic refs use the
 exact direct-agent label and index shown in a completion and resolve against the
@@ -267,17 +273,15 @@ remain logical result references. `files` is a `string[]` for all three forms.
 
 `files` is explicit per-message evidence. A fresh delegated session does not
 implicitly receive the caller's conversation or caller-side attachments.
-`fork` and `continue` are the mechanisms that deliberately reuse selected saved
-Pi history.
+`continue` resumes the exact saved managed-agent Pi history.
 
-`timeoutMs` is valid on `delegate` and `continue` and must be an integer
-from `5001` through `300000`. The startup budget reserves one bounded diagnostic
-window; it is unrelated to managed-agent Pi shell execution. Direct calls from
-a managed agent to the Pi built-in `bash` or `powershell` tool receive a default
-600-second timeout when the call omits `timeout`; an explicit timeout is kept
-unchanged. Current message limits are governed by the Herdsman config file and
-its defaults, plus the fixed mailbox protocol ceiling. Managed mailbox records use
-protocol V4 in the `mailboxes-v4` namespace, and control requests use the marker prefix
+Startup uses Herdsman's default timeout budget; it is unrelated to managed-agent
+Pi shell execution. Direct calls from a managed agent to the Pi built-in
+`bash` or `powershell` tool receive a default 600-second timeout when the call
+omits `timeout`; an explicit timeout is kept unchanged. Current message limits
+are governed by the Herdsman config file and its defaults, plus the fixed
+mailbox protocol ceiling. Managed mailbox records use protocol V4 in the
+`mailboxes-v4` namespace, and control requests use the marker prefix
 `__PI_HERDSMAN_AGENT_V4__:`.
 
 Do not attach or mention agent instruction files such as `AGENTS.md`, `CLAUDE.md`,

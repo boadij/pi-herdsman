@@ -31,8 +31,8 @@ Use these high-salience rules for the model-facing agent boundary:
 - Each unresolved unit of work has one executor. Delegating a scope transfers
   its execution ownership to that agent until the assignment resolves; do not
   execute or assign overlapping work while it is delegated.
-- For agent handoffs, `task`/`files` carry assignment evidence and
-  `fork`/`continue` carry selected Pi history; do not assume the caller's
+- For agent handoffs, `task`/`files` carry assignment evidence; `continue`
+  resumes an exact managed-agent Pi session. Do not assume the caller's
   conversation or attachments are inherited.
 - When agent work is unresolved, handle required agent control, then continue
   only necessary work you still own or end the turn without concluding; agent
@@ -53,8 +53,9 @@ Use list when fresh agent state or ownership is materially needed for a concrete
 control or recovery decision, or to refresh the definition roster after
 configuration changes. Do not use list merely to check progress.
 
-Use delegate to start one bounded assignment from an agent definition.
-Use continue to start one bounded assignment from an exact historical Pi session.
+Use delegate to start one bounded fresh assignment from an agent definition.
+Use continue to start one bounded assignment from an exact historical
+managed-agent Pi session.
 
 Each managed agent exists for one assignment only. After its terminal result is
 delivered, Pi Herdsman cleans up that agent automatically. To continue completed
@@ -128,9 +129,8 @@ are not copied or snapshotted. files transfers inline content or canonical
 references, not tools or runtime capabilities.
 
 For agent handoffs, task text and `files` carry assignment-specific evidence.
-`fork` and `continue` are the public mechanisms that deliberately select saved
-Pi history. Do not assume the caller's conversation or caller-side attachments
-are inherited by another agent session.
+`continue` resumes an exact managed-agent Pi session. Fresh delegation does not
+inherit the caller's conversation or caller-side attachments.
 
 Pass relevant evidence explicitly through `files`; omit unrelated evidence.
 

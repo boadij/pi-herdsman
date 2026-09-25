@@ -194,7 +194,7 @@ test("current error codes replace the legacy label and busy codes", async () => 
   }
 });
 
-test("agent schema exposes portable structure and runtime rejects cross-fields", async () => {
+test("agent schema exposes portable structure and canonicalizes action fields", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -202,6 +202,12 @@ test("agent schema exposes portable structure and runtime rejects cross-fields",
   assert.equal(schema.type, "object");
   assert.ok(schema.properties);
   assert.equal(schema.additionalProperties, false);
+  assert.equal(schema.anyOf, undefined);
+  assert.equal(schema.oneOf, undefined);
+  assert.equal(schema.allOf, undefined);
+  assert.ok(schema.properties.label);
+  assert.equal(schema.properties.fork, undefined);
+  assert.equal(schema.properties.timeoutMs, undefined);
   assert.equal(
     Value.Check(schema, { action: "inspect", agent: "target" }),
     true,
@@ -218,7 +224,7 @@ test("agent schema exposes portable structure and runtime rejects cross-fields",
     Value.Check(schema, {
       action: "delegate",
       definition: "agent",
-      label: "named-agent",
+      label: "check-map",
       task: "fresh work",
     }),
     true,
@@ -232,25 +238,79 @@ test("agent schema exposes portable structure and runtime rejects cross-fields",
     true,
   );
   const toolCall = pi.events.get("tool_call")![0];
-  for (const input of [
-    { action: "transcript", agent: "target", message: "not allowed" },
-    {
-      action: "delegate",
-      session: "/tmp/session.jsonl",
-      task: "continued work",
-    },
-    {
-      action: "continue",
-      session: "/tmp/session.jsonl",
-      label: "renamed-agent",
-      task: "continued work",
-    },
-  ]) {
-    assert.equal(Value.Check(schema, input), true);
-    assert.deepEqual(
-      await toolCall({ toolName: "agent", input }, fakeContext()),
-      { block: true, reason: "Invalid agent input" },
-    );
-  }
+  const tool = pi.tools.find((candidate) => candidate.name === "agent")!;
+  const prepareArguments = tool.prepareArguments;
+  assert.equal(typeof prepareArguments, "function");
+  const rawInput = {
+    action: "delegate",
+    definition: "agent",
+    task: "inspect",
+    session: null,
+    agent: null,
+    message: null,
+  };
+  const preparedInput = prepareArguments(rawInput);
+  assert.deepEqual(rawInput, {
+    action: "delegate",
+    definition: "agent",
+    task: "inspect",
+    session: null,
+    agent: null,
+    message: null,
+  });
+  assert.notEqual(preparedInput, rawInput);
+  assert.deepEqual(preparedInput, {
+    action: "delegate",
+    definition: "agent",
+    task: "inspect",
+  });
+  assert.equal(Value.Check(schema, preparedInput), true);
+  assert.equal(
+    await toolCall({ toolName: "agent", input: preparedInput }, fakeContext()),
+    undefined,
+  );
+  assert.deepEqual(preparedInput, {
+    action: "delegate",
+    definition: "agent",
+    task: "inspect",
+  });
+
+  const removedFieldInput = {
+    action: "delegate",
+    definition: "agent",
+    task: "inspect",
+    fork: "removed",
+  };
+  prepareArguments(removedFieldInput);
+  assert.equal(removedFieldInput.fork, "removed");
+  assert.equal(Value.Check(schema, removedFieldInput), false);
+
+  const input = {
+    action: "delegate",
+    definition: "agent",
+    label: "check-map",
+    task: "inspect",
+    session: "none",
+    agent: "none",
+    message: "none",
+    files: [],
+  };
+  assert.equal(Value.Check(schema, input), true);
+  assert.equal(
+    await toolCall({ toolName: "agent", input }, fakeContext()),
+    undefined,
+  );
+  assert.deepEqual(input, {
+    action: "delegate",
+    definition: "agent",
+    label: "check-map",
+    task: "inspect",
+  });
+
+  const invalid = { action: "continue", task: "inspect" };
+  assert.deepEqual(
+    await toolCall({ toolName: "agent", input: invalid }, fakeContext()),
+    { block: true, reason: "continue requires session", terminate: true },
+  );
   pi.events.get("session_shutdown")?.[0]();
 });

@@ -126,8 +126,6 @@ import {
   inspectHerdrAgent,
   stopHerdrAgentPreservingPane,
   HerdrStartFailure,
-  STARTUP_TIMEOUT_MAX,
-  STARTUP_TIMEOUT_MIN,
   type ExpectedSession,
   type StartedHerdrAgent,
   type HerdrStartPlacement,
@@ -281,7 +279,7 @@ const AGENT_DELEGATION_GUIDANCE =
 const AGENT_EXECUTION_OWNERSHIP_GUIDANCE =
   "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.";
 const AGENT_HANDOFF_GUIDANCE =
-  "For agent handoffs, `task`/`files` carry assignment evidence and `fork`/`continue` carry selected Pi history; do not assume the caller's conversation or attachments are inherited.";
+  "For agent handoffs, `task`/`files` carry assignment evidence; `continue` resumes an exact managed-agent Pi session. Do not assume the caller's conversation or attachments are inherited.";
 const AGENT_UNRESOLVED_GUIDANCE =
   "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when it is absent or insufficient, perform at most one bounded diagnostic read before returning to passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.";
 const AGENT_OPERATIONAL_DESCRIPTION = `Coordinate managed agents.
@@ -291,10 +289,9 @@ Use list when fresh agent state or ownership is materially needed for a concrete
 control or recovery decision, or to refresh the definition roster after
 configuration changes. Do not use list merely to check progress.
 
-Use delegate to start one bounded assignment from an agent definition.
-A delegate fork selects an exact saved Pi session as historical context for a
-fresh derived assignment. Use continue to start one bounded assignment from an
-exact historical managed-agent Pi session.
+Use delegate to start one bounded fresh assignment from an agent definition.
+Use continue to start one bounded assignment from an exact historical
+managed-agent Pi session.
 
 Each managed agent exists for one assignment only. After its terminal result is
 delivered, Pi Herdsman cleans up that live generation. Agent labels identify the
@@ -496,15 +493,12 @@ type Params =
       label?: string;
       task: string;
       files?: string[];
-      fork?: string;
-      timeoutMs?: number;
     }
   | {
       action: "continue";
       session: string;
       task: string;
       files?: string[];
-      timeoutMs?: number;
     }
   | {
       action: "steer" | "interrupt";
@@ -521,17 +515,20 @@ type Params =
   | { action: "close"; agent: string }
   | { action: "inspect"; agent: string }
   | { action: "transcript"; agent: string };
-function matchesActionFields(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const allowed = ["action", ...required, ...optional];
-  return (
-    required.every((key) => key in value) &&
-    Object.keys(value).every((key) => allowed.includes(key))
-  );
-}
+type StaffParams =
+  | { action: "list" }
+  | { action: "inspect" | "transcript"; lead: string }
+  | { action: "message"; lead: string; message: string; files?: string[] }
+  | {
+      action: "reply";
+      lead: string;
+      askId: string;
+      message: string;
+      files?: string[];
+    };
+type PeerParams =
+  | { action: "list" }
+  | { action: "message"; lead: string; message: string; files?: string[] };
 function invalidRequestInput(
   operation: string,
   message: string,
@@ -543,6 +540,41 @@ function invalidRequestInput(
     rollbackOccurred: false,
     retryAttempted: false,
   });
+}
+function projectedFiles(value: Record<string, unknown>): { files?: string[] } {
+  const files = value.files as string[] | undefined;
+  return files?.length ? { files } : {};
+}
+function requiredString(
+  value: Record<string, unknown>,
+  field: string,
+  action: string,
+): string {
+  const candidate = value[field];
+  if (typeof candidate !== "string")
+    throw invalidRequestInput(action, `${action} requires ${field}`);
+  return candidate;
+}
+function replaceInput(
+  input: Record<string, unknown>,
+  canonical: Record<string, unknown>,
+): void {
+  for (const key of Object.keys(input)) delete input[key];
+  Object.assign(input, canonical);
+}
+function projectActionInput(
+  value: unknown,
+  fieldsByAction: Record<string, readonly string[]>,
+): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const input = { ...(value as Record<string, unknown>) };
+  const action = String(input.action);
+  if (!Object.prototype.hasOwnProperty.call(fieldsByAction, action))
+    return input;
+  const fields = fieldsByAction[action];
+  const knownFields = new Set(Object.values(fieldsByAction).flat());
+  for (const key of knownFields) if (!fields.includes(key)) delete input[key];
+  return input;
 }
 type Runtime = {
   label: string;
@@ -1446,14 +1478,13 @@ export async function resolveManagedSession(
   return { path: manager.getSessionFile() ?? path, id };
 }
 async function resolveAssignmentSessionOrFail<T>(
-  operation: "delegate" | "continue",
   resolver: () => Promise<T>,
 ): Promise<T> {
   try {
     return await resolver();
   } catch (error) {
     if (!(error instanceof AssignmentSessionResolutionError)) throw error;
-    fail("invalid_request", error.message, operation);
+    fail("invalid_request", error.message, "continue");
   }
 }
 export async function resolveAssignmentSession(
@@ -1503,7 +1534,6 @@ export async function resolveAssignmentSession(
 async function requireOwnedAssignmentSource(
   ctx: ExtensionContext,
   session: ManagedSession,
-  operation: "continue" | "delegate",
 ): Promise<void> {
   const source = SessionManager.open(session.path);
   const entries = source.getEntries();
@@ -1511,7 +1541,7 @@ async function requireOwnedAssignmentSource(
     fail(
       "invalid_request",
       "Assignment source is outside the caller's proven session ownership tree",
-      operation,
+      "continue",
     );
   let identity: AgentSessionIdentity | undefined;
   try {
@@ -1519,10 +1549,7 @@ async function requireOwnedAssignmentSource(
   } catch {
     deny();
   }
-  if (!identity) {
-    if (operation === "delegate") return;
-    deny();
-  }
+  if (!identity) deny();
   const callerId = ctx.sessionManager.getSessionId();
   const listed = await SessionManager.listAll();
   const sourceMatches = listed.filter((item) => item.id === session.id);
@@ -3456,7 +3483,7 @@ async function deliverResultUnsafe(
         }
       })();
     const retirementGuidance = sessionRetired
-      ? "Session retired after context pressure. Do not continue or fork this session. " +
+      ? "Session retired after context pressure. Do not continue this session. " +
         "For follow-up, delegate a fresh agent and pass this result/handoff plus the relevant files."
       : undefined;
     const delegationStatus = delegationStatusForResult(
@@ -5589,7 +5616,7 @@ async function actionUnsafe(
       );
     const resumed =
       p.action === "continue"
-        ? await resolveAssignmentSessionOrFail("continue", () =>
+        ? await resolveAssignmentSessionOrFail(() =>
             resolveAssignmentSession(ctx, p.session),
           )
         : undefined;
@@ -5612,24 +5639,7 @@ async function actionUnsafe(
         `Agent definition ${agentDefinition} is not allowed for this delegating agent`,
         p.action,
       );
-    if (resumed) await requireOwnedAssignmentSource(ctx, resumed, "continue");
-    const forkSource =
-      p.action === "delegate" && p.fork
-        ? await resolveAssignmentSessionOrFail("delegate", async () => {
-            const fork = await resolveManagedSession(ctx, p.fork!);
-            const manager = SessionManager.open(fork.path);
-            if (
-              readConfig().contextRetirement &&
-              retiredManagedSession(manager)
-            )
-              throw new AssignmentSessionResolutionError(
-                `Managed agent session ${manager.getSessionId()} is retired after context pressure. ` +
-                  "Delegate a fresh agent without fork and pass the previous handoff/result and relevant files.",
-              );
-            await requireOwnedAssignmentSource(ctx, fork, "delegate");
-            return fork.path;
-          })
-        : undefined;
+    if (resumed) await requireOwnedAssignmentSource(ctx, resumed);
     if (definition.projectSource && !sameCwd(agentCwd, ctx.cwd))
       fail(
         "invalid_request",
@@ -5645,7 +5655,7 @@ async function actionUnsafe(
     if (resumed && resumed.id === ctx.sessionManager.getSessionId())
       fail(
         "invalid_request",
-        "Cannot continue the controller's currently active Pi session. Use delegate with fork=<session> for a separate derived context.",
+        "Cannot continue the controller's currently active Pi session.",
         p.action,
       );
     const resumedSessionPath = resumed
@@ -5661,11 +5671,7 @@ async function actionUnsafe(
           }
         })()
       : undefined;
-    const sessionArgs = resumed
-      ? ["--session", resumedSessionPath!]
-      : forkSource
-        ? ["--fork", forkSource]
-        : [];
+    const sessionArgs = resumed ? ["--session", resumedSessionPath!] : [];
     let releaseSessionActivation: (() => void) | undefined;
     const live = await listedAgents(pi, ctx, undefined, signal);
     if (!agentDefinitionEnabled(definition))
@@ -5958,7 +5964,7 @@ async function actionUnsafe(
       const childModel = resolveChildModel({
         configured: configuredModel(effectiveDefinition.frontmatter),
         inherited:
-          p.action === "delegate" && ctx.model
+          !resumed && ctx.model
             ? { provider: ctx.model.provider, token: modelToken(ctx.model) }
             : undefined,
         isForeignProvider: (providerId) =>
@@ -5971,9 +5977,7 @@ async function actionUnsafe(
         managedAgent: true,
         approveProject:
           agentContext.projectTrusted && sameCwd(agentCwd, ctx.cwd),
-        ...(p.action === "delegate"
-          ? { inheritedThinking: pi.getThinkingLevel() }
-          : {}),
+        ...(!resumed ? { inheritedThinking: pi.getThinkingLevel() } : {}),
         modelDecision: childModel,
       });
       started = await startHerdrAgent(pi, ctx, {
@@ -5985,7 +5989,6 @@ async function actionUnsafe(
         ...(placementRevalidator ? { placementRevalidator } : {}),
         agentArgs: [...launchArgs, ...sessionArgs],
         env,
-        timeoutMs: p.timeoutMs,
         signal,
       });
       const state = await waitForState(
@@ -6622,7 +6625,7 @@ export default function (pi: ExtensionAPI): void {
       session: Type.Optional(
         Type.String({
           description:
-            "Required for continue. Exact saved Pi session path or full UUID.",
+            "Required for continue. Exact saved managed-agent Pi session path or full UUID.",
           pattern: "\\S",
         }),
       ),
@@ -6639,53 +6642,65 @@ export default function (pi: ExtensionAPI): void {
           pattern: "\\S",
         }),
       ),
-      fork: Type.Optional(
-        Type.String({
-          description:
-            "Optional delegate context: exact saved Pi session path or full UUID.",
-          pattern: "\\S",
-        }),
-      ),
-      timeoutMs: Type.Optional(
-        Type.Integer({
-          minimum: STARTUP_TIMEOUT_MIN,
-          maximum: STARTUP_TIMEOUT_MAX,
-          description: "Optional startup budget for delegate and continue.",
-        }),
-      ),
       files: FILES_SCHEMA,
     },
     { additionalProperties: false },
   );
   const agentValidator = Compile(agentParameters);
-  const isAgentParams = (value: unknown): value is Params => {
-    if (!agentValidator.Check(value)) return false;
+  const projectAgentInput = (value: unknown): any =>
+    projectActionInput(value, {
+      list: [],
+      delegate: ["definition", "label", "task", "files"],
+      continue: ["session", "task", "files"],
+      steer: ["agent", "message", "files"],
+      interrupt: ["agent", "message", "files"],
+      reply: ["agent", "message", "files"],
+      close: ["agent"],
+      inspect: ["agent"],
+      transcript: ["agent"],
+    });
+  const parseAgentParams = (value: unknown): Params => {
+    value = projectAgentInput(value);
+    if (!agentValidator.Check(value))
+      throw invalidRequestInput("agent", "Invalid agent input");
     const p = value as Record<string, unknown>;
+    const files = projectedFiles(p);
     switch (p.action) {
       case "list":
-        return matchesActionFields(p, []);
+        return { action: "list" };
       case "delegate":
-        return matchesActionFields(
-          p,
-          ["definition", "task"],
-          ["label", "fork", "timeoutMs", "files"],
-        );
+        return {
+          action: "delegate",
+          definition: requiredString(p, "definition", "delegate"),
+          task: requiredString(p, "task", "delegate"),
+          ...(typeof p.label === "string" ? { label: p.label } : {}),
+          ...files,
+        };
       case "continue":
-        return matchesActionFields(
-          p,
-          ["session", "task"],
-          ["timeoutMs", "files"],
-        );
+        return {
+          action: "continue",
+          session: requiredString(p, "session", "continue"),
+          task: requiredString(p, "task", "continue"),
+          ...files,
+        };
       case "steer":
       case "interrupt":
       case "reply":
-        return matchesActionFields(p, ["agent", "message"], ["files"]);
+        return {
+          action: p.action,
+          agent: requiredString(p, "agent", p.action),
+          message: requiredString(p, "message", p.action),
+          ...files,
+        };
       case "close":
       case "inspect":
       case "transcript":
-        return matchesActionFields(p, ["agent"]);
+        return {
+          action: p.action,
+          agent: requiredString(p, "agent", p.action),
+        };
       default:
-        return false;
+        throw invalidRequestInput("agent", "Invalid agent action");
     }
   };
   const staffParameters = Type.Object(
@@ -6721,21 +6736,45 @@ export default function (pi: ExtensionAPI): void {
     { additionalProperties: false },
   );
   const staffValidator = Compile(staffParameters);
-  const isStaffParams = (value: unknown): boolean => {
-    if (!staffValidator.Check(value)) return false;
+  const projectStaffInput = (value: unknown): any =>
+    projectActionInput(value, {
+      list: [],
+      inspect: ["lead"],
+      transcript: ["lead"],
+      message: ["lead", "message", "files"],
+      reply: ["lead", "askId", "message", "files"],
+    });
+  const parseStaffParams = (value: unknown): StaffParams => {
+    value = projectStaffInput(value);
+    if (!staffValidator.Check(value))
+      throw invalidRequestInput("staff", "Invalid staff action");
     const p = value as Record<string, unknown>;
     switch (p.action) {
       case "list":
-        return matchesActionFields(p, []);
+        return { action: "list" };
       case "inspect":
       case "transcript":
-        return matchesActionFields(p, ["lead"]);
+        return {
+          action: p.action,
+          lead: requiredString(p, "lead", `staff ${p.action}`),
+        };
       case "message":
-        return matchesActionFields(p, ["lead", "message"], ["files"]);
+        return {
+          action: "message",
+          lead: requiredString(p, "lead", "staff message"),
+          message: requiredString(p, "message", "staff message"),
+          ...projectedFiles(p),
+        };
       case "reply":
-        return matchesActionFields(p, ["lead", "askId", "message"], ["files"]);
+        return {
+          action: "reply",
+          lead: requiredString(p, "lead", "staff reply"),
+          askId: requiredString(p, "askId", "staff reply"),
+          message: requiredString(p, "message", "staff reply"),
+          ...projectedFiles(p),
+        };
       default:
-        return false;
+        throw invalidRequestInput("staff", "Invalid staff action");
     }
   };
   const peerParameters = Type.Object(
@@ -6756,16 +6795,76 @@ export default function (pi: ExtensionAPI): void {
     { additionalProperties: false },
   );
   const peerValidator = Compile(peerParameters);
-  const isPeerParams = (value: unknown): boolean => {
-    if (!peerValidator.Check(value)) return false;
+  const projectPeerInput = (value: unknown): any =>
+    projectActionInput(value, {
+      list: [],
+      message: ["lead", "message", "files"],
+    });
+  const parsePeerParams = (value: unknown): PeerParams => {
+    value = projectPeerInput(value);
+    if (!peerValidator.Check(value))
+      throw invalidRequestInput("peer", "Invalid peer action");
     const p = value as Record<string, unknown>;
     switch (p.action) {
       case "list":
-        return matchesActionFields(p, []);
+        return { action: "list" };
       case "message":
-        return matchesActionFields(p, ["lead", "message"], ["files"]);
+        return {
+          action: "message",
+          lead: requiredString(p, "lead", "peer message"),
+          message: requiredString(p, "message", "peer message"),
+          ...projectedFiles(p),
+        };
       default:
-        return false;
+        throw invalidRequestInput("peer", "Invalid peer action");
+    }
+  };
+  const chiefParameters = Type.Object(
+    {
+      action: StringEnum(["message", "ask"] as const),
+      message: Type.Optional(
+        Type.String({ minLength: 1, description: "Required for message." }),
+      ),
+      question: Type.Optional(
+        Type.String({
+          minLength: 1,
+          maxLength: 1024,
+          description: "Required for ask.",
+        }),
+      ),
+      files: FILES_SCHEMA,
+    },
+    { additionalProperties: false },
+  );
+  const chiefValidator = Compile(chiefParameters);
+  const projectChiefInput = (value: unknown): any =>
+    projectActionInput(value, {
+      message: ["message", "files"],
+      ask: ["question", "files"],
+    });
+  type ChiefParams =
+    | { action: "message"; message: string; files?: string[] }
+    | { action: "ask"; question: string; files?: string[] };
+  const parseChiefParams = (value: unknown): ChiefParams => {
+    value = projectChiefInput(value);
+    if (!chiefValidator.Check(value))
+      throw invalidRequestInput("chief", "Invalid chief action");
+    const p = value as Record<string, unknown>;
+    switch (p.action) {
+      case "message":
+        return {
+          action: "message",
+          message: requiredString(p, "message", "chief message"),
+          ...projectedFiles(p),
+        };
+      case "ask":
+        return {
+          action: "ask",
+          question: requiredString(p, "question", "chief ask"),
+          ...projectedFiles(p),
+        };
+      default:
+        throw invalidRequestInput("chief", "Invalid chief action");
     }
   };
   let startupDefinitionRoster:
@@ -8088,26 +8187,26 @@ export default function (pi: ExtensionAPI): void {
         }
       }
       if (!controllerScope) return;
-      if (event.toolName === "agent" && !isAgentParams(event.input)) {
-        const error = invalidRequestInput("agent", "Invalid agent input");
-        return {
-          block: true,
-          reason: error.detail.message,
-        };
-      }
-      if (event.toolName === "staff" && !isStaffParams(event.input)) {
-        const error = invalidRequestInput("staff", "Invalid staff action");
-        return {
-          block: true,
-          reason: error.detail.message,
-        };
-      }
-      if (event.toolName === "peer" && !isPeerParams(event.input)) {
-        const error = invalidRequestInput("peer", "Invalid peer action");
-        return {
-          block: true,
-          reason: error.detail.message,
-        };
+      try {
+        if (event.toolName === "agent")
+          replaceInput(event.input, parseAgentParams(event.input));
+        else if (event.toolName === "staff")
+          replaceInput(event.input, parseStaffParams(event.input));
+        else if (event.toolName === "peer")
+          replaceInput(event.input, parsePeerParams(event.input));
+        else if (event.toolName === "chief")
+          replaceInput(event.input, parseChiefParams(event.input));
+      } catch (error) {
+        if (
+          error instanceof OperationError &&
+          error.detail.category === "invalid_request"
+        )
+          return {
+            block: true,
+            reason: error.detail.message,
+            terminate: true,
+          };
+        throw error;
       }
       if (controllerScope.kind !== "lead") return;
       if (event.toolName === CHIEF_TOOLS[0] || !isCurrentChief(ctx)) return;
@@ -9778,44 +9877,18 @@ export default function (pi: ExtensionAPI): void {
         description:
           "For ordinary leads only. A lead owns its complete agent tree; the chief supervises leads and never changes ownership. Message and ask require a currently valid chief and reject before mutation when none exists. Use message for meaningful progress, results, warnings, and completion, including exact artifact paths; use ask when a chief decision is genuinely required; call ask alone as the final tool call of the turn, then stop and wait for the reply. Questions are limited to 1,024 characters and 1,024 UTF-8 bytes; channel message records are bounded to 8 KiB, so multibyte content can hit the byte limit first. Chief messages arrive as follow-ups, so integrate them through normal delegation. Descendants use ask_owner, never chief.",
         executionMode: "sequential",
-        parameters: Type.Object(
-          {
-            action: StringEnum(["message", "ask"] as const),
-            message: Type.Optional(
-              Type.String({
-                minLength: 1,
-                description: "Required for message.",
-              }),
-            ),
-            question: Type.Optional(
-              Type.String({
-                minLength: 1,
-                maxLength: 1024,
-                description: "Required for ask.",
-              }),
-            ),
-            files: FILES_SCHEMA,
-          },
-          { additionalProperties: false },
-        ),
+        parameters: chiefParameters,
+        prepareArguments: projectChiefInput,
         execute: async (
           _id: string,
-          params: any,
+          raw: unknown,
           _signal: AbortSignal | undefined,
           _update: unknown,
           ctx: ExtensionContext,
         ) => {
           if (controllerScope.kind !== "lead" || chiefMode !== "inactive")
             throw new Error("Chief is available only to ordinary leads");
-          if (!params || typeof params.action !== "string")
-            throw new Error("Invalid chief action");
-          const validFields =
-            params.action === "message"
-              ? matchesActionFields(params, ["message"], ["files"])
-              : params.action === "ask"
-                ? matchesActionFields(params, ["question"], ["files"])
-                : false;
-          if (!validFields) throw new Error("Invalid chief action");
+          const params = parseChiefParams(raw);
           if (params.action === "message") {
             if (typeof params.message !== "string" || !params.message.trim())
               throw new Error("Message must contain non-whitespace text");
@@ -10016,17 +10089,17 @@ export default function (pi: ExtensionAPI): void {
           "Other ordinary Lead sessions (peers), not managed agents. Use list for peers, other Leads, or other Lead sessions. list identifies this Lead as self and returns other live Leads as peers; message sends to one peer's exact lead ID and may include ordinary files or exact reusable direct-agent result refs through files.",
         executionMode: "sequential",
         parameters: peerParameters,
+        prepareArguments: projectPeerInput,
         execute: async (
           _id: string,
-          params: any,
+          raw: unknown,
           _signal: AbortSignal | undefined,
           _update: unknown,
           ctx: ExtensionContext,
         ) => {
           if (controllerScope.kind !== "lead" || chiefMode !== "inactive")
             throw new Error("Peer is available only to ordinary leads");
-          if (!isPeerParams(params))
-            throw invalidRequestInput("peer", "Invalid peer action");
+          const params = parsePeerParams(raw);
           if (params.action === "list") {
             const self = ctx.sessionManager.getSessionId();
             const peers = listPeerLeadRecords(peerRuntime())
@@ -10114,9 +10187,10 @@ export default function (pi: ExtensionAPI): void {
           "Chief-only supervision coordination. The chief supervises independent leads, does not own their agent trees, and receives no owner controls. A fresh supervision snapshot is automatically supplied at the start of each chief agent run; treat it as the default current coordination state. For ordinary state and coordination, use a fresh snapshot directly; do not call staff list, inspect, transcript, or another read command merely to poll progress. The message and reply actions revalidate exact identity and state themselves. Use list when the automatic snapshot is stale or unavailable, an immediately refreshed exact roster is materially necessary, or you are diagnosing identity or supervision projection problems. Inspect provides bounded live terminal/process evidence; use it only when that evidence matters. Transcript provides bounded persisted Pi conversation/tool evidence; use it only when that evidence materially matters. Use the lead field's exact full Pi session ID and only fresh available_actions, never infer from display state or metadata. Every exact-identity-verified lead accepts message; reply only with the exact pending ask ID and current chief lease. Message is ordinary durable follow-up communication. Messages are bounded and direction-aware, and temporary verification or delivery failures retain queued records. Metadata is presentation-only and never authority. Messages use follow-up delivery. Human conversation remains the dispatch surface.",
         executionMode: "sequential",
         parameters: staffParameters,
+        prepareArguments: projectStaffInput,
         execute: async (
           _id: string,
-          params: any,
+          raw: unknown,
           signal: AbortSignal | undefined,
           _update: unknown,
           ctx: ExtensionContext,
@@ -10125,8 +10199,7 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Staff is available only to the active chief");
           if (!(await currentChiefAuthority(ctx)))
             throw new Error("Chief lease is no longer active");
-          if (!isStaffParams(params))
-            throw invalidRequestInput("staff", "Invalid staff action");
+          const params = parseStaffParams(raw);
           const refresh = async () => loadSupervisionSnapshot(ctx);
           const result = (value: Record<string, unknown>) => {
             const bounded = truncateModelText(JSON.stringify(value, null, 2), {
@@ -11620,21 +11693,24 @@ export default function (pi: ExtensionAPI): void {
       description: controllerDescription(controllerScope),
       executionMode: "sequential",
       parameters: agentParameters,
+      prepareArguments: projectAgentInput,
       execute: async (
         _id: string,
-        p: Params,
+        raw: unknown,
         signal: AbortSignal | undefined,
         _update: unknown,
         ctx: ExtensionContext,
       ) => {
+        let p: Params = { action: "list" };
+        let presentationAction =
+          raw &&
+          typeof raw === "object" &&
+          typeof (raw as Record<string, unknown>).action === "string"
+            ? ((raw as Record<string, unknown>).action as string)
+            : p.action;
         try {
-          if (!isAgentParams(p))
-            throw invalidRequestInput(
-              typeof (p as { action?: unknown })?.action === "string"
-                ? (p as { action: string }).action
-                : "agent",
-              "Invalid agent input",
-            );
+          p = parseAgentParams(raw);
+          presentationAction = p.action;
           const value = await action(
             pi,
             ctx,
@@ -11705,7 +11781,10 @@ export default function (pi: ExtensionAPI): void {
           if (!(e instanceof OperationError)) throw e;
           const detail = e.detail;
           const bounded = truncateModelText(
-            formatToolModelResult(p.action, { ok: false, error: detail }),
+            formatToolModelResult(presentationAction, {
+              ok: false,
+              error: detail,
+            }),
             {
               keep: "head",
               sessionId: ctx.sessionManager.getSessionId(),

@@ -131,9 +131,13 @@ identity and chief lease checks are never weakened.
 
 ## `chief`
 
-This tool is available only to an ordinary lead. Its strict schemas reject
-extra fields. Both actions require a currently valid chief; descendants use
-`ask_owner`, never `chief`.
+This tool is available only to an ordinary lead. Its schemas reject unknown
+fields; schema-known fields for the other action are projected away before
+schema validation, even when those fields have invalid types. Unknown keys and
+remaining schema-invalid values may be rejected by Pi before Herdsman's hook
+runs. Selected-action semantic errors that reach the hook are blocked with
+`terminate: true`. Both actions require a currently valid chief; descendants
+use `ask_owner`, never `chief`.
 
 ### `message`
 
