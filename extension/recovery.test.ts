@@ -757,7 +757,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   assert.equal(result.details.error.primary.category, "target_not_found");
   assert.equal(
     result.details.error.primary.message,
-    "live Herdr agent Pi session mismatch",
+    "live Herdr agent session identity mismatch",
   );
   assert.match(
     result.details.error.cleanup.message,
@@ -802,7 +802,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   );
   assert.match(
     rendered.text,
-    /primary: category=target_not_found, message=live Herdr agent Pi session mismatch/,
+    /primary: category=target_not_found, message=live Herdr agent session identity mismatch/,
   );
   assert.match(rendered.text, /cleanup: .*operation=rollback/);
   assert.equal(agentGetCount, 1);

@@ -29,15 +29,27 @@ import {
   type Frontmatter,
 } from "./agent-definitions.ts";
 
-function withPiAgentDir<T>(agentDir: string, callback: () => T): T {
+function withPiAgentDir<T>(
+  agentDir: string,
+  callback: () => T | Promise<T>,
+): T | Promise<T> {
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
-    return callback();
-  } finally {
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    const result = callback();
+    if (result instanceof Promise)
+      return result.finally(() => restoreAgentDir(previousAgentDir));
+    restoreAgentDir(previousAgentDir);
+    return result;
+  } catch (error) {
+    restoreAgentDir(previousAgentDir);
+    throw error;
   }
+}
+
+function restoreAgentDir(previousAgentDir: string | undefined): void {
+  if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 }
 
 function discoverAgentDefinitionsWithContents(content: string) {
@@ -382,7 +394,7 @@ test("rejects malformed capability fields", () => {
     );
 });
 
-test("selects global and project context independently in native order", () => {
+test("selects global and project context independently in native order", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-context-"));
   const agentDir = join(root, "custom-agent-dir");
   const project = join(root, "project");
@@ -399,7 +411,7 @@ test("selects global and project context independently in native order", () => {
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
-    const launch = (
+    const launch = async (
       name: string,
       frontmatter: Record<string, string | boolean>,
     ) =>
@@ -411,13 +423,13 @@ test("selects global and project context independently in native order", () => {
     const append = (path: string) => ["--append-system-prompt", path];
     const noSkills = ["--no-skills"];
 
-    assert.deepEqual(launch("agent", {}), [
+    assert.deepEqual(await launch("agent", {}), [
       "--system-prompt",
       "/prompt",
       ...noContext,
       ...noSkills,
     ]);
-    assert.deepEqual(launch("delegate", {}), [
+    assert.deepEqual(await launch("delegate", {}), [
       "--append-system-prompt",
       "/prompt",
       ...noSkills,
@@ -445,7 +457,7 @@ test("selects global and project context independently in native order", () => {
         ],
       ] as const)
         assert.deepEqual(
-          launch("agent", { ...frontmatter, systemPromptMode }),
+          await launch("agent", { ...frontmatter, systemPromptMode }),
           [...prompt, ...contexts, ...noSkills],
         );
     }
@@ -565,7 +577,7 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   );
 });
 
-test("enforces read-only managed launch policies and reviewer leaf projection", () => {
+test("enforces read-only managed launch policies and reviewer leaf projection", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-audit-policy-"));
   const expected = new Map([
     ["scout", ["read", "ls", "find", "grep", "ask_owner"]],
@@ -587,13 +599,13 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
   ]);
   const forbidden = ["bash", "powershell", "edit", "write"];
 
-  withPiAgentDir(root, () => {
+  await withPiAgentDir(root, async () => {
     for (const [name, tools] of expected) {
       const definition = projectAgentDefinition(
         discoverAgent(name),
         "delegating",
       );
-      const args = agentLaunchArgs(definition, {
+      const args = await agentLaunchArgs(definition, {
         bodyPromptPath: "/tmp/prompt.txt",
         cwd: process.cwd(),
         managedAgent: true,
@@ -612,7 +624,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
     }
 
     const reviewer = projectAgentDefinition(discoverAgent("reviewer"), "leaf");
-    const args = agentLaunchArgs(reviewer, {
+    const args = await agentLaunchArgs(reviewer, {
       bodyPromptPath: "/tmp/prompt.txt",
       cwd: process.cwd(),
       managedAgent: true,
@@ -771,11 +783,16 @@ test("project discovery tolerates a missing directory and rejects a file", () =>
   });
 });
 
-test("project approval is emitted only when requested", () => {
+test("project approval is emitted only when requested", async () => {
   const agent = { name: "test", path: "test", frontmatter: {}, body: "" };
-  assert.deepEqual(agentLaunchArgs(agent, {}).includes("--approve"), false);
   assert.deepEqual(
-    agentLaunchArgs(agent, { approveProject: true }).includes("--approve"),
+    (await agentLaunchArgs(agent, {})).includes("--approve"),
+    false,
+  );
+  assert.deepEqual(
+    (await agentLaunchArgs(agent, { approveProject: true })).includes(
+      "--approve",
+    ),
     true,
   );
 });
@@ -1033,7 +1050,7 @@ test("keeps a bundled parent valid when its child is overridden", () => {
   );
 });
 
-test("transports complex prompts through a private temporary file", () => {
+test("transports complex prompts through a private temporary file", async () => {
   const body = "line 1\nquotes \" ' $ `\nUnicode: café 🦊\nline 4";
   const [promptPath] = writePrivatePromptSnapshots([body]);
   try {
@@ -1045,7 +1062,7 @@ test("transports complex prompts through a private temporary file", () => {
     );
     assertPosixMode(tempRoot, 0o700);
     assertPosixMode(join(tempRoot, "prompts"), 0o700);
-    const launch = agentLaunchArgs(
+    const launch = await agentLaunchArgs(
       {
         name: "delegate",
         path: "/agents/delegate.md",
@@ -1078,7 +1095,7 @@ test("writes ordered private prompt snapshots with private permissions", () => {
   }
 });
 
-test("builds exact Pi capability launch arguments", () => {
+test("builds exact Pi capability launch arguments", async () => {
   const agent = {
     name: "delegate",
     path: "/agents/delegate.md",
@@ -1100,51 +1117,51 @@ test("builds exact Pi capability launch arguments", () => {
     body: "Use this prompt",
   };
   const promptPath = "/tmp/prompt.txt";
-  assert.deepEqual(agentLaunchArgs(agent, { bodyPromptPath: promptPath }), [
-    "--model",
-    "model-a",
-    "--thinking",
-    "off",
-    "--append-system-prompt",
-    promptPath,
-    "--no-tools",
-    "--tools",
-    "read, grep ",
-    "--exclude-tools",
-    "bash,write",
-    "--skill",
-    "./skills/local.md",
-    "--skill",
-    "/skills/shared.md",
-    "--no-extensions",
-    "--extension",
-    "./extensions/local.ts",
-    "--extension",
-    "/extensions/shared.ts",
-  ]);
+  assert.deepEqual(
+    await agentLaunchArgs(agent, { bodyPromptPath: promptPath }),
+    [
+      "--model",
+      "model-a",
+      "--thinking",
+      "off",
+      "--append-system-prompt",
+      promptPath,
+      "--no-tools",
+      "--tools",
+      "read, grep ",
+      "--exclude-tools",
+      "bash,write",
+      "--skill",
+      "./skills/local.md",
+      "--skill",
+      "/skills/shared.md",
+      "--no-extensions",
+      "--extension",
+      "./extensions/local.ts",
+      "--extension",
+      "/extensions/shared.ts",
+    ],
+  );
 });
 
-test("drops --no-extensions when the child's model comes from an extension", () => {
+test("drops --no-extensions when the child's model comes from an extension", async () => {
   const definition = {
     name: "scout",
     path: "/agents/scout.md",
     frontmatter: { name: "scout", noExtensions: true },
     body: "",
   };
-  const foreign = agentLaunchArgs(definition, {
+  const foreign = await agentLaunchArgs(definition, {
     modelDecision: {
       kind: "use",
       model: "acme/reasoning/mini",
       extensionDiscovery: true,
     },
   });
-  assert.deepEqual(foreign.slice(0, 2), [
-    "--model",
-    "acme/reasoning/mini",
-  ]);
+  assert.deepEqual(foreign.slice(0, 2), ["--model", "acme/reasoning/mini"]);
   assert.equal(foreign.includes("--no-extensions"), false);
 
-  const lean = agentLaunchArgs(definition, {
+  const lean = await agentLaunchArgs(definition, {
     modelDecision: {
       kind: "use",
       model: "vendor-one/chat-large",
@@ -1155,9 +1172,9 @@ test("drops --no-extensions when the child's model comes from an extension", () 
   assert.equal(lean.includes("--no-extensions"), true);
 });
 
-test("resolves model and thinking fallbacks independently at launch", () => {
-  const launch = (frontmatter: Frontmatter, options = {}) =>
-    agentLaunchArgs(
+test("resolves model and thinking fallbacks independently at launch", async () => {
+  const launch = async (frontmatter: Frontmatter, options = {}) =>
+    await agentLaunchArgs(
       { name: "agent", path: "/agent.md", frontmatter, body: "" },
       {
         inheritedModel: "inherited/model",
@@ -1175,9 +1192,9 @@ test("resolves model and thinking fallbacks independently at launch", () => {
     [{ thinking: "low" }, ["--model", "inherited/model", "--thinking", "low"]],
     [{ thinking: false }, ["--model", "inherited/model", "--thinking", "off"]],
   ] as const)
-    assert.deepEqual(launch(frontmatter), [...settings, ...suffix]);
+    assert.deepEqual(await launch(frontmatter), [...settings, ...suffix]);
   assert.deepEqual(
-    agentLaunchArgs(
+    await agentLaunchArgs(
       { name: "agent", path: "/agent.md", frontmatter: {}, body: "" },
       {},
     ),
@@ -1202,9 +1219,9 @@ test("bundled definitions leave execution settings to the controller", () => {
   });
 });
 
-test("appends the shared prompt after context additions", () => {
+test("appends the shared prompt after context additions", async () => {
   assert.deepEqual(
-    agentLaunchArgs(
+    await agentLaunchArgs(
       {
         name: "agent",
         path: "/agent.md",
@@ -1227,23 +1244,22 @@ test("appends the shared prompt after context additions", () => {
   );
 });
 
-test("requires a body prompt path for body-bearing agents", () => {
-  assert.throws(
-    () =>
-      agentLaunchArgs(
-        {
-          name: "agent",
-          path: "/agent.md",
-          frontmatter: {},
-          body: "body",
-        },
-        {},
-      ),
+test("requires a body prompt path for body-bearing agents", async () => {
+  await assert.rejects(
+    agentLaunchArgs(
+      {
+        name: "agent",
+        path: "/agent.md",
+        frontmatter: {},
+        body: "body",
+      },
+      {},
+    ),
     /agent agent has a body but no bodyPromptPath was provided/,
   );
 });
 
-test("bundled generalist definition retains its declared tool policy", () => {
+test("bundled generalist definition retains its declared tool policy", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agent-policy-"));
   const generalist = withPiAgentDir(root, () => discoverAgent("generalist"));
   assert.equal(generalist.frontmatter.noExtensions, true);
@@ -1254,7 +1270,7 @@ test("bundled generalist definition retains its declared tool policy", () => {
     "write",
     "agent",
   ]);
-  const args = agentLaunchArgs(generalist, {
+  const args = await agentLaunchArgs(generalist, {
     bodyPromptPath: "/tmp/prompt.txt",
     cwd: process.cwd(),
     managedAgent: true,
@@ -1264,9 +1280,9 @@ test("bundled generalist definition retains its declared tool policy", () => {
   assert.equal(args[tools + 1], "read,bash,edit,write,agent,ask_owner");
 });
 
-test("managed launch policy always includes ask_owner", () => {
-  const launch = (frontmatter: Record<string, unknown>) =>
-    agentLaunchArgs(
+test("managed launch policy always includes ask_owner", async () => {
+  const launch = async (frontmatter: Record<string, unknown>) =>
+    await agentLaunchArgs(
       { name: "agent", path: "/agent.md", frontmatter, body: "" },
       {
         bodyPromptPath: "/prompt",
@@ -1289,7 +1305,7 @@ test("managed launch policy always includes ask_owner", () => {
     [{}, []],
   ] as const;
   for (const [frontmatter, expected] of cases) {
-    const args = launch(frontmatter);
+    const args = await launch(frontmatter);
     if (expected.length) {
       const start = args.indexOf(expected[0]);
       assert.notEqual(start, -1);
@@ -1308,55 +1324,59 @@ test("managed launch policy always includes ask_owner", () => {
     /agent-definitions\/generalist\.md$/,
   );
   assert.equal(
-    agentLaunchArgs(standalone, {
-      bodyPromptPath: "/prompt",
-      cwd: process.cwd(),
-      managedAgent: true,
-    })
+    (
+      await agentLaunchArgs(standalone, {
+        bodyPromptPath: "/prompt",
+        cwd: process.cwd(),
+        managedAgent: true,
+      })
+    )
       .flatMap((arg) => arg.split(","))
       .filter((arg) => arg === "ask_owner").length,
     1,
   );
 });
 
-test("keeps omitted tools default and closes an explicit empty allowlist", () => {
-  const launch = (frontmatter: Record<string, unknown>) =>
-    agentLaunchArgs(
+test("keeps omitted tools default and closes an explicit empty allowlist", async () => {
+  const launch = async (frontmatter: Record<string, unknown>) =>
+    await agentLaunchArgs(
       { name: "agent", path: "/agent.md", frontmatter, body: "" },
       { bodyPromptPath: "/prompt" },
     );
-  assert.deepEqual(launch({}), ["--no-context-files", "--no-skills"]);
-  assert.deepEqual(launch({ tools: [] }), [
+  assert.deepEqual(await launch({}), ["--no-context-files", "--no-skills"]);
+  assert.deepEqual(await launch({ tools: [] }), [
     "--no-context-files",
     "--no-tools",
     "--no-skills",
   ]);
 });
 
-test("applies explicit noSkills before inheritSkills defaults", () => {
-  const launch = (frontmatter: Record<string, string | boolean>) =>
-    agentLaunchArgs(
+test("applies explicit noSkills before inheritSkills defaults", async () => {
+  const launch = async (frontmatter: Record<string, string | boolean>) =>
+    await agentLaunchArgs(
       { name: "agent", path: "/agent.md", frontmatter, body: "" },
       { bodyPromptPath: "/prompt" },
     );
-  assert.deepEqual(launch({}), ["--no-context-files", "--no-skills"]);
-  assert.deepEqual(launch({ inheritSkills: true }), ["--no-context-files"]);
-  assert.deepEqual(launch({ inheritSkills: "true" }), [
+  assert.deepEqual(await launch({}), ["--no-context-files", "--no-skills"]);
+  assert.deepEqual(await launch({ inheritSkills: true }), [
+    "--no-context-files",
+  ]);
+  assert.deepEqual(await launch({ inheritSkills: "true" }), [
     "--no-context-files",
     "--no-skills",
   ]);
-  assert.deepEqual(launch({ inheritSkills: true, noSkills: true }), [
+  assert.deepEqual(await launch({ inheritSkills: true, noSkills: true }), [
     "--no-context-files",
     "--no-skills",
   ]);
-  assert.deepEqual(launch({ inheritSkills: false, noSkills: false }), [
+  assert.deepEqual(await launch({ inheritSkills: false, noSkills: false }), [
     "--no-context-files",
   ]);
 });
 
-test("passes native capability combinations through to Pi", () => {
+test("passes native capability combinations through to Pi", async () => {
   assert.deepEqual(
-    agentLaunchArgs(
+    await agentLaunchArgs(
       {
         name: "agent",
         path: "/agent.md",
@@ -1518,7 +1538,7 @@ test("rejects previous delegation frontmatter and tool capability", () => {
   assert.equal(agentDefinitionDelegationEnabled(definition), false);
 });
 
-test("infers agent only when native policy permits it", () => {
+test("infers agent only when native policy permits it", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-tool-inference-"));
   const definitions = withPiAgentDir(root, () => discoverAgentDefinitions());
   const effective = new Map(
@@ -1540,8 +1560,8 @@ test("infers agent only when native policy permits it", () => {
     }),
     { name: "parent", agents: ["child"], tools: ["read"] },
   );
-  const make = (frontmatter: Frontmatter) =>
-    agentLaunchArgs(
+  const make = async (frontmatter: Frontmatter) =>
+    await agentLaunchArgs(
       inferAgentDefinitionTools({
         name: "parent",
         path: "/parent.md",
@@ -1551,23 +1571,25 @@ test("infers agent only when native policy permits it", () => {
       { managedAgent: true },
     );
   assert.deepEqual(
-    make({ agents: ["child"], tools: ["read"] }).filter(
+    (await make({ agents: ["child"], tools: ["read"] })).filter(
       (v) => v === "--tools" || v.includes("read"),
     ),
     ["--tools", "read,agent,ask_owner"],
   );
   assert.deepEqual(
-    make({ agents: ["child"], tools: ["read", "agent"] }).filter(
+    (await make({ agents: ["child"], tools: ["read", "agent"] })).filter(
       (v) => v === "--tools" || v.includes("read"),
     ),
     ["--tools", "read,agent,ask_owner"],
   );
   assert.deepEqual(
-    make({
-      agents: ["child"],
-      tools: ["read"],
-      excludeTools: ["agent"],
-    }).filter(
+    (
+      await make({
+        agents: ["child"],
+        tools: ["read"],
+        excludeTools: ["agent"],
+      })
+    ).filter(
       (v) =>
         v === "--tools" ||
         v.startsWith("read") ||
@@ -1577,14 +1599,14 @@ test("infers agent only when native policy permits it", () => {
     ["--tools", "read,ask_owner", "--exclude-tools", "agent"],
   );
   assert.deepEqual(
-    make({ agents: ["child"], noTools: true }).filter(
+    (await make({ agents: ["child"], noTools: true })).filter(
       (v) => v === "--tools" || v === "ask_owner",
     ),
     ["--tools", "ask_owner"],
   );
 });
 
-test("projects parent-launched definitions as exact leaf capabilities", () => {
+test("projects parent-launched definitions as exact leaf capabilities", async () => {
   const definition = inferAgentDefinitionTools({
     name: "parent",
     path: "/parent.md",
@@ -1608,7 +1630,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     extensions: ["./review.ts"],
   });
   assert.deepEqual(
-    agentLaunchArgs(leaf, { managedAgent: true }).filter(
+    (await agentLaunchArgs(leaf, { managedAgent: true })).filter(
       (value) => value === "--tools" || value.includes("ask_owner"),
     ),
     ["--tools", "read,bash,ask_owner"],
@@ -1649,7 +1671,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     "leaf",
   );
   assert.deepEqual(
-    agentLaunchArgs(delegationOnlyLeaf, { managedAgent: true }),
+    await agentLaunchArgs(delegationOnlyLeaf, { managedAgent: true }),
     [
       "--no-context-files",
       "--append-system-prompt",
@@ -1672,7 +1694,9 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
   assert.equal(omittedToolsLeaf.frontmatter.agents, undefined);
   assert.equal(omittedToolsLeaf.frontmatter.tools, undefined);
   assert.equal(
-    agentLaunchArgs(omittedToolsLeaf, { managedAgent: true }).includes("agent"),
+    (await agentLaunchArgs(omittedToolsLeaf, { managedAgent: true })).includes(
+      "agent",
+    ),
     false,
   );
 });
@@ -1776,12 +1800,18 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
 });
 
 const noForeignProviders = () => false;
-const inheritedModel = (provider: string, token: string) => ({ provider, token });
+const inheritedModel = (provider: string, token: string) => ({
+  provider,
+  token,
+});
 
 test("a child with no requested model passes no --model at all", () => {
-  assert.deepEqual(resolveChildModel({ isForeignProvider: noForeignProviders }), {
-    kind: "none",
-  });
+  assert.deepEqual(
+    resolveChildModel({ isForeignProvider: noForeignProviders }),
+    {
+      kind: "none",
+    },
+  );
 });
 
 test("a blank configured model is treated as no model", () => {

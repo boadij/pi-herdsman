@@ -126,6 +126,7 @@ import {
   inspectHerdrAgent,
   stopHerdrAgentPreservingPane,
   HerdrStartFailure,
+  HERDR_KIND,
   STARTUP_TIMEOUT_MAX,
   STARTUP_TIMEOUT_MIN,
   type ExpectedSession,
@@ -1648,7 +1649,7 @@ async function herdrVersion(
 function expectedSession(id?: string, path?: string): ExpectedSession {
   return { id, path };
 }
-function isPiAgent(agent: any): boolean {
+function isCurrentHostAgent(agent: any): boolean {
   return sessionIdentity(agent?.agent_session) !== undefined;
 }
 async function workspacePresentationProvenance(
@@ -1792,7 +1793,7 @@ function isLeadSessionBoundary(
   pane: any,
   ownerSessionId: string,
 ): boolean {
-  if (!isPiAgent(agent) || pane?.agent !== "pi") return false;
+  if (!isCurrentHostAgent(agent) || pane?.agent !== HERDR_KIND) return false;
   const session = sessionIdentity(agent?.agent_session);
   if (session?.kind !== "path") return false;
   try {
@@ -1834,7 +1835,7 @@ async function validateIntegration(
       if (signal?.aborted) throw error;
       fail(
         "invalid_request",
-        `Unable to validate the official Herdr Pi integration: ${String(error)}`,
+        `Unable to validate the official Herdr integration for ${HERDR_KIND}: ${String(error)}`,
         "integration",
       );
     }
@@ -1867,7 +1868,7 @@ async function validateIntegration(
       }
       fail(
         "invalid_request",
-        "Herdr detected this agent, but the official Pi integration did not report its session identity. Run `herdr integration install pi`, restart Pi, and verify with `herdr integration status`.",
+        `Herdr detected this agent, but the official integration did not report its session identity. Run \`herdr integration install ${HERDR_KIND}\`, restart ${HERDR_KIND}, and verify with \`herdr integration status\`.`,
         "integration",
         { retryAttempted: attempt > 0 },
       );
@@ -1880,7 +1881,7 @@ async function validateIntegration(
     )
       fail(
         "target_not_found",
-        "live Herdr agent Pi session mismatch",
+        "live Herdr agent session identity mismatch",
         "integration",
       );
     break;
@@ -2766,7 +2767,7 @@ async function managedAgentSnapshots(
     const now = Date.now();
     const listed = {
       label: state.agentLabel,
-      kind: "pi",
+      kind: HERDR_KIND,
       state: projectedState,
       steerable,
       workspace_id: state.workspaceId,
@@ -5964,7 +5965,7 @@ async function actionUnsafe(
         isForeignProvider: (providerId) =>
           registeredProviderIds.has(providerId),
       });
-      const launchArgs = agentLaunchArgs(effectiveDefinition, {
+      const launchArgs = await agentLaunchArgs(effectiveDefinition, {
         ...(effectiveDefinition.body ? { bodyPromptPath: promptPaths[0] } : {}),
         sharedPromptPath: promptPaths[effectiveDefinition.body ? 1 : 0],
         cwd: agentCwd,
@@ -6546,7 +6547,7 @@ export default function (pi: ExtensionAPI): void {
       handler: async (_args: string, ctx: ExtensionCommandContext) => {
         if (!ctx.hasUI) return;
         ctx.ui.notify(
-          "Pi Herdsman is inactive because this Pi session is not running inside Herdr.\n\nStart Herdr in this project, then run Pi in a Herdr pane:\n  herdr\n  pi\n\nIf needed, install the Pi integration once:\n  herdr integration install pi",
+          `Pi Herdsman is inactive because this session is not running inside Herdr.\n\nStart Herdr in this project, then run ${HERDR_KIND} in a Herdr pane:\n  herdr\n  ${HERDR_KIND}\n\nIf needed, install the integration once:\n  herdr integration install ${HERDR_KIND}`,
         );
       },
     };
@@ -7325,7 +7326,7 @@ export default function (pi: ExtensionAPI): void {
   const liveAgent = async (ctx: ExtensionContext, sessionId: string) =>
     (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents.filter(
       (agent: any) =>
-        isPiAgent(agent) &&
+        isCurrentHostAgent(agent) &&
         herdrSessionId(agent) === sessionId &&
         typeof agent.pane_id === "string" &&
         typeof agent.tab_id === "string" &&
@@ -7338,7 +7339,8 @@ export default function (pi: ExtensionAPI): void {
     const inventory = (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents;
     const matches = inventory.filter(
       (agent: any) =>
-        isPiAgent(agent) && herdrSessionId(agent) === descriptor.piSessionId,
+        isCurrentHostAgent(agent) &&
+        herdrSessionId(agent) === descriptor.piSessionId,
     );
     if (
       matches.length !== 1 ||
@@ -7360,7 +7362,10 @@ export default function (pi: ExtensionAPI): void {
         { signal: ctx.signal },
       );
       const alias = result?.agent;
-      if (!isPiAgent(alias) || herdrSessionId(alias) !== descriptor.piSessionId)
+      if (
+        !isCurrentHostAgent(alias) ||
+        herdrSessionId(alias) !== descriptor.piSessionId
+      )
         return undefined;
     } catch {
       // A failed alias lookup is not identity proof.
@@ -8204,7 +8209,7 @@ export default function (pi: ExtensionAPI): void {
         for (const agent of agents) {
           const sessionId = herdrSessionId(agent);
           if (
-            !isPiAgent(agent) ||
+            !isCurrentHostAgent(agent) ||
             !sessionId ||
             sessionId === chief.piSessionId ||
             agentIds.has(sessionId) ||
@@ -8213,7 +8218,8 @@ export default function (pi: ExtensionAPI): void {
             typeof agent.workspace_id !== "string" ||
             agents.filter(
               (candidate: any) =>
-                isPiAgent(candidate) && herdrSessionId(candidate) === sessionId,
+                isCurrentHostAgent(candidate) &&
+                herdrSessionId(candidate) === sessionId,
             ).length !== 1
           )
             continue;
@@ -8306,7 +8312,7 @@ export default function (pi: ExtensionAPI): void {
       );
       const agents = live.flatMap((agent: any) => {
         const sessionId = herdrSessionId(agent);
-        if (!isPiAgent(agent) || !sessionId) return [];
+        if (!isCurrentHostAgent(agent) || !sessionId) return [];
         const sessionName = persistedSessionName(agent);
         const candidateSessionFile = supervisedSessionFile(agent, sessionId);
         const piSessionFile =
@@ -8346,11 +8352,12 @@ export default function (pi: ExtensionAPI): void {
       );
       const diagnostics = live.some(
         (agent: any) =>
-          (agent?.agent === "pi" || agent?.agent_session?.agent === "pi") &&
-          !isPiAgent(agent),
+          (agent?.agent === HERDR_KIND ||
+            agent?.agent_session?.agent === HERDR_KIND) &&
+          !isCurrentHostAgent(agent),
       )
         ? [
-            "Live Pi agents are present but their session identities are unresolvable",
+            "Live agents are present but their session identities are unresolvable",
           ]
         : undefined;
       const coordinationStates = agents.flatMap((agent) => {
@@ -8579,7 +8586,7 @@ export default function (pi: ExtensionAPI): void {
           candidate?.pane_id === lead.paneId &&
           candidate?.tab_id === lead.tabId &&
           candidate?.workspace_id === lead.workspaceId &&
-          isPiAgent(candidate) &&
+          isCurrentHostAgent(candidate) &&
           herdrSessionId(candidate) === lead.lead,
       );
       if (matches.length !== 1) throw new Error("Lead changed; reopen staff.");
@@ -8596,7 +8603,7 @@ export default function (pi: ExtensionAPI): void {
       const candidate = await remoteChiefAgent(ctx, descriptor);
       const current = readChiefDescriptor(supervisionRuntime().descriptor);
       if (
-        !isPiAgent(candidate) ||
+        !isCurrentHostAgent(candidate) ||
         herdrSessionId(candidate) !== descriptor.piSessionId ||
         !sameChiefDescriptor(current, descriptor)
       )
@@ -8813,7 +8820,7 @@ export default function (pi: ExtensionAPI): void {
                   },
                   ctx.signal,
                   (agent: any) =>
-                    isPiAgent(agent) &&
+                    isCurrentHostAgent(agent) &&
                     agent?.pane_id === lead.paneId &&
                     agent?.tab_id === lead.tabId &&
                     herdrSessionId(agent) === lead.lead &&
@@ -10191,7 +10198,7 @@ export default function (pi: ExtensionAPI): void {
               signal,
               (agent) => {
                 return (
-                  isPiAgent(agent) &&
+                  isCurrentHostAgent(agent) &&
                   herdrSessionId(agent) === lead.lead &&
                   agent.pane_id === lead.paneId &&
                   agent.tab_id === lead.tabId &&
