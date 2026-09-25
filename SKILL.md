@@ -428,6 +428,10 @@ may also supervise manually created Leads in the same worktree group. An
 assigned Lead reports completion via
 `supervisor.result`, which persists provenance and a reusable
 `result:<assignment-id>` before notifying Manager. Idle is not completion.
+Manager-created Leads launch with Pi's `--no-approve` policy, which ignores
+project-local files for that run rather than implicitly trusting the linked-
+worktree path. If a delegated Lead needs trust-gated project resources, the user
+must explicitly trust that path through Pi's supported project-trust flow.
 The worktree remains after completion; the result ref can be passed in `files`
 for subsequent work. Pending asks and settling results reconcile across
 Manager replacement. `staff.message`, `staff.reply`, and `peer.message`

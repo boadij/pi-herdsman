@@ -903,10 +903,7 @@ test("project assignments are strict, private, bounded, and removable", () => {
   assert.throws(
     () => listProjectAssignments(runtime, "root"),
     (error) => {
-      assert.match(
-        error.message,
-        new RegExp(`${path}: invalid assignment schema`),
-      );
+      assert.ok(error.message.includes(`${path}: invalid assignment schema`));
       assert.doesNotMatch(error.message, /task/);
       return true;
     },
@@ -915,7 +912,7 @@ test("project assignments are strict, private, bounded, and removable", () => {
   assert.throws(
     () => readProjectAssignment(runtime, "root", assignment.id),
     (error) => {
-      assert.match(error.message, new RegExp(`${path}: invalid JSON`));
+      assert.ok(error.message.includes(`${path}: invalid JSON`));
       assert.doesNotMatch(error.message, /private task details/);
       return true;
     },
@@ -928,10 +925,7 @@ test("project assignments are strict, private, bounded, and removable", () => {
   assert.throws(
     () => readProjectAssignment(runtime, "root", assignment.id),
     (error) => {
-      assert.match(
-        error.message,
-        new RegExp(`${path}: invalid assignment schema`),
-      );
+      assert.ok(error.message.includes(`${path}: invalid assignment schema`));
       assert.doesNotMatch(error.message, /private task details/);
       return true;
     },
@@ -940,7 +934,7 @@ test("project assignments are strict, private, bounded, and removable", () => {
   assert.throws(
     () => readProjectAssignment(runtime, "root", assignment.id),
     (error) => {
-      assert.match(error.message, new RegExp(`${path}: file is too large`));
+      assert.ok(error.message.includes(`${path}: file is too large`));
       return true;
     },
   );

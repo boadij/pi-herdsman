@@ -380,7 +380,9 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
   }
 });
 
-test("Manager fresh delegation starts from the exact worktree-created placement", async () => {
+async function runManagerStartupScenario(
+  mode: "success" | "missing-state" | "conflict" | "managed-agent" | "recovery",
+): Promise<void> {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
   process.env.HERDR_TAB_ID = "root-tab";
@@ -393,9 +395,11 @@ test("Manager fresh delegation starts from the exact worktree-created placement"
   const childPath = "/tmp/manager-fresh-child";
   let created = false;
   let shellReady = false;
-  let started = false;
+  let started = mode === "recovery";
+  let startupObservations = 0;
   let createCalls = 0;
   let openCalls = 0;
+  let startCalls = 0;
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
@@ -471,7 +475,15 @@ test("Manager fresh delegation starts from the exact worktree-created placement"
           pane_id: "child-pane",
           shell_pid: 33,
           foreground_process_group_id: 33,
-          foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
+          foreground_processes: [
+            {
+              pid: started ? 44 : 33,
+              argv0: started ? "/usr/bin/pi" : "/bin/zsh",
+              ...(mode === "missing-state" && started
+                ? { cmdline: "x".repeat(10_000) }
+                : {}),
+            },
+          ],
         },
       });
     if (command === "herdr" && args[0] === "pane" && args[1] === "run")
@@ -485,6 +497,7 @@ test("Manager fresh delegation starts from the exact worktree-created placement"
       return respond({});
     }
     if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+      startCalls++;
       assert.equal(shellReady, true, "agent starts only after shell readiness");
       assert.deepEqual(args.slice(0, 6), [
         "agent",
@@ -495,6 +508,8 @@ test("Manager fresh delegation starts from the exact worktree-created placement"
         "--pane",
       ]);
       assert.equal(args[6], "child-pane");
+      assert.ok(args.includes("--no-approve"));
+      assert.equal(args.includes("--approve"), false);
       const starting = listProjectAssignments(
         supervisionRuntime(),
         WORKSPACE,
@@ -503,13 +518,6 @@ test("Manager fresh delegation starts from the exact worktree-created placement"
       assert.equal(starting.tabId, "child-tab");
       assert.equal(starting.paneId, "child-pane");
       started = true;
-      writeLeadCoordinationState(supervisionRuntime(), {
-        version: 1,
-        role: "lead",
-        instanceId: randomUUID(),
-        piSessionId: childSession,
-        updatedAt: Date.now(),
-      });
       return respond({
         agent: {
           name: "lead",
@@ -522,27 +530,58 @@ test("Manager fresh delegation starts from the exact worktree-created placement"
         },
       });
     }
-    if (command === "herdr" && isApiSnapshot(args))
+    if (command === "herdr" && isApiSnapshot(args)) {
+      if (started) startupObservations++;
+      if (
+        started &&
+        startupObservations === 3 &&
+        !["missing-state", "managed-agent"].includes(mode)
+      )
+        writeLeadCoordinationState(supervisionRuntime(), {
+          version: 1,
+          role: mode === "conflict" ? "manager" : "lead",
+          instanceId: randomUUID(),
+          piSessionId: childSession,
+          updatedAt: Date.now(),
+        });
+      if (mode === "managed-agent" && started && startupObservations === 2) {
+        const identity = {
+          paneId: "child-pane",
+          tabId: "child-tab",
+          piSessionId: childSession,
+          piSessionFile: `/tmp/${childSession}.jsonl`,
+        };
+        writeAgentState(
+          agentMailboxPath(WORKSPACE, "managed-child"),
+          managedState("managed-child", undefined, identity),
+        );
+      }
+      if (mode === "missing-state" && started && startupObservations === 2) {
+        const now = Date.now.bind(Date);
+        Date.now = () => now() + 60_000;
+      }
       return respond({
         snapshot: {
           panes: [],
-          agents: started
-            ? [
-                {
-                  agent_session: {
-                    source: "herdr:pi",
-                    agent: "pi",
-                    kind: "id",
-                    value: childSession,
+          agents:
+            started && startupObservations >= 2
+              ? [
+                  {
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: childSession,
+                    },
+                    workspace_id: childWorkspace,
+                    pane_id: "child-pane",
+                    tab_id: "child-tab",
                   },
-                  workspace_id: childWorkspace,
-                  pane_id: "child-pane",
-                  tab_id: "child-tab",
-                },
-              ]
-            : [],
+                ]
+              : [],
         },
       });
+    }
     if (command === "herdr" && isAgentList(args))
       return respond({ agents: [managerAgent] });
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
@@ -556,44 +595,99 @@ test("Manager fresh delegation starts from the exact worktree-created placement"
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     const staff = pi.tools.find((tool) => tool.name === "staff")!;
-    const result = await staff.execute(
-      "delegate",
-      { action: "delegate", task: "deliver the fresh assignment" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const execute = () =>
+      staff.execute(
+        "delegate",
+        { action: "delegate", task: "deliver the fresh assignment" },
+        undefined,
+        undefined,
+        ctx,
+      );
+    if (mode === "missing-state") {
+      const now = Date.now.bind(Date);
+      try {
+        await assert.rejects(execute(), (error: Error) => {
+          assert.match(
+            error.message,
+            /Timed out verifying the new Lead session/,
+          );
+          assert.ok(error.message.length <= 4_096);
+          return true;
+        });
+      } finally {
+        Date.now = now;
+      }
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        WORKSPACE,
+      )[0]!;
+      assert.equal(assignment.phase, "starting");
+      assert.equal(createCalls, 1);
+      assert.equal(startCalls, 1);
+      assert.equal(started, true);
+      assert.equal(startupObservations, 2);
+      return;
+    }
+    if (mode === "conflict" || mode === "managed-agent")
+      await assert.rejects(execute(), /conflicting role or identity/);
+    else {
+      const result = await execute();
+      assert.equal(result.details.ok, true);
+      assert.equal(result.details.session, childSession);
+    }
     const assignment = listProjectAssignments(
       supervisionRuntime(),
       WORKSPACE,
     )[0]!;
-    assert.equal(result.details.ok, true);
-    assert.equal(result.details.session, childSession);
-    assert.equal(assignment.phase, "active");
-    assert.equal(assignment.workspaceId, childWorkspace);
-    assert.equal(assignment.tabId, "child-tab");
-    assert.equal(assignment.paneId, "child-pane");
-    assert.equal(createCalls, 1);
-    assert.equal(openCalls, 0);
-    const messages = listChiefMessagePaths(
-      supervisionRuntime(),
-      childSession,
-    ).map((path) => readChiefMessage(path));
-    assert.ok(
-      messages.some(
-        (message) =>
-          message.kind === "manager_assignment" &&
-          message.leadSessionId === childSession &&
-          message.text.includes("deliver the fresh assignment"),
-      ),
-      "the active Lead receives the Manager assignment message",
+    assert.equal(
+      assignment.phase,
+      mode === "conflict" || mode === "managed-agent" ? "starting" : "active",
     );
+    if (mode !== "conflict" && mode !== "managed-agent") {
+      assert.equal(assignment.workspaceId, childWorkspace);
+      assert.equal(assignment.tabId, "child-tab");
+      assert.equal(assignment.paneId, "child-pane");
+    }
+    assert.equal(createCalls, 1);
+    assert.equal(startCalls, mode === "recovery" ? 0 : 1);
+    assert.equal(openCalls, 0);
+    assert.equal(
+      startupObservations,
+      mode === "managed-agent" ? 2 : startupObservations,
+    );
+    assert.equal(started, true);
+    if (mode === "success") {
+      assert.equal(assignment.paneId, "child-pane");
+      const messages = listChiefMessagePaths(
+        supervisionRuntime(),
+        childSession,
+      ).map((path) => readChiefMessage(path));
+      assert.ok(
+        messages.some(
+          (message) =>
+            message.kind === "manager_assignment" &&
+            message.leadSessionId === childSession &&
+            message.text.includes("deliver the fresh assignment"),
+        ),
+      );
+    }
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }
-});
+}
+
+test("Manager fresh delegation waits for delayed Lead state", () =>
+  runManagerStartupScenario("success"));
+test("Manager startup timeout retains starting assignment without duplicate Pi", () =>
+  runManagerStartupScenario("missing-state"));
+test("Manager startup rejects conflicting role promptly", () =>
+  runManagerStartupScenario("conflict"));
+test("Manager startup rejects managed Agent identity without Lead state", () =>
+  runManagerStartupScenario("managed-agent"));
+test("Manager recovery waits on existing exact Pi without restarting it", () =>
+  runManagerStartupScenario("recovery"));
 
 test("project agent discovery is gated by Pi project trust", async () => {
   setLeadEnvironment();

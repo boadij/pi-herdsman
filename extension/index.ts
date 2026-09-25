@@ -9432,26 +9432,45 @@ export default function (pi: ExtensionAPI): void {
               ({ state }) => state.piSessionId === sessionId,
             );
           if (
-            state?.role !== "lead" ||
-            state.piSessionId !== sessionId ||
-            managed
+            managed ||
+            (state &&
+              (state.role !== "lead" || state.piSessionId !== sessionId))
           )
             throw new Error(
-              "Existing session in new worktree is not an unambiguous Lead",
+              "Existing session in new worktree has a conflicting role or identity",
             );
-          lead = currentCandidates[0];
-        } else {
-          await startHerdrAgentInPane(pi, ctx, {
-            primaryWorkspaceId,
-            workspaceId,
-            tabId,
-            paneId,
-            cwd,
-            label: `lead-${id.slice(0, 8)}`,
-            runId: id,
-            extensionPath: HERDSMAN_EXTENSION_PATH,
-            signal,
-          });
+          if (state?.role === "lead" && state.piSessionId === sessionId)
+            lead = currentCandidates[0];
+        }
+        if (!lead) {
+          const processInfo = await runHerdr(
+            pi,
+            ctx,
+            ["pane", "process-info", "--pane", paneId],
+            { signal },
+          );
+          const foreground = processInfo?.process_info?.foreground_processes;
+          const piAlreadyRunning =
+            currentCandidates.length === 1 ||
+            (Array.isArray(foreground) &&
+              foreground.some((process: any) => {
+                const executable = `${process?.argv0 ?? ""} ${process?.cmdline ?? ""}`;
+                return /(^|[\\/\s])pi(?:\s|$)/i.test(executable);
+              }));
+          if (!piAlreadyRunning) {
+            await startHerdrAgentInPane(pi, ctx, {
+              primaryWorkspaceId,
+              workspaceId,
+              tabId,
+              paneId,
+              cwd,
+              label: `lead-${id.slice(0, 8)}`,
+              runId: id,
+              extensionPath: HERDSMAN_EXTENSION_PATH,
+              agentArgs: ["--no-approve"],
+              signal,
+            });
+          }
         }
         const deadline = Date.now() + 30_000;
         while (!lead && Date.now() < deadline) {
@@ -9476,6 +9495,14 @@ export default function (pi: ExtensionAPI): void {
                 ({ state }) => state.piSessionId === sessionId,
               );
             if (
+              managed ||
+              (state &&
+                (state.role !== "lead" || state.piSessionId !== sessionId))
+            )
+              throw new Error(
+                "Existing session in new worktree has a conflicting role or identity",
+              );
+            if (
               state?.role === "lead" &&
               state.piSessionId === sessionId &&
               !managed
@@ -9487,8 +9514,39 @@ export default function (pi: ExtensionAPI): void {
           await delay(250, undefined, { signal });
         }
         const leadSessionId = lead && herdrSessionId(lead);
-        if (!leadSessionId)
-          throw new Error("Timed out verifying the new Lead session");
+        if (!leadSessionId) {
+          let diagnostic = "pane/process diagnostic unavailable";
+          try {
+            const [process, pane] = await Promise.all([
+              runHerdr(pi, ctx, ["pane", "process-info", "--pane", paneId], {
+                signal,
+              }),
+              runHerdr(pi, ctx, ["pane", "read", "--pane", paneId], {
+                signal,
+              }),
+            ]);
+            const processInfo = (() => {
+              try {
+                return JSON.stringify(process?.process_info).slice(0, 1024);
+              } catch {
+                return "[process info unavailable: serialization failed]";
+              }
+            })();
+            diagnostic = JSON.stringify({
+              paneId,
+              processInfo,
+              output: String(pane?.stdout ?? "").slice(-2048),
+            }).slice(0, 4096);
+          } catch {
+            // Keep the timeout actionable even when Herdr cannot capture diagnostics.
+          }
+          throw new Error(
+            `Timed out verifying the new Lead session in pane ${paneId}; ${diagnostic}`.slice(
+              0,
+              4096,
+            ),
+          );
+        }
         assignment = {
           ...assignment,
           phase: "active",
