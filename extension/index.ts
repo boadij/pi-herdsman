@@ -1835,7 +1835,7 @@ async function validateIntegration(
       if (signal?.aborted) throw error;
       fail(
         "invalid_request",
-        `Unable to validate the official Herdr Pi integration: ${String(error)}`,
+        `Unable to validate the official Herdr integration for ${HERDR_KIND}: ${String(error)}`,
         "integration",
       );
     }
@@ -1868,7 +1868,7 @@ async function validateIntegration(
       }
       fail(
         "invalid_request",
-        "Herdr detected this agent, but the official Pi integration did not report its session identity. Run `herdr integration install pi`, restart Pi, and verify with `herdr integration status`.",
+        `Herdr detected this agent, but the official integration did not report its session identity. Run \`herdr integration install ${HERDR_KIND}\`, restart ${HERDR_KIND}, and verify with \`herdr integration status\`.`,
         "integration",
         { retryAttempted: attempt > 0 },
       );
@@ -1881,7 +1881,7 @@ async function validateIntegration(
     )
       fail(
         "target_not_found",
-        "live Herdr agent Pi session mismatch",
+        "live Herdr agent session identity mismatch",
         "integration",
       );
     break;
@@ -6547,7 +6547,7 @@ export default function (pi: ExtensionAPI): void {
       handler: async (_args: string, ctx: ExtensionCommandContext) => {
         if (!ctx.hasUI) return;
         ctx.ui.notify(
-          "Pi Herdsman is inactive because this Pi session is not running inside Herdr.\n\nStart Herdr in this project, then run Pi in a Herdr pane:\n  herdr\n  pi\n\nIf needed, install the Pi integration once:\n  herdr integration install pi",
+          `Pi Herdsman is inactive because this session is not running inside Herdr.\n\nStart Herdr in this project, then run ${HERDR_KIND} in a Herdr pane:\n  herdr\n  ${HERDR_KIND}\n\nIf needed, install the integration once:\n  herdr integration install ${HERDR_KIND}`,
         );
       },
     };

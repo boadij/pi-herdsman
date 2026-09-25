@@ -32,6 +32,7 @@ import type {
   ManagedAgentState,
 } from "./mailbox.ts";
 import { OperationError } from "./errors.ts";
+import { HERDR_KIND } from "./herdr.ts";
 import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -488,8 +489,11 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   await herdsmanCommand.handler("", context);
   assert.equal(notices.length, 1);
   assert.match(notices[0]!, /inactive because .*not running inside Herdr/);
-  assert.match(notices[0]!, /herdr\n  pi/);
-  assert.match(notices[0]!, /herdr integration install pi/);
+  assert.match(notices[0]!, new RegExp(`herdr\\n  ${HERDR_KIND}`));
+  assert.match(
+    notices[0]!,
+    new RegExp(`herdr integration install ${HERDR_KIND}`),
+  );
 });
 
 test("managed agents receive no peer tool and Chiefs expose only staff actively", async () => {

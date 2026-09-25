@@ -13,6 +13,7 @@ import type {
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
 import support from "./support.ts";
+import { HERDR_KIND } from "./herdr.ts";
 import {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -4492,8 +4493,14 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
   assert.equal(result.details.error.category, "invalid_request");
   assert.match(
     result.details.error.message,
-    /official Pi integration did not report its session identity/,
+    /official integration did not report its session identity/,
   );
+  assert.ok(
+    result.details.error.message.includes(
+      `herdr integration install ${HERDR_KIND}`,
+    ),
+  );
+  assert.ok(result.details.error.message.includes(`restart ${HERDR_KIND}`));
   assert.equal(result.details.error.retryAttempted, true);
   assert.equal(pi.calls.filter((args) => isPreservePaneStop(args)).length, 1);
   assert.equal(
