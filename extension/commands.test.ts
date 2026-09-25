@@ -127,7 +127,6 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           "agent",
           "supervisor",
           "peer",
-          "staff",
           ...fixture.tools.map((tool) => tool.name),
         ]),
       ].map((name) => ({ name })),
@@ -186,6 +185,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       "supervisor",
       "peer",
     ]);
+    assert.equal(
+      first.pi.getAllTools().some((tool) => tool.name === "staff"),
+      false,
+    );
     const leadPrompt = await first.events.get("before_agent_start")![0](
       { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
       ctx1,
@@ -201,6 +204,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       "supervisor",
       "peer",
     ]);
+    assert.equal(
+      first.pi.getAllTools().some((tool) => tool.name === "staff"),
+      true,
+    );
     assert.equal(first.pi.getActiveTools().includes("agent"), false);
     const managerPrompt = await first.events.get("before_agent_start")![0](
       { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
@@ -235,6 +242,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     const staff = first.tools.find((tool) => tool.name === "staff");
     assert.ok(staff);
+    assert.match(
+      staff.parameters.properties.assignment.description,
+      /exclusive recovery form[\s\S]*omit task, branch, base, and files/i,
+    );
+    assert.match(
+      staff.description,
+      /\{action:'delegate', assignment:'<id>'\} only/i,
+    );
     assert.ok(
       Value.Check(staff.parameters, {
         action: "delegate",
@@ -249,29 +264,6 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       }),
       false,
     );
-    const resumed = fakeChiefPi({
-      activeTools: ["read"],
-      exec,
-      entries: [
-        {
-          type: "custom",
-          customType: "pi-herdsman-role",
-          data: { role: "manager", leadTools: ["read"] },
-        },
-      ],
-    });
-    registerExtension!(resumed.pi as never);
-    const resumedCtx = fakeContext(resumed.entries) as any;
-    resumedCtx.sessionManager.getSessionId = () => `manager-${randomUUID()}`;
-    await resumed.events.get("session_start")![0](undefined, resumedCtx);
-    assert.deepEqual(resumed.pi.getActiveTools(), ["read"]);
-    assert.equal(
-      resumed.entries
-        .filter((entry: any) => entry.customType === "pi-herdsman-role")
-        .at(-1).data.role,
-      "manager",
-    );
-    await resumed.events.get("session_shutdown")![0]();
     const roster = await staff.execute(
       "list",
       { action: "list" },
@@ -395,6 +387,83 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
   } finally {
     await second.events.get("session_shutdown")?.[0]();
     await first.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("restored Manager registers supervision tools and restores Manager tools", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "manager-pane";
+  process.env.HERDR_TAB_ID = "manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `restored-manager-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        data: { role: "manager", leadTools: ["read"] },
+      },
+    ],
+    exec: (command, args) => {
+      if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: {
+            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+          },
+        });
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            source_workspace_id: WORKSPACE,
+            repo_key: "repo-key",
+            repo_name: "project",
+          },
+          worktrees: [],
+        });
+      if (command === "herdr" && isAgentList(args))
+        return respond({ agents: [] });
+      if (command === "herdr" && isApiSnapshot(args))
+        return respond({ snapshot: { agents: [], panes: [] } });
+      return respond({});
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const context = fakeContext(pi.entries) as any;
+    context.sessionManager.getSessionId = () => `manager-${randomUUID()}`;
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "staff",
+      "supervisor",
+      "peer",
+    ]);
+    assert.ok(pi.tools.some((tool) => tool.name === "staff"));
+    assert.equal(pi.pi.getActiveTools().includes("agent"), false);
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "list"),
+      false,
+    );
+    assert.equal(
+      pi.entries
+        .filter((entry: any) => entry.customType === "pi-herdsman-role")
+        .at(-1).data.role,
+      "manager",
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;

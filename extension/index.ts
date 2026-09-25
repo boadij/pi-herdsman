@@ -6718,6 +6718,8 @@ export default function (pi: ExtensionAPI): void {
         Type.String({
           pattern:
             "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          description:
+            "Exclusive recovery form for the exact unresolved assignment. Supply only assignment; omit task, branch, base, and files.",
         }),
       ),
       branch: Type.Optional(Type.String({ minLength: 1 })),
@@ -8410,8 +8412,8 @@ export default function (pi: ExtensionAPI): void {
       persistRole("manager");
       if (!persistCoordinatorState())
         throw new Error("Manager coordination state could not be persisted");
-      reconcileRoleTools();
       registerSupervisionTool?.();
+      reconcileRoleTools();
       clearNormalUI?.();
       startSupervisionUI?.(ctx);
       ++peerPresenceGeneration;
@@ -8439,6 +8441,10 @@ export default function (pi: ExtensionAPI): void {
   ): Promise<string> => {
     if (controllerRole !== "manager" || !managerLease)
       throw new Error("Manager mode is not active");
+    if (pendingSupervisorAsk)
+      throw new Error(
+        "Cannot leave Manager while a supervisor ask remains unresolved",
+      );
     const assignments = listProjectAssignments(
       supervisionRuntime(),
       managerLease.descriptor.workspaceId,
@@ -9314,6 +9320,8 @@ export default function (pi: ExtensionAPI): void {
               [
                 "worktree",
                 "open",
+                "--workspace",
+                primaryWorkspaceId,
                 "--branch",
                 assignment.branch!,
                 "--no-focus",
@@ -9617,7 +9625,7 @@ export default function (pi: ExtensionAPI): void {
         const status = supervisionSnapshotStatus(ctx);
         const content = formatSupervisionContext(
           status === "unavailable" ? undefined : supervisionSnapshot,
-          { status },
+          { status, role: activeRole() === "manager" ? "manager" : "chief" },
         );
         const previous = [
           ...buildSessionProjection(ctx.sessionManager.getBranch()).entries,
@@ -9714,6 +9722,7 @@ export default function (pi: ExtensionAPI): void {
           return createSupervisionWidget(
             () => supervisionSnapshot,
             () => supervisionSnapshotStatus(ctx),
+            activeRole() === "manager" ? "manager" : "chief",
           );
         });
       } catch {
@@ -11468,7 +11477,7 @@ export default function (pi: ExtensionAPI): void {
         promptSnippet:
           "Supervise direct reports; Managers may delegate new linked-worktree Leads",
         description:
-          "Staff addresses only direct reports using the exact session ID from a fresh roster. Chief supervises Managers and unclaimed Leads; Manager sees ordinary project Leads. List when stale or necessary; inspect and transcript only when evidence matters. Message and reply revalidate identity and authority; reply requires the exact pending ask ID. Manager delegate creates one linked-worktree Lead and durable assignment. Descendants are observable but never staff targets.",
+          "Staff addresses only direct reports using the exact session ID from a fresh roster. Chief supervises Managers and unclaimed Leads; Manager sees ordinary project Leads. List when stale or necessary; inspect and transcript only when evidence matters. Message and reply revalidate identity and authority; reply requires the exact pending ask ID. Manager delegate creates one linked-worktree Lead and durable assignment. To recover an unresolved delegation, call {action:'delegate', assignment:'<id>'} only; omit task, branch, base, and files. Descendants are observable but never staff targets.",
         executionMode: "sequential",
         parameters: staffParameters,
         execute: async (
@@ -12761,6 +12770,7 @@ export default function (pi: ExtensionAPI): void {
       ++sessionGeneration;
       ++peerPresenceGeneration;
       const previousChiefMode = chiefMode;
+      const previousControllerRole = controllerRole;
       const previousLeadContext = leadContext;
       ++chiefModeGeneration;
       if (previousChiefMode === "active" && previousLeadContext)
@@ -12897,7 +12907,9 @@ export default function (pi: ExtensionAPI): void {
         statusWidget.dispose();
         statusWidget = undefined;
       }
-      clearSupervisionUI?.(previousChiefMode === "active");
+      clearSupervisionUI?.(
+        previousChiefMode === "active" || previousControllerRole === "manager",
+      );
       statusWidgetGeneration = 0;
       statusContext = undefined;
       requestStatusRefresh = undefined;
@@ -12928,10 +12940,20 @@ export default function (pi: ExtensionAPI): void {
         breadcrumb: initialStatusBreadcrumb,
         ...ownToolsSnapshot(),
       };
-      if (controllerScope.kind === "lead" && chiefMode === "active")
+      const activeManager =
+        controllerScope.kind === "lead" &&
+        controllerRole === "manager" &&
+        !roleSuspended;
+      if (
+        controllerScope.kind === "lead" &&
+        (chiefMode === "active" || activeManager)
+      )
         startSupervisionUI?.(ctx);
       else startNormalUI?.(ctx);
-      if (!(controllerScope.kind === "lead" && chiefMode === "active")) {
+      if (!(
+        controllerScope.kind === "lead" &&
+        (chiefMode === "active" || activeManager)
+      )) {
         try {
           startupDefinitionRoster = {
             sessionId: ctx.sessionManager.getSessionId(),
@@ -12949,7 +12971,7 @@ export default function (pi: ExtensionAPI): void {
         requestStatusRefresh?.();
         return;
       }
-      await recoverControllerRuntimes(ctx, sessionSignal);
+      if (!activeManager) await recoverControllerRuntimes(ctx, sessionSignal);
       if (activeRole() === "manager" && !roleSuspended)
         try {
           await reconcileLeadAsksForChief?.(ctx);

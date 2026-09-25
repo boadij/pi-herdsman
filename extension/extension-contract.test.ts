@@ -3351,6 +3351,15 @@ test("registered lead and replacement chief exchange messages and asks", async (
     const state = readLeadCoordinationState(supervisionRuntime(), leadId);
     assert.equal(state?.pendingAsk?.askId, askId);
     assert.equal(state?.pendingAsk?.question, "Which credential should I use?");
+    const managerLeaveNotices: string[] = [];
+    leadContext.ui.notify = (message: string) =>
+      managerLeaveNotices.push(message);
+    await lead.commandOptions.get("manager").handler("leave", leadContext);
+    assert.ok(
+      managerLeaveNotices.some((message) =>
+        /supervisor ask remains unresolved/.test(message),
+      ),
+    );
     assert.match(state?.pendingAsk?.text ?? "", /<file name="/);
     const missingAskPath = listChiefMessagePaths(
       supervisionRuntime(),

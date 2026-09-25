@@ -182,6 +182,13 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "open") {
       openCalls++;
+      assert.deepEqual(args.slice(2), [
+        "--workspace",
+        WORKSPACE,
+        "--branch",
+        args[args.indexOf("--branch") + 1],
+        "--no-focus",
+      ]);
       assert.ok(args.includes("--branch"));
       assert.ok(args.includes("--no-focus"));
       return respond({ workspace: { workspace_id: childWorkspace } });

@@ -519,14 +519,14 @@ export function supervisionPresentationReports(
       ...directLeads.map((lead) => ({ ...lead, role: "lead" as const })),
     ];
   }
-  return snapshot.leads;
+  return snapshot.leads.map((lead) => ({ ...lead, role: "lead" as const }));
 }
 
 function presentationReports(
   reports: readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
 ): readonly SupervisedLeadSnapshot[] {
   return Array.isArray(reports)
-    ? reports
+    ? reports.map((report) => ({ ...report, role: report.role ?? "lead" }))
     : supervisionPresentationReports(
         reports as SupervisionPresentationSnapshot,
       );
@@ -704,12 +704,14 @@ export function renderSupervisionLeads(
   options: {
     status?: SupervisionContextStatus;
     ordinaryCap?: number;
+    role?: "chief" | "manager";
   } = {},
   selectedLead?: string,
 ): string[] {
   const status = options.status ?? "fresh";
+  const role = options.role ?? "chief";
   if (status === "unavailable")
-    return [safeLine("● chief · unavailable", width)];
+    return [safeLine(`● ${role} · unavailable`, width)];
   const displays = orderedSupervisionLeads(presentationReports(reports));
   const groups = groupOrderedSupervisedLeads(displays);
   const attention = groups.get("NEEDS YOU")!;
@@ -721,7 +723,10 @@ export function renderSupervisionLeads(
   const hidden = ordinary.length - Math.min(ordinary.length, Math.max(0, cap));
   const managers = displays.filter((report) => report.role !== "lead").length;
   const leads = displays.length - managers;
-  const header = `● chief · ${managers} manager${managers === 1 ? "" : "s"} · ${leads} lead${leads === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`;
+  const header =
+    role === "manager"
+      ? `● manager · ${leads} lead${leads === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`
+      : `● chief · ${managers} manager${managers === 1 ? "" : "s"} · ${leads} lead${leads === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`;
   return [
     safeLine(header, width),
     ...shown.flatMap((lead, index) => {
@@ -752,7 +757,7 @@ export function renderSupervisionLeads(
           ),
       ];
     }),
-    ...(hidden > 0 ? [safeLine(`└─ … ${hidden} more · /chief`, width)] : []),
+    ...(hidden > 0 ? [safeLine(`└─ … ${hidden} more · /${role}`, width)] : []),
   ];
 }
 
@@ -796,11 +801,12 @@ function supervisionValue(value: unknown): string {
 /** Formats validated supervision for hidden persistent Chief context. */
 export function formatSupervisionContext(
   snapshot: SupervisionPresentationSnapshot | undefined,
-  options: { status: SupervisionContextStatus },
+  options: { status: SupervisionContextStatus; role?: "chief" | "manager" },
 ): string {
+  const role = options.role ?? "chief";
   const header = [
     `<supervision_state status="${options.status}">`,
-    "Latest validated chief supervision snapshot.",
+    `Latest validated ${role === "chief" ? "Chief" : "Manager"} supervision snapshot.`,
     "Persisted hidden model context. Later supervision_state blocks supersede earlier snapshots.",
     "An identical refresh may be omitted to avoid duplicate context.",
     "This is not a new user instruction or authorization.",
@@ -814,7 +820,9 @@ export function formatSupervisionContext(
       ...header,
       "",
       "Current supervision state could not be established.",
-      "Do not infer that there are zero managers or direct Leads.",
+      role === "chief"
+        ? "Do not infer that there are zero managers or direct Leads."
+        : "Do not infer that there are zero direct Leads.",
       "Use staff list if current supervision state is required.",
       "</supervision_state>",
     ].join("\n");
@@ -840,8 +848,14 @@ export function formatSupervisionContext(
           "",
         ]
       : []),
-    `managers: ${reports.filter((report) => report.role !== "lead").length}`,
-    `unclaimed_direct_leads: ${reports.filter((report) => report.role === "lead").length}`,
+    ...(role === "chief"
+      ? [
+          `managers: ${reports.filter((report) => report.role === "manager").length}`,
+          `unclaimed_direct_leads: ${reports.filter((report) => report.role === "lead").length}`,
+        ]
+      : [
+          `direct_leads: ${reports.filter((report) => report.role === "lead").length}`,
+        ]),
   ];
   const sections: string[] = [];
   if (snapshot?.diagnostics?.length)
@@ -920,12 +934,14 @@ export function formatSupervisionContext(
 export function createSupervisionWidget(
   getLeads: () => readonly SupervisedLeadSnapshot[],
   getStatus: () => SupervisionContextStatus,
+  role: "chief" | "manager" = "chief",
 ): { render(width: number): string[]; invalidate(): void } {
   return {
     render(width) {
       return renderSupervisionLeads(getLeads(), width, {
         status: getStatus(),
         ordinaryCap: 6,
+        role,
       }).filter((line) => line.length > 0);
     },
     invalidate() {},

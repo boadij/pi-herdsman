@@ -366,8 +366,11 @@ session and requires the exclusive lease for the Herdsman project scope
 corresponding to that worktree group. If another live Manager holds it,
 activation fails and the caller remains an ordinary Lead. Activation also
 fails while this session owns unresolved managed-Agent work, preserving its
-control surface. `/manager leave` is refused while project assignments or
-Manager-addressed asks remain outstanding; once clear, it releases the lease
+control surface. Restored Manager sessions use the same Manager profile,
+supervision UI, and context as explicit activation; they do not load the Lead
+Agent-definition roster or recover Lead-owned Agent runtimes. `/manager leave`
+is refused while project assignments, Manager-addressed asks, or the Manager's
+own pending ask to Chief remain outstanding; once clear, it releases the lease
 and restores the Lead profile and exact Lead tool baseline.
 An eligible ordinary Lead may activate workspace-neutral Chief with `/chief`;
 a Manager cannot. Chief has only `staff`.
@@ -388,8 +391,9 @@ Descendant summaries never confer direct control. The active tool sets are:
 `staff` targets only a current direct report's exact `session` from a fresh
 roster. Chief can observe bounded Lead summaries but may act only on its direct
 reports; its snapshot includes Managers and direct Leads whose projects have no
-Manager. Manager receives bounded automatic context for its direct Leads, not
-the Lead Agent-definition roster or instructions to use unavailable tools.
+Manager. Manager receives role-specific supervision context for its direct
+Leads, not the Lead Agent-definition roster or instructions to use unavailable
+tools.
 Manager can observe bounded Agent state through its Leads but may act only on
 Leads. Use a fresh
 automatic `<supervision_state>` for general status; call `staff.list` only
@@ -411,11 +415,14 @@ Only explicit Manager `staff.delegate` starts or recovers delegation; reads
 never resume external mutations. An unresolved creation/start blocks an
 unrelated delegate request rather than being reused for new task intent. It
 creates a Lead in a linked-worktree workspace and a durable assignment. It
-retains a requested branch or derives `herdsman/<assignment-id>`, resolves and
-persists the chosen base before Herdr creation, and uses the same branch/base
-on every recovery. If creation is ambiguous, reconcile by persisted branch,
-base, and Herdr topology; use Herdr `worktree open --branch ... --no-focus`
-when the branch exists but is not open. Never create a second
+retains a requested branch or derives `herdsman/<assignment-id>`, persists the
+chosen base ref token (default `HEAD`) before Herdr creation, and reuses the
+exact token on every recovery. Token stability does not freeze a moving ref;
+Herdr 0.9.1 exposes no public ref-to-immutable-commit resolver or resolved
+commit output. If creation is ambiguous, reconcile by persisted branch, base,
+and Herdr topology; use Herdr `worktree open --workspace
+<primary-workspace-id> --branch ... --no-focus` when the branch exists but is
+not open. Never create a second
 branch/workspace for the assignment. Herdr determines the workspace path and label. Manager
 may also supervise manually created Leads in the same worktree group. An
 assigned Lead reports completion via

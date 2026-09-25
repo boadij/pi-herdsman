@@ -183,6 +183,13 @@ handles: exact Pi session IDs are the continuation selector.
 A continued session reuses its saved logical label. Exact herdr identifiers are
 validation evidence behind live agent and lead identity.
 
+Manager and Chief use role-specific supervision status and context. A restored
+Manager resumes its Manager profile and supervision UI without loading the Lead
+Agent roster or recovering Lead-owned Agents. Manager leave is blocked while
+assignments or pending asks on either supervision edge remain. See the
+[supervision reference](docs/reference/supervision.md) for delegation recovery
+and worktree/base-token guarantees.
+
 Bundled definitions are portable defaults, not required workflow stages. Global
 definitions can override them or add new roles with your preferred models,
 tools, extensions, skills, and instructions.

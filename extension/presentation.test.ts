@@ -139,7 +139,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
       formatted,
       /Respond to the preceding human\/lead message/,
     );
-    assert.match(formatted, /managers: 2/);
+    assert.match(formatted, /managers: 0\nunclaimed_direct_leads: 2/);
     assert.doesNotMatch(formatted, /truncated/);
     assert.match(
       formatted,
@@ -284,19 +284,19 @@ test("Supervision ambient projections share status and empty-state semantics", (
     };
 
     const fresh = projections("fresh");
-    assert.match(fresh.ambient, /1 manager/);
-    assert.match(fresh.widget, /1 manager/);
+    assert.match(fresh.ambient, /0 managers · 1 lead/);
+    assert.match(fresh.widget, /0 managers · 1 lead/);
     assert.match(fresh.ambient, /chief/);
     assert.doesNotMatch(fresh.ambient, /Chief/);
     assert.match(fresh.notification, /Pi Herdsman/);
-    assert.match(fresh.notification, /1 manager/);
+    assert.match(fresh.notification, /0 managers · 1 lead/);
     assert.doesNotMatch(fresh.ambient, /stale|unavailable/);
     assert.doesNotMatch(fresh.notification, /stale|unavailable/);
 
     const stale = projections("stale");
     for (const output of Object.values(stale)) assert.match(output, /stale/);
-    assert.match(stale.ambient, /1 manager/);
-    assert.match(stale.notification, /1 manager/);
+    assert.match(stale.ambient, /0 managers · 1 lead/);
+    assert.match(stale.notification, /0 managers · 1 lead/);
 
     const unavailable = projections("unavailable");
     for (const output of Object.values(unavailable)) {
@@ -325,9 +325,12 @@ test("Chief ambient projection pluralizes counts and handles unavailable state",
   {
     const cases = [
       { leads: [], label: "0 managers · 0 leads" },
-      { leads: [lead()], label: "1 manager · 0 leads" },
+      { leads: [lead({ role: "manager" })], label: "1 manager · 0 leads" },
       {
-        leads: [lead(), lead({ lead: "session-b" })],
+        leads: [
+          lead({ role: "manager" }),
+          lead({ lead: "session-b", role: "manager" }),
+        ],
         label: "2 managers · 0 leads",
       },
     ];
@@ -351,6 +354,40 @@ test("Chief ambient projection pluralizes counts and handles unavailable state",
     );
     assert.deepEqual(rows, ["● chief · unavailable"]);
   }
+});
+
+test("Manager supervision presentation is role-aware and classifies direct Leads", () => {
+  const snapshot = {
+    leads: [
+      lead({
+        lead: "direct-lead",
+        agentCounts: { active: 0, blocked: 0, total: 0 },
+      }),
+    ],
+  };
+  const reports = supervisionPresentationReports(snapshot);
+  assert.deepEqual(
+    reports.map(({ role }) => role),
+    ["lead"],
+  );
+  assert.equal(
+    renderSupervisionLeads(snapshot, 120, { role: "manager" })[0],
+    "● manager · 1 lead",
+  );
+  assert.equal(
+    renderSupervisionLeads(snapshot, 120, {
+      role: "manager",
+      status: "unavailable",
+    })[0],
+    "● manager · unavailable",
+  );
+  const context = formatSupervisionContext(snapshot, {
+    status: "fresh",
+    role: "manager",
+  });
+  assert.match(context, /Latest validated Manager supervision snapshot\./);
+  assert.match(context, /direct_leads: 1/);
+  assert.doesNotMatch(context, /chief|managers:|unclaimed_direct_leads/iu);
 });
 
 test("Chief ambient projection preserves branch and hidden-lead rendering", (t) => {
@@ -390,8 +427,8 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       120,
     );
     const output = rows.join("\n");
-    assert.equal(rows[1], "├─ !◐ attention  1 agent · 1 active");
-    assert.equal(rows[2], "├─ ● working  1 agent · 1 active");
+    assert.equal(rows[1], "├─ !◐ attention  lead · 1 agent · 1 active");
+    assert.equal(rows[2], "├─ ● working  lead · 1 agent · 1 active");
     assert.equal(
       rows.some((line) => line === ""),
       false,
@@ -407,7 +444,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       ],
       () => "fresh",
     ).render(120);
-    assert.equal(widgetRows[1], "├─ ◉ widget-a  1 agent · 1 active");
+    assert.equal(widgetRows[1], "├─ ◉ widget-a  lead · 1 agent · 1 active");
     assert.equal(widgetRows[1]?.startsWith("├─ "), true);
     assert.equal(
       widgetRows.some((line) => line === ""),
@@ -433,7 +470,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       {},
       "selected",
     );
-    assert.equal(selectedRows[1], "└─ >!◐ selected  no agents");
+    assert.equal(selectedRows[1], "└─ >!◐ selected  lead · no agents");
   }
 
   {
@@ -446,6 +483,11 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       ["├─ ", "├─ ", "└─ "],
     );
     assert.match(rows.at(-1)!, /└─ … 6 more · \/chief/);
+    const managerRows = renderSupervisionLeads(leads, 120, {
+      ordinaryCap: 2,
+      role: "manager",
+    });
+    assert.match(managerRows.at(-1)!, /└─ … 6 more · \/manager/);
   }
 });
 
@@ -560,7 +602,7 @@ test("Supervision rows cap ordinary leads, retain attention, and fit every width
       ),
     ];
     const rows = renderSupervisionLeads(leads, 200);
-    assert.match(rows[0]!, /9 managers/);
+    assert.match(rows[0]!, /9 leads/);
     assert.ok(rows.some((line) => line.includes("attention")));
     assert.match(rows.at(-1)!, /2 more/);
     for (let width = 1; width <= 120; width++)
@@ -2300,12 +2342,15 @@ test("Manager and Chief report presentation keeps descendants observational", ()
     ],
   };
   const rows = renderSupervisionLeads(managerSnapshot, 120);
+  assert.match(rows.join("\n"), /● chief · 1 manager · 0 leads/);
   assert.match(rows.join("\n"), /api\/manager  2 leads/);
   assert.match(rows.join("\n"), /fix\/auth  blocked · needs you · 2 agents/);
   assert.doesNotMatch(rows.join("\n"), /child-lead/);
   const context = formatSupervisionContext(managerSnapshot, {
     status: "fresh",
   });
+  assert.match(context, /Latest validated Chief supervision snapshot\./);
+  assert.match(context, /managers: 1\nunclaimed_direct_leads: 0/);
   assert.match(context, /session: manager-session/);
   assert.match(
     context,

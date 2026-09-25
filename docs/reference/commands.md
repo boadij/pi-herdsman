@@ -138,8 +138,11 @@ its Herdsman project scope and enter the Manager profile. Leads in
 linked-worktree workspaces cannot enter Manager mode. If another live Manager
 holds the lease, activation fails and the
 caller remains an ordinary Lead. Manager activation also refuses while the
-session owns unresolved Agent work. `/manager leave` is refused while project
-assignments or asks addressed to the Manager remain outstanding; otherwise it
+session owns unresolved Agent work. A restored Manager uses the same profile,
+supervision UI, and context as explicit activation, without the Lead Agent
+roster or Lead-owned Agent recovery. `/manager leave` is refused while project
+assignments, asks addressed to the Manager, or the Manager's own pending ask
+to Chief remain outstanding; otherwise it
 relinquishes the lease and restores the exact Lead tool baseline, including
 `agent`, and Lead instruction profile. See
 [Supervision](supervision.md) for the role and project boundaries.
