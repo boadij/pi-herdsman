@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/boadij/pi-herdsman/compare/v0.16.0...v0.16.1) (2026-09-25)
+
+
+### CI
+
+* add npm PR preview publishing ([#149](https://github.com/boadij/pi-herdsman/issues/149)) ([fa2d141](https://github.com/boadij/pi-herdsman/commit/fa2d14143cf9228f90682445318600665f458917))
+
 ## [0.16.0](https://github.com/boadij/pi-herdsman/compare/v0.15.0...v0.16.0) (2026-09-25)
 
 
