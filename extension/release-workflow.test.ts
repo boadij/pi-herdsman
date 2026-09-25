@@ -7,7 +7,7 @@ const workflow = readFileSync(resolve(".github/workflows/release.yml"), "utf8");
 const previewWorkflow = readFileSync(
   resolve(".github/workflows/preview.yml"),
   "utf8",
-);
+).replaceAll("\r\n", "\n");
 
 test("release publication uses explicit release identity", () => {
   assert.match(
@@ -75,6 +75,7 @@ test("PR preview publication isolates publish credentials from PR code", () => {
 
   assert.doesNotMatch(prepare, /id-token:\s*write/);
   assert.match(publish, /id-token:\s*write/);
+  assert.match(publish, /environment:\s*npm-preview/);
 
   assert.match(publish, /actions\/download-artifact@v8/);
   assert.match(
