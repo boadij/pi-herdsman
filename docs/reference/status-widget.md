@@ -7,19 +7,20 @@ agents plus controller-local transient starting assignments.
 
 It does not replace mailbox assignment/result authority.
 
-An active chief receives a separate leads-only widget. It shows the
-supervision projection, not managed agent rows. Its complete
+An active Chief receives a separate supervision widget for its current direct
+reports (Managers and ordinary Leads without an active project Manager). It
+shows the direct-report projection, not managed Agent rows. Its complete
 overview, peek, and focus behavior is documented in the
 [supervision reference](supervision.md). The two widgets are never combined.
 
-The ambient supervision rows use `├─` for non-final visible leads and `└─` for the
-final visible lead. Selection, attention, and lifecycle remain separate: `>`
+The ambient supervision rows use `├─` for non-final visible reports and `└─` for the
+final visible report. Selection, attention, and lifecycle remain separate: `>`
 means selected, `!` means `needs_you`, `●` means working, `◐` means blocked,
 `◌` means settling or starting, `○` means idle or done, `?` means unknown, and
 `×` means lost. An idle or done lead with active delegated descendants uses
 `◉`. Workspace labels are presentation text inside each lead row, not
 additional hierarchy nodes. The widget always retains
-attention leads, caps ordinary leads, and shows omitted leads in a final
+attention reports, caps ordinary reports, and shows omitted reports in a final
 `└─ … N more · /chief` row.
 
 ## Installation

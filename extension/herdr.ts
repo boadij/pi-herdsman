@@ -351,6 +351,59 @@ export async function runHerdr(
   return stdoutJson.result;
 }
 
+export type WorktreeGroupScope = Readonly<{
+  repoKey: string;
+  primaryWorkspaceId: string;
+  workspaceIds: readonly string[];
+}>;
+
+export async function worktreeGroupScope(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<WorktreeGroupScope> {
+  const workspace = (
+    await runHerdr(pi, ctx, ["workspace", "get", workspaceId], { signal })
+  )?.workspace;
+  const membership = workspace?.worktree;
+  if (typeof membership?.repo_key !== "string" || !membership.repo_key)
+    throw new Error("Workspace is not part of a Herdr Git worktree group");
+
+  const listed = await runHerdr(
+    pi,
+    ctx,
+    ["worktree", "list", "--workspace", workspaceId],
+    { signal },
+  );
+  const source = listed?.source;
+  if (!source || source.repo_key !== membership.repo_key)
+    throw new Error("Herdr worktree group topology changed");
+
+  const primaryWorkspaceId =
+    source.source_workspace_id ??
+    (membership.is_linked_worktree === false ? workspaceId : undefined);
+  if (typeof primaryWorkspaceId !== "string" || !primaryWorkspaceId)
+    throw new Error("Herdr primary workspace is unavailable");
+
+  return {
+    repoKey: source.repo_key,
+    primaryWorkspaceId,
+    workspaceIds: [
+      ...new Set([
+        primaryWorkspaceId,
+        ...(Array.isArray(listed.worktrees) ? listed.worktrees : []).flatMap(
+          (worktree: HerdrRecord) =>
+            typeof worktree?.open_workspace_id === "string" &&
+            worktree.open_workspace_id
+              ? [worktree.open_workspace_id]
+              : [],
+        ),
+      ]),
+    ],
+  };
+}
+
 function workspace(ctx: ExtensionContext): string {
   const value = process.env.HERDR_WORKSPACE_ID;
   if (!value) error("herdr context", "HERDR_WORKSPACE_ID is not set");

@@ -58,8 +58,9 @@ Continue with:
 - [Agent states](reference/agent-states.md)
 - [Errors](reference/errors.md)
 
-For chief supervision of independent leads, read [Supervision](concepts/supervision.md)
-and its [complete reference contract](reference/supervision.md).
+For structural project Manager and runtime Chief supervision, read
+[Supervision](concepts/supervision.md) and its
+[complete reference contract](reference/supervision.md).
 
 ### Develop Pi Herdsman
 
@@ -77,32 +78,32 @@ before choosing the material relevant to them.
 
 ## Canonical ownership
 
-| Subject                               | Canonical page                                                                  |
-| ------------------------------------- | ------------------------------------------------------------------------------- |
-| Human UI first use                    | [Getting started](getting-started.md)                                           |
-| Container deployment                  | [Container deployment](guides/container-deployment.md)                          |
-| Agent/API first use                   | [Agent coordination API](agent-api.md)                                          |
-| Asynchronous orchestration            | [Lifecycle](concepts/lifecycle.md)                                              |
-| Agent identity                        | [Agents and identity](concepts/agents.md)                                       |
-| State transitions                     | [Lifecycle](concepts/lifecycle.md)                                              |
-| Delegation model                      | [Delegation](concepts/delegation.md)                                            |
-| Creating definitions                  | [Agent definitions](guides/agent-definitions.md)                                |
-| Overrides and prompt composition      | [Customizing bundled agents](guides/customizing-agents.md)                      |
-| `files`, body references, and results | [Handoffs and files](guides/handoffs.md)                                        |
-| Operator recovery                     | [Recovery](guides/recovery.md)                                                  |
-| `agent` request contract              | [`agent` API](reference/agent.md)                                               |
-| `ask_owner` contract                  | [`ask_owner` API](reference/ask-owner.md)                                       |
-| Pi Herdsman supervision concept       | [Supervision](concepts/supervision.md)                                          |
-| Chief and staff tools                 | [Supervision reference](reference/supervision.md)                               |
-| Frontmatter fields                    | [Agent-definition schema](reference/agent-definition-schema.md)                 |
-| Public agent states                   | [Agent states](reference/agent-states.md)                                       |
-| `/agents` human commands              | [`/agents` commands](reference/commands.md)                                     |
-| Settings                              | [Configuration](reference/configuration.md)                                     |
-| TUI agent widget                      | [Status widget](reference/status-widget.md)                                     |
-| Error categories                      | [Errors](reference/errors.md)                                                   |
-| Repository checks                     | [Validation](development/validation.md)                                         |
-| Live acceptance                       | [Smoke testing](development/smoke-testing.md)                                   |
-| Instruction and interface design      | [Instruction and interface design](development/instruction-interface-design.md) |
+| Subject                                     | Canonical page                                                                  |
+| ------------------------------------------- | ------------------------------------------------------------------------------- |
+| Human UI first use                          | [Getting started](getting-started.md)                                           |
+| Container deployment                        | [Container deployment](guides/container-deployment.md)                          |
+| Agent/API first use                         | [Agent coordination API](agent-api.md)                                          |
+| Asynchronous orchestration                  | [Lifecycle](concepts/lifecycle.md)                                              |
+| Agent identity                              | [Agents and identity](concepts/agents.md)                                       |
+| State transitions                           | [Lifecycle](concepts/lifecycle.md)                                              |
+| Delegation model                            | [Delegation](concepts/delegation.md)                                            |
+| Creating definitions                        | [Agent definitions](guides/agent-definitions.md)                                |
+| Overrides and prompt composition            | [Customizing bundled agents](guides/customizing-agents.md)                      |
+| `files`, body references, and results       | [Handoffs and files](guides/handoffs.md)                                        |
+| Operator recovery                           | [Recovery](guides/recovery.md)                                                  |
+| `agent` request contract                    | [`agent` API](reference/agent.md)                                               |
+| `ask_owner` contract                        | [`ask_owner` API](reference/ask-owner.md)                                       |
+| Pi Herdsman supervision concept             | [Supervision](concepts/supervision.md)                                          |
+| Chief, Manager, staff, supervisor, and peer | [Supervision reference](reference/supervision.md)                               |
+| Frontmatter fields                          | [Agent-definition schema](reference/agent-definition-schema.md)                 |
+| Public agent states                         | [Agent states](reference/agent-states.md)                                       |
+| `/agents` human commands                    | [`/agents` commands](reference/commands.md)                                     |
+| Settings                                    | [Configuration](reference/configuration.md)                                     |
+| TUI agent widget                            | [Status widget](reference/status-widget.md)                                     |
+| Error categories                            | [Errors](reference/errors.md)                                                   |
+| Repository checks                           | [Validation](development/validation.md)                                         |
+| Live acceptance                             | [Smoke testing](development/smoke-testing.md)                                   |
+| Instruction and interface design            | [Instruction and interface design](development/instruction-interface-design.md) |
 
 When another page needs one of these subjects, it summarizes only enough to
 establish context and links to the canonical page instead of restating the full

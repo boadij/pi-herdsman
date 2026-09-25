@@ -19,6 +19,7 @@ import {
   listHerdrAgents,
   listAllHerdrAgents,
   herdrSessionSnapshot,
+  worktreeGroupScope,
   watchHerdrLifecycle,
   leadMetadataArgs,
   reportLeadMetadata,
@@ -42,6 +43,100 @@ import {
 } from "./herdr.ts";
 import { claimProcessLock } from "./lock.ts";
 import { herdsmanTempRoot } from "./storage.ts";
+
+test("worktree group scope resolves primary and linked workspaces from Herdr topology", async () => {
+  const calls: string[][] = [];
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const workspaceId = args.at(-1);
+      const result =
+        args[0] === "workspace"
+          ? {
+              workspace: {
+                worktree: {
+                  repo_key: "repo-key",
+                  is_linked_worktree: workspaceId !== "root",
+                },
+              },
+            }
+          : {
+              source: {
+                repo_key: "repo-key",
+                source_workspace_id: "root",
+              },
+              worktrees: [
+                { open_workspace_id: "root" },
+                { open_workspace_id: "linked" },
+                { open_workspace_id: "linked" },
+                { open_workspace_id: null },
+              ],
+            };
+      return { code: 0, stdout: JSON.stringify({ id: 1, result }), stderr: "" };
+    },
+  } as any;
+  const ctx = { cwd: "/tmp" } as any;
+  const primary = await worktreeGroupScope(pi, ctx, "root");
+  const linked = await worktreeGroupScope(pi, ctx, "linked");
+  assert.deepEqual(primary, {
+    repoKey: "repo-key",
+    primaryWorkspaceId: "root",
+    workspaceIds: ["root", "linked"],
+  });
+  assert.deepEqual(linked, primary);
+  assert.notEqual(linked.primaryWorkspaceId, "linked"); // /manager requires the primary workspace.
+  assert.deepEqual(calls, [
+    ["workspace", "get", "root"],
+    ["worktree", "list", "--workspace", "root"],
+    ["workspace", "get", "linked"],
+    ["worktree", "list", "--workspace", "linked"],
+  ]);
+});
+
+test("worktree group scope fails closed on missing or inconsistent topology evidence", async () => {
+  const ctx = { cwd: "/tmp" } as any;
+  const scope = (membership: any, source: any) =>
+    worktreeGroupScope(
+      {
+        exec: async (_command: string, args: string[]) => ({
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            id: 1,
+            result:
+              args[0] === "workspace"
+                ? { workspace: { worktree: membership } }
+                : { source, worktrees: [] },
+          }),
+        }),
+      } as any,
+      ctx,
+      "linked",
+    );
+  await assert.rejects(
+    scope(undefined, undefined),
+    /not part of a Herdr Git worktree group/,
+  );
+  await assert.rejects(
+    scope({ repo_key: "one", is_linked_worktree: true }, { repo_key: "two" }),
+    /topology changed/,
+  );
+  await assert.rejects(
+    scope({ repo_key: "one", is_linked_worktree: true }, { repo_key: "one" }),
+    /primary workspace is unavailable/,
+  );
+  assert.deepEqual(
+    await scope(
+      { repo_key: "one", is_linked_worktree: false },
+      { repo_key: "one" },
+    ),
+    {
+      repoKey: "one",
+      primaryWorkspaceId: "linked",
+      workspaceIds: ["linked"],
+    },
+  );
+});
 
 test("nested topology keeps the Herdr workspace authoritative", () => {
   assert.deepEqual(

@@ -15,7 +15,7 @@ Pi Herdsman is a Pi extension for asynchronous subagents and multi-agent
 coding. Delegate coding tasks to managed background agents running in
 independent Pi sessions while the lead conversation stays interactive. Run
 coding agents in parallel, nest delegation, steer active agents, route
-questions and results back to their owning agent, and supervise multiple leads
+questions and results back to their owning agent, and supervise project leads
 through one coordinated hierarchy.
 
 Use it in an existing Pi/herdr setup or deploy the SSH-ready container as a
@@ -105,23 +105,31 @@ Open the human agent management surface at any time with:
 /agents
 ```
 
-To supervise independent leads across the current herdr runtime, use:
+Every session starts as an ordinary Lead. In the primary workspace of a Herdr
+worktree group, a Lead can explicitly enter Manager mode with `/manager`;
+Leads in linked-worktree workspaces remain Leads. A Manager is a dedicated
+coordinator for Leads across the Herdsman project scope for that worktree
+group. Actual delegated implementation belongs to Leads and their Agent trees;
+Manager can create Leads in linked-worktree workspaces for independent work.
+In an eligible Lead session, supervise Managers across the current Herdr
+runtime with:
 
 ```text
 /chief
 ```
 
-Chief supervision is separate from ownership:
+Supervision is separate from Agent ownership:
 
 ```text
-chief
-  ├─ herd A / lead A
-  │  └─ agents...
-  └─ herd B / lead B
-     └─ agents...
+Chief
+└─ Manager
+   ├─ Lead
+   │  └─ Agents...
+   └─ Lead
+      └─ Agents...
 ```
 
-Leave chief mode with:
+Leave Manager mode with `/manager leave`, or Chief mode with:
 
 ```text
 /chief leave
@@ -161,14 +169,17 @@ Pi Herdsman deliberately separates three responsibilities:
   coordination.
 - **Pi** owns each session and turn state.
 
-The model-facing tools are `agent`, `chief`, `peer`, `staff`, and `ask_owner`.
-`agent` manages owned assignments, `chief` sends messages or asks to the chief,
-`peer` lets ordinary leads message independent ordinary leads, `staff` lets the
-chief supervise leads, and `ask_owner` lets an agent ask its exact owner. Leads
-use `chief.message` and `chief.ask`; ordinary leads use `peer.list` and
-`peer.message` with exact Pi session IDs; the active chief uses
-`staff.message` and `staff.reply` with exact lead session IDs. Agent labels are
-not continuation handles: exact Pi session IDs are the continuation selector.
+The model-facing tools are `agent`, `supervisor`, `peer`, `staff`, and
+`ask_owner`. A Lead uses `agent` for owned Agents and routes `supervisor` to
+its Manager, or to Chief when no Manager is active. Manager has `staff`,
+`supervisor`, and `peer`, but no `agent`; it coordinates project Leads and
+routes `supervisor` to Chief. Chief
+has only `staff` and can target Managers, plus ordinary Leads whose project
+has no active Manager. `peer` addresses live same-role Leads or Managers with exact
+`session` IDs, never Agents. `ask_owner` lets an Agent ask its exact owner.
+An assigned Lead completes a project task with `supervisor.result`, leaving a
+reusable `result:<assignment-id>` artifact. Agent labels are not continuation
+handles: exact Pi session IDs are the continuation selector.
 A continued session reuses its saved logical label. Exact herdr identifiers are
 validation evidence behind live agent and lead identity.
 
@@ -215,7 +226,7 @@ Choose the path that matches what you are doing:
 - **Using Pi Herdsman:** [Getting started](docs/getting-started.md), then the
   [`/agents` commands](docs/reference/commands.md), [status widget](docs/reference/status-widget.md),
   and [agent definitions](docs/guides/agent-definitions.md).
-- **Supervising leads:** [Supervision](docs/concepts/supervision.md), then the
+- **Supervising projects:** [Supervision](docs/concepts/supervision.md), then the
   [supervision reference](docs/reference/supervision.md).
 - **Building agent coordination:** [Agent coordination API](docs/agent-api.md),
   then the [`agent` API](docs/reference/agent.md),

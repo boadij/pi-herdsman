@@ -24,6 +24,16 @@ import {
   chiefAskMessageId,
   chiefLeaseIsHeld,
   claimChiefLease,
+  claimManagerLease,
+  readManagerDescriptor,
+  listManagerDescriptors,
+  sameManagerDescriptor,
+  writeProjectAssignment,
+  readProjectAssignment,
+  listProjectAssignments,
+  removeProjectAssignment,
+  projectAssignmentPath,
+  PROJECT_ASSIGNMENT_MAX_BYTES,
   coordinationMessageBytes,
   coordinationMessagePath,
   drainCoordinationInbox,
@@ -67,6 +77,7 @@ const state = (
   extra: Partial<LeadCoordinationState> = {},
 ): LeadCoordinationState => ({
   version: 1,
+  role: "lead",
   instanceId: id(),
   piSessionId,
   updatedAt: 1,
@@ -114,6 +125,7 @@ function peerRecord(
   return {
     record: {
       version: 1,
+      role: "lead",
       piSessionId,
       paneId: "pane",
       tabId: "tab",
@@ -556,7 +568,7 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   const value = state("lead");
   const path = writeLeadCoordinationState(runtime, value);
   assert.deepEqual(readLeadCoordinationState(runtime, "lead"), value);
-  assert.match(path.split(sep).join("/"), /leads\/[0-9a-f]{64}\.json$/);
+  assert.match(path.split(sep).join("/"), /coordinators\/[0-9a-f]{64}\.json$/);
   assertPosixMode(path, 0o600);
   assertPosixMode(runtime.leads, 0o700);
   assert.throws(() =>
@@ -670,10 +682,17 @@ test("lead role state requires a canonical durable tool baseline", () => {
     ]),
     { role: "chief", leadTools: [] },
   );
+  assert.deepEqual(
+    sessionLeadRoleState([
+      { ...valid, data: { role: "manager", leadTools: ["read", "agent"] } },
+    ]),
+    { role: "manager", leadTools: ["read", "agent"] },
+  );
   for (const data of [
     undefined,
     [],
     { role: "lead" },
+    { role: "invalid", leadTools: [] },
     { role: "invalid", leadTools: [] },
     { role: "lead", leadTools: "read" },
     { role: "lead", leadTools: ["read", "read"] },
@@ -688,6 +707,241 @@ test("lead role state requires a canonical durable tool baseline", () => {
     );
     assert.deepEqual(sessionLeadRoleState([malformed, valid]), valid.data);
   }
+});
+
+test("Chief lead projection supports fallback without dual-reporting Manager reports", () => {
+  const makeLead = (sessionId: string) => ({
+    sessionId,
+    sessionKind: "id" as const,
+    workspaceId: "workspace",
+    paneId: `pane-${sessionId}`,
+    tabId: `tab-${sessionId}`,
+  });
+  const agents = [makeLead("fallback-lead"), makeLead("manager-lead")];
+  const coordinationStates = agents.map(({ sessionId }) => state(sessionId));
+  const chiefFallback = projectSupervision({
+    agents,
+    managedAgents: [],
+    coordinationStates,
+    chiefSessionId: "chief",
+  });
+  assert.deepEqual(
+    chiefFallback.leads.map(({ lead }) => lead),
+    ["fallback-lead", "manager-lead"],
+  );
+  const managerHierarchy = projectSupervision({
+    agents,
+    managedAgents: [],
+    coordinationStates,
+    chiefSessionId: "chief",
+    managerSupervisedLeadSessionIds: new Set(["manager-lead"]),
+  });
+  assert.deepEqual(
+    managerHierarchy.leads.map(({ lead }) => lead),
+    ["fallback-lead"],
+  );
+});
+
+test("coordinator state and peer presence admit only Lead or Manager roles", () => {
+  const runtime = supervisionRuntime(socket());
+  for (const role of ["lead", "manager"] as const) {
+    const value = state(`session-${role}`, { role });
+    writeLeadCoordinationState(runtime, value);
+    assert.deepEqual(
+      readLeadCoordinationState(runtime, value.piSessionId),
+      value,
+    );
+  }
+  assert.throws(() =>
+    writeLeadCoordinationState(
+      runtime,
+      state("chief", { role: "chief" as never }),
+    ),
+  );
+  assert.throws(() =>
+    writeLeadCoordinationState(
+      runtime,
+      state("bad", {
+        pendingAsk: {
+          askId: id(),
+          question: "?",
+          text: "x",
+          extra: true,
+        } as never,
+      }),
+    ),
+  );
+  const peers = peerRuntime();
+  const manager = peerRecord(peers, `manager-${id()}`, { role: "manager" });
+  try {
+    writePeerLeadRecord(peers, manager.record);
+    assert.deepEqual(
+      readPeerLeadRecord(peers, manager.record.piSessionId),
+      manager.record,
+    );
+    assert.throws(() =>
+      writePeerLeadRecord(peers, { ...manager.record, role: "chief" } as never),
+    );
+  } finally {
+    manager.release();
+  }
+});
+
+test("Manager leases are exclusive per root and fail closed on stale descriptor generations", () => {
+  const runtime = supervisionRuntime(socket());
+  const identity = {
+    piSessionId: id(),
+    paneId: "pane",
+    tabId: "tab",
+    workspaceId: "root",
+    repoKey: "repo",
+  };
+  const first = claimManagerLease(identity, runtime);
+  const second = claimManagerLease(
+    { ...identity, workspaceId: "other" },
+    runtime,
+  );
+  try {
+    assert.throws(() =>
+      claimManagerLease({ ...identity, piSessionId: id() }, runtime),
+    );
+    assert.deepEqual(
+      new Set(
+        listManagerDescriptors(runtime).map((record) => record.workspaceId),
+      ),
+      new Set(["root", "other"]),
+    );
+    assert.deepEqual(readManagerDescriptor(runtime, "root"), first.descriptor);
+    const path = join(
+      runtime.managers,
+      `${createHash("sha256").update("root").digest("hex")}.json`,
+    );
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...first.descriptor,
+        claim: { ...first.descriptor.claim, id: id() },
+      }),
+    );
+    assert.throws(
+      () => readManagerDescriptor(runtime, "root"),
+      /generation changed/,
+    );
+    assert.equal(
+      listManagerDescriptors(runtime).some(
+        (record) => record.workspaceId === "root",
+      ),
+      false,
+    );
+    first.release();
+    assert.equal(statSync(path).isFile(), true);
+    assert.equal(
+      sameManagerDescriptor(first.descriptor, {
+        ...first.descriptor,
+        leaseId: id(),
+      }),
+      false,
+    );
+  } finally {
+    first.release();
+    second.release();
+  }
+});
+
+test("project assignments are strict, private, bounded, and removable", () => {
+  const runtime = supervisionRuntime(socket());
+  const assignment = {
+    version: 1 as const,
+    id: id(),
+    primaryWorkspaceId: "root",
+    repoKey: "repo",
+    text: "task",
+    phase: "creating" as const,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const path = writeProjectAssignment(runtime, assignment);
+  assert.equal(path, projectAssignmentPath(runtime, "root", assignment.id));
+  assertPosixMode(path, 0o600);
+  assertPosixMode(
+    join(
+      runtime.assignments,
+      createHash("sha256").update("root").digest("hex"),
+    ),
+    0o700,
+  );
+  assert.deepEqual(listProjectAssignments(runtime, "root"), [assignment]);
+  assert.deepEqual(
+    readProjectAssignment(runtime, "root", assignment.id),
+    assignment,
+  );
+  assert.throws(() =>
+    writeProjectAssignment(runtime, { ...assignment, extra: true } as never),
+  );
+  assert.throws(() =>
+    writeProjectAssignment(runtime, {
+      ...assignment,
+      primaryWorkspaceId: undefined,
+      rootWorkspaceId: "root",
+    } as never),
+  );
+  assert.throws(() =>
+    writeProjectAssignment(runtime, {
+      ...assignment,
+      text: "é".repeat(PROJECT_ASSIGNMENT_MAX_BYTES),
+    }),
+  );
+  assert.deepEqual(
+    readProjectAssignment(runtime, "root", assignment.id),
+    assignment,
+  );
+  writeFileSync(
+    path,
+    JSON.stringify({ ...assignment, repoKey: "repo", unknown: 1 }),
+  );
+  assert.throws(
+    () => listProjectAssignments(runtime, "root"),
+    /Unable to read/,
+  );
+  removeProjectAssignment(runtime, "root", assignment.id);
+  assert.equal(
+    readProjectAssignment(runtime, "root", assignment.id),
+    undefined,
+  );
+});
+
+test("Manager asks and project results use the one durable inbox", async () => {
+  const runtime = supervisionRuntime(socket());
+  const ask = message({
+    kind: "manager_ask",
+    fromSessionId: "manager",
+    toSessionId: "chief",
+    leadSessionId: "manager",
+    askId: id(),
+  });
+  writeChiefAskMessage(ask, runtime);
+  const result = message({
+    kind: "report_result",
+    fromSessionId: "lead",
+    toSessionId: "manager",
+    leadSessionId: "lead",
+    text: `result:${id()}`,
+  });
+  writeChiefMessage(result, runtime);
+  const received: string[] = [];
+  for (const sessionId of ["chief", "manager"])
+    await drainCoordinationInbox({
+      runtime,
+      sessionId,
+      isAuthorized: () => true,
+      isDelivered: () => false,
+      sendMessage: (payload) =>
+        received.push((payload as { content: string }).content),
+    });
+  assert.deepEqual(received, [
+    "From manager manager to chief chief: hello",
+    `Result from lead lead to manager manager: ${result.text}`,
+  ]);
 });
 
 test("supervision authority is coordination state, not metadata", () => {
@@ -1299,17 +1553,17 @@ test("inbox rechecks quarantine before accepting an already-delivered record", a
 test("inbox orders valid records by createdAt and retains transient failures", async () => {
   const runtime = supervisionRuntime(socket());
   const records = [
-    message({ createdAt: 20, text: "twenty" }),
-    message({ createdAt: 10, text: "ten" }),
-    message({ createdAt: 30, text: "thirty" }),
+    message({ toSessionId: "manager", createdAt: 20, text: "twenty" }),
+    message({ toSessionId: "manager", createdAt: 10, text: "ten" }),
+    message({ toSessionId: "manager", createdAt: 30, text: "thirty" }),
   ];
   for (const record of records) writeChiefMessage(record, runtime);
-  assert.equal(listChiefMessagePaths(runtime, "chief").length, 3);
+  assert.equal(listChiefMessagePaths(runtime, "manager").length, 3);
   const seen: string[] = [];
   const cleared: string[] = [];
   await drainCoordinationInbox({
     runtime,
-    sessionId: "chief",
+    sessionId: "manager",
     isAuthorized: () => {
       throw new Error("temporary");
     },
@@ -1321,11 +1575,11 @@ test("inbox orders valid records by createdAt and retains transient failures", a
       clear: (token) => cleared.push(token as string),
     },
   });
-  assert.equal(listChiefMessagePaths(runtime, "chief").length, 3);
+  assert.equal(listChiefMessagePaths(runtime, "manager").length, 3);
   assert.equal(cleared.length, 3);
   await drainCoordinationInbox({
     runtime,
-    sessionId: "chief",
+    sessionId: "manager",
     isAuthorized: () => true,
     isDelivered: () => false,
     sendMessage: (payload) => {
@@ -1333,9 +1587,9 @@ test("inbox orders valid records by createdAt and retains transient failures", a
     },
   });
   assert.deepEqual(seen, [
-    "From lead lead to chief chief: ten",
-    "From lead lead to chief chief: twenty",
-    "From lead lead to chief chief: thirty",
+    "From lead lead to manager manager: ten",
+    "From lead lead to manager manager: twenty",
+    "From lead lead to manager manager: thirty",
   ]);
 });
 
@@ -1360,29 +1614,30 @@ test("terminal authorization rejection deletes, and sender is model-visible", as
   const record = message({
     fromSessionId: "api/backend",
     leadSessionId: "api/backend",
+    toSessionId: "manager",
   });
   writeChiefMessage(record, runtime);
   let content = "";
   await drainCoordinationInbox({
     runtime,
-    sessionId: "chief",
+    sessionId: "manager",
     isAuthorized: () => true,
     isDelivered: () => false,
     sendMessage: (payload) => {
       content = (payload as any).content;
     },
   });
-  assert.match(content, /^From lead api\/backend to chief chief: hello$/);
-  const rejected = message();
+  assert.match(content, /^From lead api\/backend to manager manager: hello$/);
+  const rejected = message({ toSessionId: "manager" });
   writeChiefMessage(rejected, runtime);
   await drainCoordinationInbox({
     runtime,
-    sessionId: "chief",
+    sessionId: "manager",
     isAuthorized: () => false,
     isDelivered: () => false,
     sendMessage: () => {},
   });
-  assert.equal(listChiefMessagePaths(runtime, "chief").length, 0);
+  assert.equal(listChiefMessagePaths(runtime, "manager").length, 0);
 });
 
 test("in-flight authorization cleanup becomes a no-op after invalidation", async () => {
@@ -1411,31 +1666,43 @@ test("in-flight authorization cleanup becomes a no-op after invalidation", async
   assert.equal(listChiefMessagePaths(runtime, "chief").length, 1);
 });
 
-test("both directions identify the actual sender and target in bounded content", async () => {
+test("each supervision edge identifies the actual sender and target in bounded content", async () => {
   const runtime = supervisionRuntime(socket());
   const askId = id();
   const leadAsk = message({
     kind: "lead_ask",
     fromSessionId: "lead-session",
-    toSessionId: "chief-session",
+    toSessionId: "manager-session",
     leadSessionId: "lead-session",
     askId,
     text: "Which credential should I use?",
+    createdAt: 1,
   });
   const chiefReply = message({
     kind: "chief_reply",
     fromSessionId: "chief-session",
+    toSessionId: "manager-session",
+    leadSessionId: "manager-session",
+    askId,
+    text: "Use the service account.",
+    createdAt: 2,
+  });
+  const managerReply = message({
+    kind: "manager_reply",
+    fromSessionId: "manager-session",
     toSessionId: "lead-session",
     leadSessionId: "lead-session",
     askId,
-    text: "Use the service account.",
+    text: "Proceed.",
+    createdAt: 3,
   });
   writeChiefMessage(leadAsk, runtime);
   writeChiefMessage(chiefReply, runtime);
+  writeChiefMessage(managerReply, runtime);
   const content: string[] = [];
   await drainCoordinationInbox({
     runtime,
-    sessionId: "chief-session",
+    sessionId: "manager-session",
     isAuthorized: () => true,
     isDelivered: () => false,
     sendMessage: (payload) => content.push((payload as any).content),
@@ -1448,8 +1715,9 @@ test("both directions identify the actual sender and target in bounded content",
     sendMessage: (payload) => content.push((payload as any).content),
   });
   assert.deepEqual(content, [
-    "From lead lead-session to chief chief-session: Which credential should I use?",
-    "From chief chief-session to lead lead-session: Use the service account.",
+    "From lead lead-session to manager manager-session: Which credential should I use?",
+    "From chief chief-session to manager manager-session: Use the service account.",
+    "From manager manager-session to lead lead-session: Proceed.",
   ]);
   assert.ok(
     content.every((value) => Buffer.byteLength(value, "utf8") <= 8 * 1024),

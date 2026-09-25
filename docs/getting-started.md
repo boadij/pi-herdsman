@@ -144,28 +144,27 @@ proven owned agent tree.
 
 For failure diagnosis and conservative cleanup, see [Recovery](guides/recovery.md).
 
-## 8. Optionally supervise leads
+## 8. Supervise project Leads and Managers
 
-When several independent lead sessions run in the same herdr runtime, an
-eligible lead can become the chief with:
+Every session starts as a Lead. In the primary workspace of a Herdr worktree
+group, use `/manager` to explicitly claim the exclusive Manager lease for its
+Herdsman project scope; `/manager leave` returns to Lead. Leads in
+linked-worktree workspaces cannot enter Manager mode. Manager is a dedicated
+project coordinator with a distinct coordination profile and only
+`staff`, `supervisor`, and `peer` among Herdsman tools. It does not own Agents
+or implement work through them; delegated implementation belongs to Leads and
+their Agent trees. Worktree Leads are the execution boundary for project work
+delegated by Manager. See the
+[supervision reference](reference/supervision.md) for project eligibility,
+direct-report tools, durable assignments, and results.
 
-```text
-/chief
-```
-
-This is optional and does not change agent ownership. In a UI session, use
-`/chief leave` to leave after reviewing its confirmation, which reports
-known outstanding supervised lead asks and leaves them pending. Cancellation
-does nothing; an unavailable count is reported as unknown. Without a UI, leave
-proceeds without interactive confirmation. See the [supervision
-reference](reference/supervision.md) before using its model-facing tools.
-
-The `/chief` command is state-sensitive: from an ordinary lead, it
-activates chief mode only and shows the ambient widget. When already active
-as chief, `/chief` opens the interactive overview instead. Use
-`/chief leave` to leave chief mode and remove the widget.
-While active, chief mode is supervision-only; leave it to resume ordinary
-workspace-local Pi work.
+In an eligible Lead session, use `/chief` to supervise Managers across the
+current Herdr runtime. When a Herdsman project scope has no active Manager,
+Chief may supervise its ordinary Leads directly; when a Manager is active,
+Leads in that worktree group report to the Manager, not Chief. Chief can
+observe bounded descendant Lead summaries but cannot act on those Leads. A Manager cannot
+activate Chief mode. From Chief, `/chief` opens the overview; `/chief leave`
+returns to ordinary Lead mode.
 
 ## Next steps
 
