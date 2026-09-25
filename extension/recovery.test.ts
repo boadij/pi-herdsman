@@ -3118,7 +3118,7 @@ test("result delivery identifies retired sessions and honors the disabled settin
     const retired = await deliver("retired-delivery-agent", true, true);
     assert.match(
       retired.content,
-      /Session retired after context pressure\. Do not continue or fork this session\./,
+      /Session retired after context pressure\. Do not continue this session\./,
     );
     assert.equal(retired.details.sessionRetired, true);
 

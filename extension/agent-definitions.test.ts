@@ -1138,10 +1138,7 @@ test("drops --no-extensions when the child's model comes from an extension", () 
       extensionDiscovery: true,
     },
   });
-  assert.deepEqual(foreign.slice(0, 2), [
-    "--model",
-    "acme/reasoning/mini",
-  ]);
+  assert.deepEqual(foreign.slice(0, 2), ["--model", "acme/reasoning/mini"]);
   assert.equal(foreign.includes("--no-extensions"), false);
 
   const lean = agentLaunchArgs(definition, {
@@ -1776,12 +1773,18 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
 });
 
 const noForeignProviders = () => false;
-const inheritedModel = (provider: string, token: string) => ({ provider, token });
+const inheritedModel = (provider: string, token: string) => ({
+  provider,
+  token,
+});
 
 test("a child with no requested model passes no --model at all", () => {
-  assert.deepEqual(resolveChildModel({ isForeignProvider: noForeignProviders }), {
-    kind: "none",
-  });
+  assert.deepEqual(
+    resolveChildModel({ isForeignProvider: noForeignProviders }),
+    {
+      kind: "none",
+    },
+  );
 });
 
 test("a blank configured model is treated as no model", () => {

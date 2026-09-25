@@ -308,7 +308,7 @@ test("lead direct placement modes use real controller delegation", async () => {
           fakeContext(),
         );
         assert.equal(result.details.ok, true, JSON.stringify(result.details));
-        const childMailbox = agentMailboxPath(WORKSPACE, label);
+        const childMailbox = agentMailboxPath(WORKSPACE, result.details.agent);
         childMailboxes.push(childMailbox);
         return readAgentState(childMailbox)!;
       };
@@ -395,7 +395,7 @@ test("lead split-to-tab placement creates a dedicated agents tab", async () => {
         fakeContext(),
       );
       assert.equal(result.details.ok, true, JSON.stringify(result.details));
-      childMailboxes.push(agentMailboxPath(WORKSPACE, label));
+      childMailboxes.push(agentMailboxPath(WORKSPACE, result.details.agent));
       const state = readAgentState(childMailboxes.at(-1)!);
       assert.ok(state);
       if (placement === "split")
@@ -463,7 +463,6 @@ test("lead tab placement vetoes an ambiguous current-lead direct root", async ()
       {
         action: "delegate",
         definition: "agent",
-        label: "ambiguous-current-child",
         task: "reject ambiguous root reuse",
       },
       undefined,
@@ -536,7 +535,6 @@ test("lead tab placement vetoes ambiguous foreign-herd evidence", async () => {
       {
         action: "delegate",
         definition: "agent",
-        label: "ambiguous-foreign-child",
         task: "reject foreign ambiguity",
       },
       undefined,
@@ -600,7 +598,7 @@ test("lead tab placement rejects old shared tabs and only changes future starts"
         fakeContext(),
       );
       assert.equal(result.details.ok, true, JSON.stringify(result.details));
-      const childMailbox = agentMailboxPath(WORKSPACE, label);
+      const childMailbox = agentMailboxPath(WORKSPACE, result.details.agent);
       childMailboxes.push(childMailbox);
       return readAgentState(childMailbox)!;
     };
@@ -680,7 +678,6 @@ test("lead tab revalidation rejects a newly contaminated candidate under the loc
       {
         action: "delegate",
         definition: "agent",
-        label: "revalidation-child",
         task: "reject contaminated candidate",
       },
       undefined,
@@ -746,10 +743,7 @@ test("managed-agent delegation always splits in its current pane for every lead 
         },
       },
     ]);
-    const childMailbox = agentMailboxPath(
-      WORKSPACE,
-      `nested-placement-child-${placement}`,
-    );
+    const childMailbox = agentMailboxPath(WORKSPACE, "agent");
     try {
       for (const handler of pi.events.get("session_start") ?? [])
         await handler(undefined, context);
@@ -758,7 +752,6 @@ test("managed-agent delegation always splits in its current pane for every lead 
         {
           action: "delegate",
           definition: "agent",
-          label: `nested-placement-child-${placement}`,
           task: "nested placement",
         },
         undefined,
@@ -869,7 +862,6 @@ test("parent delegation lock makes concurrent close and delegate fail fast", asy
       {
         action: "delegate",
         definition: "child",
-        label: "race-new-child",
         task: "must not start during parent close",
       },
       undefined,
@@ -1171,14 +1163,13 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
 });
 
 test("staged fresh assignment bridges pending start through working", async () => {
-  const fixture = createStagedAssignmentFixture("staged-bridge-agent");
+  const fixture = createStagedAssignmentFixture("agent");
   try {
     const starting = fixture.pi.tools[0].execute(
       "id",
       {
         action: "delegate",
         definition: "agent",
-        label: "staged-bridge-agent",
         task: "bridge the staged lifecycle",
       },
       undefined,
@@ -1196,11 +1187,8 @@ test("staged fresh assignment bridges pending start through working", async () =
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(readAgentState(fixture.mailbox), undefined);
     assert.equal(
-      fixture.widgetValue
-        .render(160)
-        .join("\n")
-        .match(/staged-bridge-agent/g)?.length,
-      1,
+      /agent/.test(fixture.widgetValue.render(160).join("\n")),
+      true,
     );
 
     fixture.releaseStart();
@@ -1214,7 +1202,7 @@ test("staged fresh assignment bridges pending start through working", async () =
     const renderedBeforeAck = fixture.widgetValue.render(160).join("\n");
     assert.match(renderedBeforeAck, /starting/);
     assert.doesNotMatch(renderedBeforeAck, /settling/);
-    assert.equal(renderedBeforeAck.match(/staged-bridge-agent/g)?.length, 1);
+    assert.match(renderedBeforeAck, /agent/);
 
     fixture.releasePreSubmitValidation();
     await waitForTestCondition(
@@ -1313,7 +1301,7 @@ test("fixture mailbox consumer retries a failed acknowledgement callback", async
 
 test("fresh path sessions remain controllable after controller cache loss", async () => {
   setLeadEnvironment();
-  const label = `fresh-path-${randomUUID().slice(0, 8)}`;
+  const label = "agent";
   const sessionPath = join(testTmpRoot, "registered-agent.jsonl");
   realFs.rmSync(sessionPath, { force: true });
   realFs.writeFileSync(sessionPath, "{}", "utf8");
@@ -1435,17 +1423,13 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
 });
 
 test("staged fresh assignment removes a fast completion without observing working", async () => {
-  const fixture = createStagedAssignmentFixture(
-    "staged-fast-completion-agent",
-    true,
-  );
+  const fixture = createStagedAssignmentFixture("agent", true);
   try {
     const starting = fixture.pi.tools[0].execute(
       "id",
       {
         action: "delegate",
         definition: "agent",
-        label: "staged-fast-completion-agent",
         task: "complete before the working snapshot",
       },
       undefined,
@@ -1518,7 +1502,7 @@ test("staged fresh assignment removes a fast completion without observing workin
 
 test("lead herd runs start once and stay open through intermediate settlement", async () => {
   setLeadEnvironment();
-  const label = `herd-run-${randomUUID().slice(0, 8)}`;
+  const label = "agent";
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -1583,6 +1567,29 @@ test("lead herd runs start once and stay open through intermediate settlement", 
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
   }
+
+  const invalidPi = fakePi();
+  registerExtension!(invalidPi.pi as never);
+  for (const invalidLabel of [
+    "Ainvalid",
+    "invalid.label",
+    "a" + "b".repeat(32),
+  ]) {
+    const result = await invalidPi.tools[0].execute(
+      "id",
+      {
+        action: "delegate",
+        definition: "agent",
+        label: invalidLabel,
+        task: "reject invalid label",
+      },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(result.details.error.category, "invalid_request");
+    assert.deepEqual(invalidPi.calls, []);
+  }
 });
 
 test("restored herd run keeps its start and closes after settlement", async () => {
@@ -1599,7 +1606,7 @@ test("restored herd run keeps its start and closes after settlement", async () =
       },
     },
   ];
-  const label = `restored-herd-${randomUUID().slice(0, 8)}`;
+  const label = "agent";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({ entries, exec: startup.exec });
   const context = fakeContext(entries);
@@ -2355,7 +2362,7 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
 test("historical session with its inherited label rejects an active managed representation", async () => {
   setLeadEnvironment();
   const name = `active-session-${randomUUID().slice(0, 8)}`;
-  const label = `${name}-agent`;
+  const label = name;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
   const identity = {
     ...recoveryIdentity(label),
@@ -2792,7 +2799,7 @@ test("session assignment reports a pane mismatch from the agent state producer",
 test("fresh assignment transports automatic prompt snapshots and cleans them up", async () => {
   setLeadEnvironment();
   const name = `prompt-fresh-${randomUUID().slice(0, 8)}`;
-  const label = `${name}-agent`;
+  const label = name;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
   const promptPath = join(PI_AGENT_ROOT, `${name}-prompt.md`);
   const mailbox = agentMailboxPath(WORKSPACE, label);
@@ -2896,7 +2903,6 @@ test("startup failure cleans private prompt snapshots", async () => {
       {
         action: "delegate",
         definition: name,
-        label,
         task: "must fail at startup",
       },
       undefined,
@@ -2925,7 +2931,7 @@ test("startup failure cleans private prompt snapshots", async () => {
 test("caller assignment files suppress canonical-overlapping automatic prompts", async () => {
   setLeadEnvironment();
   const name = `prompt-overlap-${randomUUID().slice(0, 8)}`;
-  const label = `${name}-agent`;
+  const label = name;
   const definitionPath = join(PI_AGENTS_DIR, `${name}.md`);
   const promptPath = join(PI_AGENT_ROOT, `${name}-prompt.md`);
   const callerPath = join(PI_AGENT_ROOT, `${name}-caller.md`);
@@ -2955,7 +2961,6 @@ test("caller assignment files suppress canonical-overlapping automatic prompts",
       {
         action: "delegate",
         definition: name,
-        label,
         files: [callerPath],
         task: "use caller context",
       },
@@ -3059,7 +3064,6 @@ test("fresh and non-live historical assignments reject disabled definitions", as
       {
         action: "delegate",
         definition: freshName,
-        label: freshLabel,
         task: "must remain disabled",
       },
       undefined,
@@ -3167,7 +3171,6 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
       {
         action: "delegate",
         definition: "disabled-child-parent",
-        label: "disabled-child-parent",
         task: "must reject disabled child",
       },
       undefined,
@@ -3876,7 +3879,7 @@ test("lost mailbox labels remain reserved until explicit close", async () => {
 
 test("rolls back fresh assignment when the authoritative pane makes the request too large", async () => {
   setLeadEnvironment();
-  const label = "fresh-envelope-boundary";
+  const label = "agent";
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -3928,7 +3931,6 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
       {
         action: "delegate",
         definition: "agent",
-        label,
         task: "retry after rollback",
       },
       undefined,
@@ -3946,41 +3948,33 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const prefix = `fresh-${randomUUID().slice(0, 8)}`;
   const cases = [
     {
-      label: `${prefix}-missing-agent`,
       params: { action: "delegate" },
-      message: "Invalid agent input",
+      message: "delegate requires definition",
     },
     {
-      label: `${prefix}-missing-session`,
       params: { action: "continue", task: "missing session" },
-      message: "Invalid agent input",
+      message: "continue requires session",
     },
     {
-      label: `${prefix}-whitespace-agent`,
       params: { action: "delegate", definition: " \t", task: " \t" },
       message: "Invalid agent input",
     },
     {
-      label: `${prefix}-missing-task`,
       params: { action: "delegate", definition: "agent" },
-      message: "Invalid agent input",
+      message: "delegate requires task",
     },
     {
-      label: `${prefix}-whitespace-task`,
       params: { action: "delegate", definition: "agent", task: " \t" },
       message: "Invalid agent input",
     },
   ];
 
-  for (const { label, params, message } of cases) {
-    const mailbox = agentMailboxPath(WORKSPACE, label);
-    const before = readAgentState(mailbox);
+  for (const { params, message } of cases) {
     const result = await pi.tools[0].execute(
       "id",
-      { ...params, label },
+      params,
       undefined,
       undefined,
       fakeContext(),
@@ -3989,78 +3983,30 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
     assert.equal(result.details.error.category, "invalid_request");
     assert.equal(result.details.error.message, message);
     assert.deepEqual(pi.calls, []);
-    assert.deepEqual(readAgentState(mailbox), before);
   }
 });
 
-test("enforces the agent label grammar before assignment lifecycle mutation", async () => {
+test("delegate keeps an explicit human-readable label", async () => {
   setLeadEnvironment();
-  const validLabel = "a" + "b".repeat(31);
-  const startup = startupExecutor(validLabel, () => DEFAULT_PI_SESSION_ID);
-  const acceptedPi = fakePi({ exec: startup.exec });
-  registerExtension!(acceptedPi.pi as never);
-  const accepted = await acceptedPi.tools[0].execute(
-    "id",
-    {
-      action: "delegate",
-      definition: "agent",
-      label: validLabel,
-      task: "accept the maximum valid label",
-    },
-    undefined,
-    undefined,
-    fakeContext(),
-  );
-  assert.equal(accepted.details.ok, true, JSON.stringify(accepted.details));
-  assert.equal(accepted.details.agent, validLabel);
-  acceptedPi.events.get("session_shutdown")?.[0]();
-  resetAgentMailbox(startup.mailbox);
-
-  setLeadEnvironment();
-  const invalidPi = fakePi();
-  registerExtension!(invalidPi.pi as never);
-  for (const label of [
-    "a" + "b".repeat(32),
-    "A" + "b".repeat(10),
-    "agent.label",
-  ]) {
-    const result = await invalidPi.tools[0].execute(
+  const label = "review-map";
+  const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
+  const pi = fakePi({ exec: startup.exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await pi.tools[0].execute(
       "id",
-      {
-        action: "delegate",
-        definition: "agent",
-        label,
-        task: "reject the invalid label",
-      },
+      { action: "delegate", definition: "agent", label, task: "map" },
       undefined,
       undefined,
       fakeContext(),
     );
-    assert.equal(result.details.error.category, "invalid_request");
-    assert.equal(result.details.error.operation, "delegate");
-    assert.equal(result.details.error.rollbackOccurred, false);
-    assert.equal(result.details.error.message, "Invalid agent input");
-    assert.deepEqual(invalidPi.calls, []);
-    assert.equal(realFs.existsSync(agentMailboxPath(WORKSPACE, label)), false);
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(result.details.agent, label);
+    assert.equal(readAgentState(startup.mailbox)?.agentLabel, label);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
   }
-  for (const params of [
-    { action: "delegate", agent: "Agent", task: "reject the agent" },
-    { action: "steer", agent: "Agent", message: "reject the agent" },
-    { action: "reply", agent: "Agent", message: "reject the agent" },
-    { action: "close", agent: "Agent" },
-  ]) {
-    const result = await invalidPi.tools[0].execute(
-      "id",
-      params,
-      undefined,
-      undefined,
-      fakeContext(),
-    );
-    assert.equal(result.details.error.category, "invalid_request");
-    assert.equal(result.details.error.message, "Invalid agent input");
-    assert.deepEqual(invalidPi.calls, []);
-  }
-  invalidPi.events.get("session_shutdown")?.[0]();
 });
 
 test("rejects an invalid generated collision label after releasing its claim", async () => {
@@ -4151,49 +4097,11 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
   registerExtension!(pi.pi as never);
   const cases = [
     { action: "delegate", task: "work" },
-    {
-      action: "delegate",
-      session: "/tmp/session.jsonl",
-      task: "work",
-    },
-    {
-      action: "delegate",
-      definition: "agent",
-      session: "/tmp/session.jsonl",
-      task: "work",
-    },
     { action: "delegate", agent: "agent", task: "work" },
     { action: "delegate", definition: "agent", reusable: true, task: "work" },
-    { action: "delegate", agent: "agent", timeoutMs: 5001, task: "work" },
     { action: "delegate", agent: "agent", message: "wrong", task: "work" },
-    { action: "delegate", definition: "agent", label: " ", task: "work" },
     { action: "delegate", definition: "agent", cwd: "/other", task: "work" },
-    { action: "delegate", definition: "agent", fork: "\n", task: "work" },
-    {
-      action: "delegate",
-      session: "/tmp/session.jsonl",
-      label: "agent",
-      task: "work",
-    },
-    {
-      action: "continue",
-      session: "/tmp/session.jsonl",
-      cwd: "/tmp",
-      task: "work",
-    },
-    {
-      action: "continue",
-      session: "/tmp/session.jsonl",
-      fork: "/tmp/source.jsonl",
-      task: "work",
-    },
-    {
-      action: "continue",
-      session: "/tmp/session.jsonl",
-      fork: "/tmp/source.jsonl",
-      message: "wrong",
-      task: "work",
-    },
+    { action: "unknown", task: "work" },
     { action: "steer", message: "change" },
     { action: "steer", agent: "agent" },
     { action: "interrupt", message: "change now" },
@@ -4211,22 +4119,6 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
     assert.equal(result.details.error.category, "invalid_request");
     assert.deepEqual(pi.calls, []);
   }
-  const aggregate = await pi.tools[0].execute(
-    "id",
-    {
-      action: "continue",
-      session: "/tmp/session.jsonl",
-      fork: "/tmp/fork.jsonl",
-      message: "wrong",
-      task: "work",
-    },
-    undefined,
-    undefined,
-    fakeContext(),
-  );
-  assert.equal(aggregate.details.error.category, "invalid_request");
-  assert.equal(aggregate.details.error.message, "Invalid agent input");
-  assert.deepEqual(pi.calls, []);
   const legacy = await pi.tools[0].execute(
     "id",
     { action: "close", label: "agent" } as any,
@@ -4235,7 +4127,7 @@ test("rejects illegal public parameter combinations before lifecycle mutation", 
     fakeContext(),
   );
   assert.equal(legacy.details.error.category, "invalid_request");
-  assert.equal(legacy.details.error.message, "Invalid agent input");
+  assert.equal(legacy.details.error.message, "close requires agent");
   assert.deepEqual(pi.calls, []);
 });
 
@@ -4294,7 +4186,7 @@ test("assignment launch handles delayed official Pi session identity", async () 
 
 test("empty early launch cleans exact resources and same-label retry creates one agent", async () => {
   setLeadEnvironment();
-  const label = "early-diagnostic-retry";
+  const label = "agent";
   const startup = startupExecutor(
     label,
     () => "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -4442,7 +4334,6 @@ test("empty early launch cleans exact resources and same-label retry creates one
     {
       action: "delegate",
       definition: "agent",
-      label,
       task: "corrected attempt",
     },
     undefined,
@@ -4460,7 +4351,7 @@ test("empty early launch cleans exact resources and same-label retry creates one
 
 test("assignment launch bounds missing official Pi session identity grace", async () => {
   setLeadEnvironment();
-  const label = "missing-session-agent";
+  const label = "agent";
   const startup = startupExecutor(
     label,
     () => null,
@@ -4481,7 +4372,6 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
     {
       action: "delegate",
       definition: "agent",
-      label,
       task: "missing identity",
     },
     undefined,

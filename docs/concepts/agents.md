@@ -47,8 +47,8 @@ Every managed agent has an exact Pi session. The list may expose the session
 ID and path for correlation.
 
 A session path or full UUID can be supplied to the `continue` action to continue
-historical work. Continuation creates a new agent generation for one new
-assignment and uses the saved session's cwd, definition, logical label, and
+historical managed-agent work. Continuation creates a new agent generation for
+one new assignment and uses the saved session's cwd, definition, logical label, and
 historical context. The caller cannot rename the continued session. The Pi
 session remains the continuation identity, not a live-control identity. An
 exact active or unresolved managed representation blocks concurrent activation
@@ -113,9 +113,9 @@ The Pi session remains available after agent cleanup. To continue the same
 conversational context, use `continue` with the exact session ID or session path
 returned with the result. This creates a new agent generation, which restores
 the saved session's model and thinking unless the current definition
-explicitly overrides either field. To derive a separate context instead, use
-`fork` on a `delegate` action; fork is a fresh delegation and inherits from its
-spawning controller when those fields are omitted.
+explicitly overrides either field. Fresh delegation does not inherit the
+caller's conversation; pass assignment-specific evidence through task text and
+`files`.
 
 The identities are therefore:
 
