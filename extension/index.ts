@@ -127,6 +127,7 @@ import {
   sessionIdentity,
   matchesExpectedSession,
   startHerdrAgent,
+  startHerdrAgentInPane,
   sameCwd,
   inspectHerdrAgent,
   stopHerdrAgentPreservingPane,
@@ -6713,6 +6714,12 @@ export default function (pi: ExtensionAPI): void {
       ),
       files: FILES_SCHEMA,
       task: Type.Optional(Type.String({ minLength: 1 })),
+      assignment: Type.Optional(
+        Type.String({
+          pattern:
+            "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        }),
+      ),
       branch: Type.Optional(Type.String({ minLength: 1 })),
       base: Type.Optional(Type.String({ minLength: 1 })),
     },
@@ -6737,7 +6744,9 @@ export default function (pi: ExtensionAPI): void {
           ["files"],
         );
       case "delegate":
-        return matchesActionFields(p, ["task"], ["branch", "base", "files"]);
+        return p.assignment
+          ? matchesActionFields(p, ["assignment"])
+          : matchesActionFields(p, ["task"], ["branch", "base", "files"]);
       default:
         return false;
     }
@@ -6796,6 +6805,8 @@ export default function (pi: ExtensionAPI): void {
       chiefModeGeneration,
       sessionGeneration,
       chiefLease?.descriptor.leaseId ?? "",
+      managerLease?.descriptor.leaseId ?? "",
+      activeRole(),
       ctx?.sessionManager.getSessionId() ??
         leadContext?.sessionManager.getSessionId() ??
         "",
@@ -6825,6 +6836,7 @@ export default function (pi: ExtensionAPI): void {
         text: string;
         supervisorSessionId: string;
         supervisorLeaseId: string;
+        supervisorRole?: "chief" | "manager";
       }
     | undefined;
   let leadInstanceId = randomUUID();
@@ -7324,7 +7336,7 @@ export default function (pi: ExtensionAPI): void {
           ask === undefined ||
           (ask &&
             typeof ask === "object" &&
-            Object.keys(ask).length === 5 &&
+            (Object.keys(ask).length === 5 || Object.keys(ask).length === 6) &&
             typeof ask.askId === "string" &&
             /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
               ask.askId,
@@ -7334,7 +7346,10 @@ export default function (pi: ExtensionAPI): void {
             typeof ask.text === "string" &&
             ask.text.length > 0 &&
             typeof ask.supervisorSessionId === "string" &&
-            typeof ask.supervisorLeaseId === "string");
+            typeof ask.supervisorLeaseId === "string" &&
+            (ask.supervisorRole === undefined ||
+              ask.supervisorRole === "chief" ||
+              ask.supervisorRole === "manager"));
         if (!validAsk) malformed = true;
         else
           pendingSupervisorAsk = ask
@@ -7344,6 +7359,9 @@ export default function (pi: ExtensionAPI): void {
                 text: ask.text,
                 supervisorSessionId: ask.supervisorSessionId,
                 supervisorLeaseId: ask.supervisorLeaseId,
+                ...(ask.supervisorRole
+                  ? { supervisorRole: ask.supervisorRole }
+                  : {}),
               }
             : undefined;
       }
@@ -7455,6 +7473,27 @@ export default function (pi: ExtensionAPI): void {
       : activeRole() === "manager"
         ? await currentChiefAuthority(ctx)
         : undefined;
+  const pendingAskSupervisorIsCurrent = async (
+    ctx: ExtensionContext,
+    sessionId: string,
+    leaseId: string,
+    askId: string | undefined,
+  ): Promise<boolean> => {
+    if (!pendingSupervisorAsk || pendingSupervisorAsk.askId !== askId)
+      return false;
+    const current = await currentSupervisor(ctx);
+    if (!pendingSupervisorAsk.supervisorRole)
+      return (
+        pendingSupervisorAsk.supervisorSessionId === sessionId &&
+        pendingSupervisorAsk.supervisorLeaseId === leaseId
+      );
+    return (
+      !!current &&
+      current.piSessionId === sessionId &&
+      ("repoKey" in current ? "manager" : "chief") ===
+        pendingSupervisorAsk.supervisorRole
+    );
+  };
   const liveAgent = async (ctx: ExtensionContext, sessionId: string) =>
     (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents.filter(
       (agent: any) =>
@@ -7770,9 +7809,12 @@ export default function (pi: ExtensionAPI): void {
           chief.leaseId === record.leaseId &&
           record.leadSessionId === sessionId &&
           (record.kind !== "chief_reply" ||
-            (record.askId === pendingSupervisorAsk?.askId &&
-              chief.piSessionId === pendingSupervisorAsk?.supervisorSessionId &&
-              chief.leaseId === pendingSupervisorAsk?.supervisorLeaseId))
+            (await pendingAskSupervisorIsCurrent(
+              ctx,
+              chief.piSessionId,
+              chief.leaseId,
+              record.askId,
+            )))
         );
       }
       const manager = await currentManager(ctx);
@@ -7835,9 +7877,12 @@ export default function (pi: ExtensionAPI): void {
         chief.leaseId === record.leaseId &&
         record.leadSessionId === sessionId &&
         (record.kind !== "chief_reply" ||
-          (record.askId === pendingSupervisorAsk?.askId &&
-            chief.piSessionId === pendingSupervisorAsk?.supervisorSessionId &&
-            chief.leaseId === pendingSupervisorAsk?.supervisorLeaseId))
+          (await pendingAskSupervisorIsCurrent(
+            ctx,
+            chief.piSessionId,
+            chief.leaseId,
+            record.askId,
+          )))
       );
     }
     const chief = await currentManager(ctx);
@@ -7852,9 +7897,12 @@ export default function (pi: ExtensionAPI): void {
         record.kind === "manager_assignment" ||
         (record.kind === "manager_reply" &&
           !!pendingSupervisorAsk &&
-          record.askId === pendingSupervisorAsk.askId &&
-          chief.piSessionId === pendingSupervisorAsk.supervisorSessionId &&
-          chief.leaseId === pendingSupervisorAsk.supervisorLeaseId))
+          (await pendingAskSupervisorIsCurrent(
+            ctx,
+            chief.piSessionId,
+            chief.leaseId,
+            record.askId,
+          ))))
     );
   };
   const queueChiefRecord = async (
@@ -8247,24 +8295,27 @@ export default function (pi: ExtensionAPI): void {
       .catch(() => {})
       .finally(schedule);
   };
-  const activationGuard = (sessionId: string): void => {
+  const activationGuard = (
+    sessionId: string,
+    role: "Chief" | "Manager",
+  ): void => {
     if (!leadCoordinationHealthy)
       throw new Error("Lead coordination state is unavailable");
 
     if (pendingSupervisorAsk)
       throw new Error(
-        "Cannot activate Chief while a supervisor ask is pending",
+        `Cannot activate ${role} while a supervisor ask is pending`,
       );
 
     const { states, issues } = scanAgentStates();
 
     if (issues.length)
       throw new Error(
-        "Cannot activate chief while managed mailbox state is unresolved",
+        `Cannot activate ${role} while managed mailbox state is unresolved`,
       );
 
     if (states.some(({ state }) => state.ownerSessionId === sessionId))
-      throw new Error("Cannot activate chief while owned agent work exists");
+      throw new Error(`Cannot activate ${role} while owned agent work exists`);
   };
   const resolveControllerRole = async (
     ctx: ExtensionContext,
@@ -8328,6 +8379,7 @@ export default function (pi: ExtensionAPI): void {
       roleSuspended
     )
       throw new Error("/manager requires an ordinary Lead");
+    activationGuard(ctx.sessionManager.getSessionId(), "Manager");
     const paneId = process.env.HERDR_PANE_ID;
     const tabId = process.env.HERDR_TAB_ID;
     const workspaceId = process.env.HERDR_WORKSPACE_ID;
@@ -8360,6 +8412,8 @@ export default function (pi: ExtensionAPI): void {
         throw new Error("Manager coordination state could not be persisted");
       reconcileRoleTools();
       registerSupervisionTool?.();
+      clearNormalUI?.();
+      startSupervisionUI?.(ctx);
       ++peerPresenceGeneration;
       if (leadCoordinationHealthy) await schedulePeerPresence(ctx);
       await publishLeadRole(ctx, "inactive", chiefModeGeneration);
@@ -8375,6 +8429,8 @@ export default function (pi: ExtensionAPI): void {
         persistRole("lead");
       } catch {}
       reconcileRoleTools();
+      clearSupervisionUI?.();
+      startNormalUI?.(ctx);
       throw error;
     }
   };
@@ -8383,6 +8439,21 @@ export default function (pi: ExtensionAPI): void {
   ): Promise<string> => {
     if (controllerRole !== "manager" || !managerLease)
       throw new Error("Manager mode is not active");
+    const assignments = listProjectAssignments(
+      supervisionRuntime(),
+      managerLease.descriptor.workspaceId,
+    ).filter(
+      (assignment) =>
+        assignment.repoKey === managerLease!.descriptor.repoKey &&
+        ["creating", "starting", "active", "settling"].includes(
+          assignment.phase,
+        ),
+    );
+    const reports = await directReports(ctx);
+    if (assignments.length || reports.some((report: any) => report.needsYou))
+      throw new Error(
+        "Cannot leave Manager while project assignments or Manager-bound asks remain unresolved",
+      );
     ++peerPresenceGeneration;
     removePeerPresence();
     managerLease.release();
@@ -8392,6 +8463,8 @@ export default function (pi: ExtensionAPI): void {
     if (!persistCoordinatorState())
       throw new Error("Lead coordination state could not be persisted");
     reconcileRoleTools();
+    clearSupervisionUI?.();
+    startNormalUI?.(ctx);
     if (leadCoordinationHealthy) await schedulePeerPresence(ctx);
     await publishLeadRole(ctx, "inactive", chiefModeGeneration);
     return "Manager mode left.";
@@ -8408,7 +8481,7 @@ export default function (pi: ExtensionAPI): void {
     if (controllerRole !== "lead" || roleSuspended)
       throw new Error("Chief mode is unavailable to a project Manager");
     const sessionId = ctx.sessionManager.getSessionId();
-    activationGuard(sessionId);
+    activationGuard(sessionId, "Chief");
     chiefActivationRollback = false;
     const generation = ++chiefModeGeneration;
     const paneId = process.env.HERDR_PANE_ID;
@@ -8843,10 +8916,13 @@ export default function (pi: ExtensionAPI): void {
         const managers = reports.filter(
           (report: any) => report.role === "manager",
         );
-        return managers.length
-          ? { managers }
-          : { leads: reports.filter((report: any) => report.role === "lead") };
+        return {
+          managers,
+          leads: reports.filter((report: any) => report.role === "lead"),
+        };
       }
+      if (activeRole() === "manager" && !includeAll)
+        return { leads: await directReports(ctx) };
       const inventory =
         suppliedInventory ?? (await herdrSessionSnapshot(pi, ctx, ctx.signal));
       const live = inventory.agents;
@@ -8966,28 +9042,12 @@ export default function (pi: ExtensionAPI): void {
           manager.workspaceId,
           ctx.signal,
         );
-        const pending = listProjectAssignments(
-          supervisionRuntime(),
-          manager.workspaceId,
-        ).find(
-          (assignment) =>
-            assignment.repoKey === manager.repoKey &&
-            (assignment.phase === "creating" ||
-              assignment.phase === "starting"),
-        );
-        if (pending)
-          await delegateProjectLead(
-            { branch: pending.branch },
-            ctx,
-            ctx.signal,
-          );
         const snapshot = await loadSupervisionSnapshot(
           ctx,
           undefined,
           undefined,
           true,
         );
-        await reconcileLeadAsksForChief?.(ctx);
         return snapshot.leads.filter((lead) =>
           scope.workspaceIds.includes(lead.workspaceId),
         );
@@ -9101,15 +9161,13 @@ export default function (pi: ExtensionAPI): void {
               .length,
             total: leads.length,
           },
-          leads: leads
-            .slice(0, 32)
-            .map((lead) => ({
-              session: lead.lead,
-              displayName: lead.displayName,
-              runtimeState: lead.runtimeState,
-              needsYou: lead.needsYou,
-              agentCounts: lead.agentCounts,
-            })),
+          leads: leads.slice(0, 32).map((lead) => ({
+            session: lead.lead,
+            displayName: lead.displayName,
+            runtimeState: lead.runtimeState,
+            needsYou: lead.needsYou,
+            agentCounts: lead.agentCounts,
+          })),
           availableActions: [
             "inspect",
             "message",
@@ -9172,15 +9230,25 @@ export default function (pi: ExtensionAPI): void {
           assignment.repoKey === manager.repoKey &&
           (assignment.phase === "creating" || assignment.phase === "starting"),
       );
-      if (unresolved && params.branch && params.branch !== unresolved.branch)
+      if (unresolved && params.assignment !== unresolved.id)
         throw new Error(
-          `Assignment ${unresolved.id} is unresolved on branch ${unresolved.branch}`,
+          `Assignment ${unresolved.id} is unresolved on branch ${unresolved.branch ?? "unknown"}; inspect it before requesting another delegation`,
+        );
+      if (params.assignment && params.assignment !== unresolved?.id)
+        throw new Error("The requested assignment is not unresolved here");
+      if (
+        unresolved &&
+        (params.task || params.files?.length || params.base || params.branch)
+      )
+        throw new Error(
+          "Resume the exact unresolved assignment without changing its request",
         );
       const id = unresolved?.id ?? randomUUID();
       let assignment: ProjectAssignment;
       if (unresolved) assignment = unresolved;
       else {
         const branch = params.branch ?? `herdsman/${id}`;
+        const base = params.base ?? "HEAD";
         const createdAt = Date.now();
         const text = await prepareCoordinationText(
           ctx,
@@ -9212,6 +9280,7 @@ export default function (pi: ExtensionAPI): void {
           primaryWorkspaceId: manager.workspaceId,
           repoKey: manager.repoKey,
           branch,
+          base,
           text,
           phase: "creating",
           createdAt,
@@ -9237,9 +9306,23 @@ export default function (pi: ExtensionAPI): void {
             `Multiple Herdr worktrees match assignment branch ${assignment.branch}`,
           );
         if (matchingWorktrees.length === 1) {
-          const foundWorkspace = matchingWorktrees[0]?.open_workspace_id;
+          let foundWorkspace = matchingWorktrees[0]?.open_workspace_id;
+          if (typeof foundWorkspace !== "string" || !foundWorkspace) {
+            const opened = await runHerdr(
+              pi,
+              ctx,
+              [
+                "worktree",
+                "open",
+                "--branch",
+                assignment.branch!,
+                "--no-focus",
+              ],
+              { signal },
+            );
+            foundWorkspace = opened?.workspace?.workspace_id;
+          }
           if (
-            typeof foundWorkspace !== "string" ||
             !foundWorkspace ||
             (workspaceId && workspaceId !== foundWorkspace)
           )
@@ -9275,7 +9358,7 @@ export default function (pi: ExtensionAPI): void {
             assignment.branch!,
             "--no-focus",
           ];
-          if (params.base) args.push("--base", params.base);
+          args.push("--base", assignment.base!);
           const created = await runHerdr(pi, ctx, args, { signal });
           workspaceId = created?.workspace?.workspace_id;
           paneId = created?.root_pane?.pane_id;
@@ -9334,20 +9417,40 @@ export default function (pi: ExtensionAPI): void {
             );
           lead = currentCandidates[0];
         } else {
-          await runHerdr(
+          const workspaceDetails = await runHerdr(
             pi,
             ctx,
-            [
-              "agent",
-              "start",
-              `lead-${id.slice(0, 8)}`,
-              "--kind",
-              "pi",
-              "--pane",
-              paneId,
-            ],
+            ["workspace", "get", workspaceId],
             { signal },
           );
+          const workspaceRecord = workspaceDetails?.workspace;
+          const checkoutPath = workspaceRecord?.worktree?.checkout_path;
+          if (
+            (workspaceRecord?.workspace_id &&
+              workspaceRecord.workspace_id !== workspaceId) ||
+            ![
+              workspaceDetails?.root_pane?.pane_id,
+              workspaceDetails?.root_pane?.tab_id,
+            ].every((value) => typeof value === "string" && value) ||
+            workspaceDetails.root_pane.pane_id !== paneId ||
+            workspaceDetails.root_pane.tab_id !== tabId ||
+            typeof checkoutPath !== "string" ||
+            !checkoutPath
+          )
+            throw new Error(
+              "Herdr workspace does not match the exact assignment pane",
+            );
+          await startHerdrAgentInPane(pi, ctx, {
+            primaryWorkspaceId,
+            workspaceId,
+            tabId,
+            paneId,
+            cwd: checkoutPath,
+            label: `lead-${id.slice(0, 8)}`,
+            runId: id,
+            extensionPath: HERDSMAN_EXTENSION_PATH,
+            signal,
+          });
         }
         const deadline = Date.now() + 30_000;
         while (!lead && Date.now() < deadline) {
@@ -9451,7 +9554,11 @@ export default function (pi: ExtensionAPI): void {
       ctx: ExtensionContext,
       isCurrent?: () => boolean,
     ): Promise<boolean> => {
-      if (chiefMode !== "active") return false;
+      if (
+        chiefMode !== "active" &&
+        !(activeRole() === "manager" && !roleSuspended)
+      )
+        return false;
       const generation = currentSupervisionGeneration(ctx);
       const refreshIsCurrent = (): boolean =>
         currentSupervisionGeneration(ctx) === generation &&
@@ -9469,7 +9576,8 @@ export default function (pi: ExtensionAPI): void {
         );
         const snapshot = await loadSupervisionSnapshot(ctx, inventory, agents);
         if (!refreshIsCurrent()) return false;
-        await reconcileLeadAsksForChief(ctx, inventory, agents);
+        if (activeRole() === "chief")
+          await reconcileLeadAsksForChief(ctx, inventory, agents);
         if (!refreshIsCurrent()) return false;
         supervisionSnapshot = snapshot;
         supervisionSnapshotKnown = true;
@@ -9481,7 +9589,11 @@ export default function (pi: ExtensionAPI): void {
         if (refreshIsCurrent())
           supervisionStale = currentSupervisionSnapshotKnown(ctx);
       }
-      if (refreshIsCurrent() && chiefMode === "active" && ctx.mode === "tui") {
+      if (
+        refreshIsCurrent() &&
+        (chiefMode === "active" || activeRole() === "manager") &&
+        ctx.mode === "tui"
+      ) {
         try {
           requestSupervisionWidgetRender?.();
         } catch {
@@ -9491,11 +9603,12 @@ export default function (pi: ExtensionAPI): void {
       return refreshed;
     };
     prepareSupervisionMessage = async (ctx: ExtensionContext) => {
-      if (!isCurrentChief(ctx)) return;
+      if (!isCurrentChief(ctx) && activeRole() !== "manager") return;
 
       const generation = currentSupervisionGeneration(ctx);
       const isCurrent = (): boolean =>
-        isCurrentChief(ctx) && currentSupervisionGeneration(ctx) === generation;
+        (isCurrentChief(ctx) || activeRole() === "manager") &&
+        currentSupervisionGeneration(ctx) === generation;
 
       try {
         await refreshSupervision(ctx, isCurrent);
@@ -9548,11 +9661,18 @@ export default function (pi: ExtensionAPI): void {
             ...(message ? { message } : {}),
           };
         }
-        const roster = startupDefinitionRoster;
         const roleCharter =
           activeRole() === "manager" && !roleSuspended
             ? MANAGER_ROLE_CHARTER
             : LEAD_ROLE_CHARTER;
+        if (activeRole() === "manager" && !roleSuspended) {
+          const message = await prepareSupervisionMessage(ctx);
+          return {
+            systemPrompt: `${event.systemPrompt}\n\n${roleCharter}`,
+            ...(message ? { message } : {}),
+          };
+        }
+        const roster = startupDefinitionRoster;
         if (!roster || roster.sessionId !== ctx.sessionManager.getSessionId())
           return { systemPrompt: `${event.systemPrompt}\n\n${roleCharter}` };
         return {
@@ -11077,6 +11197,7 @@ export default function (pi: ExtensionAPI): void {
                 text,
                 supervisorSessionId: chief.piSessionId,
                 supervisorLeaseId: chief.leaseId,
+                supervisorRole: "repoKey" in chief ? "manager" : "chief",
               };
               try {
                 if (!persistCoordinatorState())

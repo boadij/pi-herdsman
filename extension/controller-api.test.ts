@@ -123,7 +123,17 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
   const childSession = `lead-${randomUUID()}`;
   let topologyCreated = false;
   let createCalls = 0;
+  let openCalls = 0;
   let started = false;
+  let delayReadiness = false;
+  let releaseReadiness!: () => void;
+  let markReadinessStarted!: () => void;
+  const readinessPending = new Promise<void>(
+    (resolve) => (releaseReadiness = resolve),
+  );
+  const readinessStarted = new Promise<void>(
+    (resolve) => (markReadinessStarted = resolve),
+  );
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
@@ -140,13 +150,18 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     pane_id: "root-pane",
     tab_id: "root-tab",
   };
-  const exec = (command: string, args: string[]) => {
+  const exec = async (command: string, args: string[]) => {
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
+          workspace_id: args[2],
           worktree: {
             repo_key: "repo-key",
             is_linked_worktree: args[2] === childWorkspace,
+            checkout_path:
+              args[2] === childWorkspace
+                ? "/tmp/manager-child"
+                : "/tmp/manager-root",
           },
         },
         ...(args[2] === childWorkspace
@@ -159,16 +174,54 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
         worktrees: topologyCreated
           ? [
               {
-                open_workspace_id: childWorkspace,
+                ...(openCalls ? { open_workspace_id: childWorkspace } : {}),
                 branch: `herdsman/${listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id}`,
               },
             ]
           : [],
       });
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "open") {
+      openCalls++;
+      assert.ok(args.includes("--branch"));
+      assert.ok(args.includes("--no-focus"));
+      return respond({ workspace: { workspace_id: childWorkspace } });
+    }
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
       createCalls++;
       topologyCreated = true; // Herdr succeeded, but the response was lost.
       return { stdout: "", stderr: "transport closed", code: 1 };
+    }
+    if (command === "herdr" && args[0] === "pane" && args[1] === "list")
+      return respond({
+        panes: [
+          {
+            pane_id: "child-pane",
+            workspace_id: childWorkspace,
+            tab_id: "child-tab",
+            cwd: "/tmp/manager-child",
+          },
+        ],
+      });
+    if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
+      return respond({
+        process_info: {
+          pane_id: "child-pane",
+          shell_pid: 33,
+          foreground_process_group_id: 33,
+          foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
+        },
+      });
+    if (command === "herdr" && args[0] === "pane" && args[1] === "run") {
+      if (delayReadiness) markReadinessStarted();
+      return respond({});
+    }
+    if (
+      command === "herdr" &&
+      args[0] === "pane" &&
+      args[1] === "wait-output"
+    ) {
+      if (delayReadiness) await readinessPending;
+      return respond({});
     }
     if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
       started = true;
@@ -184,7 +237,17 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
         updatedAt: Date.now(),
       });
       assert.equal(assignment.phase, "starting");
-      return respond({});
+      return respond({
+        agent: {
+          name: "lead",
+          agent_session: {
+            source: "herdr:pi",
+            agent: "pi",
+            kind: "id",
+            value: childSession,
+          },
+        },
+      });
     }
     if (command === "herdr" && isApiSnapshot(args))
       return respond({
@@ -232,21 +295,67 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     );
     const pending = listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]!;
     assert.equal(pending.phase, "creating");
+    assert.equal(pending.base, "HEAD");
     assert.equal(createCalls, 1);
-    const retry = await staff.execute(
-      "delegate",
-      { action: "delegate", task: "retry" },
+    assert.ok(
+      pi.calls.some(
+        (args) =>
+          args.includes("--base") &&
+          args[args.indexOf("--base") + 1] === pending.base,
+      ),
+      "creation must use the base persisted before the Herdr mutation",
+    );
+    const staffList = await staff.execute(
+      "list",
+      { action: "list" },
       undefined,
       undefined,
       ctx,
     );
+    assert.equal(staffList.details.ok, true);
+    assert.equal(createCalls, 1, "roster reads must not retry creation");
+    assert.equal(pending.phase, "creating");
+    await assert.rejects(
+      staff.execute(
+        "delegate",
+        { action: "delegate", task: "different task" },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      /is unresolved[\s\S]*inspect it/,
+    );
+    delayReadiness = true;
+    const retryPromise = staff.execute(
+      "delegate",
+      { action: "delegate", assignment: pending.id },
+      undefined,
+      undefined,
+      ctx,
+    );
+    await readinessStarted;
+    assert.equal(
+      started,
+      false,
+      "Manager must wait for the exact pane shell readiness marker",
+    );
+    releaseReadiness();
+    const retry = await retryPromise;
     assert.equal(retry.details.ok, true, JSON.stringify(retry.details));
     assert.equal(retry.details.assignment, pending.id);
     assert.equal(retry.details.session, childSession);
     assert.equal(createCalls, 1);
+    assert.equal(openCalls, 1);
     assert.equal(
       listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
       "active",
+    );
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    assert.ok(pi.pi.getActiveTools().includes("staff"));
+    assert.equal(
+      listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
+      "active",
+      "Manager leave must retain assignment ownership until completion",
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();

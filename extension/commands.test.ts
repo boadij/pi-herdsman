@@ -214,6 +214,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       managerPrompt.systemPrompt,
       /Lead role[\s\S]*## Manager role/,
     );
+    assert.doesNotMatch(
+      managerPrompt.systemPrompt,
+      /Available agent definitions/,
+    );
+    assert.equal(
+      managerPrompt.message?.customType,
+      "pi-herdsman-supervision-context",
+    );
     assert.deepEqual(
       await first.events.get("tool_call")![0](
         { toolName: "agent", input: { action: "list" } },
@@ -356,13 +364,13 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     await first.commandOptions.get("manager").handler("leave", ctx1);
     assert.deepEqual(first.pi.getActiveTools(), [
       "read",
-      "agent",
+      "staff",
       "supervisor",
       "peer",
     ]);
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-      "lead",
+      "manager",
     );
     await first.events.get("session_shutdown")![0]();
     const replacement = fakeChiefPi({ activeTools: ["read"], exec });
@@ -472,6 +480,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
   );
   const childWorkspace = `child-${randomUUID()}`;
   const childSession = `lead-${randomUUID()}`;
+  let created = false;
   let started = false;
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
@@ -493,11 +502,19 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
+          workspace_id: args[2],
           worktree: {
             repo_key: "repo-key",
             is_linked_worktree: args[2] === childWorkspace,
+            checkout_path:
+              args[2] === childWorkspace
+                ? "/tmp/manager-child"
+                : "/tmp/manager-root",
           },
         },
+        ...(args[2] === childWorkspace
+          ? { root_pane: { pane_id: "child-pane", tab_id: "child-tab" } }
+          : {}),
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
       return respond({
@@ -506,7 +523,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
           repo_key: "repo-key",
           repo_name: "project",
         },
-        worktrees: started ? [{ open_workspace_id: childWorkspace }] : [],
+        worktrees: created ? [{ open_workspace_id: childWorkspace }] : [],
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
       const branchIndex = args.indexOf("--branch");
@@ -517,12 +534,39 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
       assert.ok(assignment);
       assert.equal(args[branchIndex + 1], `herdsman/${assignment.id}`);
       assert.equal(assignment.branch, args[branchIndex + 1]);
+      created = true;
       return respond({
         workspace: { workspace_id: childWorkspace },
         root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
         worktree: { branch: assignment.branch },
       });
     }
+    if (command === "herdr" && args[0] === "pane" && args[1] === "list")
+      return respond({
+        panes: [
+          {
+            pane_id: "child-pane",
+            workspace_id: childWorkspace,
+            tab_id: "child-tab",
+            cwd: "/tmp/manager-child",
+          },
+        ],
+      });
+    if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
+      return respond({
+        process_info: {
+          pane_id: "child-pane",
+          shell_pid: 33,
+          foreground_process_group_id: 33,
+          foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
+        },
+      });
+    if (
+      command === "herdr" &&
+      args[0] === "pane" &&
+      (args[1] === "run" || args[1] === "wait-output")
+    )
+      return respond({});
     if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
       started = true;
       writeLeadCoordinationState(supervisionRuntime(), {
@@ -532,7 +576,17 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
         piSessionId: childSession,
         updatedAt: Date.now(),
       });
-      return respond({});
+      return respond({
+        agent: {
+          name: "lead",
+          agent_session: {
+            source: "herdr:pi",
+            agent: "pi",
+            kind: "id",
+            value: childSession,
+          },
+        },
+      });
     }
     if (command === "herdr" && isApiSnapshot(args))
       return respond({
@@ -677,7 +731,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
   }
 });
 
-test("Chief staff lists only live Managers as actionable reports", async () => {
+test("Chief staff and ambient supervision include Managers and unclaimed Leads", async () => {
   setLeadEnvironment();
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
@@ -701,14 +755,51 @@ test("Chief staff lists only live Managers as actionable reports", async () => {
     pane_id: "manager-pane",
     tab_id: "manager-tab",
   };
+  const independentLeadSession = `lead-${randomUUID()}`;
+  const independentWorkspace = `workspace-${randomUUID()}`;
+  const independentLead = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: independentLeadSession,
+    },
+    workspace_id: independentWorkspace,
+    pane_id: "independent-pane",
+    tab_id: "independent-tab",
+    cwd: "/tmp/independent-project",
+  };
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    role: "lead",
+    instanceId: randomUUID(),
+    piSessionId: independentLeadSession,
+    updatedAt: Date.now(),
+  });
   const exec = (command: string, args: string[]) => {
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace:
           args[2] === WORKSPACE
             ? { worktree: { repo_key: "repo-key", is_linked_worktree: false } }
-            : {},
+            : args[2] === independentWorkspace
+              ? {
+                  worktree: {
+                    repo_key: "other-repo",
+                    is_linked_worktree: false,
+                  },
+                }
+              : {},
       });
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+      if (args[args.indexOf("--workspace") + 1] === independentWorkspace)
+        return respond({
+          source: {
+            source_workspace_id: independentWorkspace,
+            repo_key: "other-repo",
+          },
+          worktrees: [],
+        });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
       return respond({
         source: {
@@ -719,11 +810,13 @@ test("Chief staff lists only live Managers as actionable reports", async () => {
         worktrees: [],
       });
     if (command === "herdr" && isAgentList(args))
-      return respond({ agents: [managerAgent] });
+      return respond({ agents: [managerAgent, independentLead] });
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
       return respond({ agent: managerAgent });
     if (command === "herdr" && isApiSnapshot(args))
-      return respond({ snapshot: { agents: [managerAgent], panes: [] } });
+      return respond({
+        snapshot: { agents: [managerAgent, independentLead], panes: [] },
+      });
     return respond({});
   };
   const manager = fakeChiefPi({ activeTools: ["read"], exec });
@@ -745,6 +838,13 @@ test("Chief staff lists only live Managers as actionable reports", async () => {
       await chief.events.get("session_start")![0](undefined, chiefCtx);
       await chief.commandOptions.get("chief").handler("", chiefCtx);
       assert.deepEqual(chief.pi.getActiveTools(), ["staff"]);
+      const chiefPrompt = await chief.events.get("before_agent_start")![0](
+        { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+        chiefCtx,
+      );
+      assert.ok(
+        JSON.stringify(chiefPrompt.message).includes(independentLeadSession),
+      );
       const staff = chief.tools.find((tool) => tool.name === "staff");
       const listed = await staff.execute(
         "list",
@@ -754,10 +854,12 @@ test("Chief staff lists only live Managers as actionable reports", async () => {
         chiefCtx,
       );
       assert.equal(listed.details.self.role, "chief");
-      assert.equal(listed.details.reports.length, 1);
+      assert.equal(listed.details.reports.length, 2);
       assert.equal(listed.details.reports[0].role, "manager");
       assert.equal(listed.details.reports[0].session, LEAD_SESSION_ID);
       assert.equal(listed.details.reports[0].leads.length, 0);
+      assert.equal(listed.details.reports[1].role, "lead");
+      assert.equal(listed.details.reports[1].session, independentLeadSession);
       await assert.rejects(
         staff.execute(
           "message",
@@ -1603,6 +1705,8 @@ test("Chief activation rejects owned work outside the current workspace", async 
   context.ui.notify = (message: string) => notices.push(message);
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
+  await pi.commandOptions.get("manager").handler("", context);
+  assert.ok(notices.some((message) => /owned agent work exists/.test(message)));
   await pi.commandOptions.get("chief").handler("", context);
   assert.ok(notices.some((message) => /owned agent work exists/.test(message)));
   realFs.rmSync(mailbox, { recursive: true, force: true });

@@ -364,8 +364,11 @@ primary workspace may explicitly enter Manager mode with `/manager`; a Lead
 in a linked-worktree workspace cannot. Manager mode is persisted for the Pi
 session and requires the exclusive lease for the Herdsman project scope
 corresponding to that worktree group. If another live Manager holds it,
-activation fails and the caller remains an ordinary Lead. `/manager leave`
-releases the lease and restores the Lead profile and exact Lead tool baseline.
+activation fails and the caller remains an ordinary Lead. Activation also
+fails while this session owns unresolved managed-Agent work, preserving its
+control surface. `/manager leave` is refused while project assignments or
+Manager-addressed asks remain outstanding; once clear, it releases the lease
+and restores the Lead profile and exact Lead tool baseline.
 An eligible ordinary Lead may activate workspace-neutral Chief with `/chief`;
 a Manager cannot. Chief has only `staff`.
 
@@ -384,8 +387,11 @@ Descendant summaries never confer direct control. The active tool sets are:
 
 `staff` targets only a current direct report's exact `session` from a fresh
 roster. Chief can observe bounded Lead summaries but may act only on its direct
-reports. Manager can observe bounded Agent state through its Leads but may act
-only on Leads. Use a fresh
+reports; its snapshot includes Managers and direct Leads whose projects have no
+Manager. Manager receives bounded automatic context for its direct Leads, not
+the Lead Agent-definition roster or instructions to use unavailable tools.
+Manager can observe bounded Agent state through its Leads but may act only on
+Leads. Use a fresh
 automatic `<supervision_state>` for general status; call `staff.list` only
 when a refreshed roster matters, `inspect` for live terminal/process evidence,
 and `transcript` for persisted Pi conversation/tool evidence. Never poll.
@@ -393,19 +399,24 @@ State and metadata do not establish authority; every action revalidates exact
 identity and current lease.
 
 `supervisor.message` reports upward: Lead → active project Manager, or Chief
-when no Manager is active; Manager → Chief. A Lead's pending ask remains bound
-to the exact supervisor it was sent to if the hierarchy changes. Use `supervisor.ask` only
+when no Manager is active; Manager → Chief. A pending ask stays attached to its
+supervision edge: a same-edge replacement can answer after fresh validation,
+but a hierarchy change cannot reroute it. Use `supervisor.ask` only
 for a genuine decision, as the sole and final tool call of the turn, with at
 most one outstanding question. Wait for the exact `staff.reply`. A Manager's
 own escalation to Chief is a separate decision, never an automatic forward.
 Managed Agents use `ask_owner` to their exact owner, not `supervisor`.
 
-Manager `staff.delegate` creates a Lead in a linked-worktree workspace and a
-durable assignment. It retains a requested branch or derives
-`herdsman/<assignment-id>`, persists that branch before Herdr creation, and
-always passes it explicitly. If creation is ambiguous, reconcile by the
-persisted branch and Herdr topology; never create a second branch/workspace
-for the assignment. Herdr determines the workspace path and label. Manager
+Only explicit Manager `staff.delegate` starts or recovers delegation; reads
+never resume external mutations. An unresolved creation/start blocks an
+unrelated delegate request rather than being reused for new task intent. It
+creates a Lead in a linked-worktree workspace and a durable assignment. It
+retains a requested branch or derives `herdsman/<assignment-id>`, resolves and
+persists the chosen base before Herdr creation, and uses the same branch/base
+on every recovery. If creation is ambiguous, reconcile by persisted branch,
+base, and Herdr topology; use Herdr `worktree open --branch ... --no-focus`
+when the branch exists but is not open. Never create a second
+branch/workspace for the assignment. Herdr determines the workspace path and label. Manager
 may also supervise manually created Leads in the same worktree group. An
 assigned Lead reports completion via
 `supervisor.result`, which persists provenance and a reusable

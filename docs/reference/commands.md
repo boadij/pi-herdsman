@@ -137,9 +137,11 @@ worktree group can use `/manager` to claim the exclusive Manager lease for
 its Herdsman project scope and enter the Manager profile. Leads in
 linked-worktree workspaces cannot enter Manager mode. If another live Manager
 holds the lease, activation fails and the
-caller remains an ordinary Lead. `/manager leave` relinquishes the lease and
-restores the exact Lead tool baseline, including `agent`, and Lead instruction
-profile. See
+caller remains an ordinary Lead. Manager activation also refuses while the
+session owns unresolved Agent work. `/manager leave` is refused while project
+assignments or asks addressed to the Manager remain outstanding; otherwise it
+relinquishes the lease and restores the exact Lead tool baseline, including
+`agent`, and Lead instruction profile. See
 [Supervision](supervision.md) for the role and project boundaries.
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.

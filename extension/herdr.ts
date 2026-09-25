@@ -362,9 +362,13 @@ export async function worktreeGroupScope(
   ctx: ExtensionContext,
   workspaceId: string,
   signal?: AbortSignal,
+  timeout?: number,
 ): Promise<WorktreeGroupScope> {
   const workspace = (
-    await runHerdr(pi, ctx, ["workspace", "get", workspaceId], { signal })
+    await runHerdr(pi, ctx, ["workspace", "get", workspaceId], {
+      signal,
+      timeout,
+    })
   )?.workspace;
   const membership = workspace?.worktree;
   if (typeof membership?.repo_key !== "string" || !membership.repo_key)
@@ -374,7 +378,7 @@ export async function worktreeGroupScope(
     pi,
     ctx,
     ["worktree", "list", "--workspace", workspaceId],
-    { signal },
+    { signal, timeout },
   );
   const source = listed?.source;
   if (!source || source.repo_key !== membership.repo_key)
@@ -739,6 +743,16 @@ export type StartHerdrOptions = {
   timeoutMs?: number;
   direction?: "right" | "down";
   signal?: AbortSignal;
+};
+
+export type StartHerdrInPaneOptions = Omit<
+  StartHerdrOptions,
+  "placement" | "placementRevalidator" | "direction" | "env"
+> & {
+  primaryWorkspaceId: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
 };
 
 export type HerdrStartPlacement =
@@ -1179,147 +1193,270 @@ export async function startHerdrAgent(
       cwd,
       createdTab,
     };
-    let started: any;
-    stage = "pane_readiness";
-    let shell: PaneProcess;
-    try {
-      shell = await proveShellReady(
-        pi,
-        ctx,
-        paneId,
-        undefined,
-        startupDeadline,
-        "start",
-        options.signal,
-      );
-    } catch (failure) {
-      if (failure instanceof OperationError)
-        throw withStartupDiagnostic(
-          failure,
-          await captureStartupDiagnostic(
-            pi,
-            ctx,
-            paneId,
-            startupDeadline,
-            options.signal,
-          ),
-        );
-
-      throw failure;
-    }
-    stage = "ownership_capture";
-    attempt.shellProcess = shell;
-    const currentPanes =
-      (
-        await runHerdr(pi, ctx, ["pane", "list", "--workspace", workspaceId], {
-          signal: options.signal,
-          timeout: startupCallTimeout(startupDeadline),
-        })
-      ).panes ?? [];
-    const currentPane = currentPanes.find(
-      (item: any) => item.pane_id === paneId,
-    );
-    if (
-      !currentPane ||
-      currentPane.workspace_id !== workspaceId ||
-      currentPane.tab_id !== tab.tab_id
-    )
-      error("start", `pane ${paneId} topology changed before launch`);
-    if (createdTab) {
-      const tabPanes = currentPanes.filter(
-        (item: any) => item.tab_id === tab.tab_id,
-      );
-      if (tabPanes.length !== 1 || tabPanes[0]?.pane_id !== paneId)
-        error("start", `tab ${tab.tab_id} topology changed before launch`);
-    }
-    if (!sameCwd(currentPane.cwd, cwd))
-      error("start", `pane ${paneId} cwd does not match requested cwd`, {
-        expected_cwd: cwd,
-        observed_cwd:
-          typeof currentPane.cwd === "string" ? currentPane.cwd : null,
-      });
-    stage = "agent_start";
-    const latest = await paneProcess(
+    return await startPiInExactPane(
       pi,
       ctx,
-      paneId,
-      options.signal,
+      attempt,
       startupDeadline,
-      true,
+      childTimeout,
+      (value) => {
+        stage = value;
+      },
+      options,
     );
-    if (
-      !latest ||
-      latest.pane_id !== paneId ||
-      !sameShellProcessOwner(shell, latest)
-    )
-      error("start", `pane ${paneId} shell identity changed before launch`);
-    const remaining = startupCallTimeout(startupDeadline, childTimeout);
-    if (remaining < HERDR_START_TIMEOUT_MIN)
-      error("start", "startup deadline exhausted before agent start");
-    try {
-      started = await runHerdr(
-        pi,
-        ctx,
-        [
-          "agent",
-          "start",
-          attempt.herdrAgent,
-          "--kind",
-          "pi",
-          "--pane",
-          paneId,
-          "--timeout",
-          String(Math.min(remaining, childTimeout)),
-          "--",
-          ...(options.extensionPath
-            ? ["--extension", options.extensionPath]
-            : []),
-          "--extension",
-          HERDR_AGENT_STATE_EXTENSION,
-          ...(options.agentArgs ?? []),
-        ],
-        {
-          signal: options.signal,
-          // Outlive Herdr's own readiness deadline by the diagnostic window so
-          // its structured failure is the one reported. With the identical
-          // value this command's kill always won the race, and "Herdr command
-          // was killed" replaced Herdr's reason.
-          timeout: Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
-        },
-      );
-    } catch (failure) {
-      if (isUnstructuredResultFailure(failure))
-        throw withStartupDiagnostic(
-          failure,
-          await captureStartupDiagnostic(
-            pi,
-            ctx,
-            paneId,
-            startupDeadline,
-            options.signal,
-          ),
-        );
-      throw failure;
-    }
-    stage = "agent_result";
-    const agent = started.agent;
-    const session = sessionIdentity(agent.agent_session);
-    const reference = session
-      ? session.kind === "id"
-        ? { id: session.value }
-        : { path: session.value }
-      : undefined;
-    attempt.herdrAgent = agent.name ?? attempt.herdrAgent;
-    attempt.paneId = paneId;
-    attempt.sessionReference = reference;
-    attempt.agent = agent;
-    return attempt;
   } catch (cause) {
     if (attempt) throw new HerdrStartFailure(cause, stage, attempt, false);
     throw cause;
   } finally {
     release();
   }
+}
+
+/** Start Pi only after proving that this exact existing Herdr pane is safe. */
+export async function startHerdrAgentInPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: StartHerdrInPaneOptions,
+): Promise<StartedHerdrAgent> {
+  const { primaryWorkspaceId, workspaceId } = options;
+  const { totalTimeout, childTimeout } = startupTimeoutBudget(
+    options.timeoutMs,
+  );
+  const attempt: StartedHerdrAgent = {
+    herdrAgent: alias(workspaceId, options.label, options.runId),
+    workspaceId,
+    tabId: options.tabId,
+    paneId: options.paneId,
+    cwd: canonicalCwd(options.cwd),
+    createdTab: false,
+  };
+  let stage = "topology";
+  const release = await lockLifecycle(ctx, options.signal);
+  const deadline = Date.now() + totalTimeout;
+  try {
+    const currentWorkspaceId = workspace(ctx);
+    const scope = await worktreeGroupScope(
+      pi,
+      ctx,
+      currentWorkspaceId,
+      options.signal,
+      startupCallTimeout(deadline),
+    );
+    if (scope.primaryWorkspaceId !== primaryWorkspaceId)
+      error(
+        "start",
+        `workspace ${currentWorkspaceId} is not in primary workspace ${primaryWorkspaceId}'s worktree group`,
+      );
+    if (!scope.workspaceIds.includes(workspaceId))
+      error(
+        "start",
+        `workspace ${workspaceId} is not in primary workspace ${primaryWorkspaceId}'s worktree group`,
+      );
+    return await startPiInExactPane(
+      pi,
+      ctx,
+      attempt,
+      deadline,
+      childTimeout,
+      (value) => {
+        stage = value;
+      },
+      { ...options, primaryWorkspaceId },
+      true,
+    );
+  } catch (cause) {
+    throw new HerdrStartFailure(cause, stage, attempt, false);
+  } finally {
+    release();
+  }
+}
+
+async function startPiInExactPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  attempt: StartedHerdrAgent,
+  deadline: number,
+  childTimeout: number,
+  setStage: (stage: string) => void,
+  options: Pick<StartHerdrOptions, "extensionPath" | "agentArgs" | "signal"> & {
+    primaryWorkspaceId?: string;
+  },
+  validateBeforeReadiness = false,
+): Promise<StartedHerdrAgent> {
+  const { workspaceId, tabId, paneId, cwd } = attempt;
+  if (validateBeforeReadiness)
+    await validateTargetPane(
+      pi,
+      ctx,
+      workspaceId,
+      tabId,
+      paneId,
+      cwd,
+      options.signal,
+      deadline,
+    );
+  let shell: PaneProcess;
+  setStage("pane_readiness");
+  try {
+    shell = await proveShellReady(
+      pi,
+      ctx,
+      paneId,
+      undefined,
+      deadline,
+      "start",
+      options.signal,
+    );
+  } catch (failure) {
+    if (failure instanceof OperationError)
+      throw withStartupDiagnostic(
+        failure,
+        await captureStartupDiagnostic(
+          pi,
+          ctx,
+          paneId,
+          deadline,
+          options.signal,
+        ),
+      );
+    throw failure;
+  }
+  setStage("ownership_capture");
+  attempt.shellProcess = shell;
+  const panes = await validateTargetPane(
+    pi,
+    ctx,
+    workspaceId,
+    tabId,
+    paneId,
+    cwd,
+    options.signal,
+    deadline,
+  );
+  if (options.primaryWorkspaceId) {
+    const scope = await worktreeGroupScope(
+      pi,
+      ctx,
+      workspace(ctx),
+      options.signal,
+      startupCallTimeout(deadline),
+    );
+    if (
+      scope.primaryWorkspaceId !== options.primaryWorkspaceId ||
+      !scope.workspaceIds.includes(workspaceId)
+    )
+      error(
+        "start",
+        `workspace ${workspaceId} left primary workspace ${options.primaryWorkspaceId}'s worktree group before launch`,
+      );
+  }
+  if (attempt.createdTab) {
+    const tabPanes = panes.filter((item: any) => item.tab_id === tabId);
+    if (tabPanes.length !== 1 || tabPanes[0]?.pane_id !== paneId)
+      error("start", `tab ${tabId} topology changed before launch`);
+  }
+  setStage("agent_start");
+  const latest = await paneProcess(
+    pi,
+    ctx,
+    paneId,
+    options.signal,
+    deadline,
+    true,
+  );
+  if (
+    !latest ||
+    latest.pane_id !== paneId ||
+    !sameShellProcessOwner(shell, latest)
+  )
+    error("start", `pane ${paneId} shell identity changed before launch`);
+  const remaining = startupCallTimeout(deadline, childTimeout);
+  if (remaining < HERDR_START_TIMEOUT_MIN)
+    error("start", "startup deadline exhausted before agent start");
+  let started: any;
+  try {
+    started = await runHerdr(
+      pi,
+      ctx,
+      [
+        "agent",
+        "start",
+        attempt.herdrAgent,
+        "--kind",
+        "pi",
+        "--pane",
+        paneId,
+        "--timeout",
+        String(Math.min(remaining, childTimeout)),
+        "--",
+        ...(options.extensionPath
+          ? ["--extension", options.extensionPath]
+          : []),
+        "--extension",
+        HERDR_AGENT_STATE_EXTENSION,
+        ...(options.agentArgs ?? []),
+      ],
+      {
+        signal: options.signal,
+        // Keep Herdr's structured readiness failure ahead of our subprocess timeout.
+        timeout: Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
+      },
+    );
+  } catch (failure) {
+    if (isUnstructuredResultFailure(failure))
+      throw withStartupDiagnostic(
+        failure,
+        await captureStartupDiagnostic(
+          pi,
+          ctx,
+          paneId,
+          deadline,
+          options.signal,
+        ),
+      );
+    throw failure;
+  }
+  setStage("agent_result");
+  const agent = started.agent;
+  const session = sessionIdentity(agent.agent_session);
+  attempt.herdrAgent = agent.name ?? attempt.herdrAgent;
+  attempt.sessionReference = session
+    ? session.kind === "id"
+      ? { id: session.value }
+      : { path: session.value }
+    : undefined;
+  attempt.agent = agent;
+  return attempt;
+}
+
+async function validateTargetPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  workspaceId: string,
+  tabId: string,
+  paneId: string,
+  cwd: string,
+  signal?: AbortSignal,
+  deadline?: number,
+): Promise<any[]> {
+  const panes =
+    (
+      await runHerdr(pi, ctx, ["pane", "list", "--workspace", workspaceId], {
+        signal,
+        ...(deadline === undefined
+          ? {}
+          : { timeout: startupCallTimeout(deadline) }),
+      })
+    ).panes ?? [];
+  const pane = panes.find((item: any) => item.pane_id === paneId);
+  if (!pane || pane.workspace_id !== workspaceId || pane.tab_id !== tabId)
+    error("start", `pane ${paneId} topology changed before launch`);
+  if (!sameCwd(pane.cwd, cwd))
+    error("start", `pane ${paneId} cwd does not match requested cwd`, {
+      expected_cwd: cwd,
+      observed_cwd: typeof pane.cwd === "string" ? pane.cwd : null,
+    });
+  return panes;
 }
 
 function validateEnvironment(

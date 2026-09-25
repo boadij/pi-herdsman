@@ -9,9 +9,11 @@ It does not replace mailbox assignment/result authority.
 
 An active Chief receives a separate supervision widget for its current direct
 reports (Managers and ordinary Leads without an active project Manager). It
-shows the direct-report projection, not managed Agent rows. Its complete
-overview, peek, and focus behavior is documented in the
-[supervision reference](supervision.md). The two widgets are never combined.
+shows both categories together when both exist, not managed Agent rows. An
+active Manager receives bounded direct-Lead supervision state rather than the
+ordinary Lead Agent widget. Chief's complete overview, peek, and focus behavior
+is documented in the [supervision reference](supervision.md). Supervision and
+Agent widgets are never combined.
 
 The ambient supervision rows use `├─` for non-final visible reports and `└─` for the
 final visible report. Selection, attention, and lifecycle remain separate: `>`

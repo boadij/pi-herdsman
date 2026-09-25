@@ -148,7 +148,9 @@ For failure diagnosis and conservative cleanup, see [Recovery](guides/recovery.m
 
 Every session starts as a Lead. In the primary workspace of a Herdr worktree
 group, use `/manager` to explicitly claim the exclusive Manager lease for its
-Herdsman project scope; `/manager leave` returns to Lead. Leads in
+Herdsman project scope; activation is refused while the session owns unresolved
+Agent work. `/manager leave` returns to Lead only after project assignments
+and Manager-addressed asks are resolved. Leads in
 linked-worktree workspaces cannot enter Manager mode. Manager is a dedicated
 project coordinator with a distinct coordination profile and only
 `staff`, `supervisor`, and `peer` among Herdsman tools. It does not own Agents

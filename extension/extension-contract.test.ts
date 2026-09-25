@@ -3481,13 +3481,9 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assertToolResult(staleReply);
     await new Promise<void>((resolve) => setTimeout(resolve, 550));
     assert.equal(
-      readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk
-        ?.askId,
-      askId,
-    );
-    assert.deepEqual(
       readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk,
-      state?.pendingAsk,
+      undefined,
+      "a replacement Chief on the same supervision edge may answer the pending ask",
     );
     const beforeFailedAsk = readLeadCoordinationState(
       supervisionRuntime(),
@@ -3502,7 +3498,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /A supervisor ask is already pending/,
+      /No active supervisor/,
     );
     const afterFailedAsk = readLeadCoordinationState(
       supervisionRuntime(),
@@ -3662,6 +3658,7 @@ test("lead restart creates a fresh coordination generation but restores state", 
           text: "Question: Need a decision",
           supervisorSessionId: "11111111-1111-4111-8111-111111111112",
           supervisorLeaseId: "11111111-1111-4111-8111-111111111113",
+          supervisorRole: "chief",
         },
       },
     },

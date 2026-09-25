@@ -855,6 +855,7 @@ test("project assignments are strict, private, bounded, and removable", () => {
     id: id(),
     primaryWorkspaceId: "root",
     repoKey: "repo",
+    base: "HEAD",
     text: "task",
     phase: "creating" as const,
     createdAt: 1,

@@ -1672,6 +1672,7 @@ export type ProjectAssignment = {
   id: string;
   primaryWorkspaceId: string;
   repoKey: string;
+  base: string;
   text: string;
   phase: "creating" | "starting" | "active" | "settling";
   workspaceId?: string;
@@ -1706,6 +1707,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     "id",
     "primaryWorkspaceId",
     "repoKey",
+    "base",
     "text",
     "phase",
     "createdAt",
@@ -1727,6 +1729,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     UUID.test(String(r.id)) &&
     validNativeIdentity(r.primaryWorkspaceId) &&
     validNativeIdentity(r.repoKey) &&
+    validNativeIdentity(r.base) &&
     typeof r.text === "string" &&
     r.text.length > 0 &&
     ["creating", "starting", "active", "settling"].includes(String(r.phase)) &&
