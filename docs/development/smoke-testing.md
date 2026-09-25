@@ -242,77 +242,149 @@ After every smoke:
 - disposable herdr resources are closed by exact ID;
 - no repository source file changed unless the smoke explicitly required it.
 
-## Chief supervision live matrix
+## Project Manager / Chief supervision live matrix
 
-No live Pi/herdr smoke was run for the current worktree. Every scenario below
-is **NOT RUN**, not a claim of failure or success. The automated tests are not
-substitutes for these checks.
+No live Pi/Herdr smoke was run for this worktree. Every scenario below is
+**NOT RUN**; automated tests are not substitutes for these checks. Use a
+disposable Herdr worktree group and branch. Manager runs from the group's
+primary workspace and coordinates the group, not one worktree per Lead. Multiple
+Leads can share one workspace; do not count those sessions as separate
+worktrees. Do not delete the delegated linked-worktree workspace as part of
+completion.
 
-| Scenario                                                                                                                                                                       | Result  |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| Normal lead has `agent` and `chief`, not `staff`                                                                                                                               | NOT RUN |
-| Active Chief has exactly `staff`, not lead controller tools                                                                                                                    | NOT RUN |
-| Active Chief remains exactly `staff` after `/tree` restores a pre-Chief Lead branch                                                                                            | NOT RUN |
-| Leaving Chief persists `role` plus exact `leadTools`; resume repairs stale restored `staff` before another model turn                                                          | NOT RUN |
-| A legitimate ordinary branch loadout is preserved instead of being overwritten by an older `leadTools` checkpoint                                                              | NOT RUN |
-| Persisted Chief resume collision becomes suspended                                                                                                                             | NOT RUN |
-| Ordinary losing `/chief` collision remains a lead with its tools and offers Focus/Cancel                                                                                       | NOT RUN |
-| Delegating agent and agent retain their current role tools                                                                                                                     | NOT RUN |
-| Activate one Chief with `/chief`                                                                                                                                               | NOT RUN |
-| Activation refuses a lead with owned or unresolved agent work                                                                                                                  | NOT RUN |
-| Two exact simultaneous Chief claims have one winner                                                                                                                            | NOT RUN |
-| Stale exact lease recovery                                                                                                                                                     | NOT RUN |
-| Malformed role, lead state, lease, or descriptor fails closed; coordination publication invalidates stale state and disables actions                                           | NOT RUN |
-| Discover leads across multiple workspaces                                                                                                                                      | NOT RUN |
-| Exclude managed agents and the active Chief from leads                                                                                                                         | NOT RUN |
-| Agent exclusion uses the production validated snapshot and stale/ambiguous generations fail closed                                                                             | NOT RUN |
-| Herdr `agent_status` lifecycle normalization is reflected                                                                                                                      | NOT RUN |
-| Nested agent aggregation attaches only to the proven lead                                                                                                                      | NOT RUN |
-| A blocked agent does not mark its lead `needs you`                                                                                                                             | NOT RUN |
-| Duplicate live agents, coordination records, or agent evidence fail closed                                                                                                     | NOT RUN |
-| Target disappearance or replacement between list and action is rejected                                                                                                        | NOT RUN |
-| Inspect a lead and compare bounded peek evidence                                                                                                                               | NOT RUN |
-| Read `staff transcript` when `transcript` is advertised; the action validates the persisted session header, version, and exact Pi session ID; content is bounded and read-only | NOT RUN |
-| `staff inspect` exposes live terminal/process evidence while `staff transcript` exposes persisted conversation/tool evidence                                                   | NOT RUN |
-| Focus a lead after exact revalidation                                                                                                                                          | NOT RUN |
-| Chief `message` to idle, working, or blocked leads                                                                                                                             | NOT RUN |
-| Two Chief messages queue and arrive once and in order                                                                                                                          | NOT RUN |
-| A quarantined message does not block a new message to the same lead                                                                                                            | NOT RUN |
-| Leads retain descendant ownership after a Chief `message`                                                                                                                      | NOT RUN |
-| Lead `chief message` reaches the active Chief                                                                                                                                  | NOT RUN |
-| Lead `chief ask` reaches the active Chief and creates one pending ask                                                                                                          | NOT RUN |
-| Pending ask projects as `needs_you` with bounded public question and exact reply action                                                                                        | NOT RUN |
-| A second lead ask while one is pending is rejected                                                                                                                             | NOT RUN |
-| Exact Chief `reply` reaches the lead and clears the ask after local acceptance                                                                                                 | NOT RUN |
-| Pending ask remains replyable after chief replacement using the unchanged ask ID/current lease                                                                                 | NOT RUN |
-| Failed ask queue restores the exact previous pending-ask state                                                                                                                 | NOT RUN |
-| Metadata publication failure does not remove communication eligibility                                                                                                         | NOT RUN |
-| Ordinary lead messages leave lead coordination state unchanged                                                                                                                 | NOT RUN |
-| Follow-up delivery while the receiver is streaming, never steering                                                                                                             | NOT RUN |
-| Receiver restart delivers each queued message once                                                                                                                             | NOT RUN |
-| Accepted-before-delete crash deduplicates without reinjection                                                                                                                  | NOT RUN |
-| Failed delivery/acceptance retains the queued record                                                                                                                           | NOT RUN |
-| Transient authorization lookup failure retains the queued message                                                                                                              | NOT RUN |
-| Stale lease, wrong sender/generation, duplicate identity, and malformed records fail closed                                                                                    | NOT RUN |
-| Lead/Chief messages show bounded direction-aware model-visible sender and target identity                                                                                      | NOT RUN |
-| Queued inbox records are ordered by `createdAt`, then ID                                                                                                                       | NOT RUN |
-| Resume with a free or occupied lease                                                                                                                                           | NOT RUN |
-| Confirm `/chief leave` without mutating supervised leads                                                                                                                       | NOT RUN |
-| Suspended Chief retains no Herdsman authority tools                                                                                                                            | NOT RUN |
-| Descendant `working`, `settling`, and `blocked` states remain exact; counts report `active`, `blocked`, and `total`                                                            | NOT RUN |
-| Chief rows separate `!` attention from lifecycle: `●` working, `◐` blocked, `?` unknown, and `◉` delegated active descendants                                                  | NOT RUN |
-| Empty-roster Escape closes the native custom UI                                                                                                                                | NOT RUN |
-| Empty-roster Ctrl+C closes the native custom UI                                                                                                                                | NOT RUN |
-| Real terminal arrow sequences navigate the visual order                                                                                                                        | NOT RUN |
-| Space switches overview to peek and Escape/Space returns without nested custom UI                                                                                              | NOT RUN |
-| Ctrl+C closes from peek                                                                                                                                                        | NOT RUN |
-| Enter focuses the lead and closes the overview                                                                                                                                 | NOT RUN |
-| Background refresh redraws the open overview                                                                                                                                   | NOT RUN |
-| Ambient and overview rendering stay within the supplied width                                                                                                                  | NOT RUN |
-| Named herdr sockets independently support one Chief each                                                                                                                       | NOT RUN |
+Minimum live sequence:
 
-Named herdr socket independence is also **NOT RUN** because no live Pi/herdr
-runtime was available for this worktree.
+1. Open a Herdr worktree group's primary workspace and start Pi; verify it starts
+   as an ordinary Lead with `agent`, `supervisor`, and `peer`, but no `staff`.
+2. With an owned Agent still unresolved, attempt `/manager`; verify activation
+   is refused and the Lead retains its Agent controls. After resolving that
+   work, activate `/manager`; verify the exclusive project lease is claimed, the
+   distinct Manager coordination profile is active, `agent` is removed, and
+   `staff`, `supervisor`, and `peer` plus ordinary project tools remain available,
+   with bounded direct-Lead context and no Agent-definition roster/instructions.
+   Verify its status header says `manager` (not `chief`) and reports direct
+   Leads as Leads. Restart this Manager session and verify the same Manager
+   profile, UI, context, and tool set return without Lead Agent-roster discovery
+   or Lead-owned Agent recovery.
+3. Open a Lead in a linked-worktree workspace and verify `/manager` is unavailable. Attempt
+   activation from a second primary-workspace session while Manager is active;
+   verify it remains an ordinary Lead with no automatic elevation.
+4. Delegate a disposable branch/task with Manager `staff.delegate`; verify
+   Herdr creates a linked-worktree workspace in the same group and Pi starts
+   in its pane only after the shell is ready. Verify Manager-created Pi receives
+   `--session-id <assignment-id>` and the trust flag selected from the
+   Manager's `ctx.isProjectTrusted()` decision: trusted Manager means
+   `--approve` (not `--no-approve`), untrusted Manager means `--no-approve`
+   (not `--approve`). Verify this does not modify Pi's persistent trust store
+   or elevate trust beyond the Manager's current decision. Also verify a
+   delayed shell does not trigger an early `agent start`. Exercise
+   startup while Herdr reports a path whose initial session JSONL does not yet
+   exist: Lead coordination state under the assignment ID should complete
+   verification without waiting for that file, and a resolvable Herdr session
+   identity must match the assignment ID. Inspect the live Pi pane/process during
+   startup with trust-protected project resources in both Manager trust states:
+   with a trusted Manager, verify Pi loads those protected resources; with an
+   untrusted Manager, verify Pi uses `--no-approve` and skips those protected
+   resources. Do not treat this as a claim that all project-local files are
+   skipped. Confirm neither case writes the linked-worktree path to Pi's
+   persistent trust store.
+   Ask Manager to describe its topology: it should identify one Herdr worktree
+   group from the primary workspace and the delegated branch's linked Git
+   worktree/workspace. When multiple Lead sessions share a workspace, confirm
+   Manager distinguishes those sessions from separate worktrees.
+5. Stall or simulate a lost create response for a delegation on `manager1`'s
+   branch. While it remains unresolved, delegate `manager2` on a different
+   branch and verify it starts independently. Verify a same-branch request
+   conflicts with `manager1`; while its phase is `creating` or `starting`, the
+   message directs recovery through `staff.delegate assignment=<id>`. Recover
+   `manager1` using exactly
+   `{"action":"delegate","assignment":"<id>"}` with `task`, `branch`,
+   `base`, and `files` omitted; confirm no duplicate worktree or Pi is
+   created. Verify a fresh delegation rejects an already-existing Herdr
+   worktree on its branch rather than adopting its Lead. `staff.list`, inspect,
+   transcript, message, and reply remain observational and never resume
+   creation or remove assignments. During explicit recovery, verify a
+   persisted placement is retired only when authoritative Herdr topology proves
+   its worktree absent. Confirm the abandonment result says the branch
+   reservation was released and permits a fresh delegation retry; uncertain
+   topology fails closed. Confirm retries reuse the exact persisted base ref
+   token (default `HEAD`), but do not imply that
+   the token freezes a moving ref or identifies an immutable commit.
+   Also verify that a conflict with an `active` or `settling` assignment directs
+   the Manager to `staff list`, identifies the existing Lead session when
+   available, and does not recommend `staff.delegate` recovery.
+6. Verify `staff.list` shows that exact Lead and the assignment's branch name.
+   Verify the Lead has `agent`, `supervisor`, and `peer`, and sees no Agents as
+   peers.
+7. Send a nonterminal `supervisor.message` from the Lead; verify Manager handles
+   the inbound message locally and does not echo it to Chief via `supervisor`.
+   Confirm the assignment remains active. Then complete the task with Lead
+   `supervisor.result`; verify Manager receives `result:<assignment-id>`, the
+   assignment settles/removes after accepted delivery, and the result ref can be
+   passed to another Lead through `files`.
+8. Activate Chief with `/chief` in another eligible Lead session; verify its
+   roster and automatic state include both the Manager and direct Leads from
+   another project without a Manager, not actionable nested Leads in the
+   managed project. Direct targeting of a nested Lead fails.
+9. Replace a Manager without changing the supervision edge; verify the
+   replacement can answer the existing Lead ask after fresh validation. Then
+   change the Lead's supervisor edge and verify the old ask cannot be rerouted.
+10. Verify Manager peers see Managers and Lead peers see Leads; neither role
+    appears in the other peer roster. Leave Manager with `/manager leave` and
+    verify leave is refused with an active assignment, an ask from a Lead, and
+    separately with the Manager's own pending ask to Chief.
+    Resolve/answer them, leave, and verify its Lead tools/profile return and the
+    lease is released.
+11. Restart Manager once during an active assignment; verify the Lead remains
+    alive and the replacement Manager rediscovers/reconciles it. Verify result
+    completion leaves the worktree in place.
 
-The automated test gate is the available evidence for this worktree; see
-[Validation](validation.md).
+| Scenario                                                                                                                                                                                                                 | Result  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| Session starts as ordinary Lead; `/manager` enters Manager only from primary workspace                                                                                                                                   | NOT RUN |
+| `/manager leave` refuses outstanding assignments, incoming asks, and its own pending ask to Chief; once clear restores Lead profile/tools                                                                                | NOT RUN |
+| Manager activation refuses while this session owns unresolved Agents                                                                                                                                                     | NOT RUN |
+| Lead in linked-worktree workspace cannot enter Manager; competing Manager claim leaves caller ordinary Lead                                                                                                              | NOT RUN |
+| Chief remains separate; Manager cannot activate `/chief`; Chief has exactly `staff`                                                                                                                                      | NOT RUN |
+| Manager uses distinct coordination profile with `staff`, `supervisor`, `peer`, ordinary project tools, and no `agent`                                                                                                    | NOT RUN |
+| Manager gets direct-Lead context and Manager status header; direct reports are Leads, not Managers                                                                                                                       | NOT RUN |
+| Manager role contract identifies one worktree group from primary workspace; multiple Leads in one workspace are not separate worktrees                                                                                   | NOT RUN |
+| Restored Manager returns to same profile/UI/context/tools; no Lead Agent roster discovery or Agent recovery                                                                                                              | NOT RUN |
+| Manager cannot own Agents or perform local implementation; `/manager leave` restores Lead profile and `agent`                                                                                                            | NOT RUN |
+| Lead has `agent`, `supervisor`, `peer`, and no `staff`; Agent has no `peer`                                                                                                                                              | NOT RUN |
+| Manager `staff.delegate` creates a linked-worktree workspace in the same group and starts Pi in the exact pane                                                                                                           | NOT RUN |
+| Manager Lead uses the assignment UUID as Pi `--session-id`; Lead state verifies under that ID without waiting for the initial session JSONL path to exist; resolvable Herdr ID matches                                   | NOT RUN |
+| Missing persisted worktree on explicit recovery reports the branch reservation released and allows fresh delegation                                                                                                      | NOT RUN |
+| Requested branch is retained; omitted branch is derived from assignment ID, persisted before creation, and passed explicitly to Herdr                                                                                    | NOT RUN |
+| Exact base ref token (default `HEAD`) is persisted with branch and reused on recovery; moving refs are not described as frozen commits                                                                                   | NOT RUN |
+| Different branches can be delegated independently while another assignment is unresolved; same branch has at most one creating/starting/active/settling assignment                                                       | NOT RUN |
+| Same-branch `creating`/`starting` conflicts guide exact-ID `staff.delegate` recovery; `active`/`settling` conflicts direct to `staff list` and identify the Lead session when available                                  | NOT RUN |
+| Fresh delegation never adopts an existing Herdr worktree/Lead                                                                                                                                                            | NOT RUN |
+| `staff.list` reports each assignment's branch without task text; reads never resume mutations or remove assignments                                                                                                      | NOT RUN |
+| Explicit recovery uses the exact `{"action":"delegate","assignment":"<id>"}` key, retains persisted inputs, and creates no duplicate worktree/Pi                                                                         | NOT RUN |
+| Explicit recovery retires a persisted placement only when authoritative topology proves its worktree absent; uncertain topology fails closed                                                                             | NOT RUN |
+| Manager startup waits for delayed pane shell readiness and retains startup ownership/topology checks                                                                                                                     | NOT RUN |
+| Manager-created Pi inherits `ctx.isProjectTrusted()`: trusted uses `--approve` and loads trust-protected project resources; untrusted uses `--no-approve` and skips those resources; persistent trust store is unchanged | NOT RUN |
+| Manager roster sees the exact delegated Lead and ordinary manually created Leads in its worktree group                                                                                                                   | NOT RUN |
+| Lead sees only its project-group direct reports; Manager cannot act on Agent IDs                                                                                                                                         | NOT RUN |
+| Lead `supervisor.ask` routes to active Manager; Manager ask routes to Chief                                                                                                                                              | NOT RUN |
+| Manager handles inbound direct-Lead messages locally and does not echo them through `supervisor`                                                                                                                         | NOT RUN |
+| Without an active Manager, Lead `supervisor` routes to Chief                                                                                                                                                             | NOT RUN |
+| Same-edge supervisor replacement can answer pending ask after fresh validation                                                                                                                                           | NOT RUN |
+| Hierarchy-edge change cannot reroute an existing pending ask                                                                                                                                                             | NOT RUN |
+| `supervisor.message` is nonterminal progress/coordination and does not settle the assignment                                                                                                                             | NOT RUN |
+| Lead `supervisor.result` completes assignment, persists provenance and `result:<assignment-id>` before Manager notification                                                                                              | NOT RUN |
+| Manager receives result ref; assignment settles/removes after acceptance while canonical artifact and worktree remain                                                                                                    | NOT RUN |
+| Manager restart during active assignment rediscovers Lead and reconciles ask/result                                                                                                                                      | NOT RUN |
+| Chief staff roster lists Managers when active; direct Lead supervision remains available without Manager                                                                                                                 | NOT RUN |
+| Chief roster and automatic supervision state include Managers and direct Leads from projects without a Manager                                                                                                           | NOT RUN |
+| With an active Manager, Chief has no simultaneous direct authority over its project Leads                                                                                                                                | NOT RUN |
+| Chief cannot message, inspect, or reply to a nested Lead session ID                                                                                                                                                      | NOT RUN |
+| Manager peers see Managers; Lead peers see Leads; no project filter; no Agents or Chief peers                                                                                                                            | NOT RUN |
+| Uncertain creation is reconciled by branch and Herdr topology; no second branch/workspace is created                                                                                                                     | NOT RUN |
+| `/manager leave` is refused with assignments, Manager-addressed asks, or its own pending ask to Chief                                                                                                                    | NOT RUN |
+| Herdr metadata displays roles but does not grant authority                                                                                                                                                               | NOT RUN |
+
+This worktree has no recorded live smoke result. Run the matrix against real Pi
+and Herdr before merge; see [Development validation](validation.md) for the
+required final validation order.

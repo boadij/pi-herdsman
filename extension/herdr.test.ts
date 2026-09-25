@@ -19,6 +19,7 @@ import {
   listHerdrAgents,
   listAllHerdrAgents,
   herdrSessionSnapshot,
+  worktreeGroupScope,
   watchHerdrLifecycle,
   leadMetadataArgs,
   reportLeadMetadata,
@@ -31,6 +32,7 @@ import {
   closeHerdrPane,
   rollbackHerdrStart,
   startHerdrAgent,
+  startHerdrAgentInPane,
   matchesExpectedSession,
   sameObservedSessionPath,
   sessionIdentity,
@@ -42,6 +44,100 @@ import {
 } from "./herdr.ts";
 import { claimProcessLock } from "./lock.ts";
 import { herdsmanTempRoot } from "./storage.ts";
+
+test("worktree group scope resolves primary and linked workspaces from Herdr topology", async () => {
+  const calls: string[][] = [];
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const workspaceId = args.at(-1);
+      const result =
+        args[0] === "workspace"
+          ? {
+              workspace: {
+                worktree: {
+                  repo_key: "repo-key",
+                  is_linked_worktree: workspaceId !== "root",
+                },
+              },
+            }
+          : {
+              source: {
+                repo_key: "repo-key",
+                source_workspace_id: "root",
+              },
+              worktrees: [
+                { open_workspace_id: "root" },
+                { open_workspace_id: "linked" },
+                { open_workspace_id: "linked" },
+                { open_workspace_id: null },
+              ],
+            };
+      return { code: 0, stdout: JSON.stringify({ id: 1, result }), stderr: "" };
+    },
+  } as any;
+  const ctx = { cwd: "/tmp" } as any;
+  const primary = await worktreeGroupScope(pi, ctx, "root");
+  const linked = await worktreeGroupScope(pi, ctx, "linked");
+  assert.deepEqual(primary, {
+    repoKey: "repo-key",
+    primaryWorkspaceId: "root",
+    workspaceIds: ["root", "linked"],
+  });
+  assert.deepEqual(linked, primary);
+  assert.notEqual(linked.primaryWorkspaceId, "linked"); // /manager requires the primary workspace.
+  assert.deepEqual(calls, [
+    ["workspace", "get", "root"],
+    ["worktree", "list", "--workspace", "root"],
+    ["workspace", "get", "linked"],
+    ["worktree", "list", "--workspace", "linked"],
+  ]);
+});
+
+test("worktree group scope fails closed on missing or inconsistent topology evidence", async () => {
+  const ctx = { cwd: "/tmp" } as any;
+  const scope = (membership: any, source: any) =>
+    worktreeGroupScope(
+      {
+        exec: async (_command: string, args: string[]) => ({
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            id: 1,
+            result:
+              args[0] === "workspace"
+                ? { workspace: { worktree: membership } }
+                : { source, worktrees: [] },
+          }),
+        }),
+      } as any,
+      ctx,
+      "linked",
+    );
+  await assert.rejects(
+    scope(undefined, undefined),
+    /not part of a Herdr Git worktree group/,
+  );
+  await assert.rejects(
+    scope({ repo_key: "one", is_linked_worktree: true }, { repo_key: "two" }),
+    /topology changed/,
+  );
+  await assert.rejects(
+    scope({ repo_key: "one", is_linked_worktree: true }, { repo_key: "one" }),
+    /primary workspace is unavailable/,
+  );
+  assert.deepEqual(
+    await scope(
+      { repo_key: "one", is_linked_worktree: false },
+      { repo_key: "one" },
+    ),
+    {
+      repoKey: "one",
+      primaryWorkspaceId: "linked",
+      workspaceIds: ["linked"],
+    },
+  );
+});
 
 test("nested topology keeps the Herdr workspace authoritative", () => {
   assert.deepEqual(
@@ -2073,6 +2169,191 @@ test("startup does not launch while the exact readiness marker is pending", asyn
   } finally {
     if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
     else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
+test("existing-pane startup waits for shell readiness before starting Pi", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "primary-workspace";
+  const calls: string[][] = [];
+  let releaseMarker!: () => void;
+  let markerStarted!: () => void;
+  const markerPending = new Promise<void>(
+    (resolve) => (releaseMarker = resolve),
+  );
+  const markerSeen = new Promise<void>((resolve) => (markerStarted = resolve));
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const key = args.slice(0, 2).join(" ");
+      if (key === "workspace get")
+        return response({
+          workspace: {
+            worktree: { repo_key: "repo", is_linked_worktree: false },
+          },
+        });
+      if (key === "worktree list")
+        return response({
+          source: {
+            repo_key: "repo",
+            source_workspace_id: "primary-workspace",
+          },
+          worktrees: [{ open_workspace_id: "existing-workspace" }],
+        });
+      if (key === "pane run") {
+        markerStarted();
+        return response({});
+      }
+      if (key === "pane wait-output") {
+        await markerPending;
+        return response({});
+      }
+      if (key === "pane process-info")
+        return response({
+          process_info: {
+            pane_id: "existing-pane",
+            shell_pid: 33,
+            foreground_process_group_id: 33,
+            foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
+          },
+        });
+      if (key === "pane list")
+        return response({
+          panes: [
+            {
+              pane_id: "existing-pane",
+              workspace_id: "existing-workspace",
+              tab_id: "existing-tab",
+              cwd: "/tmp/existing-agent",
+            },
+          ],
+        });
+      if (key === "agent start")
+        return response({ agent: { name: "existing-agent" } });
+      throw new Error("unexpected Herdr call: " + args.join(" "));
+    },
+  } as any;
+  try {
+    const starting = startHerdrAgentInPane(
+      pi,
+      { cwd: "/tmp/existing-agent" } as any,
+      {
+        label: "existing",
+        runId: "existing-run",
+        cwd: "/tmp/existing-agent",
+        primaryWorkspaceId: "primary-workspace",
+        workspaceId: "existing-workspace",
+        tabId: "existing-tab",
+        paneId: "existing-pane",
+      },
+    );
+    await markerSeen;
+    assert.equal(
+      calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+    releaseMarker();
+    await starting;
+    assert.equal(
+      calls.filter((args) => args[0] === "agent" && args[1] === "start").length,
+      1,
+    );
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
+test("existing-pane startup requires group membership and an exact pane", async () => {
+  const previousWorkspace = process.env.HERDR_WORKSPACE_ID;
+  process.env.HERDR_WORKSPACE_ID = "primary-workspace";
+  let targetIsMember = true;
+  let exactPane = true;
+  const calls: string[][] = [];
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const key = args.slice(0, 2).join(" ");
+      if (key === "workspace get")
+        return response({
+          workspace: {
+            worktree: { repo_key: "repo", is_linked_worktree: false },
+          },
+        });
+      if (key === "worktree list")
+        return response({
+          source: {
+            repo_key: "repo",
+            source_workspace_id: "primary-workspace",
+          },
+          worktrees: targetIsMember
+            ? [{ open_workspace_id: "target-workspace" }]
+            : [],
+        });
+      if (key === "pane list")
+        return response({
+          panes: [
+            {
+              pane_id: exactPane ? "target-pane" : "replacement-pane",
+              workspace_id: "target-workspace",
+              tab_id: "target-tab",
+              cwd: "/tmp/target",
+            },
+          ],
+        });
+      throw new Error("unexpected Herdr call: " + args.join(" "));
+    },
+  } as any;
+  const options = {
+    label: "lead",
+    runId: "lead-run",
+    cwd: "/tmp/target",
+    primaryWorkspaceId: "primary-workspace",
+    workspaceId: "target-workspace",
+    tabId: "target-tab",
+    paneId: "target-pane",
+  };
+  try {
+    await assert.rejects(
+      startHerdrAgentInPane(pi, { cwd: "/tmp/target" } as any, {
+        ...options,
+        primaryWorkspaceId: "different-primary",
+      }),
+      /not in primary workspace/,
+    );
+    targetIsMember = false;
+    await assert.rejects(
+      startHerdrAgentInPane(pi, { cwd: "/tmp/target" } as any, options),
+      /not in primary workspace/,
+    );
+    assert.equal(
+      calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+    targetIsMember = true;
+    exactPane = false;
+    await assert.rejects(
+      startHerdrAgentInPane(pi, { cwd: "/tmp/target" } as any, options),
+      /topology changed/,
+    );
+    assert.equal(
+      calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+  } finally {
+    if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
+    else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
   }
 });
 

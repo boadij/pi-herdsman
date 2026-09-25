@@ -14,7 +14,10 @@ import type {
 import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import {
   claimChiefLease,
+  listProjectAssignments,
   listCoordinationMessagePaths,
+  readChiefMessage,
+  readManagerDescriptor,
   listPeerLeadRecords,
   peerLeadLockPath,
   peerRuntime,
@@ -27,6 +30,7 @@ import {
   writePeerLeadRecord,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
+import { resultPath, resultRef } from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -84,6 +88,34 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
     : [];
   fixture = fakePi({
     ...options,
+    exec: async (command: string, args: string[], extra: any) => {
+      const provided = await options.exec?.(command, args, extra);
+      if (
+        provided &&
+        !(
+          command === "herdr" &&
+          args[0] === "workspace" &&
+          args[1] === "get" &&
+          provided.stdout === "{}"
+        )
+      )
+        return provided;
+      return {
+        stdout:
+          command === "herdr" && args[0] === "workspace" && args[1] === "get"
+            ? JSON.stringify({ id: AGENT_ID, result: { workspace: {} } })
+            : command === "herdr" && isAgentList(args)
+              ? JSON.stringify({ id: AGENT_ID, result: { agents: [] } })
+              : command === "herdr" && isApiSnapshot(args)
+                ? JSON.stringify({
+                    id: AGENT_ID,
+                    result: { snapshot: { agents: [], panes: [] } },
+                  })
+                : "{}",
+        stderr: "",
+        code: 0,
+      };
+    },
     allTools: () =>
       [
         ...new Set([
@@ -93,15 +125,877 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           "grep",
           "foreign_tool",
           "agent",
-          "chief",
+          "supervisor",
           "peer",
-          "staff",
           ...fixture.tools.map((tool) => tool.name),
         ]),
       ].map((name) => ({ name })),
   });
   return fixture;
 }
+
+test("root Lead explicitly enters Manager; a competing root session stays Lead", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "root-pane";
+  process.env.HERDR_TAB_ID = "root-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `structural-manager-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const exec = (command: string, args: string[]) => {
+    if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+      return respond({
+        workspace: {
+          worktree: { repo_key: "repo-key", is_linked_worktree: false },
+        },
+      });
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+      return respond({
+        source: {
+          source_workspace_id: WORKSPACE,
+          repo_key: "repo-key",
+          repo_name: "project",
+        },
+        worktrees: [],
+      });
+    if (command === "herdr" && isAgentList(args))
+      return respond({ agents: [] });
+    if (command === "herdr" && isApiSnapshot(args))
+      return respond({ snapshot: { agents: [], panes: [] } });
+    return respond({});
+  };
+  const first = fakeChiefPi({ activeTools: ["read"], exec });
+  const second = fakeChiefPi({ activeTools: ["read"], exec });
+  const ctx1 = fakeContext() as any;
+  const ctx2 = fakeContext() as any;
+  ctx2.sessionManager.getSessionId = () => `lead-${randomUUID()}`;
+  registerExtension!(first.pi as never);
+  registerExtension!(second.pi as never);
+  try {
+    assert.equal(first.commands.includes("manager"), true);
+    await first.events.get("session_start")![0](undefined, ctx1);
+    assert.deepEqual(first.pi.getActiveTools(), [
+      "read",
+      "agent",
+      "supervisor",
+      "peer",
+    ]);
+    assert.equal(
+      first.pi.getAllTools().some((tool) => tool.name === "staff"),
+      false,
+    );
+    const leadPrompt = await first.events.get("before_agent_start")![0](
+      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+      ctx1,
+    );
+    assert.match(
+      leadPrompt.systemPrompt,
+      /Own the assigned objective and any Agents/,
+    );
+    await first.commandOptions.get("manager").handler("", ctx1);
+    assert.deepEqual(first.pi.getActiveTools(), [
+      "read",
+      "staff",
+      "supervisor",
+      "peer",
+    ]);
+    assert.equal(
+      first.pi.getAllTools().some((tool) => tool.name === "staff"),
+      true,
+    );
+    assert.equal(first.pi.getActiveTools().includes("agent"), false);
+    const managerPrompt = await first.events.get("before_agent_start")![0](
+      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+      ctx1,
+    );
+    assert.match(
+      managerPrompt.systemPrompt,
+      /Manager role[\s\S]*exactly one Herdr worktree group[\s\S]*same workspace may host multiple Leads[\s\S]*Actual implementation belongs to Leads and their Agent trees[\s\S]*Handle them locally; do not echo them through supervisor[\s\S]*own Manager-level escalation to Chief/i,
+    );
+    assert.doesNotMatch(
+      managerPrompt.systemPrompt,
+      /Lead role[\s\S]*## Manager role/,
+    );
+    assert.doesNotMatch(
+      managerPrompt.systemPrompt,
+      /Available agent definitions/,
+    );
+    assert.equal(
+      managerPrompt.message?.customType,
+      "pi-herdsman-supervision-context",
+    );
+    assert.deepEqual(
+      await first.events.get("tool_call")![0](
+        { toolName: "agent", input: { action: "list" } },
+        ctx1,
+      ),
+      {
+        block: true,
+        reason:
+          "Manager mode cannot own Agents; use staff to coordinate Leads.",
+      },
+    );
+    const staff = first.tools.find((tool) => tool.name === "staff");
+    assert.ok(staff);
+    assert.match(
+      staff.parameters.properties.assignment.description,
+      /exclusive recovery form[\s\S]*omit task, branch, base, and files/i,
+    );
+    assert.match(
+      staff.description,
+      /\{action:'delegate', assignment:'<id>'\} only/i,
+    );
+    assert.ok(
+      Value.Check(staff.parameters, {
+        action: "delegate",
+        task: "Build feature",
+      }),
+    );
+    assert.equal(
+      Value.Check(staff.parameters, {
+        action: "message",
+        lead: LEAD_SESSION_ID,
+        message: "old selector",
+      }),
+      false,
+    );
+    const roster = await staff.execute(
+      "list",
+      { action: "list" },
+      undefined,
+      undefined,
+      ctx1,
+    );
+    assert.equal(roster.details.self.role, "manager");
+    assert.deepEqual(roster.details.reports, []);
+    const leadPeerSession = `lead-${randomUUID()}`;
+    const peerLease = acquireProcessLock(
+      peerLeadLockPath(peerRuntime(), leadPeerSession),
+    );
+    const leadPeer = {
+      version: 1 as const,
+      role: "lead" as const,
+      piSessionId: leadPeerSession,
+      workspaceId: "unrelated",
+      paneId: "lead-pane",
+      tabId: "lead-tab",
+      claim: peerLease.claim,
+      updatedAt: Date.now(),
+    };
+    try {
+      writePeerLeadRecord(peerRuntime(), leadPeer);
+      const peer = first.tools.find((tool) => tool.name === "peer");
+      const visible = await peer.execute(
+        "list",
+        { action: "list" },
+        undefined,
+        undefined,
+        ctx1,
+      );
+      assert.deepEqual(visible.details.peers, []);
+      await assert.rejects(
+        peer.execute(
+          "message",
+          {
+            action: "message",
+            session: leadPeerSession,
+            message: "Wrong role",
+          },
+          undefined,
+          undefined,
+          ctx1,
+        ),
+        /no longer a live same-role peer/,
+      );
+    } finally {
+      removePeerLeadRecord(peerRuntime(), leadPeerSession, leadPeer);
+      peerLease.release();
+    }
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "manager",
+    );
+    assert.ok(readManagerDescriptor(supervisionRuntime(), WORKSPACE));
+    await first.commandOptions.get("chief").handler("", ctx1);
+    assert.deepEqual(first.pi.getActiveTools(), [
+      "read",
+      "staff",
+      "supervisor",
+      "peer",
+    ]);
+    await second.events.get("session_start")![0](undefined, ctx2);
+    assert.deepEqual(second.pi.getActiveTools(), [
+      "read",
+      "agent",
+      "supervisor",
+      "peer",
+    ]);
+    const collisionNotices: string[] = [];
+    ctx2.ui.notify = (message: string) => collisionNotices.push(message);
+    await second.commandOptions.get("manager").handler("", ctx2);
+    assert.deepEqual(second.pi.getActiveTools(), [
+      "read",
+      "agent",
+      "supervisor",
+      "peer",
+    ]);
+    assert.ok(
+      collisionNotices.some((message) =>
+        /already has an active Manager/.test(message),
+      ),
+    );
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "manager",
+    );
+    await first.commandOptions.get("manager").handler("leave", ctx1);
+    assert.deepEqual(first.pi.getActiveTools(), [
+      "read",
+      "staff",
+      "supervisor",
+      "peer",
+    ]);
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "manager",
+    );
+    await first.events.get("session_shutdown")![0]();
+    const replacement = fakeChiefPi({ activeTools: ["read"], exec });
+    registerExtension!(replacement.pi as never);
+    try {
+      const replacementContext = fakeContext() as any;
+      replacementContext.sessionManager.getSessionId = () =>
+        `lead-${randomUUID()}`;
+      await replacement.events.get("session_start")![0](
+        undefined,
+        replacementContext,
+      );
+      assert.deepEqual(replacement.pi.getActiveTools(), [
+        "read",
+        "agent",
+        "supervisor",
+        "peer",
+      ]);
+    } finally {
+      await replacement.events.get("session_shutdown")![0]();
+    }
+  } finally {
+    await second.events.get("session_shutdown")?.[0]();
+    await first.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("restored Manager registers supervision tools and restores Manager tools", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "manager-pane";
+  process.env.HERDR_TAB_ID = "manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `restored-manager-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        data: { role: "manager", leadTools: ["read"] },
+      },
+    ],
+    exec: (command, args) => {
+      if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: {
+            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+          },
+        });
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            source_workspace_id: WORKSPACE,
+            repo_key: "repo-key",
+            repo_name: "project",
+          },
+          worktrees: [],
+        });
+      if (command === "herdr" && isAgentList(args))
+        return respond({ agents: [] });
+      if (command === "herdr" && isApiSnapshot(args))
+        return respond({ snapshot: { agents: [], panes: [] } });
+      return respond({});
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const context = fakeContext(pi.entries) as any;
+    context.sessionManager.getSessionId = () => `manager-${randomUUID()}`;
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "staff",
+      "supervisor",
+      "peer",
+    ]);
+    assert.ok(pi.tools.some((tool) => tool.name === "staff"));
+    assert.equal(pi.pi.getActiveTools().includes("agent"), false);
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "list"),
+      false,
+    );
+    assert.equal(
+      pi.entries
+        .filter((entry: any) => entry.customType === "pi-herdsman-role")
+        .at(-1).data.role,
+      "manager",
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("linked and non-project sessions derive ordinary Lead tools", async () => {
+  for (const membership of ["linked", "non-project"] as const) {
+    setLeadEnvironment();
+    process.env.HERDR_PANE_ID = `pane-${membership}`;
+    process.env.HERDR_TAB_ID = `tab-${membership}`;
+    process.env.HERDR_SOCKET_PATH = join(
+      tmpdir(),
+      `structural-${membership}-${randomUUID()}.sock`,
+    );
+    const respond = (result: unknown) => ({
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    });
+    const pi = fakeChiefPi({
+      activeTools: ["read"],
+      exec: (command, args) => {
+        if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+          return respond({
+            workspace:
+              membership === "linked"
+                ? {
+                    worktree: {
+                      repo_key: "repo-key",
+                      is_linked_worktree: true,
+                    },
+                  }
+                : {},
+          });
+        if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+          return respond({
+            source: {
+              source_workspace_id: "root-workspace",
+              repo_key: "repo-key",
+              repo_name: "project",
+            },
+            worktrees: [{ open_workspace_id: WORKSPACE }],
+          });
+        if (command === "herdr" && isAgentList(args))
+          return respond({ agents: [] });
+        if (command === "herdr" && isApiSnapshot(args))
+          return respond({ snapshot: { agents: [], panes: [] } });
+        return respond({});
+      },
+    });
+    registerExtension!(pi.pi as never);
+    try {
+      await pi.events.get("session_start")![0](undefined, fakeContext());
+      assert.deepEqual(pi.pi.getActiveTools(), [
+        "read",
+        "agent",
+        "supervisor",
+        "peer",
+      ]);
+      assert.equal(
+        readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+        "lead",
+      );
+    } finally {
+      await pi.events.get("session_shutdown")?.[0]();
+      delete process.env.HERDR_SOCKET_PATH;
+      delete process.env.HERDR_TAB_ID;
+      delete process.env.HERDR_PANE_ID;
+      setLeadEnvironment();
+    }
+  }
+});
+
+test("Manager delegate persists an exact worktree Lead assignment", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "root-pane";
+  process.env.HERDR_TAB_ID = "root-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `delegate-project-${randomUUID()}.sock`,
+  );
+  const childWorkspace = `child-${randomUUID()}`;
+  let childSession = `lead-${randomUUID()}`;
+  let created = false;
+  let started = false;
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: LEAD_SESSION_ID,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "root-pane",
+    tab_id: "root-tab",
+  };
+  const exec = (command: string, args: string[]) => {
+    if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+      return respond({
+        workspace: {
+          workspace_id: args[2],
+          worktree: {
+            repo_key: "repo-key",
+            is_linked_worktree: args[2] === childWorkspace,
+            checkout_path:
+              args[2] === childWorkspace
+                ? "/tmp/manager-child"
+                : "/tmp/manager-root",
+          },
+        },
+        ...(args[2] === childWorkspace
+          ? { root_pane: { pane_id: "child-pane", tab_id: "child-tab" } }
+          : {}),
+      });
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+      return respond({
+        source: {
+          source_workspace_id: WORKSPACE,
+          repo_key: "repo-key",
+          repo_name: "project",
+        },
+        worktrees: created ? [{ open_workspace_id: childWorkspace }] : [],
+      });
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
+      const branchIndex = args.indexOf("--branch");
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        WORKSPACE,
+      ).find((item) => item.phase === "creating");
+      assert.ok(assignment);
+      assert.equal(args[branchIndex + 1], `herdsman/${assignment.id}`);
+      assert.equal(assignment.branch, args[branchIndex + 1]);
+      created = true;
+      return respond({
+        workspace: { workspace_id: childWorkspace },
+        tab: { tab_id: "child-tab" },
+        root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
+        worktree: { branch: assignment.branch, path: "/tmp/manager-child" },
+      });
+    }
+    if (command === "herdr" && args[0] === "pane" && args[1] === "list")
+      return respond({
+        panes: [
+          {
+            pane_id: "child-pane",
+            workspace_id: childWorkspace,
+            tab_id: "child-tab",
+            cwd: "/tmp/manager-child",
+          },
+        ],
+      });
+    if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
+      return respond({
+        process_info: {
+          pane_id: "child-pane",
+          shell_pid: 33,
+          foreground_process_group_id: 33,
+          foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
+        },
+      });
+    if (
+      command === "herdr" &&
+      args[0] === "pane" &&
+      (args[1] === "run" || args[1] === "wait-output")
+    )
+      return respond({});
+    if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+      started = true;
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        WORKSPACE,
+      ).find((item) => item.phase === "starting");
+      assert.ok(assignment);
+      const sessionIdIndex = args.indexOf("--session-id");
+      assert.notEqual(sessionIdIndex, -1);
+      childSession = args[sessionIdIndex + 1]!;
+      assert.equal(childSession, assignment.id);
+      writeLeadCoordinationState(supervisionRuntime(), {
+        version: 1,
+        role: "lead",
+        instanceId: randomUUID(),
+        piSessionId: childSession,
+        updatedAt: Date.now(),
+      });
+      return respond({
+        agent: {
+          name: "lead",
+          agent_session: {
+            source: "herdr:pi",
+            agent: "pi",
+            kind: "id",
+            value: childSession,
+          },
+        },
+      });
+    }
+    if (command === "herdr" && isApiSnapshot(args))
+      return respond({
+        snapshot: {
+          panes: [],
+          agents: started
+            ? [
+                {
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: childSession,
+                  },
+                  workspace_id: childWorkspace,
+                  pane_id: "child-pane",
+                  tab_id: "child-tab",
+                },
+              ]
+            : [],
+        },
+      });
+    if (command === "herdr" && isAgentList(args))
+      return respond({ agents: [managerAgent] });
+    if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+      return respond({ agent: managerAgent });
+    return respond({});
+  };
+  const pi = fakeChiefPi({ activeTools: ["read"], exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const ctx = fakeContext() as any;
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get("manager").handler("", ctx);
+    const staff = pi.tools.find((tool) => tool.name === "staff");
+    await assert.rejects(
+      staff.execute(
+        "invalid",
+        { action: "delegate", task: "Do it", unexpected: childSession },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      /Invalid staff action/,
+    );
+    const outcome = await staff.execute(
+      "delegate",
+      { action: "delegate", task: "Implement focused change" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.equal(outcome.details.ok, true);
+    const assignment = listProjectAssignments(
+      supervisionRuntime(),
+      WORKSPACE,
+    )[0];
+    assert.equal(assignment?.phase, "active");
+    assert.equal(assignment?.leadSessionId, childSession);
+    assert.equal(assignment?.leadSessionId, assignment?.id);
+    assert.equal(assignment?.branch, `herdsman/${assignment?.id}`);
+    assert.equal(assignment?.workspaceId, childWorkspace);
+    assert.equal(assignment?.paneId, "child-pane");
+    assert.equal(assignment?.tabId, "child-tab");
+    const paths = listCoordinationMessagePaths(
+      supervisionRuntime(),
+      childSession,
+    );
+    assert.equal(paths.length, 1);
+    const delivery = readChiefMessage(paths[0]!);
+    assert.equal(delivery.kind, "manager_assignment");
+    assert.match(
+      delivery.text,
+      /When this assignment is complete, report its result with supervisor\.result\./,
+    );
+    assert.match(
+      delivery.text,
+      /supervisor\.message only for nonterminal progress or coordination\./,
+    );
+    assert.ok(
+      pi.calls.some(
+        (args) => args.includes("--no-focus") && args.includes("--branch"),
+      ),
+    );
+    assert.ok(
+      pi.calls.some(
+        (args) =>
+          args[0] === "agent" && args[1] === "start" && args.includes("--pane"),
+      ),
+    );
+    process.env.HERDR_WORKSPACE_ID = childWorkspace;
+    process.env.HERDR_PANE_ID = "child-pane";
+    process.env.HERDR_TAB_ID = "child-tab";
+    const lead = fakeChiefPi({ activeTools: ["read"], exec });
+    registerExtension!(lead.pi as never);
+    const leadCtx = fakeContext() as any;
+    leadCtx.sessionManager.getSessionId = () => childSession;
+    try {
+      await lead.events.get("session_start")![0](undefined, leadCtx);
+      const supervisor = lead.tools.find((tool) => tool.name === "supervisor");
+      await assert.rejects(
+        supervisor.execute(
+          "invalid",
+          { action: "result", message: "wrong" },
+          undefined,
+          undefined,
+          leadCtx,
+        ),
+        /supervisor result requires result/,
+      );
+      const result = await supervisor.execute(
+        "result",
+        { action: "result", result: "Finished implementation" },
+        undefined,
+        undefined,
+        leadCtx,
+      );
+      assert.equal(result.details.result, resultRef(assignment!.id));
+      assert.match(
+        readFileSync(resultPath(assignment!.id), "utf8"),
+        /Lead result source:.*assignment/,
+      );
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
+        "settling",
+      );
+    } finally {
+      await lead.events.get("session_shutdown")![0]();
+    }
+    process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+    process.env.HERDR_PANE_ID = "root-pane";
+    process.env.HERDR_TAB_ID = "root-tab";
+    await waitForTestCondition(
+      () =>
+        pi.sent.some(
+          (message: any) => message?.customType === "pi-herdsman-report_result",
+        ),
+      "Manager did not receive the durable Lead result",
+      1800,
+    );
+    const resultNotification = pi.sent.find(
+      (message: any) => message?.customType === "pi-herdsman-report_result",
+    );
+    assert.ok(resultNotification);
+    assert.match(
+      String(resultNotification.content),
+      new RegExp(
+        `Result from lead ${childSession} to manager ${LEAD_SESSION_ID}:`,
+      ),
+    );
+    assert.match(
+      String(resultNotification.content),
+      new RegExp(`Result ref: ${resultRef(assignment!.id)}`),
+    );
+    assert.match(String(resultNotification.content), /Finished implementation/);
+    assert.deepEqual(
+      listProjectAssignments(supervisionRuntime(), WORKSPACE),
+      [],
+    );
+    assert.match(
+      readFileSync(resultPath(assignment!.id), "utf8"),
+      new RegExp(`"branch":"herdsman/${assignment!.id}"`),
+    );
+    assert.match(
+      readFileSync(resultPath(assignment!.id), "utf8"),
+      /Finished implementation/,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("Chief staff and ambient supervision include Managers and unclaimed Leads", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `chief-managers-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_PANE_ID = "manager-pane";
+  process.env.HERDR_TAB_ID = "manager-tab";
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: LEAD_SESSION_ID,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "manager-pane",
+    tab_id: "manager-tab",
+  };
+  const independentLeadSession = `lead-${randomUUID()}`;
+  const independentWorkspace = `workspace-${randomUUID()}`;
+  const independentLead = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: independentLeadSession,
+    },
+    workspace_id: independentWorkspace,
+    pane_id: "independent-pane",
+    tab_id: "independent-tab",
+    cwd: "/tmp/independent-project",
+  };
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    role: "lead",
+    instanceId: randomUUID(),
+    piSessionId: independentLeadSession,
+    updatedAt: Date.now(),
+  });
+  const exec = (command: string, args: string[]) => {
+    if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+      return respond({
+        workspace:
+          args[2] === WORKSPACE
+            ? { worktree: { repo_key: "repo-key", is_linked_worktree: false } }
+            : args[2] === independentWorkspace
+              ? {
+                  worktree: {
+                    repo_key: "other-repo",
+                    is_linked_worktree: false,
+                  },
+                }
+              : {},
+      });
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+      if (args[args.indexOf("--workspace") + 1] === independentWorkspace)
+        return respond({
+          source: {
+            source_workspace_id: independentWorkspace,
+            repo_key: "other-repo",
+          },
+          worktrees: [],
+        });
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+      return respond({
+        source: {
+          source_workspace_id: WORKSPACE,
+          repo_key: "repo-key",
+          repo_name: "project",
+        },
+        worktrees: [],
+      });
+    if (command === "herdr" && isAgentList(args))
+      return respond({ agents: [managerAgent, independentLead] });
+    if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+      return respond({ agent: managerAgent });
+    if (command === "herdr" && isApiSnapshot(args))
+      return respond({
+        snapshot: { agents: [managerAgent, independentLead], panes: [] },
+      });
+    return respond({});
+  };
+  const manager = fakeChiefPi({ activeTools: ["read"], exec });
+  registerExtension!(manager.pi as never);
+  try {
+    process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+    await manager.events.get("session_start")![0](undefined, fakeContext());
+    await manager.commandOptions.get("manager").handler("", fakeContext());
+    process.env.HERDR_WORKSPACE_ID = "chief-workspace";
+    process.env.HERDR_PANE_ID = "chief-pane";
+    process.env.HERDR_TAB_ID = "chief-tab";
+    const chief = fakeChiefPi({ activeTools: ["read"], exec });
+    const chiefCtx = fakeContext() as any;
+    chiefCtx.sessionManager.getSessionId = () => `chief-${randomUUID()}`;
+    const chiefSession = chiefCtx.sessionManager.getSessionId();
+    chiefCtx.sessionManager.getSessionId = () => chiefSession;
+    registerExtension!(chief.pi as never);
+    try {
+      await chief.events.get("session_start")![0](undefined, chiefCtx);
+      await chief.commandOptions.get("chief").handler("", chiefCtx);
+      assert.deepEqual(chief.pi.getActiveTools(), ["staff"]);
+      const chiefPrompt = await chief.events.get("before_agent_start")![0](
+        { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+        chiefCtx,
+      );
+      assert.ok(
+        JSON.stringify(chiefPrompt.message).includes(independentLeadSession),
+      );
+      const staff = chief.tools.find((tool) => tool.name === "staff");
+      const listed = await staff.execute(
+        "list",
+        { action: "list" },
+        undefined,
+        undefined,
+        chiefCtx,
+      );
+      assert.equal(listed.details.self.role, "chief");
+      assert.equal(listed.details.reports.length, 2);
+      assert.equal(listed.details.reports[0].role, "manager");
+      assert.equal(listed.details.reports[0].session, LEAD_SESSION_ID);
+      assert.equal(listed.details.reports[0].leads.length, 0);
+      assert.equal(listed.details.reports[1].role, "lead");
+      assert.equal(listed.details.reports[1].session, independentLeadSession);
+      await assert.rejects(
+        staff.execute(
+          "message",
+          {
+            action: "message",
+            session: "unrelated-lead",
+            message: "Not a direct report",
+          },
+          undefined,
+          undefined,
+          chiefCtx,
+        ),
+        /not a current direct report/,
+      );
+    } finally {
+      await chief.events.get("session_shutdown")![0]();
+    }
+  } finally {
+    await manager.events.get("session_shutdown")![0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
 
 test("ordinary Lead peer presence disappears in Chief mode and on shutdown", async () => {
   setLeadEnvironment();
@@ -150,7 +1044,7 @@ test("ordinary Lead peer presence disappears in Chief mode and on shutdown", asy
   }
 });
 
-test("coordination failure withdraws peer presence and recovery republishes a fresh generation", async () => {
+test("a Lead without a Manager routes upward to Chief and keeps peer presence", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   process.env.HERDR_TAB_ID = "lead-tab";
@@ -210,7 +1104,7 @@ test("coordination failure withdraws peer presence and recovery republishes a fr
       {
         message: {
           role: "assistant",
-          content: [{ type: "toolCall", name: "chief" }],
+          content: [{ type: "toolCall", name: "supervisor" }],
         },
       },
     ],
@@ -224,50 +1118,18 @@ test("coordination failure withdraws peer presence and recovery republishes a fr
     const initial = readPeerLeadRecord(peerRuntime(), sessionId);
     assert.ok(initial);
 
-    const appendEntry = pi.pi.appendEntry;
-    let leadStateAttempts = 0;
-    let rollbackObservedWithdrawal = false;
-    pi.pi.appendEntry = (customType: string, data: unknown) => {
-      if (customType === "pi-herdsman-lead-state") {
-        leadStateAttempts++;
-        if (leadStateAttempts === 1)
-          throw new Error("injected lead coordination failure");
-        if (leadStateAttempts === 2) {
-          rollbackObservedWithdrawal =
-            readPeerLeadRecord(peerRuntime(), sessionId) === undefined;
-          assert.equal(
-            rollbackObservedWithdrawal,
-            true,
-            "unhealthy Lead remained globally discoverable",
-          );
-        }
-      }
-      appendEntry(customType, data);
-    };
-
-    const chief = pi.tools.find((tool) => tool.name === "chief");
-    assert.ok(chief);
-    await assert.rejects(
-      chief.execute(
-        "ask",
-        { action: "ask", question: "Which path?" },
-        undefined,
-        undefined,
-        context,
-      ),
-      /Lead coordination state is unavailable/,
+    const supervisor = pi.tools.find((tool) => tool.name === "supervisor");
+    assert.ok(supervisor);
+    await supervisor.execute(
+      "ask",
+      { action: "ask", question: "Which path?" },
+      undefined,
+      undefined,
+      context,
     );
-    assert.equal(leadStateAttempts, 2);
-    assert.equal(rollbackObservedWithdrawal, true);
-
-    await waitForTestCondition(
-      () => !!readPeerLeadRecord(peerRuntime(), sessionId),
-      "healthy Lead did not republish peer presence",
-    );
-
-    const recovered = readPeerLeadRecord(peerRuntime(), sessionId);
-    assert.ok(recovered);
-    assert.notEqual(recovered.claim.id, initial.claim.id);
+    const stillPresent = readPeerLeadRecord(peerRuntime(), sessionId);
+    assert.ok(stillPresent);
+    assert.equal(stillPresent.claim.id, initial.claim.id);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     lease.release();
@@ -288,7 +1150,6 @@ test("Chief leave restores minimal peer presence before provenance resolves", as
   );
   const sessionId = randomUUID();
   const runtime = peerRuntime();
-  const startupProvenance = testGate<void>();
   const leaveProvenance = testGate<void>();
   const releaseProvenance = testGate<void>();
   let provenanceCalls = 0;
@@ -298,15 +1159,20 @@ test("Chief leave restores minimal peer presence before provenance resolves", as
     exec: async (_command, args) => {
       if (args[0] === "workspace" && args[1] === "get") {
         const call = ++provenanceCalls;
-        if (call === 1) startupProvenance.resolve();
+        if (call === 1)
+          return {
+            stdout: JSON.stringify({ id: AGENT_ID, result: { workspace: {} } }),
+            stderr: "",
+            code: 0,
+          };
         if (call === 2) leaveProvenance.resolve();
-        await releaseProvenance.promise;
+        if (call > 1) await releaseProvenance.promise;
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
               workspace: {
-                label: call === 1 ? "stale-generation" : "fresh-generation",
+                label: call === 2 ? "fresh-generation" : "stale-generation",
               },
             },
           }),
@@ -328,14 +1194,13 @@ test("Chief leave restores minimal peer presence before provenance resolves", as
   const sessionShutdown = pi.events.get("session_shutdown")![0];
   try {
     const starting = sessionStart(undefined, context);
-    await startupProvenance.promise;
     await starting;
 
     const initial = readPeerLeadRecord(runtime, sessionId);
     assert.ok(initial);
     assert.equal(initial.repo, undefined);
     assert.equal(initial.branch, undefined);
-    assert.equal(initial.workspaceLabel, undefined);
+    assert.equal(initial.workspaceLabel, "tmp");
 
     await pi.commandOptions.get("chief").handler("", context);
     const leaving = pi.commandOptions.get("chief").handler("leave", context);
@@ -404,6 +1269,7 @@ test("queued peer traffic stays durable through Chief mode and drains after leav
   });
   const senderRecord = {
     version: 1 as const,
+    role: "lead" as const,
     piSessionId: senderId,
     paneId: "sender-pane",
     tabId: "sender-tab",
@@ -480,6 +1346,7 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
   });
   const targetRecord = {
     version: 1 as const,
+    role: "lead" as const,
     piSessionId: targetId,
     paneId: "target-pane",
     tabId: "target-tab",
@@ -494,12 +1361,12 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
     assert.ok(peer);
     const queued = await peer.execute(
       "message",
-      { action: "message", lead: targetId, message: "sender survived" },
+      { action: "message", session: targetId, message: "sender survived" },
       undefined,
       undefined,
       senderContext,
     );
-    assert.equal(queued.details?.lead, targetId);
+    assert.equal(queued.details?.session, targetId);
     await sender.events.get("session_shutdown")![0]();
     assert.equal(readPeerLeadRecord(runtime, senderId), undefined);
 
@@ -762,7 +1629,7 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
     entries
       .filter((entry: any) => entry.customType === "pi-herdsman-role")
       .at(-1)?.data,
-    { role: "lead", leadTools: baseline },
+    { role: "lead", leadTools: ["read", "bash"] },
   );
   const lease = claimChiefLease({
     piSessionId: context.sessionManager.getSessionId(),
@@ -802,7 +1669,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
   const start = pi.events.get("session_start")![0];
   await start(undefined, context);
   await pi.commandOptions.get("chief").handler("", context);
-  const baseline = ["read", "bash", "agent", "chief", "peer"];
+  const baseline = ["read", "bash", "agent", "supervisor", "peer"];
   entries.push({
     type: "custom",
     customType: "pi-herdsman-role",
@@ -854,7 +1721,7 @@ test("lead session-start continues when chief lease release fails", async () => 
     customType: "pi-herdsman-role",
     data: {
       role: "lead",
-      leadTools: ["read", "bash", "agent", "chief", "peer"],
+      leadTools: ["read", "bash", "agent", "supervisor", "peer"],
     },
   });
   const runtime = supervisionRuntime();
@@ -868,7 +1735,7 @@ test("lead session-start continues when chief lease release fails", async () => 
     "read",
     "bash",
     "agent",
-    "chief",
+    "supervisor",
     "peer",
   ]);
   assert.ok(
@@ -904,19 +1771,53 @@ test("Chief activation rejects owned work outside the current workspace", async 
   });
   const pi = fakePi({
     exec: (_command, args) =>
-      isAgentList(args)
+      args[0] === "workspace" && args[1] === "get"
         ? {
-            stdout: JSON.stringify({ id: AGENT_ID, result: { agents: [] } }),
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                workspace: {
+                  worktree: { repo_key: "repo-key", is_linked_worktree: true },
+                },
+              },
+            }),
             stderr: "",
             code: 0,
           }
-        : { stdout: "{}", stderr: "", code: 0 },
+        : args[0] === "worktree" && args[1] === "list"
+          ? {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: {
+                  source: {
+                    source_workspace_id: "root-workspace",
+                    repo_key: "repo-key",
+                    repo_name: "project",
+                  },
+                  worktrees: [{ open_workspace_id: WORKSPACE }],
+                },
+              }),
+              stderr: "",
+              code: 0,
+            }
+          : isAgentList(args)
+            ? {
+                stdout: JSON.stringify({
+                  id: AGENT_ID,
+                  result: { agents: [] },
+                }),
+                stderr: "",
+                code: 0,
+              }
+            : { stdout: "{}", stderr: "", code: 0 },
   });
   const context = fakeContext() as any;
   const notices: string[] = [];
   context.ui.notify = (message: string) => notices.push(message);
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
+  await pi.commandOptions.get("manager").handler("", context);
+  assert.ok(notices.some((message) => /owned agent work exists/.test(message)));
   await pi.commandOptions.get("chief").handler("", context);
   assert.ok(notices.some((message) => /owned agent work exists/.test(message)));
   realFs.rmSync(mailbox, { recursive: true, force: true });
@@ -1009,6 +1910,7 @@ test("/agents placement subtree writes flat config outside project settings", as
 test("Chief activation replaces the lead widget and overview selection is interactive", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `supervision-${randomUUID()}.sock`,
@@ -1030,7 +1932,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   };
   const entries: unknown[] = [];
   const pi = fakeChiefPi({
-    activeTools: ["agent", "chief", "read"],
+    activeTools: ["read", "agent", "supervisor"],
     autoActivateRegisteredTools: true,
     entries,
     exec: (_command, args) => {
@@ -1068,6 +1970,10 @@ test("Chief activation replaces the lead widget and overview selection is intera
     },
   });
   const context = fakeContext(entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => `chief-${randomUUID()}`,
+  };
   context.hasUI = true;
   const widgetKeys: string[] = [];
   const confirmations: string[] = [];
@@ -1110,6 +2016,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   await start(undefined, context);
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
+    role: "lead",
     instanceId: randomUUID(),
     piSessionId: PARENT_SESSION_ID,
     pendingAsk: {
@@ -1119,8 +2026,14 @@ test("Chief activation replaces the lead widget and overview selection is intera
     },
     updatedAt: Date.now(),
   });
-  assert.deepEqual(pi.pi.getActiveTools(), ["agent", "chief", "read", "peer"]);
+  assert.deepEqual(pi.pi.getActiveTools(), [
+    "read",
+    "agent",
+    "supervisor",
+    "peer",
+  ]);
   await pi.commandOptions.get("chief").handler("", context);
+  assert.deepEqual(notices, ["Chief mode active."]);
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
   assert.ok(widgetKeys.includes("pi-herdsman"));
   assert.ok(widgetKeys.includes("pi-herdsman-staff"));
@@ -1145,20 +2058,20 @@ test("Chief activation replaces the lead widget and overview selection is intera
   await new Promise<void>((resolve) => setTimeout(resolve, 25));
   assert.equal(customCalls, customCallsBeforePeek);
   overview.handleInput("\u001b");
-  assert.equal(overviewDone, 0);
+  assert.equal(overviewDone, 1);
   await pi.commandOptions.get("chief").handler("", context);
   assert.ok(overview);
   overview.handleInput(" ");
   await new Promise<void>((resolve) => setImmediate(resolve));
   await new Promise<void>((resolve) => setTimeout(resolve, 25));
   overview.handleInput(" ");
-  assert.equal(overviewDone, 0);
+  assert.equal(overviewDone, 1);
   await pi.commandOptions.get("chief").handler("", context);
   overview.handleInput(" ");
   await new Promise<void>((resolve) => setImmediate(resolve));
   await new Promise<void>((resolve) => setTimeout(resolve, 25));
   overview.handleInput("\u0003");
-  assert.equal(overviewDone, 1);
+  assert.equal(overviewDone, 2);
   await pi.commandOptions.get("chief").handler("", context);
   assert.ok(overview);
   overview.handleInput("\u001b[B");
@@ -1167,7 +2080,10 @@ test("Chief activation replaces the lead widget and overview selection is intera
   assert.equal(overviewDone, 2, notices.join(" | "));
   const entriesBeforeCancel = entries.length;
   await pi.commandOptions.get("chief").handler("leave", context);
-  assert.match(confirmations[0], /Outstanding supervised lead asks: 1/);
+  assert.match(
+    confirmations[0],
+    /Outstanding supervised lead asks could not be verified/,
+  );
   assert.equal(pi.pi.getActiveTools().includes("staff"), true);
   assert.equal(entries.length, entriesBeforeCancel);
   assert.equal(
@@ -1179,7 +2095,12 @@ test("Chief activation replaces the lead widget and overview selection is intera
   );
   confirmLeave = true;
   await pi.commandOptions.get("chief").handler("leave", context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["agent", "chief", "read", "peer"]);
+  assert.deepEqual(pi.pi.getActiveTools(), [
+    "read",
+    "agent",
+    "supervisor",
+    "peer",
+  ]);
   assert.match(confirmations[1], /Supervised leads will not be changed/);
   const baseline = pi.pi.getActiveTools();
   const setActiveTools = pi.pi.setActiveTools;
@@ -1201,7 +2122,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
     `supervision-reload-${randomUUID()}.sock`,
   );
   const entries: unknown[] = [];
-  const ordinaryTools = ["read", "bash", "agent", "chief", "peer"];
+  const ordinaryTools = ["read", "bash", "agent", "supervisor", "peer"];
   const pi = fakeChiefPi({
     activeTools: ordinaryTools,
     entries,
@@ -1219,7 +2140,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   const role = entries
     .filter((entry: any) => entry.customType === "pi-herdsman-role")
     .at(-1) as any;
-  assert.deepEqual(role.data, { role: "lead", leadTools: ordinaryTools });
+  assert.deepEqual(role.data, { role: "lead", leadTools: ["read", "bash"] });
 
   const reloaded = fakeChiefPi({
     activeTools: ["staff"],
@@ -1230,7 +2151,13 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   reloadedContext.ui.notify = () => undefined;
   registerExtension!(reloaded.pi as never);
   await reloaded.events.get("session_start")![0](undefined, reloadedContext);
-  assert.deepEqual(reloaded.pi.getActiveTools(), ordinaryTools);
+  assert.deepEqual(reloaded.pi.getActiveTools(), [
+    "read",
+    "bash",
+    "agent",
+    "supervisor",
+    "peer",
+  ]);
 
   await reloaded.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
@@ -1245,11 +2172,11 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
       customType: "pi-herdsman-role",
       data: {
         role: "lead",
-        leadTools: ["read", "bash", "agent", "chief", "peer"],
+        leadTools: ["read", "bash"],
       },
     },
   ];
-  const branchTools = ["read", "grep", "agent", "chief", "peer"];
+  const branchTools = ["read", "grep", "agent", "supervisor", "peer"];
   const pi = fakeChiefPi({ entries, activeTools: branchTools });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
@@ -1293,7 +2220,7 @@ async function openChiefOverview(
       ]
     : [];
   const pi = fakeChiefPi({
-    activeTools: ["agent", "chief", "read"],
+    activeTools: ["agent", "supervisor", "read"],
     entries: [],
     exec: (_command, args) => {
       if (failRefresh && isApiSnapshot(args))
@@ -1373,6 +2300,7 @@ async function openChiefOverview(
   if (populated)
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
+      role: "lead",
       instanceId: randomUUID(),
       piSessionId: PARENT_SESSION_ID,
       updatedAt: Date.now(),
@@ -1606,12 +2534,12 @@ test("Chief resume rejects a persisted pending chief ask without activation", as
       },
     },
   ];
-  const pi = fakeChiefPi({ entries, activeTools: ["agent", "chief", "peer"] });
+  const pi = fakeChiefPi({ entries, activeTools: ["agent", "peer"] });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   context.ui.notify = () => undefined;
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["agent", "chief", "peer"]);
+  assert.deepEqual(pi.pi.getActiveTools(), ["agent", "supervisor", "peer"]);
   assert.equal(
     entries.some(
       (entry: any) =>
@@ -1644,7 +2572,14 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
       customType: "pi-herdsman-role",
       data: {
         role: "chief",
-        leadTools: ["read", "bash", "foreign_tool", "agent", "chief", "peer"],
+        leadTools: [
+          "read",
+          "bash",
+          "foreign_tool",
+          "agent",
+          "supervisor",
+          "peer",
+        ],
       },
     },
   ];
@@ -1673,7 +2608,7 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     "bash",
     "foreign_tool",
     "agent",
-    "chief",
+    "supervisor",
     "peer",
   ]);
   await pi.events.get("session_shutdown")?.[0]();
@@ -1695,7 +2630,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
     {
       type: "custom",
       customType: "pi-herdsman-role",
-      data: { role: "chief", leadTools: ["agent", "chief"] },
+      data: { role: "chief", leadTools: ["agent", "supervisor"] },
     },
   ];
   const incumbent = claimChiefLease({
@@ -1705,7 +2640,7 @@ test("persisted chief collision is suspended and has no lead authority", async (
     workspaceId: "incumbent-workspace",
   });
   try {
-    const pi = fakeChiefPi({ entries, activeTools: ["agent", "chief"] });
+    const pi = fakeChiefPi({ entries, activeTools: ["agent", "supervisor"] });
     registerExtension!(pi.pi as never);
     const context = fakeContext(entries) as any;
     context.ui.notify = () => undefined;

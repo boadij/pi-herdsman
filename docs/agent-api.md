@@ -14,8 +14,8 @@ their canonical pages.
 If you only want to configure, observe, focus, or stop agents from Pi's TUI,
 begin with [Getting started](getting-started.md) instead.
 
-For an active chief supervising independent leads, use the [`staff` and
-`chief` contracts](reference/supervision.md).
+For project supervision, direct-report coordination, and durable assignments,
+use the [`staff`, `supervisor`, and `peer` contracts](reference/supervision.md).
 
 ## Prerequisites
 

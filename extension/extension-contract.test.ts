@@ -9,6 +9,7 @@ import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import {
+  claimManagerLease,
   claimChiefLease,
   listCoordinationMessagePaths,
   invalidateLeadCoordinationState,
@@ -25,6 +26,7 @@ import {
   peerRuntime,
   writePeerLeadRecord,
 } from "./supervision.ts";
+import { worktreeGroupScope } from "./herdr.ts";
 import type {
   AskRecord,
   RequestRecord,
@@ -100,10 +102,84 @@ function assertPortableToolSchema(tool: any): void {
 
 const REGISTERED_ROLE_TOOLS = [
   { name: "agent" },
-  { name: "chief" },
+  { name: "supervisor" },
   { name: "peer" },
   { name: "staff" },
 ];
+
+async function installStructuralManager(
+  pi: ReturnType<typeof fakePi>,
+  context: any,
+  managerId: string,
+) {
+  const primaryWorkspaceId = process.env.HERDR_WORKSPACE_ID!;
+  const scope = await worktreeGroupScope(
+    pi.pi as never,
+    context,
+    primaryWorkspaceId,
+  );
+  const lease = claimManagerLease({
+    piSessionId: managerId,
+    paneId: "manager-pane",
+    tabId: "manager-tab",
+    workspaceId: scope.primaryWorkspaceId,
+    repoKey: scope.repoKey,
+  });
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    role: "manager",
+    instanceId: randomUUID(),
+    piSessionId: managerId,
+    updatedAt: Date.now(),
+  });
+  return lease;
+}
+
+test("direct-edge tool schemas are provider-safe and reject removed selectors", () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  try {
+    const supervisor = pi.tools.find((tool) => tool.name === "supervisor");
+    const peer = pi.tools.find((tool) => tool.name === "peer");
+    assert.equal(
+      pi.tools.some((tool) => tool.name === "chief"),
+      false,
+    );
+    assert.ok(supervisor);
+    assert.ok(peer);
+    for (const tool of [supervisor, peer]) assertPortableToolSchema(tool);
+    assert.ok(
+      Value.Check(supervisor.parameters, { action: "result", result: "Done" }),
+    );
+    assert.equal(
+      Value.Check(supervisor.parameters, {
+        action: "result",
+        lead: LEAD_SESSION_ID,
+      }),
+      false,
+    );
+    assert.ok(
+      Value.Check(peer.parameters, {
+        action: "message",
+        session: LEAD_SESSION_ID,
+        message: "Hi",
+      }),
+    );
+    assert.equal(
+      Value.Check(peer.parameters, {
+        action: "message",
+        lead: LEAD_SESSION_ID,
+        message: "Hi",
+      }),
+      false,
+    );
+  } finally {
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
 
 test("Herdr version parsing accepts preview suffixes but rejects trailing text", async () => {
   const { parseHerdrVersion } = await import("./index.ts");
@@ -195,15 +271,20 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   process.env.HERDR_PANE_ID = "lead-pane";
   const lead = fakePi();
   registerExtension!(lead.pi as never);
-  assert.deepEqual(lead.commands.sort(), ["agents", "chief", "herdsman"]);
+  assert.deepEqual(lead.commands.sort(), [
+    "agents",
+    "chief",
+    "herdsman",
+    "manager",
+  ]);
   assert.deepEqual(lead.tools.map((tool) => tool.name).sort(), [
     "agent",
-    "chief",
     "peer",
+    "supervisor",
   ]);
   assert.equal(
-    lead.tools.find((tool) => tool.name === "chief")?.label,
-    "chief",
+    lead.tools.find((tool) => tool.name === "supervisor")?.label,
+    "supervisor",
   );
   assert.equal(
     lead.tools.find((tool) => tool.name === "agent")?.label,
@@ -223,19 +304,19 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     ],
   );
   assert.equal(
-    lead.tools.find((tool) => tool.name === "chief")?.promptSnippet,
-    "Report progress to or ask the active chief supervising this lead",
+    lead.tools.find((tool) => tool.name === "supervisor")?.promptSnippet,
+    "Report progress to or ask the current direct supervisor",
   );
   assert.equal(
     lead.tools.find((tool) => tool.name === "peer")?.promptSnippet,
-    "Discover and message other live lead sessions",
+    "Discover and message live same-role peers",
   );
   const agentTool = lead.tools.find((tool) => tool.name === "agent");
-  const chiefTool = lead.tools.find((tool) => tool.name === "chief");
+  const supervisorTool = lead.tools.find((tool) => tool.name === "supervisor");
   const peerTool = lead.tools.find((tool) => tool.name === "peer");
   assert.ok(agentTool);
   assert.ok(peerTool);
-  for (const tool of [agentTool, chiefTool, peerTool])
+  for (const tool of [agentTool, supervisorTool, peerTool])
     assertPortableToolSchema(tool);
   const toolCall = lead.events.get("tool_call")![0];
   const noisyAgentInput = {
@@ -270,7 +351,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.doesNotMatch(invalidDirectCall.content[0].text, /Agent list failed\./);
   const noisyPeerInput = {
     action: "list",
-    lead: LEAD_SESSION_ID,
+    session: LEAD_SESSION_ID,
     message: "provider noise",
   };
   assert.equal(
@@ -285,7 +366,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   };
   assert.equal(
     await toolCall(
-      { toolName: "chief", input: noisyChiefInput },
+      { toolName: "supervisor", input: noisyChiefInput },
       fakeContext(),
     ),
     undefined,
@@ -388,10 +469,10 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   assert.equal(typeof agentTool?.renderCall, "function");
   assert.equal(typeof agentTool?.renderResult, "function");
-  assert.equal(typeof chiefTool?.renderCall, "function");
-  assert.equal(typeof chiefTool?.renderResult, "function");
+  assert.equal(typeof supervisorTool?.renderCall, "function");
+  assert.equal(typeof supervisorTool?.renderResult, "function");
   assert.equal(
-    Value.Check(chiefTool.parameters, {
+    Value.Check(supervisorTool.parameters, {
       action: "message",
       message: "progress",
       files: [resultRef],
@@ -399,7 +480,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     true,
   );
   assert.equal(
-    Value.Check(chiefTool.parameters, {
+    Value.Check(supervisorTool.parameters, {
       action: "ask",
       question: "decision needed",
       files: [resultRef],
@@ -407,7 +488,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     true,
   );
   assert.equal(
-    Value.Check(chiefTool.parameters, {
+    Value.Check(supervisorTool.parameters, {
       action: "message",
       message: "progress",
       results: [{ agent: "implementation", index: 1 }],
@@ -419,7 +500,11 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.equal(typeof peerTool.renderCall, "function");
   assert.equal(typeof peerTool.renderResult, "function");
   const renderedPeerCall = peerTool.renderCall(
-    { action: "message", lead: LEAD_SESSION_ID, message: "Please coordinate" },
+    {
+      action: "message",
+      session: LEAD_SESSION_ID,
+      message: "Please coordinate",
+    },
     {
       fg: (_color: string, value: string) => value,
       bold: (text: string) => text,
@@ -427,16 +512,13 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     { argsComplete: true },
   );
   assert.match(renderedPeerCall.render(160).join("\n"), /^peer message/);
-  assert.match(
-    peerTool.description,
-    /ordinary Lead sessions \(peers\), not managed agents/,
-  );
-  assert.match(peerTool.description, /list identifies this Lead as self/);
+  assert.match(peerTool.description, /never Agents or Chief/);
+  assert.match(peerTool.description, /exact peer session IDs/);
   assert.equal(Value.Check(peerTool.parameters, { action: "list" }), true);
   assert.equal(
     Value.Check(peerTool.parameters, {
       action: "message",
-      lead: LEAD_SESSION_ID,
+      session: LEAD_SESSION_ID,
       message: "Please coordinate this result",
     }),
     true,
@@ -444,7 +526,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.equal(
     Value.Check(peerTool.parameters, {
       action: "message",
-      lead: LEAD_SESSION_ID,
+      session: LEAD_SESSION_ID,
       message: "Share result",
       files: [resultRef],
     }),
@@ -453,7 +535,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.equal(
     Value.Check(peerTool.parameters, {
       action: "message",
-      lead: LEAD_SESSION_ID,
+      session: LEAD_SESSION_ID,
       message: "Share result",
       results: [{ agent: "implementation", index: 1 }],
     }),
@@ -462,7 +544,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.equal(
     Value.Check(peerTool.parameters, {
       action: "message",
-      lead: "display-name",
+      session: "display-name",
       message: "not an exact session ID",
     }),
     true,
@@ -471,7 +553,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.equal(
     Value.Check(peerTool.parameters, {
       action: "message",
-      lead: "lead/session",
+      session: "lead/session",
       message: "slash is not a session ID",
     }),
     false,
@@ -479,7 +561,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.equal(
     Value.Check(peerTool.parameters, {
       action: "message",
-      lead: LEAD_SESSION_ID,
+      session: LEAD_SESSION_ID,
       message: "legacy target name",
       target: "display-name",
     }),
@@ -569,6 +651,14 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
     entries,
     activeTools: ["agent", "chief", "peer"],
     allTools: REGISTERED_ROLE_TOOLS,
+    exec: (command, args) =>
+      command === "herdr" && args[0] === "workspace" && args[1] === "get"
+        ? {
+            stdout: JSON.stringify({ id: AGENT_ID, result: { workspace: {} } }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
   });
   registerExtension!(chief.pi as never);
   const context = fakeContext(entries) as any;
@@ -618,6 +708,7 @@ test("peer list and message use global peer presence, not caller inventory", asy
     });
     const record = {
       version: 1 as const,
+      role: "lead" as const,
       piSessionId: sessionId,
       paneId,
       tabId,
@@ -678,13 +769,15 @@ test("peer list and message use global peer presence, not caller inventory", asy
     assert.deepEqual(
       {
         self: payload.self,
-        peers: [...payload.peers].sort((a, b) => a.lead.localeCompare(b.lead)),
+        peers: [...payload.peers].sort((a, b) =>
+          a.session.localeCompare(b.session),
+        ),
       },
       {
         self: senderId,
         peers: [
           {
-            lead: targetId,
+            session: targetId,
             name: "Target Lead",
             cwd: "/workspaces/target",
             repo: "pi-herdsman",
@@ -692,26 +785,28 @@ test("peer list and message use global peer presence, not caller inventory", asy
             workspace_label: "pi-herdsman/feature/peer",
           },
           {
-            lead: unenrichedTargetId,
-            name: `lead-${unenrichedTargetId.slice(0, 8)}`,
+            session: unenrichedTargetId,
+            name: "",
             cwd: "",
             repo: "",
             branch: "",
             workspace_label: "",
           },
-        ].sort((a, b) => a.lead.localeCompare(b.lead)),
+        ].sort((a, b) => a.session.localeCompare(b.session)),
       },
     );
     assert.equal(modelJson.includes(WORKSPACE), false);
     assert.equal(
-      payload.peers.some((peer: { lead: string }) => peer.lead === senderId),
+      payload.peers.some(
+        (peer: { session: string }) => peer.session === senderId,
+      ),
       false,
     );
     const queued = await peer.execute(
       "message",
       {
         action: "message",
-        lead: targetId,
+        session: targetId,
         message: "global peer",
         files: ["result:implementation#1"],
       },
@@ -719,7 +814,7 @@ test("peer list and message use global peer presence, not caller inventory", asy
       undefined,
       context,
     );
-    assert.equal(queued.details?.lead, targetId);
+    assert.equal(queued.details?.session, targetId);
     const messagePaths = listCoordinationMessagePaths(runtime, targetId);
     assert.equal(messagePaths.length, 1);
     const message = readChiefMessage(messagePaths[0]);
@@ -755,7 +850,37 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
       if (args[0] === "workspace" && args[1] === "get") {
         provenanceStarted.resolve();
         await releaseProvenance.promise;
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                worktree: { repo_key: "repo-key", is_linked_worktree: true },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       }
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                source_workspace_id: "root-workspace",
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
+              worktrees: [
+                { open_workspace_id: process.env.HERDR_WORKSPACE_ID },
+              ],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       return { stdout: "{}", stderr: "", code: 0 };
     },
   });
@@ -772,6 +897,10 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
     const starting = sessionStart(undefined, context);
     await provenanceStarted.promise;
 
+    assert.ok(readPeerLeadRecord(runtime, sessionId));
+
+    releaseProvenance.resolve();
+    await starting;
     const record = readPeerLeadRecord(runtime, sessionId);
     assert.ok(record);
     assert.deepEqual(Object.keys(record).sort(), [
@@ -779,18 +908,18 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
       "cwd",
       "paneId",
       "piSessionId",
+      "role",
       "tabId",
       "updatedAt",
       "version",
       "workspaceId",
+      "workspaceLabel",
     ]);
     assert.equal(record.cwd, context.cwd);
+    assert.equal(record.role, "lead");
     assert.equal(record.repo, undefined);
     assert.equal(record.branch, undefined);
-    assert.equal(record.workspaceLabel, undefined);
-
-    await starting;
-    releaseProvenance.resolve();
+    assert.equal(record.workspaceLabel, "lead-checkout");
   } finally {
     releaseProvenance.resolve();
     await sessionShutdown();
@@ -916,6 +1045,7 @@ test("peer publication rejects sender and target generation replacement during a
     });
     const record = {
       version: 1 as const,
+      role: "lead" as const,
       piSessionId: sessionId,
       paneId,
       tabId,
@@ -953,7 +1083,7 @@ test("peer publication rejects sender and target generation replacement during a
         "message",
         {
           action: "message",
-          lead: targetId,
+          session: targetId,
           message: "must not queue",
           files: [attachment],
         },
@@ -1023,6 +1153,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
     });
     const record = {
       version: 1 as const,
+      role: "lead" as const,
       piSessionId: sessionId,
       paneId,
       tabId,
@@ -1065,7 +1196,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
           "message",
           {
             action: "message",
-            lead: targetId,
+            session: targetId,
             message: "presentation enrichment queues",
             files: [attachment],
           },
@@ -1091,7 +1222,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
         );
 
         const queued = await pending;
-        assert.equal(queued.details?.lead, targetId);
+        assert.equal(queued.details?.session, targetId);
         messageId = queued.details?.id as string;
         assert.equal(listCoordinationMessagePaths(runtime, targetId).length, 1);
         const message = readChiefMessage(
@@ -1214,6 +1345,7 @@ test("stale peer publication cannot replace a same-session lifecycle generation"
     );
     const replacement = {
       version: 1 as const,
+      role: "lead" as const,
       piSessionId: sessionId,
       paneId: "replacement-pane",
       tabId: "replacement-tab",
@@ -1253,29 +1385,134 @@ test("active chief describes authoritative remote ask projection", async () => {
       data: { role: "chief", leadTools: ["agent", "chief"] },
     },
   ];
+  const managerId = randomUUID();
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: managerId,
+    },
+    pane_id: "manager-pane",
+    tab_id: "manager-tab",
+    workspace_id: WORKSPACE,
+    cwd: "/tmp",
+    agent_status: "idle",
+  };
+  const chiefId = randomUUID();
+  const chiefAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: chiefId,
+    },
+    pane_id: "chief-pane",
+    tab_id: "chief-tab",
+    workspace_id: "chief-workspace",
+    cwd: "/tmp",
+    agent_status: "idle",
+  };
+  const exec = (_command: string, args: string[]) => {
+    if (args[0] === "workspace" && args[1] === "get")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            workspace: {
+              worktree:
+                args[2] === WORKSPACE
+                  ? { repo_key: "test-repo", is_linked_worktree: false }
+                  : undefined,
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (args[0] === "worktree" && args[1] === "list")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            source: {
+              source_workspace_id: WORKSPACE,
+              repo_key: "test-repo",
+              repo_name: "pi-herdsman",
+            },
+            worktrees: [{ open_workspace_id: WORKSPACE }],
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (isApiSnapshot(args))
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            snapshot: {
+              agents: [managerAgent, chiefAgent],
+              panes: [managerAgent, chiefAgent],
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (args[0] === "agent" && args[1] === "get")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            agent: args[2] === "manager-pane" ? managerAgent : chiefAgent,
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (args[0] === "agent" && args[1] === "list")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: { agents: [managerAgent, chiefAgent] },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    return { stdout: "{}", stderr: "", code: 0 };
+  };
   const pi = fakePi({
     entries,
+    exec,
     activeTools: ["agent", "chief"],
     allTools: REGISTERED_ROLE_TOOLS,
   });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => chiefId,
+  };
   context.ui.notify = () => undefined;
+  const managerLease = await installStructuralManager(pi, context, managerId);
+  process.env.HERDR_WORKSPACE_ID = "chief-workspace";
   await pi.events.get("session_start")![0](undefined, context);
+  await pi.commandOptions.get("chief").handler("", context);
   const tool = pi.tools.find((candidate) => candidate.name === "staff");
   assert.ok(tool);
   assertPortableToolSchema(tool);
   assert.equal(tool.label, "staff");
   assert.equal(
     tool.promptSnippet,
-    "Supervise and communicate with independent lead sessions",
+    "Supervise direct reports; Managers may delegate new linked-worktree Leads",
   );
   assert.equal(typeof tool.renderCall, "function");
   assert.equal(typeof tool.renderResult, "function");
   assert.equal(
     Value.Check(tool.parameters, {
       action: "message",
-      lead: LEAD_SESSION_ID,
+      session: managerId,
       message: "Please continue",
       files: ["result:implementation#1"],
     }),
@@ -1284,7 +1521,7 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.equal(
     Value.Check(tool.parameters, {
       action: "reply",
-      lead: LEAD_SESSION_ID,
+      session: managerId,
       askId: "ask-1",
       message: "Here is the decision",
       files: ["result:implementation#1"],
@@ -1294,14 +1531,18 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.equal(
     Value.Check(tool.parameters, {
       action: "message",
-      lead: LEAD_SESSION_ID,
+      session: LEAD_SESSION_ID,
       message: "Please continue",
       results: [{ agent: "implementation", index: 1 }],
     }),
     false,
   );
   const renderedStaffCall = tool.renderCall(
-    { action: "message", lead: "lead-bbbbbbbbb", message: "Please continue" },
+    {
+      action: "message",
+      session: "lead-bbbbbbbbb",
+      message: "Please continue",
+    },
     {
       fg: (_color: string, value: string) => value,
       bold: (text: string) => text,
@@ -1323,7 +1564,7 @@ test("active chief describes authoritative remote ask projection", async () => {
       fg: (_color: string, value: string) => value,
       bold: (text: string) => text,
     },
-    { args: { action: "message", lead: "lead-bbbbbbbbb" } },
+    { args: { action: "message", session: "lead-bbbbbbbbb" } },
   );
   assert.match(renderedStaffResult.text, /✓ sent to workspace\/api/);
   assert.deepEqual(pi.pi.getActiveTools(), ["staff"]);
@@ -1340,11 +1581,11 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.match(String(beforeStart?.message?.content), /status="fresh"/);
   assert.match(
     String(chiefPrompt),
-    /Chief coordination is event-driven, not polling/,
+    /Chief role[\s\S]*Act on Managers and unclaimed Leads only/,
   );
   assert.match(
     String(chiefPrompt),
-    /Do not use list, inspect, repeated messages, status requests, sleep, or any other mechanism merely to wait for lead progress or completion/,
+    /Work event-first,[\s\S]*poll for progress/,
   );
   const description = tool.description.replaceAll(/\s+/g, " ");
   assert.doesNotMatch(description, /remote needs_you.*unavailable/);
@@ -1353,46 +1594,34 @@ test("active chief describes authoritative remote ask projection", async () => {
     /metadata is display-only and never grants reply/,
   );
   for (const expected of [
-    /The lead is the exact full Pi session ID shown as lead in a fresh automatic supervision snapshot or returned by staff list; never use display_name/,
-    /For ordinary state and coordination, use a fresh snapshot directly; do not call staff list, inspect, transcript, or another read command merely to poll progress/,
-    /The message and reply actions revalidate exact identity and state themselves/,
-    /Every exact-identity-verified lead accepts message/,
-    /reply only with the exact pending ask ID and current chief lease/,
-    /Messages are bounded and direction-aware, and temporary verification or delivery failures retain queued records/,
-    /Metadata is presentation-only and never authority/,
-    /Human conversation remains the dispatch surface/,
-    /Inspect provides bounded live terminal\/process evidence/,
-    /Transcript provides bounded persisted Pi conversation\/tool evidence/,
-    /does not own their agent trees, and receives no owner controls/,
+    /Chief supervises Managers and unclaimed Leads; Manager sees ordinary project Leads/,
+    /exact session ID from a fresh roster/,
+    /Message and reply revalidate identity and authority/,
+    /reply requires the exact pending ask ID/,
+    /Manager delegate creates one linked-worktree Lead/,
+    /Descendants are observable but never staff targets/,
   ])
     assert.match(description, expected);
   assert.doesNotMatch(description, /\b(steer|interrupt|close)\b/);
-  const leadSchema = (tool.parameters as any).properties.lead;
-  assert.equal(
-    leadSchema.pattern,
-    "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$",
-  );
-  assert.equal(Value.Check(leadSchema, ""), false);
-  assert.equal(Value.Check(leadSchema, "-"), false);
-  assert.equal(Value.Check(leadSchema, "lead/session"), false);
-  assert.equal(Value.Check(leadSchema, LEAD_SESSION_ID), true);
+  const sessionSchema = (tool.parameters as any).properties.session;
+  assert.ok(sessionSchema);
   assert.equal(
     Value.Check(tool.parameters, {
       action: "inspect",
-      lead: LEAD_SESSION_ID,
+      session: managerId,
     }),
     true,
   );
   assert.equal(
     Value.Check(tool.parameters, {
       action: "transcript",
-      lead: LEAD_SESSION_ID,
+      session: managerId,
     }),
     true,
   );
-  for (const action of ["steer", "interrupt", "close", "delegate", "continue"])
+  for (const action of ["steer", "interrupt", "close", "continue"])
     assert.equal(
-      Value.Check(tool.parameters, { action, lead: LEAD_SESSION_ID }),
+      Value.Check(tool.parameters, { action, session: managerId }),
       false,
       action,
     );
@@ -1413,6 +1642,7 @@ test("active chief describes authoritative remote ask projection", async () => {
     false,
   );
   pi.events.get("session_shutdown")?.[0]();
+  managerLease.release();
   delete process.env.HERDR_TAB_ID;
   delete process.env.HERDR_SOCKET_PATH;
   setLeadEnvironment();
@@ -1420,12 +1650,13 @@ test("active chief describes authoritative remote ask projection", async () => {
 
 test("staff transcript advertises persisted candidates and revalidates the lead", async () => {
   setLeadEnvironment();
-  process.env.HERDR_PANE_ID = "chief-pane";
-  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_PANE_ID = "manager-pane";
+  process.env.HERDR_TAB_ID = "manager-tab";
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
     `supervision-transcript-${randomUUID()}.sock`,
   );
+  const managerId = randomUUID();
   const chiefId = randomUUID();
   const leadId = randomUUID();
   const sessionRoot = realFs.realpathSync(
@@ -1529,6 +1760,19 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
     cwd: "/tmp",
     agent_status: "idle",
   };
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: managerId,
+    },
+    pane_id: "manager-pane",
+    tab_id: "manager-tab",
+    workspace_id: WORKSPACE,
+    cwd: "/tmp",
+    agent_status: "idle",
+  };
   const chiefAgent = {
     agent_session: {
       source: "herdr:pi",
@@ -1538,7 +1782,7 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
     },
     pane_id: "chief-pane",
     tab_id: "chief-tab",
-    workspace_id: WORKSPACE,
+    workspace_id: "chief-workspace",
     cwd: "/tmp",
     agent_status: "idle",
   };
@@ -1556,8 +1800,8 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
           id: AGENT_ID,
           result: {
             snapshot: {
-              agents: [leadAgent, chiefAgent],
-              panes: [leadAgent, chiefAgent],
+              agents: [leadAgent, managerAgent].filter(Boolean),
+              panes: [leadAgent, managerAgent].filter(Boolean),
             },
           },
         }),
@@ -1570,30 +1814,68 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
         stdout: JSON.stringify({
           id: AGENT_ID,
           result: {
-            agent: args[2] === leadAgent.pane_id ? leadAgent : chiefAgent,
+            agent: args[2] === leadAgent.pane_id ? leadAgent : managerAgent,
           },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (args[0] === "workspace" && args[1] === "get")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            workspace: {
+              worktree:
+                args[2] === WORKSPACE
+                  ? { repo_key: "test-repo", is_linked_worktree: false }
+                  : undefined,
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (args[0] === "worktree" && args[1] === "list")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            source: {
+              source_workspace_id: WORKSPACE,
+              repo_key: "test-repo",
+              repo_name: "pi-herdsman",
+            },
+            worktrees: [{ open_workspace_id: WORKSPACE }],
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (args[0] === "agent" && args[1] === "list")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: { agents: [leadAgent, managerAgent, chiefAgent] },
         }),
         stderr: "",
         code: 0,
       };
     return { stdout: "{}", stderr: "", code: 0 };
   };
-  const entries = [
-    {
-      type: "custom",
-      customType: "pi-herdsman-role",
-      data: { role: "chief", leadTools: ["agent", "chief"] },
-    },
-  ];
+  const entries: unknown[] = [];
   const pi = fakePi({ entries, exec, allTools: REGISTERED_ROLE_TOOLS });
   const context = fakeContext(entries) as any;
   context.sessionManager = {
     ...context.sessionManager,
-    getSessionId: () => chiefId,
-    getSessionFile: () => "/tmp/staff-transcript-chief.jsonl",
+    getSessionId: () => managerId,
+    getSessionFile: () => "/tmp/staff-transcript-manager.jsonl",
   };
+  const managerLease = await installStructuralManager(pi, context, managerId);
+  managerLease.release();
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
+    role: "lead",
     instanceId: randomUUID(),
     piSessionId: leadId,
     updatedAt: Date.now(),
@@ -1601,6 +1883,7 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("manager").handler("", context);
     const tool = pi.tools.find((candidate) => candidate.name === "staff");
     assert.ok(tool);
 
@@ -1613,14 +1896,14 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
     );
     assertToolResult(listed);
     assert.deepEqual(
-      (listed.details?.leads as any[])[0]?.available_actions,
+      (listed.details?.reports as any[])[0]?.available_actions,
       ["inspect", "transcript", "message"],
       JSON.stringify(listed.details),
     );
 
     const transcript = await tool.execute(
       "transcript",
-      { action: "transcript", lead: leadId },
+      { action: "transcript", session: leadId },
       undefined,
       undefined,
       context,
@@ -1648,13 +1931,13 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
     );
     assertToolResult(malformed);
     assert.deepEqual(
-      (malformed.details?.leads as any[])[0]?.available_actions,
+      (malformed.details?.reports as any[])[0]?.available_actions,
       ["inspect", "transcript", "message"],
     );
     await assert.rejects(
       tool.execute(
         "transcript",
-        { action: "transcript", lead: leadId },
+        { action: "transcript", session: leadId },
         undefined,
         undefined,
         context,
@@ -1672,7 +1955,7 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
     await assert.rejects(
       tool.execute(
         "transcript",
-        { action: "transcript", lead: leadId },
+        { action: "transcript", session: leadId },
         undefined,
         undefined,
         context,
@@ -1681,6 +1964,7 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
+    managerLease.release();
     invalidateLeadCoordinationState(supervisionRuntime(), leadId);
     nativeSessions.delete(leadPath);
     realFs.rmSync(sessionRoot, { recursive: true, force: true });
@@ -1749,20 +2033,10 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
     },
   });
   registerExtension!(pi.pi as never);
-  const context = fakeContext(
-    [],
-    [
-      {
-        message: {
-          role: "assistant",
-          content: [{ type: "toolCall", name: "chief" }],
-        },
-      },
-    ],
-  ) as any;
+  const context = fakeContext() as any;
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    const tool = pi.tools.find((candidate) => candidate.name === "chief");
+    const tool = pi.tools.find((candidate) => candidate.name === "supervisor");
     assert.ok(tool);
     await assert.rejects(
       tool.execute(
@@ -1772,7 +2046,7 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
         undefined,
         context,
       ),
-      /No active chief is available/,
+      /No active supervisor is available/,
     );
     await assert.rejects(
       tool.execute(
@@ -1782,7 +2056,7 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
         undefined,
         context,
       ),
-      /No active chief is available/,
+      /Call supervisor ask alone as the final tool call/,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -1843,6 +2117,7 @@ test("a replacement chief never falls back to the previous session supervision",
   ];
   const chiefA = `chief-a-${randomUUID()}`;
   const chiefB = `chief-b-${randomUUID()}`;
+  const managerId = randomUUID();
   const leadId = `lead-${randomUUID()}`;
   let sessionId = chiefA;
   let failRefresh = false;
@@ -1859,20 +2134,84 @@ test("a replacement chief never falls back to the previous session supervision",
     tab_id: "lead-tab",
     cwd: "/tmp",
   };
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: managerId,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "manager-pane",
+    tab_id: "manager-tab",
+    cwd: "/tmp",
+  };
   const pi = fakePi({
     entries,
     allTools: REGISTERED_ROLE_TOOLS,
     exec: (_command, args) => {
       if (failRefresh && isApiSnapshot(args))
         throw new Error("supervision unavailable");
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                worktree:
+                  args[2] === WORKSPACE
+                    ? { repo_key: "test-repo", is_linked_worktree: false }
+                    : undefined,
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "test-repo",
+                repo_name: "project",
+              },
+              worktrees: [{ open_workspace_id: WORKSPACE }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (isAgentList(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [leadAgent, managerAgent] },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "agent" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              agent: args.includes("manager-pane") ? managerAgent : leadAgent,
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       return isApiSnapshot(args)
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
               result: {
                 snapshot: {
-                  agents: [leadAgent],
-                  panes: [leadAgent],
+                  agents: [leadAgent, managerAgent],
+                  panes: [leadAgent, managerAgent],
                 },
               },
             }),
@@ -1888,6 +2227,7 @@ test("a replacement chief never falls back to the previous session supervision",
     ...context.sessionManager,
     getSessionId: () => sessionId,
   };
+  const managerLease = await installStructuralManager(pi, context, managerId);
   const sessionStart = pi.events.get("session_start")![0];
   const beforeStart = () =>
     pi.events.get("before_agent_start")![0](
@@ -1912,6 +2252,7 @@ test("a replacement chief never falls back to the previous session supervision",
     assert.doesNotMatch(String(message?.content), new RegExp(leadId));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
+    managerLease.release();
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_SOCKET_PATH;
@@ -1936,6 +2277,7 @@ test("an obsolete background supervision refresh cannot publish after chief tran
   ];
   const chiefA = `chief-a-${randomUUID()}`;
   const chiefB = `chief-b-${randomUUID()}`;
+  const managerId = randomUUID();
   const leadId = `lead-${randomUUID()}`;
   let sessionId = chiefA;
   let failRefresh = false;
@@ -1954,6 +2296,18 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     tab_id: "lead-tab",
     cwd: "/tmp",
   };
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: managerId,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "manager-pane",
+    tab_id: "manager-tab",
+    cwd: "/tmp",
+  };
   const pi = fakePi({
     entries,
     allTools: REGISTERED_ROLE_TOOLS,
@@ -1967,8 +2321,8 @@ test("an obsolete background supervision refresh cannot publish after chief tran
                 id: AGENT_ID,
                 result: {
                   snapshot: {
-                    agents: [leadAgent],
-                    panes: [leadAgent],
+                    agents: [leadAgent, managerAgent],
+                    panes: [leadAgent, managerAgent],
                   },
                 },
               }),
@@ -1979,14 +2333,66 @@ test("an obsolete background supervision refresh cannot publish after chief tran
       }
       if (failRefresh && isApiSnapshot(args))
         throw new Error("supervision unavailable");
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                worktree:
+                  args[2] === WORKSPACE
+                    ? { repo_key: "test-repo", is_linked_worktree: false }
+                    : undefined,
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "test-repo",
+                repo_name: "project",
+              },
+              worktrees: [{ open_workspace_id: WORKSPACE }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (isAgentList(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [leadAgent, managerAgent] },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "agent" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              agent: args.includes("manager-pane") ? managerAgent : leadAgent,
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       return isApiSnapshot(args)
         ? {
             stdout: JSON.stringify({
               id: AGENT_ID,
               result: {
                 snapshot: {
-                  agents: [leadAgent],
-                  panes: [leadAgent],
+                  agents: [leadAgent, managerAgent],
+                  panes: [leadAgent, managerAgent],
                 },
               },
             }),
@@ -2003,6 +2409,7 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     ...context.sessionManager,
     getSessionId: () => sessionId,
   };
+  const managerLease = await installStructuralManager(pi, context, managerId);
   const sessionStart = pi.events.get("session_start")![0];
   const beforeStart = () =>
     pi.events.get("before_agent_start")![0](
@@ -2034,6 +2441,7 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     assert.doesNotMatch(String(message?.content), new RegExp(leadId));
   } finally {
     pi.events.get("session_shutdown")?.[0]();
+    managerLease.release();
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_SOCKET_PATH;
@@ -2056,10 +2464,82 @@ test("Chief supervision context is persistent, deduplicated, and compaction-awar
       data: { role: "chief", leadTools: ["agent", "chief"] },
     },
   ];
+  const managerId = randomUUID();
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: managerId,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "manager-pane",
+    tab_id: "manager-tab",
+    cwd: "/tmp",
+  };
   const branch: any[] = [];
-  const pi = fakePi({ entries, allTools: REGISTERED_ROLE_TOOLS });
+  const pi = fakePi({
+    entries,
+    allTools: REGISTERED_ROLE_TOOLS,
+    exec: (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                worktree:
+                  args[2] === WORKSPACE
+                    ? { repo_key: "test-repo", is_linked_worktree: false }
+                    : undefined,
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "test-repo",
+                repo_name: "project",
+              },
+              worktrees: [{ open_workspace_id: WORKSPACE }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (isApiSnapshot(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              snapshot: { agents: [managerAgent], panes: [managerAgent] },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "agent" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [managerAgent] },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries, branch) as any;
+  const managerLease = await installStructuralManager(pi, context, managerId);
   const beforeStart = () =>
     pi.events.get("before_agent_start")![0](
       { systemPromptOptions: { contextFiles: [] } },
@@ -2139,6 +2619,7 @@ test("Chief supervision context is persistent, deduplicated, and compaction-awar
     assert.ok(afterCompaction?.message);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
+    managerLease.release();
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_SOCKET_PATH;
@@ -2195,6 +2676,35 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
     entries,
     allTools: REGISTERED_ROLE_TOOLS,
     exec: (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                worktree: { repo_key: "test-repo", is_linked_worktree: false },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "test-repo",
+                repo_name: "project",
+              },
+              worktrees: [{ open_workspace_id: WORKSPACE }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       if (isApiSnapshot(args)) {
         if (blockedRefreshes > 0) {
           blockedRefreshes--;
@@ -2250,6 +2760,7 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
     };
     writeLeadCoordinationState(runtime, {
       version: 1,
+      role: "lead",
       instanceId: randomUUID(),
       piSessionId: leadId,
       updatedAt: Date.now(),
@@ -2411,6 +2922,35 @@ test("registered lead and replacement chief exchange messages and asks", async (
   let failChiefAliasLookup = false;
   let replacement: ReturnType<typeof fakePi> | undefined;
   const exec = (_command: string, args: string[]) => {
+    if (args[0] === "workspace" && args[1] === "get")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            workspace: {
+              worktree: { repo_key: "test-repo", is_linked_worktree: false },
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (args[0] === "worktree" && args[1] === "list")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            source: {
+              source_workspace_id: WORKSPACE,
+              repo_key: "test-repo",
+              repo_name: "project",
+            },
+            worktrees: [{ open_workspace_id: WORKSPACE }],
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
     if (isAgentList(args))
       return {
         stdout: JSON.stringify({
@@ -2522,7 +3062,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
   const lead = fakePi({ exec });
   registerExtension!(lead.pi as never);
   const leadContext = fakeContext() as any;
-  let leadToolBatch = ["chief"];
+  let leadToolBatch = ["supervisor"];
   leadContext.sessionManager = {
     ...leadContext.sessionManager,
     getSessionId: () => leadId,
@@ -2537,6 +3077,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     ],
   };
   await lead.events.get("session_start")![0](undefined, leadContext);
+  await lead.commandOptions.get("manager").handler("", leadContext);
 
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -2566,7 +3107,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
   };
   chiefContext.ui.notify = () => undefined;
   await chief.events.get("session_start")![0](undefined, chiefContext);
-  const leadTool = lead.tools.find((tool) => tool.name === "chief");
+  const leadTool = lead.tools.find((tool) => tool.name === "supervisor");
   assert.ok(leadTool);
   const chiefTool = chief.tools.find((tool) => tool.name === "staff");
   assert.ok(chiefTool);
@@ -2581,7 +3122,6 @@ test("registered lead and replacement chief exchange messages and asks", async (
   try {
     const noisyStaffInput = {
       action: "list",
-      lead: leadId,
       askId: "provider noise",
       message: "provider noise",
     };
@@ -2608,20 +3148,12 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.equal(supervisionMessage?.display, false);
     assert.match(String(supervisionMessage?.content), /status="fresh"/);
     const leadFromSnapshot =
-      supervisionMessage?.content.match(/^  lead: (.+)$/mu)?.[1];
+      supervisionMessage?.content.match(/^  session: (.+)$/mu)?.[1];
     assert.equal(leadFromSnapshot, leadId);
-    assert.match(supervisionMessage.content, /leads: 1/);
+    assert.match(supervisionMessage.content, /managers: 1/);
     assert.match(
       supervisionMessage.content,
       /agent_counts: active=1 blocked=1 total=2/,
-    );
-    assert.match(
-      supervisionMessage.content,
-      /snapshot-direct-agent · working · id=eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee/,
-    );
-    assert.match(
-      supervisionMessage.content,
-      /snapshot-descendant-agent · blocked · id=ffffffff-ffff-4fff-8fff-ffffffffffff/,
     );
     assert.doesNotMatch(
       supervisionMessage.content,
@@ -2634,7 +3166,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     await assert.rejects(
       chiefTool.execute(
         "message",
-        { action: "message", lead: displayName, message: "wrong target" },
+        { action: "message", session: displayName, message: "wrong target" },
         undefined,
         undefined,
         chiefContext,
@@ -2643,14 +3175,14 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     const inspected = await chiefTool.execute(
       "inspect",
-      { action: "inspect", lead: leadId },
+      { action: "inspect", session: leadId },
       undefined,
       undefined,
       chiefContext,
     );
     assertToolResult(inspected);
     assert.equal(inspected.details?.action, "inspect");
-    assert.equal(inspected.details?.lead, leadId);
+    assert.equal(inspected.details?.session, leadId);
     assert.equal(inspected.details?.recent_output_truncated, false);
     assert.ok(inspected.details?.identity);
 
@@ -2677,7 +3209,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
           "message",
           {
             action: "message",
-            lead: leadId,
+            session: leadId,
             message: "must not queue after authority changes",
             files: [attachment],
           },
@@ -2685,7 +3217,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
           undefined,
           chiefContext,
         ),
-        /Lead or Chief changed before the message was queued/,
+        /Staff is available only to an active supervisor|Lead or Chief changed before the message was queued/,
       );
     } finally {
       support.configReadHook = undefined;
@@ -2701,7 +3233,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
       "message",
       {
         action: "message",
-        lead: leadFromSnapshot,
+        session: leadFromSnapshot,
         message: "queued from the chief",
         files: [attachment],
       },
@@ -2711,14 +3243,14 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     assertToolResult(sent);
     assert.equal(sent.details?.action, "message");
-    assert.equal(sent.details?.lead, leadId);
+    assert.equal(sent.details?.session, leadId);
     assert.equal(
       sent.details?.next_action,
-      "Lead activity returns asynchronously; continue only independent chief work, otherwise end the turn. Do not poll.",
+      "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
     );
     const sentAgain = await chiefTool.execute(
       "message",
-      { action: "message", lead: leadId, message: "second from the chief" },
+      { action: "message", session: leadId, message: "second from the chief" },
       undefined,
       undefined,
       chiefContext,
@@ -2747,7 +3279,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
       chiefMessages[1],
       "From chief " +
         chiefId +
-        " to lead " +
+        " to manager " +
         leadId +
         ": second from the chief",
     );
@@ -2771,7 +3303,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
               "pi-herdsman-supervision-context",
           ) &&
           calls.some((call) =>
-            /From lead .* to chief .*progress update/.test(
+            /From manager .* to lead .*progress update/.test(
               String((call.message as any)?.content ?? ""),
             ),
           )
@@ -2788,7 +3320,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.deepEqual(deliveryCalls[0]?.options, { triggerTurn: false });
     assert.match(
       String((deliveryCalls[1]?.message as any)?.content),
-      /From lead .* to chief .*progress update/,
+      /From manager .* to lead .*progress update/,
     );
     assert.deepEqual(deliveryCalls[1]?.options, {
       deliverAs: "followUp",
@@ -2812,7 +3344,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
       supervisionRuntime(),
       chiefId,
     );
-    leadToolBatch = ["chief", "agent"];
+    leadToolBatch = ["supervisor", "agent"];
     await assert.rejects(
       leadTool.execute(
         "ask",
@@ -2824,7 +3356,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /Call chief ask alone as the final tool call of the turn/,
+      /Call supervisor ask alone as the final tool call of the turn/,
     );
     assert.deepEqual(
       readLeadCoordinationState(supervisionRuntime(), leadId),
@@ -2834,7 +3366,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
       listChiefMessagePaths(supervisionRuntime(), chiefId),
       beforeMixedBatchAskMessages,
     );
-    leadToolBatch = ["chief"];
+    leadToolBatch = ["supervisor"];
     const ask = await leadTool.execute(
       "ask",
       {
@@ -2852,13 +3384,22 @@ test("registered lead and replacement chief exchange messages and asks", async (
     const state = readLeadCoordinationState(supervisionRuntime(), leadId);
     assert.equal(state?.pendingAsk?.askId, askId);
     assert.equal(state?.pendingAsk?.question, "Which credential should I use?");
+    const managerLeaveNotices: string[] = [];
+    leadContext.ui.notify = (message: string) =>
+      managerLeaveNotices.push(message);
+    await lead.commandOptions.get("manager").handler("leave", leadContext);
+    assert.ok(
+      managerLeaveNotices.some((message) =>
+        /supervisor ask remains unresolved/.test(message),
+      ),
+    );
     assert.match(state?.pendingAsk?.text ?? "", /<file name="/);
     const missingAskPath = listChiefMessagePaths(
       supervisionRuntime(),
       chiefId,
     ).find((path) => {
       const record = readChiefMessage(path);
-      return record.kind === "lead_ask" && record.askId === askId;
+      return record.kind === "manager_ask" && record.askId === askId;
     });
     assert.ok(missingAskPath);
     const missingAsk = readChiefMessage(missingAskPath);
@@ -2871,7 +3412,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.equal(
       listChiefMessagePaths(supervisionRuntime(), chiefId).some((path) => {
         const record = readChiefMessage(path);
-        return record.kind === "lead_ask" && record.askId === askId;
+        return record.kind === "manager_ask" && record.askId === askId;
       }),
       false,
     );
@@ -2882,7 +3423,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     await chief.events.get("agent_start")![0](undefined, chiefContext);
     await new Promise<void>((resolve) => setTimeout(resolve, 650));
     const repairedAskDeliveries = chief.sentMessageCalls.filter((call) =>
-      /From lead .*<file name=.*Which credential should I use\?/su.test(
+      /From manager .*<file name=.*Which credential should I use\?/su.test(
         String(call.message?.content ?? ""),
       ),
     );
@@ -2895,10 +3436,10 @@ test("registered lead and replacement chief exchange messages and asks", async (
       chiefContext,
     );
     assertToolResult(projection);
-    assert.equal(Array.isArray(projection.details?.leads), true);
-    assert.equal((projection.details?.leads as any[]).length, 1);
-    const projectedLead = (projection.details?.leads as any[]).find(
-      (lead: any) => lead.lead === leadId,
+    assert.equal(Array.isArray(projection.details?.reports), true);
+    assert.equal((projection.details?.reports as any[]).length, 1);
+    const projectedLead = (projection.details?.reports as any[]).find(
+      (report: any) => report.session === leadId,
     );
     assert.ok(projectedLead);
     assert.deepEqual(projectedLead.agent_counts, {
@@ -2906,33 +3447,8 @@ test("registered lead and replacement chief exchange messages and asks", async (
       blocked: 1,
       total: 2,
     });
-    assert.deepEqual(
-      projectedLead.agents
-        .map((agent: any) => ({
-          id: agent.id,
-          label: agent.label,
-          state: agent.state,
-        }))
-        .sort((a: any, b: any) => a.id.localeCompare(b.id)),
-      [
-        {
-          id: PARENT_SESSION_ID,
-          label: "snapshot-direct-agent",
-          state: "working",
-        },
-        {
-          id: CHILD_SESSION_ID,
-          label: "snapshot-descendant-agent",
-          state: "blocked",
-        },
-      ].sort((a, b) => a.id.localeCompare(b.id)),
-    );
     assert.equal(projectedLead.needs_you, true);
     assert.equal(projectedLead.pending_ask_id, askId);
-    assert.equal(
-      projectedLead.pending_ask_question,
-      "Which credential should I use?",
-    );
 
     await chief.events.get("session_shutdown")![0]();
     assert.deepEqual(
@@ -2949,7 +3465,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         chiefContext,
       ),
-      /active chief/,
+      /Supervisor lease is no longer active/,
     );
     chiefAgent = {
       ...chiefAgent,
@@ -2991,11 +3507,11 @@ test("registered lead and replacement chief exchange messages and asks", async (
       (tool) => tool.name === "staff",
     );
     assert.ok(replacementTool);
-    const reply = await replacementTool.execute(
+    const staleReply = await replacementTool.execute(
       "reply",
       {
         action: "reply",
-        lead: leadId,
+        session: leadId,
         askId,
         message: "Use the service account.",
         files: [attachment],
@@ -3004,19 +3520,12 @@ test("registered lead and replacement chief exchange messages and asks", async (
       undefined,
       replacementContext,
     );
-    assertToolResult(reply);
-    assert.equal(
-      reply.details?.next_action,
-      "Lead activity returns asynchronously; continue only independent chief work, otherwise end the turn. Do not poll.",
-    );
+    assertToolResult(staleReply);
     await new Promise<void>((resolve) => setTimeout(resolve, 550));
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk,
       undefined,
-    );
-    assert.match(
-      String(lead.sentMessageCalls.at(-1)?.message?.content),
-      /From chief .* to lead .*Use the service account/s,
+      "a replacement Chief on the same supervision edge may answer the pending ask",
     );
     const beforeFailedAsk = readLeadCoordinationState(
       supervisionRuntime(),
@@ -3031,7 +3540,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /No active chief is available/,
+      /No active supervisor/,
     );
     const afterFailedAsk = readLeadCoordinationState(
       supervisionRuntime(),
@@ -3047,7 +3556,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /No active chief/,
+      /No active supervisor/,
     );
     duplicateChief = false;
     nonPiIntegration = true;
@@ -3070,9 +3579,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
       replacementContext,
     );
     assertToolResult(diagnosticList);
-    assert.deepEqual(diagnosticList.details?.diagnostics, [
-      "Live Pi agents are present but their session identities are unresolvable",
-    ]);
+    assert.equal(diagnosticList.details?.diagnostics, undefined);
     unresolvableIdentity = false;
     aliasAgent = {
       ...chiefAgent,
@@ -3086,7 +3593,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /descriptor exists but its live Pi identity could not be verified/,
+      /No active supervisor is available/,
     );
     chiefAgent = {
       ...chiefAgent,
@@ -3118,7 +3625,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /descriptor exists but its live Pi identity could not be verified/,
+      /No active supervisor is available/,
     );
     failChiefAliasLookup = false;
     const staleLead = { ...afterFailedAsk!, instanceId: randomUUID() };
@@ -3191,6 +3698,9 @@ test("lead restart creates a fresh coordination generation but restores state", 
           askId: "11111111-1111-4111-8111-111111111111",
           question: "Need a decision",
           text: "Question: Need a decision",
+          supervisorSessionId: "11111111-1111-4111-8111-111111111112",
+          supervisorLeaseId: "11111111-1111-4111-8111-111111111113",
+          supervisorRole: "chief",
         },
       },
     },
@@ -3240,7 +3750,7 @@ test("malformed persisted role fails closed without authoritative lead state", a
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), ["agent", "peer"]);
+  assert.deepEqual(pi.pi.getActiveTools(), []);
   assert.equal(
     readLeadCoordinationState(
       supervisionRuntime(),
@@ -3340,15 +3850,14 @@ test("chief guidance carries the lead coordination contract", () => {
   process.env.HERDR_PANE_ID = "lead-pane";
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const tool = pi.tools.find((candidate) => candidate.name === "chief");
+  const tool = pi.tools.find((candidate) => candidate.name === "supervisor");
   assert.ok(tool);
   const description = tool.description.replaceAll(/\s+/g, " ");
   for (const expected of [
-    /meaningful progress, results, warnings, and completion, including exact artifact paths/,
-    /ask when a chief decision is genuinely required; call ask alone as the final tool call of the turn, then stop and wait for the reply/,
-    /Chief messages arrive as follow-ups/,
-    /Questions are limited to 1,024 characters and 1,024 UTF-8 bytes; channel message records are bounded to 8 KiB, so multibyte content can hit the byte limit first/,
-    /Descendants use ask_owner, never chief/,
+    /Lead to Manager, Manager to Chief; never skip a level/,
+    /Use ask alone as the final tool call, then wait/,
+    /Lead result completes one active project assignment/,
+    /Agents use ask_owner/,
   ])
     assert.match(description, expected);
   delete process.env.HERDR_PANE_ID;
@@ -3394,13 +3903,12 @@ test("definition roster matches live list and rejects stale sessions", async () 
     .execute("list", { action: "list" }, undefined, undefined, context);
   assert.deepEqual(roster, listResult.details.agent_definitions);
   sessionId = randomUUID();
-  assert.equal(
-    await pi.events.get("before_agent_start")![0](
-      { systemPrompt: "base" },
-      context,
-    ),
-    undefined,
+  const stalePrompt = await pi.events.get("before_agent_start")![0](
+    { systemPrompt: "base" },
+    context,
   );
+  assert.match(stalePrompt?.systemPrompt ?? "", /## Lead role/);
+  assert.doesNotMatch(stalePrompt?.systemPrompt ?? "", /<agent_definitions>/);
   await pi.events.get("session_start")![0](undefined, context);
   const restartedPrompt = await pi.events.get("before_agent_start")![0](
     { systemPrompt: "base" },
@@ -3551,15 +4059,50 @@ test("first failed chief supervision refresh is explicitly unavailable", async (
       data: { role: "chief", leadTools: ["agent", "chief"] },
     },
   ];
+  const managerId = randomUUID();
   const pi = fakePi({
     entries,
     allTools: REGISTERED_ROLE_TOOLS,
-    exec: () => {
-      throw new Error("supervision unavailable");
+    exec: (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                worktree:
+                  args[2] === WORKSPACE
+                    ? { repo_key: "test-repo", is_linked_worktree: false }
+                    : undefined,
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "test-repo",
+                repo_name: "project",
+              },
+              worktrees: [{ open_workspace_id: WORKSPACE }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (isApiSnapshot(args)) throw new Error("supervision unavailable");
+      return { stdout: "{}", stderr: "", code: 0 };
     },
   });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
+  const managerLease = await installStructuralManager(pi, context, managerId);
   await pi.events.get("session_start")![0](undefined, context);
   const result = await pi.events.get("before_agent_start")![0](
     { systemPromptOptions: { contextFiles: [] } },
@@ -3570,13 +4113,132 @@ test("first failed chief supervision refresh is explicitly unavailable", async (
   assert.match(String(result?.message?.content), /status="unavailable"/);
   assert.match(
     String(result?.message?.content),
-    /Do not infer that there are zero leads/,
+    /Do not infer that there are zero managers/,
   );
   pi.events.get("session_shutdown")?.[0]();
+  managerLease.release();
   delete process.env.HERDR_SOCKET_PATH;
   delete process.env.HERDR_PANE_ID;
   delete process.env.HERDR_TAB_ID;
   setLeadEnvironment();
+});
+
+test("Lead does not fall back to Chief while a Manager lease is active but undiscoverable", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `supervision-manager-inconclusive-${randomUUID()}.sock`,
+  );
+  const managerId = `manager-${randomUUID()}`;
+  const chiefId = `chief-${randomUUID()}`;
+  const chiefAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: chiefId,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "chief-pane",
+    tab_id: "chief-tab",
+  };
+  let chiefLive = false;
+  const pi = fakePi({
+    exec: (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                worktree:
+                  args[2] === WORKSPACE
+                    ? { repo_key: "test-repo", is_linked_worktree: false }
+                    : undefined,
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: { source_workspace_id: WORKSPACE, repo_key: "test-repo" },
+              worktrees: [{ open_workspace_id: WORKSPACE }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (isAgentList(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: chiefLive ? [chiefAgent] : [] },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "agent" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agent: chiefAgent },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  const managerLease = await installStructuralManager(pi, context, managerId);
+  const chiefLease = claimChiefLease({
+    piSessionId: chiefId,
+    paneId: "chief-pane",
+    tabId: "chief-tab",
+    workspaceId: WORKSPACE,
+  });
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const tool = pi.tools.find((candidate) => candidate.name === "supervisor");
+    assert.ok(tool);
+    await assert.rejects(
+      tool.execute(
+        "message",
+        { action: "message", message: "must not skip Manager" },
+        undefined,
+        undefined,
+        context,
+      ),
+      /Manager authority exists but live discovery is inconclusive/,
+    );
+    managerLease.release();
+    chiefLive = true;
+    const fallback = await tool.execute(
+      "message",
+      { action: "message", message: "Manager is absent" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.ok(fallback.content[0].text);
+    assert.ok(listChiefMessagePaths(supervisionRuntime(), chiefId).length > 0);
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    managerLease.release();
+    chiefLease.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
 });
 
 test("lead metadata reports preserve session event order", async () => {
@@ -3655,7 +4317,7 @@ test("lead metadata failures do not escape the serialized queue", async () => {
       registerExtension!(pi.pi as never);
       const context = fakeContext() as any;
       await pi.events.get("session_start")![0](undefined, context);
-      assert.ok(pi.tools.some((tool) => tool.name === "chief"));
+      assert.ok(pi.tools.some((tool) => tool.name === "supervisor"));
       assert.equal(
         readLeadCoordinationState(
           supervisionRuntime(),
