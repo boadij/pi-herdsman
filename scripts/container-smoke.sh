@@ -78,6 +78,7 @@ verify_runtime() {
   remote "test \"\$(pi --version)\" = '$expected_pi'; \
     test \"\$(readlink -f \"\$(command -v pi)\")\" = /opt/pi/pi; \
     ! npm list -g --depth=0 2>/dev/null | grep -q '@earendil-works/pi-coding-agent'; \
+    test \"\$(npm config get update-notifier)\" = false; \
     command -v node >/dev/null; node --version | grep -q '^v26\\.'; \
     command -v herdr >/dev/null; herdr --version >/dev/null; \
     command -v mise >/dev/null; mise --version >/dev/null; \
@@ -175,6 +176,7 @@ docker rm -f "$name" >/dev/null
 
 start
 verify_runtime
+docker exec --user herdsman "$name" sh -c 'test "$(npm config get update-notifier)" = false'
 
 printf '%s\n' \
   '#!/bin/sh' \

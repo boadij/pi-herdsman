@@ -1797,11 +1797,8 @@ function renderExpandedCoordinationCall(
     if (action === "delegate") {
       if (args.definition) fields.push(["definition", args.definition]);
       if (args.label) fields.push(["label", args.label]);
-      if (args.timeoutMs) fields.push(["timeout", args.timeoutMs]);
-      if (args.fork) fields.push(["fork", args.fork]);
     } else if (action === "continue") {
       if (args.session) fields.push(["session", args.session]);
-      if (args.timeoutMs) fields.push(["timeout", args.timeoutMs]);
     } else if (args.agent) fields.push(["agent", args.agent]);
   } else if (tool === "staff" || tool === "peer") {
     if (args.session) fields.push(["session", args.session]);

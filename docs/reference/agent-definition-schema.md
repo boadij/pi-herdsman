@@ -71,7 +71,6 @@ inherited according to this precedence:
 | Operation                                       | Omitted `model` or `thinking`          |
 | ----------------------------------------------- | -------------------------------------- |
 | fresh `delegate`                                | current spawning controller session    |
-| `delegate` with `fork`                          | current spawning controller session    |
 | nested fresh `delegate`                         | current spawning managed-agent session |
 | `continue`                                      | saved Pi session                       |
 | any operation with an explicit definition field | explicit definition value              |

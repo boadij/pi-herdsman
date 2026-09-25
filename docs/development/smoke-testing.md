@@ -94,16 +94,6 @@ Verify:
   generation;
 - the exact session continues.
 
-## Fork
-
-Delegate to a definition with `fork` pointing to an exact saved session.
-
-Verify:
-
-- a new agent/session is created;
-- the fork source is explicit;
-- the current controller session is not implicitly used.
-
 ## Inferred delegation
 
 Use a bundled delegating agent definition whose source `tools` list does not explicitly

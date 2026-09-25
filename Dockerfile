@@ -33,7 +33,8 @@ ARG TARGETARCH
 ARG HERDR_VERSION
 ARG MISE_VERSION
 
-ENV LANG=C.UTF-8
+ENV LANG=C.UTF-8 \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \

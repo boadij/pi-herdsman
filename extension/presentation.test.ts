@@ -1262,7 +1262,6 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
       {
         action: "continue",
         session: "/tmp/session.jsonl",
-        timeoutMs: 300000,
         task: "Apply the findings",
         files: ["investigation.md"],
       },
@@ -1271,9 +1270,8 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
     ),
   );
   assert.match(expandedContinue, /session: \/tmp\/session\.jsonl/);
-  assert.match(expandedContinue, /timeout: 300000/);
   assert.match(expandedContinue, /task:\nApply the findings/);
-  assert.doesNotMatch(expandedContinue, /cwd:|fork:/);
+  assert.doesNotMatch(expandedContinue, /cwd:|label:/);
   assert.equal(
     renderedText(
       renderCoordinationCall(
@@ -1292,7 +1290,6 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
         action: "delegate",
         definition: "researcher",
         label: "release-review",
-        timeoutMs: 300000,
         task: "Find why the release PR is missing",
         files: ["investigation.md"],
       },
@@ -1302,7 +1299,6 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
   );
   assert.match(expanded, /definition: researcher/);
   assert.match(expanded, /label: release-review/);
-  assert.match(expanded, /timeout: 300000/);
   assert.match(expanded, /task:\nFind why the release PR is missing/);
   assert.match(expanded, /files:\n  investigation\.md/);
 });

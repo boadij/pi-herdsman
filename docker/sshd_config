@@ -17,6 +17,6 @@ X11Forwarding no
 AcceptEnv LANG LC_*
 
 SetEnv PATH=/home/herdsman/.local/share/mise/shims:/home/herdsman/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-SetEnv NPM_CONFIG_PREFIX=/home/herdsman/.local
+SetEnv NPM_CONFIG_PREFIX=/home/herdsman/.local NPM_CONFIG_UPDATE_NOTIFIER=false
 
 Subsystem sftp internal-sftp

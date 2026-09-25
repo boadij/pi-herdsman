@@ -299,7 +299,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     [
       "Use agent for genuinely independent or context-heavy work; keep small, tightly coupled work local.",
       "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.",
-      "For agent handoffs, `task`/`files` carry assignment evidence and `fork`/`continue` carry selected Pi history; do not assume the caller's conversation or attachments are inherited.",
+      "For agent handoffs, `task`/`files` carry assignment evidence; `continue` resumes an exact managed-agent Pi session. Do not assume the caller's conversation or attachments are inherited.",
       "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when it is absent or insufficient, perform at most one bounded diagnostic read before returning to passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
     ],
   );
@@ -319,21 +319,62 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   for (const tool of [agentTool, supervisorTool, peerTool])
     assertPortableToolSchema(tool);
   const toolCall = lead.events.get("tool_call")![0];
-  for (const input of [
-    { action: "list", task: "not valid for list" },
-    { action: "delegate", definition: "agent" },
-  ])
-    assert.deepEqual(
-      await toolCall({ toolName: "agent", input }, fakeContext()),
-      { block: true, reason: "Invalid agent input" },
-    );
-  assert.deepEqual(
+  const noisyAgentInput = {
+    action: "list",
+    task: "provider noise",
+    session: "none",
+  };
+  assert.equal(
     await toolCall(
-      { toolName: "peer", input: { action: "list", lead: LEAD_SESSION_ID } },
+      { toolName: "agent", input: noisyAgentInput },
       fakeContext(),
     ),
-    { block: true, reason: "Invalid peer action" },
+    undefined,
   );
+  assert.deepEqual(noisyAgentInput, { action: "list" });
+  assert.deepEqual(
+    await toolCall(
+      { toolName: "agent", input: { action: "delegate", definition: "agent" } },
+      fakeContext(),
+    ),
+    { block: true, reason: "delegate requires task", terminate: true },
+  );
+
+  const invalidDirectCall = await agentTool.execute(
+    "invalid-delegate",
+    { action: "delegate", definition: "agent" },
+    undefined,
+    undefined,
+    fakeContext(),
+  );
+  assert.match(invalidDirectCall.content[0].text, /Agent delegate failed\./);
+  assert.doesNotMatch(invalidDirectCall.content[0].text, /Agent list failed\./);
+  const noisyPeerInput = {
+    action: "list",
+    session: LEAD_SESSION_ID,
+    message: "provider noise",
+  };
+  assert.equal(
+    await toolCall({ toolName: "peer", input: noisyPeerInput }, fakeContext()),
+    undefined,
+  );
+  assert.deepEqual(noisyPeerInput, { action: "list" });
+  const noisyChiefInput = {
+    action: "message",
+    message: "progress",
+    question: "provider noise",
+  };
+  assert.equal(
+    await toolCall(
+      { toolName: "supervisor", input: noisyChiefInput },
+      fakeContext(),
+    ),
+    undefined,
+  );
+  assert.deepEqual(noisyChiefInput, {
+    action: "message",
+    message: "progress",
+  });
   const resultRef = "result:implementation#1";
   for (const request of [
     {
@@ -3079,27 +3120,19 @@ test("registered lead and replacement chief exchange messages and asks", async (
   writeFileSync(attachment, "chief evidence\n", "utf8");
 
   try {
-    assert.deepEqual(
+    const noisyStaffInput = {
+      action: "list",
+      askId: "provider noise",
+      message: "provider noise",
+    };
+    assert.equal(
       await chief.events.get("tool_call")![0](
-        { toolName: "staff", input: { action: "list", lead: leadId } },
+        { toolName: "staff", input: noisyStaffInput },
         chiefContext,
       ),
-      { block: true, reason: "Invalid staff action" },
+      undefined,
     );
-    await assert.rejects(
-      leadTool.execute(
-        "invalid",
-        {
-          action: "message",
-          message: "progress",
-          question: "not valid for message",
-        },
-        undefined,
-        undefined,
-        leadContext,
-      ),
-      /Invalid supervisor action/,
-    );
+    assert.deepEqual(noisyStaffInput, { action: "list" });
     writeAgentState(directAgentMailbox, directAgent);
     writeAgentState(descendantAgentMailbox, descendantAgent);
     const chiefStart = await chief.events.get("before_agent_start")![0](

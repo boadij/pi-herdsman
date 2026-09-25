@@ -704,7 +704,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
     await assert.rejects(
       staff.execute(
         "invalid",
-        { action: "delegate", task: "Do it", session: childSession },
+        { action: "delegate", task: "Do it", unexpected: childSession },
         undefined,
         undefined,
         ctx,
@@ -765,7 +765,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
           undefined,
           leadCtx,
         ),
-        /Invalid supervisor action/,
+        /supervisor result requires result/,
       );
       const result = await supervisor.execute(
         "result",

@@ -55,7 +55,7 @@ cleanup, blocked work, settling, and delegating-agent completion, is owned by
 
 The examples above establish the first-use path only. Use the
 [`agent` API](reference/agent.md) for exact accepted fields, validation,
-control eligibility, session continuation, fork behavior, and return shapes.
+control eligibility, session continuation, and return shapes.
 
 ## Understand agent identity
 

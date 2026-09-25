@@ -21,7 +21,9 @@ Coordinator state is private, atomic, bounded, and tied to the exact Pi session 
 
 ## `supervisor`: one edge upward
 
-Strict actions reject extra or wrong-action fields:
+Schema-known fields for other actions are projected away before validation;
+unknown keys and remaining invalid values are rejected. Validation operates on
+a projected copy, leaving the assistant's original arguments unchanged.
 
 ```json
 {

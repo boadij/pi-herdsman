@@ -199,8 +199,7 @@ generation for the new assignment. The continuation uses the saved cwd, session
 history, definition, and logical label together with the current effective
 authorized definition configuration. Its omitted model and thinking fields
 restore the saved session settings, while explicit definition fields override
-them. The caller cannot rename the continued session. Use `delegate` with
-`fork` when a separate derived session is required.
+them. The caller cannot rename the continued session.
 Session continuation does not retain the old Herdr tab. A still-live
 generation may be restored from its exact managed identity, while ordinary
 same-workspace tab movement remains presentation-only and does not change
