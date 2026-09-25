@@ -829,7 +829,7 @@ function isAbortError(value: unknown, signal?: AbortSignal): boolean {
   );
 }
 
-async function captureStartupDiagnostic(
+export async function captureStartupDiagnostic(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   paneId: string,

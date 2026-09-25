@@ -115,6 +115,7 @@ import {
   writePrivatePromptSnapshots,
 } from "./agent-definitions.ts";
 import {
+  captureStartupDiagnostic,
   closeHerdrPane,
   herdrAgentAlias,
   herdrSessionSnapshot,
@@ -9551,6 +9552,10 @@ export default function (pi: ExtensionAPI): void {
           }
         }
         const deadline = Date.now() + 30_000;
+        let piProcessSeen = false;
+        let herdrSessionReported = false;
+        let sessionIdResolved = false;
+        let leadStateObserved = false;
         while (!lead && Date.now() < deadline) {
           const inventory = await herdrSessionSnapshot(pi, ctx, signal);
           const candidates = inventory.agents.filter(
@@ -9563,61 +9568,88 @@ export default function (pi: ExtensionAPI): void {
           if (candidates.length > 1)
             throw new Error("Ambiguous Lead session in new worktree");
           if (candidates.length === 1) {
+            piProcessSeen = true;
+            herdrSessionReported = Boolean(candidates[0]?.agent_session);
             const sessionId = herdrSessionId(candidates[0]);
-            const state =
-              sessionId &&
-              readLeadCoordinationState(supervisionRuntime(), sessionId);
-            const managed =
-              sessionId &&
-              scanAgentStates().states.some(
+            sessionIdResolved = Boolean(sessionId);
+            if (sessionId) {
+              const state = readLeadCoordinationState(
+                supervisionRuntime(),
+                sessionId,
+              );
+              leadStateObserved = Boolean(state);
+              const managed = scanAgentStates().states.some(
                 ({ state }) => state.piSessionId === sessionId,
               );
-            if (
-              managed ||
-              (state &&
-                (state.role !== "lead" || state.piSessionId !== sessionId))
-            )
-              throw new Error(
-                "Existing session in new worktree has a conflicting role or identity",
-              );
-            if (
-              state?.role === "lead" &&
-              state.piSessionId === sessionId &&
-              !managed
-            ) {
-              lead = candidates[0];
-              break;
+              if (
+                managed ||
+                (state &&
+                  (state.role !== "lead" || state.piSessionId !== sessionId))
+              )
+                throw new Error(
+                  "Existing session in new worktree has a conflicting role or identity",
+                );
+              if (state?.role === "lead" && state.piSessionId === sessionId) {
+                lead = candidates[0];
+                break;
+              }
             }
+          }
+          try {
+            const process = await runHerdr(
+              pi,
+              ctx,
+              ["pane", "process-info", "--pane", paneId],
+              { signal },
+            );
+            const foreground = process?.process_info?.foreground_processes;
+            piProcessSeen ||=
+              Array.isArray(foreground) &&
+              foreground.some((entry: any) => {
+                const executable = `${entry?.argv0 ?? ""} ${entry?.cmdline ?? ""}`;
+                return /(^|[\\/\s])pi(?:\s|$)/i.test(executable);
+              });
+          } catch {
+            // Process evidence is diagnostic only; keep polling the authoritative session API.
           }
           await delay(250, undefined, { signal });
         }
         const leadSessionId = lead && herdrSessionId(lead);
         if (!leadSessionId) {
-          let diagnostic = "pane/process diagnostic unavailable";
+          const readiness = !piProcessSeen
+            ? "No Pi process or exact-pane Herdr session was observed"
+            : !herdrSessionReported
+              ? "Pi process seen in the exact pane, but Herdr never reported a Pi session identity"
+              : !sessionIdResolved
+                ? "Herdr reported a Pi session, but its session ID could not be resolved"
+                : !leadStateObserved
+                  ? "Herdr session reported, but Herdsman Lead coordination state was never published"
+                  : "Lead coordination state was present but not a valid Lead identity";
+          let processInfo = "unavailable";
           try {
-            const [process, pane] = await Promise.all([
-              runHerdr(pi, ctx, ["pane", "process-info", "--pane", paneId], {
-                signal,
-              }),
-              runHerdr(pi, ctx, ["pane", "read", "--pane", paneId], {
-                signal,
-              }),
-            ]);
-            const processInfo = (() => {
-              try {
-                return JSON.stringify(process?.process_info).slice(0, 1024);
-              } catch {
-                return "[process info unavailable: serialization failed]";
-              }
-            })();
-            diagnostic = JSON.stringify({
-              paneId,
-              processInfo,
-              output: String(pane?.stdout ?? "").slice(-2048),
-            }).slice(0, 4096);
+            const process = await runHerdr(
+              pi,
+              ctx,
+              ["pane", "process-info", "--pane", paneId],
+              { signal },
+            );
+            processInfo = JSON.stringify(process?.process_info).slice(0, 1024);
           } catch {
-            // Keep the timeout actionable even when Herdr cannot capture diagnostics.
+            processInfo = "unavailable";
           }
+          const pane = await captureStartupDiagnostic(
+            pi,
+            ctx,
+            paneId,
+            Date.now() + 2_000,
+            signal,
+          );
+          const diagnostic = JSON.stringify({
+            readiness,
+            paneId,
+            processInfo,
+            pane: pane.status === "captured" ? pane.snapshot : pane.status,
+          });
           throw new Error(
             `Timed out verifying the new Lead session in pane ${paneId}; ${diagnostic}`.slice(
               0,

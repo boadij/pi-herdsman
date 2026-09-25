@@ -438,6 +438,7 @@ async function runManagerStartupScenario(
   mode:
     | "success"
     | "missing-state"
+    | "missing-herdr-session"
     | "conflict"
     | "managed-agent"
     | "recovery"
@@ -560,6 +561,23 @@ async function runManagerStartupScenario(
           ],
         },
       });
+    if (command === "herdr" && args[0] === "pane" && args[1] === "read") {
+      assert.deepEqual(args, [
+        "pane",
+        "read",
+        "child-pane",
+        "--source",
+        "recent-unwrapped",
+        "--lines",
+        "40",
+        "--format",
+        "text",
+        "--raw",
+      ]);
+      return mode === "missing-state"
+        ? { stdout: "", stderr: "read failed", code: 1 }
+        : { stdout: "child bootstrap error", stderr: "", code: 0 };
+    }
     if (command === "herdr" && args[0] === "pane" && args[1] === "run")
       return respond({});
     if (
@@ -630,7 +648,11 @@ async function runManagerStartupScenario(
           managedState("managed-child", undefined, identity),
         );
       }
-      if (mode === "missing-state" && started && startupObservations === 2) {
+      if (
+        ["missing-state", "missing-herdr-session"].includes(mode) &&
+        started &&
+        startupObservations === 2
+      ) {
         const now = Date.now.bind(Date);
         Date.now = () => now() + 60_000;
       }
@@ -638,7 +660,9 @@ async function runManagerStartupScenario(
         snapshot: {
           panes: [],
           agents:
-            started && startupObservations >= 2
+            started &&
+            startupObservations >= 2 &&
+            mode !== "missing-herdr-session"
               ? [
                   {
                     agent_session: {
@@ -729,7 +753,7 @@ async function runManagerStartupScenario(
       );
       return;
     }
-    if (mode === "missing-state") {
+    if (mode === "missing-state" || mode === "missing-herdr-session") {
       const now = Date.now.bind(Date);
       try {
         await assert.rejects(execute(), (error: Error) => {
@@ -737,6 +761,15 @@ async function runManagerStartupScenario(
             error.message,
             /Timed out verifying the new Lead session/,
           );
+          assert.match(
+            error.message,
+            mode === "missing-state"
+              ? /Herdr session reported, but Herdsman Lead coordination state was never published/
+              : /Pi process seen in the exact pane, but Herdr never reported a Pi session identity/,
+          );
+          if (mode === "missing-state")
+            assert.match(error.message, /shell_pid/);
+          else assert.match(error.message, /child bootstrap error/);
           assert.ok(error.message.length <= 4_096);
           return true;
         });
@@ -883,10 +916,12 @@ async function runManagerStartupScenario(
   }
 }
 
-test("Manager fresh delegation waits for delayed Lead state", () =>
+test("Manager activates only after mocked Lead-state publication", () =>
   runManagerStartupScenario("success"));
-test("Manager startup timeout retains starting assignment without duplicate Pi", () =>
+test("Manager distinguishes Herdr identity and Lead-state bootstrap timeouts", () =>
   runManagerStartupScenario("missing-state"));
+test("Manager reports Pi process without a Herdr session identity", () =>
+  runManagerStartupScenario("missing-herdr-session"));
 test("Manager startup rejects conflicting role promptly", () =>
   runManagerStartupScenario("conflict"));
 test("Manager startup rejects managed Agent identity without Lead state", () =>
