@@ -63,6 +63,10 @@ test("PR preview publication isolates publish credentials from PR code", () => {
 
   assert.match(previewWorkflow, /VERSION="0\.0\.0-pr\.\$PR\.g\$HEAD_SHA"/);
   assert.match(previewWorkflow, /TAG="pr-\$PR"/);
+  assert.match(
+    previewWorkflow,
+    /prepare:[\s\S]*outputs:\s*\n\s+sha:\s*\$\{\{\s*steps\.target\.outputs\.sha\s*\}\}\s*\n\s*steps:/,
+  );
 
   assert.match(previewWorkflow, /npm run release:check/);
   assert.match(previewWorkflow, /npm pack[\s\S]*--ignore-scripts/);
@@ -78,6 +82,31 @@ test("PR preview publication isolates publish credentials from PR code", () => {
   assert.match(publish, /environment:\s*npm-preview/);
 
   assert.match(publish, /actions\/download-artifact@v8/);
+  assert.match(publish, /VERSION="0\.0\.0-pr\.\$PR\.g\$SHA"/);
+  assert.match(publish, /TAG="pr-\$PR"/);
+  assert.doesNotMatch(publish, /needs\.prepare\.outputs\.(?:version|tag)/);
+  const packageNameCheck = publish.search(
+    /test "\$\(node -p "require\('\.\/manifest\/package\/package\.json'\)\.name"\)" = "\$PACKAGE"/,
+  );
+  const packageVersionCheck = publish.search(
+    /test "\$\(node -p "require\('\.\/manifest\/package\/package\.json'\)\.version"\)" = "\$VERSION"/,
+  );
+  const tarballExtraction = publish.indexOf(
+    'tar -xzf "${TARBALLS[0]}" -C manifest package/package.json',
+  );
+  const firstNpmView = publish.indexOf("npm view");
+  const firstNpmPublish = publish.indexOf("npm publish");
+  assert.notEqual(tarballExtraction, -1);
+  assert.notEqual(packageNameCheck, -1);
+  assert.notEqual(packageVersionCheck, -1);
+  assert.notEqual(firstNpmView, -1);
+  assert.notEqual(firstNpmPublish, -1);
+  assert.ok(tarballExtraction < packageNameCheck);
+  assert.ok(tarballExtraction < packageVersionCheck);
+  assert.ok(packageNameCheck < firstNpmView);
+  assert.ok(packageVersionCheck < firstNpmView);
+  assert.ok(packageNameCheck < firstNpmPublish);
+  assert.ok(packageVersionCheck < firstNpmPublish);
   assert.match(
     publish,
     /npm publish[\s\S]*--tag "\$TAG"[\s\S]*--ignore-scripts/,

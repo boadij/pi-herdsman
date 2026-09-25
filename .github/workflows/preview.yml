@@ -21,8 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.target.outputs.sha }}
-      version: ${{ steps.package.outputs.version }}
-      tag: ${{ steps.package.outputs.tag }}
 
     steps:
       - id: target
@@ -89,9 +87,6 @@ jobs:
             --pack-destination "$RUNNER_TEMP/npm-preview" \
             >/dev/null
 
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
       - uses: actions/upload-artifact@v7
         with:
           name: npm-preview
@@ -125,14 +120,20 @@ jobs:
           PACKAGE: pi-herdsman
           PR: ${{ inputs.pr }}
           SHA: ${{ needs.prepare.outputs.sha }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
 
+          VERSION="0.0.0-pr.$PR.g$SHA"
+          TAG="pr-$PR"
+
           TARBALLS=(package/*.tgz)
           [ "${#TARBALLS[@]}" -eq 1 ]
+
+          mkdir manifest
+          tar -xzf "${TARBALLS[0]}" -C manifest package/package.json
+          test "$(node -p "require('./manifest/package/package.json').name")" = "$PACKAGE"
+          test "$(node -p "require('./manifest/package/package.json').version")" = "$VERSION"
 
           if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
             test "$(npm view "$PACKAGE@$TAG" version)" = "$VERSION"
