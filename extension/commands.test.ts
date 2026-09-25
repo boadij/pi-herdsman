@@ -215,7 +215,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.match(
       managerPrompt.systemPrompt,
-      /coordinate project-level work across Leads and workspaces/i,
+      /Manager role[\s\S]*exactly one Herdr worktree group[\s\S]*same workspace may host multiple Leads[\s\S]*Actual implementation belongs to Leads and their Agent trees[\s\S]*Handle them locally; do not echo them through supervisor[\s\S]*own Manager-level escalation to Chief/i,
     );
     assert.doesNotMatch(
       managerPrompt.systemPrompt,
@@ -735,7 +735,16 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
       childSession,
     );
     assert.equal(paths.length, 1);
-    assert.equal(readChiefMessage(paths[0]!).kind, "manager_assignment");
+    const delivery = readChiefMessage(paths[0]!);
+    assert.equal(delivery.kind, "manager_assignment");
+    assert.match(
+      delivery.text,
+      /When this assignment is complete, report its result with supervisor\.result\./,
+    );
+    assert.match(
+      delivery.text,
+      /supervisor\.message only for nonterminal progress or coordination\./,
+    );
     assert.ok(
       pi.calls.some(
         (args) => args.includes("--no-focus") && args.includes("--branch"),

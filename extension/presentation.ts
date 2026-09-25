@@ -2236,7 +2236,7 @@ function expandedResultLines(
       ...(Array.isArray(details.assignments)
         ? details.assignments.map(
             (assignment: any) =>
-              `assignment: ${value(assignment?.id)} · ${value(assignment?.phase)}${value(assignment?.workspace_id) ? ` · workspace: ${value(assignment.workspace_id)}` : ""}${value(assignment?.pane_id) ? ` · pane: ${value(assignment.pane_id)}` : ""}${value(assignment?.session) ? ` · session: ${value(assignment.session)}` : ""}`,
+              `assignment: ${value(assignment?.id)} · ${value(assignment?.phase)}${value(assignment?.branch) ? ` · branch: ${value(assignment.branch)}` : ""}${value(assignment?.workspace_id) ? ` · workspace: ${value(assignment.workspace_id)}` : ""}${value(assignment?.pane_id) ? ` · pane: ${value(assignment.pane_id)}` : ""}${value(assignment?.session) ? ` · session: ${value(assignment.session)}` : ""}`,
           )
         : []),
     );

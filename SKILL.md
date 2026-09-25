@@ -380,6 +380,11 @@ Manager is active for their project. Project Leads with an active Manager
 report to that Manager, not Chief. Leads own their Agent trees. Manager is a
 dedicated project coordinator and never owns or implements work through Agents;
 actual delegated implementation belongs to Leads and their Agent trees.
+Manager coordinates exactly one Herdr worktree group from its primary
+workspace. Direct-report Leads run in workspaces in that group. A fresh
+`staff.delegate` creates a linked Git worktree and linked-worktree workspace for
+its branch; multiple Leads may share one workspace, so one workspace is not
+one worktree.
 Descendant summaries never confer direct control. The active tool sets are:
 
 - Lead: `agent`, `supervisor`, `peer`, and ordinary tools; no `staff`.
@@ -409,7 +414,10 @@ but a hierarchy change cannot reroute it. Use `supervisor.ask` only
 for a genuine decision, as the sole and final tool call of the turn, with at
 most one outstanding question. Wait for the exact `staff.reply`. A Manager's
 own escalation to Chief is a separate decision, never an automatic forward.
-Managed Agents use `ask_owner` to their exact owner, not `supervisor`.
+Messages and results from direct-report Leads are addressed to Manager; handle
+them locally rather than echoing them through `supervisor`. Use Manager's
+`supervisor` only for its own escalation to an active Chief. Managed Agents use
+`ask_owner` to their exact owner, not `supervisor`.
 
 Only explicit Manager `staff.delegate` starts or recovers delegation; reads
 never resume external mutations. Assignment ID is the sole recovery key:
@@ -449,6 +457,8 @@ also supervise manually created Leads in the same worktree group. An assigned
 Lead reports completion via
 `supervisor.result`, which persists provenance and a reusable
 `result:<assignment-id>` before notifying Manager. Idle is not completion.
+Use `supervisor.message` only for nonterminal progress or coordination; it does
+not complete the assignment.
 Manager-created Leads launch with Pi's `--no-approve` policy, which ignores
 project-local files for that run rather than implicitly trusting the linked-
 worktree path. If a delegated Lead needs trust-gated project resources, the user

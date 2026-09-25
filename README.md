@@ -111,6 +111,13 @@ Leads in linked-worktree workspaces remain Leads. A Manager is a dedicated
 coordinator for Leads across the Herdsman project scope for that worktree
 group. Actual delegated implementation belongs to Leads and their Agent trees;
 Manager can create Leads in linked-worktree workspaces for independent work.
+Manager coordinates exactly one Herdr worktree group from its primary
+workspace. A branch may have a linked Git worktree and workspace, but multiple
+Leads can share that same workspace; one workspace does not imply one
+worktree. Direct-report messages are handled by Manager locally rather than
+echoed upward, and assigned Leads complete work with `supervisor.result`;
+`supervisor.message` is for progress or coordination, not completion.
+Manager's `staff list` reports each assignment's branch without task text.
 Those Leads launch with Pi's `--no-approve` policy: Manager delegation does not
 implicitly trust project-local resources in the new worktree. If such resources
 are needed, explicitly trust that path using Pi's supported project-trust flow.

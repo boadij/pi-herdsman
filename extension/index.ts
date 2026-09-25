@@ -276,9 +276,18 @@ Own the assigned objective and any Agents you delegate to. Use the direct
 supervisor for project coordination and peer for other Leads. Keep work inside
 your assigned scope.`;
 const MANAGER_ROLE_CHARTER = `## Manager role
-Coordinate project-level work across Leads and workspaces. Actual delegated
-implementation belongs to Leads and their Agent trees. Never perform Lead-level
-delegation or control Agents; coordinate through direct-report Leads using staff.
+Coordinate exactly one Herdr worktree group from its primary workspace. Direct
+Leads are in that group. A fresh staff.delegate creates a linked Git worktree
+and linked-worktree workspace for the branch, then starts the Lead there. The
+same workspace may host multiple Leads; multiple Leads in one workspace are not
+multiple worktrees.
+
+Actual implementation belongs to Leads and their Agent trees. Never control
+Agents; coordinate direct-report Leads through staff.
+
+Messages and results from direct-report Leads are addressed to you as Manager.
+Handle them locally; do not echo them through supervisor. Use supervisor only
+for your own Manager-level escalation to Chief when one is active.
 `;
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const STALE_AFTER_MS = 10 * 60_000;
@@ -9503,7 +9512,7 @@ export default function (pi: ExtensionAPI): void {
             fromSessionId: manager.piSessionId,
             toSessionId: "x".repeat(512),
             leadSessionId: "x".repeat(512),
-            text: `Manager assignment ${id}: ${candidate}`,
+            text: `Manager assignment ${id}: ${candidate}\n\nWhen this assignment is complete, report its result with supervisor.result. Use supervisor.message only for nonterminal progress or coordination.`,
             createdAt,
           }),
         );
@@ -9835,7 +9844,7 @@ export default function (pi: ExtensionAPI): void {
           fromSessionId: manager.piSessionId,
           toSessionId: leadSessionId,
           leadSessionId,
-          text: `Manager assignment ${id}: ${assignment.text}`,
+          text: `Manager assignment ${id}: ${assignment.text}\n\nWhen this assignment is complete, report its result with supervisor.result. Use supervisor.message only for nonterminal progress or coordination.`,
           createdAt: Date.now(),
         });
         return {

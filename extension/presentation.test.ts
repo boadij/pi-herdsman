@@ -2297,7 +2297,13 @@ test("Manager and Chief report presentation keeps descendants observational", ()
           self: { role: "manager", session: "manager-session" },
           reports: [reportLead],
           assignments: [
-            { id: "assignment-1", phase: "starting", session: "lead-session" },
+            {
+              id: "assignment-1",
+              phase: "starting",
+              branch: "smoke/manager1",
+              session: "lead-session",
+            },
+            { id: "assignment-2", phase: "active", session: "other-session" },
           ],
         },
       },
@@ -2309,8 +2315,13 @@ test("Manager and Chief report presentation keeps descendants observational", ()
   assert.match(list, /fix\/auth  blocked · 1 agent\n  session: lead-session/);
   assert.match(
     list,
-    /assignment: assignment-1 · starting · session: lead-session/,
+    /assignment: assignment-1 · starting · branch: smoke\/manager1 · session: lead-session/,
   );
+  assert.match(
+    list,
+    /assignment: assignment-2 · active · session: other-session/,
+  );
+  assert.doesNotMatch(list, /assignment-2[^\n]*branch:/);
   const managerSnapshot = {
     managers: [
       {
