@@ -902,7 +902,47 @@ test("project assignments are strict, private, bounded, and removable", () => {
   );
   assert.throws(
     () => listProjectAssignments(runtime, "root"),
-    /Unable to read/,
+    (error) => {
+      assert.match(
+        error.message,
+        new RegExp(`${path}: invalid assignment schema`),
+      );
+      assert.doesNotMatch(error.message, /task/);
+      return true;
+    },
+  );
+  writeFileSync(path, '{"text":"private task details"');
+  assert.throws(
+    () => readProjectAssignment(runtime, "root", assignment.id),
+    (error) => {
+      assert.match(error.message, new RegExp(`${path}: invalid JSON`));
+      assert.doesNotMatch(error.message, /private task details/);
+      return true;
+    },
+  );
+  const { base: _base, ...preBaseAssignment } = assignment;
+  writeFileSync(
+    path,
+    JSON.stringify({ ...preBaseAssignment, text: "private task details" }),
+  );
+  assert.throws(
+    () => readProjectAssignment(runtime, "root", assignment.id),
+    (error) => {
+      assert.match(
+        error.message,
+        new RegExp(`${path}: invalid assignment schema`),
+      );
+      assert.doesNotMatch(error.message, /private task details/);
+      return true;
+    },
+  );
+  writeFileSync(path, "x".repeat(PROJECT_ASSIGNMENT_MAX_BYTES + 1));
+  assert.throws(
+    () => readProjectAssignment(runtime, "root", assignment.id),
+    (error) => {
+      assert.match(error.message, new RegExp(`${path}: file is too large`));
+      return true;
+    },
   );
   removeProjectAssignment(runtime, "root", assignment.id);
   assert.equal(

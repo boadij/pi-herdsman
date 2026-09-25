@@ -606,8 +606,9 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
       created = true;
       return respond({
         workspace: { workspace_id: childWorkspace },
+        tab: { tab_id: "child-tab" },
         root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
-        worktree: { branch: assignment.branch },
+        worktree: { branch: assignment.branch, path: "/tmp/manager-child" },
       });
     }
     if (command === "herdr" && args[0] === "pane" && args[1] === "list")
@@ -716,6 +717,9 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
     assert.equal(assignment?.phase, "active");
     assert.equal(assignment?.leadSessionId, childSession);
     assert.equal(assignment?.branch, `herdsman/${assignment?.id}`);
+    assert.equal(assignment?.workspaceId, childWorkspace);
+    assert.equal(assignment?.paneId, "child-pane");
+    assert.equal(assignment?.tabId, "child-tab");
     const paths = listCoordinationMessagePaths(
       supervisionRuntime(),
       childSession,

@@ -9298,6 +9298,13 @@ export default function (pi: ExtensionAPI): void {
         let workspaceId = assignment.workspaceId;
         let paneId = assignment.paneId;
         let tabId = assignment.tabId;
+        let cwd: string | undefined;
+        const hasPlacement = [workspaceId, paneId, tabId].some(
+          (value) => typeof value === "string" && value,
+        );
+        const hasExactPlacement = [workspaceId, paneId, tabId].every(
+          (value) => typeof value === "string" && value,
+        );
         const topology = await runHerdr(
           pi,
           ctx,
@@ -9312,8 +9319,19 @@ export default function (pi: ExtensionAPI): void {
             `Multiple Herdr worktrees match assignment branch ${assignment.branch}`,
           );
         if (matchingWorktrees.length === 1) {
-          let foundWorkspace = matchingWorktrees[0]?.open_workspace_id;
-          if (typeof foundWorkspace !== "string" || !foundWorkspace) {
+          const worktree = matchingWorktrees[0];
+          cwd = worktree?.path;
+          if (typeof cwd !== "string" || !cwd)
+            throw new Error(
+              `Herdr worktree for branch ${assignment.branch} has no exact path`,
+            );
+          const openWorkspaceId = worktree?.open_workspace_id;
+          if (hasExactPlacement) {
+            if (openWorkspaceId && openWorkspaceId !== workspaceId)
+              throw new Error(
+                `Herdr worktree for branch ${assignment.branch} contradicts the persisted workspace identity`,
+              );
+          } else {
             const opened = await runHerdr(
               pi,
               ctx,
@@ -9328,35 +9346,28 @@ export default function (pi: ExtensionAPI): void {
               ],
               { signal },
             );
-            foundWorkspace = opened?.workspace?.workspace_id;
-          }
-          if (
-            !foundWorkspace ||
-            (workspaceId && workspaceId !== foundWorkspace)
-          )
-            throw new Error(
-              `Herdr worktree for branch ${assignment.branch} has ambiguous workspace identity`,
-            );
-          const found = await runHerdr(
-            pi,
-            ctx,
-            ["workspace", "get", foundWorkspace],
-            { signal },
-          );
-          const foundPane = found?.root_pane?.pane_id;
-          const foundTab = found?.root_pane?.tab_id;
-          if (
-            ![foundPane, foundTab].every(
-              (value) => typeof value === "string" && value,
+            workspaceId = opened?.workspace?.workspace_id;
+            paneId = opened?.root_pane?.pane_id;
+            tabId = opened?.root_pane?.tab_id;
+            cwd = opened?.worktree?.path;
+            if (
+              (assignment.workspaceId &&
+                assignment.workspaceId !== workspaceId) ||
+              (assignment.paneId && assignment.paneId !== paneId) ||
+              (assignment.tabId && assignment.tabId !== tabId)
             )
-          )
-            throw new Error(
-              `Herdr worktree for branch ${assignment.branch} has no exact root pane identity`,
-            );
-          workspaceId = foundWorkspace;
-          paneId = foundPane;
-          tabId = foundTab;
-        } else if (!workspaceId) {
+              throw new Error(
+                `Herdr worktree for branch ${assignment.branch} contradicts the persisted placement`,
+              );
+            if (
+              opened?.worktree?.branch &&
+              opened.worktree.branch !== assignment.branch
+            )
+              throw new Error(
+                "Herdr opened a worktree on a different branch than the persisted assignment",
+              );
+          }
+        } else if (!hasPlacement) {
           const args = [
             "worktree",
             "create",
@@ -9370,7 +9381,8 @@ export default function (pi: ExtensionAPI): void {
           const created = await runHerdr(pi, ctx, args, { signal });
           workspaceId = created?.workspace?.workspace_id;
           paneId = created?.root_pane?.pane_id;
-          tabId = created?.root_pane?.tab_id;
+          tabId = created?.tab?.tab_id;
+          cwd = created?.worktree?.path;
           if (
             created?.worktree?.branch &&
             created.worktree.branch !== assignment.branch
@@ -9378,9 +9390,13 @@ export default function (pi: ExtensionAPI): void {
             throw new Error(
               "Herdr created a worktree on a different branch than the persisted assignment",
             );
+        } else {
+          throw new Error(
+            "Persisted project assignment placement is not present in Herdr topology",
+          );
         }
         if (
-          ![workspaceId, paneId, tabId].every(
+          ![workspaceId, paneId, tabId, cwd].every(
             (value) => typeof value === "string" && value,
           )
         )
@@ -9425,35 +9441,12 @@ export default function (pi: ExtensionAPI): void {
             );
           lead = currentCandidates[0];
         } else {
-          const workspaceDetails = await runHerdr(
-            pi,
-            ctx,
-            ["workspace", "get", workspaceId],
-            { signal },
-          );
-          const workspaceRecord = workspaceDetails?.workspace;
-          const checkoutPath = workspaceRecord?.worktree?.checkout_path;
-          if (
-            (workspaceRecord?.workspace_id &&
-              workspaceRecord.workspace_id !== workspaceId) ||
-            ![
-              workspaceDetails?.root_pane?.pane_id,
-              workspaceDetails?.root_pane?.tab_id,
-            ].every((value) => typeof value === "string" && value) ||
-            workspaceDetails.root_pane.pane_id !== paneId ||
-            workspaceDetails.root_pane.tab_id !== tabId ||
-            typeof checkoutPath !== "string" ||
-            !checkoutPath
-          )
-            throw new Error(
-              "Herdr workspace does not match the exact assignment pane",
-            );
           await startHerdrAgentInPane(pi, ctx, {
             primaryWorkspaceId,
             workspaceId,
             tabId,
             paneId,
-            cwd: checkoutPath,
+            cwd,
             label: `lead-${id.slice(0, 8)}`,
             runId: id,
             extensionPath: HERDSMAN_EXTENSION_PATH,

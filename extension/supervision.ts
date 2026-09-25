@@ -1793,19 +1793,34 @@ export function readProjectAssignment(
   let value: unknown;
   try {
     if (statSync(path).size > PROJECT_ASSIGNMENT_MAX_BYTES)
-      throw new Error("assignment too large");
+      throw new Error("file is too large");
     value = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new Error("Unable to read project assignment", { cause: error });
+    const reason =
+      error instanceof SyntaxError
+        ? "invalid JSON"
+        : error instanceof Error && error.message === "file is too large"
+          ? error.message
+          : `read failed${safeFilesystemCode(error)}`;
+    throw projectAssignmentReadError(path, reason);
   }
-  if (
-    !validProjectAssignment(value) ||
-    value.id !== id ||
-    value.primaryWorkspaceId !== primaryWorkspaceId
-  )
-    throw new Error("Unable to read project assignment");
+  if (!validProjectAssignment(value))
+    throw projectAssignmentReadError(path, "invalid assignment schema");
+  if (value.id !== id || value.primaryWorkspaceId !== primaryWorkspaceId)
+    throw projectAssignmentReadError(path, "assignment identity mismatch");
   return value;
+}
+
+function safeFilesystemCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code)
+    ? ` (${code})`
+    : "";
+}
+
+function projectAssignmentReadError(path: string, reason: string): Error {
+  return new Error(`Unable to read project assignment ${path}: ${reason}`);
 }
 
 export function listProjectAssignments(
@@ -1825,9 +1840,16 @@ export function listProjectAssignments(
   return entries
     .filter((entry) => UUID.test(entry.slice(0, -5)) && entry.endsWith(".json"))
     .sort()
-    .map((entry) =>
-      readProjectAssignment(runtime, primaryWorkspaceId, entry.slice(0, -5))!,
-    );
+    .map((entry) => {
+      const id = entry.slice(0, -5);
+      const assignment = readProjectAssignment(runtime, primaryWorkspaceId, id);
+      if (!assignment)
+        throw projectAssignmentReadError(
+          join(directory, entry),
+          "file disappeared while listing",
+        );
+      return assignment;
+    });
 }
 
 export function removeProjectAssignment(

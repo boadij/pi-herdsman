@@ -15,6 +15,8 @@ import { OperationError } from "./errors.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import {
   listProjectAssignments,
+  listChiefMessagePaths,
+  readChiefMessage,
   supervisionRuntime,
   writeLeadCoordinationState,
 } from "./supervision.ts";
@@ -164,9 +166,6 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
                 : "/tmp/manager-root",
           },
         },
-        ...(args[2] === childWorkspace
-          ? { root_pane: { pane_id: "child-pane", tab_id: "child-tab" } }
-          : {}),
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
       return respond({
@@ -176,6 +175,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
               {
                 ...(openCalls ? { open_workspace_id: childWorkspace } : {}),
                 branch: `herdsman/${listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id}`,
+                path: "/tmp/manager-child",
               },
             ]
           : [],
@@ -191,7 +191,16 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       ]);
       assert.ok(args.includes("--branch"));
       assert.ok(args.includes("--no-focus"));
-      return respond({ workspace: { workspace_id: childWorkspace } });
+      return respond({
+        workspace: { workspace_id: childWorkspace },
+        tab: { tab_id: "child-tab" },
+        root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
+        worktree: {
+          branch: args[args.indexOf("--branch") + 1],
+          path: "/tmp/manager-child",
+        },
+        already_open: true,
+      });
     }
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
       createCalls++;
@@ -363,6 +372,221 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
       "active",
       "Manager leave must retain assignment ownership until completion",
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("Manager fresh delegation starts from the exact worktree-created placement", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "root-pane";
+  process.env.HERDR_TAB_ID = "root-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `delegate-fresh-${randomUUID()}.sock`,
+  );
+  const childWorkspace = `child-${randomUUID()}`;
+  const childSession = `lead-${randomUUID()}`;
+  const childPath = "/tmp/manager-fresh-child";
+  let created = false;
+  let shellReady = false;
+  let started = false;
+  let createCalls = 0;
+  let openCalls = 0;
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: LEAD_SESSION_ID,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: "root-pane",
+    tab_id: "root-tab",
+  };
+  const exec = async (command: string, args: string[]) => {
+    if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+      return respond({
+        workspace: {
+          workspace_id: args[2],
+          worktree: {
+            repo_key: "repo-key",
+            is_linked_worktree: args[2] === childWorkspace,
+            checkout_path:
+              args[2] === childWorkspace ? childPath : "/tmp/manager-root",
+          },
+        },
+      });
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+      return respond({
+        source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+        worktrees: created
+          ? [
+              {
+                branch: `herdsman/${listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id}`,
+                path: childPath,
+                open_workspace_id: childWorkspace,
+              },
+            ]
+          : [],
+      });
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
+      createCalls++;
+      created = true;
+      const branch = args[args.indexOf("--branch") + 1];
+      assert.ok(branch);
+      return respond({
+        workspace: { workspace_id: childWorkspace },
+        tab: { tab_id: "child-tab" },
+        root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
+        worktree: { branch, path: childPath },
+      });
+    }
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "open") {
+      openCalls++;
+      throw new Error("fresh worktree must not be opened again");
+    }
+    if (command === "herdr" && args[0] === "pane" && args[1] === "list")
+      return respond({
+        panes: [
+          {
+            pane_id: "child-pane",
+            workspace_id: childWorkspace,
+            tab_id: "child-tab",
+            cwd: childPath,
+          },
+        ],
+      });
+    if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
+      return respond({
+        process_info: {
+          pane_id: "child-pane",
+          shell_pid: 33,
+          foreground_process_group_id: 33,
+          foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
+        },
+      });
+    if (command === "herdr" && args[0] === "pane" && args[1] === "run")
+      return respond({});
+    if (
+      command === "herdr" &&
+      args[0] === "pane" &&
+      args[1] === "wait-output"
+    ) {
+      shellReady = true;
+      return respond({});
+    }
+    if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+      assert.equal(shellReady, true, "agent starts only after shell readiness");
+      assert.deepEqual(args.slice(0, 6), [
+        "agent",
+        "start",
+        args[2],
+        "--kind",
+        "pi",
+        "--pane",
+      ]);
+      assert.equal(args[6], "child-pane");
+      const starting = listProjectAssignments(
+        supervisionRuntime(),
+        WORKSPACE,
+      )[0]!;
+      assert.equal(starting.workspaceId, childWorkspace);
+      assert.equal(starting.tabId, "child-tab");
+      assert.equal(starting.paneId, "child-pane");
+      started = true;
+      writeLeadCoordinationState(supervisionRuntime(), {
+        version: 1,
+        role: "lead",
+        instanceId: randomUUID(),
+        piSessionId: childSession,
+        updatedAt: Date.now(),
+      });
+      return respond({
+        agent: {
+          name: "lead",
+          agent_session: {
+            source: "herdr:pi",
+            agent: "pi",
+            kind: "id",
+            value: childSession,
+          },
+        },
+      });
+    }
+    if (command === "herdr" && isApiSnapshot(args))
+      return respond({
+        snapshot: {
+          panes: [],
+          agents: started
+            ? [
+                {
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: childSession,
+                  },
+                  workspace_id: childWorkspace,
+                  pane_id: "child-pane",
+                  tab_id: "child-tab",
+                },
+              ]
+            : [],
+        },
+      });
+    if (command === "herdr" && isAgentList(args))
+      return respond({ agents: [managerAgent] });
+    if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+      return respond({ agent: managerAgent });
+    return respond({});
+  };
+  const pi = fakeChiefPi({ activeTools: ["read"], exec });
+  registerExtension!(pi.pi as never);
+  try {
+    const ctx = fakeContext() as any;
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get("manager").handler("", ctx);
+    const staff = pi.tools.find((tool) => tool.name === "staff")!;
+    const result = await staff.execute(
+      "delegate",
+      { action: "delegate", task: "deliver the fresh assignment" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const assignment = listProjectAssignments(
+      supervisionRuntime(),
+      WORKSPACE,
+    )[0]!;
+    assert.equal(result.details.ok, true);
+    assert.equal(result.details.session, childSession);
+    assert.equal(assignment.phase, "active");
+    assert.equal(assignment.workspaceId, childWorkspace);
+    assert.equal(assignment.tabId, "child-tab");
+    assert.equal(assignment.paneId, "child-pane");
+    assert.equal(createCalls, 1);
+    assert.equal(openCalls, 0);
+    const messages = listChiefMessagePaths(
+      supervisionRuntime(),
+      childSession,
+    ).map((path) => readChiefMessage(path));
+    assert.ok(
+      messages.some(
+        (message) =>
+          message.kind === "manager_assignment" &&
+          message.leadSessionId === childSession &&
+          message.text.includes("deliver the fresh assignment"),
+      ),
+      "the active Lead receives the Manager assignment message",
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
