@@ -16,9 +16,12 @@ inspect
 transcript
 ```
 
-Unknown fields, invalid property values, and missing fields required by the
-selected action fail with `invalid_request`. Schema-known fields for another
-action are ignored.
+Schema-known fields for another action are projected away before schema
+validation and ignored. Unknown fields and values that do not match the tool
+schema may be rejected by Pi before Herdsman's hook runs. For inputs that reach
+the hook, semantically invalid property values and missing fields required by
+the selected action fail with `invalid_request`; action-required semantic
+errors terminate the call there.
 The tool is registered only for the lead controller and authorized delegating agent
 controllers.
 

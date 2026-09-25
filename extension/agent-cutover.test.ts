@@ -238,6 +238,44 @@ test("agent schema exposes portable structure and canonicalizes action fields", 
     true,
   );
   const toolCall = pi.events.get("tool_call")![0];
+  const tool = pi.tools.find((candidate) => candidate.name === "agent")!;
+  const prepareArguments = tool.prepareArguments;
+  assert.equal(typeof prepareArguments, "function");
+  const preparedInput = {
+    action: "delegate",
+    definition: "agent",
+    task: "inspect",
+    session: null,
+    agent: null,
+    message: null,
+  };
+  prepareArguments(preparedInput);
+  assert.deepEqual(preparedInput, {
+    action: "delegate",
+    definition: "agent",
+    task: "inspect",
+  });
+  assert.equal(Value.Check(schema, preparedInput), true);
+  assert.equal(
+    await toolCall({ toolName: "agent", input: preparedInput }, fakeContext()),
+    undefined,
+  );
+  assert.deepEqual(preparedInput, {
+    action: "delegate",
+    definition: "agent",
+    task: "inspect",
+  });
+
+  const removedFieldInput = {
+    action: "delegate",
+    definition: "agent",
+    task: "inspect",
+    fork: "removed",
+  };
+  prepareArguments(removedFieldInput);
+  assert.equal(removedFieldInput.fork, "removed");
+  assert.equal(Value.Check(schema, removedFieldInput), false);
+
   const input = {
     action: "delegate",
     definition: "agent",

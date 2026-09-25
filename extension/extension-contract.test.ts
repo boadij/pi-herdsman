@@ -258,6 +258,16 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     ),
     { block: true, reason: "delegate requires task", terminate: true },
   );
+
+  const invalidDirectCall = await agentTool.execute(
+    "invalid-delegate",
+    { action: "delegate", definition: "agent" },
+    undefined,
+    undefined,
+    fakeContext(),
+  );
+  assert.match(invalidDirectCall.content[0].text, /Agent delegate failed\./);
+  assert.doesNotMatch(invalidDirectCall.content[0].text, /Agent list failed\./);
   const noisyPeerInput = {
     action: "list",
     lead: LEAD_SESSION_ID,

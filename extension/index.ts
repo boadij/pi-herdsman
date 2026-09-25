@@ -562,6 +562,20 @@ function replaceInput(
   for (const key of Object.keys(input)) delete input[key];
   Object.assign(input, canonical);
 }
+function projectActionInput(
+  value: unknown,
+  fieldsByAction: Record<string, readonly string[]>,
+): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const input = value as Record<string, unknown>;
+  const action = String(input.action);
+  if (!Object.prototype.hasOwnProperty.call(fieldsByAction, action))
+    return value;
+  const fields = fieldsByAction[action];
+  const knownFields = new Set(Object.values(fieldsByAction).flat());
+  for (const key of knownFields) if (!fields.includes(key)) delete input[key];
+  return value;
+}
 type Runtime = {
   label: string;
   herdrAgent: string;
@@ -6633,7 +6647,20 @@ export default function (pi: ExtensionAPI): void {
     { additionalProperties: false },
   );
   const agentValidator = Compile(agentParameters);
+  const projectAgentInput = (value: unknown): any =>
+    projectActionInput(value, {
+      list: [],
+      delegate: ["definition", "label", "task", "files"],
+      continue: ["session", "task", "files"],
+      steer: ["agent", "message", "files"],
+      interrupt: ["agent", "message", "files"],
+      reply: ["agent", "message", "files"],
+      close: ["agent"],
+      inspect: ["agent"],
+      transcript: ["agent"],
+    });
   const parseAgentParams = (value: unknown): Params => {
+    value = projectAgentInput(value);
     if (!agentValidator.Check(value))
       throw invalidRequestInput("agent", "Invalid agent input");
     const p = value as Record<string, unknown>;
@@ -6709,7 +6736,16 @@ export default function (pi: ExtensionAPI): void {
     { additionalProperties: false },
   );
   const staffValidator = Compile(staffParameters);
+  const projectStaffInput = (value: unknown): any =>
+    projectActionInput(value, {
+      list: [],
+      inspect: ["lead"],
+      transcript: ["lead"],
+      message: ["lead", "message", "files"],
+      reply: ["lead", "askId", "message", "files"],
+    });
   const parseStaffParams = (value: unknown): StaffParams => {
+    value = projectStaffInput(value);
     if (!staffValidator.Check(value))
       throw invalidRequestInput("staff", "Invalid staff action");
     const p = value as Record<string, unknown>;
@@ -6759,7 +6795,13 @@ export default function (pi: ExtensionAPI): void {
     { additionalProperties: false },
   );
   const peerValidator = Compile(peerParameters);
+  const projectPeerInput = (value: unknown): any =>
+    projectActionInput(value, {
+      list: [],
+      message: ["lead", "message", "files"],
+    });
   const parsePeerParams = (value: unknown): PeerParams => {
+    value = projectPeerInput(value);
     if (!peerValidator.Check(value))
       throw invalidRequestInput("peer", "Invalid peer action");
     const p = value as Record<string, unknown>;
@@ -6795,10 +6837,16 @@ export default function (pi: ExtensionAPI): void {
     { additionalProperties: false },
   );
   const chiefValidator = Compile(chiefParameters);
+  const projectChiefInput = (value: unknown): any =>
+    projectActionInput(value, {
+      message: ["message", "files"],
+      ask: ["question", "files"],
+    });
   type ChiefParams =
     | { action: "message"; message: string; files?: string[] }
     | { action: "ask"; question: string; files?: string[] };
   const parseChiefParams = (value: unknown): ChiefParams => {
+    value = projectChiefInput(value);
     if (!chiefValidator.Check(value))
       throw invalidRequestInput("chief", "Invalid chief action");
     const p = value as Record<string, unknown>;
@@ -9830,6 +9878,7 @@ export default function (pi: ExtensionAPI): void {
           "For ordinary leads only. A lead owns its complete agent tree; the chief supervises leads and never changes ownership. Message and ask require a currently valid chief and reject before mutation when none exists. Use message for meaningful progress, results, warnings, and completion, including exact artifact paths; use ask when a chief decision is genuinely required; call ask alone as the final tool call of the turn, then stop and wait for the reply. Questions are limited to 1,024 characters and 1,024 UTF-8 bytes; channel message records are bounded to 8 KiB, so multibyte content can hit the byte limit first. Chief messages arrive as follow-ups, so integrate them through normal delegation. Descendants use ask_owner, never chief.",
         executionMode: "sequential",
         parameters: chiefParameters,
+        prepareArguments: projectChiefInput,
         execute: async (
           _id: string,
           raw: unknown,
@@ -10040,6 +10089,7 @@ export default function (pi: ExtensionAPI): void {
           "Other ordinary Lead sessions (peers), not managed agents. Use list for peers, other Leads, or other Lead sessions. list identifies this Lead as self and returns other live Leads as peers; message sends to one peer's exact lead ID and may include ordinary files or exact reusable direct-agent result refs through files.",
         executionMode: "sequential",
         parameters: peerParameters,
+        prepareArguments: projectPeerInput,
         execute: async (
           _id: string,
           raw: unknown,
@@ -10137,6 +10187,7 @@ export default function (pi: ExtensionAPI): void {
           "Chief-only supervision coordination. The chief supervises independent leads, does not own their agent trees, and receives no owner controls. A fresh supervision snapshot is automatically supplied at the start of each chief agent run; treat it as the default current coordination state. For ordinary state and coordination, use a fresh snapshot directly; do not call staff list, inspect, transcript, or another read command merely to poll progress. The message and reply actions revalidate exact identity and state themselves. Use list when the automatic snapshot is stale or unavailable, an immediately refreshed exact roster is materially necessary, or you are diagnosing identity or supervision projection problems. Inspect provides bounded live terminal/process evidence; use it only when that evidence matters. Transcript provides bounded persisted Pi conversation/tool evidence; use it only when that evidence materially matters. Use the lead field's exact full Pi session ID and only fresh available_actions, never infer from display state or metadata. Every exact-identity-verified lead accepts message; reply only with the exact pending ask ID and current chief lease. Message is ordinary durable follow-up communication. Messages are bounded and direction-aware, and temporary verification or delivery failures retain queued records. Metadata is presentation-only and never authority. Messages use follow-up delivery. Human conversation remains the dispatch surface.",
         executionMode: "sequential",
         parameters: staffParameters,
+        prepareArguments: projectStaffInput,
         execute: async (
           _id: string,
           raw: unknown,
@@ -11642,6 +11693,7 @@ export default function (pi: ExtensionAPI): void {
       description: controllerDescription(controllerScope),
       executionMode: "sequential",
       parameters: agentParameters,
+      prepareArguments: projectAgentInput,
       execute: async (
         _id: string,
         raw: unknown,
@@ -11650,8 +11702,15 @@ export default function (pi: ExtensionAPI): void {
         ctx: ExtensionContext,
       ) => {
         let p: Params = { action: "list" };
+        let presentationAction =
+          raw &&
+          typeof raw === "object" &&
+          typeof (raw as Record<string, unknown>).action === "string"
+            ? ((raw as Record<string, unknown>).action as string)
+            : p.action;
         try {
           p = parseAgentParams(raw);
+          presentationAction = p.action;
           const value = await action(
             pi,
             ctx,
@@ -11722,7 +11781,10 @@ export default function (pi: ExtensionAPI): void {
           if (!(e instanceof OperationError)) throw e;
           const detail = e.detail;
           const bounded = truncateModelText(
-            formatToolModelResult(p.action, { ok: false, error: detail }),
+            formatToolModelResult(presentationAction, {
+              ok: false,
+              error: detail,
+            }),
             {
               keep: "head",
               sessionId: ctx.sessionManager.getSessionId(),
