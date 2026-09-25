@@ -442,7 +442,12 @@ perform this cleanup. Launch each Manager-created Lead with its assignment UUID
 as Pi's `--session-id`. Verify Lead coordination state under that ID and
 cross-check Herdr's session identity when resolvable; an initial session path
 whose JSONL file has not yet been created does not block startup verification.
-Keep `--no-approve`: delegation must not implicitly trust project-local files.
+Pass `--approve` when `ctx.isProjectTrusted()` is true and `--no-approve`
+otherwise, inheriting the Manager session's effective project-trust decision
+for this run. Pi's trust-protected project resources are available only in the
+trusted case; `--no-approve` skips those protected resources without implying
+that all project-local files are skipped. This does not modify Pi's persistent
+trust store or elevate trust beyond the Manager's current decision.
 New delegation creates a Lead in a linked-worktree workspace and durable
 assignment. It retains a requested branch or derives
 `herdsman/<assignment-id>`, persists the chosen base ref token (default `HEAD`)
@@ -459,10 +464,6 @@ Lead reports completion via
 `result:<assignment-id>` before notifying Manager. Idle is not completion.
 Use `supervisor.message` only for nonterminal progress or coordination; it does
 not complete the assignment.
-Manager-created Leads launch with Pi's `--no-approve` policy, which ignores
-project-local files for that run rather than implicitly trusting the linked-
-worktree path. If a delegated Lead needs trust-gated project resources, the user
-must explicitly trust that path through Pi's supported project-trust flow.
 The worktree remains after completion; the result ref can be passed in `files`
 for subsequent work. Pending asks and settling results reconcile across
 Manager replacement. `staff.message`, `staff.reply`, and `peer.message`

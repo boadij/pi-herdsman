@@ -118,9 +118,13 @@ worktree. Direct-report messages are handled by Manager locally rather than
 echoed upward, and assigned Leads complete work with `supervisor.result`;
 `supervisor.message` is for progress or coordination, not completion.
 Manager's `staff list` reports each assignment's branch without task text.
-Those Leads launch with Pi's `--no-approve` policy: Manager delegation does not
-implicitly trust project-local resources in the new worktree. If such resources
-are needed, explicitly trust that path using Pi's supported project-trust flow.
+Each delegated Lead inherits the Manager session's effective project-trust
+decision for that run: a trusted Manager launches Pi with `--approve`, and an
+untrusted Manager uses `--no-approve`. Pi's trust-protected project resources
+are available only in the trusted case; `--no-approve` skips those protected
+resources, without implying that all project-local files are skipped. This
+does not modify Pi's persistent trust store or elevate trust beyond the
+Manager's current decision.
 In an eligible Lead session, supervise Managers across the current Herdr
 runtime with:
 

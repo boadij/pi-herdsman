@@ -9721,7 +9721,11 @@ export default function (pi: ExtensionAPI): void {
               label: `lead-${id.slice(0, 8)}`,
               runId: id,
               extensionPath: HERDSMAN_EXTENSION_PATH,
-              agentArgs: ["--session-id", assignment.id, "--no-approve"],
+              agentArgs: [
+                "--session-id",
+                assignment.id,
+                ctx.isProjectTrusted() ? "--approve" : "--no-approve",
+              ],
               signal,
             });
           }

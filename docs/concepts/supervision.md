@@ -48,10 +48,13 @@ Only explicit `staff.delegate` starts or recovers delegation; roster and report 
 The Manager's `staff list` also reports each assignment's branch, without task
 text.
 
-Manager-created Leads launch Pi with `--no-approve`, which ignores project-local
-files for that run; Manager delegation does not implicitly trust the linked-
-worktree path. If a Lead needs trust-gated project resources, the user must
-explicitly trust that path through Pi's supported project-trust flow.
+Manager-created Leads inherit the Manager session's effective project-trust
+decision for that run: a trusted Manager launches Pi with `--approve`, while an
+untrusted Manager uses `--no-approve`. Pi's trust-protected project resources
+are available only in the trusted case; `--no-approve` skips those protected
+resources without implying that all project-local files are skipped. This does
+not modify Pi's persistent trust store or elevate trust beyond the Manager's
+current decision.
 
 Recover an uncertain delegation only with `staff.delegate` using `{"action":"delegate","assignment":"<id>"}`; omit `task`, `branch`, `base`, and `files` so recovery uses the persisted assignment.
 

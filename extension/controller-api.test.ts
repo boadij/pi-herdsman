@@ -467,6 +467,7 @@ async function runManagerStartupScenario(
     | "stale-placement"
     | "invalid-topology"
     | "concurrent",
+  projectTrusted = false,
 ): Promise<void> {
   setLeadEnvironment();
   if (mode === "unmaterialized-path")
@@ -624,8 +625,12 @@ async function runManagerStartupScenario(
         "--pane",
       ]);
       assert.equal(args[6], "child-pane");
-      assert.ok(args.includes("--no-approve"));
-      assert.equal(args.includes("--approve"), false);
+      const approvalFlag = projectTrusted ? "--approve" : "--no-approve";
+      assert.ok(args.includes(approvalFlag));
+      assert.equal(
+        args.includes(projectTrusted ? "--no-approve" : "--approve"),
+        false,
+      );
       const starting = listProjectAssignments(
         supervisionRuntime(),
         WORKSPACE,
@@ -637,7 +642,7 @@ async function runManagerStartupScenario(
           args.indexOf("--session-id"),
           args.indexOf("--session-id") + 3,
         ),
-        ["--session-id", starting.id, "--no-approve"],
+        ["--session-id", starting.id, approvalFlag],
       );
       assert.equal(starting.workspaceId, childWorkspace);
       assert.equal(starting.tabId, "child-tab");
@@ -745,6 +750,7 @@ async function runManagerStartupScenario(
   registerExtension!(pi.pi as never);
   try {
     const ctx = fakeContext() as any;
+    ctx.isProjectTrusted = () => projectTrusted;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     const staff = pi.tools.find((tool) => tool.name === "staff")!;
@@ -992,6 +998,10 @@ async function runManagerStartupScenario(
 
 test("Manager activates only after mocked Lead-state publication", () =>
   runManagerStartupScenario("success"));
+test("trusted Manager starts its Lead with approval and the assignment session ID", () =>
+  runManagerStartupScenario("success", true));
+test("untrusted Manager starts its Lead without approval and with the assignment session ID", () =>
+  runManagerStartupScenario("success", false));
 test("Manager distinguishes Herdr identity and Lead-state bootstrap timeouts", () =>
   runManagerStartupScenario("missing-state"));
 test("Manager reports Pi process without a Herdr session identity", () =>
