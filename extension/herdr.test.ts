@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import {
   HerdrStartFailure,
   herdrAgentAlias,
+  herdrKindForConfigDir,
   listHerdrAgents,
   listAllHerdrAgents,
   herdrSessionSnapshot,
@@ -40,6 +41,12 @@ import {
   structuredTopologyEnvironment,
   type HerdrStartPlacement,
 } from "./herdr.ts";
+
+test("resolves Herdr runtime kind from the exact host config directory", () => {
+  assert.equal(herdrKindForConfigDir(".omp"), "omp");
+  assert.equal(herdrKindForConfigDir(".pi"), "pi");
+  assert.equal(herdrKindForConfigDir(".omp-extra"), "pi");
+});
 import { claimProcessLock } from "./lock.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 

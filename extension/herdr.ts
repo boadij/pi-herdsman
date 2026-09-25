@@ -1,4 +1,5 @@
 import {
+  CONFIG_DIR_NAME,
   getAgentDir,
   SessionManager,
   type ExecResult,
@@ -98,11 +99,17 @@ const LIFECYCLE_SUBSCRIPTIONS = [
 const LIFECYCLE_SUBSCRIPTION_ID = "pi-herdsman:lifecycle";
 const LIFECYCLE_RECONNECT_MS = 1_000;
 const MAX_EVENT_BUFFER_BYTES = 1024 * 1024;
-const HERDR_AGENT_STATE_EXTENSION = join(
-  getAgentDir(),
-  "extensions",
-  "herdr-agent-state.ts",
-);
+export function herdrKindForConfigDir(configDirName: string): "omp" | "pi" {
+  return configDirName === ".omp" ? "omp" : "pi";
+}
+export const HERDR_KIND = herdrKindForConfigDir(CONFIG_DIR_NAME);
+export function herdrAgentStateExtension(): string {
+  return join(
+    getAgentDir(),
+    "extensions",
+    HERDR_KIND === "omp" ? "herdr-omp-agent-state.ts" : "herdr-agent-state.ts",
+  );
+}
 function error(operation: string, message: string, details?: unknown): never {
   throw new OperationError({
     category: "internal_failure",
@@ -1212,7 +1219,7 @@ export async function startHerdrAgent(
           "start",
           attempt.herdrAgent,
           "--kind",
-          "pi",
+          HERDR_KIND,
           "--pane",
           paneId,
           "--timeout",
@@ -1222,7 +1229,7 @@ export async function startHerdrAgent(
             ? ["--extension", options.extensionPath]
             : []),
           "--extension",
-          HERDR_AGENT_STATE_EXTENSION,
+          herdrAgentStateExtension(),
           ...(options.agentArgs ?? []),
         ],
         {
@@ -1540,7 +1547,8 @@ export function sessionIdentity(
   };
   const kind = session.kind;
   const sessionValue = session.value;
-  if (session.source !== "herdr:pi" || session.agent !== "pi") return undefined;
+  if (session.source !== `herdr:${HERDR_KIND}` || session.agent !== HERDR_KIND)
+    return undefined;
   return (kind === "id" || kind === "path") &&
     typeof sessionValue === "string" &&
     sessionValue.length > 0

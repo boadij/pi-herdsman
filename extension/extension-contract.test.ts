@@ -3037,7 +3037,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     assertToolResult(diagnosticList);
     assert.deepEqual(diagnosticList.details?.diagnostics, [
-      "Live Pi agents are present but their session identities are unresolvable",
+      "Live agents are present but their session identities are unresolvable",
     ]);
     unresolvableIdentity = false;
     aliasAgent = {

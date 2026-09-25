@@ -734,10 +734,10 @@ export type AgentLaunchOptions = {
   modelDecision?: ChildModelDecision;
 };
 
-export function agentLaunchArgs(
+export async function agentLaunchArgs(
   agent: AgentDefinition,
   options: AgentLaunchOptions,
-): string[] {
+): Promise<string[]> {
   const {
     bodyPromptPath,
     sharedPromptPath,
@@ -800,7 +800,7 @@ export function agentLaunchArgs(
     args.push("--no-context-files");
     if (inheritProjectContext === true || inheritGlobalContext === true) {
       const agentDir = getAgentDir();
-      for (const context of loadProjectContextFiles({ cwd, agentDir })) {
+      for (const context of await loadProjectContextFiles({ cwd, agentDir })) {
         const isGlobal = resolve(dirname(context.path)) === resolve(agentDir);
         if (
           (isGlobal && inheritGlobalContext === true) ||

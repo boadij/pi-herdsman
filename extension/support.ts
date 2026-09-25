@@ -229,7 +229,7 @@ mock.module("@earendil-works/pi-coding-agent", {
     getAgentDir: () => PI_AGENT_ROOT,
     parseFrontmatter: nativeParseFrontmatter,
     parseSessionEntries: nativeParseSessionEntries,
-    loadProjectContextFiles: ({ cwd }: { cwd: string }) => {
+    loadProjectContextFiles: async ({ cwd }: { cwd: string }) => {
       projectContextCwds.push(cwd);
       return [];
     },
