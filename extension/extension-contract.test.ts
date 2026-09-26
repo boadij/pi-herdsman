@@ -192,6 +192,9 @@ const SEMANTIC_TOOL_CASES = [
     { session: "session-id", message: "please review", lead: "x" },
     ["session", "message"],
   ],
+] as const;
+
+const STAFF_TOOL_CASES = [
   ["staff_list", {}, { session: "x" }, []],
   [
     "staff_inspect",
@@ -287,6 +290,33 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   setLeadEnvironment();
 });
 
+test("extension loading does not call runtime action methods", () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  const runtimeMethods = {
+    getActiveTools: pi.pi.getActiveTools,
+    getAllTools: pi.pi.getAllTools,
+    setActiveTools: pi.pi.setActiveTools,
+    getSessionName: pi.pi.getSessionName,
+    getThinkingLevel: pi.pi.getThinkingLevel,
+  };
+  const unavailable = () => {
+    throw new Error("runtime action used during extension loading");
+  };
+  pi.pi.getActiveTools = unavailable;
+  pi.pi.getAllTools = unavailable;
+  pi.pi.setActiveTools = unavailable;
+  pi.pi.getSessionName = unavailable;
+  pi.pi.getThinkingLevel = unavailable;
+
+  try {
+    assert.doesNotThrow(() => registerExtension!(pi.pi as never));
+  } finally {
+    Object.assign(pi.pi, runtimeMethods);
+    pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
 test("Chief activation exposes only semantic staff tools", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "semantic-chief-pane";
@@ -323,6 +353,27 @@ test("Chief activation exposes only semantic staff tools", async () => {
       "staff_message",
       "staff_reply",
     ]);
+    const tools = new Map(chief.tools.map((tool) => [tool.name, tool]));
+    for (const [name, valid, invalid, required] of STAFF_TOOL_CASES) {
+      const tool = tools.get(name);
+      assert.ok(tool, `missing ${name}`);
+      assertPortableToolSchema(tool);
+      assert.deepEqual(
+        [...(tool.parameters.required ?? [])].sort(),
+        [...required].sort(),
+        name,
+      );
+      assert.equal(
+        Value.Check(tool.parameters, valid),
+        true,
+        `${name} valid input`,
+      );
+      assert.equal(
+        Value.Check(tool.parameters, invalid),
+        false,
+        `${name} cross-operation input`,
+      );
+    }
   } finally {
     await chief.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
@@ -3593,6 +3644,28 @@ test("delegating agents receive only their allowed definition roster", async () 
   assert.match(
     description,
     /Each unresolved unit of work has one executor\. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves\. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work\. Continue only concrete, necessary work clearly outside the delegated scope that you still own\./,
+  );
+  assert.match(
+    sharedGuidance,
+    /Each live Agent generation exists for one assignment/,
+  );
+  assert.match(
+    sharedGuidance,
+    /exact Pi sessions identify historical context and continuation/,
+  );
+  assert.match(sharedGuidance, /physical disappearance is not completion/);
+  assert.match(
+    sharedGuidance,
+    /Unknown or conflicting identity remains fail-closed/,
+  );
+  for (const file of ["AGENTS\\.md", "CLAUDE\\.md", "GEMINI\\.md"])
+    assert.match(sharedGuidance, new RegExp(file));
+  assert.match(sharedGuidance, /do not attach or mention/i);
+  assert.match(sharedGuidance, /not runtime capability/);
+  assert.match(sharedGuidance, /Complete strict UTF-8 text may be embedded/);
+  assert.match(
+    sharedGuidance,
+    /canonical local references and are not copied or snapshotted/,
   );
   assert.doesNotMatch(description, /sole executor/);
   assert.doesNotMatch(

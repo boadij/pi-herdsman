@@ -1702,11 +1702,13 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     const unresolvedStatus = String(
       (pi.sentMessageCalls[0].message as any).content,
     );
-    assert.ok(
-      unresolvedStatus.endsWith(
-        "Each unresolved unit of work has one executor. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. " +
-          "Use agent_list when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. Follow current available_tools and revalidation: agent_steer cooperatively changes live work and may wait for a safe boundary, while agent_interrupt cancels the current operation and replaces its direction. Use agent_reply only to answer that Agent's exact pending ask_owner question. agent_close destructively closes an eligible Agent generation. agent_inspect provides bounded live terminal/process evidence; agent_transcript provides bounded persisted conversation/tool evidence. When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
-      ),
+    assert.match(
+      unresolvedStatus,
+      /Delegation status: 1 active direct agent; 1 pending direct result; 2 direct agent assignments remain unresolved\./,
+    );
+    assert.match(
+      unresolvedStatus,
+      /A proven lost Agent remains unresolved; physical disappearance is not completion\./,
     );
     assert.equal(
       readResult(childOneMailbox, childOne.activeRequestId!)?.text,
@@ -1745,12 +1747,6 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     assert.equal(
       (pi.sentMessageCalls[1].message as any).details.pendingDirectResultCount,
       0,
-    );
-    assert.ok(
-      String((pi.sentMessageCalls[1].message as any).content).endsWith(
-        "Each unresolved unit of work has one executor. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. " +
-          "Use agent_list when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. Follow current available_tools and revalidation: agent_steer cooperatively changes live work and may wait for a safe boundary, while agent_interrupt cancels the current operation and replaces its direction. Use agent_reply only to answer that Agent's exact pending ask_owner question. agent_close destructively closes an eligible Agent generation. agent_inspect provides bounded live terminal/process evidence; agent_transcript provides bounded persisted conversation/tool evidence. When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
-      ),
     );
     assert.equal(
       readResult(childTwoMailbox, childTwo.activeRequestId!)?.text,
@@ -2924,6 +2920,76 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
   ]);
   assert.deepEqual(lead.commands, ["agents", "herdsman"]);
   lead.events.get("session_shutdown")?.[0]();
+});
+
+test("delegating managed Agents preserve definition tools and activate coordination tools", async () => {
+  setAgentEnvironment("reviewer", ["researcher"]);
+  const pi = fakePi({ activeTools: ["shell", "notebook"] });
+  registerExtension!(pi.pi as never);
+  const context = fakeAgentContext();
+  for (const handler of pi.events.get("session_start") ?? [])
+    await handler(undefined, context);
+
+  const agentTools = [
+    "agent_list",
+    "agent_delegate",
+    "agent_continue",
+    "agent_steer",
+    "agent_interrupt",
+    "agent_reply",
+    "agent_close",
+    "agent_inspect",
+    "agent_transcript",
+  ];
+  assert.deepEqual(
+    pi.pi.getActiveTools().sort(),
+    ["shell", "notebook", ...agentTools, "ask_owner"].sort(),
+  );
+
+  const delegate = pi.tools.find((tool) => tool.name === "agent_delegate")!;
+  assert.equal(
+    Value.Check(delegate.parameters, {
+      definition: "researcher",
+      task: "review this",
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(delegate.parameters, {
+      definition: "implementer",
+      task: "review this",
+    }),
+    false,
+  );
+  pi.events.get("session_shutdown")?.[0]();
+});
+
+test("leaf managed Agents preserve definition tools and remove stale coordination tools", async () => {
+  setAgentEnvironment("reviewer", []);
+  const agentTools = [
+    "agent_list",
+    "agent_delegate",
+    "agent_continue",
+    "agent_steer",
+    "agent_interrupt",
+    "agent_reply",
+    "agent_close",
+    "agent_inspect",
+    "agent_transcript",
+  ];
+  const pi = fakePi({
+    activeTools: ["shell", "notebook", ...agentTools],
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeAgentContext();
+  for (const handler of pi.events.get("session_start") ?? [])
+    await handler(undefined, context);
+
+  assert.deepEqual(
+    pi.pi.getActiveTools().sort(),
+    ["shell", "notebook", "ask_owner"].sort(),
+  );
+  pi.events.get("session_shutdown")?.[0]();
 });
 
 test("session agent identity reads the session-wide entry array", () => {

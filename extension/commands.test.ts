@@ -585,30 +585,35 @@ test("partial supervision registration retries host restoration", async () => {
     activeTools: ["read", "bash"],
     autoActivateRegisteredTools: true,
   });
-  const baseline = pi.pi.getActiveTools();
-  const registerTool = pi.pi.registerTool.bind(pi.pi);
-  pi.pi.registerTool = (tool: any) => {
-    registerTool(tool);
-    if (tool.name === "staff_list") throw new Error("tool registration failed");
-  };
-  const setActiveTools = pi.pi.setActiveTools;
-  let failRestore = true;
-  pi.pi.setActiveTools = (next: string[]) => {
-    if (failRestore && next.join("|") === baseline.join("|")) {
-      failRestore = false;
-      throw new Error("tool restoration failed");
-    }
-    setActiveTools(next);
-  };
-
+  const context = fakeContext() as any;
+  context.mode = "rpc";
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
   try {
-    assert.throws(
-      () => registerExtension!(pi.pi as never),
-      /tool restoration failed/,
-    );
+    registerExtension!(pi.pi as never);
+    await pi.events.get("session_start")![0](undefined, context);
+    const baseline = pi.pi.getActiveTools();
+    const registerTool = pi.pi.registerTool.bind(pi.pi);
+    pi.pi.registerTool = (tool: any) => {
+      registerTool(tool);
+      if (tool.name === "staff_list")
+        throw new Error("tool registration failed");
+    };
+    const setActiveTools = pi.pi.setActiveTools;
+    let failRestore = true;
+    pi.pi.setActiveTools = (next: string[]) => {
+      if (failRestore && next.join("|") === baseline.join("|")) {
+        failRestore = false;
+        throw new Error("tool restoration failed");
+      }
+      setActiveTools(next);
+    };
+
+    await pi.commandOptions.get("chief").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), baseline);
     assert.equal(pi.pi.getActiveTools().includes("staff_list"), false);
     assert.ok(pi.tools.some((tool) => tool.name === "staff_list"));
+    assert.deepEqual(notices, ["tool restoration failed"]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]?.();
     delete process.env.HERDR_SOCKET_PATH;

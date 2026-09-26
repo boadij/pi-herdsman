@@ -261,6 +261,19 @@ const AGENT_TOOLS = [
   "agent_inspect",
   "agent_transcript",
 ] as const;
+function managedAgentTools(
+  current: readonly string[],
+  delegationEnabled: boolean,
+): string[] {
+  const tools = current.filter(
+    (name) =>
+      !AGENT_TOOLS.includes(name as (typeof AGENT_TOOLS)[number]) &&
+      name !== "ask_owner",
+  );
+  if (delegationEnabled) tools.push(...AGENT_TOOLS);
+  tools.push("ask_owner");
+  return tools;
+}
 const SUPERVISOR_TOOLS = ["supervisor_message", "supervisor_ask"] as const;
 const PEER_TOOLS = ["peer_list", "peer_message"] as const;
 const STAFF_TOOLS = [
@@ -303,9 +316,27 @@ const AGENT_DELEGATION_GUIDANCE =
 const AGENT_EXECUTION_OWNERSHIP_GUIDANCE =
   "Each unresolved unit of work has one executor. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.";
 const AGENT_HANDOFF_GUIDANCE =
-  "Use agent_delegate to start a fresh bounded assignment from a definition; use agent_continue to resume an exact historical managed-Agent Pi session with a new bounded assignment. For either handoff, `task`/`files` carry assignment evidence; do not assume the caller's conversation or attachments are inherited.";
+  "Use agent_delegate to start a fresh bounded assignment from a definition; " +
+  "use agent_continue to resume an exact historical managed-Agent Pi session " +
+  "with a new bounded assignment. Each live Agent generation exists for one " +
+  "assignment; after its terminal result is delivered, Herdsman cleans up that " +
+  "generation. Agent labels identify the current live generation; exact Pi " +
+  "sessions identify historical context and continuation. For either handoff, " +
+  "`task`/`files` carry assignment evidence; do not assume the caller's " +
+  "conversation or attachments are inherited. `files` carries relevant " +
+  "assignment evidence, not runtime capability. Complete strict UTF-8 text may " +
+  "be embedded; other files remain canonical local references and are not " +
+  "copied or snapshotted. Preserve exact supplied result refs when forwarding " +
+  "them and omit unrelated evidence. Do not attach or mention agent instruction " +
+  "files such as AGENTS.md, CLAUDE.md, GEMINI.md, or equivalents merely because " +
+  "they exist. Rely on normal project or runtime discovery when it supplies " +
+  "those instructions. Attach such a file only when the task itself requires " +
+  "inspecting, modifying, comparing, or transmitting it, the user explicitly " +
+  "requests it, or required instructions would not otherwise reach the target. " +
+  "Skills are separate; attach SKILL.md only when the task needs it and the " +
+  "selected definition does not already provide that skill.";
 const AGENT_UNRESOLVED_GUIDANCE =
-  "Use agent_list when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. Follow current available_tools and revalidation: agent_steer cooperatively changes live work and may wait for a safe boundary, while agent_interrupt cancels the current operation and replaces its direction. Use agent_reply only to answer that Agent's exact pending ask_owner question. agent_close destructively closes an eligible Agent generation. agent_inspect provides bounded live terminal/process evidence; agent_transcript provides bounded persisted conversation/tool evidence. When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.";
+  "Use agent_list when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. Follow current available_tools and revalidation: agent_steer cooperatively changes live work and may wait for a safe boundary, while agent_interrupt cancels the current operation and replaces its direction. Use agent_reply only to answer that Agent's exact pending ask_owner question. agent_close destructively closes an eligible Agent generation. agent_inspect provides bounded live terminal/process evidence; agent_transcript provides bounded persisted conversation/tool evidence. When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. Repeated reminders alone do not justify another read. A proven lost Agent remains unresolved; physical disappearance is not completion. Unknown or conflicting identity remains fail-closed. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed. Do not invent work merely to remain active.";
 const LEAD_SCOPE_DESCRIPTION = `Own architecture, approved scope, acceptance, integration, conflict resolution,
 and final decisions. Decompose only as far as useful. Assign each independent
 objective to the narrowest capable owner and let delegation-enabled agents own
@@ -10395,7 +10426,6 @@ export default function (pi: ExtensionAPI): void {
         supervisionToolRegistered = true;
         registerSupervisionTool = undefined;
       };
-      registerSupervisionTool();
       const agentsCommand = {
         description: "Manage Herdr agents",
         getArgumentCompletions: (argumentPrefix: string) => {
@@ -12533,7 +12563,12 @@ export default function (pi: ExtensionAPI): void {
       agentContext = ctx;
       const candidate = envManagedAgent(ctx);
       if (!candidate) throw new Error("invalid agent environment");
-      if (!delegationEnabled) ownTools = pi.getActiveTools();
+      const activeTools = managedAgentTools(
+        pi.getActiveTools(),
+        delegationEnabled,
+      );
+      pi.setActiveTools(activeTools);
+      if (!delegationEnabled) ownTools = activeTools;
       ensureAgentIdentity(
         pi,
         ctx,

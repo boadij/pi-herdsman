@@ -200,17 +200,19 @@ test("combined status reports a completed agent as pending, not active", async (
       "the exact current child is excluded once its sibling result is delivered",
     );
     assert.equal(
-      resultMessages.some(
-        ({ message }) =>
+      resultMessages.some(({ message }) => {
+        const content = String((message as any).content);
+        const status = content.slice(content.lastIndexOf("Delegation status:"));
+        return (
           (message as any).details.activeDirectChildCount === 0 &&
           (message as any).details.pendingDirectResultCount === 1 &&
           (message as any).details.unresolvedDirectChildCount === 1 &&
-          String((message as any).content).endsWith(
-            "Delegation status: 0 active direct agents; 1 pending direct result; 1 direct agent assignment remains unresolved. " +
-              "Each unresolved unit of work has one executor. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. " +
-              "Use agent_list when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. Follow current available_tools and revalidation: agent_steer cooperatively changes live work and may wait for a safe boundary, while agent_interrupt cancels the current operation and replaces its direction. Use agent_reply only to answer that Agent's exact pending ask_owner question. agent_close destructively closes an eligible Agent generation. agent_inspect provides bounded live terminal/process evidence; agent_transcript provides bounded persisted conversation/tool evidence. When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
-          ),
-      ),
+          status.startsWith(
+            "Delegation status: 0 active direct agents; 1 pending direct result; 1 direct agent assignment remains unresolved.",
+          ) &&
+          status.includes("physical disappearance is not completion")
+        );
+      }),
       true,
     );
     assert.equal(
@@ -1850,12 +1852,19 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
         .unresolvedDirectChildCount,
       1,
     );
+    const recoveredContent = String(
+      (recovered.sentMessageCalls[0]?.message as any).content,
+    );
+    const recoveredStatus = recoveredContent.slice(
+      recoveredContent.lastIndexOf("Delegation status:"),
+    );
     assert.ok(
-      String((recovered.sentMessageCalls[0]?.message as any).content).endsWith(
-        "Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved. " +
-          "Each unresolved unit of work has one executor. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. " +
-          "Use agent_list when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. Follow current available_tools and revalidation: agent_steer cooperatively changes live work and may wait for a safe boundary, while agent_interrupt cancels the current operation and replaces its direction. Use agent_reply only to answer that Agent's exact pending ask_owner question. agent_close destructively closes an eligible Agent generation. agent_inspect provides bounded live terminal/process evidence; agent_transcript provides bounded persisted conversation/tool evidence. When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
+      recoveredStatus.startsWith(
+        "Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved.",
       ),
+    );
+    assert.ok(
+      recoveredStatus.includes("physical disappearance is not completion"),
     );
     assert.equal(
       (recovered.sentMessageCalls[0]?.message as any).details
