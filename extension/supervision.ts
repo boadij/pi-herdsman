@@ -1767,7 +1767,7 @@ export function serializeSupervision(snapshot: SupervisionSnapshot) {
       ? { diagnostics: snapshot.diagnostics }
       : {}),
     leads: snapshot.leads.map((r) => ({
-      lead: r.lead,
+      session: r.lead,
       display_name: r.displayName,
       workspace_id: r.workspaceId,
       ...(r.workspaceLabel ? { workspace_label: r.workspaceLabel } : {}),

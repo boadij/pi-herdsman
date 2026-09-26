@@ -515,7 +515,7 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
       undefined,
       senderContext,
     );
-    assert.equal(queued.details?.lead, targetId);
+    assert.equal(queued.details?.session, targetId);
     await sender.events.get("session_shutdown")![0]();
     assert.equal(readPeerLeadRecord(runtime, senderId), undefined);
 

@@ -672,13 +672,15 @@ test("peer list and message use global peer presence, not caller inventory", asy
     assert.deepEqual(
       {
         self: payload.self,
-        peers: [...payload.peers].sort((a, b) => a.lead.localeCompare(b.lead)),
+        peers: [...payload.peers].sort((a, b) =>
+          a.session.localeCompare(b.session),
+        ),
       },
       {
         self: senderId,
         peers: [
           {
-            lead: targetId,
+            session: targetId,
             name: "Target Lead",
             cwd: "/workspaces/target",
             repo: "pi-herdsman",
@@ -686,21 +688,33 @@ test("peer list and message use global peer presence, not caller inventory", asy
             workspace_label: "pi-herdsman/feature/peer",
           },
           {
-            lead: unenrichedTargetId,
+            session: unenrichedTargetId,
             name: `lead-${unenrichedTargetId.slice(0, 8)}`,
             cwd: "",
             repo: "",
             branch: "",
             workspace_label: "",
           },
-        ].sort((a, b) => a.lead.localeCompare(b.lead)),
+        ].sort((a, b) => a.session.localeCompare(b.session)),
       },
     );
     assert.equal(modelJson.includes(WORKSPACE), false);
     assert.equal(
-      payload.peers.some((peer: { lead: string }) => peer.lead === senderId),
+      payload.peers.some(
+        (peer: { session: string }) => peer.session === senderId,
+      ),
       false,
     );
+    for (const peer of payload.peers) {
+      assert.equal("lead" in peer, false);
+      assert.equal(
+        Value.Check(peerMessage.parameters, {
+          session: peer.session,
+          message: "hello",
+        }),
+        true,
+      );
+    }
     const queued = await peerMessage.execute(
       "message",
       {
@@ -712,7 +726,8 @@ test("peer list and message use global peer presence, not caller inventory", asy
       undefined,
       context,
     );
-    assert.equal(queued.details?.lead, targetId);
+    assert.equal(queued.details?.session, targetId);
+    assert.equal("lead" in (queued.details ?? {}), false);
     const messagePaths = listCoordinationMessagePaths(runtime, targetId);
     assert.equal(messagePaths.length, 1);
     const message = readChiefMessage(messagePaths[0]);
@@ -1082,7 +1097,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
         );
 
         const queued = await pending;
-        assert.equal(queued.details?.lead, targetId);
+        assert.equal(queued.details?.session, targetId);
         messageId = queued.details?.id as string;
         assert.equal(listCoordinationMessagePaths(runtime, targetId).length, 1);
         const message = readChiefMessage(
@@ -1592,8 +1607,11 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
       context,
     );
     assertToolResult(listed);
+    const listedLead = (listed.details?.leads as any[])[0];
+    assert.equal(listedLead.session, leadId);
+    assert.equal("lead" in listedLead, false);
     assert.deepEqual(
-      (listed.details?.leads as any[])[0]?.available_tools,
+      listedLead?.available_tools,
       ["staff_inspect", "staff_transcript", "staff_message"],
       JSON.stringify(listed.details),
     );
@@ -1606,6 +1624,8 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
       context,
     );
     assertToolResult(transcript);
+    assert.equal(transcript.details?.session, leadId);
+    assert.equal("lead" in (transcript.details ?? {}), false);
     assert.match(transcript.details?.transcript, /visible user/);
     assert.match(transcript.details?.transcript, /visible assistant/);
     assert.match(transcript.details?.transcript, /visible argument/);
@@ -1627,7 +1647,10 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
       context,
     );
     assertToolResult(malformed);
-    assert.deepEqual((malformed.details?.leads as any[])[0]?.available_tools, [
+    const malformedLead = (malformed.details?.leads as any[])[0];
+    assert.equal(malformedLead.session, leadId);
+    assert.equal("lead" in malformedLead, false);
+    assert.deepEqual(malformedLead?.available_tools, [
       "staff_inspect",
       "staff_transcript",
       "staff_message",
@@ -2634,8 +2657,18 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.equal(supervisionMessage?.display, false);
     assert.match(String(supervisionMessage?.content), /status="fresh"/);
     const leadFromSnapshot =
-      supervisionMessage?.content.match(/^  lead: (.+)$/mu)?.[1];
+      supervisionMessage?.content.match(/^  session: (.+)$/mu)?.[1];
     assert.equal(leadFromSnapshot, leadId);
+    assert.match(
+      supervisionMessage.content,
+      /available_tools: staff_inspect, staff_message/,
+    );
+    assert.match(
+      supervisionMessage.content,
+      /For a straightforward message or reply, use the exact session value directly/,
+    );
+    assert.doesNotMatch(supervisionMessage.content, /^  lead: /mu);
+    assert.doesNotMatch(supervisionMessage.content, /^  actions: /mu);
     assert.match(supervisionMessage.content, /leads: 1/);
     assert.match(
       supervisionMessage.content,
@@ -2676,7 +2709,8 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     assertToolResult(inspected);
     assert.equal(inspected.details?.action, "inspect");
-    assert.equal(inspected.details?.lead, leadId);
+    assert.equal(inspected.details?.session, leadId);
+    assert.equal("lead" in (inspected.details ?? {}), false);
     assert.equal(inspected.details?.recent_output_truncated, false);
     assert.ok(inspected.details?.identity);
 
@@ -2735,7 +2769,8 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     assertToolResult(sent);
     assert.equal(sent.details?.action, "message");
-    assert.equal(sent.details?.lead, leadId);
+    assert.equal(sent.details?.session, leadId);
+    assert.equal("lead" in (sent.details ?? {}), false);
     assert.equal(
       sent.details?.next_action,
       "Lead activity returns asynchronously; continue only independent chief work, otherwise end the turn. Do not poll.",
@@ -2920,9 +2955,15 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.equal(Array.isArray(projection.details?.leads), true);
     assert.equal((projection.details?.leads as any[]).length, 1);
     const projectedLead = (projection.details?.leads as any[]).find(
-      (lead: any) => lead.lead === leadId,
+      (lead: any) => lead.session === leadId,
     );
     assert.ok(projectedLead);
+    assert.equal("lead" in projectedLead, false);
+    assert.deepEqual(projectedLead.available_tools, [
+      "staff_inspect",
+      "staff_message",
+      "staff_reply",
+    ]);
     assert.deepEqual(projectedLead.agent_counts, {
       active: 1,
       blocked: 1,
@@ -3020,6 +3061,8 @@ test("registered lead and replacement chief exchange messages and asks", async (
       replacementContext,
     );
     assertToolResult(reply);
+    assert.equal(reply.details?.session, leadId);
+    assert.equal("lead" in (reply.details ?? {}), false);
     assert.equal(
       reply.details?.next_action,
       "Lead activity returns asynchronously; continue only independent chief work, otherwise end the turn. Do not poll.",
@@ -3499,6 +3542,32 @@ test("delegating agents receive only their allowed definition roster", async () 
     JSON.stringify(listResult.details),
   );
   const agentListTool = pi.tools.find((tool) => tool.name === "agent_list")!;
+  assert.match(agentListTool.description, /list current owned Agent state/i);
+  assert.match(agentListTool.description, /Do not use for progress polling/i);
+  assert.doesNotMatch(
+    agentListTool.description,
+    /agent_(?:delegate|continue|steer|interrupt|reply|close|inspect|transcript)/,
+  );
+  assert.equal(
+    pi.tools.filter((tool) => tool.promptGuidelines?.length).length,
+    1,
+  );
+  const sharedGuidance = agentListTool.promptGuidelines?.join(" ") ?? "";
+  for (const toolName of [
+    "agent_list",
+    "agent_delegate",
+    "agent_continue",
+    "agent_steer",
+    "agent_interrupt",
+    "agent_reply",
+    "agent_close",
+    "agent_inspect",
+    "agent_transcript",
+  ])
+    assert.ok(
+      sharedGuidance.includes(toolName),
+      `missing ${toolName} guidance`,
+    );
   const description =
     `${agentListTool.description} ${agentListTool.promptGuidelines?.join(" ")}`.replaceAll(
       /\s+/g,
@@ -3523,7 +3592,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   );
   assert.match(
     description,
-    /Each unresolved unit of work has one executor\. Delegating a scope transfers its execution ownership to that agent until the assignment resolves\. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work\. Continue only concrete, necessary work clearly outside the delegated scope that you still own\./,
+    /Each unresolved unit of work has one executor\. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves\. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work\. Continue only concrete, necessary work clearly outside the delegated scope that you still own\./,
   );
   assert.doesNotMatch(description, /sole executor/);
   assert.doesNotMatch(

@@ -124,18 +124,18 @@ test("Supervision context formatting preserves state, safety, and bounded record
     assert.doesNotMatch(formatted, /truncated/);
     assert.match(
       formatted,
-      /For a straightforward message or reply, use the exact lead value directly; do not call staff list, inspect, or another read command first\./,
+      /For a straightforward message or reply, use the exact session value directly; do not call staff_list, staff_inspect, or another read command first\./,
     );
     assert.ok(
       formatted.indexOf("display_name: workspace\/api") <
         formatted.indexOf("display_name: workspace\/research"),
     );
     for (const value of [
-      "lead: lead-bbbbbbbb",
-      "lead: lead-aaaaaaaa",
+      "session: lead-bbbbbbbb",
+      "session: lead-aaaaaaaa",
       "runtime: working",
       "runtime: idle",
-      "actions: inspect, message, reply",
+      "available_tools: staff_inspect, staff_message, staff_reply",
       "agent_counts: active=1 blocked=1 total=2",
       "ask_id: ask-123",
       "question: OAuth or service accounts?",
@@ -153,6 +153,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
       /recent_output|foreground_processes|\bpid\b/iu,
     );
     assert.doesNotMatch(formatted, /lead_session_id/);
+    assert.doesNotMatch(formatted, /^  lead:|^  actions:/mu);
 
     const stale = formatSupervisionContext(snapshot, { status: "stale" });
     assert.match(stale, /The latest refresh attempt failed/);
@@ -234,8 +235,9 @@ test("Supervision context formatting preserves state, safety, and bounded record
     );
     assert.match(formatted, /truncated: true/);
     assert.match(formatted, /Use staff list for current omitted state/);
-    assert.match(formatted, /lead: lead-0\n/);
-    assert.doesNotMatch(formatted, /lead: lead-9\n/);
+    assert.match(formatted, /session: lead-0\n/);
+    assert.doesNotMatch(formatted, /session: lead-9\n/);
+    assert.doesNotMatch(formatted, /^  lead:|^  actions:/mu);
   }
 });
 
@@ -2046,13 +2048,19 @@ test("chief and staff coordination renderers share semantic status language", ()
       renderCoordinationResult(
         "staff",
         "message",
-        { details: { ok: true, display_name: "workspace/api" } },
-        {},
+        {
+          details: {
+            ok: true,
+            session: "lead-opaque",
+            display_name: "workspace/api",
+          },
+        },
+        { expanded: true },
         presentationTheme,
         { args: { session: "lead-opaque" } },
       ),
     ),
-    /✓ sent to workspace\/api/,
+    /session: lead-opaque/,
   );
 
   const chiefAsk = renderedText(
@@ -2122,6 +2130,7 @@ test("chief and staff coordination renderers share semantic status language", ()
           details: {
             ok: true,
             action: "reply",
+            session: "lead-opaque",
             display_name: "workspace\/api",
           },
         },
@@ -2131,6 +2140,19 @@ test("chief and staff coordination renderers share semantic status language", ()
       ),
     ),
     /ask: ask-for-lead/,
+  );
+  assert.match(
+    renderedText(
+      renderCoordinationResult(
+        "peer",
+        "message",
+        { details: { ok: true, session: "peer-session" } },
+        { expanded: true },
+        presentationTheme,
+        { args: { session: "peer-session" } },
+      ),
+    ),
+    /session: peer-session/,
   );
 
   const staffList = renderedText(
@@ -2142,7 +2164,7 @@ test("chief and staff coordination renderers share semantic status language", ()
           ok: true,
           leads: [
             {
-              lead: "lead-opaque",
+              session: "lead-opaque",
               display_name: "workspace/api",
               runtime_state: "blocked",
               needs_you: true,
@@ -2162,6 +2184,7 @@ test("chief and staff coordination renderers share semantic status language", ()
   );
   for (const evidence of [
     "needs you: yes",
+    "session: lead-opaque",
     "ask: pending-ask",
     "question: Which provider should I use?",
     "agent counts: active=2 · blocked=1 · total=3",
@@ -2179,7 +2202,7 @@ test("peer list rendering distinguishes self from peers", () => {
       self: "lead-self",
       peers: [
         {
-          lead: "lead-other",
+          session: "lead-other",
           name: "workspace/api",
           cwd: "/work/api",
           repo: "api",
@@ -2210,7 +2233,7 @@ test("peer list rendering distinguishes self from peers", () => {
         { args: { action: "list" } },
       ),
     ),
-    "peer\n\nself lead-self\npeers 1\n  workspace/api · lead: lead-other · branch: feature/peer",
+    "peer\n\nself lead-self\npeers 1\n  workspace/api · session: lead-other · branch: feature/peer",
   );
 
   assert.equal(
@@ -2231,7 +2254,7 @@ test("peer list rendering distinguishes self from peers", () => {
         { args: { action: "list" } },
       ),
     ),
-    "peer\n\nself lead-self\npeers 1\n  lead · lead: lead",
+    "peer\n\nself lead-self\npeers 1\n  session · session: session",
   );
 });
 
