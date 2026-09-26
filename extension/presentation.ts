@@ -1465,8 +1465,10 @@ export function formatToolModelResult(
         ...(definition ? [`definition ${definition}`] : []),
         status,
         ...(fallback ? ["non-actionable"] : []),
-        ...(!fallback && Array.isArray(agent.available_actions)
-          ? [`can ${agent.available_actions.join(", ") || "nothing"}`]
+        ...(!fallback && Array.isArray(agent.available_tools)
+          ? [
+              `can ${agent.available_tools.map((tool) => String(tool).replace(/^agent_/, "")).join(", ") || "nothing"}`,
+            ]
           : []),
         ...(agent.stale === true
           ? [
@@ -1532,7 +1534,7 @@ export function formatToolModelResult(
     ...cleanup,
   ].join("\n");
 }
-type CoordinationTool = "agent" | "chief" | "peer" | "staff";
+type CoordinationTool = "agent" | "supervisor" | "peer" | "staff";
 
 function humanText(theme: any, color: string, text: string): string {
   return theme?.fg ? theme.fg(color, text) : text;
@@ -1660,9 +1662,9 @@ type CoordinationBody = {
 };
 
 function coordinationBody(
+  action: string,
   args: Record<string, unknown>,
 ): CoordinationBody | undefined {
-  const action = value(args.action);
   const label =
     action === "delegate" || action === "continue"
       ? "task"
@@ -1685,12 +1687,12 @@ function coordinationHeader(
 
 function renderExpandedCoordinationCall(
   tool: CoordinationTool,
+  action: string,
   args: Record<string, unknown>,
   theme: any,
   header: string,
 ): Component {
-  const action = value(args.action);
-  const body = coordinationBody(args);
+  const body = coordinationBody(action, args);
   const fields: Array<[string, unknown]> = [];
   if (tool === "agent") {
     if (action === "delegate") {
@@ -1700,7 +1702,7 @@ function renderExpandedCoordinationCall(
       if (args.session) fields.push(["session", args.session]);
     } else if (args.agent) fields.push(["agent", args.agent]);
   } else if (tool === "staff" || tool === "peer") {
-    if (args.lead) fields.push(["lead", args.lead]);
+    if (args.session) fields.push(["session", args.session]);
     if (args.askId) fields.push(["ask", args.askId]);
   }
   const content = new Container();
@@ -1741,12 +1743,12 @@ function renderExpandedCoordinationCall(
 
 export function renderCoordinationCall(
   tool: CoordinationTool,
+  action: string,
   args: unknown,
   theme: any,
   context: any = {},
 ): Component {
   const a = (context?.args ?? args ?? {}) as Record<string, unknown>;
-  const action = value(a.action);
   const verb = action;
   let target = "";
   if (tool === "agent" && action === "delegate")
@@ -1755,7 +1757,7 @@ export function renderCoordinationCall(
     target = value(context?.state?.agentLabel);
   else if (tool === "agent") target = value(a.agent);
   else if (tool === "staff" || tool === "peer")
-    target = action === "list" ? "" : shortIdentity(a.lead);
+    target = action === "list" ? "" : shortIdentity(a.session);
   const definition =
     tool === "agent"
       ? value(a.definition) ||
@@ -1767,6 +1769,7 @@ export function renderCoordinationCall(
   if (humanExpanded(context, undefined))
     return renderExpandedCoordinationCall(
       tool,
+      action,
       a,
       theme,
       partial ? `${header}…` : header,
@@ -1779,7 +1782,7 @@ export function renderCoordinationCall(
   const partialHeader = partial ? `${compactHeader}…` : compactHeader;
   const content = new Container();
   content.addChild(new Text(partialHeader, 0, 0));
-  const body = coordinationBody(a);
+  const body = coordinationBody(action, a);
   if (body) {
     const preview = collapseDisplayText(body.text);
     if (preview)
@@ -1867,8 +1870,8 @@ function agentListSummary(details: Record<string, unknown>): string {
     if (agent.state === "working") working++;
     if (agent.state === "blocked") blocked++;
     if (
-      Array.isArray(agent.available_actions) &&
-      agent.available_actions.includes("reply")
+      Array.isArray(agent.available_tools) &&
+      agent.available_tools.includes("agent_reply")
     )
       needsReply++;
   }
@@ -1907,8 +1910,10 @@ function agentHierarchy(details: Record<string, unknown>): string[] {
     const label = value(agent.agent) || "unknown";
     const state = value(agent.state) || "unknown";
     const definition = value(agent.agent_definition);
-    const actions = Array.isArray(agent.available_actions)
-      ? agent.available_actions.join(", ")
+    const actions = Array.isArray(agent.available_tools)
+      ? agent.available_tools
+          .map((tool) => String(tool).replace(/^agent_/, ""))
+          .join(", ")
       : "";
     const parent = value(agent.parent_label);
     const session = value(agent.pi_session_id) || value(agent.pi_session_path);
@@ -1975,7 +1980,7 @@ function expandedResultLines(
         ? `inspect ${display}`
         : action === "delegate" || action === "continue"
           ? `${display} started`
-          : tool === "chief"
+          : tool === "supervisor"
             ? action === "ask"
               ? "waiting for Chief"
               : "sent to Chief"
@@ -2099,8 +2104,10 @@ function expandedResultLines(
                   .join(" · ")}`,
               ]
             : []),
-          ...(Array.isArray(lead.available_actions)
-            ? [`  can: ${lead.available_actions.join(", ")}`]
+          ...(Array.isArray(lead.available_tools)
+            ? [
+                `  can: ${lead.available_tools.map((tool) => String(tool).replace(/^staff_/, "")).join(", ")}`,
+              ]
             : []),
         ];
       }),
@@ -2150,6 +2157,7 @@ function expandedResultLines(
 
 export function renderCoordinationResult(
   tool: CoordinationTool,
+  action: string,
   result: any,
   options: any,
   theme: any,
@@ -2158,7 +2166,6 @@ export function renderCoordinationResult(
   const details = resultDetails(result);
   const args = (context?.args ?? {}) as Record<string, unknown>;
   hydrateCoordinationAgent(details, context);
-  const action = value(args.action) || value(details.action) || "agent";
   const expanded = humanExpanded(context, options);
   const failed = details.ok === false || context?.isError === true;
   if (failed && details.error && typeof details.error === "object")
@@ -2177,7 +2184,7 @@ export function renderCoordinationResult(
     return new WidthSafeText(statusLine(theme, "error", "✗", fallback), 0, 0);
   }
   if (options?.isPartial || context?.isPartial)
-    return renderCoordinationCall(tool, args, theme, {
+    return renderCoordinationCall(tool, action, args, theme, {
       ...context,
       expanded: false,
     });
@@ -2255,7 +2262,7 @@ export function renderCoordinationResult(
       0,
     );
   }
-  if (tool === "chief") {
+  if (tool === "supervisor") {
     const waiting = action === "ask";
     return new WidthSafeText(
       statusLine(

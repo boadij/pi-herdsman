@@ -1780,7 +1780,7 @@ export function serializeSupervision(snapshot: SupervisionSnapshot) {
         ? { pending_ask_question: r.pendingAskQuestion }
         : {}),
       agent_counts: r.agentCounts,
-      available_actions: r.availableActions,
+      available_tools: r.availableActions.map((action) => `staff_${action}`),
       agents: r.agents,
     })),
   };

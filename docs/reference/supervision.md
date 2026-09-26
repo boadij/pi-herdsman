@@ -48,8 +48,8 @@ readiness. Herdr lifecycle observation for a lead is normalized to
 `idle|working|blocked|done|unknown`. Validated descendant lifecycle states are
 preserved, including `settling`, `starting`, and `lost`.
 
-Chief is a mode of a lead session. While active, its model has exactly the
-`staff` tool. Project/workspace context files and skills are excluded from
+Chief is a mode of a lead session. While active, its model has exactly the tools `staff_list`, `staff_inspect`,
+`staff_transcript`, `staff_message`, and `staff_reply`. Project/workspace context files and skills are excluded from
 chief model context; workspace-specific work remains the responsibility of
 supervised leads. Chief supervises independent Leads, does not own their
 agents, and receives no owner controls. `/chief leave` restores the session's
@@ -61,14 +61,14 @@ managed agent work.
 
 An eligible lead requires one exact live recognized Pi agent, a matching lead
 record, and no chief or validated managed agent identity. A lead's observed
-runtime state is informational. Every exact-identity-verified live lead has
-`inspect` and `message`, whether it is idle, working, blocked, done, or unknown.
-A non-empty persisted session candidate adds `transcript` to
-`available_actions`; `available_actions` is advisory readiness, not transcript
-authorization. The transcript action validates the current session header,
+runtime state is informational. Every exact-identity-verified live lead has `staff_inspect` and `staff_message`,
+whether it is idle, working, blocked, done, or unknown.
+A non-empty persisted session candidate adds `staff_transcript` to
+`available_tools`; `available_tools` is advisory readiness, not transcript
+authorization. `staff_transcript` validates the current session header,
 version, and exact Pi session ID before returning evidence. A pending ask is
 separate attention state: it projects as `needs_you`, exposes the bounded
-question and ask ID, and adds `reply`.
+question and ask ID, and adds `staff_reply`.
 
 The automatic `<supervision_state>` is a hidden Pi custom message hard-bounded
 to 16 KiB. A changed refresh appends a new snapshot; a byte-identical refresh
@@ -76,18 +76,18 @@ may omit the duplicate. The latest active snapshot supersedes earlier
 snapshots. Pi's ordinary branch and compaction rules determine which persisted
 snapshots participate in current model context.
 
-The `staff list` representation contains `lead` (the exact full Pi session ID),
+The `staff_list` representation contains `session` (the exact full Pi session ID),
 `display_name` (a presentation-only label), identity fields, `runtime_state`,
 `needs_you`, optional pending-ask fields, `agent_counts`, and
-`available_actions`. `agent_counts` contains `active`, `blocked`, and `total`;
+`available_tools`. `agent_counts` contains `active`, `blocked`, and `total`;
 `active` counts `working`, `settling`, and `starting` descendants. The automatic
 snapshot is state-only and uses `leads`, `agent_counts`, and `agents`, not
 inspect terminal/process evidence.
 Oversized output is truncated only at complete lead records and identifies
-omitted state. Use `staff list` when a fresh complete roster is required.
+omitted state. Use `staff_list` when a fresh complete roster is required.
 
-The `lead` value is the exact full Pi session ID shown in a fresh supervision
-snapshot or returned by `staff list`; the `display_name` label is never accepted
+The `session` value is the exact full Pi session ID shown in a fresh supervision
+snapshot or returned by `staff_list`; the `display_name` label is never accepted
 as a target.
 
 ## Metadata
@@ -129,30 +129,23 @@ individual quarantined record does not block a new record for that lead.
 Transient identity, authority, or delivery failures retain records. Exact
 identity and chief lease checks are never weakened.
 
-## `chief`
+## Supervisor tools
 
-This tool is available only to an ordinary lead. Its schemas reject unknown
-fields; schema-known fields for the other action are projected away before
-schema validation, even when those fields have invalid types. Unknown keys and
-remaining schema-invalid values may be rejected by Pi before Herdsman's hook
-runs. Selected-action semantic errors that reach the hook are blocked with
-`terminate: true`. Both actions require a currently valid chief; descendants
-use `ask_owner`, never `chief`.
+The `supervisor_message` and `supervisor_ask` tools are available only to an ordinary Lead. Each operation has its own exact schema. Both require a currently valid Chief; descendants use `ask_owner`, never supervisor tools.
 
-### `message`
+### `supervisor_message`
 
 ```json
 {
-  "action": "message",
   "message": "Build completed.",
   "files": ["/tmp/result.txt"]
 }
 ```
 
-Use `message` for meaningful progress, reports, results, warnings, and
+Call `supervisor_message` for meaningful progress, reports, results, warnings, and
 completion. It queues one bounded `chief_message` and does not change lead
 coordination state.
-`message` accepts optional `files`, including ordinary paths, reusable direct
+`supervisor_message` accepts optional `files`, including ordinary paths, reusable direct
 refs such as `result:implementation#1`, and canonical `result:<request-id>` refs
 already supplied as evidence. A direct ref resolves by exact agent label and
 index against the calling Pi session's current branch before ordinary file
@@ -162,18 +155,17 @@ supplied as file evidence can still be forwarded through `files`. Files use the
 same submission-time canonicalization, UTF-8 embedding, reference fallback, and
 configured byte limits as agent messages.
 
-### `ask`
+### `supervisor_ask`
 
 ```json
 {
-  "action": "ask",
   "question": "Should the release include the endpoint?",
   "files": ["/tmp/evidence.md", "result:implementation#1"]
 }
 ```
 
-`ask` accepts optional `files` with the same ordinary, semantic-ref, and
-canonical-ref semantics as `message`. Use `ask` only when a chief decision is
+`supervisor_ask` accepts optional `files` with the same ordinary, semantic-ref, and
+canonical-ref semantics as `message`. Call `supervisor_ask` only when a chief decision is
 genuinely required. One pending ask is allowed per lead. The call durably
 records its ask ID and clean question, then queues the prepared text. The
 prepared text, including attachment rendering, is persisted before publication
@@ -181,39 +173,34 @@ so reconciliation can deliver it after a failed initial publication. It must be
 the only tool call in the turn; call it last, do not guess, and wait for the
 reply.
 
-## `staff`
+## Staff tools
 
-This tool is available only to the active chief. Its target `lead` must be the
-exact full Pi session ID shown as `lead` in a fresh automatic supervision
-snapshot or returned by `staff list`; never use `display_name`.
+The `staff_*` tools are available only to the active Chief. Their target `session` must be the exact full Pi session ID shown as `session` in a fresh automatic supervision snapshot or returned by `staff_list`; never use `display_name`.
 
-For general state questions and ordinary messages or replies, use the fresh
-automatic supervision snapshot directly; do not call `staff list`, `inspect`,
-or `transcript` merely to poll progress. The `message` and `reply` actions
-perform their own authoritative validation. Use `list` when the snapshot is
+For general state questions and ordinary messages or replies, use the fresh automatic supervision snapshot directly; do not call `staff_list`, `staff_inspect`, or `staff_transcript` merely to poll progress. The `staff_message` and `staff_reply` tools
+perform their own authoritative validation. Use `staff_list` when the snapshot is
 stale or unavailable, an immediately refreshed roster is materially necessary,
-or diagnosis is required. Use `inspect` only when bounded live terminal/process
-evidence matters. Use `transcript` only when bounded persisted Pi
+or diagnosis is required. Use `staff_inspect` only when bounded live terminal/process
+evidence matters. Use `staff_transcript` only when bounded persisted Pi
 conversation/tool evidence materially matters.
 
-### `list`
+### `staff_list`
 
 ```json
-{ "action": "list" }
+{}
 ```
 
-Returns a fresh supervision projection and fresh `available_actions`.
+`staff_list` returns a fresh supervision projection and fresh `available_tools`.
 
-### `inspect`
+### `staff_inspect`
 
 ```json
 {
-  "action": "inspect",
-  "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>"
+  "session": "<exact full Pi session ID shown in a fresh snapshot>"
 }
 ```
 
-Inspect is read-only and requires an active chief and eligible exact lead. It
+`staff_inspect` is read-only and requires an active Chief and eligible exact session. It
 returns live identity-checked terminal/process evidence: Herdr's up to 80
 recent-unwrapped terminal lines with a Herdsman-local 16 KiB byte cap, plus
 separately bounded process evidence. The public
@@ -221,22 +208,21 @@ separately bounded process evidence. The public
 truncates the terminal output and false otherwise. It does not expose persisted
 Pi session-message history.
 
-### `transcript`
+### `staff_transcript`
 
 ```json
 {
-  "action": "transcript",
-  "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>"
+  "session": "<exact full Pi session ID shown in a fresh snapshot>"
 }
 ```
 
-Transcript is read-only and requires an active chief and an eligible exact
-lead. A non-empty persisted session candidate adds `transcript` to
-`available_actions`. `available_actions` is advisory readiness, not transcript
+`staff_transcript` is read-only and requires an active Chief and an eligible exact
+session. A non-empty persisted session candidate adds `staff_transcript` to
+`available_tools`. `available_tools` is advisory readiness, not transcript
 authorization; the transcript action validates the current session header,
 version, and exact Pi session ID before returning evidence. It returns the same
 bounded persisted Pi
-conversation/tool projection used by the agent transcript action: visible user,
+conversation/tool projection used by `agent_transcript`: visible user,
 assistant, tool-call, tool-result, compaction, and branch-summary evidence;
 reasoning, system messages, extension entries, and control markers are
 excluded. The transcript is bounded to 16 KiB, with individual tool results
@@ -244,40 +230,39 @@ bounded to 4 KiB. The internal session-file path is never returned by staff
 list, automatic supervision context, or the transcript result. Reading it does
 not send a message or change Lead state.
 
-### `message`
+### `staff_message`
 
 ```json
 {
-  "action": "message",
-  "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>",
+  "session": "<exact full Pi session ID shown in a fresh snapshot>",
   "message": "Run checks.",
   "files": ["/tmp/checklist.md", "result:implementation#1"]
 }
 ```
 
-The exact lead must currently expose `message`. Atomic creation of one bounded
+The exact session must currently expose `staff_message`. Atomic creation of one
+bounded
 `chief_message` record queues a follow-up and does not wait for completion.
-`staff message` accepts optional `files`, including ordinary paths, reusable
+`staff_message` accepts optional `files`, including ordinary paths, reusable
 direct refs, and canonical result refs. Semantic refs use the same exact
 label/index and current-branch rules as chief actions; Chief does not normally
 own direct agents, so canonical result references supplied as evidence remain
 the usual cross-session forwarding form through `files`.
 
-### `reply`
+### `staff_reply`
 
 ```json
 {
-  "action": "reply",
-  "lead": "<exact full Pi session ID shown as lead in a fresh snapshot>",
+  "session": "<exact full Pi session ID shown in a fresh snapshot>",
   "askId": "<exact pending ask ID>",
   "message": "Proceed.",
   "files": ["/tmp/decision.md", "result:implementation#1"]
 }
 ```
 
-The exact lead, unchanged pending ask ID, current lead identity, and chief
+The exact session, unchanged pending ask ID, current lead identity, and chief
 lease must validate. The pending ask is cleared only after accepted delivery.
-`staff reply` accepts optional `files` with the same ordinary, semantic-ref, and
+`staff_reply` accepts optional `files` with the same ordinary, semantic-ref, and
 canonical-ref semantics. Lead activity returns asynchronously; continue only
 independent chief work, otherwise end the turn and do not poll.
 

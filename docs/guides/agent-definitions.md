@@ -228,7 +228,7 @@ References are resolved from the Markdown file that declares them.
 
 The bundled definitions are `generalist`, `implementer`, `researcher`,
 `reviewer`, and `scout`. The session-start agent-definition roster and the
-`agent list` result use the same metadata projection.
+`agent_list` result use the same metadata projection.
 
 For exact expansion, deduplication, and caller-file precedence, see
 [Handoffs and files](handoffs.md).
@@ -244,7 +244,7 @@ A lead Pi session can use:
 or the model can use:
 
 ```json
-{ "action": "list" }
+{}
 ```
 
 Both resolve the same effective roster.

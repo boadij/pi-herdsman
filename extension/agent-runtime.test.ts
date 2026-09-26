@@ -53,6 +53,8 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
+const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
+  pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
 
 test("managed agents cancel native session replacement", () => {
   setAgentEnvironment();
@@ -952,9 +954,9 @@ test("agent bounds result persistence failure and exposes owner recovery evidenc
   process.env.HERDR_ENV = "1";
   process.env.HERDR_WORKSPACE_ID = WORKSPACE;
   registerExtension!(root.pi as never);
-  const listed = await root.tools[0].execute(
+  const listed = await agentTool(root, "list").execute(
     "id",
-    { action: "list" },
+    {},
     undefined,
     undefined,
     fakeContext(),
@@ -2902,13 +2904,28 @@ test("acknowledgement state-write failure retains an identity-rejected request",
   agent.events.get("session_shutdown")?.[0]();
 });
 
-test("a stray agent variable does not suppress lead registration", () => {
+test("a stray agent variable does not suppress the active Lead tool surface", async () => {
   setLeadEnvironment();
-  const lead = fakePi();
+  const lead = fakePi({ activeTools: [], allTools: () => lead.tools });
   registerExtension!(lead.pi as never);
-  assert.equal(lead.tools.length, 1);
-  assert.equal(lead.tools[0].name, "agent");
+  await lead.events.get("session_start")![0](undefined, fakeContext());
+  assert.deepEqual(lead.pi.getActiveTools(), [
+    "agent_list",
+    "agent_delegate",
+    "agent_continue",
+    "agent_steer",
+    "agent_interrupt",
+    "agent_reply",
+    "agent_close",
+    "agent_inspect",
+    "agent_transcript",
+    "supervisor_message",
+    "supervisor_ask",
+    "peer_list",
+    "peer_message",
+  ]);
   assert.deepEqual(lead.commands, ["agents", "herdsman"]);
+  lead.events.get("session_shutdown")?.[0]();
 });
 
 test("session agent identity reads the session-wide entry array", () => {
