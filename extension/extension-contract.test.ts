@@ -3593,6 +3593,21 @@ test("delegating agents receive only their allowed definition roster", async () 
     JSON.stringify(listResult.details),
   );
   const agentListTool = pi.tools.find((tool) => tool.name === "agent_list")!;
+  const delegateTool = pi.tools.find((tool) => tool.name === "agent_delegate")!;
+  assert.equal(
+    Value.Check(delegateTool.parameters, {
+      definition: "scout",
+      task: "review this",
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(delegateTool.parameters, {
+      definition: "implementer",
+      task: "review this",
+    }),
+    false,
+  );
   assert.match(agentListTool.description, /list current owned Agent state/i);
   assert.match(agentListTool.description, /Do not use for progress polling/i);
   assert.doesNotMatch(

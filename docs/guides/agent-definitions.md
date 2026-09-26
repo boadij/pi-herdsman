@@ -193,8 +193,12 @@ The effective roster is validated atomically. Every `agents` name must exist.
 Bundled role descriptions communicate each role's purpose and selection boundary;
 the active controller contract remains authoritative for delegation behavior.
 
-With a non-empty explicit `tools` allowlist, `agent` is inferred unless
-explicitly denied. See [Delegation](../concepts/delegation.md).
+The non-empty `agents` list enables all nine managed-agent coordination tools
+and mandatory `ask_owner`. The list is projected out when this definition is
+launched as a leaf. Ordinary `tools` and `excludeTools` settings cannot remove
+these role-required tools. When `tools` is omitted, Pi's configured/default
+tool selection is preserved; an explicit allowlist is augmented with the
+required role tools. See [Delegation](../concepts/delegation.md).
 
 ## Add body files
 

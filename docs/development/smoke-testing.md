@@ -93,22 +93,20 @@ Verify:
   generation;
 - the exact session continues.
 
-## Inferred delegation
+## Managed-agent tool policy
 
-Use a bundled delegating agent definition whose source `tools` list does not explicitly
-contain `agent`, such as the current `implementer`.
+Launch a delegating managed agent with an explicit ordinary execution-tool
+allowlist and ask it to delegate one bounded scout task. Verify that it retains
+those ordinary tools and can call all nine coordination tools plus
+`ask_owner`, then verify that the spawned scout is a leaf with its normal tools
+and `ask_owner` but no delegation tools. Also verify that role-required tools
+are not removed by `excludeTools`.
 
-Ask it to delegate one bounded scout task.
-
-Verify:
-
-- the real Pi agent can call `agent`;
-- agent result reaches the delegating agent;
-- delegating agent integrates it once;
-- all one-shot agents clean up.
-
-This proves effective-definition inference reaches Pi launch policy rather than
-only metadata.
+For a definition with `tools` omitted, verify that launch does not add a
+`--tools` option and Pi's configured/default selection remains in effect.
+For an explicit `tools` list, verify that Pi receives the selected ordinary
+tools augmented with the agent's required role tools. Confirm result delivery,
+integration, and cleanup for all one-shot agents.
 
 ## Body reference expansion
 

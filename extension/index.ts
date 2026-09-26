@@ -94,6 +94,7 @@ import {
   type SpawnPlacement,
 } from "./core.ts";
 import {
+  AGENT_COORDINATION_TOOLS,
   agentLaunchArgs,
   agentDefinitionEnabled,
   agentDefinitionDelegationEnabled,
@@ -250,30 +251,6 @@ type HerdRunEntry =
       startedAt: number;
       completedAt: number;
     };
-const AGENT_TOOLS = [
-  "agent_list",
-  "agent_delegate",
-  "agent_continue",
-  "agent_steer",
-  "agent_interrupt",
-  "agent_reply",
-  "agent_close",
-  "agent_inspect",
-  "agent_transcript",
-] as const;
-function managedAgentTools(
-  current: readonly string[],
-  delegationEnabled: boolean,
-): string[] {
-  const tools = current.filter(
-    (name) =>
-      !AGENT_TOOLS.includes(name as (typeof AGENT_TOOLS)[number]) &&
-      name !== "ask_owner",
-  );
-  if (delegationEnabled) tools.push(...AGENT_TOOLS);
-  tools.push("ask_owner");
-  return tools;
-}
 const SUPERVISOR_TOOLS = ["supervisor_message", "supervisor_ask"] as const;
 const PEER_TOOLS = ["peer_list", "peer_message"] as const;
 const STAFF_TOOLS = [
@@ -284,7 +261,7 @@ const STAFF_TOOLS = [
   "staff_reply",
 ] as const;
 const LEAD_COORDINATION_TOOLS = [
-  ...AGENT_TOOLS,
+  ...AGENT_COORDINATION_TOOLS,
   ...SUPERVISOR_TOOLS,
   ...PEER_TOOLS,
 ] as const;
@@ -6770,7 +6747,7 @@ export default function (pi: ExtensionAPI): void {
     "chief",
     "peer",
     "staff",
-    ...AGENT_TOOLS,
+    ...AGENT_COORDINATION_TOOLS,
     ...SUPERVISOR_TOOLS,
     ...PEER_TOOLS,
     ...STAFF_TOOLS,
@@ -12563,12 +12540,7 @@ export default function (pi: ExtensionAPI): void {
       agentContext = ctx;
       const candidate = envManagedAgent(ctx);
       if (!candidate) throw new Error("invalid agent environment");
-      const activeTools = managedAgentTools(
-        pi.getActiveTools(),
-        delegationEnabled,
-      );
-      pi.setActiveTools(activeTools);
-      if (!delegationEnabled) ownTools = activeTools;
+      if (!delegationEnabled) ownTools = pi.getActiveTools();
       ensureAgentIdentity(
         pi,
         ctx,

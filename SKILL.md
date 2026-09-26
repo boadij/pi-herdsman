@@ -496,8 +496,12 @@ Pi Herdsman uses one durable vocabulary:
 
 The `agents` frontmatter field names the direct agent definitions an agent may
 delegate to. A delegation-capable session remains an agent at every depth.
-`ask_owner` is mandatory managed agent infrastructure and is separate from
-definition-based tool inference.
+Every managed agent receives `ask_owner`. A non-empty effective `agents` list
+also enables the nine semantic `agent_*` coordination tools; an empty or
+omitted list makes the agent a leaf with `ask_owner` only. Ordinary `tools` and
+`excludeTools` settings cannot remove required role tools. If `tools` is
+omitted, Pi's configured/default selection is preserved without emitting
+`--tools`; an explicit allowlist is augmented with the role-required tools.
 
 The managed mailbox accepts only protocol V4 agent records in the
 `mailboxes-v4` runtime namespace. Identity and protocol validation fail closed.
