@@ -5929,12 +5929,44 @@ async function actionUnsafe(
         (s) => s.runId === runId && s.ownerSessionId === owner,
         { timeoutMs: 5000, signal },
       ).catch(() => undefined);
-      if (!state)
+      if (!state) {
+        let startupDiagnostic: string | undefined;
+        try {
+          const result = await pi.exec(
+            "herdr",
+            [
+              "pane",
+              "read",
+              started.paneId,
+              "--source",
+              "recent-unwrapped",
+              "--lines",
+              "40",
+            ],
+            { cwd: ctx.cwd, signal, timeout: 5_000 },
+          );
+          if (result.code === 0 && !result.killed) {
+            const bytes = Buffer.from(
+              `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim(),
+              "utf8",
+            );
+            if (bytes.length) {
+              let start = Math.max(0, bytes.length - 4096);
+              while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80)
+                start++;
+              startupDiagnostic = bytes.subarray(start).toString("utf8");
+            }
+          }
+        } catch {
+          // Startup evidence is advisory; preserve the original failure.
+        }
         fail(
           "pane_not_ready",
           "Agent did not initialize its mailbox",
           p.action,
+          startupDiagnostic ? { details: { startupDiagnostic } } : {},
         );
+      }
       const expectedHerdrAgent = herdrAgentAlias(
         workspaceId,
         label,
