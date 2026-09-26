@@ -3495,6 +3495,15 @@ test("owner ask waits while busy and delivers once after settlement", async () =
     idle = true;
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler(undefined, context);
+    const delivered = pi.sent.find(
+      (message: any) => message.customType === "pi-herdsman-agent-ask",
+    ) as any;
+    assert.ok(delivered);
+    assert.match(
+      delivered.content,
+      new RegExp(`Use agent_reply with agent="${label}"`),
+    );
+    assert.doesNotMatch(delivered.content, /agent action/i);
     assert.equal(
       pi.sent.filter(
         (message: any) => message.customType === "pi-herdsman-agent-ask",

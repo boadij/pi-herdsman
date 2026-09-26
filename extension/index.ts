@@ -3931,7 +3931,7 @@ function deliverAskUnsafe(
   pi.sendMessage(
     {
       customType: "pi-herdsman-agent-ask",
-      content: `Agent ${ask.agentLabel} needs your input:\n\n${ask.question}\n\nReply using agent action "reply" for this agent.`,
+      content: `Agent ${ask.agentLabel} needs your input:\n\n${ask.question}\n\nUse agent_reply with agent="${ask.agentLabel}" to answer this question.`,
       display: true,
       details: {
         askId: ask.askId,
