@@ -13189,7 +13189,7 @@ export default function (pi: ExtensionAPI): void {
             retrySafe: false,
             cleanupSafe: true,
             nextAction:
-              "Use agent_inspect to inspect result_error, resolve mailbox persistence, then use agent_close to close this agent before starting another assignment; follow the stored recovery nextAction.",
+              "Resolve the mailbox persistence failure described by result_error, then use agent_close before starting another assignment.",
           };
           try {
             const nextState: ManagedAgentState = {

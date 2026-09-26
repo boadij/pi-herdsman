@@ -4847,7 +4847,7 @@ test("result errors wake the direct owner with durable recovery evidence", async
       retrySafe: false,
       cleanupSafe: true,
       nextAction:
-        "Use agent_inspect to inspect result_error, resolve mailbox persistence, then use agent_close to close this agent.",
+        "Resolve the mailbox persistence failure described by result_error, then use agent_close before starting another assignment.",
     },
   };
   const mailbox = agentMailboxPath(WORKSPACE, label);
@@ -4871,8 +4871,8 @@ test("result errors wake the direct owner with durable recovery evidence", async
   assert.equal(attention?.details.reason, "result_error");
   assert.equal(attention?.details.requestId, REQUEST_ID);
   assert.equal(attention?.details.nextReminderMs, 5 * 60_000);
-  assert.match(attention.content, /Use agent_inspect to inspect result_error/);
-  assert.match(attention.content, /use agent_close to close this agent/);
+  assert.doesNotMatch(attention.details.nextAction, /\bagent_inspect\b/);
+  assert.match(attention.details.nextAction, /\bagent_close\b/);
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 });
