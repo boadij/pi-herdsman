@@ -66,6 +66,8 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
+const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
+  pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
 const ownershipResult = (child: string, owner = LEAD_SESSION_ID) => ({
   type: "custom_message",
   customType: "pi-herdsman-agent-result",
@@ -187,10 +189,9 @@ test("semantic result refs attach persisted output and preserve canonical file r
   const pi = fakePi({ entries, exec: startup.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "agent",
         task: "Review supplied implementation.",
         files: ["result:implementation#1", canonical],
@@ -236,10 +237,9 @@ test("semantic result refs resolve only on the active branch", async () => {
   const pi = fakePi({ entries });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "agent",
         task: "must not start",
         files: ["result:implementation#2"],
@@ -253,10 +253,9 @@ test("semantic result refs resolve only on the active branch", async () => {
       pi.calls.some((args) => args[0] === "agent" && args[1] === "start"),
       false,
     );
-    const malformed = await pi.tools[0].execute(
+    const malformed = await agentTool(pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "agent",
         task: "must not start",
         files: ["result:implementation#01"],
@@ -308,10 +307,9 @@ test("conflicting duplicate result mappings fail closed", async () => {
   const pi = fakePi({ entries });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "agent",
         task: "must not guess",
         files: ["result:implementation#1"],
@@ -391,10 +389,9 @@ test("trusted same-cwd project assignment launches with native approval", async 
   const context = fakeContext() as any;
   context.cwd = project;
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "project-only",
         task: "same cwd",
       },
@@ -408,9 +405,9 @@ test("trusted same-cwd project assignment launches with native approval", async 
       JSON.stringify({ result: result.details, entries: pi.entries }),
     );
     assert.ok(startArgs[0]?.includes("--approve"));
-    const tool = pi.tools.find((candidate) => candidate.name === "agent");
+    const tool = pi.tools.find((candidate) => candidate.name === "agent_steer");
     const rendered = tool.renderCall(
-      { action: "steer", agent: result.details.agent, message: "Continue." },
+      { agent: result.details.agent, message: "Continue." },
       {
         fg: (_color: string, value: string) => value,
         bold: (text: string) => text,
@@ -452,9 +449,9 @@ test("trusted same-cwd project assignment launches with native approval", async 
     const context = fakeContext() as any;
     context.cwd = projectLink;
     try {
-      const result = await pi.tools[0].execute(
+      const result = await agentTool(pi, "delegate").execute(
         "id",
-        { action: "delegate", definition: "project-only", task: "symlink cwd" },
+        { definition: "project-only", task: "symlink cwd" },
         undefined,
         undefined,
         context,
@@ -497,10 +494,9 @@ test("untrusted assignments omit project approval", async () => {
   context.cwd = project;
   context.isProjectTrusted = () => false;
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "agent",
         task: "untrusted",
       },
@@ -608,10 +604,9 @@ test("same-cwd managed parents resolve project children", async () => {
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
-    const started = await pi.tools[0].execute(
+    const started = await agentTool(pi, "delegate").execute(
       "start",
       {
-        action: "delegate",
         definition: "project-child",
         task: "delegate project child work",
       },
@@ -666,11 +661,11 @@ test("parent controller readiness and allowlist fail closed", async () => {
   ]);
   const pi = fakePi({ exec: agentControllerExecutor(parent) });
   registerExtension!(pi.pi as never);
-  const tool = pi.tools[0];
+  const tool = agentTool(pi, "delegate");
   try {
     const beforeInit = await tool.execute(
       "id",
-      { action: "delegate", definition: "child", task: "before init" },
+      { definition: "child", task: "before init" },
       undefined,
       undefined,
       context,
@@ -678,9 +673,9 @@ test("parent controller readiness and allowlist fail closed", async () => {
     assert.equal(beforeInit.details.error.category, "target_not_found");
     assert.equal(pi.calls.length, 0);
 
-    const listBeforeInit = await tool.execute(
+    const listBeforeInit = await agentTool(pi, "list").execute(
       "id",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
@@ -693,13 +688,16 @@ test("parent controller readiness and allowlist fail closed", async () => {
 
     const unauthorized = await tool.execute(
       "id",
-      { action: "delegate", definition: "other", task: "not allowed" },
+      { definition: "other", task: "not allowed" },
       undefined,
       undefined,
       context,
     );
     assert.equal(unauthorized.details.error.category, "invalid_request");
-    assert.equal(unauthorized.details.error.message, "Invalid agent input");
+    assert.equal(
+      unauthorized.details.error.message,
+      "Agent definition other is not allowed for this delegating agent",
+    );
   } finally {
     for (const handler of pi.events.get("session_shutdown") ?? []) handler();
     resetAgentMailbox(parentMailbox);
@@ -733,9 +731,9 @@ test("parent controller readiness and allowlist fail closed", async () => {
   try {
     for (const handler of failing.events.get("session_start") ?? [])
       await handler(undefined, failingContext);
-    const rejected = await failing.tools[0].execute(
+    const rejected = await agentTool(failing, "delegate").execute(
       "id",
-      { action: "delegate", definition: "child", task: "conflicting state" },
+      { definition: "child", task: "conflicting state" },
       undefined,
       undefined,
       failingContext,
@@ -773,9 +771,9 @@ test("parent list hides disabled allowed definitions", async () => {
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
-    const listed = await pi.tools[0].execute(
+    const listed = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
@@ -853,9 +851,9 @@ test("parent list omits unrelated unknown mailbox diagnostics", async () => {
       await handler(undefined, context);
 
     assert.deepEqual(getTargets, [child.paneId]);
-    const listed = await pi.tools[0].execute(
+    const listed = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
@@ -912,9 +910,9 @@ test("foreign-workspace mailbox is ignored by recovery and list", async () => {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
 
-    const listed = await pi.tools[0].execute(
+    const listed = await agentTool(pi, "list").execute(
       "id",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
@@ -1026,9 +1024,9 @@ test("parent controls only direct children and enforces session allowlists", asy
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
-    const listed = await pi.tools[0].execute(
+    const listed = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
@@ -1040,10 +1038,9 @@ test("parent controls only direct children and enforces session allowlists", asy
       [child.agentLabel, workingChild.agentLabel],
     );
 
-    const steered = await pi.tools[0].execute(
+    const steered = await agentTool(pi, "steer").execute(
       "steer",
       {
-        action: "steer",
         agent: workingChild.agentLabel,
         message: "steer direct child",
       },
@@ -1052,9 +1049,9 @@ test("parent controls only direct children and enforces session allowlists", asy
       context,
     );
     assert.equal(steered.details.ok, true);
-    const siblingResult = await pi.tools[0].execute(
+    const siblingResult = await agentTool(pi, "steer").execute(
       "sibling",
-      { action: "steer", agent: sibling.agentLabel, message: "wrong owner" },
+      { agent: sibling.agentLabel, message: "wrong owner" },
       undefined,
       undefined,
       context,
@@ -1070,10 +1067,9 @@ test("parent controls only direct children and enforces session allowlists", asy
       false,
     );
 
-    const resumed = await pi.tools[0].execute(
+    const resumed = await agentTool(pi, "continue").execute(
       "resume",
       {
-        action: "continue",
         session: resumePath,
         task: "wrong definition",
       },
@@ -1238,9 +1234,9 @@ test("list retains durable agents whose physical identity is not exact", async (
   });
   try {
     registerExtension!(pi.pi as never);
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       fakeContext(),
@@ -1260,7 +1256,7 @@ test("list retains durable agents whose physical identity is not exact", async (
     assert.ok(invalidAgent);
     assert.ok(validAgent);
     assert.equal(invalidAgent.state, "unknown");
-    assert.deepEqual(invalidAgent.available_actions, []);
+    assert.deepEqual(invalidAgent.available_tools, []);
     assert.equal(validAgent.agent_definition, "agent");
     assert.equal(validAgent.managed, true);
   } finally {
@@ -1291,9 +1287,9 @@ test("list projects an unreadable current mailbox as non-actionable unknown", as
   });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       fakeContext(),
@@ -1303,7 +1299,7 @@ test("list projects an unreadable current mailbox as non-actionable unknown", as
       { ...result.details.agents[0], diagnostic: undefined },
       {
         state: "unknown",
-        available_actions: [],
+        available_tools: [],
         managed: true,
         diagnostic: undefined,
       },
@@ -1460,10 +1456,9 @@ test("session continuation inherits the saved label without an override", async 
     context.thinkingLevel = "high";
     registerExtension!(pi.pi as never);
     try {
-      const result = await pi.tools[0].execute(
+      const result = await agentTool(pi, "continue").execute(
         "id",
         {
-          action: "continue",
           session: source.path,
           task: "continue with the saved label",
         },
@@ -1538,9 +1533,9 @@ test("session continuation keeps explicit definition execution overrides", async
   context.model = { provider: "controller-provider", id: "controller-model" };
   context.thinkingLevel = "high";
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "continue").execute(
       "id",
-      { action: "continue", session: sourcePath, task: "continue" },
+      { session: sourcePath, task: "continue" },
       undefined,
       undefined,
       context,
@@ -1567,18 +1562,25 @@ test("session continuation rejects label overrides and occupied inherited labels
   registerExtension!(invalidPi.pi as never);
   try {
     const invalidRequest = {
-      action: "continue",
       session: "/tmp/session.jsonl",
       label: "Invalid_Label",
       task: "reject the label",
     } as const;
     assert.equal(
-      Value.Check(invalidPi.tools[0].parameters, invalidRequest),
+      Value.Check(agentTool(invalidPi, "continue").parameters, {
+        session: invalidRequest.session,
+        label: invalidRequest.label,
+        task: invalidRequest.task,
+      }),
       false,
     );
-    const invalid = await invalidPi.tools[0].execute(
+    const invalid = await agentTool(invalidPi, "continue").execute(
       "id",
-      invalidRequest,
+      {
+        session: invalidRequest.session,
+        label: invalidRequest.label,
+        task: invalidRequest.task,
+      },
       undefined,
       undefined,
       fakeContext(),
@@ -1644,10 +1646,9 @@ test("session continuation rejects label overrides and occupied inherited labels
   });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "continue").execute(
       "id",
       {
-        action: "continue",
         session: source.path,
         task: "must not fall back to another label",
       },
@@ -1668,42 +1669,19 @@ test("session continuation rejects label overrides and occupied inherited labels
   }
 });
 
-test("registered agent revalidates input mutated after tool_call", async () => {
+test("delegate schema rejects an empty task", () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const context = fakeContext();
-  const input = {
-    action: "delegate",
-    definition: "agent",
-    task: "initially valid",
-  };
-  try {
-    const toolCall = pi.events.get("tool_call")?.[0];
-    assert.ok(toolCall);
-    assert.equal(
-      await toolCall({ toolName: "agent", input }, context),
-      undefined,
-    );
-    input.task = "";
-    const blocked = await toolCall({ toolName: "agent", input }, context);
-    assert.equal(blocked?.block, true);
-    assert.equal(blocked?.reason, "Invalid agent input");
-    const result = await pi.tools[0].execute(
-      "id",
-      input,
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(result.details.error.category, "invalid_request");
-    assert.equal(result.details.error.message, "Invalid agent input");
-    assert.equal(result.details.error.operation, "agent");
-    assert.equal(result.details.error.details, undefined);
-    assert.equal(pi.calls.length, 0);
-  } finally {
-    pi.events.get("session_shutdown")?.[0]();
-  }
+  const schema = pi.tools.find(
+    (candidate) => candidate.name === "agent_delegate",
+  )!.parameters;
+  assert.equal(
+    Value.Check(schema, { definition: "agent", task: "work" }),
+    true,
+  );
+  assert.equal(Value.Check(schema, { definition: "agent", task: "" }), false);
+  pi.events.get("session_shutdown")?.[0]();
 });
 
 test("public assignment normalizes invalid and unknown session sources", async () => {
@@ -1718,10 +1696,9 @@ test("public assignment normalizes invalid and unknown session sources", async (
       ["11111111", /prefixes are not allowed/],
       ["11111111-1111-4111-8111-111111111111", /no assignment session found/],
     ] as const) {
-      const result = await pi.tools[0].execute(
+      const result = await agentTool(pi, "continue").execute(
         "id",
         {
-          action: "continue",
           task: "resolve the source",
           session: value,
         },
@@ -1766,9 +1743,9 @@ test("session assignment rejects the controller's active session", async () => {
   });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "continue").execute(
       "id",
-      { action: "continue", session: session.path, task: "same session" },
+      { session: session.path, task: "same session" },
       undefined,
       undefined,
       fakeContext(),
@@ -1807,10 +1784,9 @@ test("public assignment preserves session source open failures", async () => {
   });
   support.sessionOpenError = openOperationError;
   try {
-    const structured = await pi.tools[0].execute(
+    const structured = await agentTool(pi, "continue").execute(
       "id",
       {
-        action: "continue",
         session: session.path,
         task: "continue the saved session",
       },
@@ -1823,10 +1799,9 @@ test("public assignment preserves session source open failures", async () => {
     const internalError = new Error("permission denied while opening session");
     support.sessionOpenError = internalError;
     await assert.rejects(
-      pi.tools[0].execute(
+      agentTool(pi, "continue").execute(
         "id",
         {
-          action: "continue",
           session: session.path,
           task: "continue the saved session",
         },
@@ -1861,10 +1836,9 @@ test("assignment session rejects unusable saved cwd headers without mutation", a
     });
     registerExtension!(pi.pi as never);
     const context = fakeContext();
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "continue").execute(
       "id",
       {
-        action: "continue",
         session: path,
         task: "continue the saved session",
       },
@@ -1946,9 +1920,9 @@ test("managed historical sources require durable owner-side ancestry for continu
   const pi = fakePi({ exec: () => ({ stdout: "0.8.0", stderr: "", code: 0 }) });
   registerExtension!(pi.pi as never);
   const request = async (selector: string, entries: unknown[]) =>
-    pi.tools[0].execute(
+    agentTool(pi, "continue").execute(
       "id",
-      { action: "continue", session: selector, task: "follow up" },
+      { session: selector, task: "follow up" },
       undefined,
       undefined,
       fakeContext(entries),
@@ -1991,9 +1965,9 @@ test("managed historical sources require durable owner-side ancestry for continu
         const owner = fakePi({ exec: startup.exec });
         registerExtension!(owner.pi as never);
         try {
-          const result = await owner.tools[0].execute(
+          const result = await agentTool(owner, "continue").execute(
             "id",
-            { action: "continue", session: sourceId, task: "follow up" },
+            { session: sourceId, task: "follow up" },
             undefined,
             undefined,
             fakeContext(proof),
@@ -2054,9 +2028,9 @@ test("copied fork result history does not invalidate the original owner edge", a
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "continue").execute(
       "id",
-      { action: "continue", session: childId, task: "follow up" },
+      { session: childId, task: "follow up" },
       undefined,
       undefined,
       fakeContext([ownershipResult(parentId)]),
@@ -2112,9 +2086,9 @@ test("historical continuation re-parenting preserves every valid ownership path"
     try {
       const context = fakeContext(entries) as any;
       context.sessionManager.getSessionId = () => callerId;
-      const result = await pi.tools[0].execute(
+      const result = await agentTool(pi, "continue").execute(
         "id",
-        { action: "continue", session: childId, task: "continue child" },
+        { session: childId, task: "continue child" },
         undefined,
         undefined,
         context,
@@ -2233,10 +2207,9 @@ test("session assignment fails closed on duplicate live representations", async 
   });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await agentTool(pi, "continue").execute(
       "id",
       {
-        action: "continue",
         session: session.path,
         task: "continue the ambiguous session",
       },
@@ -2276,8 +2249,10 @@ test("registered agent validates duplicate agents and selectors before lifecycle
   });
   registerExtension!(duplicate.pi as never);
   await duplicate.events.get("session_start")![0](undefined, fakeContext());
-  const tool = duplicate.tools[0];
-  assert.equal(tool.name, "agent");
+  const tool = duplicate.tools.find(
+    (candidate) => candidate.name === "agent_delegate",
+  )!;
+  assert.equal(tool.name, "agent_delegate");
   assert.equal(
     duplicate.tools.some((candidate) => candidate.name === "subagent"),
     false,
@@ -2288,7 +2263,6 @@ test("registered agent validates duplicate agents and selectors before lifecycle
   const duplicateResult = await tool.execute(
     "id",
     {
-      action: "delegate",
       definition: "agent",
       label,
       task: "duplicate task",
@@ -2304,37 +2278,20 @@ test("registered agent validates duplicate agents and selectors before lifecycle
   );
   const missingAgentTask = await tool.execute(
     "id",
-    { action: "delegate", agent: "session-agent" },
+    { definition: "agent" },
     undefined,
     undefined,
     context,
   );
   assert.equal(missingAgentTask.details.error.category, "invalid_request");
-  for (const legacy of [
-    { action: "start", definition: "agent", task: "legacy start" },
-    {
-      action: "resume",
-      session: "/tmp/session.jsonl",
-      task: "legacy resume",
-    },
-    { action: "assign", agent: label, task: "legacy assign" },
-  ]) {
-    const result = await tool.execute(
-      "id",
-      legacy,
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(result.details.error.category, "invalid_request");
-    assert.equal(result.details.error.message, "Invalid agent input");
-  }
-  const substitutedResume = await tool.execute(
+  const continueTool = duplicate.tools.find(
+    (candidate) => candidate.name === "agent_continue",
+  )!;
+  const substitutedResume = await continueTool.execute(
     "id",
     {
-      action: "delegate",
       session: "/tmp/missing-session.jsonl",
-      definition: "implementer",
+      task: "continue",
     },
     undefined,
     undefined,
@@ -2390,10 +2347,10 @@ test("registered delegate protects a live mailbox owned by another owner", async
   const startup = startupExecutor("agent-2", () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  const tool = pi.tools[0];
+  const tool = agentTool(pi, "delegate");
   const result = await tool.execute(
     "id",
-    { action: "delegate", definition: "agent", label, task: "preserve me" },
+    { definition: "agent", label, task: "preserve me" },
     undefined,
     undefined,
     fakeContext(),
@@ -2441,10 +2398,9 @@ test("fresh assignments do not reset an unacknowledged stale mailbox", async () 
   );
   const automaticPi = fakePi({ exec: automaticStartup.exec });
   registerExtension!(automaticPi.pi as never);
-  const automatic = await automaticPi.tools[0].execute(
+  const automatic = await agentTool(automaticPi, "delegate").execute(
     "id",
     {
-      action: "delegate",
       definition: "agent",
       task: "use the next safe label",
     },
@@ -2500,10 +2456,9 @@ test("request-only mailbox remnants reserve their labels", async () => {
   );
   const automaticPi = fakePi({ exec: automaticStartup.exec });
   registerExtension!(automaticPi.pi as never);
-  const automatic = await automaticPi.tools[0].execute(
+  const automatic = await agentTool(automaticPi, "delegate").execute(
     "id",
     {
-      action: "delegate",
       definition: "agent",
       task: "choose the next safe label",
     },
@@ -2530,10 +2485,9 @@ test("assignment retains its request when acknowledgement never arrives", async 
     exec: startup.exec,
   });
   registerExtension!(pi.pi as never);
-  const result = await pi.tools[0].execute(
+  const result = await agentTool(pi, "delegate").execute(
     "id",
     {
-      action: "delegate",
       definition: "agent",
       task: "retain on timeout",
     },
@@ -2565,6 +2519,8 @@ test("registered lead exposes only explicit live controls", async () => {
   realFs.writeFileSync(steerFile, "steer evidence");
   let steerSubmitted: RequestRecord | undefined;
   const accepting = fakePi({
+    activeTools: [],
+    allTools: () => accepting.tools,
     exec: leadExec(
       label,
       "working",
@@ -2584,40 +2540,49 @@ test("registered lead exposes only explicit live controls", async () => {
     ),
   });
   registerExtension!(accepting.pi as never);
-  assert.deepEqual(
-    accepting.tools.map((candidate) => candidate.name),
-    ["agent", "chief", "peer"],
-  );
   assert.equal(
     accepting.tools.some((candidate) => candidate.name === "subagent"),
     false,
   );
-  const tool = accepting.tools[0];
+  const tool = accepting.tools.find(
+    (candidate) => candidate.name === "agent_list",
+  )!;
   const context = fakeContext(accepting.entries);
   await accepting.events.get("session_start")![0](
     undefined,
     fakeContext(accepting.entries),
   );
-  const listed = await tool.execute(
-    "id",
-    { action: "list" },
-    undefined,
-    undefined,
-    context,
-  );
-  assert.deepEqual(listed.details.agents[0].available_actions, [
-    "inspect",
-    "steer",
-    "interrupt",
-    "close",
+  assert.deepEqual(accepting.pi.getActiveTools(), [
+    "agent_list",
+    "agent_delegate",
+    "agent_continue",
+    "agent_steer",
+    "agent_interrupt",
+    "agent_reply",
+    "agent_close",
+    "agent_inspect",
+    "agent_transcript",
+    "supervisor_message",
+    "supervisor_ask",
+    "peer_list",
+    "peer_message",
   ]);
-  const steer = await accepting.tools[0].execute(
-    "id",
-    { action: "steer", agent: label, message: "continue", files: [steerFile] },
-    undefined,
-    undefined,
-    context,
-  );
+  const listed = await tool.execute("id", {}, undefined, undefined, context);
+  assert.deepEqual(listed.details.agents[0].available_tools, [
+    "agent_inspect",
+    "agent_steer",
+    "agent_interrupt",
+    "agent_close",
+  ]);
+  const steer = await accepting.tools
+    .find((candidate) => candidate.name === "agent_steer")!
+    .execute(
+      "id",
+      { agent: label, message: "continue", files: [steerFile] },
+      undefined,
+      undefined,
+      context,
+    );
   assert.equal(steer.details.ok, true);
   assert.equal(steer.details.action, "steer");
   assert.equal(steer.details.agent, label);
@@ -2636,12 +2601,14 @@ test("registered lead exposes only explicit live controls", async () => {
     (steer.content[0] as { text: string }).text,
     /Assignment request: /,
   );
-  const rendered = accepting.tools[0].renderResult(
-    { content: steer.content, details: steer.details },
-    { expanded: true, isPartial: false },
-    { fg: (_color: string, text: string) => text },
-    { args: { action: "steer", agent: label, message: "continue" } },
-  );
+  const rendered = accepting.tools
+    .find((candidate) => candidate.name === "agent_steer")!
+    .renderResult(
+      { content: steer.content, details: steer.details },
+      { expanded: true, isPartial: false },
+      { fg: (_color: string, text: string) => text },
+      { args: { agent: label, message: "continue" } },
+    );
   assert.match(rendered.text, new RegExp(`session: ${identity.piSessionId}`));
   assert.match(rendered.text, /assignment request: /);
   let interruptSubmitted: RequestRecord | undefined;
@@ -2670,10 +2637,9 @@ test("registered lead exposes only explicit live controls", async () => {
     undefined,
     interruptContext,
   );
-  const interrupt = await interruptPi.tools[0].execute(
+  const interrupt = await agentTool(interruptPi, "interrupt").execute(
     "interrupt",
     {
-      action: "interrupt",
       agent: label,
       message: "Stop and use the fallback.",
     },
@@ -2773,10 +2739,9 @@ test("successful controls persist their definition before runtime teardown", asy
     registerExtension!(pi.pi as never);
     try {
       await pi.events.get("session_start")![0](undefined, context);
-      const result = await pi.tools[0].execute(
+      const result = await agentTool(pi, action).execute(
         action,
         {
-          action,
           agent: label,
           ...(action !== "inspect" ? { message: "Continue." } : {}),
         },
@@ -2902,9 +2867,9 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
   const context = fakeContext();
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    const listed = await pi.tools[0].execute(
+    const listed = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
@@ -2914,29 +2879,31 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       "blocked",
       JSON.stringify(listed.details),
     );
-    assert.ok(listed.details.agents[0].available_actions.includes("steer"));
+    assert.ok(listed.details.agents[0].available_tools.includes("agent_steer"));
     const listedChild = (listed.details.agents as any[]).find(
       (agent) => agent.agent === child.agentLabel,
     );
-    assert.deepEqual(listedChild?.available_actions, []);
+    assert.deepEqual(listedChild?.available_tools, []);
 
     parentStatus = "working";
-    const workingParent = await pi.tools[0].execute(
+    const workingParent = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.equal(workingParent.details.agents[0].state, "working");
     assert.ok(
-      workingParent.details.agents[0].available_actions.includes("steer"),
+      workingParent.details.agents[0].available_tools.includes("agent_steer"),
     );
     assert.ok(
-      workingParent.details.agents[0].available_actions.includes("interrupt"),
+      workingParent.details.agents[0].available_tools.includes(
+        "agent_interrupt",
+      ),
     );
     assert.equal(
-      listed.details.agents[0].available_actions.includes("interrupt"),
+      listed.details.agents[0].available_tools.includes("agent_interrupt"),
       false,
     );
 
@@ -2946,16 +2913,16 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       activeRequestId: undefined,
       completedRequestId: undefined,
     });
-    const noChildWork = await pi.tools[0].execute(
+    const noChildWork = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.equal(noChildWork.details.agents[0].state, "settling");
     assert.ok(
-      !noChildWork.details.agents[0].available_actions.includes("steer"),
+      !noChildWork.details.agents[0].available_tools.includes("agent_steer"),
     );
 
     writeAgentState(foreignChildMailbox, {
@@ -2964,16 +2931,16 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       agentLabel: "foreign-steerable-child",
       activeRequestId: randomUUID(),
     });
-    const foreignWorkspaceChild = await pi.tools[0].execute(
+    const foreignWorkspaceChild = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.ok(
-      !foreignWorkspaceChild.details.agents[0].available_actions.includes(
-        "steer",
+      !foreignWorkspaceChild.details.agents[0].available_tools.includes(
+        "agent_steer",
       ),
     );
     resetAgentMailbox(foreignChildMailbox);
@@ -2983,15 +2950,17 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       ...child,
       ownerSessionId: "11111111-1111-4111-8111-111111111111",
     });
-    const otherOwnerChild = await pi.tools[0].execute(
+    const otherOwnerChild = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.ok(
-      !otherOwnerChild.details.agents[0].available_actions.includes("steer"),
+      !otherOwnerChild.details.agents[0].available_tools.includes(
+        "agent_steer",
+      ),
     );
     writeAgentState(childMailbox, child);
 
@@ -2999,15 +2968,17 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       ...parent,
       activeRequestId: undefined,
     });
-    const noParentAssignment = await pi.tools[0].execute(
+    const noParentAssignment = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.ok(
-      !noParentAssignment.details.agents[0].available_actions.includes("steer"),
+      !noParentAssignment.details.agents[0].available_tools.includes(
+        "agent_steer",
+      ),
     );
     writeAgentState(parentMailbox, parent);
 
@@ -3024,22 +2995,22 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       text: "pending handoff",
       createdAt: Date.now(),
     });
-    const handoffPending = await pi.tools[0].execute(
+    const handoffPending = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.equal(handoffPending.details.agents[0].state, "settling");
     assert.ok(
-      !handoffPending.details.agents[0].available_actions.includes("steer"),
+      !handoffPending.details.agents[0].available_tools.includes("agent_steer"),
     );
     removeRequest(parentMailbox, handoffRequestId);
 
-    const steered = await pi.tools[0].execute(
+    const steered = await agentTool(pi, "steer").execute(
       "steer",
-      { action: "steer", agent: parent.agentLabel, message: "continue" },
+      { agent: parent.agentLabel, message: "continue" },
       undefined,
       undefined,
       context,
@@ -3066,16 +3037,16 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       completedAt: Date.now(),
     });
     assert.ok(readResult(childMailbox, child.activeRequestId!));
-    const completedChild = await pi.tools[0].execute(
+    const completedChild = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.equal(completedChild.details.agents[0].state, "blocked");
     assert.ok(
-      completedChild.details.agents[0].available_actions.includes("steer"),
+      completedChild.details.agents[0].available_tools.includes("agent_steer"),
     );
     assert.equal(
       readAgentState(childMailbox)?.completedRequestId,
@@ -3100,17 +3071,17 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       ...parent,
       pendingAskId: ownerAskId,
     });
-    const ownerAsk = await pi.tools[0].execute(
+    const ownerAsk = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.equal(ownerAsk.details.agents[0].state, "blocked");
-    assert.deepEqual(ownerAsk.details.agents[0].available_actions, [
-      "inspect",
-      "reply",
+    assert.deepEqual(ownerAsk.details.agents[0].available_tools, [
+      "agent_inspect",
+      "agent_reply",
     ]);
     removeAsk(parentMailbox, ownerAskId);
     writeAgentState(parentMailbox, parent);
@@ -3132,17 +3103,17 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       text: "parent result while child result is pending",
       completedAt: Date.now(),
     });
-    const completionWithChild = await pi.tools[0].execute(
+    const completionWithChild = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.equal(completionWithChild.details.agents[0].state, "settling");
     assert.ok(
-      !completionWithChild.details.agents[0].available_actions.includes(
-        "steer",
+      !completionWithChild.details.agents[0].available_tools.includes(
+        "agent_steer",
       ),
     );
     writeAgentState(parentMailbox, parent);
@@ -3152,16 +3123,16 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       readAgentState(childMailbox)?.completedRequestId,
       child.activeRequestId,
     );
-    const completedChildWithoutResult = await pi.tools[0].execute(
+    const completedChildWithoutResult = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.equal(
-      completedChildWithoutResult.details.agents[0].available_actions.includes(
-        "steer",
+      completedChildWithoutResult.details.agents[0].available_tools.includes(
+        "agent_steer",
       ),
       false,
     );
@@ -3183,20 +3154,20 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       text: "parent result",
       completedAt: Date.now(),
     });
-    const ownCompletion = await pi.tools[0].execute(
+    const ownCompletion = await agentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
     );
     assert.equal(ownCompletion.details.agents[0].state, "settling");
     assert.ok(
-      !ownCompletion.details.agents[0].available_actions.includes("steer"),
+      !ownCompletion.details.agents[0].available_tools.includes("agent_steer"),
     );
-    const rejected = await pi.tools[0].execute(
+    const rejected = await agentTool(pi, "steer").execute(
       "steer",
-      { action: "steer", agent: parent.agentLabel, message: "late" },
+      { agent: parent.agentLabel, message: "late" },
       undefined,
       undefined,
       context,
@@ -3234,15 +3205,15 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       },
     });
     registerExtension!(restarted.pi as never);
-    const restartedList = await restarted.tools[0].execute(
+    const restartedList = await agentTool(restarted, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       fakeContext(),
     );
     assert.ok(
-      !restartedList.details.agents[0].available_actions.includes("steer"),
+      !restartedList.details.agents[0].available_tools.includes("agent_steer"),
     );
     restarted.events.get("session_shutdown")?.[0]();
 
@@ -3250,16 +3221,13 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     writeAgentState(childMailbox, child);
     const recoveredPositive = fakePi({ exec: base });
     registerExtension!(recoveredPositive.pi as never);
-    const recoveredPositiveList = await recoveredPositive.tools[0].execute(
+    const recoveredPositiveList = await agentTool(
+      recoveredPositive,
       "list",
-      { action: "list" },
-      undefined,
-      undefined,
-      fakeContext(),
-    );
+    ).execute("list", {}, undefined, undefined, fakeContext());
     assert.ok(
-      recoveredPositiveList.details.agents[0].available_actions.includes(
-        "steer",
+      recoveredPositiveList.details.agents[0].available_tools.includes(
+        "agent_steer",
       ),
     );
     recoveredPositive.events.get("session_shutdown")?.[0]();
@@ -3452,9 +3420,9 @@ test("assignment status normalization fails closed safely", async () => {
     try {
       registerExtension!(pi.pi as never);
       const context = fakeContext();
-      const listed = await pi.tools[0].execute(
+      const listed = await agentTool(pi, "list").execute(
         "list",
-        { action: "list" },
+        {},
         undefined,
         undefined,
         context,
@@ -3511,16 +3479,18 @@ test("assignment status normalization fails closed safely", async () => {
         createdAt: Date.now(),
       });
       await pi.events.get("session_start")![0](undefined, context);
-      const handoffList = await pi.tools[0].execute(
+      const handoffList = await agentTool(pi, "list").execute(
         "id",
-        { action: "list" },
+        {},
         undefined,
         undefined,
         context,
       );
       assert.equal(handoffList.details.agents[0].state, "settling");
       assert.equal(
-        handoffList.details.agents[0].available_actions.includes("delegate"),
+        handoffList.details.agents[0].available_tools.includes(
+          "agent_delegate",
+        ),
         false,
       );
       removeRequest(mailbox, handoffRequestId);
@@ -3530,9 +3500,9 @@ test("assignment status normalization fails closed safely", async () => {
         ...state,
         activeRequestId: requestA,
       });
-      const activeList = await pi.tools[0].execute(
+      const activeList = await agentTool(pi, "list").execute(
         "id",
-        { action: "list" },
+        {},
         undefined,
         undefined,
         context,
@@ -3540,7 +3510,7 @@ test("assignment status normalization fails closed safely", async () => {
       assert.equal(activeList.details.agents[0].state, "settling");
       assert.equal(activeList.details.agents[0].active_request_id, requestA);
       assert.equal(
-        activeList.details.agents[0].available_actions.includes("delegate"),
+        activeList.details.agents[0].available_tools.includes("agent_delegate"),
         false,
       );
 
@@ -3560,31 +3530,33 @@ test("assignment status normalization fails closed safely", async () => {
         text: "done",
         completedAt: Date.now(),
       });
-      const completedList = await pi.tools[0].execute(
+      const completedList = await agentTool(pi, "list").execute(
         "id",
-        { action: "list" },
+        {},
         undefined,
         undefined,
         context,
       );
       assert.equal(completedList.details.agents[0].state, "settling");
       assert.equal(
-        completedList.details.agents[0].available_actions.includes("delegate"),
+        completedList.details.agents[0].available_tools.includes(
+          "agent_delegate",
+        ),
         false,
       );
 
       removeResult(mailbox, requestA);
-      const settledList = await pi.tools[0].execute(
+      const settledList = await agentTool(pi, "list").execute(
         "id",
-        { action: "list" },
+        {},
         undefined,
         undefined,
         context,
       );
       assert.equal(settledList.details.agents[0].state, "settling");
-      assert.deepEqual(settledList.details.agents[0].available_actions, [
-        "inspect",
-        "close",
+      assert.deepEqual(settledList.details.agents[0].available_tools, [
+        "agent_inspect",
+        "agent_close",
       ]);
     } finally {
       pi.events.get("session_shutdown")?.[0]();
@@ -3593,24 +3565,14 @@ test("assignment status normalization fails closed safely", async () => {
   })();
 });
 
-test("canonicalizes known fields and rejects unknown agent input", async () => {
+test("agent list schema rejects unknown fields", () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const toolCall = pi.events.get("tool_call")?.[0];
-  assert.ok(toolCall);
-  const input = { action: "list", task: "provider noise", files: [] };
-  assert.equal(
-    await toolCall({ toolName: "agent", input }, fakeContext()),
-    undefined,
-  );
-  assert.deepEqual(input, { action: "list" });
-  const invalid = await toolCall(
-    { toolName: "agent", input: { action: "list", unknown: true } },
-    fakeContext(),
-  );
-  assert.equal(invalid?.block, true);
-  assert.equal(invalid?.terminate, true);
+  const schema = agentTool(pi, "list").parameters;
+  assert.equal(Value.Check(schema, {}), true);
+  assert.equal(Value.Check(schema, { unknown: true }), false);
+  pi.events.get("session_shutdown")?.[0]();
 });
 
 test("transcript projects persisted agent evidence without Herdr terminal reads", async () => {
@@ -3698,20 +3660,20 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
   });
   registerExtension!(pi.pi as never);
   try {
-    const before = await pi.tools[0]!.execute(
+    const before = await agentTool(pi, "list").execute(
       "id",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       fakeContext(pi.entries),
     );
     assert.equal(
-      before.details.agents[0].available_actions.includes("transcript"),
+      before.details.agents[0].available_tools.includes("agent_transcript"),
       false,
     );
-    const pending = await pi.tools[0]!.execute(
+    const pending = await agentTool(pi, "transcript").execute(
       "id",
-      { action: "transcript", agent: label },
+      { agent: label },
       undefined,
       undefined,
       fakeContext(pi.entries),
@@ -3724,20 +3686,20 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
     assert.equal(realFs.existsSync(identity.piSessionFile), false);
 
     writeSession();
-    const ready = await pi.tools[0]!.execute(
+    const ready = await agentTool(pi, "list").execute(
       "id",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       fakeContext(pi.entries),
     );
     assert.equal(
-      ready.details.agents[0].available_actions.includes("transcript"),
+      ready.details.agents[0].available_tools.includes("agent_transcript"),
       true,
     );
-    const result = await pi.tools[0]!.execute(
+    const result = await agentTool(pi, "transcript").execute(
       "id",
-      { action: "transcript", agent: label },
+      { agent: label },
       undefined,
       undefined,
       fakeContext(pi.entries),
@@ -3789,9 +3751,9 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       },
     ];
     writeSession();
-    const edited = await pi.tools[0]!.execute(
+    const edited = await agentTool(pi, "transcript").execute(
       "id",
-      { action: "transcript", agent: label },
+      { agent: label },
       undefined,
       undefined,
       fakeContext(pi.entries),
@@ -3816,9 +3778,9 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       },
     ];
     writeSession();
-    const completed = await pi.tools[0]!.execute(
+    const completed = await agentTool(pi, "transcript").execute(
       "id",
-      { action: "transcript", agent: label },
+      { agent: label },
       undefined,
       undefined,
       fakeContext(pi.entries),
@@ -3857,9 +3819,9 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       },
     ];
     writeSession();
-    const boundedTool = await pi.tools[0]!.execute(
+    const boundedTool = await agentTool(pi, "transcript").execute(
       "id",
-      { action: "transcript", agent: label },
+      { agent: label },
       undefined,
       undefined,
       fakeContext(pi.entries),
@@ -3896,9 +3858,9 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       },
     ];
     writeSession();
-    const bounded = await pi.tools[0]!.execute(
+    const bounded = await agentTool(pi, "transcript").execute(
       "id",
-      { action: "transcript", agent: label },
+      { agent: label },
       undefined,
       undefined,
       fakeContext(pi.entries),
@@ -3911,22 +3873,22 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
     assert.doesNotMatch(bounded.details.transcript, /old evidence/);
 
     realFs.writeFileSync(identity.piSessionFile, "");
-    const emptyList = await pi.tools[0]!.execute(
+    const emptyList = await agentTool(pi, "list").execute(
       "id",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       fakeContext(pi.entries),
     );
     assert.equal(
-      emptyList.details.agents[0].available_actions.includes("transcript"),
+      emptyList.details.agents[0].available_tools.includes("agent_transcript"),
       false,
     );
     const emptyBefore = readFileSync(identity.piSessionFile, "utf8");
     const emptyStatBefore = realFs.statSync(identity.piSessionFile);
-    const rejected = await pi.tools[0]!.execute(
+    const rejected = await agentTool(pi, "transcript").execute(
       "id",
-      { action: "transcript", agent: label },
+      { agent: label },
       undefined,
       undefined,
       fakeContext(pi.entries),
@@ -3951,9 +3913,9 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
         cwd: "/tmp",
       })}\n`,
     );
-    const mismatched = await pi.tools[0]!.execute(
+    const mismatched = await agentTool(pi, "transcript").execute(
       "id",
-      { action: "transcript", agent: label },
+      { agent: label },
       undefined,
       undefined,
       fakeContext(pi.entries),

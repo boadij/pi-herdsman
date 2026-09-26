@@ -13,8 +13,9 @@ decision authority.
 ## Delegating agent
 
 A lead-launched agent becomes delegation-enabled when its effective definition
-has a non-empty `agents` list and its tool policy permits the `agent` tool.
-The agent receives only the definitions named by its effective `agents` list.
+has a non-empty `agents` list. It receives all nine semantic `agent_*`
+coordination tools and may delegate only to definitions named in that list.
+Every managed agent also receives `ask_owner`.
 
 A delegating agent:
 
@@ -24,7 +25,7 @@ A delegating agent:
 - remains subordinate to the lead's approved objective.
 
 Agent-started agents are leaves. Their effective metadata and launch policy
-remove the `agents` allowlist and `agent` capability. This keeps the supported
+remove the `agents` allowlist and delegation tools. This keeps the supported
 structure bounded:
 
 ```text
@@ -58,18 +59,20 @@ lead                          [lead]
 Physical layout never determines ownership; the durable owner/session
 relationships do.
 
-## Inferred `agent` capability
+## Agent tool policy
 
-A non-empty `agents` field implies the `agent` tool when the definition uses
-an explicit non-empty `tools` allowlist. An omitted tool allowlist keeps Pi's
-default tool policy rather than creating an `agent`-only list.
+A non-empty effective `agents` list enables all nine coordination tools:
+`agent_list`, `agent_delegate`, `agent_continue`, `agent_steer`,
+`agent_interrupt`, `agent_reply`, `agent_close`, `agent_inspect`, and
+`agent_transcript`. An omitted or empty list means the agent is a leaf, with
+`ask_owner` as its only mandatory Herdsman tool. Normal `tools` and
+`excludeTools` settings configure ordinary execution tools and cannot remove
+these role-required tools.
 
-Explicit denial wins:
-
-- `excludeTools: ["agent"]` prevents inference.
-- `noTools: true` prevents inferred `agent` unless `agent` is explicitly
-  present in `tools`.
-- An explicit exclusion wins over an explicit allow.
+When `tools` is omitted, no `--tools` option is emitted and Pi's configured or
+default selection is preserved. An explicit `tools` allowlist is augmented
+with the required coordination tools for a delegating agent and with
+`ask_owner` for every managed agent.
 
 The exact field semantics live in the
 [agent-definition schema](../reference/agent-definition-schema.md).

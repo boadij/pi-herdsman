@@ -1767,7 +1767,7 @@ export function serializeSupervision(snapshot: SupervisionSnapshot) {
       ? { diagnostics: snapshot.diagnostics }
       : {}),
     leads: snapshot.leads.map((r) => ({
-      lead: r.lead,
+      session: r.lead,
       display_name: r.displayName,
       workspace_id: r.workspaceId,
       ...(r.workspaceLabel ? { workspace_label: r.workspaceLabel } : {}),
@@ -1780,7 +1780,7 @@ export function serializeSupervision(snapshot: SupervisionSnapshot) {
         ? { pending_ask_question: r.pendingAskQuestion }
         : {}),
       agent_counts: r.agentCounts,
-      available_actions: r.availableActions,
+      available_tools: r.availableActions.map((action) => `staff_${action}`),
       agents: r.agents,
     })),
   };

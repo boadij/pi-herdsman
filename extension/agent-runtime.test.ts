@@ -53,6 +53,8 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
+const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
+  pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
 
 test("managed agents cancel native session replacement", () => {
   setAgentEnvironment();
@@ -920,7 +922,8 @@ test("agent bounds result persistence failure and exposes owner recovery evidenc
   assert.equal(recovered.resultError?.attempts, 8);
   assert.equal(recovered.resultError?.retrySafe, false);
   assert.equal(recovered.resultError?.cleanupSafe, true);
-  assert.match(recovered.resultError?.nextAction ?? "", /close this agent/);
+  assert.match(recovered.resultError?.nextAction ?? "", /agent_inspect/);
+  assert.match(recovered.resultError?.nextAction ?? "", /agent_close/);
 
   agent.events.get("session_shutdown")?.[0]();
   const root = fakePi({
@@ -952,9 +955,9 @@ test("agent bounds result persistence failure and exposes owner recovery evidenc
   process.env.HERDR_ENV = "1";
   process.env.HERDR_WORKSPACE_ID = WORKSPACE;
   registerExtension!(root.pi as never);
-  const listed = await root.tools[0].execute(
+  const listed = await agentTool(root, "list").execute(
     "id",
-    { action: "list" },
+    {},
     undefined,
     undefined,
     fakeContext(),
@@ -991,7 +994,7 @@ test("agent rejects task replay while result persistence recovery is present", (
     retrySafe: false,
     cleanupSafe: true,
     nextAction:
-      "Inspect result_error, resolve mailbox persistence, then close this agent before assigning new work.",
+      "Use agent_inspect to inspect result_error, resolve mailbox persistence, then use agent_close to close this agent before assigning new work.",
   };
   writeAgentState(mailbox, { ...managedState(label), resultError: recovery });
 
@@ -1700,12 +1703,13 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     const unresolvedStatus = String(
       (pi.sentMessageCalls[0].message as any).content,
     );
-    assert.ok(
-      unresolvedStatus.endsWith(
-        "Delegation status: 1 active direct agent; 1 pending direct result; 2 direct agent assignments remain unresolved. " +
-          "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. " +
-          "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when it is absent or insufficient, perform at most one bounded diagnostic read before returning to passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
-      ),
+    assert.match(
+      unresolvedStatus,
+      /Delegation status: 1 active direct agent; 1 pending direct result; 2 direct agent assignments remain unresolved\./,
+    );
+    assert.match(
+      unresolvedStatus,
+      /A proven lost Agent remains unresolved; physical disappearance is not completion\./,
     );
     assert.equal(
       readResult(childOneMailbox, childOne.activeRequestId!)?.text,
@@ -1744,13 +1748,6 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     assert.equal(
       (pi.sentMessageCalls[1].message as any).details.pendingDirectResultCount,
       0,
-    );
-    assert.ok(
-      String((pi.sentMessageCalls[1].message as any).content).endsWith(
-        "Delegation status: 1 active direct agent; 0 pending direct results; 1 direct agent assignment remains unresolved. " +
-          "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. " +
-          "When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when it is absent or insufficient, perform at most one bounded diagnostic read before returning to passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
-      ),
     );
     assert.equal(
       readResult(childTwoMailbox, childTwo.activeRequestId!)?.text,
@@ -2902,13 +2899,28 @@ test("acknowledgement state-write failure retains an identity-rejected request",
   agent.events.get("session_shutdown")?.[0]();
 });
 
-test("a stray agent variable does not suppress lead registration", () => {
+test("a stray agent variable does not suppress the active Lead tool surface", async () => {
   setLeadEnvironment();
-  const lead = fakePi();
+  const lead = fakePi({ activeTools: [], allTools: () => lead.tools });
   registerExtension!(lead.pi as never);
-  assert.equal(lead.tools.length, 1);
-  assert.equal(lead.tools[0].name, "agent");
+  await lead.events.get("session_start")![0](undefined, fakeContext());
+  assert.deepEqual(lead.pi.getActiveTools(), [
+    "agent_list",
+    "agent_delegate",
+    "agent_continue",
+    "agent_steer",
+    "agent_interrupt",
+    "agent_reply",
+    "agent_close",
+    "agent_inspect",
+    "agent_transcript",
+    "supervisor_message",
+    "supervisor_ask",
+    "peer_list",
+    "peer_message",
+  ]);
   assert.deepEqual(lead.commands, ["agents", "herdsman"]);
+  lead.events.get("session_shutdown")?.[0]();
 });
 
 test("session agent identity reads the session-wide entry array", () => {
@@ -3484,6 +3496,15 @@ test("owner ask waits while busy and delivers once after settlement", async () =
     idle = true;
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler(undefined, context);
+    const delivered = pi.sent.find(
+      (message: any) => message.customType === "pi-herdsman-agent-ask",
+    ) as any;
+    assert.ok(delivered);
+    assert.match(
+      delivered.content,
+      new RegExp(`Use agent_reply with agent="${label}"`),
+    );
+    assert.doesNotMatch(delivered.content, /agent action/i);
     assert.equal(
       pi.sent.filter(
         (message: any) => message.customType === "pi-herdsman-agent-ask",

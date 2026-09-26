@@ -142,13 +142,15 @@ test("parent delegates two same-definition children with exact ownership", async
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
     for (const task of ["first child", "second child"]) {
-      const started = await pi.tools[0].execute(
-        "start",
-        { action: "delegate", definition: "child", task },
-        undefined,
-        undefined,
-        context,
-      );
+      const started = await pi.tools
+        .find((tool) => tool.name === "agent_delegate")!
+        .execute(
+          "start",
+          { definition: "child", task },
+          undefined,
+          undefined,
+          context,
+        );
       assert.equal(started.details.ok, true, JSON.stringify(started.details));
       mailboxes.push(
         agentMailboxPath(WORKSPACE, started.details.agent as string),
@@ -161,8 +163,20 @@ test("parent delegates two same-definition children with exact ownership", async
     assert.equal(guidance.length, 1);
     assert.equal(
       (guidance[0].message as any).content,
-      "Each unresolved unit of work has one executor. Delegating a scope transfers its execution ownership to that agent until the assignment resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. When agent work is unresolved, handle required agent control, then continue only necessary work you still own or end the turn without concluding; agent results or attention will resume the session automatically. Do not check progress with list, inspect, transcript, status requests, steering, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when it is absent or insufficient, perform at most one bounded diagnostic read before returning to passive waiting. Repeated reminders alone do not justify another read. Do not invent work merely to remain active.",
+      "Each unresolved unit of work has one executor. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own. Use agent_list when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. Follow current available_tools and revalidation: agent_steer cooperatively changes live work and may wait for a safe boundary, while agent_interrupt cancels the current operation and replaces its direction. Use agent_reply only to answer that Agent's exact pending ask_owner question. agent_close destructively closes an eligible Agent generation. agent_inspect provides bounded live terminal/process evidence; agent_transcript provides bounded persisted conversation/tool evidence. When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. Repeated reminders alone do not justify another read. A proven lost Agent remains unresolved; physical disappearance is not completion. Unknown or conflicting identity remains fail-closed. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed. Do not invent work merely to remain active.",
     );
+    const sharedGuidance = pi.tools
+      .find((tool) => tool.name === "agent_list")!
+      .promptGuidelines!.join(" ");
+    for (const phrase of [
+      "Use agent_delegate to start a fresh bounded assignment from a definition; use agent_continue to resume an exact historical managed-Agent Pi session with a new bounded assignment.",
+      "Each live Agent generation exists for one assignment; after its terminal result is delivered, Herdsman cleans up that generation.",
+      "Agent labels identify the current live generation; exact Pi sessions identify historical context and continuation.",
+      "`files` carries relevant assignment evidence, not runtime capability.",
+      "Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md, GEMINI.md, or equivalents merely because they exist.",
+      "A proven lost Agent remains unresolved; physical disappearance is not completion. Unknown or conflicting identity remains fail-closed. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed.",
+    ])
+      assert.ok(sharedGuidance.includes(phrase), phrase);
     const labels = mailboxes.map(
       (mailbox) => readAgentState(mailbox)!.agentLabel,
     );
@@ -204,13 +218,9 @@ test("parent delegates two same-definition children with exact ownership", async
     );
     assert.equal(lifecycle.createdTabs(), 0);
     for (const label of labels) {
-      const closed = await pi.tools[0].execute(
-        "close",
-        { action: "close", agent: label },
-        undefined,
-        undefined,
-        context,
-      );
+      const closed = await pi.tools
+        .find((tool) => tool.name === "agent_close")!
+        .execute("close", { agent: label }, undefined, undefined, context);
       assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
       assert.equal(
         readAgentState(agentMailboxPath(WORKSPACE, label)),
@@ -267,6 +277,11 @@ async function liveAgentList(pi: ReturnType<typeof fakePi>) {
   return JSON.parse(response.stdout).result.agents as Record<string, unknown>[];
 }
 
+const registeredAgentTool = (
+  pi: ReturnType<typeof fakePi>,
+  operation: string,
+) => pi.tools.find((tool) => tool.name === `agent_${operation}`)!;
+
 test("lead direct placement modes use real controller delegation", async () => {
   for (const placement of ["tab", "subtree", "split"] as const) {
     setLeadEnvironment();
@@ -300,9 +315,9 @@ test("lead direct placement modes use real controller delegation", async () => {
     const childMailboxes: string[] = [];
     try {
       const start = async (label: string) => {
-        const result = await pi.tools[0].execute(
+        const result = await registeredAgentTool(pi, "delegate").execute(
           `start-${label}`,
-          { action: "delegate", definition: "agent", label, task: "placement" },
+          { definition: "agent", label, task: "placement" },
           undefined,
           undefined,
           fakeContext(),
@@ -387,9 +402,9 @@ test("lead split-to-tab placement creates a dedicated agents tab", async () => {
     for (const [index, placement] of placements.entries()) {
       writePlacementSetting(placement);
       const label = `split-to-tab-${placement}-${index}`;
-      const result = await pi.tools[0].execute(
+      const result = await registeredAgentTool(pi, "delegate").execute(
         `start-${label}`,
-        { action: "delegate", definition: "agent", label, task: placement },
+        { definition: "agent", label, task: placement },
         undefined,
         undefined,
         fakeContext(),
@@ -458,10 +473,9 @@ test("lead tab placement vetoes an ambiguous current-lead direct root", async ()
   registerExtension!(pi.pi as never);
   const childMailbox = agentMailboxPath(WORKSPACE, "ambiguous-current-child");
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "ambiguous-current-start",
       {
-        action: "delegate",
         definition: "agent",
         task: "reject ambiguous root reuse",
       },
@@ -530,10 +544,9 @@ test("lead tab placement vetoes ambiguous foreign-herd evidence", async () => {
   registerExtension!(pi.pi as never);
   const childMailbox = agentMailboxPath(WORKSPACE, "ambiguous-foreign-child");
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "ambiguous-foreign-start",
       {
-        action: "delegate",
         definition: "agent",
         task: "reject foreign ambiguity",
       },
@@ -590,9 +603,9 @@ test("lead tab placement rejects old shared tabs and only changes future starts"
   const childMailboxes: string[] = [];
   try {
     const start = async (label: string) => {
-      const result = await pi.tools[0].execute(
+      const result = await registeredAgentTool(pi, "delegate").execute(
         `start-${label}`,
-        { action: "delegate", definition: "agent", label, task: "placement" },
+        { definition: "agent", label, task: "placement" },
         undefined,
         undefined,
         fakeContext(),
@@ -673,10 +686,9 @@ test("lead tab revalidation rejects a newly contaminated candidate under the loc
   registerExtension!(pi.pi as never);
   const childMailbox = agentMailboxPath(WORKSPACE, "revalidation-child");
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "revalidation-start",
       {
-        action: "delegate",
         definition: "agent",
         task: "reject contaminated candidate",
       },
@@ -747,10 +759,9 @@ test("managed-agent delegation always splits in its current pane for every lead 
     try {
       for (const handler of pi.events.get("session_start") ?? [])
         await handler(undefined, context);
-      const result = await pi.tools[0].execute(
+      const result = await registeredAgentTool(pi, "delegate").execute(
         `nested-${placement}`,
         {
-          action: "delegate",
           definition: "agent",
           task: "nested placement",
         },
@@ -848,19 +859,18 @@ test("parent delegation lock makes concurrent close and delegate fail fast", asy
       await handler(undefined, parentContext);
     assert.equal(parentPi.entries.length, 0, JSON.stringify(parentPi.entries));
 
-    const closePromise = leadPi.tools[0].execute(
+    const closePromise = registeredAgentTool(leadPi, "close").execute(
       "close",
-      { action: "close", agent: parent.agentLabel },
+      { agent: parent.agentLabel },
       undefined,
       undefined,
       leadContext,
     );
     await closeEntered;
 
-    const started = await parentPi.tools[0].execute(
+    const started = await registeredAgentTool(parentPi, "delegate").execute(
       "start",
       {
-        action: "delegate",
         definition: "child",
         task: "must not start during parent close",
       },
@@ -922,9 +932,9 @@ test("zero-child lead close is blocked by the parent delegation lock", async () 
   );
 
   try {
-    const closed = await pi.tools[0].execute(
+    const closed = await registeredAgentTool(pi, "close").execute(
       "id",
-      { action: "close", agent: parent.agentLabel },
+      { agent: parent.agentLabel },
       undefined,
       undefined,
       fakeContext(),
@@ -953,9 +963,9 @@ test("zero-child lead close is blocked by the parent delegation lock", async () 
     assert.ok(readAgentState(mailbox));
     releaseLock();
     releaseLock = undefined;
-    const listed = await pi.tools[0].execute(
+    const listed = await registeredAgentTool(pi, "list").execute(
       "list-after-busy-close",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       fakeContext(),
@@ -988,9 +998,9 @@ test("lead close maps assignment-lock contention to agent_busy", async () => {
     name: "test assignment transition",
   });
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "close").execute(
       "id",
-      { action: "close", agent: parent.agentLabel },
+      { agent: parent.agentLabel },
       undefined,
       undefined,
       fakeContext(),
@@ -1038,9 +1048,9 @@ test("cascade close revalidates the parent generation under its assignment lock"
         writeAgentState(parentMailbox, replacement);
       }
     };
-    const closed = await pi.tools[0].execute(
+    const closed = await registeredAgentTool(pi, "close").execute(
       "close-generation-race",
-      { action: "close", agent: parent.agentLabel },
+      { agent: parent.agentLabel },
       undefined,
       undefined,
       fakeContext(),
@@ -1111,9 +1121,9 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
   registerExtension!(pi.pi as never);
   try {
     support.failNextRequestRemoval = true;
-    const first = await pi.tools[0].execute(
+    const first = await registeredAgentTool(pi, "close").execute(
       "close-parent-with-child-cleanup-failure",
-      { action: "close", agent: parent.agentLabel },
+      { agent: parent.agentLabel },
       undefined,
       undefined,
       fakeContext(),
@@ -1139,9 +1149,9 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
     assert.ok(readAgentState(parentMailbox));
     assert.deepEqual(lifecycle.closeOrder, [child.agentLabel]);
 
-    const retried = await pi.tools[0].execute(
+    const retried = await registeredAgentTool(pi, "close").execute(
       "retry-parent-close-after-child-cleanup",
-      { action: "close", agent: parent.agentLabel },
+      { agent: parent.agentLabel },
       undefined,
       undefined,
       fakeContext(),
@@ -1164,11 +1174,18 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
 
 test("staged fresh assignment bridges pending start through working", async () => {
   const fixture = createStagedAssignmentFixture("agent");
+  const list = () =>
+    registeredAgentTool(fixture.pi, "list").execute(
+      "id",
+      {},
+      undefined,
+      undefined,
+      fixture.context,
+    );
   try {
-    const starting = fixture.pi.tools[0].execute(
+    const starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "agent",
         task: "bridge the staged lifecycle",
       },
@@ -1196,7 +1213,7 @@ test("staged fresh assignment bridges pending start through working", async () =
       () => fixture.preSubmitValidationReady,
       "assignment did not reach pre-submit validation",
     );
-    const beforeAck = await fixture.list();
+    const beforeAck = await list();
     assert.equal(fixture.requestObserved, false);
     assert.equal(beforeAck.details.agents[0].state, "settling");
     const renderedBeforeAck = fixture.widgetValue.render(160).join("\n");
@@ -1222,21 +1239,21 @@ test("staged fresh assignment bridges pending start through working", async () =
     );
     assert.equal(readAgentState(fixture.mailbox)?.activeRequestId, undefined);
 
-    const afterAck = await fixture.list();
+    const afterAck = await list();
     assert.equal(afterAck.details.agents[0].state, "settling");
 
-    const settlingRefresh = await fixture.list();
+    const settlingRefresh = await list();
     assert.equal(settlingRefresh.details.agents[0].state, "settling");
     const renderedAfterAck = fixture.widgetValue.render(160).join("\n");
     assert.match(renderedAfterAck, /starting/);
     assert.doesNotMatch(renderedAfterAck, /settling/);
 
     fixture.markWorking(requestId);
-    const working = await fixture.list();
+    const working = await list();
     assert.equal(working.details.agents[0].state, "working");
     assert.equal(working.details.agents[0].active_request_id, requestId);
     assert.equal(
-      working.details.agents[0].available_actions.includes("delegate"),
+      working.details.agents[0].available_tools.includes("agent_delegate"),
       false,
     );
     await new Promise<void>((resolve) => setTimeout(resolve, 2100));
@@ -1246,7 +1263,7 @@ test("staged fresh assignment bridges pending start through working", async () =
     assert.equal(working.details.agents.length, 1);
     assert.ok(fixture.workingObservations > 0);
 
-    const settling = await fixture.list();
+    const settling = await list();
     assert.equal(settling.details.agents[0].state, "working");
     assert.doesNotMatch(fixture.widgetValue.render(160).join("\n"), /ready/);
   } finally {
@@ -1346,9 +1363,9 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
   for (const handler of pi.events.get("session_start") ?? [])
     await handler(undefined, context);
   try {
-    const delegated = await pi.tools[0].execute(
+    const delegated = await registeredAgentTool(pi, "delegate").execute(
       "id",
-      { action: "delegate", definition: "agent", label, task: "fresh path" },
+      { definition: "agent", label, task: "fresh path" },
       undefined,
       undefined,
       context,
@@ -1379,31 +1396,27 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
         `${startup.mailbox}/result-${recovered.activeRequestId}.json`,
       ),
     );
-    const listed = await pi.tools[0].execute(
-      "list",
-      { action: "list" },
-      undefined,
-      undefined,
-      context,
-    );
+    const listed = await pi.tools
+      .find((tool) => tool.name === "agent_list")!
+      .execute("list", {}, undefined, undefined, context);
     assert.equal(
       listed.details.agents[0]?.agent,
       label,
       JSON.stringify(listed.details),
     );
 
-    const inspected = await pi.tools[0].execute(
+    const inspected = await registeredAgentTool(pi, "inspect").execute(
       "inspect",
-      { action: "inspect", agent: label },
+      { agent: label },
       undefined,
       undefined,
       context,
     );
     assert.equal(inspected.details.ok, true, JSON.stringify(inspected.details));
 
-    const closed = await pi.tools[0].execute(
+    const closed = await registeredAgentTool(pi, "close").execute(
       "close",
-      { action: "close", agent: label },
+      { agent: label },
       undefined,
       undefined,
       context,
@@ -1424,11 +1437,18 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
 
 test("staged fresh assignment removes a fast completion without observing working", async () => {
   const fixture = createStagedAssignmentFixture("agent", true);
+  const list = () =>
+    registeredAgentTool(fixture.pi, "list").execute(
+      "id",
+      {},
+      undefined,
+      undefined,
+      fixture.context,
+    );
   try {
-    const starting = fixture.pi.tools[0].execute(
+    const starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "agent",
         task: "complete before the working snapshot",
       },
@@ -1462,7 +1482,7 @@ test("staged fresh assignment removes a fast completion without observing workin
     assert.equal(readAgentState(fixture.mailbox)?.activeRequestId, undefined);
 
     fixture.releaseInitialStatus();
-    const beforeCompletion = await fixture.list();
+    const beforeCompletion = await list();
     assert.equal(beforeCompletion.details.agents[0].state, "settling");
     assert.equal(fixture.workingObservations, 0);
     const renderedBeforeCompletion = fixture.widgetValue.render(160).join("\n");
@@ -1482,14 +1502,14 @@ test("staged fresh assignment removes a fast completion without observing workin
       () => !readAgentState(fixture.mailbox),
       "fast completion cleanup did not remove the mailbox",
     );
-    const afterCleanup = await fixture.list();
+    const afterCleanup = await list();
     assert.deepEqual(afterCleanup.details.agents, []);
     assert.equal(readAgentState(fixture.mailbox), undefined);
     assert.equal(realFs.existsSync(fixture.mailbox), false);
     const renderedAfterCleanup = fixture.widgetValue.render(160).join("\n");
     assert.doesNotMatch(renderedAfterCleanup, /starting/);
     assert.doesNotMatch(renderedAfterCleanup, /working/);
-    const laterRefresh = await fixture.list();
+    const laterRefresh = await list();
     assert.deepEqual(laterRefresh.details.agents, []);
     await new Promise<void>((resolve) => setTimeout(resolve, 2100));
     const renderedAfterRefresh = fixture.widgetValue.render(160).join("\n");
@@ -1529,9 +1549,9 @@ test("lead herd runs start once and stay open through intermediate settlement", 
   try {
     await pi.events.get("session_start")![0](undefined, context);
     await emit("agent_start");
-    const first = await pi.tools[0].execute(
+    const first = await registeredAgentTool(pi, "delegate").execute(
       "first-delegate",
-      { action: "delegate", definition: "agent", label, task: "first task" },
+      { definition: "agent", label, task: "first task" },
       undefined,
       undefined,
       context,
@@ -1551,9 +1571,9 @@ test("lead herd runs start once and stay open through intermediate settlement", 
     );
     resetAgentMailbox(startup.mailbox);
     await emit("agent_start");
-    const second = await pi.tools[0].execute(
+    const second = await registeredAgentTool(pi, "delegate").execute(
       "second-delegate",
-      { action: "delegate", definition: "agent", label, task: "second task" },
+      { definition: "agent", label, task: "second task" },
       undefined,
       undefined,
       context,
@@ -1575,10 +1595,9 @@ test("lead herd runs start once and stay open through intermediate settlement", 
     "invalid.label",
     "a" + "b".repeat(32),
   ]) {
-    const result = await invalidPi.tools[0].execute(
+    const result = await registeredAgentTool(invalidPi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "agent",
         label: invalidLabel,
         task: "reject invalid label",
@@ -1588,7 +1607,13 @@ test("lead herd runs start once and stay open through intermediate settlement", 
       fakeContext(),
     );
     assert.equal(result.details.error.category, "invalid_request");
-    assert.deepEqual(invalidPi.calls, []);
+    assert.ok(
+      invalidPi.calls.every(
+        (args) =>
+          (args[0] === "status" && args[1] === "--json") || isApiSnapshot(args),
+      ),
+      `invalid label made unexpected calls: ${JSON.stringify(invalidPi.calls)}`,
+    );
   }
 });
 
@@ -1633,9 +1658,9 @@ test("restored herd run keeps its start and closes after settlement", async () =
     assert.ok(finished.data.completedAt >= startedAt);
     for (const handler of pi.events.get("agent_start") ?? [])
       await handler(undefined, context);
-    const second = await pi.tools[0].execute(
+    const second = await registeredAgentTool(pi, "delegate").execute(
       "second-run",
-      { action: "delegate", definition: "agent", label, task: "second run" },
+      { definition: "agent", label, task: "second run" },
       undefined,
       undefined,
       context,
@@ -2028,10 +2053,12 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     registerExtension!(leadAgent.pi as never);
     const leadContext = fakeContext();
     await leadAgent.events.get("session_start")![0](undefined, leadContext);
-    const leadReplyResult = await leadAgent.tools[0].execute(
+    const leadReplyResult = await registeredAgentTool(
+      leadAgent,
+      "reply",
+    ).execute(
       "lead-reply",
       {
-        action: "reply",
         agent: parentLabel,
         message: "Tell the child ALPHA.",
       },
@@ -2125,11 +2152,12 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     );
     for (const handler of parentAgent.events.get("session_start") ?? [])
       await handler(undefined, parentReplyAgentContext);
-    const parentTool = parentAgent.tools[0];
-    const childReplyResult = await parentTool.execute(
+    const childReplyResult = await registeredAgentTool(
+      parentAgent,
+      "reply",
+    ).execute(
       "parent-reply",
       {
-        action: "reply",
         agent: childLabel,
         message: "Use ALPHA and finish.",
       },
@@ -2340,9 +2368,9 @@ test("one failed child recovery does not clear valid sibling runtimes", async ()
   try {
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
-    const listed = await pi.tools[0].execute(
+    const listed = await registeredAgentTool(pi, "list").execute(
       "list",
-      { action: "list" },
+      {},
       undefined,
       undefined,
       context,
@@ -2411,26 +2439,29 @@ test("historical session with its inherited label rejects an active managed repr
   try {
     const controllerContext = fakeContext();
     controllerContext.sessionManager.getSessionId = () => session.id;
-    const ownSession = await pi.tools[0].execute(
-      "controller-session",
-      {
-        action: "continue",
-        session: session.id,
-        task: "must not self-delegate",
-      },
-      undefined,
-      undefined,
-      controllerContext,
-    );
+    const ownSession = await pi.tools
+      .find((tool) => tool.name === "agent_continue")!
+      .execute(
+        "controller-session",
+        {
+          session: session.id,
+          task: "must not self-delegate",
+        },
+        undefined,
+        undefined,
+        controllerContext,
+      );
     assert.equal(ownSession.details.error.category, "invalid_request");
     const before = pi.calls.length;
-    const result = await pi.tools[0].execute(
-      "id",
-      { action: "continue", session: session.path, task: "must wait" },
-      undefined,
-      undefined,
-      ownedSessionContext(session.id, label),
-    );
+    const result = await pi.tools
+      .find((tool) => tool.name === "agent_continue")!
+      .execute(
+        "id",
+        { session: session.path, task: "must wait" },
+        undefined,
+        undefined,
+        ownedSessionContext(session.id, label),
+      );
     assert.equal(result.details.error.category, "agent_busy");
     assert.match(result.details.error.message, /exact Pi session|represented/i);
     assert.equal(
@@ -2492,9 +2523,9 @@ test("exact requested session IDs remain busy when persisted paths are stale", a
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "continue").execute(
       "id",
-      { action: "continue", session: sessionPath, task: "must wait" },
+      { session: sessionPath, task: "must wait" },
       undefined,
       undefined,
       ownedSessionContext(session.id, `${name}-agent`),
@@ -2559,17 +2590,17 @@ test("concurrent session activation permits one generation", async () => {
   });
   registerExtension!(pi.pi as never);
   try {
-    const first = pi.tools[0].execute(
+    const first = registeredAgentTool(pi, "continue").execute(
       "first",
-      { action: "continue", session: session.path, task: "first assignment" },
+      { session: session.path, task: "first assignment" },
       undefined,
       undefined,
       ownedSessionContext(session.id, name),
     );
     await entered;
-    const second = await pi.tools[0].execute(
+    const second = await registeredAgentTool(pi, "continue").execute(
       "second",
-      { action: "continue", session: session.id, task: "duplicate assignment" },
+      { session: session.id, task: "duplicate assignment" },
       undefined,
       undefined,
       ownedSessionContext(session.id, name),
@@ -2771,10 +2802,9 @@ test("session assignment reports a pane mismatch from the agent state producer",
   });
   registerExtension!(lead.pi as never);
   try {
-    const result = await lead.tools[0].execute(
+    const result = await registeredAgentTool(lead, "continue").execute(
       "id",
       {
-        action: "continue",
         session: producerMismatchPath,
         task: "continue the mismatched session",
       },
@@ -2822,9 +2852,9 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
-      { action: "delegate", definition: name, label, task: "fresh task" },
+      { definition: name, label, task: "fresh task" },
       undefined,
       undefined,
       fakeContext(),
@@ -2898,10 +2928,9 @@ test("startup failure cleans private prompt snapshots", async () => {
   try {
     const context = fakeContext();
     await pi.events.get("agent_start")![0](undefined, context);
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: name,
         task: "must fail at startup",
       },
@@ -2956,10 +2985,9 @@ test("caller assignment files suppress canonical-overlapping automatic prompts",
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: name,
         files: [callerPath],
         task: "use caller context",
@@ -3013,9 +3041,9 @@ test("automatic prompt failures happen before topology or mailbox mutation", asy
       const pi = fakePi({ exec: startup.exec });
       registerExtension!(pi.pi as never);
       try {
-        const result = await pi.tools[0].execute(
+        const result = await registeredAgentTool(pi, "delegate").execute(
           "id",
-          { action: "delegate", definition: name, label, task: "must fail" },
+          { definition: name, label, task: "must fail" },
           undefined,
           undefined,
           fakeContext(),
@@ -3059,10 +3087,9 @@ test("fresh and non-live historical assignments reject disabled definitions", as
   const freshPi = fakePi({ exec: freshStartup.exec });
   registerExtension!(freshPi.pi as never);
   try {
-    const result = await freshPi.tools[0].execute(
+    const result = await registeredAgentTool(freshPi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: freshName,
         task: "must remain disabled",
       },
@@ -3111,10 +3138,9 @@ test("fresh and non-live historical assignments reject disabled definitions", as
   const historicalPi = fakePi({ exec: historicalStartup.exec });
   registerExtension!(historicalPi.pi as never);
   try {
-    const result = await historicalPi.tools[0].execute(
+    const result = await registeredAgentTool(historicalPi, "continue").execute(
       "id",
       {
-        action: "continue",
         session: session.path,
         task: "must remain disabled",
       },
@@ -3166,10 +3192,9 @@ test("assigning a parent with a disabled child fails with an explicit reason", a
   });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "disabled-child-parent",
         task: "must reject disabled child",
       },
@@ -3241,10 +3266,9 @@ test("session continuation starts a new agent generation with current prompt con
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "continue").execute(
       "id",
       {
-        action: "continue",
         session: session.path,
         task: "resume current prompt",
       },
@@ -3349,9 +3373,9 @@ test("session continuation ignores an unrelated missing live session path", asyn
   });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "continue").execute(
       "id",
-      { action: "continue", session: sessionPath, task: "continue" },
+      { session: sessionPath, task: "continue" },
       undefined,
       undefined,
       ownedSessionContext(session.id, name),
@@ -3437,9 +3461,9 @@ test("session continuation keeps an exact live ID busy despite a missing path ob
   });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "continue").execute(
       "id",
-      { action: "continue", session: sessionPath, task: "must wait" },
+      { session: sessionPath, task: "must wait" },
       undefined,
       undefined,
       ownedSessionContext(session.id, name),
@@ -3528,9 +3552,9 @@ test("session continuation keeps an exact live ID busy despite contradictory liv
   });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "continue").execute(
       "id",
-      { action: "continue", session: sessionPath, task: "must wait" },
+      { session: sessionPath, task: "must wait" },
       undefined,
       undefined,
       ownedSessionContext(session.id, name),
@@ -3629,9 +3653,9 @@ test("session continuation ignores removed secondary session fields", async () =
   });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "continue").execute(
       "id",
-      { action: "continue", session: sessionPath, task: "must wait" },
+      { session: sessionPath, task: "must wait" },
       undefined,
       undefined,
       ownedSessionContext(session.id, name),
@@ -3710,9 +3734,9 @@ test("session continuation fails closed on an unrelated malformed persisted mail
   registerExtension!(pi.pi as never);
   try {
     await assert.rejects(
-      pi.tools[0].execute(
+      registeredAgentTool(pi, "continue").execute(
         "id",
-        { action: "continue", session: sessionPath, task: "must fail closed" },
+        { session: sessionPath, task: "must fail closed" },
         undefined,
         undefined,
         ownedSessionContext(session.id, label),
@@ -3760,9 +3784,9 @@ test("rejects known generated-label envelope overflow before startup", async () 
     true,
   );
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
-      { action: "delegate", definition: "agent", task },
+      { definition: "agent", task },
       undefined,
       undefined,
       fakeContext(),
@@ -3825,9 +3849,9 @@ test("revalidates automatic-label collision sizing before startup", async () => 
     true,
   );
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
-      { action: "delegate", definition: "agent", task },
+      { definition: "agent", task },
       undefined,
       undefined,
       fakeContext(),
@@ -3862,9 +3886,9 @@ test("lost mailbox labels remain reserved until explicit close", async () => {
   const pi = fakePi({ exec: cascadeExecutor([]).exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
-      { action: "delegate", definition: "agent", label, task: "replace" },
+      { definition: "agent", label, task: "replace" },
       undefined,
       undefined,
       fakeContext(),
@@ -3901,9 +3925,9 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
   assert.equal(requestRecordBytes(label, "", task) <= 131072, true);
   assert.equal(requestRecordBytes(label, "startup-pane", task) > 131072, true);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
-      { action: "delegate", definition: "agent", label, task },
+      { definition: "agent", label, task },
       undefined,
       undefined,
       fakeContext(),
@@ -3926,10 +3950,9 @@ test("rolls back fresh assignment when the authoritative pane makes the request 
   const reusePi = fakePi({ exec: reuse.exec });
   registerExtension!(reusePi.pi as never);
   try {
-    const result = await reusePi.tools[0].execute(
+    const result = await registeredAgentTool(reusePi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: "agent",
         task: "retry after rollback",
       },
@@ -3950,29 +3973,34 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
   registerExtension!(pi.pi as never);
   const cases = [
     {
-      params: { action: "delegate" },
+      operation: "delegate",
+      params: {},
       message: "delegate requires definition",
     },
     {
-      params: { action: "continue", task: "missing session" },
+      operation: "continue",
+      params: { task: "missing session" },
       message: "continue requires session",
     },
     {
-      params: { action: "delegate", definition: " \t", task: " \t" },
-      message: "Invalid agent input",
+      operation: "delegate",
+      params: { definition: " \t", task: " \t" },
+      message: "Agent definition  \t was not found",
     },
     {
-      params: { action: "delegate", definition: "agent" },
+      operation: "delegate",
+      params: { definition: "agent" },
       message: "delegate requires task",
     },
     {
-      params: { action: "delegate", definition: "agent", task: " \t" },
-      message: "Invalid agent input",
+      operation: "delegate",
+      params: { definition: "agent", task: " \t" },
+      message: "Message must not be empty",
     },
   ];
 
-  for (const { params, message } of cases) {
-    const result = await pi.tools[0].execute(
+  for (const { operation, params, message } of cases) {
+    const result = await registeredAgentTool(pi, operation).execute(
       "id",
       params,
       undefined,
@@ -3982,7 +4010,13 @@ test("rejects invalid assignment prerequisites before lifecycle mutation", async
 
     assert.equal(result.details.error.category, "invalid_request");
     assert.equal(result.details.error.message, message);
-    assert.deepEqual(pi.calls, []);
+    assert.ok(
+      pi.calls.every(
+        (args) =>
+          (args[0] === "status" && args[1] === "--json") || isApiSnapshot(args),
+      ),
+      `invalid assignment prerequisite made unexpected calls: ${JSON.stringify(pi.calls)}`,
+    );
   }
 });
 
@@ -3993,9 +4027,9 @@ test("delegate keeps an explicit human-readable label", async () => {
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
-      { action: "delegate", definition: "agent", label, task: "map" },
+      { definition: "agent", label, task: "map" },
       undefined,
       undefined,
       fakeContext(),
@@ -4062,10 +4096,9 @@ test("rejects an invalid generated collision label after releasing its claim", a
   };
 
   try {
-    const result = await pi.tools[0].execute(
+    const result = await registeredAgentTool(pi, "delegate").execute(
       "id",
       {
-        action: "delegate",
         definition: label,
         task: "reject the oversized generated collision label",
       },
@@ -4089,46 +4122,6 @@ test("rejects an invalid generated collision label after releasing its claim", a
     realFs.rmSync(visibleMailbox, { recursive: true, force: true });
     realFs.unlinkSync(definitionPath);
   }
-});
-
-test("rejects illegal public parameter combinations before lifecycle mutation", async () => {
-  setLeadEnvironment();
-  const pi = fakePi();
-  registerExtension!(pi.pi as never);
-  const cases = [
-    { action: "delegate", task: "work" },
-    { action: "delegate", agent: "agent", task: "work" },
-    { action: "delegate", definition: "agent", reusable: true, task: "work" },
-    { action: "delegate", agent: "agent", message: "wrong", task: "work" },
-    { action: "delegate", definition: "agent", cwd: "/other", task: "work" },
-    { action: "unknown", task: "work" },
-    { action: "steer", message: "change" },
-    { action: "steer", agent: "agent" },
-    { action: "interrupt", message: "change now" },
-    { action: "interrupt", agent: "agent" },
-    { action: "close" },
-  ];
-  for (const params of cases) {
-    const result = await pi.tools[0].execute(
-      "id",
-      params,
-      undefined,
-      undefined,
-      fakeContext(),
-    );
-    assert.equal(result.details.error.category, "invalid_request");
-    assert.deepEqual(pi.calls, []);
-  }
-  const legacy = await pi.tools[0].execute(
-    "id",
-    { action: "close", label: "agent" } as any,
-    undefined,
-    undefined,
-    fakeContext(),
-  );
-  assert.equal(legacy.details.error.category, "invalid_request");
-  assert.equal(legacy.details.error.message, "close requires agent");
-  assert.deepEqual(pi.calls, []);
 });
 
 test("assignment launch handles delayed official Pi session identity", async () => {
@@ -4162,9 +4155,9 @@ test("assignment launch handles delayed official Pi session identity", async () 
     const pi = fakePi({ exec: startup.exec });
     registerExtension!(pi.pi as never);
     try {
-      const result = await pi.tools[0].execute(
+      const result = await registeredAgentTool(pi, "delegate").execute(
         "id",
-        { action: "delegate", definition: "agent", label, task },
+        { definition: "agent", label, task },
         undefined,
         undefined,
         fakeContext(),
@@ -4290,11 +4283,11 @@ test("empty early launch cleans exact resources and same-label retry creates one
     },
   });
   registerExtension!(pi.pi as never);
-  const tool = pi.tools[0];
+  const tool = registeredAgentTool(pi, "delegate");
   const context = fakeContext();
   const failed = await tool.execute(
     "id",
-    { action: "delegate", definition: "agent", label, task: "first attempt" },
+    { definition: "agent", label, task: "first attempt" },
     undefined,
     undefined,
     context,
@@ -4321,9 +4314,9 @@ test("empty early launch cleans exact resources and same-label retry creates one
   assert.equal(closeProvedByList, true);
   assert.equal(panePresent, false);
 
-  const listed = await tool.execute(
+  const listed = await registeredAgentTool(pi, "list").execute(
     "id",
-    { action: "list" },
+    {},
     undefined,
     undefined,
     context,
@@ -4332,7 +4325,6 @@ test("empty early launch cleans exact resources and same-label retry creates one
   const retried = await tool.execute(
     "id",
     {
-      action: "delegate",
       definition: "agent",
       task: "corrected attempt",
     },
@@ -4367,10 +4359,9 @@ test("assignment launch bounds missing official Pi session identity grace", asyn
   );
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  const result = await pi.tools[0].execute(
+  const result = await registeredAgentTool(pi, "delegate").execute(
     "id",
     {
-      action: "delegate",
       definition: "agent",
       task: "missing identity",
     },
@@ -4419,9 +4410,9 @@ test("assignment integration grace aborts without a later lookup or timer", asyn
   });
   registerExtension!(pi.pi as never);
   const startedAt = Date.now();
-  const result = await pi.tools[0].execute(
+  const result = await registeredAgentTool(pi, "delegate").execute(
     "id",
-    { action: "delegate", definition: "agent", label, task: "abort identity" },
+    { definition: "agent", label, task: "abort identity" },
     controller.signal,
     undefined,
     fakeContext(),

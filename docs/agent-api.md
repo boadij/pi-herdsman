@@ -14,8 +14,8 @@ their canonical pages.
 If you only want to configure, observe, focus, or stop agents from Pi's TUI,
 begin with [Getting started](getting-started.md) instead.
 
-For an active chief supervising independent leads, use the [`staff` and
-`chief` contracts](reference/supervision.md).
+For an active Chief supervising independent Leads, use the [`staff_*` and
+`supervisor_*` contracts](reference/supervision.md).
 
 ## Prerequisites
 
@@ -25,24 +25,24 @@ must run inside [herdr](https://github.com/herdrdev/herdr).
 
 ## First use
 
-The exact controller contract is the [`agent` API](reference/agent.md).
-Start by inspecting the current roster and authoritative visible agents:
+The exact controller contract is the [Agent tools](reference/agent.md).
+Start by calling `agent_list` to inspect the current roster and authoritative
+visible agents:
 
 ```json
-{ "action": "list" }
+{}
 ```
 
-Then delegate to a fresh agent by definition:
+Then call `agent_delegate` to delegate to a fresh agent by definition:
 
 ```json
 {
-  "action": "delegate",
   "definition": "implementer",
   "task": "Implement the approved change"
 }
 ```
 
-`delegate` is non-blocking orchestration. It returns after the agent has accepted
+`agent_delegate` is non-blocking orchestration. It returns after the agent has accepted
 the assignment, not when the agent finishes.
 
 The owner remains free to make useful progress, coordinate other independent
@@ -54,7 +54,7 @@ cleanup, blocked work, settling, and delegating-agent completion, is owned by
 [Lifecycle](concepts/lifecycle.md).
 
 The examples above establish the first-use path only. Use the
-[`agent` API](reference/agent.md) for exact accepted fields, validation,
+[Agent tools](reference/agent.md) for exact accepted fields, validation,
 control eligibility, session continuation, and return shapes.
 
 ## Understand agent identity
@@ -73,14 +73,14 @@ ownership and delegation limits.
 
 An agent that genuinely needs an owner decision uses the separate
 [`ask_owner` API](reference/ask-owner.md). The exact owner answers through the
-controller's `reply` action; ordinary active agent work is not an owner
+controller's `agent_reply` tool; ordinary active agent work is not an owner
 question.
 
 ## Pass evidence through handoffs
 
 Read [Handoffs and files](guides/handoffs.md) for `files`, result references, body
 references, and coordination artifacts. That guide owns the evidence-transfer
-workflow; the `agent` reference owns the accepted request fields.
+workflow; the Agent tools reference owns the accepted request fields.
 
 ## Handle failures conservatively
 

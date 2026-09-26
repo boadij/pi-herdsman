@@ -136,11 +136,13 @@ accepted and can match a tool registered later. Pi Herdsman does not provide
 source-qualified permissions, such as an extension path plus tool name.
 
 An explicit `tools` allowlist takes precedence over the default-selection
-switches `noTools` and `noBuiltinTools`; `excludeTools` still removes matching
-names. Thus a managed agent may receive both `--no-tools` and an explicit
-`--tools ask_owner`. Pi Herdsman protects that mandatory `ask_owner` capability in
-managed launches and removes it from explicit exclusions. Unmanaged Pi
-launches do not receive this exception.
+switches `noTools` and `noBuiltinTools`; `excludeTools` removes matching
+ordinary tool names. Managed agents always retain role-required Herdsman tools,
+which are protected from exclusions. When `tools` is omitted, Pi Herdsman does
+not emit `--tools`, preserving Pi's configured/default tool selection. When
+`tools` is explicitly set, the selected allowlist is augmented with the
+managed agent's mandatory role tools. Unmanaged Pi launches do not receive
+these managed-agent exceptions.
 
 Loading extension code and exposing its tools are separate concerns. An
 extension listed in `extensions` is loaded, while its registered tools still
@@ -173,35 +175,22 @@ pinned in the definition is passed to Pi as written and keeps the definition's
 own extension policy, so a definition that pins such a model must set
 `noExtensions: false` itself.
 
-## Tool inference for `agents`
+## Managed-agent coordination tools
 
-A non-empty `agents` list declares potential agent definitions; effective
-delegation also requires permitted `agent` capability and a controller depth
-that allows delegation.
+A managed agent with a non-empty effective `agents` list is
+delegation-enabled and receives all nine coordination tools:
+`agent_list`, `agent_delegate`, `agent_continue`, `agent_steer`,
+`agent_interrupt`, `agent_reply`, `agent_close`, `agent_inspect`, and
+`agent_transcript`. An omitted or empty `agents` list makes it a leaf; a leaf
+receives `ask_owner` but no delegation tools. Every managed agent receives
+`ask_owner`.
 
-This capability is projected by controller depth. Lead-launched definitions
-retain their declared agent allowlist and effective `agent` tool. An
-agent-launched agent receives no agent allowlist and no effective `agent`,
-even when its definition is delegation-enabled at the lead. Explicit tool
-allowlists, empty arrays, `noTools`, and exclusions remain fail-closed.
-
-When it has an explicit non-empty `tools` allowlist and does not already contain
-`agent`, Pi Herdsman appends `agent` to the effective allowlist unless denied.
-
-Rules:
-
-| Configuration                                   | Effective inference                                                       |
-| ----------------------------------------------- | ------------------------------------------------------------------------- |
-| `agents` omitted or `[]`                        | no inferred `agent`                                                       |
-| non-empty `agents`, `tools` omitted             | keep Pi default tool policy; do not materialize an `agent`-only allowlist |
-| non-empty `agents`, explicit non-empty `tools`  | append `agent`                                                            |
-| `excludeTools` contains `agent`                 | explicit denial wins                                                      |
-| `noTools: true`, no explicit `agent` in `tools` | no inferred `agent`                                                       |
-| `noTools: true`, explicit `tools: ["agent"]`    | explicit allow is preserved                                               |
-| explicit allow plus explicit exclusion          | exclusion wins                                                            |
-
-`ask_owner` is separate mandatory managed agent infrastructure and is not this
-inference rule.
+`tools` and `excludeTools` configure ordinary execution tools, not this
+mandatory role infrastructure. They cannot remove required coordination tools
+or `ask_owner`. If `tools` is omitted, Pi Herdsman emits no `--tools` option
+and Pi's configured/default selection remains in effect. An explicit `tools`
+allowlist is augmented with the role-required coordination tools (when
+delegation-enabled) and `ask_owner`.
 
 ## Body composition
 
@@ -305,8 +294,9 @@ Additional local review instructions.
 @./prompts/review-policy.md
 ```
 
-Because `agents` is non-empty and the explicit `tools` list does not deny it,
-the effective tools include `agent`.
+Because `agents` is non-empty, this managed agent receives all nine
+coordination tools and `ask_owner`, in addition to the explicitly selected
+ordinary tools.
 
 To disable a bundled role without copying its definition, use a minimal global
 override:

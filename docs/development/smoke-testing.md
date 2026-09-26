@@ -58,7 +58,6 @@ Use the exact returned session ID or path for a follow-up assignment:
 
 ```json
 {
-  "action": "continue",
   "session": "<exact session>",
   "task": "Continue the investigation with one short follow-up."
 }
@@ -78,7 +77,7 @@ Verify:
 While the continuation assignment is active, submit another `continue` request
 for the same exact session. Verify it fails with
 `agent_busy`, creates no duplicate agent or pane, and leaves the active
-assignment unchanged. After both assignments finish, `agent list` must show
+assignment unchanged. After both assignments finish, `agent_list` must show
 no completed idle agent.
 
 ## Historical session continuation
@@ -94,22 +93,20 @@ Verify:
   generation;
 - the exact session continues.
 
-## Inferred delegation
+## Managed-agent tool policy
 
-Use a bundled delegating agent definition whose source `tools` list does not explicitly
-contain `agent`, such as the current `implementer`.
+Launch a delegating managed agent with an explicit ordinary execution-tool
+allowlist and ask it to delegate one bounded scout task. Verify that it retains
+those ordinary tools and can call all nine coordination tools plus
+`ask_owner`, then verify that the spawned scout is a leaf with its normal tools
+and `ask_owner` but no delegation tools. Also verify that role-required tools
+are not removed by `excludeTools`.
 
-Ask it to delegate one bounded scout task.
-
-Verify:
-
-- the real Pi agent can call `agent`;
-- agent result reaches the delegating agent;
-- delegating agent integrates it once;
-- all one-shot agents clean up.
-
-This proves effective-definition inference reaches Pi launch policy rather than
-only metadata.
+For a definition with `tools` omitted, verify that launch does not add a
+`--tools` option and Pi's configured/default selection remains in effect.
+For an explicit `tools` list, verify that Pi receives the selected ordinary
+tools augmented with the agent's required role tools. Confirm result delivery,
+integration, and cleanup for all one-shot agents.
 
 ## Body reference expansion
 
@@ -140,7 +137,7 @@ Verify:
 1. agent calls `ask_owner` alone;
 2. owner receives one question;
 3. agent becomes `blocked`;
-4. owner replies with exact `agent reply`;
+4. owner replies with exact `agent_reply`;
 5. reply continues the same assignment;
 6. agent produces exactly one final result;
 7. no agent/mailbox leak remains.
@@ -156,8 +153,8 @@ Inspect the actual transcript and verify the delegating agent:
 - does not repeat the delegated reconnaissance locally;
 - does not manufacture adjacent analysis merely to remain active;
 - does not delegate substantially overlapping reconnaissance to another agent;
-- does not poll `agent list`;
-- does not use `agent inspect`, `agent transcript`, or `agent steer` merely to check progress;
+- does not poll `agent_list`;
+- does not use `agent_inspect`, `agent_transcript`, or `agent_steer` merely to check progress;
 - does not send "finish", "status", or equivalent progress nudges to a healthy
   agent;
 - does not sleep or use another mechanism to keep the turn alive;
@@ -199,7 +196,7 @@ Verify the native Definitions selector shows:
 - `Inherit current session` for model and thinking;
 - narrow panes remain width-safe.
 
-Structured `agent list` should still retain exact deterministic metadata.
+Structured `agent_list` should still retain exact deterministic metadata.
 
 Select a disposable bundled, project, or global definition and change its
 model, thinking, and enabled state. Confirm that project discovery requires Pi
@@ -236,7 +233,7 @@ Verify startup failure:
 
 After every smoke:
 
-- `agent list` has no unintended managed agents;
+- `agent_list` has no unintended managed agents;
 - temporary global definitions are removed;
 - temporary prompt/body files are removed;
 - disposable herdr resources are closed by exact ID;
@@ -250,10 +247,10 @@ substitutes for these checks.
 
 | Scenario                                                                                                                                                                       | Result  |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| Normal lead has `agent` and `chief`, not `staff`                                                                                                                               | NOT RUN |
-| Active Chief has exactly `staff`, not lead controller tools                                                                                                                    | NOT RUN |
-| Active Chief remains exactly `staff` after `/tree` restores a pre-Chief Lead branch                                                                                            | NOT RUN |
-| Leaving Chief persists `role` plus exact `leadTools`; resume repairs stale restored `staff` before another model turn                                                          | NOT RUN |
+| Normal lead has Agent, supervisor, and peer semantic tools, not staff tools                                                                                                    | NOT RUN |
+| Active Chief has exactly the five staff semantic tools, not lead controller tools                                                                                              | NOT RUN |
+| Active Chief remains exactly `staff_*` after `/tree` restores a pre-Chief Lead branch                                                                                          | NOT RUN |
+| Leaving Chief persists `role` plus exact `leadTools`; resume repairs stale restored `staff_*` before another model turn                                                        | NOT RUN |
 | A legitimate ordinary branch loadout is preserved instead of being overwritten by an older `leadTools` checkpoint                                                              | NOT RUN |
 | Persisted Chief resume collision becomes suspended                                                                                                                             | NOT RUN |
 | Ordinary losing `/chief` collision remains a lead with its tools and offers Focus/Cancel                                                                                       | NOT RUN |
@@ -272,15 +269,15 @@ substitutes for these checks.
 | Duplicate live agents, coordination records, or agent evidence fail closed                                                                                                     | NOT RUN |
 | Target disappearance or replacement between list and action is rejected                                                                                                        | NOT RUN |
 | Inspect a lead and compare bounded peek evidence                                                                                                                               | NOT RUN |
-| Read `staff transcript` when `transcript` is advertised; the action validates the persisted session header, version, and exact Pi session ID; content is bounded and read-only | NOT RUN |
-| `staff inspect` exposes live terminal/process evidence while `staff transcript` exposes persisted conversation/tool evidence                                                   | NOT RUN |
+| Read `staff_transcript` when `transcript` is advertised; the action validates the persisted session header, version, and exact Pi session ID; content is bounded and read-only | NOT RUN |
+| `staff_inspect` exposes live terminal/process evidence while `staff_transcript` exposes persisted conversation/tool evidence                                                   | NOT RUN |
 | Focus a lead after exact revalidation                                                                                                                                          | NOT RUN |
 | Chief `message` to idle, working, or blocked leads                                                                                                                             | NOT RUN |
 | Two Chief messages queue and arrive once and in order                                                                                                                          | NOT RUN |
 | A quarantined message does not block a new message to the same lead                                                                                                            | NOT RUN |
 | Leads retain descendant ownership after a Chief `message`                                                                                                                      | NOT RUN |
-| Lead `chief message` reaches the active Chief                                                                                                                                  | NOT RUN |
-| Lead `chief ask` reaches the active Chief and creates one pending ask                                                                                                          | NOT RUN |
+| Lead `supervisor_message` reaches the active Chief                                                                                                                             | NOT RUN |
+| Lead `supervisor_ask` reaches the active Chief and creates one pending ask                                                                                                     | NOT RUN |
 | Pending ask projects as `needs_you` with bounded public question and exact reply action                                                                                        | NOT RUN |
 | A second lead ask while one is pending is rejected                                                                                                                             | NOT RUN |
 | Exact Chief `reply` reaches the lead and clears the ask after local acceptance                                                                                                 | NOT RUN |

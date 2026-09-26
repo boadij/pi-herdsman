@@ -106,6 +106,18 @@ export type AgentDefinition = {
   overrideSource?: string;
 };
 
+export const AGENT_COORDINATION_TOOLS = [
+  "agent_list",
+  "agent_delegate",
+  "agent_continue",
+  "agent_steer",
+  "agent_interrupt",
+  "agent_reply",
+  "agent_close",
+  "agent_inspect",
+  "agent_transcript",
+] as const;
+
 function markdownFiles(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);
@@ -353,15 +365,13 @@ export function discoverAgentDefinitions(
         throw new Error(
           `agent ${definition.name} references missing agent definition ${reference}`,
         );
-  return effective.map((definition) =>
-    inferAgentDefinitionTools({
-      ...definition,
-      frontmatter: {
-        ...definition.frontmatter,
-        enabled: definition.frontmatter.enabled ?? true,
-      },
-    }),
-  );
+  return effective.map((definition) => ({
+    ...definition,
+    frontmatter: {
+      ...definition.frontmatter,
+      enabled: definition.frontmatter.enabled ?? true,
+    },
+  }));
 }
 
 export function discoverAgent(
@@ -404,24 +414,10 @@ export type AgentDefinitionScope = "delegating" | "leaf";
 function withoutDelegationCapability(
   definition: AgentDefinition,
 ): AgentDefinition {
-  const { agents: _agents, tools, ...frontmatter } = definition.frontmatter;
-  if (tools === undefined)
-    return {
-      ...definition,
-      frontmatter,
-    };
-  const projectedTools = normalizedToolNames(tools).filter(
-    (tool) => tool !== "agent",
-  );
+  const { agents: _agents, ...frontmatter } = definition.frontmatter;
   return {
     ...definition,
-    frontmatter: {
-      ...frontmatter,
-      ...(tools.length > 0 && projectedTools.length === 0
-        ? { noTools: true }
-        : {}),
-      tools: projectedTools,
-    },
+    frontmatter,
   };
 }
 
@@ -682,41 +678,10 @@ export function expandAgentBodyFiles(
   });
 }
 
-export function inferAgentDefinitionTools(
-  definition: AgentDefinition,
-): AgentDefinition {
-  const allowedAgentDefinitions = definition.frontmatter.agents ?? [];
-  if (allowedAgentDefinitions.length === 0) return definition;
-  const tools = normalizedToolNames(definition.frontmatter.tools);
-  const excluded = new Set(
-    normalizedToolNames(definition.frontmatter.excludeTools),
-  );
-  if (
-    excluded.has("agent") ||
-    (definition.frontmatter.noTools === true && !tools.includes("agent")) ||
-    tools.length === 0 ||
-    tools.includes("agent")
-  )
-    return definition;
-  return {
-    ...definition,
-    frontmatter: {
-      ...definition.frontmatter,
-      tools: [...(definition.frontmatter.tools ?? []), "agent"],
-    },
-  };
-}
-
 export function agentDefinitionDelegationEnabled(
   definition: AgentDefinition,
 ): boolean {
-  if ((definition.frontmatter.agents?.length ?? 0) === 0) return false;
-  const tools = normalizedToolNames(definition.frontmatter.tools);
-  const excluded = normalizedToolNames(definition.frontmatter.excludeTools);
-  if (excluded.includes("agent")) return false;
-  if (definition.frontmatter.noTools === true && !tools.includes("agent"))
-    return false;
-  return definition.frontmatter.tools === undefined || tools.length > 0;
+  return (definition.frontmatter.agents?.length ?? 0) > 0;
 }
 
 export type AgentLaunchOptions = {
@@ -821,14 +786,27 @@ export function agentLaunchArgs(
   if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");
   if (managedAgent) {
     if (noTools || explicitTools) {
-      const tools = normalizedToolNames([
-        ...(frontmatter.tools ?? []),
-        "ask_owner",
-      ]).filter((tool, index, all) => all.indexOf(tool) === index);
+      const requiredTools = agentDefinitionDelegationEnabled(agent)
+        ? [...AGENT_COORDINATION_TOOLS, "ask_owner"]
+        : ["ask_owner"];
+      const tools = [
+        ...new Set([
+          ...normalizedToolNames(frontmatter.tools).filter(
+            (tool) => !requiredTools.includes(tool),
+          ),
+          ...requiredTools,
+        ]),
+      ];
       args.push("--tools", tools.join(","));
     }
+    const requiredTools = new Set([
+      "ask_owner",
+      ...(agentDefinitionDelegationEnabled(agent)
+        ? AGENT_COORDINATION_TOOLS
+        : []),
+    ]);
     const excluded = normalizedToolNames(frontmatter.excludeTools)
-      .filter((tool) => tool !== "ask_owner")
+      .filter((tool) => !requiredTools.has(tool))
       .filter((tool, index, all) => all.indexOf(tool) === index);
     if (excluded.length) args.push("--exclude-tools", excluded.join(","));
   } else {

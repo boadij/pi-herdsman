@@ -124,18 +124,18 @@ test("Supervision context formatting preserves state, safety, and bounded record
     assert.doesNotMatch(formatted, /truncated/);
     assert.match(
       formatted,
-      /For a straightforward message or reply, use the exact lead value directly; do not call staff list, inspect, or another read command first\./,
+      /For a straightforward message or reply, use the exact session value directly; do not call staff_list, staff_inspect, or another read command first\./,
     );
     assert.ok(
       formatted.indexOf("display_name: workspace\/api") <
         formatted.indexOf("display_name: workspace\/research"),
     );
     for (const value of [
-      "lead: lead-bbbbbbbb",
-      "lead: lead-aaaaaaaa",
+      "session: lead-bbbbbbbb",
+      "session: lead-aaaaaaaa",
       "runtime: working",
       "runtime: idle",
-      "actions: inspect, message, reply",
+      "available_tools: staff_inspect, staff_message, staff_reply",
       "agent_counts: active=1 blocked=1 total=2",
       "ask_id: ask-123",
       "question: OAuth or service accounts?",
@@ -153,6 +153,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
       /recent_output|foreground_processes|\bpid\b/iu,
     );
     assert.doesNotMatch(formatted, /lead_session_id/);
+    assert.doesNotMatch(formatted, /^  lead:|^  actions:/mu);
 
     const stale = formatSupervisionContext(snapshot, { status: "stale" });
     assert.match(stale, /The latest refresh attempt failed/);
@@ -233,9 +234,10 @@ test("Supervision context formatting preserves state, safety, and bounded record
       1,
     );
     assert.match(formatted, /truncated: true/);
-    assert.match(formatted, /Use staff list for current omitted state/);
-    assert.match(formatted, /lead: lead-0\n/);
-    assert.doesNotMatch(formatted, /lead: lead-9\n/);
+    assert.match(formatted, /Use staff_list for current omitted state/);
+    assert.match(formatted, /session: lead-0\n/);
+    assert.doesNotMatch(formatted, /session: lead-9\n/);
+    assert.doesNotMatch(formatted, /^  lead:|^  actions:/mu);
   }
 });
 
@@ -1142,7 +1144,7 @@ test("herd run entries render only valid finished durations", () => {
 test("empty partial coordination calls do not duplicate the tool name", () => {
   assert.equal(
     renderedText(
-      renderCoordinationCall("agent", {}, presentationTheme, {
+      renderCoordinationCall("agent", "", {}, presentationTheme, {
         isPartial: true,
         argsComplete: false,
       }),
@@ -1156,6 +1158,7 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
     renderedText(
       renderCoordinationCall(
         "agent",
+        "delegate",
         {
           action: "delegate",
           definition: "researcher",
@@ -1172,6 +1175,7 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
     renderedText(
       renderCoordinationCall(
         "agent",
+        "delegate",
         { action: "delegate", definition: "researcher", task: "Investigate" },
         presentationTheme,
       ),
@@ -1182,6 +1186,7 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
     renderedText(
       renderCoordinationCall(
         "agent",
+        "continue",
         {
           action: "continue",
           session: "/tmp/session.jsonl",
@@ -1195,6 +1200,7 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
   const expandedContinue = renderedText(
     renderCoordinationCall(
       "agent",
+      "continue",
       {
         action: "continue",
         session: "/tmp/session.jsonl",
@@ -1212,6 +1218,7 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
     renderedText(
       renderCoordinationCall(
         "agent",
+        "delegate",
         { action: "delegate", definition: "researcher", task: "streaming" },
         presentationTheme,
         { isPartial: true, argsComplete: false },
@@ -1222,6 +1229,7 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
   const expanded = renderedText(
     renderCoordinationCall(
       "agent",
+      "delegate",
       {
         action: "delegate",
         definition: "researcher",
@@ -1239,6 +1247,31 @@ test("coordination calls use semantic collapsed and expanded presentation", () =
   assert.match(expanded, /files:\n  investigation\.md/);
 });
 
+test("coordination presentation uses the explicit operation and session target", () => {
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "staff",
+        "reply",
+        { action: "message", session: "staff-1", lead: "wrong" },
+        presentationTheme,
+      ),
+    ),
+    "staff reply  staff-1",
+  );
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "peer",
+        "message",
+        { session: "peer-1", message: "Check this" },
+        presentationTheme,
+      ),
+    ),
+    "peer message  peer-1\n  Check this",
+  );
+});
+
 test("compact coordination calls show available agent definitions", () => {
   for (const [action, expected] of [
     ["steer", "agent steer  release-review · researcher"],
@@ -1251,7 +1284,8 @@ test("compact coordination calls show available agent definitions", () => {
       renderedText(
         renderCoordinationCall(
           "agent",
-          { action, agent: "release-review" },
+          action,
+          { agent: "release-review" },
           presentationTheme,
           { agentDefinition: "researcher" },
         ),
@@ -1263,6 +1297,7 @@ test("compact coordination calls show available agent definitions", () => {
     renderedText(
       renderCoordinationCall(
         "agent",
+        "delegate",
         { action: "delegate", definition: "researcher" },
         presentationTheme,
       ),
@@ -1273,6 +1308,7 @@ test("compact coordination calls show available agent definitions", () => {
     renderedText(
       renderCoordinationCall(
         "agent",
+        "steer",
         { action: "steer", agent: "researcher" },
         presentationTheme,
         { agentDefinition: "researcher" },
@@ -1284,6 +1320,7 @@ test("compact coordination calls show available agent definitions", () => {
     renderedText(
       renderCoordinationCall(
         "agent",
+        "steer",
         { action: "steer", agent: "release-review" },
         presentationTheme,
       ),
@@ -1292,7 +1329,7 @@ test("compact coordination calls show available agent definitions", () => {
   );
   assert.equal(
     renderedText(
-      renderCoordinationCall("agent", {}, presentationTheme, {
+      renderCoordinationCall("agent", "", {}, presentationTheme, {
         isPartial: true,
         argsComplete: false,
       }),
@@ -1315,12 +1352,19 @@ test("coordination result definitions keep compact calls transcript-stable", asy
   };
   assert.equal(
     renderedText(
-      renderCoordinationCall("agent", context.args, presentationTheme, context),
+      renderCoordinationCall(
+        "agent",
+        "continue",
+        context.args,
+        presentationTheme,
+        context,
+      ),
     ).split("\n")[0],
     "agent continue",
   );
   renderCoordinationResult(
     "agent",
+    "continue",
     {
       details: {
         ok: true,
@@ -1337,7 +1381,13 @@ test("coordination result definitions keep compact calls transcript-stable", asy
   await Promise.resolve();
   assert.equal(
     renderedText(
-      renderCoordinationCall("agent", context.args, presentationTheme, context),
+      renderCoordinationCall(
+        "agent",
+        "continue",
+        context.args,
+        presentationTheme,
+        context,
+      ),
     ).split("\n")[0],
     "agent continue  ask-owner-retry · researcher",
   );
@@ -1345,6 +1395,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
 
   renderCoordinationResult(
     "agent",
+    "continue",
     {
       details: {
         ok: true,
@@ -1375,6 +1426,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
   };
   renderCoordinationResult(
     "agent",
+    "steer",
     {
       details: {
         ok: true,
@@ -1393,6 +1445,7 @@ test("coordination result definitions keep compact calls transcript-stable", asy
     renderedText(
       renderCoordinationCall(
         "agent",
+        "steer",
         historicalContext.args,
         presentationTheme,
         historicalContext,
@@ -1419,6 +1472,7 @@ test("coordination headers use semantic typography without ANSI-specific asserti
   const rendered = renderedText(
     renderCoordinationCall(
       "agent",
+      "close",
       { action: "close", agent: "release-review" },
       styleProbeTheme,
       { agentDefinition: "researcher" },
@@ -1439,6 +1493,7 @@ test("human coordination prose renders Markdown in compact and expanded calls", 
   const collapsed = renderedText(
     renderCoordinationCall(
       "agent",
+      "delegate",
       {
         action: "delegate",
         definition: "researcher",
@@ -1457,6 +1512,7 @@ test("human coordination prose renders Markdown in compact and expanded calls", 
   const expanded = renderedText(
     renderCoordinationCall(
       "agent",
+      "delegate",
       {
         action: "delegate",
         definition: "researcher",
@@ -1484,16 +1540,19 @@ test("coordination prose source mapping covers agent, chief, and staff actions",
   const cases = [
     [
       "agent",
+      "delegate",
       { action: "delegate", definition: "researcher", task: "delegate task" },
       "delegate task",
     ],
     [
       "agent",
+      "steer",
       { action: "steer", agent: "researcher", message: "steer message" },
       "steer message",
     ],
     [
       "agent",
+      "interrupt",
       {
         action: "interrupt",
         agent: "researcher",
@@ -1503,26 +1562,29 @@ test("coordination prose source mapping covers agent, chief, and staff actions",
     ],
     [
       "agent",
+      "reply",
       { action: "reply", agent: "researcher", message: "reply message" },
       "reply message",
     ],
-    ["chief", { action: "message", message: "chief message" }, "chief message"],
-    ["chief", { action: "ask", question: "chief question" }, "chief question"],
+    ["supervisor", "message", { message: "chief message" }, "chief message"],
+    ["supervisor", "ask", { question: "chief question" }, "chief question"],
     [
       "staff",
-      { action: "message", lead: "lead-id", message: "staff message" },
+      "message",
+      { session: "lead-id", message: "staff message" },
       "staff message",
     ],
     [
       "staff",
-      { action: "reply", lead: "lead-id", message: "staff reply" },
+      "reply",
+      { session: "lead-id", message: "staff reply" },
       "staff reply",
     ],
   ] as const;
-  for (const [tool, args, prose] of cases)
+  for (const [tool, action, args, prose] of cases)
     assert.ok(
       renderedText(
-        renderCoordinationCall(tool, args, presentationTheme),
+        renderCoordinationCall(tool, action, args, presentationTheme),
       ).includes(prose),
     );
 });
@@ -1532,6 +1594,7 @@ test("partial Markdown coordination calls remain useful and retain the partial h
     const rendered = renderedText(
       renderCoordinationCall(
         "agent",
+        "delegate",
         {
           action: "delegate",
           definition: "researcher",
@@ -1576,6 +1639,7 @@ test("coordination results keep collapsed identity bounded and render evidence t
   const collapsed = renderedText(
     renderCoordinationResult(
       "agent",
+      "delegate",
       result,
       { expanded: false },
       presentationTheme,
@@ -1596,12 +1660,13 @@ test("coordination results keep collapsed identity bounded and render evidence t
       new RegExp(hidden.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),
     );
   const compactCall = renderedText(
-    renderCoordinationCall("agent", args, presentationTheme),
+    renderCoordinationCall("agent", "delegate", args, presentationTheme),
   );
   assert.doesNotMatch(compactCall, /results:/);
   const expanded = renderedText(
     renderCoordinationResult(
       "agent",
+      "delegate",
       result,
       { expanded: true },
       presentationTheme,
@@ -1609,7 +1674,7 @@ test("coordination results keep collapsed identity bounded and render evidence t
     ),
   );
   const expandedCall = renderedText(
-    renderCoordinationCall("agent", args, presentationTheme, {
+    renderCoordinationCall("agent", "delegate", args, presentationTheme, {
       expanded: true,
     }),
   );
@@ -1633,11 +1698,12 @@ test("coordination results keep collapsed identity bounded and render evidence t
 test("compact transcript results are shared by agent and staff", () => {
   for (const [tool, details, label] of [
     ["agent", { agent: "implementer" }, "implementer"],
-    ["staff", { lead: "lead-session", display_name: "api" }, "api"],
+    ["staff", { session: "lead-session", display_name: "api" }, "api"],
   ] as const) {
     const rendered = renderedText(
       renderCoordinationResult(
         tool,
+        "transcript",
         {
           content: [],
           details: {
@@ -1662,6 +1728,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   const list = renderedText(
     renderCoordinationResult(
       "agent",
+      "list",
       {
         details: {
           ok: true,
@@ -1669,25 +1736,25 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
             {
               agent: "root",
               state: "working",
-              available_actions: ["inspect", "steer", "close"],
+              available_tools: ["agent_inspect", "agent_steer", "agent_close"],
             },
             {
               agent: "child",
               parent_label: "root",
               state: "blocked",
-              available_actions: ["inspect", "reply", "close"],
+              available_tools: ["agent_inspect", "agent_reply", "agent_close"],
             },
             {
               agent: "grandchild",
               parent_label: "child",
               state: "working",
-              available_actions: ["inspect", "close"],
+              available_tools: ["agent_inspect", "agent_close"],
             },
             {
               agent: "recovery",
               parent_label: "missing",
               state: "idle",
-              available_actions: ["inspect"],
+              available_tools: ["agent_inspect"],
             },
           ],
         },
@@ -1701,16 +1768,21 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   const hierarchy = renderedText(
     renderCoordinationResult(
       "agent",
+      "list",
       {
         details: {
           ok: true,
           agents: [
-            { agent: "root", state: "working", available_actions: ["inspect"] },
+            {
+              agent: "root",
+              state: "working",
+              available_tools: ["agent_inspect"],
+            },
             {
               agent: "child",
               parent_label: "root",
               state: "blocked",
-              available_actions: ["reply"],
+              available_tools: ["agent_reply"],
               cleanup_error: "child cleanup warning",
               result_error: { code: "write_failure", message: "result lost" },
             },
@@ -1718,13 +1790,13 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
               agent: "grandchild",
               parent_label: "child",
               state: "working",
-              available_actions: [],
+              available_tools: [],
             },
             {
               agent: "recovery",
               parent_label: "missing",
               state: "unknown",
-              available_actions: ["inspect"],
+              available_tools: ["agent_inspect"],
               agent_definition: "reviewer",
               pi_session_id: "recovery-session",
               stale: true,
@@ -1757,6 +1829,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   const inspect = renderedText(
     renderCoordinationResult(
       "agent",
+      "inspect",
       {
         details: {
           ok: true,
@@ -1778,6 +1851,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   const literalInspect = renderedText(
     renderCoordinationResult(
       "agent",
+      "inspect",
       {
         details: {
           ok: true,
@@ -1799,6 +1873,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   const structuredError = renderedText(
     renderCoordinationResult(
       "agent",
+      "steer",
       {
         details: {
           ok: false,
@@ -1822,6 +1897,7 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   const expandedError = renderedText(
     renderCoordinationResult(
       "agent",
+      "steer",
       {
         details: {
           ok: false,
@@ -1864,7 +1940,8 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   assert.match(expandedError, /message: \*\* FAILED \*\* `steering`/);
   const plainError = renderedText(
     renderCoordinationResult(
-      "chief",
+      "supervisor",
+      "message",
       {
         content: [{ type: "text", text: "Chief lease is no longer active" }],
         details: {},
@@ -1877,7 +1954,8 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   assert.match(plainError, /Chief lease is no longer active/);
   const plainStringError = renderedText(
     renderCoordinationResult(
-      "chief",
+      "supervisor",
+      "message",
       { content: "Chief lease is no longer active", details: {} },
       {},
       presentationTheme,
@@ -1899,12 +1977,13 @@ test("coordination observations, evidence, hierarchy, errors, and width safety a
   };
   for (const width of [1, 8, 16, 32, 80]) {
     for (const rendered of [
-      renderCoordinationCall("agent", wideArgs, presentationTheme),
-      renderCoordinationCall("agent", wideIdentityArgs, presentationTheme, {
+      renderCoordinationCall("agent", "", wideArgs, presentationTheme),
+      renderCoordinationCall("agent", "", wideIdentityArgs, presentationTheme, {
         agentDefinition: "定义".repeat(20),
       }),
       renderCoordinationResult(
         "agent",
+        "delegate",
         { details: { ok: true, agent: "界".repeat(30) } },
         {},
         presentationTheme,
@@ -1921,17 +2000,19 @@ test("chief and staff coordination renderers share semantic status language", ()
   assert.equal(
     renderedText(
       renderCoordinationCall(
-        "chief",
+        "supervisor",
+        "message",
         { action: "message", message: "TASK-84 is complete" },
         presentationTheme,
       ),
     ),
-    "chief message\n  TASK-84 is complete",
+    "supervisor message\n  TASK-84 is complete",
   );
   assert.equal(
     renderedText(
       renderCoordinationResult(
-        "chief",
+        "supervisor",
+        "ask",
         { details: { ok: true } },
         {},
         presentationTheme,
@@ -1944,6 +2025,7 @@ test("chief and staff coordination renderers share semantic status language", ()
     renderedText(
       renderCoordinationResult(
         "staff",
+        "list",
         {
           details: {
             ok: true,
@@ -1965,18 +2047,26 @@ test("chief and staff coordination renderers share semantic status language", ()
     renderedText(
       renderCoordinationResult(
         "staff",
-        { details: { ok: true, display_name: "workspace/api" } },
-        {},
+        "message",
+        {
+          details: {
+            ok: true,
+            session: "lead-opaque",
+            display_name: "workspace/api",
+          },
+        },
+        { expanded: true },
         presentationTheme,
-        { args: { action: "message", lead: "lead-opaque" } },
+        { args: { session: "lead-opaque" } },
       ),
     ),
-    /✓ sent to workspace\/api/,
+    /session: lead-opaque/,
   );
 
   const chiefAsk = renderedText(
     renderCoordinationResult(
-      "chief",
+      "supervisor",
+      "ask",
       {
         details: {
           ok: true,
@@ -1995,7 +2085,8 @@ test("chief and staff coordination renderers share semantic status language", ()
 
   const chiefMessage = renderedText(
     renderCoordinationResult(
-      "chief",
+      "supervisor",
+      "message",
       {
         details: {
           ok: true,
@@ -2012,26 +2103,34 @@ test("chief and staff coordination renderers share semantic status language", ()
 
   const staffReplyArgs = {
     action: "reply",
-    lead: "lead-opaque",
+    session: "lead-opaque",
     askId: "ask-for-lead",
     message: "answer",
   };
   assert.match(
     renderedText(
-      renderCoordinationCall("staff", staffReplyArgs, presentationTheme, {
-        expanded: true,
-      }),
+      renderCoordinationCall(
+        "staff",
+        "reply",
+        staffReplyArgs,
+        presentationTheme,
+        {
+          expanded: true,
+        },
+      ),
     ),
-    /lead: lead-opaque\n\nask: ask-for-lead/,
+    /session: lead-opaque\n\nask: ask-for-lead/,
   );
   assert.match(
     renderedText(
       renderCoordinationResult(
         "staff",
+        "reply",
         {
           details: {
             ok: true,
             action: "reply",
+            session: "lead-opaque",
             display_name: "workspace\/api",
           },
         },
@@ -2042,16 +2141,30 @@ test("chief and staff coordination renderers share semantic status language", ()
     ),
     /ask: ask-for-lead/,
   );
+  assert.match(
+    renderedText(
+      renderCoordinationResult(
+        "peer",
+        "message",
+        { details: { ok: true, session: "peer-session" } },
+        { expanded: true },
+        presentationTheme,
+        { args: { session: "peer-session" } },
+      ),
+    ),
+    /session: peer-session/,
+  );
 
   const staffList = renderedText(
     renderCoordinationResult(
       "staff",
+      "list",
       {
         details: {
           ok: true,
           leads: [
             {
-              lead: "lead-opaque",
+              session: "lead-opaque",
               display_name: "workspace/api",
               runtime_state: "blocked",
               needs_you: true,
@@ -2059,7 +2172,7 @@ test("chief and staff coordination renderers share semantic status language", ()
               pending_ask_question: "Which provider should I use?",
               agent_counts: { active: 2, blocked: 1, total: 3 },
               agents: [{ label: "one" }, { label: "two" }, { label: "three" }],
-              available_actions: ["inspect", "reply"],
+              available_tools: ["staff_inspect", "staff_reply"],
             },
           ],
         },
@@ -2071,6 +2184,7 @@ test("chief and staff coordination renderers share semantic status language", ()
   );
   for (const evidence of [
     "needs you: yes",
+    "session: lead-opaque",
     "ask: pending-ask",
     "question: Which provider should I use?",
     "agent counts: active=2 · blocked=1 · total=3",
@@ -2088,7 +2202,7 @@ test("peer list rendering distinguishes self from peers", () => {
       self: "lead-self",
       peers: [
         {
-          lead: "lead-other",
+          session: "lead-other",
           name: "workspace/api",
           cwd: "/work/api",
           repo: "api",
@@ -2101,7 +2215,7 @@ test("peer list rendering distinguishes self from peers", () => {
 
   assert.equal(
     renderedText(
-      renderCoordinationResult("peer", result, {}, presentationTheme, {
+      renderCoordinationResult("peer", "list", result, {}, presentationTheme, {
         args: { action: "list" },
       }),
     ),
@@ -2112,19 +2226,21 @@ test("peer list rendering distinguishes self from peers", () => {
     renderedText(
       renderCoordinationResult(
         "peer",
+        "list",
         result,
         { expanded: true },
         presentationTheme,
         { args: { action: "list" } },
       ),
     ),
-    "peer\n\nself lead-self\npeers 1\n  workspace/api · lead: lead-other · branch: feature/peer",
+    "peer\n\nself lead-self\npeers 1\n  workspace/api · session: lead-other · branch: feature/peer",
   );
 
   assert.equal(
     renderedText(
       renderCoordinationResult(
         "peer",
+        "list",
         {
           details: {
             ok: true,
@@ -2138,7 +2254,7 @@ test("peer list rendering distinguishes self from peers", () => {
         { args: { action: "list" } },
       ),
     ),
-    "peer\n\nself lead-self\npeers 1\n  lead · lead: lead",
+    "peer\n\nself lead-self\npeers 1\n  session · session: session",
   );
 });
 
@@ -2659,6 +2775,7 @@ test("tool and completion renderers retain structured action details", (t) => {
       renderedText(
         renderCoordinationResult(
           "agent",
+          "list",
           {
             details: {
               ok: true,
@@ -2675,6 +2792,7 @@ test("tool and completion renderers retain structured action details", (t) => {
     const cleanupWarning = renderedText(
       renderCoordinationResult(
         "agent",
+        "delegate",
         {
           details: {
             ok: true,
@@ -3749,10 +3867,18 @@ test("List output preserves definitions and agent action state", (t) => {
     const rendered = formatToolModelResult("list", {
       ok: true,
       agents: [
-        { agent: "parent", state: "settling", available_actions: ["steer"] },
+        {
+          agent: "parent",
+          state: "settling",
+          available_tools: ["agent_inspect", "agent_reply", "agent_close"],
+        },
       ],
     });
-    assert.match(rendered, /parent · settling · can steer/);
+    assert.match(
+      rendered,
+      /parent · settling · available_tools: agent_inspect, agent_reply, agent_close/,
+    );
+    assert.doesNotMatch(rendered, /\b(?:inspect|reply|close)\b/);
   }
 });
 
@@ -3841,7 +3967,7 @@ test("List output preserves recovery, session, and diagnostic evidence", (t) => 
           agent: "recovery",
           parent_label: "missing",
           state: "working",
-          available_actions: ["steer"],
+          available_tools: ["agent_steer"],
         },
         {
           parent_label: "missing-too",
@@ -3873,7 +3999,7 @@ test("List output preserves recovery, session, and diagnostic evidence", (t) => 
       agents: [
         {
           state: "unknown",
-          available_actions: [],
+          available_tools: [],
           managed: true,
           diagnostic: "Mailbox state unavailable: malformed state",
         },
@@ -3881,7 +4007,7 @@ test("List output preserves recovery, session, and diagnostic evidence", (t) => 
     });
     assert.equal(
       rendered,
-      "Agents: 1\n\nunknown · unknown · can nothing\n  diagnostic: Mailbox state unavailable: malformed state\n",
+      "Agents: 1\n\nunknown · unknown · available_tools: nothing\n  diagnostic: Mailbox state unavailable: malformed state\n",
     );
   }
 });
