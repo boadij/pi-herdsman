@@ -3870,11 +3870,15 @@ test("List output preserves definitions and agent action state", (t) => {
         {
           agent: "parent",
           state: "settling",
-          available_tools: ["agent_steer"],
+          available_tools: ["agent_inspect", "agent_reply", "agent_close"],
         },
       ],
     });
-    assert.match(rendered, /parent · settling · can steer/);
+    assert.match(
+      rendered,
+      /parent · settling · available_tools: agent_inspect, agent_reply, agent_close/,
+    );
+    assert.doesNotMatch(rendered, /\b(?:inspect|reply|close)\b/);
   }
 });
 
@@ -4003,7 +4007,7 @@ test("List output preserves recovery, session, and diagnostic evidence", (t) => 
     });
     assert.equal(
       rendered,
-      "Agents: 1\n\nunknown · unknown · can nothing\n  diagnostic: Mailbox state unavailable: malformed state\n",
+      "Agents: 1\n\nunknown · unknown · available_tools: nothing\n  diagnostic: Mailbox state unavailable: malformed state\n",
     );
   }
 });

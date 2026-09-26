@@ -922,7 +922,8 @@ test("agent bounds result persistence failure and exposes owner recovery evidenc
   assert.equal(recovered.resultError?.attempts, 8);
   assert.equal(recovered.resultError?.retrySafe, false);
   assert.equal(recovered.resultError?.cleanupSafe, true);
-  assert.match(recovered.resultError?.nextAction ?? "", /close this agent/);
+  assert.match(recovered.resultError?.nextAction ?? "", /agent_inspect/);
+  assert.match(recovered.resultError?.nextAction ?? "", /agent_close/);
 
   agent.events.get("session_shutdown")?.[0]();
   const root = fakePi({
@@ -993,7 +994,7 @@ test("agent rejects task replay while result persistence recovery is present", (
     retrySafe: false,
     cleanupSafe: true,
     nextAction:
-      "Inspect result_error, resolve mailbox persistence, then close this agent before assigning new work.",
+      "Use agent_inspect to inspect result_error, resolve mailbox persistence, then use agent_close to close this agent before assigning new work.",
   };
   writeAgentState(mailbox, { ...managedState(label), resultError: recovery });
 

@@ -1469,7 +1469,7 @@ export function formatToolModelResult(
         ...(fallback ? ["non-actionable"] : []),
         ...(!fallback && Array.isArray(agent.available_tools)
           ? [
-              `can ${agent.available_tools.map((tool) => String(tool).replace(/^agent_/, "")).join(", ") || "nothing"}`,
+              `available_tools: ${agent.available_tools.map(String).join(", ") || "nothing"}`,
             ]
           : []),
         ...(agent.stale === true

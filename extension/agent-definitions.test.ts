@@ -1282,7 +1282,7 @@ test("managed launch policy always includes ask_owner", () => {
     [{ noTools: true }, ["--no-tools", "--tools", "ask_owner"]],
     [
       { noTools: true, tools: ["read"] },
-      ["--no-tools", "--tools", "ask_owner"],
+      ["--no-tools", "--tools", "read,ask_owner"],
     ],
     [{ tools: [] }, ["--no-tools", "--tools", "ask_owner"]],
     [
@@ -1582,6 +1582,16 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
     "--tools",
     ["read", ...roleTools].join(","),
   ]);
+  assert.deepEqual(
+    toolArgs({ agents: ["child"], noTools: true, tools: ["read"] }),
+    ["--tools", ["read", ...roleTools].join(",")],
+  );
+  assert.equal(
+    make({ agents: ["child"], noTools: true, tools: ["read"] }).includes(
+      "--no-tools",
+    ),
+    true,
+  );
   assert.equal(make({ agents: ["child"] }).includes("--tools"), false);
   const exclusions = make({
     agents: ["child"],

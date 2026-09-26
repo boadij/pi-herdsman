@@ -364,7 +364,7 @@ messages to leads do not require automatic acknowledgment.
 Chief coordination is event-driven, not polling. After sending a message or
 reply, continue only useful independent chief work that does not depend on the
 lead response; otherwise end the turn normally. Lead reports and questions
-resume the chief automatically when attention is required. Do not use list, inspect, repeated messages, status requests, sleep, or any other mechanism merely to wait for lead progress or completion. A working lead does not require
+resume the chief automatically when attention is required. Do not use staff_list, staff_inspect, repeated messages, status requests, sleep, or any other mechanism merely to wait for lead progress or completion. A working lead does not require
 intervention, and available_tools describe capability, not a recommendation
 to act. Treat ordinary progress reports as informational; do not acknowledge or
 query them automatically. If the human task still depends on unfinished lead
@@ -5481,7 +5481,7 @@ async function actionUnsafe(
           "transcript",
           {
             nextAction:
-              "This is expected briefly after delegation. Do not poll or retry immediately; use transcript later only when it is listed as agent_transcript in available_tools and persisted transcript evidence is needed.",
+              "This is expected briefly after delegation. Do not poll or retry immediately; use agent_transcript later only when it is listed in available_tools and persisted transcript evidence is needed.",
           },
         );
       fail(
@@ -5490,7 +5490,7 @@ async function actionUnsafe(
         "transcript",
         {
           nextAction:
-            "Use transcript only when it is listed as agent_transcript in available_tools.",
+            "Use agent_transcript only when it is listed in available_tools.",
         },
       );
     }
@@ -6209,7 +6209,7 @@ async function actionUnsafe(
       "steer",
       {
         nextAction:
-          "Refresh list and use steer only when available_tools includes agent_steer.",
+          "Refresh with agent_list and use agent_steer only when available_tools includes it.",
       },
     );
   if (p.action === "steer" && !runtime.activeRequestId)
@@ -6221,7 +6221,7 @@ async function actionUnsafe(
       "interrupt",
       {
         nextAction:
-          "Use interrupt only when available_tools includes agent_interrupt. Use steer for non-preemptive assignment changes.",
+          "Use agent_interrupt only when available_tools includes it. Use agent_steer for non-preemptive assignment changes.",
       },
     );
   if (
@@ -6247,7 +6247,7 @@ async function actionUnsafe(
     if (!currentState?.activeRequestId || !askId || !ask)
       fail("agent_busy", "Agent is not waiting for an owner reply", "reply", {
         nextAction:
-          "Use reply only for an outstanding ask_owner question; otherwise continue normal control or refresh list.",
+          "Use agent_reply only for an outstanding ask_owner question; otherwise continue normal control or refresh with agent_list.",
       });
     if (
       ask.askId !== askId ||
@@ -9770,7 +9770,7 @@ export default function (pi: ExtensionAPI): void {
               );
             if (!currentTurnIsSoleToolCall(ctx, "supervisor_ask"))
               throw new Error(
-                "Call supervisor ask alone as the final tool call of the turn, with no other tool calls, then wait for the reply using supervisor_ask.",
+                "Call supervisor_ask alone as the final tool call of the turn, with no other tool calls, then wait for the reply.",
               );
             const releaseCoordinationPublication =
               await enterCoordinationPublication();
@@ -9975,9 +9975,6 @@ export default function (pi: ExtensionAPI): void {
         label: "staff message",
         promptSnippet:
           "Supervise and communicate with independent lead sessions",
-        description:
-          "The exact full Pi session ID is shown as session in a fresh automatic supervision snapshot or returned by staff_list; never use display_name. " +
-          "Chief-only supervision coordination. The chief supervises independent leads, does not own their agent trees, and receives no owner controls. A fresh supervision snapshot is automatically supplied at the start of each chief agent run; treat it as the default current coordination state. For ordinary state and coordination, use a fresh snapshot directly; do not call staff_list, staff_inspect, staff_transcript, or another read tool merely to poll progress. staff_message and staff_reply revalidate exact identity and state themselves. Use staff_list when the automatic snapshot is stale or unavailable, an immediately refreshed exact roster is materially necessary, or you are diagnosing identity or supervision projection problems. staff_inspect provides bounded live terminal/process evidence; use it only when that evidence matters. staff_transcript provides bounded persisted Pi conversation/tool evidence; use it only when that evidence materially matters. Use the session field's exact full Pi session ID and only fresh available_tools, never infer from display state or metadata. Every exact-identity-verified lead accepts staff_message; use staff_reply only with the exact pending ask ID and current chief lease. Messages are durable follow-up communication. Messages are bounded and direction-aware, and temporary verification or delivery failures retain queued records. Metadata is presentation-only and never authority. Messages use follow-up delivery. Human conversation remains the dispatch surface.",
         executionMode: "sequential",
         parameters: staffMessageParameters,
         constrainedSampling: { type: "json_schema", strict: "prefer" },
@@ -10710,13 +10707,13 @@ export default function (pi: ExtensionAPI): void {
               `Available tools: ${availableActions.map((action) => `agent_${action}`).join(", ") || "none"}`,
               `Next reminder if unresolved: ~${formatAttentionDuration(nextReminderMs)}`,
               "",
-              "Use transcript only when persisted work materially affects the recovery decision.",
+              "Use agent_transcript only when persisted work materially affects the recovery decision.",
               ...(closeAvailable
                 ? [
-                    "Close this lost generation before replacing it or continuing its saved session.",
+                    "Use agent_close to close this lost generation before replacing it or continuing its saved session.",
                   ]
                 : [
-                    "Close is not currently available; resolve the condition blocking its close preflight before replacing or continuing it.",
+                    "agent_close is not currently available; resolve the condition blocking its close preflight before replacing or continuing it.",
                   ]),
               "Physical disappearance is not task completion.",
             ].join("\n"),
@@ -10934,7 +10931,7 @@ export default function (pi: ExtensionAPI): void {
                     `Available tools: ${availableActions.map((action) => `agent_${action}`).join(", ") || "none"}`,
                     `Next reminder if unresolved: ~${formatAttentionDuration(intervalMs)}`,
                     "",
-                    "Reply to this exact pending ask if the required decision is available.",
+                    "Use agent_reply to reply to this exact pending ask if the required decision is available.",
                     "Do not delegate around or duplicate the blocked assignment.",
                   ].join("\n"),
                   display: true,
@@ -10987,10 +10984,10 @@ export default function (pi: ExtensionAPI): void {
                   `Available tools: ${availableActions.map((action) => `agent_${action}`).join(", ") || "none"}`,
                   `Next reminder if unresolved: ~${formatAttentionDuration(intervalMs)}`,
                   "",
-                  "Use transcript for persisted conversation/tool evidence.",
-                  "Use inspect only when the live blocking state matters.",
+                  "Use agent_transcript for persisted conversation/tool evidence.",
+                  "Use agent_inspect only when the live blocking state matters.",
                   "Do not invent an owner reply or send guessed terminal input.",
-                  "Close only when abandoning the assignment is the intended recovery.",
+                  "Use agent_close only when abandoning the assignment is the intended recovery.",
                 ].join("\n"),
                 display: true,
                 details: {
@@ -11195,8 +11192,8 @@ export default function (pi: ExtensionAPI): void {
                 : []),
               ...(outputTruncated ? ["Earlier terminal output omitted."] : []),
               "",
-              "Use this evidence first. Do not repeat inspect merely because this stale episode remains unresolved.",
-              "If the supplied live evidence is insufficient and persisted conversation/tool history materially affects the decision, use transcript once.",
+              "Use this evidence first. Do not repeat agent_inspect merely because this stale episode remains unresolved.",
+              "If the supplied live evidence is insufficient and persisted conversation/tool history materially affects the decision, use agent_transcript once.",
             ]
           : firstAttention
             ? [
@@ -11205,7 +11202,7 @@ export default function (pi: ExtensionAPI): void {
                 availableActions.includes("transcript")
                   ? [
                       "Automatic live diagnostic evidence was unavailable.",
-                      "Before returning to passive waiting, perform at most one currently available diagnostic read: use transcript for persisted conversation/tool history or inspect for live terminal/process evidence.",
+                      "Before returning to passive waiting, perform at most one currently available diagnostic read: use agent_transcript for persisted conversation/tool history or agent_inspect for live terminal/process evidence.",
                     ]
                   : [
                       "No safe diagnostic read is currently available. Do not guess or intervene solely because work is stale.",
@@ -11235,9 +11232,9 @@ export default function (pi: ExtensionAPI): void {
                 "This is advisory inactivity, not proof of a hang.",
                 "Streaming tool output does not count as qualifying progress.",
                 "If the current operation appears healthy or legitimately long-running, leave it alone.",
-                "Use steer for a non-preemptive correction.",
-                "Use interrupt only when the current operation itself must be abandoned; interrupt cancels that operation, supersedes earlier steering Pi has not yet delivered, and continues the same assignment.",
-                "Use close only to abandon the assignment or as destructive fallback.",
+                "Use agent_steer for a non-preemptive correction.",
+                "Use agent_interrupt only when the current operation itself must be abandoned; agent_interrupt cancels that operation, supersedes earlier steering Pi has not yet delivered, and continues the same assignment.",
+                "Use agent_close only to abandon the assignment or as destructive fallback.",
               ].join("\n"),
               display: true,
               details: {
@@ -13192,7 +13189,7 @@ export default function (pi: ExtensionAPI): void {
             retrySafe: false,
             cleanupSafe: true,
             nextAction:
-              "Inspect result_error, resolve mailbox persistence, then close this agent before starting another assignment; follow the stored recovery nextAction.",
+              "Use agent_inspect to inspect result_error, resolve mailbox persistence, then use agent_close to close this agent before starting another assignment; follow the stored recovery nextAction.",
           };
           try {
             const nextState: ManagedAgentState = {

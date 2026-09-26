@@ -1332,12 +1332,34 @@ test("active chief describes authoritative remote ask projection", async () => {
   const transcriptTool = pi.tools.find(
     (candidate) => candidate.name === "staff_transcript",
   );
+  const listTool = pi.tools.find(
+    (candidate) => candidate.name === "staff_list",
+  );
   assert.ok(tool);
   assert.ok(replyTool);
   assert.ok(inspectTool);
   assert.ok(transcriptTool);
-  for (const operation of [tool, replyTool, inspectTool, transcriptTool])
+  assert.ok(listTool);
+  for (const operation of [
+    tool,
+    replyTool,
+    inspectTool,
+    transcriptTool,
+    listTool,
+  ])
     assertPortableToolSchema(operation);
+  for (const [operation, phrase] of [
+    [listTool, "List direct-report supervision state."],
+    [inspectTool, "Read bounded live terminal/process evidence"],
+    [transcriptTool, "Read bounded persisted Pi conversation/tool evidence"],
+    [tool, "Send a durable follow-up message"],
+    [replyTool, "Answer the exact pending ask"],
+  ] as const)
+    assert.match(operation.description, new RegExp(phrase));
+  assert.doesNotMatch(
+    tool.description,
+    /staff_(?:list|inspect|transcript|reply)|List direct-report|Read bounded|pending ask/i,
+  );
   assert.equal(tool.label, "staff message");
   assert.equal(typeof tool.renderCall, "function");
   assert.equal(typeof tool.renderResult, "function");
@@ -1416,7 +1438,7 @@ test("active chief describes authoritative remote ask projection", async () => {
   );
   assert.match(
     String(chiefPrompt),
-    /Do not use list, inspect, repeated messages, status requests, sleep, or any other mechanism merely to wait for lead progress or completion/,
+    /Do not use staff_list, staff_inspect, repeated messages, status requests, sleep, or any other mechanism merely to wait for lead progress or completion/,
   );
   const sessionSchema = (tool.parameters as any).properties.session;
   assert.equal(
@@ -2933,7 +2955,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /Call supervisor ask alone as the final tool call of the turn/,
+      /Call supervisor_ask alone as the final tool call of the turn/,
     );
     assert.deepEqual(
       readLeadCoordinationState(supervisionRuntime(), leadId),

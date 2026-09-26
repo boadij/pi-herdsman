@@ -791,11 +791,9 @@ export function agentLaunchArgs(
         : ["ask_owner"];
       const tools = [
         ...new Set([
-          ...(noTools
-            ? []
-            : normalizedToolNames(frontmatter.tools).filter(
-                (tool) => !requiredTools.includes(tool),
-              )),
+          ...normalizedToolNames(frontmatter.tools).filter(
+            (tool) => !requiredTools.includes(tool),
+          ),
           ...requiredTools,
         ]),
       ];

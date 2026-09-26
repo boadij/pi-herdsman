@@ -2237,7 +2237,7 @@ test("controller reply submits the normal request and preserves the assignment",
   assert.equal(missingAsk.details.error.category, "agent_busy");
   assert.match(
     missingAsk.details.error.nextAction,
-    /Use reply only for an outstanding ask_owner question/,
+    /Use agent_reply only for an outstanding ask_owner question/,
   );
   resetAgentMailbox(mailbox);
   realFs.rmSync(replyFile, { force: true });
@@ -4426,7 +4426,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   assert.match(advisory.content, /not proof of a hang/);
   assert.doesNotMatch(
     advisory.content,
-    /Use transcript when .*; use inspect only/,
+    /Use agent_transcript when .*; use agent_inspect only/,
   );
   assert.match(advisory.content, /Bounded live diagnostic/);
   assert.match(advisory.content, /npm test/);
@@ -4847,7 +4847,7 @@ test("result errors wake the direct owner with durable recovery evidence", async
       retrySafe: false,
       cleanupSafe: true,
       nextAction:
-        "Inspect result_error, resolve mailbox persistence, then close this agent.",
+        "Use agent_inspect to inspect result_error, resolve mailbox persistence, then use agent_close to close this agent.",
     },
   };
   const mailbox = agentMailboxPath(WORKSPACE, label);
@@ -4871,7 +4871,8 @@ test("result errors wake the direct owner with durable recovery evidence", async
   assert.equal(attention?.details.reason, "result_error");
   assert.equal(attention?.details.requestId, REQUEST_ID);
   assert.equal(attention?.details.nextReminderMs, 5 * 60_000);
-  assert.match(attention.content, /Inspect result_error/);
+  assert.match(attention.content, /Use agent_inspect to inspect result_error/);
+  assert.match(attention.content, /use agent_close to close this agent/);
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 });
@@ -4985,6 +4986,10 @@ test("delivered owner asks repeat without duplicating first delivery", async (t)
   assert.equal(reminders[0].details.requestId, ask.requestId);
   assert.equal(reminders[0].details.nextReminderMs, 150_000);
   assert.match(reminders[0].content, /still waiting/);
+  assert.match(
+    reminders[0].content,
+    /Use agent_reply to reply to this exact pending ask/,
+  );
   writeAgentState(mailbox, { ...state, pendingAskId: undefined });
   removeAsk(mailbox, ask.askId);
   now += 3 * 60_000;
@@ -5092,7 +5097,8 @@ test("health reconciliation publishes at most one attention per scan", async (t)
         failedAt: Date.now() - 1_000,
         retrySafe: false,
         cleanupSafe: true,
-        nextAction: "Resolve the stored result error, then close this agent.",
+        nextAction:
+          "Use agent_inspect to inspect the stored result error, then use agent_close to close this agent.",
       },
     };
   });
@@ -5339,9 +5345,13 @@ test("lost parent health attention omits close when a descendant has an unread d
     ) as any;
     assert.equal(attention?.details.agentLabel, parent.agentLabel);
     assert.equal(attention?.details.availableActions.includes("close"), false);
+    assert.match(
+      String(attention?.content),
+      /agent_close is not currently available/,
+    );
     assert.doesNotMatch(
       String(attention?.content),
-      /Close this lost generation/,
+      /Close this lost generation|Use close/,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
