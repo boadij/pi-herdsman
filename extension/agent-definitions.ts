@@ -415,6 +415,10 @@ function withoutDelegationCapability(
   definition: AgentDefinition,
 ): AgentDefinition {
   const { agents: _agents, ...frontmatter } = definition.frontmatter;
+  if (frontmatter.tools !== undefined)
+    frontmatter.tools = normalizedToolNames(frontmatter.tools).filter(
+      (tool) => tool !== "agent",
+    );
   return {
     ...definition,
     frontmatter,
@@ -681,7 +685,18 @@ export function expandAgentBodyFiles(
 export function agentDefinitionDelegationEnabled(
   definition: AgentDefinition,
 ): boolean {
-  return (definition.frontmatter.agents?.length ?? 0) > 0;
+  const {
+    agents,
+    tools: configured,
+    excludeTools,
+    noTools,
+  } = definition.frontmatter;
+  if ((agents?.length ?? 0) === 0) return false;
+
+  const tools = normalizedToolNames(configured);
+  if (normalizedToolNames(excludeTools).includes("agent")) return false;
+  if (noTools === true && !tools.includes("agent")) return false;
+  return configured === undefined || tools.length > 0;
 }
 
 export type AgentLaunchOptions = {
@@ -789,14 +804,10 @@ export function agentLaunchArgs(
       const requiredTools = agentDefinitionDelegationEnabled(agent)
         ? [...AGENT_COORDINATION_TOOLS, "ask_owner"]
         : ["ask_owner"];
-      const tools = [
-        ...new Set([
-          ...normalizedToolNames(frontmatter.tools).filter(
-            (tool) => !requiredTools.includes(tool),
-          ),
-          ...requiredTools,
-        ]),
-      ];
+      const configuredTools = normalizedToolNames(frontmatter.tools).filter(
+        (tool) => tool !== "agent" && !requiredTools.includes(tool),
+      );
+      const tools = [...new Set([...configuredTools, ...requiredTools])];
       args.push("--tools", tools.join(","));
     }
     const requiredTools = new Set([

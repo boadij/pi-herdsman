@@ -1503,7 +1503,7 @@ test("expands body references with caller precedence and no recursion", () => {
   );
 });
 
-test("delegation capability depends only on nonempty agents", () => {
+test("delegation preserves legacy tool-policy authorization", () => {
   assert.throws(
     () =>
       discoverAgentDefinitionsWithContents(
@@ -1511,11 +1511,24 @@ test("delegation capability depends only on nonempty agents", () => {
       ),
     /is not a supported agent-definition field/,
   );
-  for (const frontmatter of [
-    { tools: ["read"] },
-    { tools: ["read"], excludeTools: ["agent_delegate"] },
-    { noTools: true, tools: ["read"] },
-    { agents: [] },
+  for (const { frontmatter, enabled } of [
+    { frontmatter: { agents: ["child"] }, enabled: true },
+    { frontmatter: { agents: ["child"], tools: ["read"] }, enabled: true },
+    {
+      frontmatter: { agents: ["child"], excludeTools: ["agent"] },
+      enabled: false,
+    },
+    { frontmatter: { agents: ["child"], noTools: true }, enabled: false },
+    { frontmatter: { agents: ["child"], tools: [] }, enabled: false },
+    {
+      frontmatter: { agents: ["child"], noTools: true, tools: ["read"] },
+      enabled: false,
+    },
+    {
+      frontmatter: { agents: ["child"], tools: ["agent"] },
+      enabled: true,
+    },
+    { frontmatter: { agents: [] }, enabled: false },
   ])
     assert.equal(
       agentDefinitionDelegationEnabled({
@@ -1524,7 +1537,7 @@ test("delegation capability depends only on nonempty agents", () => {
         frontmatter,
         body: "",
       }),
-      false,
+      enabled,
     );
   assert.equal(
     agentDefinitionDelegationEnabled({
@@ -1573,6 +1586,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
       { managedAgent: true },
     );
   const roleTools = [...AGENT_COORDINATION_TOOLS, "ask_owner"];
+  const leafTools = ["ask_owner"];
   const toolArgs = (frontmatter: Frontmatter) => {
     const args = make(frontmatter);
     const index = args.indexOf("--tools");
@@ -1584,7 +1598,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   ]);
   assert.deepEqual(
     toolArgs({ agents: ["child"], noTools: true, tools: ["read"] }),
-    ["--tools", ["read", ...roleTools].join(",")],
+    ["--tools", ["read", ...leafTools].join(",")],
   );
   assert.equal(
     make({ agents: ["child"], noTools: true, tools: ["read"] }).includes(
@@ -1609,7 +1623,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   ]);
   assert.deepEqual(toolArgs({ agents: ["child"], noTools: true }), [
     "--tools",
-    roleTools.join(","),
+    leafTools.join(","),
   ]);
   assert.equal(
     make({ agents: ["child"], noTools: true }).includes("--no-tools"),
@@ -1617,11 +1631,19 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   );
   assert.deepEqual(toolArgs({ agents: ["child"], tools: [] }), [
     "--tools",
-    roleTools.join(","),
+    leafTools.join(","),
   ]);
   assert.equal(
     make({ agents: ["child"], tools: [] }).includes("--no-tools"),
     true,
+  );
+  assert.deepEqual(toolArgs({ agents: ["child"], tools: ["agent"] }), [
+    "--tools",
+    roleTools.join(","),
+  ]);
+  assert.equal(
+    toolArgs({ agents: ["child"], tools: ["agent"] })[1].includes("agent,"),
+    false,
   );
 });
 
@@ -1665,6 +1687,24 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
   );
   assert.deepEqual(empty.frontmatter.tools, []);
   assert.equal(empty.frontmatter.agents, undefined);
+  const legacyToolLeaf = projectAgentDefinition(
+    {
+      name: "legacy",
+      path: "/legacy.md",
+      frontmatter: { agents: ["scout"], noTools: true, tools: ["agent"] },
+      body: "",
+    },
+    "leaf",
+  );
+  assert.deepEqual(legacyToolLeaf.frontmatter.tools, []);
+  assert.equal(legacyToolLeaf.frontmatter.noTools, true);
+  assert.deepEqual(
+    agentLaunchArgs(legacyToolLeaf, { managedAgent: true }).filter(
+      (value) =>
+        value === "--no-tools" || value === "--tools" || value === "ask_owner",
+    ),
+    ["--no-tools", "--tools", "ask_owner"],
+  );
   const denied = projectAgentDefinition(
     {
       name: "denied",

@@ -497,8 +497,14 @@ Pi Herdsman uses one durable vocabulary:
 The `agents` frontmatter field names the direct agent definitions an agent may
 delegate to. A delegation-capable session remains an agent at every depth.
 Every managed agent receives `ask_owner`. A non-empty effective `agents` list
-also enables the nine semantic `agent_*` coordination tools; an empty or
-omitted list makes the agent a leaf with `ask_owner` only. Ordinary `tools` and
+is necessary but not sufficient to enable the nine semantic `agent_*`
+coordination tools. Delegation is disabled when `excludeTools` contains
+`agent`, when `noTools: true` unless explicit `tools` contains `agent`,
+or when `tools` is explicitly empty. Otherwise, omitted `tools` permits
+delegation and explicit ordinary tools permit it. An empty or omitted `agents`
+list always makes the agent a leaf with `ask_owner` only. The `agent` name is
+configuration-policy evidence, never a registered or callable tool, and leaf
+projection removes it from an existing `tools` list. Ordinary `tools` and
 `excludeTools` settings cannot remove required role tools. If `tools` is
 omitted, Pi's configured/default selection is preserved without emitting
 `--tools`; an explicit allowlist is augmented with the role-required tools.
