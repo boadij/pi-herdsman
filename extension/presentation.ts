@@ -735,7 +735,7 @@ export function formatSupervisionContext(
       "",
       "Current supervision state could not be established.",
       "Do not infer that there are zero leads.",
-      "Use staff list if current supervision state is required.",
+      "Use staff_list if current supervision state is required.",
       "</supervision_state>",
     ].join("\n");
 
@@ -755,7 +755,7 @@ export function formatSupervisionContext(
           "The latest refresh attempt failed.",
           "This is the most recent previously validated snapshot.",
           "Refresh explicitly before relying on freshness-sensitive state.",
-          "Use staff list when current supervision state is required.",
+          "Use staff_list when current supervision state is required.",
           "",
         ]
       : []),
@@ -826,7 +826,7 @@ export function formatSupervisionContext(
   if (truncated) {
     const notice = [
       "truncated: true",
-      "Omitted supervision state is not shown. Use staff list for current omitted state.",
+      "Omitted supervision state is not shown. Use staff_list for current omitted state.",
     ];
     while (included.length > prefix.length && !fits([...included, ...notice]))
       included.pop();

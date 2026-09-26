@@ -8372,8 +8372,8 @@ export default function (pi: ExtensionAPI): void {
             `${JSON.stringify(roster.definitions, null, 2)}\n` +
             `</agent_definitions>\n\n` +
             `This is the session-start definition snapshot. ` +
-            `Use agent list for live agent state or to refresh ` +
-            `agent definitions after configuration changes.`,
+            `Use agent_list for live Agent state or to refresh ` +
+            `Agent definitions after configuration changes.`,
         };
       });
     pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) => {

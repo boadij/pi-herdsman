@@ -234,7 +234,7 @@ test("Supervision context formatting preserves state, safety, and bounded record
       1,
     );
     assert.match(formatted, /truncated: true/);
-    assert.match(formatted, /Use staff list for current omitted state/);
+    assert.match(formatted, /Use staff_list for current omitted state/);
     assert.match(formatted, /session: lead-0\n/);
     assert.doesNotMatch(formatted, /session: lead-9\n/);
     assert.doesNotMatch(formatted, /^  lead:|^  actions:/mu);
