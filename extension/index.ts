@@ -7994,6 +7994,19 @@ export default function (pi: ExtensionAPI): void {
     }
     return "Chief mode active.";
   };
+  const deactivateChief = async (ctx: ExtensionContext): Promise<void> => {
+    ++chiefModeGeneration;
+    ++chiefInboxGeneration;
+    if (chiefInboxTimer) clearTimeout(chiefInboxTimer);
+    chiefInboxTimer = undefined;
+    clearSupervisionUI?.();
+    if (leadContext)
+      await publishLeadRole(leadContext, "suspended", chiefModeGeneration);
+    enterLead(ctx);
+    await peerPresencePublication;
+    if (process.env.HERDR_SOCKET_PATH) startChiefInbox(ctx);
+    startNormalUI?.(ctx);
+  };
   const leaveChief = async (ctx?: ExtensionCommandContext): Promise<string> => {
     if (ctx?.hasUI) {
       const pending = countSupervisedPendingAsks
@@ -8013,19 +8026,66 @@ export default function (pi: ExtensionAPI): void {
       )
         return "Chief leave cancelled.";
     }
-    ++chiefModeGeneration;
-    ++chiefInboxGeneration;
-    if (chiefInboxTimer) clearTimeout(chiefInboxTimer);
-    chiefInboxTimer = undefined;
-    clearSupervisionUI?.();
-    if (leadContext)
-      await publishLeadRole(leadContext, "suspended", chiefModeGeneration);
-    enterLead(leadContext);
-    await peerPresencePublication;
-    if (leadContext && process.env.HERDR_SOCKET_PATH)
-      startChiefInbox(leadContext);
-    if (leadContext) startNormalUI?.(leadContext);
+    if (ctx) await deactivateChief(ctx);
     return "Chief mode left.";
+  };
+  const failClosedRole = async (
+    ctx: ExtensionContext,
+    error: unknown,
+  ): Promise<void> => {
+    appendDurableError(pi, ctx, "pi_herdsman_role_error", error);
+    leadTools = normalizeLeadTools(pi.getActiveTools());
+    try {
+      persistRole("lead");
+    } catch (persistError) {
+      appendDurableError(pi, ctx, "pi_herdsman_role_error", persistError);
+    }
+    // Malformed history cannot authorize Chief or healthy Lead coordination.
+    markLeadCoordinationUnhealthy(ctx);
+    if (chiefMode !== "inactive") {
+      try {
+        await deactivateChief(ctx);
+      } catch (transitionError) {
+        appendDurableError(pi, ctx, "pi_herdsman_role_error", transitionError);
+        enterLead(ctx, false);
+      }
+    } else enterLead(ctx, false);
+    pi.setActiveTools(
+      pi
+        .getActiveTools()
+        .filter((name) => !SUPERVISOR_TOOLS.includes(name as never)),
+    );
+  };
+  const reconcileBranchRole = async (ctx: ExtensionContext): Promise<void> => {
+    let branchRole: ReturnType<typeof sessionLeadRoleState>;
+    try {
+      branchRole = sessionLeadRoleState(ctx.sessionManager.getBranch());
+    } catch (error) {
+      await failClosedRole(ctx, error);
+      return;
+    }
+    if (branchRole?.role === "chief") {
+      leadTools = [...branchRole.leadTools];
+      if (chiefMode === "active" && isCurrentChief(ctx)) {
+        reconcileRoleTools();
+        return;
+      }
+      if (chiefMode === "active") await deactivateChief(ctx);
+      try {
+        await activateChief(ctx, true);
+      } catch (error) {
+        if (error instanceof ProcessLockOccupiedError) enterSuspended(ctx);
+        else {
+          appendDurableError(pi, ctx, "pi_herdsman_role_error", error);
+          if (chiefActivationRollback) chiefActivationRollback = false;
+          else enterLead(ctx);
+        }
+      }
+      return;
+    }
+    leadTools = normalizeLeadTools(pi.getActiveTools());
+    if (chiefMode !== "inactive") await deactivateChief(ctx);
+    else reconcileRoleTools();
   };
   let assignGuidanceSent = false;
   if (controllerScope)
@@ -11471,20 +11531,7 @@ export default function (pi: ExtensionAPI): void {
           }
         } catch (error) {
           malformedRole = true;
-          appendDurableError(pi, ctx, "pi_herdsman_role_error", error);
-          leadTools = normalizeLeadTools(pi.getActiveTools());
-          persistRole("lead");
-          // Do not publish the state restored above: malformed role history
-          // leaves coordination unhealthy until a clean session state exists.
-          markLeadCoordinationUnhealthy(ctx);
-          // Keep ordinary agent control, but do not expose chief
-          // while the persisted role record is unresolved.
-          enterLead(ctx, false);
-          pi.setActiveTools(
-            pi
-              .getActiveTools()
-              .filter((name) => !SUPERVISOR_TOOLS.includes(name as never)),
-          );
+          await failClosedRole(ctx, error);
         }
         if (persistedRole === "chief") {
           try {
@@ -11604,18 +11651,24 @@ export default function (pi: ExtensionAPI): void {
           ...(pendingChiefAsk ? { pendingAskId: pendingChiefAsk.askId } : {}),
         });
       });
-    pi.on("session_tree", (_event: unknown, ctx: ExtensionContext) => {
+    pi.on("session_tree", async (_event: unknown, ctx: ExtensionContext) => {
       if (!controllerSessionActive) return;
+      const watchActiveAsks = (): void => {
+        for (const runtime of runtimes.values())
+          if (runtime.activeRequestId)
+            watchAsk(pi, runtime, ctx, controllerAbortController?.signal);
+      };
+      // Preserve synchronous ask delivery for an ordinary Lead tree change.
+      if (chiefMode === "inactive") watchActiveAsks();
+      const wasChief = chiefMode !== "inactive";
       if (controllerScope.kind === "lead") {
         try {
-          reconcileRoleTools();
+          await reconcileBranchRole(ctx);
         } catch (error) {
           appendDurableError(pi, ctx, "pi_herdsman_role_error", error);
         }
       }
-      for (const runtime of runtimes.values())
-        if (runtime.activeRequestId)
-          watchAsk(pi, runtime, ctx, controllerAbortController?.signal);
+      if (wasChief) watchActiveAsks();
     });
     pi.on("session_shutdown", async () => {
       ++sessionGeneration;

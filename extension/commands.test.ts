@@ -22,6 +22,7 @@ import {
   removePeerLeadRecord,
   supervisionRuntime,
   readLeadCoordinationState,
+  sessionLeadRoleState,
   writeLeadCoordinationState,
   writeCoordinationMessage,
   writePeerLeadRecord,
@@ -728,7 +729,7 @@ test("Chief activation keeps its durable baseline when rollback restoration fail
   delete process.env.HERDR_PANE_ID;
 });
 
-test("Chief survives transcript-backed tool restoration after session tree", async () => {
+test("selecting a pre-Chief branch restores the Lead lifecycle", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -744,19 +745,145 @@ test("Chief survives transcript-backed tool restoration after session tree", asy
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
   const baseline = pi.pi.getActiveTools();
+  const preChiefBranch = [...entries];
+  assert.equal(sessionLeadRoleState(preChiefBranch), undefined);
   await pi.commandOptions.get("chief").handler("", context);
+  assert.equal(
+    readPeerLeadRecord(peerRuntime(), context.sessionManager.getSessionId()),
+    undefined,
+  );
+  context.sessionManager.getBranch = () => preChiefBranch;
+  const appendEntry = pi.pi.appendEntry;
+  pi.pi.appendEntry = (type: string, data: unknown) => {
+    appendEntry(type, data);
+    preChiefBranch.push({ type: "custom", customType: type, data });
+  };
   pi.pi.setActiveTools(baseline);
-  pi.events.get("session_tree")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "staff_list",
-    "staff_inspect",
-    "staff_transcript",
-    "staff_message",
-    "staff_reply",
-  ]);
+  await pi.events.get("session_tree")![0](undefined, context);
+  assert.deepEqual(pi.pi.getActiveTools(), baseline);
+  const replacement = claimChiefLease({
+    piSessionId: "replacement-session",
+    paneId: "replacement-pane",
+    tabId: "replacement-tab",
+    workspaceId: WORKSPACE,
+  });
+  replacement.release();
+  assert.equal(
+    sessionLeadRoleState(context.sessionManager.getBranch())?.role,
+    "lead",
+  );
+  assert.ok(
+    readPeerLeadRecord(peerRuntime(), context.sessionManager.getSessionId()),
+  );
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
+  delete process.env.HERDR_TAB_ID;
   delete process.env.HERDR_PANE_ID;
+});
+
+test("selecting a historical Chief branch activates its lease and staff tools", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `chief-branch-${randomUUID()}.sock`,
+  );
+  const entries: unknown[] = [];
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"], entries });
+  const context = fakeContext(entries) as any;
+  context.mode = "rpc";
+  context.ui.notify = () => undefined;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const baseline = pi.pi.getActiveTools();
+    const chiefBranch = [
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        data: { role: "chief", leadTools: baseline },
+      },
+    ];
+    context.sessionManager.getBranch = () => chiefBranch;
+    await pi.events.get("session_tree")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "staff_list",
+      "staff_inspect",
+      "staff_transcript",
+      "staff_message",
+      "staff_reply",
+    ]);
+    assert.equal(
+      readPeerLeadRecord(peerRuntime(), context.sessionManager.getSessionId()),
+      undefined,
+    );
+    assert.throws(() =>
+      claimChiefLease({
+        piSessionId: "replacement-session",
+        paneId: "replacement-pane",
+        tabId: "replacement-tab",
+        workspaceId: WORKSPACE,
+      }),
+    );
+    assert.equal(sessionLeadRoleState(entries)?.role, "chief");
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+  }
+});
+
+test("malformed selected branch withdraws stale Chief authority", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `malformed-branch-${randomUUID()}.sock`,
+  );
+  const entries: unknown[] = [];
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"], entries });
+  const context = fakeContext(entries) as any;
+  context.mode = "rpc";
+  context.ui.notify = () => undefined;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("chief").handler("", context);
+    context.sessionManager.getBranch = () => [
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        data: { role: "chief" },
+      },
+    ];
+    pi.pi.setActiveTools(["read", "bash"]);
+    await pi.events.get("session_tree")![0](undefined, context);
+    assert.equal(pi.pi.getActiveTools().includes("staff_list"), false);
+    assert.ok(
+      entries.some(
+        (entry: any) => entry.customType === "pi_herdsman_role_error",
+      ),
+    );
+    const replacement = claimChiefLease({
+      piSessionId: "replacement-session",
+      paneId: "replacement-pane",
+      tabId: "replacement-tab",
+      workspaceId: WORKSPACE,
+    });
+    replacement.release();
+    assert.equal(
+      readPeerLeadRecord(peerRuntime(), context.sessionManager.getSessionId()),
+      undefined,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+  }
 });
 
 test("manual chief leave completes lead cleanup when tool restoration fails", async () => {
