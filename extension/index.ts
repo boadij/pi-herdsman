@@ -39,7 +39,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
-import { herdsmanTempRoot, resultRef } from "./storage.ts";
+import {
+  herdsmanTempRoot,
+  resultPath as canonicalResultPath,
+  resultRef,
+} from "./storage.ts";
 import { Type } from "typebox";
 import {
   Container,
@@ -121,6 +125,7 @@ import {
   listAllHerdrAgents,
   rollbackHerdrStart,
   runHerdr,
+  worktreeGroupScope,
   paneProcess,
   sessionIdentity,
   matchesExpectedSession,
@@ -269,7 +274,10 @@ type HerdRunEntry =
       completedAt: number;
     };
 const SUPERVISOR_TOOLS = ["supervisor_message", "supervisor_ask"] as const;
-const LEAD_SUPERVISOR_TOOLS = [...SUPERVISOR_TOOLS, "supervisor_result"] as const;
+const LEAD_SUPERVISOR_TOOLS = [
+  ...SUPERVISOR_TOOLS,
+  "supervisor_result",
+] as const;
 const PEER_TOOLS = ["peer_list", "peer_message"] as const;
 const STAFF_TOOLS = [
   "staff_list",
@@ -6797,8 +6805,8 @@ export default function (pi: ExtensionAPI): void {
         askId: string;
         question: string;
         text: string;
-        supervisorSessionId: string;
-        supervisorLeaseId: string;
+        supervisorSessionId?: string;
+        supervisorLeaseId?: string;
         supervisorRole?: "chief" | "manager";
       }
     | undefined;
@@ -7325,7 +7333,7 @@ export default function (pi: ExtensionAPI): void {
           ask === undefined ||
           (ask &&
             typeof ask === "object" &&
-            (Object.keys(ask).length === 5 || Object.keys(ask).length === 6) &&
+            [3, 5, 6].includes(Object.keys(ask).length) &&
             typeof ask.askId === "string" &&
             /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
               ask.askId,
@@ -7334,8 +7342,9 @@ export default function (pi: ExtensionAPI): void {
             validLeadCoordinationQuestion(ask.question) &&
             typeof ask.text === "string" &&
             ask.text.length > 0 &&
-            typeof ask.supervisorSessionId === "string" &&
-            typeof ask.supervisorLeaseId === "string" &&
+            (Object.keys(ask).length === 3 ||
+              (typeof ask.supervisorSessionId === "string" &&
+                typeof ask.supervisorLeaseId === "string")) &&
             (ask.supervisorRole === undefined ||
               ask.supervisorRole === "chief" ||
               ask.supervisorRole === "manager"));
@@ -7346,8 +7355,12 @@ export default function (pi: ExtensionAPI): void {
                 askId: ask.askId,
                 question: ask.question,
                 text: ask.text,
-                supervisorSessionId: ask.supervisorSessionId,
-                supervisorLeaseId: ask.supervisorLeaseId,
+                ...(ask.supervisorSessionId
+                  ? { supervisorSessionId: ask.supervisorSessionId }
+                  : {}),
+                ...(ask.supervisorLeaseId
+                  ? { supervisorLeaseId: ask.supervisorLeaseId }
+                  : {}),
                 ...(ask.supervisorRole
                   ? { supervisorRole: ask.supervisorRole }
                   : {}),
@@ -7388,7 +7401,8 @@ export default function (pi: ExtensionAPI): void {
       !state ||
       state.instanceId !== leadInstanceId ||
       state.piSessionId !== ctx.sessionManager.getSessionId() ||
-      (state.role ?? "lead") !== (activeRole() === "manager" ? "manager" : "lead") ||
+      (state.role ?? "lead") !==
+        (activeRole() === "manager" ? "manager" : "lead") ||
       state.pendingAsk?.askId !== pendingSupervisorAsk?.askId ||
       state.pendingAsk?.question !== pendingSupervisorAsk?.question ||
       state.pendingAsk?.text !== pendingSupervisorAsk?.text
@@ -7473,8 +7487,13 @@ export default function (pi: ExtensionAPI): void {
     const current = await currentSupervisor(ctx);
     if (!pendingSupervisorAsk.supervisorRole)
       return (
-        pendingSupervisorAsk.supervisorSessionId === sessionId &&
-        pendingSupervisorAsk.supervisorLeaseId === leaseId
+        !!current &&
+        current.piSessionId === sessionId &&
+        !("repoKey" in current) &&
+        (pendingSupervisorAsk.supervisorSessionId === undefined ||
+          pendingSupervisorAsk.supervisorSessionId === sessionId) &&
+        (pendingSupervisorAsk.supervisorLeaseId === undefined ||
+          pendingSupervisorAsk.supervisorLeaseId === leaseId)
       );
     return (
       !!current &&
@@ -7600,7 +7619,7 @@ export default function (pi: ExtensionAPI): void {
     const target = await livePeerLead(ctx, record.toSessionId);
     return (
       !!target &&
-      target.role === activeRole() &&
+      (target.role ?? "lead") === activeRole() &&
       target.piSessionId === record.toSessionId
     );
   };
@@ -7647,8 +7666,8 @@ export default function (pi: ExtensionAPI): void {
       !target ||
       !samePeerLeadGeneration(sender, expectedSender) ||
       !samePeerLeadGeneration(target, expectedTarget) ||
-      sender.role !== activeRole() ||
-      target.role !== activeRole()
+      (sender.role ?? "lead") !== activeRole() ||
+      (target.role ?? "lead") !== activeRole()
     )
       throw new Error(
         "Peer sender or target changed before the message was queued",
@@ -7703,6 +7722,16 @@ export default function (pi: ExtensionAPI): void {
       return undefined;
     }
   };
+  const managerClaimsScope = (
+    scope: Awaited<ReturnType<typeof worktreeGroupScope>> | undefined,
+  ): boolean =>
+    // The held lease/descriptor precedes Manager role persistence.
+    !!scope &&
+    listManagerDescriptors(supervisionRuntime()).some(
+      (manager) =>
+        manager.repoKey === scope.repoKey &&
+        manager.workspaceId === scope.primaryWorkspaceId,
+    );
   const authorizeChiefRecord = async (
     record: ChiefMessageRecord,
     ctx: ExtensionContext,
@@ -7718,28 +7747,23 @@ export default function (pi: ExtensionAPI): void {
       if (record.kind === "lead_message" || record.kind === "lead_ask") {
         const leads = await liveLead(ctx, record.fromSessionId);
         if (leads.length !== 1) return false;
-        const scope = await worktreeGroupScope(
-          pi,
-          ctx,
-          leads[0].workspace_id,
-          ctx.signal,
-        );
-        for (const manager of listManagerDescriptors(supervisionRuntime())) {
-          if (
-            manager.repoKey !== scope.repoKey ||
-            manager.workspaceId !== scope.primaryWorkspaceId
-          )
-            continue;
-          const state = readLeadCoordinationState(
-            supervisionRuntime(),
-            manager.piSessionId,
+        let scope: Awaited<ReturnType<typeof worktreeGroupScope>> | undefined;
+        try {
+          scope = await worktreeGroupScope(
+            pi,
+            ctx,
+            leads[0].workspace_id,
+            ctx.signal,
           );
+        } catch (error) {
           if (
-            state?.role === "manager" &&
-            (await remoteChiefAgent(ctx, manager))
+            !String(error).includes(
+              "Workspace is not part of a Herdr Git worktree group",
+            )
           )
-            return false;
+            throw error;
         }
+        if (managerClaimsScope(scope)) return false;
         const state = readLeadCoordinationState(
           supervisionRuntime(),
           record.leadSessionId,
@@ -8025,8 +8049,12 @@ export default function (pi: ExtensionAPI): void {
       assertCurrentLeadCoordination(ctx);
       if (
         !chief ||
-        chief.piSessionId !== pendingSupervisorAsk.supervisorSessionId ||
-        chief.leaseId !== pendingSupervisorAsk.supervisorLeaseId
+        (pendingSupervisorAsk.supervisorSessionId !== undefined &&
+          chief.piSessionId !== pendingSupervisorAsk.supervisorSessionId) ||
+        (pendingSupervisorAsk.supervisorLeaseId !== undefined &&
+          chief.leaseId !== pendingSupervisorAsk.supervisorLeaseId) ||
+        (pendingSupervisorAsk.supervisorSessionId === undefined &&
+          "repoKey" in chief)
       )
         return;
       const runtime = runtimeOverride ?? supervisionRuntime();
@@ -8053,8 +8081,8 @@ export default function (pi: ExtensionAPI): void {
         Date.now(),
         runtimeOverride,
         {
-          piSessionId: ask.supervisorSessionId,
-          leaseId: ask.supervisorLeaseId,
+          piSessionId: chief.piSessionId,
+          leaseId: chief.leaseId,
         },
       );
       assertCurrentLeadCoordination(ctx);
@@ -8841,9 +8869,10 @@ export default function (pi: ExtensionAPI): void {
           if (
             !state ||
             !ask ||
-            (state.role ?? "lead") !== (activeRole() === "manager" ? "lead" : "manager")
+            (activeRole() === "manager" && (state.role ?? "lead") !== "lead")
           )
             continue;
+          let scope: Awaited<ReturnType<typeof worktreeGroupScope>> | undefined;
           if (activeRole() === "manager") {
             const scope = await worktreeGroupScope(
               pi,
@@ -8852,6 +8881,25 @@ export default function (pi: ExtensionAPI): void {
               ctx.signal,
             );
             if (!scope.workspaceIds.includes(agent.workspace_id)) continue;
+          } else if ((state.role ?? "lead") === "lead") {
+            try {
+              scope = await worktreeGroupScope(
+                pi,
+                ctx,
+                agent.workspace_id,
+                ctx.signal,
+              );
+            } catch (error) {
+              if (
+                !String(error).includes(
+                  "Workspace is not part of a Herdr Git worktree group",
+                )
+              )
+                throw error;
+            }
+            if (managerClaimsScope(scope)) continue;
+          } else if (state.role !== "manager") {
+            continue;
           }
           if (
             !chiefAskQueued(
@@ -8880,9 +8928,13 @@ export default function (pi: ExtensionAPI): void {
               !finalState ||
               finalState.piSessionId !== sessionId ||
               finalState.instanceId !== state.instanceId ||
+              finalState.role !== state.role ||
               finalState.pendingAsk?.askId !== ask.askId ||
               finalState.pendingAsk?.question !== ask.question ||
-              finalState.pendingAsk?.text !== ask.text
+              finalState.pendingAsk?.text !== ask.text ||
+              (activeRole() === "chief" &&
+                (state.role ?? "lead") === "lead" &&
+                managerClaimsScope(scope))
             )
               continue;
             // Derive the repair ID from the exact lead session and chief lease
@@ -8891,7 +8943,10 @@ export default function (pi: ExtensionAPI): void {
               version: 1,
               id: chiefAskMessageId(sessionId, ask.askId, chief.leaseId),
               leaseId: chief.leaseId,
-              kind: activeRole() === "manager" ? "lead_ask" : "manager_ask",
+              kind:
+                (state.role ?? "lead") === "manager"
+                  ? "manager_ask"
+                  : "lead_ask",
               fromSessionId: sessionId,
               toSessionId: chief.piSessionId,
               leadSessionId: sessionId,
@@ -9537,7 +9592,8 @@ export default function (pi: ExtensionAPI): void {
           if (
             managed ||
             (state &&
-              ((state.role ?? "lead") !== "lead" || state.piSessionId !== assignment.id))
+              ((state.role ?? "lead") !== "lead" ||
+                state.piSessionId !== assignment.id))
           )
             throw new Error(
               "Existing session in new worktree has a conflicting role or identity",
@@ -11320,7 +11376,7 @@ export default function (pi: ExtensionAPI): void {
               await enterCoordinationPublication();
             try {
               assertCurrentLeadCoordination(ctx);
-              if (pendingChiefAsk)
+              if (pendingSupervisorAsk)
                 throw new Error("A supervisor ask is already pending");
               if (!leadCoordinationHealthy)
                 throw new Error("Lead coordination state is unavailable");
@@ -11548,7 +11604,8 @@ export default function (pi: ExtensionAPI): void {
             const peers = listPeerLeadRecords(peerRuntime())
               .filter(
                 (record) =>
-                  (record.role ?? "lead") === activeRole() && record.piSessionId !== self,
+                  (record.role ?? "lead") === activeRole() &&
+                  record.piSessionId !== self,
               )
               .map((record) => ({
                 session: record.piSessionId,
@@ -11573,8 +11630,8 @@ export default function (pi: ExtensionAPI): void {
           if (
             !sender ||
             !target ||
-            sender.role !== activeRole() ||
-            target.role !== activeRole()
+            (sender.role ?? "lead") !== activeRole() ||
+            (target.role ?? "lead") !== activeRole()
           )
             throw new Error(
               "Peer target was not found or is no longer a live same-role peer",
@@ -12019,7 +12076,7 @@ export default function (pi: ExtensionAPI): void {
             ) =>
               staffTool.execute(
                 id,
-                { action: "inspect", lead: p.session },
+                { action: "inspect", session: p.session },
                 signal,
                 update,
                 ctx,
@@ -12047,7 +12104,7 @@ export default function (pi: ExtensionAPI): void {
             ) =>
               staffTool.execute(
                 id,
-                { action: "transcript", lead: p.session },
+                { action: "transcript", session: p.session },
                 signal,
                 update,
                 ctx,
@@ -12074,7 +12131,7 @@ export default function (pi: ExtensionAPI): void {
             ) =>
               staffTool.execute(
                 id,
-                { action: "message", lead: p.session, ...p },
+                { action: "message", ...p },
                 signal,
                 update,
                 ctx,
@@ -12101,7 +12158,7 @@ export default function (pi: ExtensionAPI): void {
             ) =>
               staffTool.execute(
                 id,
-                { action: "reply", lead: p.session, ...p },
+                { action: "reply", ...p },
                 signal,
                 update,
                 ctx,
@@ -13183,7 +13240,8 @@ export default function (pi: ExtensionAPI): void {
             persistedRole = persisted.role;
             const activeBaseline = normalizeLeadTools(pi.getActiveTools());
             leadTools =
-              persisted.role === "lead" && activeBaseline.length
+              persisted.role === "lead" &&
+              activeBaseline.some((name) => !ownedTools.has(name))
                 ? activeBaseline
                 : [...persisted.leadTools];
           } else {
@@ -13909,7 +13967,13 @@ export default function (pi: ExtensionAPI): void {
           update: unknown,
           ctx: ExtensionContext,
         ) =>
-          supervisorTool.execute(id, { action: "ask", ...p }, signal, update, ctx),
+          supervisorTool.execute(
+            id,
+            { action: "ask", ...p },
+            signal,
+            update,
+            ctx,
+          ),
         renderCall: (a: unknown, t: any, c: any) =>
           renderCoordinationCall("supervisor", "ask", a, t, c),
         renderResult: (r: any, o: any, t: any, c: any) =>
@@ -13931,7 +13995,13 @@ export default function (pi: ExtensionAPI): void {
           update: unknown,
           ctx: ExtensionContext,
         ) =>
-          supervisorTool.execute(id, { action: "result", ...p }, signal, update, ctx),
+          supervisorTool.execute(
+            id,
+            { action: "result", ...p },
+            signal,
+            update,
+            ctx,
+          ),
         renderCall: (a: unknown, t: any, c: any) =>
           renderCoordinationCall("supervisor", "result", a, t, c),
         renderResult: (r: any, o: any, t: any, c: any) =>

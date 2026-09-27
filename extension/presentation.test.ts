@@ -14,6 +14,7 @@ import {
   formatElapsed,
   formatSupervisionContext,
   formatSupervisionNotification,
+  supervisionPresentationReports,
   SUPERVISION_CONTEXT_MAX_BYTES,
   formatAgentDefinitions,
   formatSkills,
@@ -139,15 +140,13 @@ test("Supervision context formatting preserves state, safety, and bounded record
       "agent_counts: active=1 blocked=1 total=2",
       "ask_id: ask-123",
       "question: OAuth or service accounts?",
-      "implementer · working · id=agent-a",
-      "reviewer · blocked · id=agent-z",
       "diagnostics:",
     ])
       assert.match(
         formatted,
         new RegExp(value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),
       );
-    assert.ok(formatted.indexOf("implementer") < formatted.indexOf("reviewer"));
+    assert.doesNotMatch(formatted, /agent-a|agent-z/);
     assert.doesNotMatch(
       formatted,
       /recent_output|foreground_processes|\bpid\b/iu,
@@ -161,8 +160,11 @@ test("Supervision context formatting preserves state, safety, and bounded record
     const unavailable = formatSupervisionContext(undefined, {
       status: "unavailable",
     });
-    assert.match(unavailable, /Do not infer that there are zero leads/);
-    assert.doesNotMatch(unavailable, /leads: 0/);
+    assert.match(
+      unavailable,
+      /Current supervision state could not be established/,
+    );
+    assert.doesNotMatch(unavailable, /unclaimed_direct_leads: 0/);
   }
 
   {
@@ -264,39 +266,39 @@ test("Supervision ambient projections share status and empty-state semantics", (
     };
 
     const fresh = projections("fresh");
-    assert.match(fresh.ambient, /1 herd/);
-    assert.match(fresh.widget, /1 herd/);
+    assert.match(fresh.ambient, /1 lead/);
+    assert.match(fresh.widget, /1 lead/);
     assert.match(fresh.ambient, /chief/);
     assert.doesNotMatch(fresh.ambient, /Chief/);
     assert.match(fresh.notification, /Pi Herdsman/);
-    assert.match(fresh.notification, /1 herd/);
+    assert.match(fresh.notification, /1 lead/);
     assert.doesNotMatch(fresh.ambient, /stale|unavailable/);
     assert.doesNotMatch(fresh.notification, /stale|unavailable/);
 
     const stale = projections("stale");
     for (const output of Object.values(stale)) assert.match(output, /stale/);
-    assert.match(stale.ambient, /1 herd/);
-    assert.match(stale.notification, /1 herd/);
+    assert.match(stale.ambient, /1 lead/);
+    assert.match(stale.notification, /1 lead/);
 
     const unavailable = projections("unavailable");
     for (const output of Object.values(unavailable)) {
       assert.match(output, /unavailable/);
-      assert.doesNotMatch(output, /0 herds|1 herd/);
+      assert.doesNotMatch(output, /0 leads|1 lead/);
     }
   }
 
   {
     assert.match(
       renderSupervisionLeads([], 120, { status: "fresh" })[0]!,
-      /0 herds/,
+      /0 leads/,
     );
-    assert.match(formatSupervisionNotification([], "fresh"), /0 herds/);
+    assert.match(formatSupervisionNotification([], "fresh"), /0 leads/);
     assert.match(
       createSupervisionWidget(
         () => [],
         () => "fresh",
       ).render(120)[0]!,
-      /0 herds/,
+      /0 leads/,
     );
   }
 });
@@ -304,11 +306,11 @@ test("Supervision ambient projections share status and empty-state semantics", (
 test("Chief ambient projection pluralizes counts and handles unavailable state", (t) => {
   {
     const cases = [
-      { leads: [], label: "0 herds" },
-      { leads: [lead()], label: "1 herd" },
+      { leads: [], label: "0 leads" },
+      { leads: [lead()], label: "1 lead" },
       {
         leads: [lead(), lead({ lead: "session-b" })],
-        label: "2 herds",
+        label: "2 leads",
       },
     ];
     for (const { leads, label } of cases) {
@@ -370,8 +372,8 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       120,
     );
     const output = rows.join("\n");
-    assert.equal(rows[1], "├─ !◐ attention  1 agent · 1 active");
-    assert.equal(rows[2], "├─ ● working  1 agent · 1 active");
+    assert.equal(rows[1], "├─ !◐ attention  lead · 1 agent · 1 active");
+    assert.equal(rows[2], "├─ ● working  lead · 1 agent · 1 active");
     assert.equal(
       rows.some((line) => line === ""),
       false,
@@ -387,7 +389,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       ],
       () => "fresh",
     ).render(120);
-    assert.equal(widgetRows[1], "├─ ◉ widget-a  1 agent · 1 active");
+    assert.equal(widgetRows[1], "├─ ◉ widget-a  lead · 1 agent · 1 active");
     assert.equal(widgetRows[1]?.startsWith("├─ "), true);
     assert.equal(
       widgetRows.some((line) => line === ""),
@@ -413,7 +415,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       {},
       "selected",
     );
-    assert.equal(selectedRows[1], "└─ >!◐ selected  no agents");
+    assert.equal(selectedRows[1], "└─ >!◐ selected  lead · no agents");
   }
 
   {
@@ -540,7 +542,7 @@ test("Supervision rows cap ordinary leads, retain attention, and fit every width
       ),
     ];
     const rows = renderSupervisionLeads(leads, 200);
-    assert.match(rows[0]!, /9 herds/);
+    assert.match(rows[0]!, /9 leads/);
     assert.ok(rows.some((line) => line.includes("attention")));
     assert.match(rows.at(-1)!, /2 more/);
     for (let width = 1; width <= 120; width++)
@@ -2019,7 +2021,7 @@ test("chief and staff coordination renderers share semantic status language", ()
         { args: { action: "ask" } },
       ),
     ),
-    "? waiting for Chief",
+    "? waiting for supervisor",
   );
   assert.equal(
     renderedText(
@@ -2029,7 +2031,7 @@ test("chief and staff coordination renderers share semantic status language", ()
         {
           details: {
             ok: true,
-            leads: [
+            reports: [
               { runtime_state: "working", needs_you: true },
               { runtime_state: "settling", needs_you: false },
               { runtime_state: "starting", needs_you: false },
@@ -2162,7 +2164,7 @@ test("chief and staff coordination renderers share semantic status language", ()
       {
         details: {
           ok: true,
-          leads: [
+          reports: [
             {
               session: "lead-opaque",
               display_name: "workspace/api",
@@ -4470,13 +4472,13 @@ test("Large model truncation remains bounded at ordinary and boundary inputs", (
   }
 });
 
-
 test("Manager supervision presentation is role-aware and classifies direct Leads", () => {
   const snapshot = {
     leads: [
       lead({
         lead: "direct-lead",
         agentCounts: { active: 0, blocked: 0, total: 0 },
+        availableActions: ["inspect", "message"],
       }),
     ],
   };

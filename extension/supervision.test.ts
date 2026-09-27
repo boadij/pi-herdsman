@@ -566,7 +566,7 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   const value = state("lead");
   const path = writeLeadCoordinationState(runtime, value);
   assert.deepEqual(readLeadCoordinationState(runtime, "lead"), value);
-  assert.match(path.split(sep).join("/"), /leads\/[0-9a-f]{64}\.json$/);
+  assert.match(path.split(sep).join("/"), /coordinators\/[0-9a-f]{64}\.json$/);
   assertPosixMode(path, 0o600);
   assertPosixMode(runtime.leads, 0o700);
   assert.throws(() =>
@@ -1626,7 +1626,6 @@ test("Chief descriptor write failure releases the lock for recovery", () => {
     else process.env.HERDR_SOCKET_PATH = previousSocket;
   }
 });
-
 
 test("Chief lead projection supports fallback without dual-reporting Manager reports", () => {
   const makeLead = (sessionId: string) => ({

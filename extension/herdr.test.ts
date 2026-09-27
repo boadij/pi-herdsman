@@ -4193,7 +4193,6 @@ test("shell ownership uses captured identity without a shell allowlist", () => {
   );
 });
 
-
 test("worktree group scope resolves primary and linked workspaces from Herdr topology", async () => {
   const calls: string[][] = [];
   const pi = {

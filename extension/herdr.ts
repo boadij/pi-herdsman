@@ -355,7 +355,6 @@ export async function runHerdr(
   return stdoutJson.result;
 }
 
-
 export type WorktreeGroupScope = Readonly<{
   repoKey: string;
   primaryWorkspaceId: string;
@@ -1383,13 +1382,14 @@ export async function startHerdrAgent(
   }
 }
 
-
 export async function startHerdrAgentInPane(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   options: StartHerdrInPaneOptions,
 ): Promise<StartedHerdrAgent> {
-  const { totalTimeout, childTimeout } = startupTimeoutBudget(options.timeoutMs);
+  const { totalTimeout, childTimeout } = startupTimeoutBudget(
+    options.timeoutMs,
+  );
   const deadline = Date.now() + totalTimeout;
   const release = await lockLifecycle(ctx, options.signal);
   let attempt: StartedHerdrAgent | undefined;
@@ -1434,7 +1434,10 @@ export async function startHerdrAgentInPane(
     )
       error("start", `pane ${options.paneId} topology changed before launch`);
     if (typeof pane.terminal_id !== "string" || !pane.terminal_id)
-      error("start", `pane ${options.paneId} did not include terminal identity`);
+      error(
+        "start",
+        `pane ${options.paneId} did not include terminal identity`,
+      );
 
     attempt = {
       herdrAgent: alias(options.workspaceId, options.label, options.runId),

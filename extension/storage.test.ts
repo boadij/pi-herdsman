@@ -27,7 +27,7 @@ test("recoverable Herdsman state lives under Pi agent data", () => {
   );
   assert.equal(
     dirname(supervisionRuntime("socket with spaces").root),
-    join(root, "runtime", "supervision"),
+    join(root, "runtime", "supervision-v2"),
   );
   assert.notEqual(herdsmanTempRoot().startsWith(root), true);
 });

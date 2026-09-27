@@ -11,6 +11,7 @@ import { acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import {
   claimChiefLease,
+  claimManagerLease,
   listCoordinationMessagePaths,
   invalidateLeadCoordinationState,
   listChiefMessagePaths,
@@ -185,6 +186,12 @@ const SEMANTIC_TOOL_CASES = [
     { question: "decision?" },
     { question: "decision?", message: "x" },
     ["question"],
+  ],
+  [
+    "supervisor_result",
+    { result: "completed" },
+    { result: "completed", question: "x" },
+    ["result"],
   ],
   ["peer_list", {}, { session: "x" }, []],
   [
@@ -480,7 +487,12 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   registerExtension!(lead.pi as never);
   const leadContext = fakeContext() as any;
   await lead.events.get("session_start")![0](undefined, leadContext);
-  assert.deepEqual(lead.commands.sort(), ["agents", "chief", "herdsman"]);
+  assert.deepEqual(lead.commands.sort(), [
+    "agents",
+    "chief",
+    "herdsman",
+    "manager",
+  ]);
   assert.deepEqual(
     lead.pi.getActiveTools().sort(),
     [
@@ -856,6 +868,7 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
       "cwd",
       "paneId",
       "piSessionId",
+      "role",
       "tabId",
       "updatedAt",
       "version",
@@ -1698,12 +1711,13 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
       context,
     );
     assertToolResult(listed);
-    const listedLead = (listed.details?.leads as any[])[0];
+    const listedLead = (listed.details?.reports as any[])[0];
     assert.equal(listedLead.session, leadId);
+    assert.equal(listedLead.role, "lead");
     assert.equal("lead" in listedLead, false);
     assert.deepEqual(
-      listedLead?.available_tools,
-      ["staff_inspect", "staff_transcript", "staff_message"],
+      listedLead?.available_actions,
+      ["inspect", "transcript", "message"],
       JSON.stringify(listed.details),
     );
 
@@ -1738,13 +1752,13 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
       context,
     );
     assertToolResult(malformed);
-    const malformedLead = (malformed.details?.leads as any[])[0];
+    const malformedLead = (malformed.details?.reports as any[])[0];
     assert.equal(malformedLead.session, leadId);
     assert.equal("lead" in malformedLead, false);
-    assert.deepEqual(malformedLead?.available_tools, [
-      "staff_inspect",
-      "staff_transcript",
-      "staff_message",
+    assert.deepEqual(malformedLead?.available_actions, [
+      "inspect",
+      "transcript",
+      "message",
     ]);
     await assert.rejects(
       tool.execute(
@@ -1873,7 +1887,7 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
         undefined,
         context,
       ),
-      /No active chief is available/,
+      /No active supervisor is available/,
     );
     context.sessionManager.getBranch = () => [
       {
@@ -1891,7 +1905,7 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
         undefined,
         context,
       ),
-      /No active chief is available/,
+      /No active supervisor is available/,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -2357,6 +2371,12 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
           stderr: "",
           code: 0,
         };
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: { workspace: {} } }),
+          stderr: "",
+          code: 0,
+        };
       return { stdout: "{}", stderr: "", code: 0 };
     },
   });
@@ -2438,7 +2458,12 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
 
     await pi.events.get("agent_start")![0](undefined, context);
     await waitForTestCondition(
-      () => pi.sentMessageCalls.length === 2,
+      () =>
+        pi.sentMessageCalls.some((call) =>
+          String((call.message as any)?.content).includes(
+            "queued before Chief preflight completes",
+          ),
+        ),
       "Chief inbox delivery did not resume after agent_start",
       2000,
     );
@@ -2447,16 +2472,189 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
       "pi-herdsman-supervision-context",
     );
     assert.deepEqual(pi.sentMessageCalls[0]?.options, { triggerTurn: false });
+    const delivered = pi.sentMessageCalls.find((call) =>
+      String((call.message as any)?.content).includes(
+        "queued before Chief preflight completes",
+      ),
+    )!;
     assert.match(
-      String((pi.sentMessageCalls[1]?.message as any)?.content),
+      String((delivered.message as any)?.content),
       /queued before Chief preflight completes/,
     );
-    assert.deepEqual(pi.sentMessageCalls[1]?.options, {
+    assert.deepEqual(delivered.options, {
       deliverAs: "followUp",
       triggerTurn: true,
     });
+    const pendingAskId = randomUUID();
+    const state = readLeadCoordinationState(runtime, leadId)!;
+    writeLeadCoordinationState(runtime, {
+      ...state,
+      pendingAsk: {
+        askId: pendingAskId,
+        question: "Recover this ask?",
+        text: "Question: Recover this ask?",
+      },
+      updatedAt: Date.now(),
+    });
+    await pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      context,
+    );
+    assert.equal(
+      listChiefMessagePaths(runtime, chiefId).some((path) => {
+        const record = readChiefMessage(path);
+        return record.kind === "lead_ask" && record.askId === pendingAskId;
+      }),
+      true,
+      "Chief refresh must repair an ordinary Lead ask without a Manager",
+    );
   } finally {
     for (const release of releaseBlocked) release();
+    pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("Manager claim between Chief ask scan and publication suppresses repair and stale delivery", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-claim-ask-${randomUUID()}.sock`,
+  );
+  const chiefId = `chief-${randomUUID()}`;
+  const managerId = `manager-${randomUUID()}`;
+  const leadId = LEAD_SESSION_ID;
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: {
+        role: "chief",
+        leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+      },
+    },
+  ];
+  const agent = (id: string, pane: string) => ({
+    agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: id },
+    pane_id: pane,
+    tab_id: `${pane}-tab`,
+    workspace_id: WORKSPACE,
+    agent_status: "idle",
+  });
+  const agents = [
+    agent(chiefId, "chief-pane"),
+    agent(leadId, "lead-pane"),
+    agent(managerId, "manager-pane"),
+  ];
+  let armed = false;
+  let managerLease: ReturnType<typeof claimManagerLease> | undefined;
+  const pi = fakePi({
+    entries,
+    allTools: REGISTERED_ROLE_TOOLS,
+    exec: (_command, args) => {
+      let result: unknown = {};
+      if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+      else if (isAgentList(args)) result = { agents };
+      else if (args[0] === "agent" && args[1] === "get")
+        result = { agent: agents.find((a) => a.pane_id === args[2]) };
+      else if (args[0] === "workspace" && args[1] === "get")
+        result = {
+          workspace: {
+            worktree: { repo_key: "repo", is_linked_worktree: false },
+          },
+        };
+      else if (args[0] === "worktree" && args[1] === "list") {
+        result = {
+          source: { repo_key: "repo", source_workspace_id: WORKSPACE },
+          worktrees: [],
+        };
+        armed = true;
+      }
+      return {
+        stdout: JSON.stringify({ id: AGENT_ID, result }),
+        stderr: "",
+        code: 0,
+      };
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  context.sessionManager = {
+    ...context.sessionManager,
+    getSessionId: () => {
+      if (armed && !managerLease) {
+        armed = false;
+        managerLease = claimManagerLease({
+          piSessionId: managerId,
+          paneId: "manager-pane",
+          tabId: "manager-pane-tab",
+          workspaceId: WORKSPACE,
+          repoKey: "repo",
+        });
+      }
+      return chiefId;
+    },
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    const runtime = supervisionRuntime();
+    const askId = randomUUID();
+    writeLeadCoordinationState(runtime, {
+      version: 1,
+      instanceId: randomUUID(),
+      piSessionId: leadId,
+      pendingAsk: { askId, question: "Decision?", text: "Question: Decision?" },
+      updatedAt: Date.now(),
+    });
+    await pi.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      context,
+    );
+    assert.ok(managerLease, "Manager must claim after the scope scan");
+    assert.equal(
+      listChiefMessagePaths(runtime, chiefId).some(
+        (path) => readChiefMessage(path).askId === askId,
+      ),
+      false,
+    );
+
+    // A Lead ask published just before the claim must also fail Chief acceptance.
+    const chief = JSON.parse(readFileSync(runtime.descriptor, "utf8"));
+    writeChiefMessage({
+      version: 1,
+      id: randomUUID(),
+      leaseId: chief.leaseId,
+      kind: "lead_ask",
+      fromSessionId: leadId,
+      toSessionId: chiefId,
+      leadSessionId: leadId,
+      askId,
+      text: "stale Lead ask",
+      createdAt: Date.now(),
+    });
+    await pi.events.get("agent_start")![0](undefined, context);
+    await waitForTestCondition(
+      () =>
+        !listChiefMessagePaths(runtime, chiefId).some(
+          (path) => readChiefMessage(path).askId === askId,
+        ),
+      "Chief did not reject the stale Lead ask",
+      2000,
+    );
+    assert.equal(
+      pi.sentMessageCalls.some(({ message }) =>
+        String((message as any)?.content).includes("stale Lead ask"),
+      ),
+      false,
+    );
+  } finally {
+    managerLease?.release();
     pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
@@ -2538,6 +2736,12 @@ test("registered lead and replacement chief exchange messages and asks", async (
   let failChiefAliasLookup = false;
   let replacement: ReturnType<typeof fakePi> | undefined;
   const exec = (_command: string, args: string[]) => {
+    if (args[0] === "workspace" && args[1] === "get")
+      return {
+        stdout: JSON.stringify({ id: AGENT_ID, result: { workspace: {} } }),
+        stderr: "",
+        code: 0,
+      };
     if (isAgentList(args))
       return {
         stdout: JSON.stringify({
@@ -2760,16 +2964,16 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     assert.doesNotMatch(supervisionMessage.content, /^  lead: /mu);
     assert.doesNotMatch(supervisionMessage.content, /^  actions: /mu);
-    assert.match(supervisionMessage.content, /leads: 1/);
+    assert.match(supervisionMessage.content, /unclaimed_direct_leads: 1/);
     assert.match(
       supervisionMessage.content,
       /agent_counts: active=1 blocked=1 total=2/,
     );
-    assert.match(
+    assert.doesNotMatch(
       supervisionMessage.content,
       /snapshot-direct-agent · working · id=eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee/,
     );
-    assert.match(
+    assert.doesNotMatch(
       supervisionMessage.content,
       /snapshot-descendant-agent · blocked · id=ffffffff-ffff-4fff-8fff-ffffffffffff/,
     );
@@ -2835,7 +3039,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
           undefined,
           chiefContext,
         ),
-        /Lead or Chief changed before the message was queued/,
+        /Staff is available only to an active supervisor/,
       );
     } finally {
       support.configReadHook = undefined;
@@ -2864,7 +3068,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.equal("lead" in (sent.details ?? {}), false);
     assert.equal(
       sent.details?.next_action,
-      "Lead activity returns asynchronously; continue only independent chief work, otherwise end the turn. Do not poll.",
+      "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
     );
     const sentAgain = await chiefTool.execute(
       "message",
@@ -3043,50 +3247,27 @@ test("registered lead and replacement chief exchange messages and asks", async (
       chiefContext,
     );
     assertToolResult(projection);
-    assert.equal(Array.isArray(projection.details?.leads), true);
-    assert.equal((projection.details?.leads as any[]).length, 1);
-    const projectedLead = (projection.details?.leads as any[]).find(
-      (lead: any) => lead.session === leadId,
+    assert.equal(Array.isArray(projection.details?.reports), true);
+    assert.equal((projection.details?.reports as any[]).length, 1);
+    const projectedLead = (projection.details?.reports as any[]).find(
+      (report: any) => report.session === leadId,
     );
     assert.ok(projectedLead);
+    assert.equal(projectedLead.role, "lead");
     assert.equal("lead" in projectedLead, false);
-    assert.deepEqual(projectedLead.available_tools, [
-      "staff_inspect",
-      "staff_message",
-      "staff_reply",
+    assert.deepEqual(projectedLead.available_actions, [
+      "inspect",
+      "message",
+      "reply",
     ]);
     assert.deepEqual(projectedLead.agent_counts, {
       active: 1,
       blocked: 1,
       total: 2,
     });
-    assert.deepEqual(
-      projectedLead.agents
-        .map((agent: any) => ({
-          id: agent.id,
-          label: agent.label,
-          state: agent.state,
-        }))
-        .sort((a: any, b: any) => a.id.localeCompare(b.id)),
-      [
-        {
-          id: PARENT_SESSION_ID,
-          label: "snapshot-direct-agent",
-          state: "working",
-        },
-        {
-          id: CHILD_SESSION_ID,
-          label: "snapshot-descendant-agent",
-          state: "blocked",
-        },
-      ].sort((a, b) => a.id.localeCompare(b.id)),
-    );
+    assert.equal("agents" in projectedLead, false);
     assert.equal(projectedLead.needs_you, true);
     assert.equal(projectedLead.pending_ask_id, askId);
-    assert.equal(
-      projectedLead.pending_ask_question,
-      "Which credential should I use?",
-    );
 
     await chief.events.get("session_shutdown")![0]();
     assert.deepEqual(
@@ -3097,7 +3278,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     await assert.rejects(
       chiefListTool.execute("list", {}, undefined, undefined, chiefContext),
-      /active chief/,
+      /Supervisor lease is no longer active/,
     );
     chiefAgent = {
       ...chiefAgent,
@@ -3156,7 +3337,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.equal("lead" in (reply.details ?? {}), false);
     assert.equal(
       reply.details?.next_action,
-      "Lead activity returns asynchronously; continue only independent chief work, otherwise end the turn. Do not poll.",
+      "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
     );
     await new Promise<void>((resolve) => setTimeout(resolve, 550));
     assert.equal(
@@ -3180,7 +3361,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /No active chief is available/,
+      /No active supervisor is available/,
     );
     const afterFailedAsk = readLeadCoordinationState(
       supervisionRuntime(),
@@ -3196,7 +3377,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /No active chief/,
+      /No active supervisor is available/,
     );
     duplicateChief = false;
     nonPiIntegration = true;
@@ -3223,9 +3404,12 @@ test("registered lead and replacement chief exchange messages and asks", async (
       replacementContext,
     );
     assertToolResult(diagnosticList);
-    assert.deepEqual(diagnosticList.details?.diagnostics, [
-      "Live Pi agents are present but their session identities are unresolvable",
-    ]);
+    assert.equal(diagnosticList.details?.diagnostics, undefined);
+    assert.deepEqual(
+      diagnosticList.details?.reports,
+      nonPiDiagnosticList.details?.reports,
+      "unresolvable Pi identity must not become a direct report",
+    );
     unresolvableIdentity = false;
     aliasAgent = {
       ...chiefAgent,
@@ -3239,7 +3423,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /descriptor exists but its live Pi identity could not be verified/,
+      /No active supervisor is available/,
     );
     chiefAgent = {
       ...chiefAgent,
@@ -3271,7 +3455,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         undefined,
         leadContext,
       ),
-      /descriptor exists but its live Pi identity could not be verified/,
+      /No active supervisor is available/,
     );
     failChiefAliasLookup = false;
     const staleLead = { ...afterFailedAsk!, instanceId: randomUUID() };
@@ -3393,19 +3577,7 @@ test("malformed persisted role fails closed without authoritative lead state", a
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "agent_list",
-    "agent_delegate",
-    "agent_continue",
-    "agent_steer",
-    "agent_interrupt",
-    "agent_reply",
-    "agent_close",
-    "agent_inspect",
-    "agent_transcript",
-    "peer_list",
-    "peer_message",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), []);
   assert.equal(
     readLeadCoordinationState(
       supervisionRuntime(),
@@ -3565,13 +3737,12 @@ test("definition roster matches live list and rejects stale sessions", async () 
     JSON.stringify(listResult.details),
   );
   sessionId = randomUUID();
-  assert.equal(
-    await pi.events.get("before_agent_start")![0](
-      { systemPrompt: "base" },
-      context,
-    ),
-    undefined,
+  const stalePrompt = await pi.events.get("before_agent_start")![0](
+    { systemPrompt: "base" },
+    context,
   );
+  assert.match(stalePrompt?.systemPrompt ?? "", /## Lead role/);
+  assert.doesNotMatch(stalePrompt?.systemPrompt ?? "", /<agent_definitions>/);
   await pi.events.get("session_start")![0](undefined, context);
   const restartedPrompt = await pi.events.get("before_agent_start")![0](
     { systemPrompt: "base" },
@@ -3821,7 +3992,7 @@ test("first failed chief supervision refresh is explicitly unavailable", async (
   assert.match(String(result?.message?.content), /status="unavailable"/);
   assert.match(
     String(result?.message?.content),
-    /Do not infer that there are zero leads/,
+    /Current supervision state could not be established/,
   );
   pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
