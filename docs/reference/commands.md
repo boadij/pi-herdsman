@@ -12,7 +12,7 @@ It is separate from the structured model-facing Agent tools.
 
 Agent-management commands require a lead Pi session with UI. Outside Herdr,
 plain `/agents` and its `/herdsman` alias remain available as a setup
-diagnostic.
+diagnostic that includes the running Pi Herdsman package version.
 
 ## Usage
 
@@ -23,7 +23,8 @@ diagnostic.
 /agents stop
 ```
 
-The plain command opens a native Pi selection menu with `Running`,
+The plain command opens a native Pi selection menu titled with the running
+Pi Herdsman package version for both `/agents` and `/herdsman`, with `Running`,
 `Definitions`, `Layout`, `Context retirement  on|off`, `Message limits`, and
 `Stop all…` destinations. The
 Message limits view edits the user-wide inline attachment and mailbox payload

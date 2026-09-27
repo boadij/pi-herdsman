@@ -997,19 +997,31 @@ function renderBreadcrumb(segments: string[], width: number): string {
   }
   return result;
 }
-function renderBreadcrumbWithTools(
-  segments: string[],
+function compactStatusTools(tools: readonly string[]): string[] {
+  const agentCount = tools.filter((tool) => tool.startsWith("agent_")).length;
+  if (agentCount < 2) return [...tools];
+
+  let grouped = false;
+  return tools.flatMap((tool) => {
+    if (!tool.startsWith("agent_")) return [tool];
+    if (grouped) return [];
+    grouped = true;
+    return [`agent_*×${agentCount}`];
+  });
+}
+function renderToolMetadata(
   tools: readonly string[] | undefined,
   width: number,
-  theme: any,
 ): string {
-  const breadcrumb = renderBreadcrumb(segments, width);
-  if (!tools?.length) return breadcrumb;
-  const metadata = `  [${tools.join(", ")}]`;
-  const available = width - visibleWidth(breadcrumb);
-  if (available < 6) return breadcrumb;
-  const truncated = truncateToWidth(metadata, available, "…");
-  return `${breadcrumb}${theme.fg("muted", truncated)}`;
+  if (!tools?.length || width <= 0) return "";
+  const tokens = compactStatusTools(tools);
+  const full = `  [${tokens.join(", ")}]`;
+  if (visibleWidth(full) <= width) return full;
+  for (let count = tokens.length - 1; count > 0; count--) {
+    const candidate = `  [${tokens.slice(0, count).join(", ")}, …]`;
+    if (visibleWidth(candidate) <= width) return candidate;
+  }
+  return "";
 }
 function names(v: unknown): string[] {
   return Array.isArray(v)
@@ -2909,22 +2921,30 @@ export class StatusWidget {
     const suffix = s.unavailable
       ? "unavailable"
       : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
-    const breadcrumb = renderBreadcrumbWithTools(
+    const availableWidth = Math.max(0, width);
+    const breadcrumb = renderBreadcrumb(
       s.breadcrumb ?? ["herd"],
+      availableWidth,
+    );
+    const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
+    const run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
+    const suffixText = s.identityOnly || !suffix ? "" : `  ${suffix}`;
+    const tools = renderToolMetadata(
       s.ownTools,
-      Math.max(0, width),
-      this.theme,
+      Math.max(
+        0,
+        availableWidth -
+          visibleWidth(breadcrumb) -
+          visibleWidth(run) -
+          visibleWidth(suffixText),
+      ),
     );
     const styledBreadcrumb = this.theme.fg("success", breadcrumb);
-    const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
-    const styledRun =
-      !s.identityOnly && elapsed
-        ? this.theme.fg("accent", ` · ${elapsed}`)
-        : "";
-    const styledSuffix =
-      s.identityOnly || !suffix ? "" : this.theme.fg("muted", `  ${suffix}`);
-    const header = `${styledBreadcrumb}${styledRun}${styledSuffix}`;
-    const out = [truncateToWidth(header, Math.max(0, width), "…")];
+    const styledTools = tools ? this.theme.fg("muted", tools) : "";
+    const styledRun = run ? this.theme.fg("accent", run) : "";
+    const styledSuffix = suffixText ? this.theme.fg("muted", suffixText) : "";
+    const header = `${styledBreadcrumb}${styledTools}${styledRun}${styledSuffix}`;
+    const out = [truncateToWidth(header, availableWidth, "…")];
     if (s.identityOnly) return out;
     out.push(
       ...renderStatusRows(s.agents, {

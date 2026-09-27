@@ -2383,6 +2383,20 @@ test("Status widgets preserve parent families and settling counts", (t) => {
 });
 
 test("Status widget headers keep tools separate from child metadata", (t) => {
+  const semanticTools = [
+    "read",
+    "bash",
+    "agent_list",
+    "agent_delegate",
+    "agent_continue",
+    "agent_steer",
+    "agent_interrupt",
+    "agent_reply",
+    "agent_close",
+    "agent_inspect",
+    "agent_transcript",
+    "ask_owner",
+  ];
   {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
@@ -2411,6 +2425,35 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       identityOnly: true,
     });
     assert.equal(widget.render(160)[0], "● lead → implementer:one");
+    widget.setSnapshot({
+      agents: [],
+      stale: false,
+      unavailable: false,
+      breadcrumb: ["lead", "implementer:one"],
+      ownTools: semanticTools,
+      identityOnly: true,
+    });
+    assert.equal(
+      widget.render(160)[0],
+      "● lead → implementer:one  [read, bash, agent_*×9, ask_owner]",
+    );
+    assert.doesNotMatch(
+      widget.render(160)[0]!,
+      /agent_(?:list|delegate|continue|steer|interrupt|reply|close|inspect|transcript)/,
+    );
+    assert.match(widget.render(44)[0]!, /\[read, bash, …\]/);
+    assert.doesNotMatch(widget.render(44)[0]!, /agent_deleg…/);
+    for (let width = 1; width <= 160; width++)
+      assert.ok(visibleWidth(widget.render(width)[0]!) <= width);
+    widget.setSnapshot({
+      agents: [],
+      stale: false,
+      unavailable: false,
+      breadcrumb: ["lead", "implementer:one"],
+      ownTools: ["read", "agent_delegate", "ask_owner"],
+      identityOnly: true,
+    });
+    assert.match(widget.render(160)[0]!, /\[read, agent_delegate, ask_owner\]/);
   }
 
   {
@@ -2438,6 +2481,21 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       1,
     );
     assert.match(lines[2]!, /child/);
+  }
+
+  {
+    const widget = new StatusWidget();
+    t.after(() => widget.dispose());
+    widget.setSnapshot({
+      agents: [{ label: "child", definition: "agent", state: "working" }],
+      stale: false,
+      unavailable: false,
+      breadcrumb: ["lead", "parent"],
+      ownTools: semanticTools,
+    });
+    const header = widget.render(54)[0]!;
+    assert.match(header, /1 working/);
+    assert.match(header, /\[read, bash, agent_\*×9, …\]/);
   }
 });
 

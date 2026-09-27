@@ -54,12 +54,16 @@ Example:
 
 The breadcrumb uses validated definition/agent ancestry.
 
-Delegating-agent and leaf panes append their current Pi active tool names as
-muted bracketed metadata after the current identity, preserving Pi's exact
-order. Lead Pi sessions do not show this metadata. It is local to the current
-pane, is never copied to agent rows or authoritative agent state, and is
-truncated or omitted before breadcrumb identity is shortened when width is
-limited.
+Delegating-agent and leaf panes can append a compact summary of their current
+Pi active tools as muted bracketed metadata after the current identity.
+Ordinary tool names retain Pi's order. Multiple `agent_*` semantic coordination
+tools are collapsed into one `agent_*×N` display token. This is presentation
+only: `ownTools` and Pi's active-tool state remain exact.
+
+When width is limited, complete metadata items are omitted before breadcrumb
+identity is shortened; tool names are not rendered as partial fragments.
+Operational header state has priority over tool metadata. Lead Pi sessions do
+not show this metadata.
 
 If an ancestor cannot be proved, it is shown explicitly as `?` rather than
 guessed:
@@ -140,8 +144,8 @@ These fields are not control authority.
 The renderer preserves identity/state information before truncating task text
 and bounds every output line by visible Unicode width.
 
-The current widget does **not** claim to display the full effective tool list.
-That remains separate from the definition overview.
+The widget is a compact projection of active-tool state, not an authoritative
+or exhaustive tool inventory.
 
 ## Agent inactivity
 
