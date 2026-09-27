@@ -125,8 +125,8 @@ Pi Herdsman cleans up the agent; the exact Pi session remains available for
 continuation. The `Running` menu shows the complete authoritative inventory of
 live or unresolved lifecycle work.
 
-Managed agent panes show their validated breadcrumb identity. Their own active
-Pi tool names can appear as compact bracketed metadata on that breadcrumb.
+Managed agent panes show their validated breadcrumb identity. A compact summary
+of their current Pi active tools can appear as bracketed metadata on that breadcrumb.
 
 See [Status widget](reference/status-widget.md) for exact state, refresh, and
 rendering behavior.

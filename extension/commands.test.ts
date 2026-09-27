@@ -4,6 +4,7 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
+import packageMetadata from "../package.json" with { type: "json" };
 import { Value } from "typebox/value";
 import type {
   AskRecord,
@@ -2197,7 +2198,7 @@ test("plain agents opens the native management menu", async () => {
     return undefined;
   };
   await command.handler("", context);
-  assert.equal(prompts[0]?.label, "agents");
+  assert.equal(prompts[0]?.label, `Pi Herdsman · v${packageMetadata.version}`);
   assert.deepEqual(
     prompts[0]?.options.map((option) => option.replace(/\s+.*/u, "")),
     ["Running", "Definitions", "Layout", "Context", "Message", "Stop"],
@@ -2241,6 +2242,11 @@ test("agents TUI selectors use stable values and current preselection", async ()
     });
   try {
     await pi.commandOptions.get("agents").handler("", context);
+    assert.ok(
+      renders[0]?.some((line) =>
+        line.includes(`Pi Herdsman · v${packageMetadata.version}`),
+      ),
+    );
     assert.ok(
       renders[1]?.some((line) => /Subtree tabs \(current\)/u.test(line)),
     );
@@ -2759,7 +2765,7 @@ test("Running excludes lost and unknown durable generations", async () => {
   context.ui.notify = (message: string) => notices.push(message);
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
-    assert.equal(label, "agents");
+    assert.equal(label, `Pi Herdsman · v${packageMetadata.version}`);
     assert.ok(options.includes("Running        1 unknown · 1 lost"));
     return prompts.length === 1
       ? options.find((option) => option.startsWith("Running"))
@@ -2769,7 +2775,10 @@ test("Running excludes lost and unknown durable generations", async () => {
     await command.handler("", context);
     assert.deepEqual(
       prompts.map(({ label }) => label),
-      ["agents", "agents"],
+      [
+        `Pi Herdsman · v${packageMetadata.version}`,
+        `Pi Herdsman · v${packageMetadata.version}`,
+      ],
     );
     assert.ok(notices.some((message) => message.includes("No running agents")));
     assert.equal(

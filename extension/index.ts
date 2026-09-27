@@ -38,6 +38,7 @@ import { homedir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
+import packageMetadata from "../package.json" with { type: "json" };
 import { herdsmanTempRoot, resultRef } from "./storage.ts";
 import { Type } from "typebox";
 import {
@@ -227,6 +228,7 @@ import {
 } from "./presentation.ts";
 import type { SupervisionContextStatus } from "./presentation.ts";
 
+const HERDSMAN_VERSION = packageMetadata.version;
 const RESERVED_PREFIX = "__PI_HERDSMAN_AGENT_V4__:";
 const LEAD_INSTANCE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -6489,7 +6491,7 @@ export default function (pi: ExtensionAPI): void {
       handler: async (_args: string, ctx: ExtensionCommandContext) => {
         if (!ctx.hasUI) return;
         ctx.ui.notify(
-          "Pi Herdsman is inactive because this Pi session is not running inside Herdr.\n\nStart Herdr in this project, then run Pi in a Herdr pane:\n  herdr\n  pi\n\nIf needed, install the Pi integration once:\n  herdr integration install pi",
+          `Pi Herdsman v${HERDSMAN_VERSION} is inactive because this Pi session is not running inside Herdr.\n\nStart Herdr in this project, then run Pi in a Herdr pane:\n  herdr\n  pi\n\nIf needed, install the Pi integration once:\n  herdr integration install pi`,
         );
       },
     };
@@ -9653,7 +9655,7 @@ export default function (pi: ExtensionAPI): void {
         const definitions = (await contextAgentDefinitions(ctx)).definitions;
         const selected = await selectMenu(
           ctx,
-          "agents",
+          `Pi Herdsman · v${HERDSMAN_VERSION}`,
           [
             { value: "running", label: `Running        ${running}` },
             {

@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { test } from "node:test";
+import packageMetadata from "../package.json" with { type: "json" };
 import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
@@ -559,6 +560,11 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.equal(herdsmanCommand.handler, agentsCommand.handler);
   await herdsmanCommand.handler("", context);
   assert.equal(notices.length, 1);
+  assert.ok(
+    notices[0]!.startsWith(
+      `Pi Herdsman v${packageMetadata.version} is inactive`,
+    ),
+  );
   assert.match(notices[0]!, /inactive because .*not running inside Herdr/);
   assert.match(notices[0]!, /herdr\n  pi/);
   assert.match(notices[0]!, /herdr integration install pi/);
