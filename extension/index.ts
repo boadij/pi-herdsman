@@ -318,7 +318,12 @@ const AGENT_HANDOFF_GUIDANCE =
   "Skills are separate; attach SKILL.md only when the task needs it and the " +
   "selected definition does not already provide that skill.";
 const AGENT_UNRESOLVED_GUIDANCE =
-  "Use agent_list when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. Follow current available_tools and revalidation: agent_steer cooperatively changes live work and may wait for a safe boundary, while agent_interrupt cancels the current operation and replaces its direction. Use agent_reply only to answer that Agent's exact pending ask_owner question. agent_close destructively closes an eligible Agent generation. agent_inspect provides bounded live terminal/process evidence; agent_transcript provides bounded persisted conversation/tool evidence. When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. Repeated reminders alone do not justify another read. A proven lost Agent remains unresolved; physical disappearance is not completion. Unknown or conflicting identity remains fail-closed. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed. Do not invent work merely to remain active.";
+  "Use agent_list when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. " +
+  "Follow current available_tools and revalidation: agent_steer queues a cooperative correction for Pi to deliver after the current assistant turn and its tool calls reach a steering boundary; it does not preempt the current operation. agent_interrupt cancels the current operation and replaces its direction. " +
+  "Use agent_reply only to answer that Agent's exact pending ask_owner question. agent_close destructively closes an eligible Agent generation. agent_inspect provides bounded live terminal/process evidence; agent_transcript provides bounded persisted conversation/tool evidence. " +
+  "When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. " +
+  "Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. A repeated reminder for the same stale episode is additional recovery evidence: unchanged qualifying activity means the Agent has not crossed an execution boundary since the previous reminder. A steer queued during that unchanged episode cannot have taken effect yet. Do not repeat diagnostic reads solely because a reminder fired. Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use agent_interrupt to stop the current operation and continue the same assignment. " +
+  "A proven lost Agent remains unresolved; physical disappearance is not completion. Unknown or conflicting identity remains fail-closed. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed. Do not invent work merely to remain active.";
 const LEAD_SCOPE_DESCRIPTION = `Own architecture, approved scope, acceptance, integration, conflict resolution,
 and final decisions. Decompose only as far as useful. Assign each independent
 objective to the narrowest capable owner and let delegation-enabled agents own
@@ -11161,7 +11166,7 @@ export default function (pi: ExtensionAPI): void {
         if (published || !attentionDue(state.runId, episode, now)) continue;
         const firstAttention =
           attentionReminders.get(state.runId)?.episode !== episode;
-        const intervalMs = nextAttentionInterval(state.runId, episode);
+        const intervalMs = ATTENTION_FIRST_REPEAT_MS;
         const current = currentOwnedState(state, ownerSessionId);
         if (
           !current ||
@@ -11281,7 +11286,11 @@ export default function (pi: ExtensionAPI): void {
               ]
             : [
                 "",
-                "This is the same stale episode. Do not repeat a diagnostic read solely because this reminder fired; use earlier evidence unless it has become materially insufficient.",
+                "This is the same stale episode. Additional elapsed time without qualifying execution progress is new recovery evidence.",
+                "No qualifying execution boundary has occurred since the previous reminder.",
+                "If agent_steer was queued during this episode, it cannot have taken effect yet because Pi delivers steering only after the current assistant turn and its tool calls reach a boundary.",
+                "Do not repeat agent_inspect or agent_transcript solely because this reminder fired.",
+                "Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use agent_interrupt to stop the current operation and continue the same assignment.",
               ];
         try {
           if (
@@ -11302,8 +11311,7 @@ export default function (pi: ExtensionAPI): void {
                 "",
                 "This is advisory inactivity, not proof of a hang.",
                 "Streaming tool output does not count as qualifying progress.",
-                "If the current operation appears healthy or legitimately long-running, leave it alone.",
-                "Use agent_steer for a non-preemptive correction.",
+                "agent_steer queues a cooperative correction; it does not preempt the current operation.",
                 "Use agent_interrupt only when the current operation itself must be abandoned; agent_interrupt cancels that operation, supersedes earlier steering Pi has not yet delivered, and continues the same assignment.",
                 "Use agent_close only to abandon the assignment or as destructive fallback.",
               ].join("\n"),

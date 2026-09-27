@@ -19,17 +19,21 @@ For stale attention, use this decision sequence:
 2. If that evidence is absent or insufficient, use one bounded diagnostic read:
    `agent_transcript` for persisted history or `agent_inspect` for live terminal/process
    state.
-3. If healthy or legitimately long-running, leave the agent alone.
-4. Use `agent_steer` for cooperative correction.
-5. Use `agent_interrupt` only when the current operation must be abandoned; it cancels
-   that operation, supersedes earlier undelivered steering, and continues the
-   same assignment.
-6. Use `agent_close` only when abandoning the assignment is intended.
-7. Do not repeat reads merely because the same stale episode was reminded
-   again.
+3. Keep waiting while evidence positively supports legitimate long-running work.
+4. Use `agent_steer` to queue a cooperative correction when the current operation
+   can safely finish first.
+5. If the same stale episode repeats, treat the extra elapsed time as additional
+   evidence. No qualifying execution boundary occurred, so steering queued
+   during that episode has not taken effect. Do not repeat reads solely because
+   of the reminder.
+6. Keep waiting only while existing evidence still justifies the operation;
+   otherwise use `agent_interrupt` to abandon it and continue the same assignment.
+   Interrupt supersedes earlier undelivered steering.
+7. Use `agent_close` only when abandoning the assignment is intended.
 
-Persistent actionable conditions may repeat approximately `5m → 2m30s →
-1m15s → 1m`, with 30-second scan granularity. Reminder state is process-local
+Other persistent actionable conditions may repeat approximately `5m → 2m30s →
+1m15s → 1m`; stale episodes repeat approximately every five minutes after the
+first advisory at ten minutes, with 30-second scan granularity. Reminder state is process-local
 and advisory, not durable mailbox state. Health attention is direct-owner-only;
 do not poll, add a second delivery path, or keep a turn alive solely to wait.
 Do not intervene solely because a stale threshold was reached.
@@ -120,13 +124,8 @@ Possible list fields:
 This is not proof that the agent is hung, dead, safe to terminate, or safe to
 replace.
 
-Do not close or interrupt solely because of inactivity. A stale advisory may
-repeat while the same condition remains unresolved, but healthy or legitimately
-long-running work should be left alone. Use `agent_transcript` for persisted evidence
-and `agent_inspect` for live evidence; use `agent_steer` for cooperative correction and
-`agent_interrupt` only when the current operation itself must be abandoned; it
-cancels that operation, supersedes earlier undelivered steering, and continues
-the same assignment.
+Do not close or interrupt solely because of inactivity. Use the decision sequence
+above: a repeated unchanged episode adds evidence without proving a hang.
 
 Proven lost work remains unresolved and may receive repeated direct-owner
 attention until it is resolved or the exact owner closes it. Physical

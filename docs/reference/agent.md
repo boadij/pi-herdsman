@@ -154,9 +154,10 @@ mailbox state, and lifecycle.
 Persistent actionable attention may repeat while the same condition remains
 unresolved. Reminder timing is process-local and advisory, not a mailbox API;
 restarting may cause an unresolved condition to be reminded again. The normal
-cadence is approximately `5m → 2m30s → 1m15s → 1m` with 30-second scan
-granularity. The first stale advisory remains eligible after ten minutes
-without qualifying execution progress.
+cadence for other repeatable conditions is approximately `5m → 2m30s → 1m15s → 1m`.
+The first stale advisory remains eligible after ten minutes without qualifying
+execution progress; unchanged stale episodes repeat approximately every five
+minutes, subject to 30-second scan granularity.
 
 The first stale attention for an episode attempts one bounded live inspect
 capture when inspect is currently authorized. The automatic capture has a short
@@ -194,11 +195,16 @@ For stale recovery, use supplied evidence first. If it is absent or
 insufficient, perform at most one bounded diagnostic read: `agent_transcript` for
 persisted conversation/tool history or `agent_inspect` for live terminal/process
 evidence. Do not repeat a read solely because the same stale episode was
-reminded again. Use `agent_steer` for a cooperative correction. Use `agent_interrupt` only
-to cancel the current operation; it supersedes earlier undelivered steering and
-continues the same durable assignment. Use `agent_close` only when abandoning the
-assignment is intended. Do not poll or create another delivery path for health
-attention.
+reminded again. `agent_steer` acceptance means a cooperative correction was queued
+for Pi, not that the current operation observed it: Pi delivers it after the
+current assistant turn and its tool calls reach a steering boundary. An unchanged
+stale episode means no qualifying execution boundary occurred, so a steer queued
+during that episode cannot yet have taken effect. Continue waiting only while
+existing evidence positively supports legitimate long-running work; otherwise
+use `agent_interrupt` to preempt the active Pi operation and continue the same
+assignment. It supersedes earlier undelivered steering. Use `agent_close` only
+when abandoning the assignment is intended. Do not poll or create another
+delivery path for health attention.
 
 ## `agent_inspect`
 

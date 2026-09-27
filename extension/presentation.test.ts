@@ -3313,6 +3313,11 @@ test("ask, stale, and lost custom messages preserve attention semantics and iden
   assert.match(expandedStale, /supplied diagnostic evidence first/i);
   assert.match(
     expandedStale,
+    /same-episode staleness is additional recovery evidence/,
+  );
+  assert.match(expandedStale, /Otherwise interrupt the current operation/);
+  assert.match(
+    expandedStale,
     /actions: inspect · transcript · steer · interrupt · close/,
   );
   assert.match(expandedStale, /next reminder: ~5m/);
@@ -4171,6 +4176,35 @@ test("Capability summaries preserve deterministic tool and skill policy output",
         agent_definitions: [{ name: "delegate" }],
       }),
       /Agent definitions:\n  delegate \| tools default \| skills none/,
+    );
+  }
+});
+
+test("steer result reports queued non-preemptive delivery", () => {
+  const result = formatToolModelResult("steer", {
+    ok: true,
+    agent: "review",
+    session_id: "session-1",
+    request_id: "steer-1",
+    assignment_request_id: "assignment-1",
+  });
+  assert.match(result, /Steering queued for agent review/);
+  assert.match(result, /does not preempt the current operation/);
+  assert.match(result, /after the current assistant turn and its tool calls/);
+  const rendered = { details: { ok: true, action: "steer", agent: "review" } };
+  for (const expanded of [false, true]) {
+    assert.match(
+      renderedText(
+        renderCoordinationResult(
+          "agent",
+          "steer",
+          rendered,
+          { expanded },
+          presentationTheme,
+          { args: { action: "steer", agent: "review" } },
+        ),
+      ),
+      /steering queued/,
     );
   }
 });

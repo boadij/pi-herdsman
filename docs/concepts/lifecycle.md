@@ -126,8 +126,10 @@ event. A condition that requires owner action wakes the direct owner. If that
 same state-specific condition persists, attention may repeat. Reminder timing
 is process-local and advisory rather than durable mailbox state, so a restart
 may produce another reminder. Persistent attention follows approximately
-`5m → 2m30s → 1m15s → 1m`, subject to the 30-second scan; stale still first
-becomes eligible after ten minutes without qualifying execution progress.
+`5m → 2m30s → 1m15s → 1m`, subject to the 30-second scan, for other repeatable
+conditions. Stale first becomes eligible after ten minutes without qualifying
+execution progress and repeats approximately every five minutes, subject to
+the scan.
 
 The health conditions are deliberately narrow: stale working and proven lost
 retain their dedicated messages; a delivered owner question may be reminded;
@@ -146,14 +148,16 @@ turn. For stale attention:
 2. If that evidence is absent or insufficient, use one bounded diagnostic read:
    `agent_transcript` for persisted history or `agent_inspect` for live terminal/process
    state.
-3. If healthy or legitimately long-running, leave the agent alone.
-4. Use `agent_steer` for a cooperative non-preemptive correction.
-5. Use `agent_interrupt` only when the current operation must be abandoned; it cancels
-   the operation, supersedes earlier undelivered steering, and continues the
-   same assignment.
-6. Use `agent_close` only when abandoning the assignment is intended.
-7. Do not repeat reads merely because the same stale episode was reminded
-   again.
+3. Continue waiting while evidence positively supports legitimate long-running work.
+4. Use `agent_steer` to queue a cooperative correction when the current operation
+   can safely finish first.
+5. A repeated reminder for the same stale episode is additional evidence: an
+   unchanged episode means no qualifying execution boundary has occurred, so
+   steering queued during it cannot yet have affected the current operation.
+   Do not repeat reads solely because of a reminder.
+6. Otherwise use `agent_interrupt` to abandon the current operation and continue
+   the same assignment; it supersedes earlier undelivered steering.
+7. Use `agent_close` only when abandoning the assignment is intended.
 
 For other attention, use `agent_transcript` for persisted Pi conversation and tool
 history and `agent_inspect` for live terminal/process state as needed. Use `agent_reply` only
@@ -207,9 +211,11 @@ assignment ownership.
 
 ## Steering and interruption
 
-`agent_steer` changes the current active assignment cooperatively. It does not create
-another result and does not cancel the current Pi operation. If a tool or model
-operation does not finish, a queued steer may not take effect.
+`agent_steer` queues a cooperative change to the current assignment. It does not
+create another result or cancel the current Pi operation. Pi delivers steering
+after the current assistant turn and its tool calls reach the steering boundary.
+Acceptance by Herdsman therefore does not mean the current operation has
+observed the steering message.
 
 `agent_interrupt` changes the same active assignment preemptively. It requests
 cancellation of the current Pi operation, supersedes earlier steering that Pi
