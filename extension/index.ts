@@ -6635,17 +6635,6 @@ export default function (pi: ExtensionAPI): void {
         pattern: "\\S",
       }),
       files: FILES_SCHEMA,
-      task: Type.Optional(Type.String({ minLength: 1 })),
-      assignment: Type.Optional(
-        Type.String({
-          pattern:
-            "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-          description:
-            "Exclusive recovery form for the exact unresolved assignment. Supply only assignment; omit task, branch, base, and files.",
-        }),
-      ),
-      branch: Type.Optional(Type.String({ minLength: 1 })),
-      base: Type.Optional(Type.String({ minLength: 1 })),
     },
     { additionalProperties: false },
   );
