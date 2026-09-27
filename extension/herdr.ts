@@ -32,6 +32,7 @@ export type PaneProcess = Readonly<{
     pid?: number;
     argv0?: string;
     cmdline?: string;
+    state?: string;
   }>[];
 }>;
 export type ExpectedSession = {
@@ -1285,23 +1286,26 @@ function validateEnvironment(
   return Object.freeze(validated);
 }
 
-async function paneProcess(
+export async function paneProcess(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   paneId: string,
   signal?: AbortSignal,
   deadline?: number,
   required = false,
+  timeoutMs = Infinity,
 ): Promise<PaneProcess | undefined> {
+  const timeout =
+    deadline === undefined
+      ? timeoutMs
+      : Math.min(startupCallTimeout(deadline), timeoutMs);
   const result = await runHerdr(
     pi,
     ctx,
     ["pane", "process-info", "--pane", paneId],
     {
       signal,
-      ...(deadline === undefined
-        ? {}
-        : { timeout: startupCallTimeout(deadline) }),
+      ...(Number.isFinite(timeout) ? { timeout } : {}),
     },
   );
   const value = result?.process_info;
@@ -1370,6 +1374,9 @@ function normalizePaneProcess(
                     MAX_PROCESS_CMDLINE_BYTES,
                   ),
                 }
+              : {}),
+            ...(boundedProcessString(item.state, 64)
+              ? { state: boundedProcessString(item.state, 64) }
               : {}),
           };
           return Object.freeze(process);

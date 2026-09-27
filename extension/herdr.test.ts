@@ -87,6 +87,20 @@ test("nested topology keeps the Herdr workspace authoritative", () => {
   );
 });
 
+test("nested topology forwards the controller agent directory when configured", () => {
+  assert.ok(
+    structuredTopologyEnvironment("workspace", [
+      "PI_CODING_AGENT_DIR=/controller/agent-data",
+      "PI_HERDSMAN_OWNER_SESSION_ID=owner-session",
+    ]).includes("PI_CODING_AGENT_DIR=/controller/agent-data"),
+  );
+  assert.ok(
+    !structuredTopologyEnvironment("workspace", [
+      "PI_HERDSMAN_OWNER_SESSION_ID=owner-session",
+    ]).some((assignment) => assignment.startsWith("PI_CODING_AGENT_DIR=")),
+  );
+});
+
 test("lists all Herdr agents without changing the current-workspace view", async () => {
   const pi = {
     exec: async () => ({
@@ -423,6 +437,7 @@ test("inspection keeps partial process evidence when pane identity is absent or 
       pid: pid + 1,
       argv0: `${"a".repeat(300)}-${pid}`,
       cmdline: "b".repeat(5_000),
+      state: `${"s".repeat(80)}-${pid}`,
       arbitrary: "must not escape",
     })),
   };
@@ -492,6 +507,10 @@ test("inspection keeps partial process evidence when pane identity is absent or 
   assert.equal(
     "arbitrary" in (snapshot.process?.foreground_processes?.[0] ?? {}),
     false,
+  );
+  assert.equal(
+    Buffer.byteLength(snapshot.process?.foreground_processes?.[0]?.state ?? ""),
+    64,
   );
 });
 
@@ -1091,6 +1110,7 @@ test("start injects mandatory extensions before definition args and configures t
     "PI_HERDSMAN_LABEL=agent",
     "PI_HERDSMAN_WORKSPACE_ID=agent-workspace",
     "PI_HERDSMAN_AGENT_DEFINITION=agent",
+    "PI_CODING_AGENT_DIR=/controller/agent-data",
     "PI_OFFLINE=1",
   ];
   const calls: string[][] = [];
@@ -1217,7 +1237,7 @@ test("start injects mandatory extensions before definition args and configures t
     tabCreate
       .flatMap((arg, index) => (arg === "--env" ? [tabCreate[index + 1]!] : []))
       .filter((arg) =>
-        /^(PI_HERDSMAN_(MAILBOX|RUN_ID|OWNER_SESSION_ID|LABEL|WORKSPACE_ID|AGENT_DEFINITION)|PI_SUBAGENT_PARENT_SESSION|PI_OFFLINE)=/.test(
+        /^(PI_HERDSMAN_(MAILBOX|RUN_ID|OWNER_SESSION_ID|LABEL|WORKSPACE_ID|AGENT_DEFINITION)|PI_CODING_AGENT_DIR|PI_SUBAGENT_PARENT_SESSION|PI_OFFLINE)=/.test(
           arg,
         ),
       ),

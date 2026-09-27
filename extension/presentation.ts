@@ -1353,6 +1353,42 @@ export function formatToolModelResult(
       : [];
   if (v.ok === false) {
     const e = (v.error ?? {}) as Record<string, unknown>;
+    const details =
+      e.details && typeof e.details === "object"
+        ? (e.details as Record<string, unknown>)
+        : undefined;
+    const startupProcess =
+      details?.startupProcess && typeof details.startupProcess === "object"
+        ? (details.startupProcess as Record<string, unknown>)
+        : undefined;
+    const foreground = Array.isArray(startupProcess?.foreground_processes)
+      ? startupProcess.foreground_processes
+          .slice(0, 8)
+          .filter(
+            (process): process is Record<string, unknown> =>
+              !!process && typeof process === "object",
+          )
+          .map((process) => ({
+            ...(typeof process.argv0 === "string"
+              ? { argv0: process.argv0.slice(0, 256) }
+              : {}),
+            ...(typeof process.state === "string"
+              ? { state: process.state.slice(0, 64) }
+              : {}),
+          }))
+      : [];
+    const startupProcessText = startupProcess
+      ? JSON.stringify({
+          ...(typeof startupProcess.pane_id === "string"
+            ? { pane_id: startupProcess.pane_id.slice(0, 256) }
+            : {}),
+          ...(Number.isInteger(startupProcess.shell_pid) &&
+          (startupProcess.shell_pid as number) > 0
+            ? { shell_pid: startupProcess.shell_pid }
+            : {}),
+          foreground_processes: foreground,
+        })
+      : undefined;
     return [
       `Agent ${action} failed.`,
       `Category: ${value(e.category) || "error"}`,
@@ -1367,9 +1403,20 @@ export function formatToolModelResult(
             (line): line is string => line !== undefined,
           )
         : []),
-      ...(e.details && typeof e.details === "object"
+      ...(details
         ? [
-            evidenceLine("Stage", (e.details as Record<string, unknown>).stage),
+            evidenceLine("Stage", details.stage),
+            evidenceLine(
+              "Startup diagnostic",
+              typeof details.startupDiagnostic === "string"
+                ? new TextDecoder().decode(
+                    new TextEncoder()
+                      .encode(details.startupDiagnostic)
+                      .subarray(0, 4096),
+                  )
+                : undefined,
+            ),
+            evidenceLine("Startup process", startupProcessText?.slice(0, 4096)),
           ].filter((line): line is string => line !== undefined)
         : []),
       ...(e.primary

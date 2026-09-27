@@ -119,6 +119,7 @@ import {
   listAllHerdrAgents,
   rollbackHerdrStart,
   runHerdr,
+  paneProcess,
   sessionIdentity,
   matchesExpectedSession,
   startHerdrAgent,
@@ -5884,6 +5885,9 @@ async function actionUnsafe(
         `PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS=${JSON.stringify(
           delegationEnabled ? effectiveDefinition.frontmatter.agents : [],
         )}`,
+        ...(process.env.PI_CODING_AGENT_DIR
+          ? [`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`]
+          : []),
         "PI_OFFLINE=1",
       ];
       // Pi reports the providers that extensions registered; a model from one
@@ -5927,10 +5931,11 @@ async function actionUnsafe(
       const state = await waitForState(
         mailbox,
         (s) => s.runId === runId && s.ownerSessionId === owner,
-        { timeoutMs: 5000, signal },
+        { timeoutMs: 30_000, signal },
       ).catch(() => undefined);
       if (!state) {
         let startupDiagnostic: string | undefined;
+        let startupProcess: Record<string, unknown> | undefined;
         try {
           const result = await pi.exec(
             "herdr",
@@ -5960,11 +5965,42 @@ async function actionUnsafe(
         } catch {
           // Startup evidence is advisory; preserve the original failure.
         }
+        try {
+          const process = await paneProcess(
+            pi,
+            ctx,
+            started.paneId,
+            undefined,
+            undefined,
+            true,
+            2_000,
+          );
+          if (process?.pane_id === started.paneId)
+            startupProcess = {
+              pane_id: process.pane_id,
+              shell_pid: process.shell_pid,
+              foreground_processes: (process.foreground_processes ?? []).map(
+                ({ argv0, state }) => ({
+                  ...(argv0 ? { argv0 } : {}),
+                  ...(state ? { state } : {}),
+                }),
+              ),
+            };
+        } catch {
+          // Process evidence is optional; preserve the original failure.
+        }
         fail(
           "pane_not_ready",
           "Agent did not initialize its mailbox",
           p.action,
-          startupDiagnostic ? { details: { startupDiagnostic } } : {},
+          startupDiagnostic || startupProcess
+            ? {
+                details: {
+                  ...(startupDiagnostic ? { startupDiagnostic } : {}),
+                  ...(startupProcess ? { startupProcess } : {}),
+                },
+              }
+            : {},
         );
       }
       const expectedHerdrAgent = herdrAgentAlias(

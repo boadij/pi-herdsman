@@ -4224,7 +4224,15 @@ test("Model output preserves inspection, concise controls, and structured errors
         rollbackOccurred: true,
         retryAttempted: false,
         ids: { label: "agent", paneId: "pane-1" },
-        details: { stage: "agent_start" },
+        details: {
+          stage: "agent_start",
+          startupDiagnostic: "Error: child startup failed",
+          startupProcess: {
+            pane_id: "pane-1",
+            shell_pid: 42,
+            foreground_processes: [{ argv0: "pi", state: "running" }],
+          },
+        },
         primary: { category: "pane_not_ready", message: "Pi did not start" },
         cleanup: { category: "internal_failure", message: "pane preserved" },
         nextAction: "Inspect the preserved pane",
@@ -4235,6 +4243,11 @@ test("Model output preserves inspection, concise controls, and structured errors
     assert.match(rendered, /Retry attempted: false/);
     assert.match(rendered, /Identity: label=agent, paneId=pane-1/);
     assert.match(rendered, /Stage: agent_start/);
+    assert.match(rendered, /Startup diagnostic: Error: child startup failed/);
+    assert.match(
+      rendered,
+      /Startup process: \{"pane_id":"pane-1","shell_pid":42,"foreground_processes":\[\{"argv0":"pi","state":"running"\}\]\}/,
+    );
     assert.match(
       rendered,
       /Primary: category=pane_not_ready, message=Pi did not start/,
@@ -4245,6 +4258,22 @@ test("Model output preserves inspection, concise controls, and structured errors
     );
     assert.match(rendered, /Next action: Inspect the preserved pane/);
     assert.doesNotMatch(rendered, /\{"category"/);
+  }
+
+  {
+    const failure = (startupDiagnostic?: string) =>
+      formatToolModelResult("delegate", {
+        ok: false,
+        error: {
+          category: "pane_not_ready",
+          message: "Agent did not initialize its mailbox",
+          details: startupDiagnostic === undefined ? {} : { startupDiagnostic },
+        },
+      });
+    assert.doesNotMatch(failure(), /Startup diagnostic:/);
+    const rendered = failure("x".repeat(5000));
+    assert.equal(rendered.match(/Startup diagnostic: (x*)/)?.[1]?.length, 4096);
+    assert.doesNotMatch(failure(), /Startup process:/);
   }
 });
 
