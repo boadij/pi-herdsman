@@ -49,7 +49,7 @@ failure handling.
 
 Continue with:
 
-- [`agent` API](reference/agent.md)
+- [Agent tools](reference/agent.md)
 - [`ask_owner` API](reference/ask-owner.md)
 - [Agents and identity](concepts/agents.md)
 - [Lifecycle](concepts/lifecycle.md)
@@ -90,7 +90,7 @@ before choosing the material relevant to them.
 | Overrides and prompt composition      | [Customizing bundled agents](guides/customizing-agents.md)                      |
 | `files`, body references, and results | [Handoffs and files](guides/handoffs.md)                                        |
 | Operator recovery                     | [Recovery](guides/recovery.md)                                                  |
-| `agent` request contract              | [`agent` API](reference/agent.md)                                               |
+| `agent` request contract              | [Agent tools](reference/agent.md)                                               |
 | `ask_owner` contract                  | [`ask_owner` API](reference/ask-owner.md)                                       |
 | Pi Herdsman supervision concept       | [Supervision](concepts/supervision.md)                                          |
 | Chief and staff tools                 | [Supervision reference](reference/supervision.md)                               |

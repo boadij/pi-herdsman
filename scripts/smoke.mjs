@@ -1339,7 +1339,11 @@ async function runChiefTreeSmoke(ctx) {
     lead,
     "Chief tools must differ from ordinary Lead tools",
   );
-  assert.deepEqual(tree, chief, "session_tree must retain current Chief tools");
+  assert.deepEqual(
+    tree,
+    lead,
+    "selecting the pre-Chief branch must restore ordinary Lead tools",
+  );
 
   const followup = "Reply exactly PI_HERDSMAN_CHIEF_TREE_FOLLOWUP.";
   await submitPaneCommand(ctx, ctx.rootPaneId, followup);
@@ -1357,7 +1361,7 @@ async function runChiefTreeSmoke(ctx) {
     await sleep(250);
   }
   throw new Error(
-    "chief-tree-follow-up: Chief did not complete the follow-up action",
+    "chief-tree-follow-up: Lead did not complete the follow-up action",
   );
 }
 

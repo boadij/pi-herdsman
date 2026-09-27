@@ -49,7 +49,7 @@ settling
 cleanup → gone
 ```
 
-`reply` is not a new assignment and does not create another final result.
+`agent_reply` is not a new assignment and does not create another final result.
 
 ## Public state is a safe-control projection
 
@@ -116,7 +116,7 @@ Health reconciliation follows the same boundary. It is event-driven, with a
 30-second fallback scan for durable and physical state that has not emitted a
 separate event. Each scan reconciles fresh mailbox and Herdr evidence for the
 controller's direct agents and sends health attention only to an idle exact
-direct owner. The event's `available_actions` is a current advisory snapshot;
+direct owner. The event's `available_tools` is a current advisory snapshot;
 the selected action revalidates identity, ownership, mailbox state, and
 lifecycle before it mutates anything.
 
@@ -144,19 +144,19 @@ turn. For stale attention:
 
 1. Read the bounded evidence supplied with the first stale attention.
 2. If that evidence is absent or insufficient, use one bounded diagnostic read:
-   `transcript` for persisted history or `inspect` for live terminal/process
+   `agent_transcript` for persisted history or `agent_inspect` for live terminal/process
    state.
 3. If healthy or legitimately long-running, leave the agent alone.
-4. Use `steer` for a cooperative non-preemptive correction.
-5. Use `interrupt` only when the current operation must be abandoned; it cancels
+4. Use `agent_steer` for a cooperative non-preemptive correction.
+5. Use `agent_interrupt` only when the current operation must be abandoned; it cancels
    the operation, supersedes earlier undelivered steering, and continues the
    same assignment.
-6. Use `close` only when abandoning the assignment is intended.
+6. Use `agent_close` only when abandoning the assignment is intended.
 7. Do not repeat reads merely because the same stale episode was reminded
    again.
 
-For other attention, use `transcript` for persisted Pi conversation and tool
-history and `inspect` for live terminal/process state as needed. Use `reply` only
+For other attention, use `agent_transcript` for persisted Pi conversation and tool
+history and `agent_inspect` for live terminal/process state as needed. Use `agent_reply` only
 for the exact pending owner question. Do not poll or keep the turn alive solely
 to wait for agent progress.
 
@@ -194,7 +194,7 @@ exactly-once delivery for both completed and failed terminal results.
 ## Session continuation
 
 Agent cleanup does not delete the Pi session. To continue completed context,
-use the exact returned session with `continue`; Pi Herdsman starts a new agent
+use the exact returned session with `agent_continue`; Pi Herdsman starts a new agent
 generation for the new assignment. The continuation uses the saved cwd, session
 history, definition, and logical label together with the current effective
 authorized definition configuration. Its omitted model and thinking fields
@@ -207,24 +207,24 @@ assignment ownership.
 
 ## Steering and interruption
 
-`steer` changes the current active assignment cooperatively. It does not create
+`agent_steer` changes the current active assignment cooperatively. It does not create
 another result and does not cancel the current Pi operation. If a tool or model
 operation does not finish, a queued steer may not take effect.
 
-`interrupt` changes the same active assignment preemptively. It requests
+`agent_interrupt` changes the same active assignment preemptively. It requests
 cancellation of the current Pi operation, supersedes earlier steering that Pi
 has not yet delivered, and supplies the replacement instruction that continues
 the same assignment. The generation, active task
 request, ownership, Pi session, and final-result obligation remain unchanged.
 
-Neither action creates another assignment. `close` is the operation that
+Neither action creates another assignment. `agent_close` is the operation that
 abandons the managed generation.
 
 Steering is at-least-once at the agent boundary: an agent can apply a steer
 before its acknowledgement write is recorded. If that acknowledgement write
 fails, retrying the same request may apply the steer again.
 
-Use `steer` only when `agent list` reports `steer` in `available_actions`.
+Use `agent_steer` only when `agent_list` reports `agent_steer` in `available_tools`.
 
 ## Delegating agent completion
 

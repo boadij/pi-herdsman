@@ -132,7 +132,7 @@ See [Status widget](reference/status-widget.md) for exact state, refresh, and
 rendering behavior.
 
 To continue a completed assignment with its existing conversational context,
-use the exact `session_id` returned with its result in a new `continue` request.
+use the exact `session_id` returned with its result in a new `agent_continue` call.
 This starts a new agent generation with the saved session and current effective
 definition configuration.
 

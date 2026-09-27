@@ -139,7 +139,7 @@ For the complete walkthrough, see [Getting started](docs/getting-started.md).
   questions return when they need attention.
 - **One assignment per agent.** Each managed agent generation handles one
   bounded assignment, delivers its terminal result, and is cleaned up. Continue
-  completed context with the explicit `continue` action and exact returned Pi session.
+  completed context with `agent_continue` and the exact returned Pi session.
 - **Nested multi-agent orchestration.** Delegation-enabled agents can own and manage
   permitted agents themselves. Identity, ownership, steering, clarification,
   results, and cleanup share the same lifecycle across the hierarchy.
@@ -161,16 +161,18 @@ Pi Herdsman deliberately separates three responsibilities:
   coordination.
 - **Pi** owns each session and turn state.
 
-The model-facing tools are `agent`, `chief`, `peer`, `staff`, and `ask_owner`.
-`agent` manages owned assignments, `chief` sends messages or asks to the chief,
-`peer` lets ordinary leads message independent ordinary leads, `staff` lets the
-chief supervise leads, and `ask_owner` lets an agent ask its exact owner. Leads
-use `chief.message` and `chief.ask`; ordinary leads use `peer.list` and
-`peer.message` with exact Pi session IDs; the active chief uses
-`staff.message` and `staff.reply` with exact lead session IDs. Agent labels are
-not continuation handles: exact Pi session IDs are the continuation selector.
-A continued session reuses its saved logical label. Exact herdr identifiers are
-validation evidence behind live agent and lead identity.
+The model-facing coordination tools are operation-specific: `agent_list`,
+`agent_delegate`, `agent_continue`, `agent_steer`, `agent_interrupt`,
+`agent_reply`, `agent_close`, `agent_inspect`, and `agent_transcript` manage
+owned agents; `supervisor_message` and `supervisor_ask` contact the direct
+supervisor; `peer_list` and `peer_message` coordinate between ordinary Leads;
+`staff_list`, `staff_inspect`, `staff_transcript`, `staff_message`, and
+`staff_reply` let the active Chief supervise Leads. Managed agents can use
+`ask_owner` to ask their exact owner. Peer and staff targets use exact Pi
+session IDs in `session`. Agent labels are not continuation handles: use the
+exact Pi session ID with `agent_continue`. A continued session reuses its saved
+logical label. Exact herdr identifiers are validation evidence behind live
+agent and lead identity.
 
 Bundled definitions are portable defaults, not required workflow stages. Global
 definitions can override them or add new roles with your preferred models,
@@ -218,7 +220,7 @@ Choose the path that matches what you are doing:
 - **Supervising leads:** [Supervision](docs/concepts/supervision.md), then the
   [supervision reference](docs/reference/supervision.md).
 - **Building agent coordination:** [Agent coordination API](docs/agent-api.md),
-  then the [`agent` API](docs/reference/agent.md),
+  then the [Agent tools](docs/reference/agent.md),
   [Lifecycle](docs/concepts/lifecycle.md), and
   [Delegation](docs/concepts/delegation.md).
 - **Developing Pi Herdsman:** [Documentation index](docs/README.md) and

@@ -691,8 +691,9 @@ test("lead role state requires a canonical durable tool baseline", () => {
 });
 
 test("supervision authority is coordination state, not metadata", () => {
+  const piSessionId = "11111111-1111-4111-8111-111111111111";
   const lead = {
-    sessionId: "lead",
+    sessionId: piSessionId,
     sessionKind: "id" as const,
     workspaceId: "api",
     paneId: "pane",
@@ -704,7 +705,7 @@ test("supervision authority is coordination state, not metadata", () => {
     agents: [lead],
     managedAgents: [],
     coordinationStates: [
-      state("lead", {
+      state(piSessionId, {
         pendingAsk: {
           askId: id(),
           question: "OAuth?",
@@ -719,17 +720,20 @@ test("supervision authority is coordination state, not metadata", () => {
     "message",
     "reply",
   ]);
-  assert.equal(snapshot.leads[0].displayName, "api/lead-lead");
+  const serialized = serializeSupervision(snapshot).leads[0];
+  assert.equal(snapshot.leads[0].lead, piSessionId);
+  assert.equal(serialized.session, piSessionId);
+  assert.equal("lead" in serialized, false);
+  assert.deepEqual(serialized.available_tools, [
+    "staff_inspect",
+    "staff_message",
+    "staff_reply",
+  ]);
+  assert.equal(snapshot.leads[0].displayName, "api/lead-11111111");
   assert.equal("display_name" in snapshot.leads[0], false);
-  assert.equal(serializeSupervision(snapshot).leads[0].runtime_state, "idle");
-  assert.equal(
-    serializeSupervision(snapshot).leads[0].display_name,
-    "api/lead-lead",
-  );
-  assert.equal(
-    serializeSupervision(snapshot).leads[0].pending_ask_question,
-    "OAuth?",
-  );
+  assert.equal(serialized.runtime_state, "idle");
+  assert.equal(serialized.display_name, "api/lead-11111111");
+  assert.equal(serialized.pending_ask_question, "OAuth?");
 });
 
 test("live lead actions advertise transcript for persisted session candidates", () => {
@@ -752,6 +756,14 @@ test("live lead actions advertise transcript for persisted session candidates", 
       "message",
     ]);
     assert.equal(snapshot.leads[0]?.piSessionFile, piSessionFile);
+    const serializedLead = serializeSupervision(snapshot).leads[0];
+    assert.equal(serializedLead.session, "lead");
+    assert.equal("lead" in serializedLead, false);
+    assert.deepEqual(serializedLead.available_tools, [
+      "staff_inspect",
+      ...(piSessionFile ? ["staff_transcript"] : []),
+      "staff_message",
+    ]);
     const serialized = JSON.stringify(serializeSupervision(snapshot));
     assert.equal(serialized.includes("piSessionFile"), false);
     assert.equal(serialized.includes("/tmp/lead.jsonl"), false);

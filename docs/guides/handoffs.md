@@ -4,8 +4,8 @@
 
 Pi Herdsman has two text-file mechanisms with different purposes:
 
-- `files` supplies evidence to delegate, continue, steer, interrupt, reply,
-  or ask_owner.
+- `files` supplies evidence to `agent_delegate`, `agent_continue`,
+  `agent_steer`, `agent_interrupt`, `agent_reply`, or `ask_owner`.
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
 
@@ -17,7 +17,7 @@ canonical local references and are not copied or snapshotted.
 Agent-session context crosses boundaries explicitly.
 
 - task or message text and `files` carry assignment-specific evidence;
-- `continue` resumes an exact managed-agent Pi session;
+- `agent_continue` resumes an exact managed-agent Pi session;
 - the caller's conversation and caller-side attachments are not implicitly
   copied into another agent session.
 
@@ -45,7 +45,6 @@ Example:
 
 ```json
 {
-  "action": "delegate",
   "definition": "reviewer",
   "task": "Review the implementation against the approved plan.",
   "files": [".pi-herdsman/plan.md"]
@@ -89,8 +88,8 @@ size; for a result reference, it carries the logical result name, the physical
 path attribute, and observed byte size. File content remains raw text. This
 markup frames evidence for the model and is not a security boundary.
 
-`files` is supported by `delegate`, `continue`,
-`steer`, `interrupt`, `reply`, and `ask_owner`. For
+`files` is supported by `agent_delegate`, `agent_continue`, `agent_steer`,
+`agent_interrupt`, `agent_reply`, and `ask_owner`. For
 controller actions, relative paths resolve from the calling controller's cwd;
 for `ask_owner`, they resolve from the managed agent's cwd. Accepted ordinary
 filesystem paths retain canonical absolute-path names; `result:<request-id>`
@@ -233,7 +232,6 @@ through `files` using the exact refs shown by the completions:
 
 ```json
 {
-  "action": "delegate",
   "definition": "reviewer",
   "task": "Compare both implementation passes.",
   "files": ["result:global-peer-fix#1", "result:global-peer-fix#2"]
@@ -254,7 +252,6 @@ evidence, especially for a transitive handoff:
 
 ```json
 {
-  "action": "delegate",
   "definition": "reviewer",
   "task": "Review the implementation described in the supplied result.",
   "files": ["result:550e8400-e29b-41d4-a716-446655440000"]
@@ -289,7 +286,7 @@ resolution and transitive canonical-ref forwarding through `files`. For a
 reference-only result, the provenance is available with the body when the
 referenced artifact is read; it is not separately embedded. The context is
 informational model evidence, not authorization: an exact session ID or path
-does not authorize `continue` without durable ownership ancestry. The normal
+does not authorize `agent_continue` without durable ownership ancestry. The normal
 completion shown to the owning session
 remains unchanged.
 
@@ -342,6 +339,6 @@ actual runtime capability is required.
 
 ## See also
 
-- [`agent` API](../reference/agent.md)
+- [Agent tools](../reference/agent.md)
 - [Agent-definition schema](../reference/agent-definition-schema.md)
 - [Delegation](../concepts/delegation.md)

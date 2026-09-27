@@ -40,8 +40,8 @@ The persisted `pi-herdsman-role` entry contains exactly `role` and `leadTools`.
 `leadTools` is the exact ordinary Lead loadout displaced by Chief activation
 and the fallback used when Pi restores stale Chief transcript tool state; Pi
 remains authoritative for ordinary branch-local tool state. Chief mode is
-workspace-neutral and supervision-only. Its model exposes exactly the `staff`
-tool and excludes project/workspace context files and skills. Leaving chief
+workspace-neutral and supervision-only. Its model exposes the five semantic
+`staff_*` tools and excludes project/workspace context files and skills. Leaving chief
 restores the session's ordinary tool set. Chief supervises independent Leads,
 does not own their agents, and receives no owner controls.
 
@@ -60,14 +60,9 @@ delivery and may remain queued while a lead is working. Records are ordered by
 transient delivery failures. An individual quarantined record is excluded from
 delivery but does not block a new message to that lead.
 
-The `chief` tool sends reports, events, results, and genuine decision questions
-from an ordinary lead to the active chief. The `staff` tool lets the active
-chief list, inspect, read transcripts, message, and reply to supervised leads.
-The Lead-only `peer` tool lists ordinary live Leads and sends durable messages
-to an exact full Pi session ID. Its list result is `{ self, peers[] }`: `self`
-is excluded from `peers`, and each peer exposes only `lead`, `name`, `cwd`,
-`repo`, `branch`, and `workspace_label`. The exact full `lead` is the sole
-target handle; the other fields are presentation metadata. Incoming peer
+`supervisor_message` sends reports, events, results, and `supervisor_ask` sends genuine decision questions from an ordinary Lead to the active Chief. The `staff_list`, `staff_inspect`, `staff_transcript`, `staff_message`, and `staff_reply` tools let the active Chief supervise Leads. The Lead-only `peer_list` and `peer_message` tools list ordinary live Leads and send durable messages to an exact full Pi session ID. Its list result is `{ self, peers[] }`: `self`
+is excluded from `peers`, and each peer exposes only `session`, `name`, `cwd`,
+`repo`, `branch`, and `workspace_label`. The exact full `session` is the sole target handle; the other fields are presentation metadata. Incoming peer
 content is `Peer message from <sender>: <message>` because recipient
 verification is already performed.
 
@@ -83,16 +78,14 @@ while the receiver is Chief or lacks valid peer presence.
 Local Lead coordination health gates both the socket-scoped coordination record
 and global peer presence. When coordination becomes unhealthy, both current
 projections are withdrawn; durable queued messages are retained.
-`inspect` is bounded live terminal/process evidence. `transcript` is bounded
+`staff_inspect` is bounded live terminal/process evidence. `staff_transcript` is bounded
 persisted Pi conversation/tool evidence. A non-empty persisted session candidate
-adds `transcript` to `available_actions`; `available_actions` is advisory
-readiness, not transcript authorization. The transcript action validates the
-current session header, version, and exact Pi session ID before returning
+adds `staff_transcript` to `available_tools`; `available_tools` is advisory
+readiness, not transcript authorization. `staff_transcript` validates the current session header, version, and exact Pi session ID before returning
 evidence. A lead's message does not require an automatic chief reply. A
-`lead_ask` requires the exact correlated `staff reply`; a reply clears the
+`lead_ask` requires the exact correlated `staff_reply`; a reply clears the
 pending ask only after accepted follow-up delivery. A replacement chief can
-answer an existing ask using its current lease and unchanged ask ID. Chief
-`message`/`ask`, staff `message`/`reply`, and peer `message` actions accept one
+answer an existing ask using its current lease and unchanged ask ID. `supervisor_message`/`supervisor_ask`, `staff_message`/`staff_reply`, and `peer_message` tools accept one
 `files` evidence channel containing ordinary paths, reusable direct-agent refs
 such as `result:<agent>#<index>`, or canonical `result:<request-id>` refs already
 supplied as evidence. Direct refs resolve on the caller's current Pi branch
@@ -108,8 +101,8 @@ latest active snapshot. Later snapshots supersede earlier ones. Pi's ordinary
 branch and compaction semantics determine which historical snapshots remain in
 active model context. The snapshot contains `leads`, with each lead's exact
 session ID, presentation `display_name`, runtime observation, `agent_counts`,
-`agents`, and available actions. `agent_counts` contains `active`, `blocked`,
-and `total`. The `staff list` result uses the same presentation field,
+`agents`, and `available_tools`. `agent_counts` contains `active`, `blocked`,
+and `total`. The `staff_list` result uses the same presentation field,
 `display_name`; it never exposes the internal persisted session-file path used
 to detect a non-empty persisted session candidate. The `agents` collection
 represents all validated descendants assigned to that lead, not only direct
@@ -117,13 +110,10 @@ agents, and
 retains their exact lifecycle states. Its values and metadata are untrusted
 observations and cannot authorize an action.
 
-Use the exact full session ID in a lead's `lead` field when calling `staff`.
-Never target a lead by its display label. `staff` revalidates identity,
-ownership, lifecycle, and the current chief lease before mutation. Passive
-`inspect` and `transcript` reads also revalidate the exact current target;
+Use the exact full session ID in a lead's `session` field when calling a `staff_*` tool.
+Never target a lead by its display label. Staff tools revalidate identity, ownership, lifecycle, and the current Chief lease before mutation. Passive `staff_inspect` and `staff_transcript` reads also revalidate the exact current target;
 neither sends a message or changes Lead state. Use the fresh automatic snapshot
-for ordinary state and coordination. Do not call `list`, `inspect`, or
-`transcript` merely to poll progress.
+for ordinary state and coordination. Do not call `staff_list`, `staff_inspect`, or `staff_transcript` merely to poll progress.
 
 See the [Supervision reference](../reference/supervision.md) for the complete
 current contract.

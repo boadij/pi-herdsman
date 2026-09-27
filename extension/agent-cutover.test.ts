@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { Value } from "typebox/value";
 import { parseControlMarker } from "./mailbox.ts";
 import {
@@ -19,15 +20,17 @@ import {
   writeAgentState,
 } from "./support.ts";
 
-test("legacy tool, command, selectors, grammar, and renderers stay absent", async () => {
+test("multiplexed coordination tool aliases are absent", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
 
-  assert.equal(
-    pi.tools.some((tool) => tool.name === "agent"),
-    true,
-  );
+  for (const name of ["agent", "chief", "peer", "staff"])
+    assert.equal(
+      pi.tools.some((tool) => tool.name === name),
+      false,
+      name,
+    );
   assert.equal(
     pi.tools.some((tool) => tool.name === "worker"),
     false,
@@ -53,17 +56,6 @@ test("legacy tool, command, selectors, grammar, and renderers stay absent", asyn
       `legacy renderer registered: ${customType}`,
     );
 
-  const tool = pi.tools.find((candidate) => candidate.name === "agent")!;
-  const legacySelector = await tool.execute(
-    "id",
-    { action: "inspect", worker: "agent" },
-    undefined,
-    undefined,
-    fakeContext(),
-  );
-  assert.equal(legacySelector.details.error.category, "invalid_request");
-  assert.equal(legacySelector.details.error.message, "Invalid agent input");
-
   const notices: string[] = [];
   const context = fakeContext([]) as any;
   context.hasUI = true;
@@ -83,7 +75,7 @@ test("the legacy allowlist environment variable grants no agent capability", () 
   registerExtension!(pi.pi as never);
   try {
     assert.equal(
-      pi.tools.some((tool) => tool.name === "agent"),
+      pi.tools.some((tool) => tool.name.startsWith("agent_")),
       false,
     );
     assert.equal(
@@ -95,6 +87,35 @@ test("the legacy allowlist environment variable grants no agent capability", () 
     delete process.env.PI_HERDSMAN_ALLOWED_WORKERS;
     resetAgentMailbox(mailbox);
   }
+});
+
+test("managed Agent surfaces distinguish delegation capability from leaf access", () => {
+  const names = (pi: ReturnType<typeof fakePi>) =>
+    pi.tools.map((tool) => tool.name).sort();
+  const leafMailbox = setAgentEnvironment("leaf-surface-agent");
+  const leaf = fakePi();
+  registerExtension!(leaf.pi as never);
+  assert.deepEqual(names(leaf), ["ask_owner"]);
+  leaf.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(leafMailbox);
+
+  const mailbox = setAgentEnvironment("delegating-surface-agent", ["scout"]);
+  const delegating = fakePi();
+  registerExtension!(delegating.pi as never);
+  assert.deepEqual(names(delegating), [
+    "agent_close",
+    "agent_continue",
+    "agent_delegate",
+    "agent_inspect",
+    "agent_interrupt",
+    "agent_list",
+    "agent_reply",
+    "agent_steer",
+    "agent_transcript",
+    "ask_owner",
+  ]);
+  delegating.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
 });
 
 test("legacy V3 marker and definition metadata are not accepted", () => {
@@ -139,18 +160,19 @@ test("current error codes replace the legacy label and busy codes", async () => 
     ),
   });
   registerExtension!(duplicatePi.pi as never);
-  const duplicateResult = await duplicatePi.tools[0].execute(
-    "id",
-    {
-      action: "delegate",
-      definition: "agent",
-      label: duplicateLabel,
-      task: "duplicate",
-    },
-    undefined,
-    undefined,
-    fakeContext(),
-  );
+  const duplicateResult = await duplicatePi.tools
+    .find((tool) => tool.name === "agent_delegate")!
+    .execute(
+      "id",
+      {
+        definition: "agent",
+        label: duplicateLabel,
+        task: "duplicate",
+      },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
   assert.equal(duplicateResult.details.error.category, "agent_label_exists");
   assert.notEqual(
     duplicateResult.details.error.category,
@@ -179,13 +201,15 @@ test("current error codes replace the legacy label and busy codes", async () => 
   });
   registerExtension!(busyPi.pi as never);
   try {
-    const busyResult = await busyPi.tools[0].execute(
-      "id",
-      { action: "steer", agent: busyLabel, message: "busy" },
-      undefined,
-      undefined,
-      fakeContext(),
-    );
+    const busyResult = await busyPi.tools
+      .find((tool) => tool.name === "agent_steer")!
+      .execute(
+        "id",
+        { agent: busyLabel, message: "busy" },
+        undefined,
+        undefined,
+        fakeContext(),
+      );
     assert.equal(busyResult.details.error.category, "agent_busy");
     assert.notEqual(busyResult.details.error.category, "worker_busy");
   } finally {
@@ -194,123 +218,89 @@ test("current error codes replace the legacy label and busy codes", async () => 
   }
 });
 
-test("agent schema exposes portable structure and canonicalizes action fields", async () => {
+test("each Agent operation has its own strict schema without projection", () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const schema = pi.tools.find((tool) => tool.name === "agent")!.parameters;
-  assert.equal(schema.type, "object");
-  assert.ok(schema.properties);
-  assert.equal(schema.additionalProperties, false);
-  assert.equal(schema.anyOf, undefined);
-  assert.equal(schema.oneOf, undefined);
-  assert.equal(schema.allOf, undefined);
-  assert.ok(schema.properties.label);
-  assert.equal(schema.properties.fork, undefined);
-  assert.equal(schema.properties.timeoutMs, undefined);
-  assert.equal(
-    Value.Check(schema, { action: "inspect", agent: "target" }),
-    true,
-  );
-  assert.equal(
-    Value.Check(schema, { action: "inspect", worker: "target" }),
-    false,
-  );
-  assert.equal(
-    Value.Check(schema, { action: "transcript", agent: "target" }),
-    true,
-  );
-  assert.equal(
-    Value.Check(schema, {
-      action: "delegate",
-      definition: "agent",
-      label: "check-map",
-      task: "fresh work",
-    }),
-    true,
-  );
-  assert.equal(
-    Value.Check(schema, {
-      action: "continue",
-      session: "/tmp/session.jsonl",
-      task: "continued work",
-    }),
-    true,
-  );
-  const toolCall = pi.events.get("tool_call")![0];
-  const tool = pi.tools.find((candidate) => candidate.name === "agent")!;
-  const prepareArguments = tool.prepareArguments;
-  assert.equal(typeof prepareArguments, "function");
-  const rawInput = {
-    action: "delegate",
-    definition: "agent",
-    task: "inspect",
-    session: null,
-    agent: null,
-    message: null,
-  };
-  const preparedInput = prepareArguments(rawInput);
-  assert.deepEqual(rawInput, {
-    action: "delegate",
-    definition: "agent",
-    task: "inspect",
-    session: null,
-    agent: null,
-    message: null,
-  });
-  assert.notEqual(preparedInput, rawInput);
-  assert.deepEqual(preparedInput, {
-    action: "delegate",
-    definition: "agent",
-    task: "inspect",
-  });
-  assert.equal(Value.Check(schema, preparedInput), true);
-  assert.equal(
-    await toolCall({ toolName: "agent", input: preparedInput }, fakeContext()),
-    undefined,
-  );
-  assert.deepEqual(preparedInput, {
-    action: "delegate",
-    definition: "agent",
-    task: "inspect",
-  });
-
-  const removedFieldInput = {
-    action: "delegate",
-    definition: "agent",
-    task: "inspect",
-    fork: "removed",
-  };
-  prepareArguments(removedFieldInput);
-  assert.equal(removedFieldInput.fork, "removed");
-  assert.equal(Value.Check(schema, removedFieldInput), false);
-
-  const input = {
-    action: "delegate",
-    definition: "agent",
-    label: "check-map",
-    task: "inspect",
-    session: "none",
-    agent: "none",
-    message: "none",
-    files: [],
-  };
-  assert.equal(Value.Check(schema, input), true);
-  assert.equal(
-    await toolCall({ toolName: "agent", input }, fakeContext()),
-    undefined,
-  );
-  assert.deepEqual(input, {
-    action: "delegate",
-    definition: "agent",
-    label: "check-map",
-    task: "inspect",
-  });
-
-  const invalid = { action: "continue", task: "inspect" };
-  assert.deepEqual(
-    await toolCall({ toolName: "agent", input: invalid }, fakeContext()),
-    { block: true, reason: "continue requires session", terminate: true },
-  );
+  const cases = [
+    ["agent_list", {}, { agent: "target" }, []],
+    [
+      "agent_delegate",
+      { definition: "scout", task: "work" },
+      { definition: "scout", task: "work", session: "x" },
+      ["definition", "task"],
+    ],
+    [
+      "agent_continue",
+      { session: "/tmp/session.jsonl", task: "work" },
+      { session: "/tmp/session.jsonl", task: "work", agent: "x" },
+      ["session", "task"],
+    ],
+    [
+      "agent_steer",
+      { agent: "worker", message: "change" },
+      { agent: "worker", message: "change", session: "x" },
+      ["agent", "message"],
+    ],
+    [
+      "agent_interrupt",
+      { agent: "worker", message: "replace" },
+      { agent: "worker", message: "replace", task: "x" },
+      ["agent", "message"],
+    ],
+    [
+      "agent_reply",
+      { agent: "worker", message: "decision" },
+      { agent: "worker", message: "decision", session: "x" },
+      ["agent", "message"],
+    ],
+    [
+      "agent_close",
+      { agent: "worker" },
+      { agent: "worker", message: "x" },
+      ["agent"],
+    ],
+    [
+      "agent_inspect",
+      { agent: "worker" },
+      { agent: "worker", session: "x" },
+      ["agent"],
+    ],
+    [
+      "agent_transcript",
+      { agent: "worker" },
+      { agent: "worker", session: "x" },
+      ["agent"],
+    ],
+  ] as const;
+  for (const [name, valid, crossOperation, required] of cases) {
+    const tool = pi.tools.find((candidate) => candidate.name === name);
+    assert.ok(tool, `missing ${name}`);
+    const schema = tool.parameters;
+    assert.equal(schema.type, "object", name);
+    assert.equal(schema.additionalProperties, false, name);
+    assert.equal(schema.properties.action, undefined, name);
+    assert.deepEqual(
+      [...(schema.required ?? [])].sort(),
+      [...required].sort(),
+      name,
+    );
+    assert.equal(Value.Check(schema, valid), true, `${name} valid input`);
+    assert.equal(
+      Value.Check(schema, crossOperation),
+      false,
+      `${name} rejects cross-operation fields`,
+    );
+    assert.doesNotThrow(() => makeStrictJsonSchema(schema), name);
+    assert.deepEqual(tool.constrainedSampling, {
+      type: "json_schema",
+      strict: "prefer",
+    });
+    assert.equal(
+      tool.prepareArguments,
+      undefined,
+      `${name} needs no projection`,
+    );
+  }
   pi.events.get("session_shutdown")?.[0]();
 });

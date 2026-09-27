@@ -40,7 +40,7 @@ Prefer mechanisms such as:
 - ownership boundaries;
 - validated state;
 - defaults and derived values;
-- `available_actions`;
+- `available_tools`;
 - runtime enforcement;
 - explicit capabilities.
 

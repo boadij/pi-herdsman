@@ -193,8 +193,18 @@ The effective roster is validated atomically. Every `agents` name must exist.
 Bundled role descriptions communicate each role's purpose and selection boundary;
 the active controller contract remains authoritative for delegation behavior.
 
-With a non-empty explicit `tools` allowlist, `agent` is inferred unless
-explicitly denied. See [Delegation](../concepts/delegation.md).
+The non-empty `agents` list is required, but is not by itself sufficient, to
+enable all nine managed-agent coordination tools. Delegation is disabled when
+`excludeTools` contains `agent`, when `noTools: true` unless the explicit
+`tools` list contains `agent`, or when `tools` is explicitly empty. Otherwise,
+omitted `tools` permits delegation and explicit ordinary tools permit it. Every
+managed agent receives mandatory `ask_owner`; a definition launched as a leaf
+has its `agents` list removed. The `agent` name in these policy settings is not
+a registered or callable tool, and leaf projection also removes it from an
+existing `tools` list. Ordinary tool settings cannot remove role-required
+coordination tools. When `tools` is omitted, Pi's configured/default tool
+selection is preserved; an explicit allowlist is augmented with required role
+tools. See [Delegation](../concepts/delegation.md).
 
 ## Add body files
 
@@ -228,7 +238,7 @@ References are resolved from the Markdown file that declares them.
 
 The bundled definitions are `generalist`, `implementer`, `researcher`,
 `reviewer`, and `scout`. The session-start agent-definition roster and the
-`agent list` result use the same metadata projection.
+`agent_list` result use the same metadata projection.
 
 For exact expansion, deduplication, and caller-file precedence, see
 [Handoffs and files](handoffs.md).
@@ -244,7 +254,7 @@ A lead Pi session can use:
 or the model can use:
 
 ```json
-{ "action": "list" }
+{}
 ```
 
 Both resolve the same effective roster.

@@ -39,12 +39,12 @@ can race after the reread. Delivery validates the current ordinary-Lead target
 record and target structure only. Managed agents, Chief sessions, display
 labels, and metadata are never peer targets.
 
-## `peer`
+## Peer tools
 
-The Lead-only `peer` tool has two actions:
+The Lead-only tools are `peer_list` and `peer_message`.
 
 ```json
-{ "action": "list" }
+{}
 ```
 
 returns the current ordinary live Leads other than this Lead. The result keeps
@@ -55,7 +55,7 @@ this Lead separate from the peers:
   "self": "<this Lead's exact full Pi session ID>",
   "peers": [
     {
-      "lead": "<exact full Pi session ID>",
+      "session": "<exact full Pi session ID>",
       "name": "workspace/api",
       "cwd": "/work/api",
       "repo": "api",
@@ -66,22 +66,21 @@ this Lead separate from the peers:
 }
 ```
 
-`self` is never repeated in `peers`. Each peer has a `lead`, `name`, `cwd`,
+`self` is never repeated in `peers`. Each peer has a `session`, `name`, `cwd`,
 `repo`, `branch`, and `workspace_label`; presentation metadata may be empty.
-Only the exact full `lead` ID is a messaging target. Names, paths, branches,
+Only the exact full `session` ID is a messaging target. Names, paths, branches,
 and workspace labels are display metadata, not target handles. The model-facing
 list has no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
 
 ```json
 {
-  "action": "message",
-  "lead": "<exact full Pi session ID from peer list>",
+  "session": "<exact full Pi session ID from `peer_list`>",
   "message": "The integration is ready.",
   "files": ["/tmp/checklist.md", "result:researcher#1"]
 }
 ```
 
-`message` accepts ordinary files, reusable direct-agent refs such as
+`peer_message` accepts ordinary files, reusable direct-agent refs such as
 `result:researcher#1`, and canonical `result:<request-id>` refs already supplied
 as evidence. A semantic ref is resolved on the sender's current branch to its
 canonical result reference before the existing attachment preparation runs.

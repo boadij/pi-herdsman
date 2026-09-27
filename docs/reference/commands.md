@@ -8,7 +8,7 @@
 and runs the same command behavior; help and usage text continue to use
 `/agents` as the canonical name.
 
-It is separate from the structured model-facing `agent` API.
+It is separate from the structured model-facing Agent tools.
 
 Agent-management commands require a lead Pi session with UI. Outside Herdr,
 plain `/agents` and its `/herdsman` alias remain available as a setup
@@ -52,7 +52,7 @@ The details view can show:
 
 Bundled implementation paths are intentionally hidden from the human overview.
 
-Structured `agent list` keeps exact deterministic metadata, including exact
+Structured `agent_list` keeps exact deterministic metadata, including exact
 source and skill paths when available.
 
 `/agents definitions` does not probe runtime tool availability.
@@ -128,11 +128,11 @@ It reports discarded active work or durable pending results when present.
 Cleanup uses existing exact ownership proofs and proceeds conservatively across
 independent failures.
 
-Use ordinary `agent close` for normal targeted model-driven control.
+Use ordinary `agent_close` for normal targeted model-driven control.
 
 ## See also
 
 - [`/chief` and chief mode](supervision.md)
-- [`agent` API](agent.md)
+- [Agent tools](agent.md)
 - [Configuration](configuration.md)
 - [Status widget](status-widget.md)
