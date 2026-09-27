@@ -31,9 +31,11 @@ Use these high-salience rules for the model-facing agent boundary:
 - Each unresolved unit of work has one executor. Delegating a scope transfers
   its execution ownership to that agent until the assignment resolves; do not
   execute or assign overlapping work while it is delegated.
-- For agent handoffs, `task`/`files` carry assignment evidence; `agent_continue`
-  resumes an exact managed-agent Pi session. Do not assume the caller's
-  conversation or attachments are inherited.
+- For new or updated agent assignments, `task`/`message` and `files` carry
+  assignment evidence. Pass every user-supplied or already-available artifact
+  relevant to the target's work through `files`; do not assume the caller's
+  conversation or attachments are inherited. `agent_continue` resumes an exact
+  managed-agent Pi session.
 - When agent work is unresolved, handle required agent control, then continue
   only necessary work you still own or end the turn without concluding; agent
   results or attention will resume the session automatically. Do not check
