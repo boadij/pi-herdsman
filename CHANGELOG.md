@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.17.0](https://github.com/boadij/pi-herdsman/compare/v0.16.0...v0.17.0) (2026-09-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* expose semantic coordination tools ([#154](https://github.com/boadij/pi-herdsman/issues/154))
+
+### Features
+
+* add isolated live smoke harness ([#156](https://github.com/boadij/pi-herdsman/issues/156)) ([f0aec40](https://github.com/boadij/pi-herdsman/commit/f0aec405d8607522a2d48611942c14aa1df124c5))
+* expose semantic coordination tools ([#154](https://github.com/boadij/pi-herdsman/issues/154)) ([cc33216](https://github.com/boadij/pi-herdsman/commit/cc3321644c5c316fb781ff130770b8b5b031504c))
+* **ui:** polish status and management presentation ([#162](https://github.com/boadij/pi-herdsman/issues/162)) ([258de17](https://github.com/boadij/pi-herdsman/commit/258de17151fe43f8689f0a981f9f94b7997758d2))
+
+
+### Fixes
+
+* make stale-agent recovery converge ([#166](https://github.com/boadij/pi-herdsman/issues/166)) ([f9d1287](https://github.com/boadij/pi-herdsman/commit/f9d1287f3479133555f837996f93d8d3cfcce49d))
+* require relevant artifacts in agent handoffs ([#164](https://github.com/boadij/pi-herdsman/issues/164)) ([2a146f0](https://github.com/boadij/pi-herdsman/commit/2a146f09f5b3e4a3f2e5bf950165a8f473bc91ca))
+* resolve continue from owned session history ([#159](https://github.com/boadij/pi-herdsman/issues/159)) ([f88fb37](https://github.com/boadij/pi-herdsman/commit/f88fb37470fe94ece8bf6ad892af02a3818a6eff))
+
+
+### Documentation
+
+* document isolated smoke harness ([a414dcd](https://github.com/boadij/pi-herdsman/commit/a414dcd84b4664b1add6c8e559a10d28499a9482))
+
+
+### CI
+
+* add npm PR preview publishing ([#149](https://github.com/boadij/pi-herdsman/issues/149)) ([fa2d141](https://github.com/boadij/pi-herdsman/commit/fa2d14143cf9228f90682445318600665f458917))
+
+
+### Other Changes
+
+* add focused testing skill ([#165](https://github.com/boadij/pi-herdsman/issues/165)) ([b51bc52](https://github.com/boadij/pi-herdsman/commit/b51bc52ea04c309bd6ce350d0bd8650cb91e45a6))
+
 ## [0.16.0](https://github.com/boadij/pi-herdsman/compare/v0.15.0...v0.16.0) (2026-09-25)
 
 
