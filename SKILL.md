@@ -330,9 +330,12 @@ that can produce a future result or attention event. If an attention event
 requires owner action, handle it before returning to passive waiting. For stale
 inactivity, use evidence attached to the first attention event before judging
 health. If that evidence is absent or insufficient, perform at most one bounded
-diagnostic read before returning to passive waiting. Repeated reminders for the
-same stale episode do not by themselves justify another read. If the evidence
-shows healthy or legitimately long-running work, leave it alone.
+diagnostic read before returning to passive waiting. A repeated reminder for
+the same stale episode adds elapsed-time evidence without justifying another
+read: no qualifying execution boundary occurred, so a steer queued during that
+episode cannot yet have taken effect. Continue waiting only while existing
+evidence positively supports legitimate long-running work; otherwise interrupt
+the current operation and continue the same assignment.
 
 Health reconciliation is event-driven with a 30-second fallback scan. Actionable
 health attention is sent only to the exact direct owner and is based on freshly
@@ -341,8 +344,9 @@ condition remains unresolved. Reminder timing is process-local and advisory;
 restarting Herdsman can cause an unresolved condition to be reminded again.
 
 The first stale advisory remains at ten minutes without qualifying execution
-progress. Persistent attention repeats approximately `5m → 2m30s → 1m15s →
-1m` with 30-second scan granularity. Stale attention is advisory, not proof of
+progress. Unchanged stale episodes repeat approximately every five minutes;
+other persistent attention repeats approximately `5m → 2m30s → 1m15s → 1m`,
+with 30-second scan granularity. Stale attention is advisory, not proof of
 a hang. Lost and delivered `ask_owner` attention retain their existing message
 identity, while `result_error`, external runtime `blocked`, old unacknowledged
 handoffs, and physical `unknown` use generic attention. An unresolved

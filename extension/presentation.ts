@@ -1486,6 +1486,18 @@ export function formatToolModelResult(
       transcript || "(no persisted transcript evidence)",
     ].join("\n");
   }
+  if (action === "steer") {
+    return [
+      `Steering queued for agent ${value(v.agent) || "unknown"}.`,
+      "Pi will deliver it after the current assistant turn and its tool calls reach a steering boundary; it does not preempt the current operation.",
+      ...(value(v.session_id) ? [`Session: ${v.session_id}`] : []),
+      ...(value(v.request_id) ? [`Request: ${v.request_id}`] : []),
+      ...(value(v.assignment_request_id)
+        ? [`Assignment request: ${v.assignment_request_id}`]
+        : []),
+      ...cleanup,
+    ].join("\n");
+  }
   if (action === "interrupt") {
     return [
       `Interrupt accepted for agent ${value(v.agent) || "unknown"}.`,
@@ -2046,7 +2058,7 @@ function expandedResultLines(
               ? "waiting for Chief"
               : "sent to Chief"
             : action === "steer"
-              ? "steering sent"
+              ? "steering queued"
               : action === "interrupt"
                 ? "interrupt accepted"
                 : action === "reply"
@@ -2307,7 +2319,7 @@ export function renderCoordinationResult(
       action === "delegate" || action === "continue"
         ? `${label} started`
         : action === "steer"
-          ? "steering sent"
+          ? "steering queued"
           : action === "reply"
             ? "reply sent"
             : action === "close"
@@ -2799,9 +2811,12 @@ export function renderAgentStaleMessage(
         "This advisory is not proof of a hang.",
         "Use supplied diagnostic evidence first.",
         "If evidence is absent or insufficient, perform at most one bounded transcript or inspect read before passive waiting.",
+        "Repeated same-episode staleness is additional recovery evidence: no qualifying execution boundary has occurred.",
+        "A steer queued during an unchanged stale episode cannot have taken effect yet.",
         "Do not repeat a diagnostic read solely because the same stale episode was reminded again.",
-        "If the operation is healthy or legitimately long-running, leave it alone.",
-        "Use steer for a non-preemptive correction.",
+        "Continue waiting only while existing evidence positively supports a legitimate long-running operation.",
+        "Otherwise interrupt the current operation and continue the same assignment.",
+        "Steer queues a cooperative correction; it does not preempt the current operation.",
         "Interrupt only when the current operation must be abandoned; it supersedes earlier steering Pi has not yet delivered and continues the same assignment.",
         "Close only when abandoning the assignment is intended.",
       ]

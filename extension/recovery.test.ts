@@ -4093,25 +4093,19 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 3);
-  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 150_000);
+  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 5 * 60_000);
 
-  now += 2 * 60_000 + 30_000;
+  now += 5 * 60_000;
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 4);
-  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 75_000);
+  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 5 * 60_000);
 
-  now += 75_000;
+  now += 5 * 60_000;
   t.mock.timers.tick(30_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(attempts, 5);
-  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 60_000);
-
-  now += 60_000;
-  t.mock.timers.tick(30_000);
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(attempts, 6);
-  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 60_000);
+  assert.equal(pi.sent.at(-1)?.details?.nextReminderMs, 5 * 60_000);
 
   writeAgentState(mailbox, {
     ...readAgentState(mailbox)!,
@@ -4127,12 +4121,12 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
     attempts,
-    7,
+    6,
     "a changed activity timestamp starts a new episode",
   );
   pi.events.get("session_shutdown")?.[0]();
   t.mock.timers.tick(60_000);
-  assert.equal(attempts, 7, "shutdown removes the recurring scanner");
+  assert.equal(attempts, 6, "shutdown removes the recurring scanner");
 });
 
 test("stale scanner skips completion or identity changes before publication", async () => {
@@ -4441,12 +4435,11 @@ test("delegation parent notifies only its direct stale child", async (t) => {
     advisory.details.process.foreground_processes[0].cmdline,
     "npm test",
   );
-  assert.match(advisory.content, /legitimately long-running/);
   assert.match(
     advisory.content,
     /Available tools: agent_inspect, agent_steer, agent_interrupt, agent_close/,
   );
-  assert.match(advisory.content, /steer for a non-preemptive correction/);
+  assert.match(advisory.content, /agent_steer queues a cooperative correction/);
   assert.match(
     advisory.content,
     /interrupt.*current operation.*continues the same assignment/,
@@ -4466,10 +4459,21 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   ) as any;
   assert.ok(reminder);
   assert.equal(diagnosticReads, 1);
+  assert.match(reminder.content, /same stale episode/i);
+  assert.match(reminder.content, /additional elapsed time.*recovery evidence/i);
+  assert.match(reminder.content, /no qualifying execution boundary/i);
+  assert.match(reminder.content, /steer.*cannot have taken effect/i);
   assert.match(
     reminder.content,
-    /same stale episode|Do not repeat a diagnostic read/i,
+    /do not repeat agent_inspect or agent_transcript/i,
   );
+  assert.match(reminder.content, /otherwise use agent_interrupt/i);
+  assert.match(
+    reminder.content,
+    /Continue waiting only while existing evidence still positively supports a legitimate long-running operation/,
+  );
+  assert.doesNotMatch(reminder.content, /appears healthy.*leave it alone/i);
+  assert.equal(diagnosticReads, 1);
 
   const nextEpisode = {
     ...readAgentState(agentMailboxPath(WORKSPACE, child.agentLabel))!,
