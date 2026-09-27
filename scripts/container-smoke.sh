@@ -43,7 +43,8 @@ if docker run --rm \
 fi
 grep -q 'PUID must be a positive decimal integer' "$tmp/invalid-id.log"
 
-expected_pi="$(node -p 'require("./package-lock.json").packages["node_modules/@earendil-works/pi-coding-agent"].version')"
+expected_pi="$(node -p 'require("./package.json").piHerdsman.runtime.pi')"
+expected_herdr="$(node -p 'require("./package.json").piHerdsman.runtime.herdr.version')"
 
 start() {
   docker run -d \
@@ -80,7 +81,7 @@ verify_runtime() {
     ! npm list -g --depth=0 2>/dev/null | grep -q '@earendil-works/pi-coding-agent'; \
     test \"\$(npm config get update-notifier)\" = false; \
     command -v node >/dev/null; node --version | grep -q '^v26\\.'; \
-    command -v herdr >/dev/null; herdr --version >/dev/null; \
+    command -v herdr >/dev/null; test \"\$(herdr --version | awk '{ print $NF }')\" = '$expected_herdr'; \
     command -v mise >/dev/null; mise --version >/dev/null; \
     command -v rg >/dev/null; command -v fd >/dev/null; \
     command -v jq >/dev/null; command -v gh >/dev/null; \

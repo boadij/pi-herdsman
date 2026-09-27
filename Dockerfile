@@ -2,7 +2,6 @@
 
 ARG NODE_IMAGE=node:26.10.0-trixie-slim
 ARG MISE_VERSION=2026.9.12
-ARG HERDR_VERSION=0.9.1
 
 FROM ${NODE_IMAGE} AS package
 
@@ -16,11 +15,10 @@ COPY . .
 RUN npm run build \
  && npm run package:audit \
  && node -e '\
-const p = require("./package-lock.json").packages[\
-  "node_modules/@earendil-works/pi-coding-agent"\
-]; \
-if (!p?.version) throw new Error("locked Pi version missing"); \
-process.stdout.write(p.version);' > /pi-version \
+const runtime = require("./package.json").piHerdsman?.runtime; \
+if (!runtime?.pi || !runtime.herdr?.version || !runtime.herdr?.sha256) \
+  throw new Error("runtime metadata missing"); \
+process.stdout.write(JSON.stringify(runtime));' > /runtime.json \
  && tarball="$(npm pack --ignore-scripts --silent)" \
  && mkdir /package \
  && tar -xzf "$tarball" -C /package --strip-components=1
@@ -30,7 +28,6 @@ FROM ghcr.io/jdx/mise:${MISE_VERSION} AS mise
 FROM ${NODE_IMAGE}
 
 ARG TARGETARCH
-ARG HERDR_VERSION
 ARG MISE_VERSION
 
 ENV LANG=C.UTF-8 \
@@ -93,10 +90,10 @@ fi
 EOF
 
 COPY --from=mise /usr/local/bin/mise /usr/local/bin/mise
-COPY --from=package /pi-version /tmp/pi-version
+COPY --from=package /runtime.json /tmp/runtime.json
 
 RUN set -eu; \
-    pi_version="$(cat /tmp/pi-version)"; \
+    pi_version="$(node -p 'require("/tmp/runtime.json").pi')"; \
     case "$TARGETARCH" in \
       amd64) pi_arch=x64 ;; \
       arm64) pi_arch=arm64 ;; \
@@ -119,17 +116,23 @@ RUN set -eu; \
       arm64) herdr_arch=aarch64 ;; \
       *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://github.com/herdrdev/herdr/releases/download/v${HERDR_VERSION}/herdr-linux-${herdr_arch}" -o /usr/local/bin/herdr; \
-    chmod 0755 /usr/local/bin/herdr; \
-    herdr --version >/dev/null
+    herdr_target="linux-${herdr_arch}"; \
+    herdr_version="$(node -p 'require("/tmp/runtime.json").herdr.version')"; \
+    herdr_sha256="$(node -p 'require("/tmp/runtime.json").herdr.sha256[process.argv[1]]' "$herdr_target")"; \
+    curl -fsSL "https://github.com/herdrdev/herdr/releases/download/v${herdr_version}/herdr-linux-${herdr_arch}" -o /tmp/herdr; \
+    printf '%s  %s\n' "$herdr_sha256" /tmp/herdr | sha256sum -c -; \
+    install -m 0755 /tmp/herdr /usr/local/bin/herdr; \
+    test "$(herdr --version | awk '{ print $NF }')" = "$herdr_version"; \
+    rm -f /tmp/herdr
 
 RUN set -eu; \
     mkdir -p /usr/share/doc/pi-herdsman/third-party; \
-    pi_version="$(cat /tmp/pi-version)"; \
+    pi_version="$(node -p 'require("/tmp/runtime.json").pi')"; \
+    herdr_version="$(node -p 'require("/tmp/runtime.json").herdr.version')"; \
     curl -fsSL "https://raw.githubusercontent.com/earendil-works/pi/v${pi_version}/LICENSE" -o /usr/share/doc/pi-herdsman/third-party/pi-LICENSE; \
-    curl -fsSL "https://raw.githubusercontent.com/herdrdev/herdr/v${HERDR_VERSION}/LICENSE" -o /usr/share/doc/pi-herdsman/third-party/herdr-LICENSE; \
+    curl -fsSL "https://raw.githubusercontent.com/herdrdev/herdr/v${herdr_version}/LICENSE" -o /usr/share/doc/pi-herdsman/third-party/herdr-LICENSE; \
     curl -fsSL "https://raw.githubusercontent.com/jdx/mise/v${MISE_VERSION}/LICENSE" -o /usr/share/doc/pi-herdsman/third-party/mise-LICENSE; \
-    rm -f /tmp/pi-version
+    rm -f /tmp/runtime.json
 
 COPY --from=package /package /opt/pi-herdsman
 COPY --chmod=0444 docker/AGENTS.md /AGENTS.md
