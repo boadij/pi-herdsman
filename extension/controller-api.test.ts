@@ -1927,7 +1927,7 @@ test("assignment session rejects unusable saved cwd headers without mutation", a
   ] as const) {
     const id = randomUUID();
     const label = `assignment-session-cwd-${name}-${id}`;
-    const path = `/tmp/${id}.jsonl`;
+    const path = join(testTmpRoot, `${id}.jsonl`);
     const mailbox = agentMailboxPath(WORKSPACE, label);
     assert.equal(realFs.existsSync(mailbox), false);
     nativeSessions.clear();
