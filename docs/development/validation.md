@@ -135,11 +135,10 @@ verified:
 npm run smoke
 npm run smoke -- core
 npm run smoke -- continuation
-npm run smoke -- owner-reply
 npm run smoke -- chief-tree
 ```
 
 `npm run smoke` defaults to `core`. Run it from an active Herdr-managed Pi
 session with a selected model; it incurs real provider usage and may fail.
-Live smoke is not part of `npm run validate`. See [Smoke testing](smoke-testing.md)
+Live smoke is opt-in and not part of `npm run validate`. See [Smoke testing](smoke-testing.md)
 for its one-invocation project trust scope and isolated runtime boundaries.

@@ -16,7 +16,6 @@ Run the live harness from a Pi session managed by Herdr:
 npm run smoke
 npm run smoke -- core
 npm run smoke -- continuation
-npm run smoke -- owner-reply
 npm run smoke -- chief-tree
 ```
 
@@ -32,14 +31,16 @@ project-local files so project Agent definitions can be discovered. This does
 not change the user's project trust setting. Pi's normal extension, skill,
 prompt-template, and context-file discovery is disabled; the Pi Agent directory,
 session directory, and Herdr XDG configuration/state directories remain isolated.
-`owner-reply` and `chief-tree` additionally load disposable, root-only Pi probe
-extensions; managed descendants do not load those probes.
+`chief-tree` additionally loads a disposable, root-only Pi probe extension;
+managed descendants do not load the probe.
 
 The available scenarios are `core` (nested delegation and candidate-extension
-propagation), `continuation` (persisted session continuation), `owner-reply`
-(owner question and reply), and `chief-tree` (Chief tree restoration). The
-`chief-tree` scenario does not replace the broader manual Chief supervision
-checks below.
+propagation), `continuation` (persisted Pi-session continuation across managed
+generations), and `chief-tree` (current Chief/session_tree behavior).
+`chief-tree` records ordinary Lead, Chief, and post-`session_tree` active-tool
+snapshots and verifies the current branch's expected contract: Chief differs
+from Lead, and selecting a pre-Chief branch retains Chief tools. It does not
+replace the broader manual Chief supervision checks below.
 
 The harness must run inside Herdr with an active Pi model selection and uses
 real provider credentials/usage. Live scenarios may fail; running one is not
@@ -172,6 +173,8 @@ Afterward remove the temporary definition and referenced file, confirm discovery
 no longer lists the temporary definition, and verify no repository file changed.
 
 ## `ask_owner` round trip
+
+Owner ask/reply remains manual, unautomated coverage.
 
 Give an agent a task whose correct continuation requires an owner choice.
 

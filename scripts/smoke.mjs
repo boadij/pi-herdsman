@@ -21,7 +21,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const scenarioNames = ["core", "continuation", "owner-reply", "chief-tree"];
+const scenarioNames = ["core", "continuation", "chief-tree"];
 const MAX_SOCKET_PATH_BYTES = 100;
 const MAX_SESSION_BYTES = 8 * 1024 * 1024;
 const MAX_CHIEF_TREE_RESULT_BYTES = 16 * 1024;
@@ -58,7 +58,7 @@ export function nestedControlEnv(base, paths, sessionName) {
   return { ...isolatedEnv(base, paths), HERDR_SESSION: sessionName };
 }
 
-export function assertNestedSocketPathFits(paths, sessionName) {
+function assertNestedSocketPathFits(paths, sessionName) {
   const socketPath = join(
     paths.xdgConfig,
     "herdr",
@@ -95,9 +95,6 @@ export function candidateArgs(config) {
     config.candidateExtension,
     "--extension",
     config.herdrStateExtension,
-    ...(config.ownerReplyProbeExtension
-      ? ["--extension", config.ownerReplyProbeExtension]
-      : []),
     ...(config.chiefTreeProbeExtension
       ? ["--extension", config.chiefTreeProbeExtension]
       : []),
@@ -111,32 +108,7 @@ export function candidateArgs(config) {
       isAbsolute(config.chiefTreeProbeExtension),
       "Chief tree probe path must be absolute",
     );
-  if (config.ownerReplyProbeExtension)
-    assert.ok(
-      isAbsolute(config.ownerReplyProbeExtension),
-      "Owner reply probe path must be absolute",
-    );
   return args;
-}
-
-export function ownerReplyProbeSource(secret, expectedQuestion) {
-  assert.ok(
-    /^[a-f0-9]{12}$/i.test(secret ?? ""),
-    "owner reply probe requires a generated smoke secret",
-  );
-  assert.ok(
-    typeof expectedQuestion === "string" && expectedQuestion,
-    "owner reply probe requires the expected ask question",
-  );
-  return `export default function (pi) {
-  let submitted = false;
-  pi.on("message_end", ({ message }) => {
-    const ask = message?.customType === "pi-herdsman-agent-ask" ? message.details : undefined;
-    if (submitted || !ask || ask.agentLabel !== "implementer" || ask.question !== ${JSON.stringify(expectedQuestion)} || typeof ask.askId !== "string" || !ask.askId || typeof ask.requestId !== "string" || !ask.requestId || typeof ask.runId !== "string" || !ask.runId || typeof ask.workspaceId !== "string" || !ask.workspaceId || typeof ask.paneId !== "string" || !ask.paneId || typeof ask.piSessionId !== "string" || !ask.piSessionId) return;
-    submitted = true;
-    pi.sendUserMessage(${JSON.stringify(secret)}, { deliverAs: "steer" });
-  });
-}`;
 }
 
 export function chiefTreeProbeSource(resultPath) {
@@ -144,60 +116,41 @@ export function chiefTreeProbeSource(resultPath) {
     typeof resultPath === "string" && isAbsolute(resultPath),
     "Chief tree result path must be absolute",
   );
-  return `import { writeFile, rename } from "node:fs/promises";
+  return `import { appendFile } from "node:fs/promises";
 const resultPath = ${JSON.stringify(resultPath)};
 export default function (pi) {
-  let eventCount = 0;
-  pi.on("session_tree", async () => {
-    eventCount++;
-    const tools = pi.getActiveTools();
-    const record = Array.isArray(tools) && tools.length <= 128 && Buffer.byteLength(JSON.stringify(tools)) <= ${MAX_CHIEF_TREE_RESULT_BYTES - 512}
-      ? { marker: "PI_HERDSMAN_SMOKE_TOOLS", eventCount, tools }
-      : { marker: "PI_HERDSMAN_SMOKE_TOOLS", eventCount, error: "tool list exceeds probe bounds" };
-    const temporaryPath = resultPath + "." + eventCount + ".tmp";
-    await writeFile(temporaryPath, JSON.stringify(record) + "\\n");
-    await rename(temporaryPath, resultPath);
+  async function record(label) {
+    await appendFile(resultPath, JSON.stringify({ label, tools: [...pi.getActiveTools()].sort() }) + "\\n");
+  }
+  pi.registerCommand("smoke-tools", {
+    description: "Record active tools for isolated smoke",
+    handler: async (args) => {
+      if (args === "lead" || args === "chief") await record(args);
+    },
   });
+  pi.on("session_tree", async () => { await record("tree"); });
 }`;
 }
 
-export function parseChiefTreeProbeResult(contents) {
-  if (
-    typeof contents !== "string" ||
-    Buffer.byteLength(contents) > MAX_CHIEF_TREE_RESULT_BYTES
-  )
-    return { error: "Chief tree result is missing or exceeds the size limit" };
-  try {
-    const record = JSON.parse(contents);
-    if (record?.marker !== "PI_HERDSMAN_SMOKE_TOOLS")
-      return { error: "Chief tree result marker is missing or invalid" };
-    if (record.eventCount !== 1)
-      return {
-        error: `expected one session_tree result, observed ${record.eventCount}`,
-      };
-    if (record.error) return { error: record.error };
-    if (
-      !Array.isArray(record.tools) ||
-      !record.tools.every((tool) => typeof tool === "string")
-    )
-      return { error: "Chief tree tool list is malformed" };
-    return { tools: record.tools };
-  } catch {
-    return { error: "Chief tree result JSON is malformed" };
+export function parseToolSnapshots(contents) {
+  assert.ok(
+    typeof contents === "string" &&
+      Buffer.byteLength(contents) <= MAX_CHIEF_TREE_RESULT_BYTES,
+  );
+  const snapshots = new Map();
+  for (const line of contents.trim().split("\n")) {
+    const { label, tools } = JSON.parse(line);
+    assert.ok(["lead", "chief", "tree"].includes(label));
+    assert.ok(Array.isArray(tools));
+    assert.ok(tools.every((tool) => typeof tool === "string"));
+    assert.ok(!snapshots.has(label));
+    snapshots.set(label, [...tools].sort());
   }
+  return snapshots;
 }
 
-export function assertOrdinaryLeadTools(tools) {
-  assert.ok(
-    Array.isArray(tools),
-    "session_tree tool probe marker was missing or malformed",
-  );
-  for (const expected of ["agent", "chief", "peer"])
-    assert.ok(tools.includes(expected), `restored Lead is missing ${expected}`);
-  assert.ok(
-    !tools.includes("staff"),
-    "restored Lead still has Chief-only staff tool",
-  );
+export function distinctPaneCount(processes) {
+  return new Set(processes.map(({ paneId }) => paneId)).size;
 }
 
 export function chiefTreeBranchPlan(
@@ -300,16 +253,7 @@ export function chiefTreeSelectedRow(output, marker) {
   return rows.length === 1 && /^[ \t│├└─⊟⊞]*›\s/.test(rows[0]);
 }
 
-export function chiefTreeRestoreFailure(tools, record, error) {
-  const expectedLeadTools = ["agent", "chief", "peer"];
-  const observed = {
-    leadToolsMissing: expectedLeadTools.filter((tool) => !tools.includes(tool)),
-    staff: tools.includes("staff") ? "present" : "absent",
-  };
-  return `chief-tree-restore: ${error.message}; marker record=${JSON.stringify(record)}; observed post-session_tree=${JSON.stringify(observed)}`;
-}
-
-export function shellCommand(args) {
+function shellCommand(args) {
   assert.ok(
     Array.isArray(args) &&
       args.length > 0 &&
@@ -339,190 +283,6 @@ function messageText(content) {
         .map((block) => block.text)
         .join("\n")
     : "";
-}
-
-export function persistedOwnerReplyCalls(entries) {
-  return entries.flatMap((entry, index) => {
-    const calls = Array.isArray(entry.message?.content)
-      ? entry.message.content.filter(
-          (block) =>
-            block?.type === "toolCall" &&
-            block.name === "agent" &&
-            block.arguments?.action === "reply",
-        )
-      : [];
-    return calls.map((call) => {
-      const results =
-        typeof call.id === "string"
-          ? entries
-              .slice(index + 1)
-              .filter(
-                (candidate) =>
-                  candidate.message?.role === "toolResult" &&
-                  candidate.message.toolName === "agent" &&
-                  candidate.message.toolCallId === call.id,
-              )
-          : [];
-      const resultEntry = results.length === 1 ? results[0] : undefined;
-      const result = resultEntry?.message;
-      return {
-        entry,
-        index,
-        call,
-        resultEntry,
-        result,
-        status:
-          typeof result?.isError === "boolean"
-            ? result.isError
-              ? "rejected"
-              : "successful"
-            : "unresolved",
-      };
-    });
-  });
-}
-
-export function preSecretOwnerReplyGate(entries) {
-  const replies = persistedOwnerReplyCalls(entries);
-  if (replies.some((reply) => reply.status === "successful"))
-    return "successful";
-  if (replies.some((reply) => reply.status === "unresolved"))
-    return "unresolved";
-  return "ready";
-}
-
-export function sameOwnerAskIdentity(actual, expected) {
-  return [
-    "askId",
-    "requestId",
-    "runId",
-    "workspaceId",
-    "agentLabel",
-    "paneId",
-    "piSessionId",
-  ].every(
-    (key) =>
-      typeof actual?.[key] === "string" && actual[key] === expected?.[key],
-  );
-}
-
-export function ownerReplyEventMatches(message, expectedQuestion) {
-  const ask =
-    message?.customType === "pi-herdsman-agent-ask"
-      ? message.details
-      : undefined;
-  return (
-    ask?.agentLabel === "implementer" &&
-    ask.question === expectedQuestion &&
-    [
-      "askId",
-      "requestId",
-      "runId",
-      "workspaceId",
-      "paneId",
-      "piSessionId",
-    ].every((key) => typeof ask[key] === "string" && ask[key].length > 0)
-  );
-}
-
-export function assertOwnerReplyOrder(
-  entries,
-  ask,
-  userMessage,
-  reply,
-  childResult,
-) {
-  const order = [ask, userMessage, reply, childResult].map((entry) =>
-    entries.indexOf(entry),
-  );
-  assert.ok(
-    order.every((index) => index >= 0) &&
-      order.every((index, i) => i === 0 || order[i - 1] < index),
-    "expected persisted ask < user message < successful reply < child result",
-  );
-  return order;
-}
-
-export function captureOwnerAskIdentity(entry, original) {
-  const details = entry?.details ?? entry?.message?.details;
-  const observed = details && typeof details === "object" ? details : undefined;
-  if (original && !sameOwnerAskIdentity(observed, original))
-    throw new Error("owner-reply-question: pending ask identity changed");
-  return original ?? (observed ? { ...observed } : undefined);
-}
-
-export function ownerReplyResultMatches(result, expected, answer) {
-  const identity = result?.details ?? result?.message?.details;
-  const content = result?.content ?? result?.message?.content;
-  return (
-    identity?.agentLabel === expected.agentLabel &&
-    identity?.requestId === expected.requestId &&
-    identity?.runId === expected.runId &&
-    identity?.workspaceId === expected.workspaceId &&
-    identity?.paneId === expected.paneId &&
-    identity?.piSessionId === expected.piSessionId &&
-    messageText(content)
-      .split(/\r?\n/)
-      .some((line) => line.trim() === answer)
-  );
-}
-
-export function ownerReplyToolResultMatches(result, expected) {
-  const details = result?.details ?? result?.message?.details ?? result;
-  return (
-    details?.action === "reply" &&
-    details?.agent === expected.agentLabel &&
-    details?.ask_id === expected.askId &&
-    details?.assignment_request_id === expected.requestId &&
-    details?.session_id === expected.piSessionId
-  );
-}
-
-export function ownerReplySnapshotDiagnostics(entries, expected) {
-  const entryInfo = (entry, index) => ({
-    index,
-    id: entry.id ?? null,
-    parentId: entry.parentId ?? null,
-    type: entry.type ?? null,
-  });
-  return {
-    entries: entries.slice(-80).map(entryInfo),
-    calls: persistedOwnerReplyCalls(entries)
-      .slice(-8)
-      .map((reply) => ({
-        ...entryInfo(reply.entry, reply.index),
-        toolCallId: reply.call.id ?? null,
-        action: reply.call.arguments?.action ?? null,
-        agent: reply.call.arguments?.agent ?? null,
-        status: reply.status,
-        toolResultDetails: reply.result?.details ?? null,
-        matchesOriginalAsk:
-          reply.result?.isError === false &&
-          ownerReplyToolResultMatches(reply.result, expected ?? {}),
-      })),
-    asks: entries
-      .filter(
-        (entry) =>
-          entry.customType === "pi-herdsman-agent-ask" ||
-          entry.message?.customType === "pi-herdsman-agent-ask",
-      )
-      .slice(-4)
-      .map((entry) => ({
-        ...entryInfo(entry, entries.indexOf(entry)),
-        details: entry.details ?? entry.message?.details ?? null,
-      })),
-    results: entries
-      .filter(
-        (entry) =>
-          entry.customType === "pi-herdsman-agent-result" ||
-          entry.message?.customType === "pi-herdsman-agent-result",
-      )
-      .slice(-4)
-      .map((entry) => ({
-        ...entryInfo(entry, entries.indexOf(entry)),
-        details: entry.details ?? entry.message?.details ?? null,
-      })),
-  };
 }
 
 function assistantResultsForPrompt(contents, prompt, marker, matchesMarker) {
@@ -559,7 +319,7 @@ function assistantResultsForPrompt(contents, prompt, marker, matchesMarker) {
   });
 }
 
-export function assistantResultForPrompt(contents, prompt, marker) {
+function assistantResultForPrompt(contents, prompt, marker) {
   return (
     assistantResultsForPrompt(contents, prompt, marker, (text, expected) =>
       text.split(/\r?\n/).some((line) => line.trim() === expected),
@@ -708,10 +468,6 @@ async function linkIfPresent(source, target) {
 async function preparePi(paths, model) {
   const sourceAgentDir =
     process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-  await linkIfPresent(
-    join(sourceAgentDir, "models.json"),
-    join(paths.piAgent, "models.json"),
-  );
   const env = isolatedEnv(process.env, paths);
   const authArgs = [
     "auth",
@@ -882,9 +638,6 @@ async function startCandidate(ctx) {
   await Promise.all([
     access(ctx.candidateExtension),
     access(ctx.herdrStateExtension),
-    ...(ctx.ownerReplyProbeExtension
-      ? [access(ctx.ownerReplyProbeExtension)]
-      : []),
     ...(ctx.chiefTreeProbeExtension
       ? [access(ctx.chiefTreeProbeExtension)]
       : []),
@@ -911,9 +664,6 @@ async function startCandidate(ctx) {
   const args = candidateArgs({
     candidateExtension: ctx.candidateExtension,
     herdrStateExtension: ctx.herdrStateExtension,
-    ...(ctx.ownerReplyProbeExtension
-      ? { ownerReplyProbeExtension: ctx.ownerReplyProbeExtension }
-      : {}),
     ...(ctx.chiefTreeProbeExtension
       ? { chiefTreeProbeExtension: ctx.chiefTreeProbeExtension }
       : {}),
@@ -957,10 +707,6 @@ export function initialPromptForScenario(scenario, ctx) {
       return corePrompt(ctx.expectedPackage);
     case "continuation":
       return continuationPrompt();
-    case "owner-reply":
-      ctx.ownerSecret = randomUUID().replaceAll("-", "").slice(0, 12);
-      ctx.expectedOwnerQuestion = `Choose the owner's secret for isolated smoke run ${randomUUID()}.`;
-      return `Delegate exactly one implementer and tell it to ask the owner this exact question, with no changes: ${JSON.stringify(ctx.expectedOwnerQuestion)} It must not guess or choose the secret; after the owner replies, it must return exactly that secret. You, as Lead, must not answer the child or choose a value until a separate user message supplies the owner's exact secret. After I send it, use your normal agent reply action for that child, then return exactly the child's final secret.`;
     case "chief-tree":
       return "Reply exactly with PI_HERDSMAN_CHIEF_TREE_STARTUP.";
     default:
@@ -974,8 +720,6 @@ export async function runScenario(ctx, scenario) {
       return runCoreSmoke(ctx);
     case "continuation":
       return runContinuationSmoke(ctx);
-    case "owner-reply":
-      return runOwnerReplySmoke(ctx);
     case "chief-tree":
       return runChiefTreeSmoke(ctx);
     default:
@@ -1141,9 +885,9 @@ async function runCoreSmoke(ctx) {
       );
       if (assistantResult) ctx.assistantResult = assistantResult;
     }
-    const descendants = [...observed.values()];
-    if (ctx.assistantResult && descendants.length >= 2) {
-      ctx.descendantCount = descendants.length;
+    const paneCount = distinctPaneCount([...observed.values()]);
+    if (ctx.assistantResult && paneCount >= 2) {
+      ctx.descendantCount = paneCount;
       await waitForDescendantsToExit(ctx);
       return;
     }
@@ -1157,9 +901,10 @@ async function runCoreSmoke(ctx) {
     throw new Error(
       "waiting-for-root-session: candidate root did not save a Pi session",
     );
-  if (ctx.assistantResult && observed.size < 2)
+  const paneCount = distinctPaneCount([...observed.values()]);
+  if (ctx.assistantResult && paneCount < 2)
     throw new Error(
-      `waiting-for-descendant-processes: expected two distinct pane/PID identities with both extensions; observed ${observed.size}`,
+      `waiting-for-descendant-processes: expected two distinct panes with both extensions; observed ${paneCount}`,
     );
   throw new Error(
     "waiting-for-assistant-result: saved candidate session had no completed assistant response with the expected marker",
@@ -1350,8 +1095,14 @@ async function runContinuationSmoke(ctx) {
         ctx.herdrStateExtension,
       );
       for (const proc of matches) {
-        if (proc.pid != null && !firstPids.has(proc.pid))
+        if (
+          proc.pid != null &&
+          !firstPids.has(proc.pid) &&
+          agent.pane_id !== firstSession.paneId
+        ) {
           firstGeneration = proc.pid;
+          ctx.continuationSecondPaneId = agent.pane_id;
+        }
       }
     }
     if (firstGeneration !== undefined) break;
@@ -1405,6 +1156,8 @@ async function runContinuationSmoke(ctx) {
           `continuation-follow-up: expected one final owner result after cleanup, observed ${finalResults.length}`,
         );
       ctx.continuationSessionId = firstSession.id;
+      ctx.continuationSessionPath = firstSession.path;
+      ctx.continuationFirstPaneId = firstSession.paneId;
       ctx.continuationGenerationPid = firstGeneration;
       return;
     }
@@ -1413,370 +1166,6 @@ async function runContinuationSmoke(ctx) {
   throw new Error(
     "continuation-follow-up: no completed root response proved the persisted context and result",
   );
-}
-
-async function runOwnerReplySmoke(ctx) {
-  const deadline = Date.now() + 4 * 60_000;
-  const answer = ctx.ownerSecret;
-  assert.ok(
-    /^[a-f0-9]{12}$/i.test(answer ?? ""),
-    "owner secret must be generated locally before candidate startup",
-  );
-  assert.ok(
-    !ctx.initialPrompt.includes(answer),
-    "owner secret must never be included in the candidate prompt",
-  );
-  const rootAskEntries = (contents) =>
-    sessionEntries(contents).filter(
-      (entry) =>
-        entry.customType === "pi-herdsman-agent-ask" ||
-        entry.message?.customType === "pi-herdsman-agent-ask",
-    );
-  const rootResultEntries = (contents) =>
-    sessionEntries(contents).filter(
-      (entry) =>
-        entry.customType === "pi-herdsman-agent-result" ||
-        entry.message?.customType === "pi-herdsman-agent-result",
-    );
-  const eventDetails = (entry) => entry.details ?? entry.message?.details;
-
-  let rootSession;
-  let asks;
-  let originalAskIdentity;
-  let preSecretReplyGate;
-  while (Date.now() < deadline) {
-    rootSession = await rootSessionSnapshot(ctx);
-    asks = rootSession ? rootAskEntries(rootSession.contents) : [];
-    if (rootSession)
-      ctx.ownerReplySnapshotDiagnostics = ownerReplySnapshotDiagnostics(
-        sessionEntries(rootSession.contents),
-      );
-    if (asks.length > 1)
-      throw new Error(
-        `owner-reply-question: expected exactly one persisted owner ask, observed ${asks.length}`,
-      );
-    if (asks.length === 1) {
-      originalAskIdentity = captureOwnerAskIdentity(
-        asks[0],
-        originalAskIdentity,
-      );
-      const entries = sessionEntries(rootSession.contents);
-      ctx.ownerReplySnapshotDiagnostics = ownerReplySnapshotDiagnostics(
-        entries,
-        originalAskIdentity,
-      );
-      preSecretReplyGate = preSecretOwnerReplyGate(entries);
-      if (preSecretReplyGate === "successful")
-        throw new Error(
-          "owner-reply-too-late: candidate Lead successfully replied before receiving the stable owner's secret",
-        );
-      if (
-        entries.some(
-          (entry) =>
-            entry.type === "message" &&
-            entry.message?.role === "user" &&
-            messageText(entry.message.content) === answer,
-        )
-      )
-        throw new Error(
-          "owner-reply-privacy: generated secret appeared in a root user message before harness injection",
-        );
-      if (preSecretReplyGate === "ready") break;
-    }
-    await sleep(100);
-  }
-  if (preSecretReplyGate === "unresolved")
-    throw new Error(
-      "owner-reply-unproven: pre-secret reply call has no uniquely correlated persisted tool result",
-    );
-  if (!rootSession || asks?.length !== 1)
-    throw new Error(
-      "owner-reply-waiting-for-owner: one persisted ask was not observed",
-    );
-
-  const ask = asks[0];
-  const details = ask.details ?? ask.message?.details;
-  if (
-    typeof details?.question !== "string" ||
-    !details.question.trim() ||
-    typeof details.agentLabel !== "string" ||
-    !details.agentLabel ||
-    typeof details.paneId !== "string" ||
-    !details.paneId ||
-    typeof details.piSessionId !== "string" ||
-    !details.piSessionId ||
-    typeof details.askId !== "string" ||
-    !details.askId ||
-    typeof details.requestId !== "string" ||
-    !details.requestId ||
-    typeof details.runId !== "string" ||
-    !details.runId ||
-    typeof details.workspaceId !== "string" ||
-    !details.workspaceId
-  )
-    throw new Error(
-      "owner-reply-identity: persisted ask omitted its question or assignment identity",
-    );
-  if (
-    details.question !== ctx.expectedOwnerQuestion ||
-    !ownerReplyEventMatches(
-      { customType: "pi-herdsman-agent-ask", details },
-      ctx.expectedOwnerQuestion,
-    )
-  )
-    throw new Error(
-      "owner-reply-identity: ask question did not match the exact probe event target",
-    );
-  if (!sameOwnerAskIdentity(details, originalAskIdentity))
-    throw new Error(
-      "owner-reply-identity: persisted ask identity changed while waiting for the owner",
-    );
-
-  const processes = (await inspectCandidateProcesses(ctx)).verified;
-  if (processes.length !== 1 || processes[0].paneId !== details.paneId)
-    throw new Error(
-      `owner-reply-identity: expected one candidate descendant for the persisted ask, observed ${processes.length}`,
-    );
-  const originalProcess = processes[0];
-
-  const beforeInjection = await rootSessionSnapshot(ctx);
-  const beforeEntries = sessionEntries(beforeInjection?.contents ?? "");
-  const beforeAsks = rootAskEntries(beforeInjection?.contents ?? "");
-  if (
-    beforeAsks.length !== 1 ||
-    !sameOwnerAskIdentity(eventDetails(beforeAsks[0]), originalAskIdentity)
-  )
-    throw new Error(
-      "owner-reply-question: persisted ask identity changed before owner input",
-    );
-  const beforeReplyGate = preSecretOwnerReplyGate(beforeEntries);
-  if (beforeReplyGate === "successful")
-    throw new Error(
-      "owner-reply-too-late: candidate Lead successfully replied before receiving the stable owner's secret",
-    );
-  if (beforeReplyGate === "unresolved")
-    throw new Error(
-      "owner-reply-unproven: pre-secret reply call has no uniquely correlated persisted tool result",
-    );
-  if (
-    beforeEntries.some(
-      (entry) =>
-        entry.type === "message" &&
-        entry.message?.role === "user" &&
-        messageText(entry.message.content) === answer,
-    )
-  )
-    throw new Error(
-      "owner-reply-privacy: generated secret appeared in a root user message before harness injection",
-    );
-
-  // The root-only extension steers this exact persisted ask event; verify the
-  // Pi session records it before accepting the candidate's reply.
-  let finalResult;
-  while (Date.now() < deadline) {
-    const session = await rootSessionSnapshot(ctx);
-    if (session) {
-      const entries = sessionEntries(session.contents);
-      const currentAsks = rootAskEntries(session.contents);
-      if (currentAsks.length !== 1)
-        throw new Error(
-          `owner-reply-question: expected exactly one persisted ask after owner input, observed ${currentAsks.length}`,
-        );
-      const currentAskIdentity = eventDetails(currentAsks[0]);
-      if (!sameOwnerAskIdentity(currentAskIdentity, originalAskIdentity))
-        throw new Error(
-          "owner-reply-question: pending ask identity changed after owner input",
-        );
-      const secretMessages = entries.filter(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message?.role === "user" &&
-          messageText(entry.message.content) === answer,
-      );
-      if (!secretMessages.length && session.status === "idle")
-        throw new Error(
-          "owner-reply-event: exact persisted ask did not trigger the one-shot Pi user message",
-        );
-      if (secretMessages.length > 1)
-        throw new Error(
-          `owner-reply-input: expected one injected user message, observed ${secretMessages.length}`,
-        );
-      const replies = persistedOwnerReplyCalls(entries);
-      if (replies.some((reply) => reply.status === "unresolved")) {
-        if (session.status === "idle")
-          throw new Error(
-            "owner-reply-route: reply tool result could not be uniquely correlated or classified",
-          );
-        await sleep(150);
-        continue;
-      }
-      const successfulReplies = replies.filter(
-        (reply) => reply.status === "successful",
-      );
-      if (successfulReplies.length > 1)
-        throw new Error(
-          `owner-reply-route: expected one successful agent reply action, observed ${successfulReplies.length}`,
-        );
-      const results = rootResultEntries(session.contents);
-      if (results.length > 1)
-        throw new Error(
-          `owner-reply-result: expected one persisted child result, observed ${results.length}`,
-        );
-      const reply = successfulReplies[0];
-      if (reply) {
-        if (
-          secretMessages.length !== 1 ||
-          entries.indexOf(secretMessages[0]) >= reply.index
-        )
-          throw new Error(
-            "owner-reply-input: generated secret was not persisted as a user message before the reply action",
-          );
-        if (
-          reply.call.arguments.agent !== details.agentLabel ||
-          reply.call.arguments.message !== answer
-        )
-          throw new Error(
-            "owner-reply-route: candidate Lead replied to another Agent or used a different secret",
-          );
-        const secretMessageIndex = entries.indexOf(secretMessages[0]);
-        if (reply.index <= secretMessageIndex)
-          throw new Error(
-            "owner-reply-route: successful reply preceded the persisted owner secret",
-          );
-        if (!ownerReplyToolResultMatches(reply.result, details))
-          throw new Error(
-            "owner-reply-route: successful tool result did not prove the original ask and assignment identity",
-          );
-        if (results.length === 1) {
-          const result = results[0];
-          if (!ownerReplyResultMatches(result, details, answer))
-            throw new Error(
-              "owner-reply-result: child result did not match the original blocked assignment and secret",
-            );
-          const resultIndex = entries.indexOf(result);
-          try {
-            assertOwnerReplyOrder(
-              entries,
-              asks[0],
-              secretMessages[0],
-              reply.resultEntry,
-              result,
-            );
-          } catch {
-            throw new Error(
-              "owner-reply-order: expected persisted ask < user message < successful reply < child result",
-            );
-          }
-          const assistantResults = entries.slice(resultIndex + 1).filter(
-            (entry) =>
-              entry.type === "message" &&
-              entry.message?.role === "assistant" &&
-              entry.message.stopReason === "stop" &&
-              messageText(entry.message.content)
-                .split(/\r?\n/)
-                .some((line) => line.trim() === answer),
-          );
-          if (assistantResults.length > 1)
-            throw new Error(
-              `owner-reply-result: expected one final secret, observed ${assistantResults.length}`,
-            );
-          if (assistantResults.length === 1) {
-            const live = (await inspectCandidateProcesses(ctx)).verified;
-            if (
-              live.some(
-                (item) =>
-                  item.paneId !== originalProcess.paneId ||
-                  item.pid !== originalProcess.pid,
-              )
-            )
-              throw new Error(
-                "owner-reply-identity: a replacement Agent appeared after reply",
-              );
-            finalResult = assistantResults[0];
-            break;
-          }
-        }
-      }
-    }
-    await sleep(150);
-  }
-  if (!finalResult) {
-    const endingSession = await rootSessionSnapshot(ctx);
-    const submittedSecret =
-      endingSession &&
-      sessionEntries(endingSession.contents).some(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message?.role === "user" &&
-          messageText(entry.message.content) === answer,
-      );
-    if (!submittedSecret)
-      throw new Error(
-        "owner-reply-event: exact persisted ask did not trigger the one-shot Pi user message",
-      );
-    throw new Error(
-      "owner-reply-result: candidate Lead did not reply through its agent tool and return the owner's exact secret",
-    );
-  }
-
-  const finalSession = await rootSessionSnapshot(ctx);
-  const finalEntries = sessionEntries(finalSession?.contents ?? "");
-  const askCount = rootAskEntries(finalSession?.contents ?? "").length;
-  const resultEvents = rootResultEntries(finalSession?.contents ?? "");
-  const finalAskIdentity = eventDetails(
-    rootAskEntries(finalSession?.contents ?? "")[0] ?? {},
-  );
-  const finalSecretMessages = finalEntries.filter(
-    (entry) =>
-      entry.type === "message" &&
-      entry.message?.role === "user" &&
-      messageText(entry.message.content) === answer,
-  );
-  if (askCount !== 1)
-    throw new Error(
-      `owner-reply-question: expected one persisted ask after completion, observed ${askCount}`,
-    );
-  if (!sameOwnerAskIdentity(finalAskIdentity, originalAskIdentity))
-    throw new Error(
-      "owner-reply-question: final persisted ask did not retain its original askId and assignment identity",
-    );
-  if (resultEvents.length !== 1)
-    throw new Error(
-      `owner-reply-result: expected exactly one persisted result for the assignment, observed ${resultEvents.length}`,
-    );
-  if (finalSecretMessages.length !== 1)
-    throw new Error(
-      `owner-reply-input: expected exactly one persisted user message with the secret, observed ${finalSecretMessages.length}`,
-    );
-  const resultIdentity = eventDetails(resultEvents[0]);
-  if (
-    resultIdentity?.agentLabel !== details.agentLabel ||
-    resultIdentity?.requestId !== details.requestId ||
-    resultIdentity?.runId !== details.runId ||
-    resultIdentity?.workspaceId !== details.workspaceId ||
-    resultIdentity?.paneId !== details.paneId ||
-    resultIdentity?.piSessionId !== details.piSessionId ||
-    !messageText(resultEvents[0].content ?? resultEvents[0].message?.content)
-      .split(/\r?\n/)
-      .some((line) => line.trim() === answer)
-  )
-    throw new Error(
-      "owner-reply-result: final persisted child result did not match the original assignment and secret",
-    );
-  const finalTokens = finalEntries.filter(
-    (entry) =>
-      entry.type === "message" &&
-      entry.message?.role === "assistant" &&
-      entry.message.stopReason === "stop" &&
-      messageText(entry.message.content)
-        .split(/\r?\n/)
-        .some((line) => line.trim() === answer),
-  );
-  if (finalTokens.length !== 1 || finalTokens[0].id !== finalResult.id)
-    throw new Error(
-      `owner-reply-result: expected exactly one final secret, observed ${finalTokens.length}`,
-    );
-  await waitForDescendantsToExit(ctx);
 }
 
 async function runChiefTreeSmoke(ctx) {
@@ -1815,6 +1204,32 @@ async function runChiefTreeSmoke(ctx) {
       "chief-tree-startup: candidate did not complete the ordinary Lead startup exchange",
     );
 
+  const awaitSnapshot = async (label) => {
+    const until = Date.now() + 15_000;
+    while (Date.now() < until) {
+      try {
+        const details = await lstat(ctx.chiefTreeResultFile);
+        if (
+          !details.isFile() ||
+          details.isSymbolicLink() ||
+          details.size > MAX_CHIEF_TREE_RESULT_BYTES
+        )
+          throw new Error(
+            "chief-tree-probe: result path is not a bounded regular file",
+          );
+        const snapshots = parseToolSnapshots(
+          await readFile(ctx.chiefTreeResultFile, "utf8"),
+        );
+        if (snapshots.has(label)) return snapshots;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      await sleep(200);
+    }
+    throw new Error(`chief-tree-probe: missing ${label} tool snapshot`);
+  };
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/smoke-tools lead");
+  await awaitSnapshot("lead");
   await submitPaneCommand(ctx, ctx.rootPaneId, "/chief");
   await nestedCommand(ctx, [
     "pane",
@@ -1826,6 +1241,8 @@ async function runChiefTreeSmoke(ctx) {
     "15000",
   ]);
 
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/smoke-tools chief");
+  await awaitSnapshot("chief");
   const chiefPrompt = "Reply exactly with PI_HERDSMAN_CHIEF_TREE_POST_CHIEF.";
   await submitPaneCommand(ctx, ctx.rootPaneId, chiefPrompt);
   let branchPlan;
@@ -1908,48 +1325,21 @@ async function runChiefTreeSmoke(ctx) {
   if (summaryDialog.ok)
     await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
 
-  let restoredTools;
-  const restoreDeadline = Date.now() + 15_000;
-  while (Date.now() < restoreDeadline) {
-    try {
-      const details = await lstat(ctx.chiefTreeResultFile);
-      if (!details.isFile() || details.isSymbolicLink())
-        throw new Error("chief-tree-probe: result path is not a regular file");
-      if (details.size > MAX_CHIEF_TREE_RESULT_BYTES)
-        throw new Error("chief-tree-probe: result file exceeds the size limit");
-      const contents = await readFile(ctx.chiefTreeResultFile, "utf8");
-      const parsed = parseChiefTreeProbeResult(contents);
-      if (parsed.error) throw new Error(`chief-tree-probe: ${parsed.error}`);
-      restoredTools = parsed.tools;
-      ctx.chiefTreeProbeRecord = JSON.parse(contents);
-      break;
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-    await sleep(200);
-  }
-  if (!restoredTools)
-    throw new Error(
-      `chief-tree-probe: no result file at ${ctx.chiefTreeResultFile} after session_tree`,
-    );
-  try {
-    assertOrdinaryLeadTools(restoredTools);
-  } catch (error) {
-    ctx.chiefTreeProbeDiagnostics = {
-      markerRecord: ctx.chiefTreeProbeRecord,
-      toolClassification: {
-        leadToolsMissing: ["agent", "chief", "peer"].filter(
-          (tool) => !restoredTools.includes(tool),
-        ),
-        staff: restoredTools.includes("staff") ? "present" : "absent",
-      },
-    };
-    throw new Error(
-      chiefTreeRestoreFailure(restoredTools, ctx.chiefTreeProbeRecord, error),
-      { cause: error },
-    );
-  }
-  ctx.chiefTreeTools = restoredTools;
+  const snapshots = await awaitSnapshot("tree");
+  ctx.chiefTreeProbeDiagnostics = Object.fromEntries(snapshots);
+  const lead = snapshots.get("lead");
+  const chief = snapshots.get("chief");
+  const tree = snapshots.get("tree");
+  assert.ok(
+    lead && chief && tree,
+    "chief-tree-probe: three snapshots required",
+  );
+  assert.notDeepEqual(
+    chief,
+    lead,
+    "Chief tools must differ from ordinary Lead tools",
+  );
+  assert.deepEqual(tree, chief, "session_tree must retain current Chief tools");
 
   const followup = "Reply exactly PI_HERDSMAN_CHIEF_TREE_FOLLOWUP.";
   await submitPaneCommand(ctx, ctx.rootPaneId, followup);
@@ -1967,7 +1357,7 @@ async function runChiefTreeSmoke(ctx) {
     await sleep(250);
   }
   throw new Error(
-    "chief-tree-follow-up: restored ordinary Lead did not complete the follow-up action",
+    "chief-tree-follow-up: Chief did not complete the follow-up action",
   );
 }
 
@@ -1986,7 +1376,6 @@ async function waitForDescendantsToExit(ctx) {
 async function collectDiagnostics(ctx, owned) {
   const diagnostics = {};
   const env = nestedControlEnv(process.env, ctx.paths, ctx.sessionName);
-  diagnostics.ownerReplySnapshot = ctx.ownerReplySnapshotDiagnostics ?? null;
   diagnostics.chiefTreeProbe = ctx.chiefTreeProbeDiagnostics ?? null;
   diagnostics.agents = await tryHerdr(["agent", "list"], { env });
   diagnostics.panes = await tryHerdr(["pane", "list"], { env });
@@ -2049,9 +1438,7 @@ async function collectDiagnostics(ctx, owned) {
     ).catch((error) => ({ error: error.message }));
   try {
     const serialized = JSON.stringify(diagnostics);
-    console.error(
-      `diagnostics: ${ctx.ownerSecret ? serialized.replaceAll(ctx.ownerSecret, "[REDACTED]") : serialized}`,
-    );
+    console.error(`diagnostics: ${serialized}`);
   } catch {
     console.error("diagnostics: collection failed");
   }
@@ -2133,15 +1520,6 @@ async function main() {
           chiefTreeResultFile: join(paths.root, "chief-tree-tools.json"),
         }
       : {}),
-    ...(scenario === "owner-reply"
-      ? {
-          ownerReplyProbeExtension: join(
-            paths.piAgent,
-            "extensions",
-            "smoke-owner-reply.mjs",
-          ),
-        }
-      : {}),
     sessionName: undefined,
     paths,
     model,
@@ -2159,12 +1537,6 @@ async function main() {
         chiefTreeProbeSource(ctx.chiefTreeResultFile),
         { flag: "wx" },
       );
-    if (ctx.ownerReplyProbeExtension)
-      await writeFile(
-        ctx.ownerReplyProbeExtension,
-        ownerReplyProbeSource(ctx.ownerSecret, ctx.expectedOwnerQuestion),
-        { flag: "wx" },
-      );
     await startNestedHerdr(paths, owned);
     ctx.sessionName = owned.sessionName;
     await waitForNestedHerdr(ctx);
@@ -2172,7 +1544,31 @@ async function main() {
     await runScenario(ctx, scenario);
     console.log(`smoke ${scenario}: PASS`);
     console.log(`candidate: ${ctx.candidateExtension}`);
-    console.log(`descendants: ${ctx.descendantCount}`);
+    if (scenario === "core") {
+      console.log(`descendant panes: ${ctx.descendantCount}`);
+      console.log(
+        `process evidence: ${JSON.stringify(ctx.coreProcessEvidence)}`,
+      );
+      console.log(`package result: ${ctx.expectedPackage}`);
+    }
+    if (scenario === "continuation")
+      console.log(
+        `continuation: ${JSON.stringify({
+          sessionId: ctx.continuationSessionId,
+          sessionPath: ctx.continuationSessionPath,
+          firstPane: ctx.continuationFirstPaneId,
+          secondPane: ctx.continuationSecondPaneId,
+          secondPid: ctx.continuationGenerationPid,
+          result: "one final remembered-context owner result",
+        })}`,
+      );
+    if (scenario === "chief-tree")
+      console.log(
+        `chief-tree: ${JSON.stringify({
+          snapshots: ctx.chiefTreeProbeDiagnostics,
+          selectedBranch: ctx.chiefTreeBranchPlan,
+        })}`,
+      );
     console.log(`authentication: ${ctx.authMechanism}`);
   } catch (error) {
     failure = error;

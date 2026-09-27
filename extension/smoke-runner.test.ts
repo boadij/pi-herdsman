@@ -2,34 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assistantResultForSession,
-  assertOrdinaryLeadTools,
-  chiefTreeRestoreFailure,
   chiefTreeFooter,
   chiefTreeSelectedRow,
   candidateArgs,
-  parseChiefTreeProbeResult,
   chiefTreeProbeSource,
+  distinctPaneCount,
+  parseToolSnapshots,
   chiefTreeBranchPlan,
   continuationResultsForPrompt,
-  assertOwnerReplyOrder,
   initialPromptForScenario,
   inspectPaneProcesses,
   isolatedEnv,
   listedPanes,
   nestedControlEnv,
-  ownerReplyProbeSource,
-  ownerReplyEventMatches,
-  ownerReplyResultMatches,
-  ownerReplySnapshotDiagnostics,
-  ownerReplyToolResultMatches,
-  captureOwnerAskIdentity,
   nestedPaneInput,
   nestedPaneText,
   submitPaneCommand,
-  preSecretOwnerReplyGate,
   parseScenario,
-  persistedOwnerReplyCalls,
-  sameOwnerAskIdentity,
   runScenario,
 } from "../scripts/smoke.mjs";
 
@@ -73,23 +62,12 @@ test("smoke isolates nested Herdr routing and Pi paths", () => {
   assert.equal(base.HERDR_SESSION, "parent");
 });
 
-test("smoke scenario parsing accepts the four supported scenarios and defaults to core", async () => {
+test("smoke scenario parsing accepts the three supported scenarios and defaults to core", async () => {
   assert.equal(parseScenario([]), "core");
-  for (const scenario of ["core", "continuation", "owner-reply", "chief-tree"])
+  for (const scenario of ["core", "continuation", "chief-tree"])
     assert.equal(parseScenario([scenario]), scenario);
   assert.throws(() => parseScenario(["wat"]), /unknown smoke scenario/);
   await assert.rejects(runScenario({}, "wat"), /unknown smoke scenario/);
-});
-
-test("owner-reply prompt keeps its generated secret private and requires separate owner input", () => {
-  const ctx = {};
-  const prompt = initialPromptForScenario("owner-reply", ctx);
-  assert.ok(/^[a-f0-9]{12}$/i.test(ctx.ownerSecret));
-  assert.ok(!prompt.includes(ctx.ownerSecret));
-  assert.match(
-    prompt,
-    /must not answer the child or choose a value until a separate user message/i,
-  );
 });
 
 test("chief-tree startup prompt creates one ordinary Lead branch for harness controls", () => {
@@ -333,275 +311,7 @@ test("pane commands submit literal text with one explicit Enter", async () => {
   ]);
 });
 
-test("owner-reply probe steers once only for the exact correlated ask event", () => {
-  const secret = "a1b2c3d4e5f6";
-  const question = "choose token for this smoke";
-  const source = ownerReplyProbeSource(secret, question);
-  assert.match(source, /pi\.on\("message_end"/);
-  assert.match(source, /message\?\.customType === "pi-herdsman-agent-ask"/);
-  assert.match(source, /ask\.question !== "choose token for this smoke"/);
-  assert.match(source, /if \(submitted \|\|/);
-  assert.match(
-    source,
-    /pi\.sendUserMessage\("a1b2c3d4e5f6", \{ deliverAs: "steer" \}\)/,
-  );
-  assert.equal((source.match(/pi\.sendUserMessage\(/g) ?? []).length, 1);
-  assert.doesNotMatch(
-    source,
-    /registerCommand|isIdle|waitForIdle|sendMessage\(|mailbox|action:\s*["']reply/,
-  );
-  const event = {
-    customType: "pi-herdsman-agent-ask",
-    details: {
-      question,
-      agentLabel: "implementer",
-      askId: "ask-1",
-      requestId: "request-1",
-      runId: "run-1",
-      workspaceId: "workspace-1",
-      paneId: "pane-1",
-      piSessionId: "session-1",
-    },
-  };
-  assert.equal(ownerReplyEventMatches(event, question), true);
-  assert.equal(
-    ownerReplyEventMatches({ ...event, customType: "other" }, question),
-    false,
-  );
-  assert.equal(
-    ownerReplyEventMatches(
-      { ...event, details: { ...event.details, askId: "" } },
-      question,
-    ),
-    false,
-  );
-  assert.equal(
-    ownerReplyEventMatches(
-      { ...event, details: { ...event.details, question: "other" } },
-      question,
-    ),
-    false,
-  );
-});
-
-test("owner-reply gate rejects successful or unresolved pre-secret reply calls without requiring idle", () => {
-  const entries = (result) => [
-    {
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "reply-call",
-            name: "agent",
-            arguments: { action: "reply", agent: "child", message: "guess" },
-          },
-        ],
-      },
-    },
-    ...(result === "missing"
-      ? []
-      : [
-          {
-            type: "message",
-            message: {
-              role: "toolResult",
-              toolCallId: "reply-call",
-              toolName: "agent",
-              ...(result === "unresolved" ? {} : { isError: result }),
-            },
-          },
-        ]),
-  ];
-
-  assert.equal(preSecretOwnerReplyGate(entries(true)), "ready");
-  assert.equal(preSecretOwnerReplyGate(entries(false)), "successful");
-  assert.equal(preSecretOwnerReplyGate(entries("missing")), "unresolved");
-  assert.equal(preSecretOwnerReplyGate(entries("unresolved")), "unresolved");
-  assert.equal(preSecretOwnerReplyGate([]), "ready");
-});
-
-test("owner-reply correlation rejects a different askId", () => {
-  const ask = {
-    askId: "ask-1",
-    requestId: "request-1",
-    runId: "run-1",
-    workspaceId: "workspace-1",
-    agentLabel: "child",
-    paneId: "w1:p2",
-    piSessionId: "session-1",
-  };
-  assert.equal(sameOwnerAskIdentity(ask, { ...ask }), true);
-  assert.equal(sameOwnerAskIdentity({ ...ask, askId: "ask-2" }, ask), false);
-});
-
-test("owner-reply captures the first persisted ask identity before checking the snapshot", () => {
-  const details = {
-    askId: "ask-1",
-    requestId: "request-1",
-    runId: "run-1",
-    workspaceId: "workspace-1",
-    agentLabel: "child",
-    paneId: "w1:p2",
-    piSessionId: "session-1",
-  };
-  const firstAsk = { customType: "pi-herdsman-agent-ask", details };
-  const originalAskIdentity = captureOwnerAskIdentity(firstAsk);
-
-  assert.deepEqual(originalAskIdentity, details);
-  details.askId = "mutated-after-capture";
-  assert.equal(originalAskIdentity.askId, "ask-1");
-  assert.deepEqual(
-    captureOwnerAskIdentity(
-      { message: { details: { ...originalAskIdentity } } },
-      originalAskIdentity,
-    ),
-    originalAskIdentity,
-  );
-  assert.throws(
-    () =>
-      captureOwnerAskIdentity(
-        { details: { ...originalAskIdentity, askId: "ask-2" } },
-        originalAskIdentity,
-      ),
-    /pending ask identity changed/,
-  );
-});
-
-test("owner-reply requires persisted ask, user message, successful reply, then child result", () => {
-  const ask = {
-    askId: "ask-1",
-    requestId: "request-1",
-    runId: "run-1",
-    workspaceId: "workspace-1",
-    agentLabel: "child",
-    paneId: "w1:p2",
-    piSessionId: "session-1",
-  };
-  const childResult = {
-    id: "child-result",
-    parentId: "turn",
-    type: "custom",
-    customType: "pi-herdsman-agent-result",
-    details: { ...ask },
-    content: [{ type: "text", text: "a1b2c3d4e5f6" }],
-  };
-  const replyCall = {
-    id: "reply-call-entry",
-    parentId: "turn",
-    type: "message",
-    message: {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "reply-id",
-          name: "agent",
-          arguments: {
-            action: "reply",
-            agent: "child",
-            message: "a1b2c3d4e5f6",
-          },
-        },
-      ],
-    },
-  };
-  const replyResult = {
-    id: "reply-result-entry",
-    parentId: "reply-call-entry",
-    type: "message",
-    message: {
-      role: "toolResult",
-      toolCallId: "reply-id",
-      toolName: "agent",
-      isError: false,
-      details: {
-        action: "reply",
-        agent: "child",
-        ask_id: "ask-1",
-        assignment_request_id: "request-1",
-        session_id: "session-1",
-      },
-    },
-  };
-  const toolDetails = replyResult.message.details;
-  assert.equal(ownerReplyToolResultMatches(toolDetails, ask), true);
-  for (const key of [
-    "ask_id",
-    "assignment_request_id",
-    "session_id",
-    "agent",
-  ]) {
-    const wrong = { ...toolDetails, [key]: "other" };
-    assert.equal(
-      ownerReplyToolResultMatches(wrong, ask),
-      false,
-      `mismatched ${key} must fail`,
-    );
-  }
-  const askEntry = { customType: "pi-herdsman-agent-ask" };
-  const userMessage = {
-    type: "message",
-    message: { role: "user", content: "a1b2c3d4e5f6" },
-  };
-  const entries = [askEntry, userMessage, replyCall, replyResult, childResult];
-  const reply = persistedOwnerReplyCalls(entries)[0];
-  assert.equal(reply.status, "successful");
-  assert.deepEqual(
-    assertOwnerReplyOrder(
-      entries,
-      askEntry,
-      userMessage,
-      reply.resultEntry,
-      childResult,
-    ),
-    [0, 1, 3, 4],
-  );
-  assert.throws(
-    () =>
-      assertOwnerReplyOrder(
-        [childResult, askEntry, userMessage, replyCall],
-        askEntry,
-        userMessage,
-        reply.entry,
-        childResult,
-      ),
-    /ask < user message < successful reply < child result/,
-  );
-  assert.equal(ownerReplyResultMatches(childResult, ask, "a1b2c3d4e5f6"), true);
-  assert.equal(
-    ownerReplyResultMatches(
-      { ...childResult, details: { ...ask, runId: "other" } },
-      ask,
-      "a1b2c3d4e5f6",
-    ),
-    false,
-  );
-  assert.equal(
-    ownerReplyResultMatches(
-      childResult,
-      { ...ask, paneId: "other" },
-      "a1b2c3d4e5f6",
-    ),
-    false,
-  );
-  const diagnostic = ownerReplySnapshotDiagnostics(entries, ask);
-  assert.equal(diagnostic.calls[0].matchesOriginalAsk, true);
-  assert.deepEqual(
-    diagnostic.entries.map(({ id, parentId }) => [id, parentId]),
-    [
-      [null, null],
-      [null, null],
-      ["reply-call-entry", "turn"],
-      ["reply-result-entry", "reply-call-entry"],
-      ["child-result", "turn"],
-    ],
-  );
-  assert.doesNotMatch(JSON.stringify(diagnostic), /a1b2c3d4e5f6/);
-});
-
-test("Chief tree probe is opt-in, last in root extension order, and validates restored Lead tools", () => {
+test("Chief tree probe is opt-in, last in root extension order, and validates three tool snapshots", () => {
   const config = {
     candidateExtension: "/candidate/dist/index.js",
     herdrStateExtension: "/isolated/herdr-agent-state.ts",
@@ -639,81 +349,24 @@ test("Chief tree probe is opt-in, last in root extension order, and validates re
     "--thinking",
     config.thinking,
   ]);
-  const ownerArgs = candidateArgs({
-    ...config,
-    ownerReplyProbeExtension: "/isolated/smoke-owner-reply.mjs",
-  });
-  assert.deepEqual(ownerArgs.slice(ownerArgs.indexOf("--extension")), [
-    "--extension",
-    config.candidateExtension,
-    "--extension",
-    config.herdrStateExtension,
-    "--extension",
-    "/isolated/smoke-owner-reply.mjs",
-    "--model",
-    config.model,
-    "--thinking",
-    config.thinking,
-  ]);
   const resultPath = "/tmp/pi-herdsman-smoke/chief-tree-tools.json";
   const source = chiefTreeProbeSource(resultPath);
+  assert.match(source, /getActiveTools/);
   assert.match(source, /session_tree/);
-  assert.match(source, /PI_HERDSMAN_SMOKE_TOOLS/);
-  assert.match(source, /getActiveTools\(\)/);
-  assert.ok(source.includes(JSON.stringify(resultPath)));
-  assert.match(source, /writeFile/);
-  assert.doesNotMatch(source, /stdout|console\.log/);
-
-  const parsed = parseChiefTreeProbeResult(
-    JSON.stringify({
-      marker: "PI_HERDSMAN_SMOKE_TOOLS",
-      eventCount: 1,
-      tools: ["agent", "chief", "peer"],
-    }),
+  assert.match(source, /smoke-tools/);
+  const snapshots = parseToolSnapshots(
+    [
+      '{"label":"lead","tools":["chief","agent"]}',
+      '{"label":"chief","tools":["staff"]}',
+      '{"label":"tree","tools":["staff"]}',
+    ].join("\n"),
   );
-  const tools = parsed.tools;
-  assert.deepEqual(tools, ["agent", "chief", "peer"]);
-  assertOrdinaryLeadTools(tools);
-  assert.match(
-    parseChiefTreeProbeResult("PI_HERDSMAN_SMOKE_TOOLS nope").error,
-    /JSON is malformed/,
-  );
-  assert.match(
-    parseChiefTreeProbeResult(
-      JSON.stringify({
-        marker: "PI_HERDSMAN_SMOKE_TOOLS",
-        eventCount: 2,
-        tools: ["staff"],
-      }),
-    ).error,
-    /expected one/,
-  );
-  assert.throws(
-    () => assertOrdinaryLeadTools(["agent", "chief", "peer", "staff"]),
-    /Chief-only staff/,
-  );
-});
-
-test("Chief tree Lead-restoration failure reports the exact probe and observed tool classification", () => {
-  const record = {
-    marker: "PI_HERDSMAN_SMOKE_TOOLS",
-    eventCount: 1,
-    tools: ["read", "bash", "edit", "write", "staff"],
-  };
-  let failure;
-  try {
-    assertOrdinaryLeadTools(record.tools);
-  } catch (error) {
-    failure = chiefTreeRestoreFailure(record.tools, record, error);
-  }
-  assert.match(failure, /restored Lead is missing agent/);
-  assert.ok(failure.includes(`marker record=${JSON.stringify(record)}`));
-  assert.ok(
-    failure.includes(
-      `observed post-session_tree=${JSON.stringify({
-        leadToolsMissing: ["agent", "chief", "peer"],
-        staff: "present",
-      })}`,
+  assert.deepEqual(snapshots.get("lead"), ["agent", "chief"]);
+  assert.notDeepEqual(snapshots.get("chief"), snapshots.get("lead"));
+  assert.deepEqual(snapshots.get("tree"), snapshots.get("chief"));
+  assert.throws(() =>
+    parseToolSnapshots(
+      '{"label":"lead","tools":[]}\n{"label":"lead","tools":[]}',
     ),
   );
 });
@@ -798,6 +451,20 @@ test("continuation accepts a prefixed marker only in the stopped response descen
 });
 
 test("core counts distinct non-root pane/PID processes with both extension paths, without role labels", async () => {
+  assert.equal(
+    distinctPaneCount([
+      { paneId: "same", pid: 1 },
+      { paneId: "same", pid: 2 },
+    ]),
+    1,
+  );
+  assert.equal(
+    distinctPaneCount([
+      { paneId: "child", pid: 1 },
+      { paneId: "scout", pid: 2 },
+    ]),
+    2,
+  );
   const panes = listedPanes({
     result: {
       panes: [
