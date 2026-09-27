@@ -301,14 +301,16 @@ const AGENT_HANDOFF_GUIDANCE =
   "with a new bounded assignment. Each live Agent generation exists for one " +
   "assignment; after its terminal result is delivered, Herdsman cleans up that " +
   "generation. Agent labels identify the current live generation; exact Pi " +
-  "sessions identify historical context and continuation. For either handoff, " +
-  "`task`/`files` carry assignment evidence; do not assume the caller's " +
-  "conversation or attachments are inherited. `files` carries relevant " +
-  "assignment evidence, not runtime capability. Complete strict UTF-8 text may " +
-  "be embedded; other files remain canonical local references and are not " +
-  "copied or snapshotted. Preserve exact supplied result refs when forwarding " +
-  "them and omit unrelated evidence. Do not attach or mention agent instruction " +
-  "files such as AGENTS.md, CLAUDE.md, GEMINI.md, or equivalents merely because " +
+  "sessions identify historical context and continuation. For new or updated " +
+  "assignments, `task`/`message` and `files` carry assignment evidence. Pass " +
+  "every user-supplied or already-available artifact relevant to the target's " +
+  "work through `files`; do not assume the caller's conversation or attachments " +
+  "are inherited. `files` carries relevant assignment evidence, not runtime " +
+  "capability. Complete strict UTF-8 text may be embedded; other files remain " +
+  "canonical local references and are not copied or snapshotted. Preserve exact " +
+  "supplied result refs when forwarding them and omit unrelated evidence. " +
+  "Do not attach or mention agent instruction files such as AGENTS.md, " +
+  "CLAUDE.md, GEMINI.md, or equivalents merely because " +
   "they exist. Rely on normal project or runtime discovery when it supplies " +
   "those instructions. Attach such a file only when the task itself requires " +
   "inspecting, modifying, comparing, or transmitting it, the user explicitly " +

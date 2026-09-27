@@ -523,6 +523,18 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     lead.tools.find((tool) => tool.name === "agent_list")?.promptGuidelines
       ?.length,
   );
+  const leadGuidance =
+    lead.tools
+      .find((tool) => tool.name === "agent_list")
+      ?.promptGuidelines?.join(" ") ?? "";
+  assert.match(
+    leadGuidance,
+    /Pass every user-supplied or already-available artifact relevant to the target's work through `files`/,
+  );
+  assert.match(
+    leadGuidance,
+    /do not assume the caller's conversation or attachments are inherited/,
+  );
   assert.deepEqual(
     lead.messageRenderers.map(({ customType }) => customType).sort(),
     [
@@ -3647,6 +3659,10 @@ test("delegating agents receive only their allowed definition roster", async () 
     1,
   );
   const sharedGuidance = agentListTool.promptGuidelines?.join(" ") ?? "";
+  assert.match(
+    sharedGuidance,
+    /Pass every user-supplied or already-available artifact relevant to the target's work through `files`/,
+  );
   for (const toolName of [
     "agent_list",
     "agent_delegate",
