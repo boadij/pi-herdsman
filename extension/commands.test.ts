@@ -4790,7 +4790,10 @@ test("fresh assignment refreshes the widget after validation", async () => {
             id: AGENT_ID,
             result: {
               tab: { tab_id: "startup-tab" },
-              root_pane: { pane_id: "startup-pane" },
+              root_pane: {
+                pane_id: "startup-pane",
+                terminal_id: "startup-terminal",
+              },
             },
           }),
           stderr: "",
@@ -4807,6 +4810,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
                   pane_id: "startup-pane",
                   tab_id: "startup-tab",
                   workspace_id: WORKSPACE,
+                  terminal_id: "startup-terminal",
                   cwd: requestedCwd,
                   foreground_cwd: requestedCwd,
                   agent_status: "unknown",
@@ -4843,7 +4847,12 @@ test("fresh assignment refreshes the widget after validation", async () => {
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { pane: { pane_id: "startup-pane" } },
+            result: {
+              pane: {
+                pane_id: "startup-pane",
+                terminal_id: "startup-terminal",
+              },
+            },
           }),
           stderr: "",
           code: 0,
@@ -4916,6 +4925,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
                 pane_id: "startup-pane",
                 tab_id: "startup-tab",
                 workspace_id: WORKSPACE,
+                terminal_id: "startup-terminal",
                 cwd: requestedCwd,
               },
             },

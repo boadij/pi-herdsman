@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/boadij/pi-herdsman/compare/v0.17.0...v0.17.1) (2026-09-27)
+
+
+### Fixes
+
+* tolerate transient fresh-pane startup ([#169](https://github.com/boadij/pi-herdsman/issues/169)) ([612d0de](https://github.com/boadij/pi-herdsman/commit/612d0de9bc720a151bfa84b1b2dc5e2cf4a3cef4))
+
 ## [0.17.0](https://github.com/boadij/pi-herdsman/compare/v0.16.0...v0.17.0) (2026-09-27)
 
 

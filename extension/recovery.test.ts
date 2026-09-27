@@ -542,7 +542,10 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
                 label: "agents",
                 workspace_id: WORKSPACE,
               },
-              root_pane: { pane_id: "pane-start" },
+              root_pane: {
+                pane_id: "pane-start",
+                terminal_id: "terminal-start",
+              },
             },
           }),
           stderr: "",
@@ -568,6 +571,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
                       pane_id: "pane-start",
                       tab_id: "registered-tab",
                       workspace_id: WORKSPACE,
+                      terminal_id: "terminal-start",
                       cwd: "/tmp",
                       foreground_cwd: "/tmp",
                       agent_status: "unknown",
@@ -589,6 +593,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
                 pane_id: "pane-start",
                 tab_id: "registered-tab",
                 workspace_id: WORKSPACE,
+                terminal_id: "terminal-start",
                 cwd: "/tmp",
                 ...(stopped
                   ? {}
@@ -990,6 +995,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
                   pane_id: "detail-pane",
                   tab_id: "registered-tab",
                   workspace_id: WORKSPACE,
+                  terminal_id: "detail-terminal",
                   cwd: "/tmp",
                   foreground_cwd: "/tmp",
                   agent_status: splitCreated ? "unknown" : "idle",
@@ -1015,7 +1021,10 @@ test("assignment rollback retains primary failure and actionable cleanup details
             id: AGENT_ID,
             result: {
               tab: { tab_id: "registered-tab" },
-              root_pane: { pane_id: "detail-pane" },
+              root_pane: {
+                pane_id: "detail-pane",
+                terminal_id: "detail-terminal",
+              },
             },
           }),
           stderr: "",
@@ -1054,7 +1063,9 @@ test("assignment rollback retains primary failure and actionable cleanup details
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { pane: { pane_id: "detail-pane" } },
+            result: {
+              pane: { pane_id: "detail-pane", terminal_id: "detail-terminal" },
+            },
           }),
           stderr: "",
           code: 0,
@@ -1069,6 +1080,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
                 pane_id: "detail-pane",
                 tab_id: "registered-tab",
                 workspace_id: WORKSPACE,
+                terminal_id: "detail-terminal",
                 cwd: "/tmp",
                 agent_session: {
                   agent: "pi",
