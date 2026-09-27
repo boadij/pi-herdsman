@@ -234,11 +234,13 @@ mock.module("@earendil-works/pi-coding-agent", {
       return [];
     },
     SessionManager: {
-      listAll: async () => [...nativeSessions.values()],
       open: (path: string) => {
         if (sessionOpenError !== undefined) throw sessionOpenError;
         const session = [...nativeSessions.values()].find(
-          (item) => item.path === path,
+          (item) =>
+            item.path === path ||
+            (realFs.existsSync(item.path) &&
+              realFs.realpathSync(item.path) === path),
         );
         return {
           getSessionId: () => session?.id ?? DEFAULT_PI_SESSION_ID,
@@ -478,7 +480,6 @@ export const registerExtension = extension.default;
 export const {
   sessionAgentIdentity,
   sessionContextRetired,
-  resolveManagedSession,
   resolveAssignmentSession,
 } = extension;
 export const { herdrAgentAlias: runScopedHerdrAlias } =

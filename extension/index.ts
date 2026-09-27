@@ -1298,11 +1298,21 @@ function ensureAgentIdentity(
     label,
   });
 }
-type ManagedSession = {
+type ResolvedAssignmentSession = {
   path: string;
   id: string;
+  definition: string;
+  label: string;
+  cwd: string;
 };
-class AssignmentSessionResolutionError extends Error {}
+type AssignmentSessionSelector =
+  { kind: "id"; value: string } | { kind: "path"; value: string };
+type OwnedAssignmentResult = {
+  id: string;
+  path: string;
+  definition: string;
+  label: string;
+};
 
 function canonicalSessionPath(path: string): string {
   try {
@@ -1339,97 +1349,39 @@ function samePersistedSessionPath(
   }
 }
 
-export async function resolveManagedSession(
+function assignmentSessionSelector(
   ctx: ExtensionContext,
   raw: string,
-): Promise<ManagedSession> {
+): AssignmentSessionSelector {
   const value = raw.trim();
   if (!value)
-    throw new AssignmentSessionResolutionError(
+    fail(
+      "invalid_request",
       "assignment requires an exact session path or full UUID session ID",
+      "continue",
     );
-  let path: string;
-  let listed = false;
-  if (
+  const pathLike =
     value.includes("/") ||
     value.includes("\\") ||
     value.endsWith(".jsonl") ||
-    value.startsWith("~")
-  ) {
-    path =
-      value === "~" || value.startsWith("~/") || value.startsWith("~\\")
+    value.startsWith("~");
+  if (!pathLike) {
+    if (!validId(value))
+      fail(
+        "invalid_request",
+        "assignment session must be an exact .jsonl path or full UUID session ID; prefixes are not allowed",
+        "continue",
+      );
+    return { kind: "id", value };
+  }
+  const path =
+    value === "~"
+      ? homedir()
+      : value.startsWith("~/") || value.startsWith("~\\")
         ? resolve(homedir(), value.slice(2))
         : resolve(ctx.cwd, value);
-    listed = (await SessionManager.listAll()).some(
-      (item) => resolve(item.path) === path,
-    );
-  } else {
-    if (
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-        value,
-      )
-    )
-      throw new AssignmentSessionResolutionError(
-        "assignment session must be an exact .jsonl path or full UUID session ID; prefixes are not allowed",
-      );
-    const matches = (await SessionManager.listAll()).filter(
-      (item) => item.id === value,
-    );
-    if (matches.length > 1)
-      throw new AssignmentSessionResolutionError(
-        `assignment session ID ${value} is ambiguous`,
-      );
-    if (!matches.length)
-      throw new AssignmentSessionResolutionError(
-        `no assignment session found for exact session ID ${value}`,
-      );
-    path = matches[0].path;
-    listed = true;
-  }
-  const manager = SessionManager.open(path);
-  const id = manager.getSessionId();
-  if (!id)
-    throw new AssignmentSessionResolutionError(
-      `no assignment session found for exact session path ${path}`,
-    );
-  if (!listed && !statSync(path, { throwIfNoEntry: false }))
-    throw new AssignmentSessionResolutionError(
-      `no assignment session found for exact session path ${path}`,
-    );
-  return { path: manager.getSessionFile() ?? path, id };
-}
-async function resolveAssignmentSessionOrFail<T>(
-  resolver: () => Promise<T>,
-): Promise<T> {
   try {
-    return await resolver();
-  } catch (error) {
-    if (!(error instanceof AssignmentSessionResolutionError)) throw error;
-    fail("invalid_request", error.message, "continue");
-  }
-}
-export async function resolveAssignmentSession(
-  ctx: ExtensionContext,
-  raw: string,
-): Promise<{
-  path: string;
-  id: string;
-  definition: string;
-  label: string;
-  cwd: string;
-}> {
-  const session = await resolveManagedSession(ctx, raw);
-  const manager = SessionManager.open(session.path);
-  const header = manager.getHeader();
-  if (typeof header?.cwd !== "string" || !header.cwd.trim())
-    fail(
-      "invalid_request",
-      `Saved assignment session has no non-empty cwd in its session header: ${session.path}`,
-      "continue",
-    );
-  let identity: AgentSessionIdentity;
-  try {
-    identity = readAgentIdentity(manager);
+    return { kind: "path", value: canonicalSessionPath(path) };
   } catch (error) {
     fail(
       "invalid_request",
@@ -1437,120 +1389,128 @@ export async function resolveAssignmentSession(
       "continue",
     );
   }
-  if (readConfig().contextRetirement && retiredManagedSession(manager))
-    throw new AssignmentSessionResolutionError(
-      `Managed agent session ${manager.getSessionId()} is retired after context pressure. ` +
-        "Delegate a fresh agent and pass the previous result/handoff and relevant files.",
-    );
-  const cwd = manager.getCwd();
+}
+function ownedAssignmentResult(
+  entry: unknown,
+  ownerSessionId: string,
+): OwnedAssignmentResult | undefined {
+  const data = agentResultDetails(entry);
+  if (
+    !data ||
+    data.ownerSessionId !== ownerSessionId ||
+    typeof data.piSessionId !== "string" ||
+    !validId(data.piSessionId) ||
+    typeof data.piSessionFile !== "string" ||
+    !data.piSessionFile.trim() ||
+    typeof data.runId !== "string" ||
+    !data.runId.trim() ||
+    typeof data.requestId !== "string" ||
+    !data.requestId.trim() ||
+    typeof data.agentLabel !== "string" ||
+    !data.agentLabel.trim() ||
+    typeof data.agentDefinition !== "string" ||
+    !data.agentDefinition.trim() ||
+    (data.status !== "completed" && data.status !== "failed")
+  )
+    return undefined;
   return {
-    path: session.path,
-    id: session.id,
-    definition: identity!.definition,
-    label: identity!.label,
-    cwd,
+    id: data.piSessionId,
+    path: data.piSessionFile,
+    definition: data.agentDefinition,
+    label: data.agentLabel,
   };
 }
 
-async function requireOwnedAssignmentSource(
+export function resolveAssignmentSession(
   ctx: ExtensionContext,
-  session: ManagedSession,
-): Promise<void> {
-  const source = SessionManager.open(session.path);
-  const entries = source.getEntries();
-  const deny = (): never =>
+  raw: string,
+): ResolvedAssignmentSession {
+  const selector = assignmentSessionSelector(ctx, raw);
+  const callerId = ctx.sessionManager.getSessionId();
+  const visited = new Set<string>([callerId]);
+  const open = (child: OwnedAssignmentResult, path: string) => {
+    const manager = SessionManager.open(path);
+    if (manager.getSessionId() !== child.id) return undefined;
+    let identity: AgentSessionIdentity;
+    try {
+      identity = readAgentIdentity(manager);
+    } catch {
+      return undefined;
+    }
+    if (
+      identity.definition !== child.definition ||
+      identity.label !== child.label
+    )
+      return undefined;
+    return manager;
+  };
+  const walk = (
+    ownerId: string,
+    entries: readonly unknown[],
+  ): ResolvedAssignmentSession | undefined => {
+    const children = entries.flatMap((entry) => {
+      const child = ownedAssignmentResult(entry, ownerId);
+      if (!child) return [];
+      try {
+        return [{ child, path: canonicalSessionPath(child.path) }];
+      } catch {
+        return [];
+      }
+    });
+    for (const { child, path } of children) {
+      if (
+        selector.kind === "id"
+          ? child.id !== selector.value
+          : path !== selector.value
+      )
+        continue;
+      const manager = open(child, path);
+      if (!manager) continue;
+      const header = manager.getHeader();
+      if (typeof header?.cwd !== "string" || !header.cwd.trim())
+        fail(
+          "invalid_request",
+          `Saved assignment session has no non-empty cwd in its session header: ${path}`,
+          "continue",
+        );
+      if (readConfig().contextRetirement && retiredManagedSession(manager))
+        fail(
+          "invalid_request",
+          `Managed agent session ${child.id} is retired after context pressure. ` +
+            "Delegate a fresh agent and pass the previous result/handoff and relevant files.",
+          "continue",
+        );
+      return {
+        path,
+        id: child.id,
+        definition: child.definition,
+        label: child.label,
+        cwd: manager.getCwd(),
+      };
+    }
+    for (const { child, path } of children) {
+      if (visited.has(child.id)) continue;
+      let manager;
+      try {
+        manager = open(child, path);
+      } catch {
+        continue;
+      }
+      if (!manager) continue;
+      visited.add(child.id);
+      const found = walk(child.id, manager.getEntries());
+      if (found) return found;
+    }
+    return undefined;
+  };
+  const resolved = walk(callerId, ctx.sessionManager.getEntries());
+  if (!resolved)
     fail(
       "invalid_request",
       "Assignment source is outside the caller's proven session ownership tree",
       "continue",
     );
-  let identity: AgentSessionIdentity | undefined;
-  try {
-    identity = sessionAgentIdentity(entries, session.id);
-  } catch {
-    deny();
-  }
-  if (!identity) deny();
-  const callerId = ctx.sessionManager.getSessionId();
-  const listed = await SessionManager.listAll();
-  const sourceMatches = listed.filter((item) => item.id === session.id);
-  if (
-    sourceMatches.length > 1 ||
-    (sourceMatches.length === 1 &&
-      !samePersistedSessionPath(session.path, sourceMatches[0].path) &&
-      !samePersistedSessionPath(sourceMatches[0].path, session.path))
-  )
-    deny();
-  // ponytail: scan durable sessions per assignment; index result edges if this becomes hot.
-  const visiting = new Set<string>();
-  const visited = new Map<string, boolean>();
-  const candidates = [
-    ...listed,
-    ...(!listed.some((item) => item.id === callerId)
-      ? [{ id: callerId, path: ctx.sessionManager.getSessionFile() ?? "" }]
-      : []),
-  ];
-  const reachesCaller = (childId: string): boolean => {
-    if (childId === callerId) return true;
-    if (visiting.has(childId)) deny();
-    if (visited.has(childId)) return visited.get(childId)!;
-    visiting.add(childId);
-    const owners = new Set<string>();
-    for (const candidate of candidates) {
-      const ownerEntries =
-        candidate.id === callerId
-          ? ctx.sessionManager.getEntries()
-          : SessionManager.open(candidate.path).getEntries();
-      for (const entry of ownerEntries) {
-        if (
-          !entry ||
-          typeof entry !== "object" ||
-          entry.type !== "custom_message"
-        )
-          continue;
-        const data = agentResultDetails(entry);
-        if (
-          !data ||
-          data.piSessionId !== childId ||
-          data.ownerSessionId !== candidate.id
-        )
-          continue;
-        if (
-          typeof data.runId !== "string" ||
-          !data.runId.trim() ||
-          typeof data.requestId !== "string" ||
-          !data.requestId.trim() ||
-          typeof data.agentLabel !== "string" ||
-          !data.agentLabel.trim() ||
-          typeof data.agentDefinition !== "string" ||
-          !data.agentDefinition.trim() ||
-          (data.status !== "completed" && data.status !== "failed")
-        )
-          deny();
-        owners.add(candidate.id);
-      }
-    }
-    let found = false;
-    for (const ownerId of owners) {
-      if (ownerId !== callerId) {
-        const matches = listed.filter((item) => item.id === ownerId);
-        if (matches.length !== 1) deny();
-        const owner = SessionManager.open(matches[0].path);
-        try {
-          if (!sessionAgentIdentity(owner.getEntries(), ownerId)) deny();
-        } catch {
-          deny();
-        }
-      }
-      // Evaluate every branch even after finding a path: malformed or cyclic
-      // historical ownership must not be hidden by another valid edge.
-      if (reachesCaller(ownerId)) found = true;
-    }
-    visiting.delete(childId);
-    visited.set(childId, found);
-    return found;
-  };
-  if (!reachesCaller(session.id)) deny();
+  return resolved;
 }
 
 const HERDR_VERSION_PATTERN =
@@ -5545,9 +5505,7 @@ async function actionUnsafe(
       );
     const resumed =
       p.action === "continue"
-        ? await resolveAssignmentSessionOrFail(() =>
-            resolveAssignmentSession(ctx, p.session),
-          )
+        ? resolveAssignmentSession(ctx, p.session)
         : undefined;
     await herdrVersion(pi, ctx, signal);
     const agentDefinition = resumed ? resumed.definition : p.definition;
@@ -5573,7 +5531,6 @@ async function actionUnsafe(
         `Agent definition ${agentDefinition} is not allowed for this delegating agent`,
         p.action,
       );
-    if (resumed) await requireOwnedAssignmentSource(ctx, resumed);
     if (definition.projectSource && !sameCwd(agentCwd, ctx.cwd))
       fail(
         "invalid_request",
@@ -5592,20 +5549,7 @@ async function actionUnsafe(
         "Cannot continue the controller's currently active Pi session.",
         p.action,
       );
-    const resumedSessionPath = resumed
-      ? (() => {
-          try {
-            return canonicalSessionPath(resumed.path);
-          } catch (error) {
-            fail(
-              "invalid_request",
-              error instanceof Error ? error.message : String(error),
-              p.action,
-            );
-          }
-        })()
-      : undefined;
-    const sessionArgs = resumed ? ["--session", resumedSessionPath!] : [];
+    const sessionArgs = resumed ? ["--session", resumed.path] : [];
     let releaseSessionActivation: (() => void) | undefined;
     const live = await listedAgents(pi, ctx, undefined, signal);
     if (!agentDefinitionEnabled(definition))
@@ -5632,19 +5576,14 @@ async function actionUnsafe(
         .filter((agent): agent is string => typeof agent === "string"),
     );
     if (resumed) {
-      releaseSessionActivation = claimSessionActivationLock(
-        resumedSessionPath!,
-      );
+      releaseSessionActivation = claimSessionActivationLock(resumed.path);
       try {
         const snapshot = await managedAgentSnapshots(pi, ctx, signal);
         const states = listAgentStates().filter(
           ({ state }) =>
             state.piSessionId === resumed.id ||
             (state.piSessionFile !== undefined &&
-              samePersistedSessionPath(
-                state.piSessionFile,
-                resumedSessionPath,
-              )),
+              samePersistedSessionPath(state.piSessionFile, resumed.path)),
         );
         const representations = new Set(
           states.map(
@@ -5659,7 +5598,7 @@ async function actionUnsafe(
           if (
             herdrSessionsMatch(
               agent,
-              expectedSession(resumed.id, resumedSessionPath),
+              expectedSession(resumed.id, resumed.path),
             ) &&
             !statePanes.has(
               `${agent.workspace_id ?? ""}\0${agent.pane_id ?? ""}`,

@@ -52,7 +52,6 @@ import support, {
   removeResult,
   resetAgentMailbox,
   resolveAssignmentSession,
-  resolveManagedSession,
   leadExec,
   setLeadEnvironment,
   setAgentEnvironment,
@@ -68,18 +67,23 @@ import support, {
 const { updateConfig } = await import("./config.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
   pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
-const ownershipResult = (child: string, owner = LEAD_SESSION_ID) => ({
+const ownershipResult = (
+  child: string,
+  owner = LEAD_SESSION_ID,
+  options: { path?: string; label?: string; definition?: string } = {},
+) => ({
   type: "custom_message",
   customType: "pi-herdsman-agent-result",
   content: "",
   display: true,
   details: {
     piSessionId: child,
+    ...(options.path ? { piSessionFile: options.path } : {}),
     ownerSessionId: owner,
     runId: randomUUID(),
     requestId: randomUUID(),
-    agentLabel: "agent",
-    agentDefinition: "agent",
+    agentLabel: options.label ?? "agent",
+    agentDefinition: options.definition ?? "agent",
     status: "completed",
   },
 });
@@ -997,6 +1001,15 @@ test("parent controls only direct children and enforces session allowlists", asy
         label: process.env.PI_HERDSMAN_LABEL ?? "parent",
       },
     },
+    ownershipResult(
+      "33333333-3333-4333-8333-333333333333",
+      "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      {
+        path: join(testTmpRoot, "ownership-resume.jsonl"),
+        definition: "other",
+        label: "other",
+      },
+    ),
   ];
   const pi = fakePi({
     exec: agentControllerExecutor(parent, [child, workingChild, sibling]),
@@ -1323,9 +1336,10 @@ test("list projects an unreadable current mailbox as non-actionable unknown", as
 });
 
 test("assignment session resolution accepts exact paths and UUIDs only", async () => {
+  const name = `native-resume-${randomUUID()}.jsonl`;
   const session = {
     id: "018f2f2e-7b13-7abc-8def-0123456789ab",
-    path: join(homedir(), "native-resume.jsonl"),
+    path: join(homedir(), name),
     cwd: join(homedir(), "saved-agent"),
     entries: [
       {
@@ -1341,7 +1355,14 @@ test("assignment session resolution accepts exact paths and UUIDs only", async (
   };
   nativeSessions.clear();
   nativeSessions.set(session.id, session);
-  const context = fakeContext() as any;
+  realFs.writeFileSync(session.path, "{}", "utf8");
+  const context = fakeContext([
+    ownershipResult(session.id, LEAD_SESSION_ID, {
+      path: session.path,
+      definition: "reviewer",
+      label: "review-fix",
+    }),
+  ]) as any;
   context.cwd = homedir();
   const byPath = await resolveAssignmentSession(context, session.path);
   assert.deepEqual(byPath, {
@@ -1353,36 +1374,92 @@ test("assignment session resolution accepts exact paths and UUIDs only", async (
   });
   const byId = await resolveAssignmentSession(context, session.id);
   assert.deepEqual(byId, byPath);
-  const byTilde = await resolveAssignmentSession(
-    context,
-    "~/native-resume.jsonl",
-  );
+  const byTilde = await resolveAssignmentSession(context, `~/${name}`);
   assert.deepEqual(byTilde, byPath);
-  await assert.rejects(
-    resolveAssignmentSession(context, "11111111"),
+  assert.deepEqual(resolveAssignmentSession(context, name), byPath);
+  assert.throws(
+    () => resolveAssignmentSession(context, "11111111"),
     /prefixes are not allowed/,
   );
   nativeSessions.set("duplicate", {
     ...session,
-    path: "/tmp/native-resume-2.jsonl",
+    path: join(testTmpRoot, "native-resume-2.jsonl"),
   });
-  await assert.rejects(
-    resolveAssignmentSession(context, session.id),
-    /ambiguous/,
+  realFs.writeFileSync(
+    join(testTmpRoot, "native-resume-2.jsonl"),
+    "{}",
+    "utf8",
   );
+  assert.deepEqual(resolveAssignmentSession(context, session.id), byPath);
   const missing = {
     id: "018f2f2e-7b13-7abc-8def-0123456789ab",
-    path: join(homedir(), "missing-identity.jsonl"),
+    path: join(testTmpRoot, `missing-identity-${randomUUID()}.jsonl`),
     cwd: homedir(),
     entries: [],
   };
   nativeSessions.clear();
   nativeSessions.set(missing.id, missing);
-  await assert.rejects(
-    resolveAssignmentSession(context, missing.path),
-    /missing pi-herdsman-agent-definition entry/,
+  realFs.writeFileSync(missing.path, "{}", "utf8");
+  const missingContext = fakeContext([
+    ownershipResult(missing.id, LEAD_SESSION_ID, {
+      path: missing.path,
+      definition: "reviewer",
+      label: "review-fix",
+    }),
+  ]);
+  assert.throws(
+    () => resolveAssignmentSession(missingContext, missing.path),
+    /ownership tree/,
   );
   nativeSessions.clear();
+  realFs.rmSync(missing.path, { force: true });
+  realFs.rmSync(session.path, { force: true });
+});
+
+test("owned continuation requires a matching persisted child edge", () => {
+  const id = randomUUID();
+  const path = join(testTmpRoot, `owned-validation-${id}.jsonl`);
+  const identity = {
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { sessionId: id, definition: "agent", label: "agent" },
+  };
+  const session = { id, path, cwd: testTmpRoot, entries: [identity] };
+  nativeSessions.clear();
+  nativeSessions.set(id, session);
+  const proof = ownershipResult(id, LEAD_SESSION_ID, { path });
+  const context = (entry: unknown) => fakeContext([entry]);
+  try {
+    realFs.writeFileSync(path, "{}", "utf8");
+    assert.equal(resolveAssignmentSession(context(proof), id).id, id);
+    for (const details of [
+      { ownerSessionId: randomUUID() },
+      { piSessionId: randomUUID() },
+      { piSessionFile: undefined },
+      { piSessionFile: join(testTmpRoot, "absent.jsonl") },
+      { agentDefinition: "other" },
+      { agentLabel: "other" },
+      { status: "unknown" },
+      { requestId: "" },
+    ]) {
+      assert.throws(
+        () =>
+          resolveAssignmentSession(
+            context({ ...proof, details: { ...proof.details, ...details } }),
+            id,
+          ),
+        /ownership tree/,
+      );
+    }
+    session.entries = [];
+    assert.throws(
+      () => resolveAssignmentSession(context(proof), id),
+      /ownership tree/,
+    );
+  } finally {
+    nativeSessions.clear();
+    realFs.rmSync(path, { force: true });
+  }
 });
 
 test("context retirement rejects managed session continuation only when enabled", async () => {
@@ -1406,26 +1483,31 @@ test("context retirement rejects managed session continuation only when enabled"
   };
   nativeSessions.clear();
   nativeSessions.set(sessionId, session);
+  realFs.writeFileSync(session.path, "{}", "utf8");
+  const context = fakeContext([
+    ownershipResult(sessionId, LEAD_SESSION_ID, {
+      path: session.path,
+      label: "retired-agent",
+    }),
+  ]);
   try {
     updateConfig("contextRetirement", undefined);
-    await assert.rejects(
-      resolveAssignmentSession(fakeContext(), session.path),
+    assert.throws(
+      () => resolveAssignmentSession(context, session.path),
       /retired after context pressure/,
     );
     updateConfig("contextRetirement", false);
-    assert.deepEqual(
-      await resolveAssignmentSession(fakeContext(), session.path),
-      {
-        path: session.path,
-        id: sessionId,
-        definition: "agent",
-        label: "retired-agent",
-        cwd: resolve("/tmp"),
-      },
-    );
+    assert.deepEqual(resolveAssignmentSession(context, session.path), {
+      path: session.path,
+      id: sessionId,
+      definition: "agent",
+      label: "retired-agent",
+      cwd: resolve("/tmp"),
+    });
   } finally {
     updateConfig("contextRetirement", undefined);
     nativeSessions.clear();
+    realFs.rmSync(session.path, { force: true });
   }
 });
 
@@ -1451,7 +1533,9 @@ test("session continuation inherits the saved label without an override", async 
     nativeSessions.set(source.id, source);
     const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
     const pi = fakePi({ exec: startup.exec });
-    const context = fakeContext([ownershipResult(source.id)]) as any;
+    const context = fakeContext([
+      ownershipResult(source.id, LEAD_SESSION_ID, { path: source.path, label }),
+    ]) as any;
     context.model = { provider: "continue-provider", id: "continue-model" };
     context.thinkingLevel = "high";
     registerExtension!(pi.pi as never);
@@ -1529,7 +1613,13 @@ test("session continuation keeps explicit definition execution overrides", async
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
   const pi = fakePi({ exec: startup.exec });
   registerExtension!(pi.pi as never);
-  const context = fakeContext([ownershipResult(sourceId)]) as any;
+  const context = fakeContext([
+    ownershipResult(sourceId, LEAD_SESSION_ID, {
+      path: sourcePath,
+      label,
+      definition,
+    }),
+  ]) as any;
   context.model = { provider: "controller-provider", id: "controller-model" };
   context.thinkingLevel = "high";
   try {
@@ -1654,7 +1744,12 @@ test("session continuation rejects label overrides and occupied inherited labels
       },
       undefined,
       undefined,
-      fakeContext([ownershipResult(source.id)]),
+      fakeContext([
+        ownershipResult(source.id, LEAD_SESSION_ID, {
+          path: source.path,
+          label,
+        }),
+      ]),
     );
     assert.equal(result.details.error.category, "agent_label_exists");
     assert.equal(
@@ -1694,7 +1789,7 @@ test("public assignment normalizes invalid and unknown session sources", async (
   try {
     for (const [value, diagnostic] of [
       ["11111111", /prefixes are not allowed/],
-      ["11111111-1111-4111-8111-111111111111", /no assignment session found/],
+      ["11111111-1111-4111-8111-111111111111", /ownership tree/],
     ] as const) {
       const result = await agentTool(pi, "continue").execute(
         "id",
@@ -1748,7 +1843,9 @@ test("session assignment rejects the controller's active session", async () => {
       { session: session.path, task: "same session" },
       undefined,
       undefined,
-      fakeContext(),
+      fakeContext([
+        ownershipResult(session.id, LEAD_SESSION_ID, { path: session.path }),
+      ]),
     );
     assert.equal(result.details.error.category, "invalid_request");
     assert.equal(result.details.error.operation, "continue");
@@ -1772,9 +1869,12 @@ test("public assignment preserves session source open failures", async () => {
     entries: [],
   };
   nativeSessions.set(session.id, session);
+  realFs.writeFileSync(session.path, "{}", "utf8");
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const context = fakeContext();
+  const context = fakeContext([
+    ownershipResult(session.id, LEAD_SESSION_ID, { path: session.path }),
+  ]);
   const openOperationError = new OperationError({
     category: "internal_failure",
     message: "session dependency failed",
@@ -1814,6 +1914,7 @@ test("public assignment preserves session source open failures", async () => {
   } finally {
     support.sessionOpenError = undefined;
     nativeSessions.clear();
+    realFs.rmSync(session.path, { force: true });
     pi.events.get("session_shutdown")?.[0]();
   }
 });
@@ -1826,16 +1927,19 @@ test("assignment session rejects unusable saved cwd headers without mutation", a
   ] as const) {
     const id = randomUUID();
     const label = `assignment-session-cwd-${name}-${id}`;
-    const path = `/tmp/${id}.jsonl`;
+    const path = join(testTmpRoot, `${id}.jsonl`);
     const mailbox = agentMailboxPath(WORKSPACE, label);
     assert.equal(realFs.existsSync(mailbox), false);
     nativeSessions.clear();
+    realFs.writeFileSync(path, "{}", "utf8");
     nativeSessions.set(id, { id, path, cwd });
     const pi = fakePi({
       exec: () => ({ stdout: "0.8.0", stderr: "", code: 0 }),
     });
     registerExtension!(pi.pi as never);
-    const context = fakeContext();
+    const context = fakeContext([
+      ownershipResult(id, LEAD_SESSION_ID, { path }),
+    ]);
     const result = await agentTool(pi, "continue").execute(
       "id",
       {
@@ -1853,34 +1957,9 @@ test("assignment session rejects unusable saved cwd headers without mutation", a
     assert.equal(realFs.existsSync(mailbox), false);
     assert.deepEqual(pi.entries, []);
     pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(path, { force: true });
   }
   nativeSessions.clear();
-  await (async () => {
-    setLeadEnvironment();
-    const source = {
-      id: "018f2f2e-7b13-7abc-8def-0123456789ac",
-      path: join(homedir(), "fork-lead.jsonl"),
-      entries: [],
-    };
-    nativeSessions.clear();
-    nativeSessions.set(source.id, source);
-    try {
-      const expected = {
-        path: source.path,
-        id: source.id,
-      };
-      assert.deepEqual(
-        await resolveManagedSession(fakeContext(), source.path),
-        expected,
-      );
-      assert.deepEqual(
-        await resolveManagedSession(fakeContext(), source.id),
-        expected,
-      );
-    } finally {
-      nativeSessions.clear();
-    }
-  })();
 });
 
 test("managed historical sources require durable owner-side ancestry for continue", async () => {
@@ -1888,18 +1967,23 @@ test("managed historical sources require durable owner-side ancestry for continu
   const parentId = randomUUID();
   const sourceId = randomUUID();
   const sourcePath = join(testTmpRoot, `owned-source-${sourceId}.jsonl`);
+  const parentPath = join(testTmpRoot, `owner-${parentId}.jsonl`);
   realFs.writeFileSync(sourcePath, "{}", "utf8");
+  realFs.writeFileSync(parentPath, "{}", "utf8");
   nativeSessions.clear();
   nativeSessions.set(parentId, {
     id: parentId,
-    path: join(testTmpRoot, `owner-${parentId}.jsonl`),
+    path: parentPath,
     entries: [
       {
         type: "custom",
         customType: "pi-herdsman-agent-definition",
         data: { sessionId: parentId, definition: "agent", label: "parent" },
       },
-      ownershipResult(sourceId, parentId),
+      ownershipResult(sourceId, parentId, {
+        path: sourcePath,
+        label: "owned-source",
+      }),
     ],
   });
   const sourceEntries = [
@@ -1908,7 +1992,7 @@ test("managed historical sources require durable owner-side ancestry for continu
       customType: "pi-herdsman-agent-definition",
       data: { sessionId: sourceId, definition: "agent", label: "owned-source" },
     },
-    ownershipResult(parentId, sourceId),
+    ownershipResult(parentId, sourceId, { path: parentPath, label: "parent" }),
   ];
   nativeSessions.set(sourceId, {
     id: sourceId,
@@ -1916,7 +2000,10 @@ test("managed historical sources require durable owner-side ancestry for continu
     cwd: "/tmp",
     entries: sourceEntries,
   });
-  const parentProof = ownershipResult(parentId);
+  const parentProof = ownershipResult(parentId, LEAD_SESSION_ID, {
+    path: parentPath,
+    label: "parent",
+  });
   const pi = fakePi({ exec: () => ({ stdout: "0.8.0", stderr: "", code: 0 }) });
   registerExtension!(pi.pi as never);
   const request = async (selector: string, entries: unknown[]) =>
@@ -1955,7 +2042,15 @@ test("managed historical sources require durable owner-side ancestry for continu
   }
 
   try {
-    for (const proof of [[parentProof], [ownershipResult(sourceId)]]) {
+    for (const proof of [
+      [parentProof],
+      [
+        ownershipResult(sourceId, LEAD_SESSION_ID, {
+          path: sourcePath,
+          label: "owned-source",
+        }),
+      ],
+    ]) {
       if (proof[0] !== parentProof) nativeSessions.delete(parentId);
       {
         const startup = startupExecutor(
@@ -1983,6 +2078,7 @@ test("managed historical sources require durable owner-side ancestry for continu
   } finally {
     nativeSessions.clear();
     realFs.rmSync(sourcePath, { force: true });
+    realFs.rmSync(parentPath, { force: true });
   }
 });
 
@@ -1992,19 +2088,21 @@ test("copied fork result history does not invalidate the original owner edge", a
   const childId = randomUUID();
   const forkId = randomUUID();
   const childPath = join(testTmpRoot, `fork-history-child-${childId}.jsonl`);
+  const parentPath = join(testTmpRoot, `fork-history-parent-${parentId}.jsonl`);
   const parentEntries = [
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
       data: { sessionId: parentId, definition: "agent", label: "parent" },
     },
-    ownershipResult(childId, parentId),
+    ownershipResult(childId, parentId, { path: childPath, label: "child" }),
   ];
   realFs.writeFileSync(childPath, "{}", "utf8");
+  realFs.writeFileSync(parentPath, "{}", "utf8");
   nativeSessions.clear();
   nativeSessions.set(parentId, {
     id: parentId,
-    path: join(testTmpRoot, `fork-history-parent-${parentId}.jsonl`),
+    path: parentPath,
     entries: parentEntries,
   });
   nativeSessions.set(forkId, {
@@ -2033,7 +2131,12 @@ test("copied fork result history does not invalidate the original owner edge", a
       { session: childId, task: "follow up" },
       undefined,
       undefined,
-      fakeContext([ownershipResult(parentId)]),
+      fakeContext([
+        ownershipResult(parentId, LEAD_SESSION_ID, {
+          path: parentPath,
+          label: "parent",
+        }),
+      ]),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
   } finally {
@@ -2042,6 +2145,7 @@ test("copied fork result history does not invalidate the original owner edge", a
     resetAgentMailbox(startup.mailbox);
     nativeSessions.clear();
     realFs.rmSync(childPath, { force: true });
+    realFs.rmSync(parentPath, { force: true });
   }
 });
 
@@ -2051,20 +2155,27 @@ test("historical continuation re-parenting preserves every valid ownership path"
   const childId = DEFAULT_PI_SESSION_ID;
   const outsiderId = randomUUID();
   const childPath = join(testTmpRoot, `reparented-${childId}.jsonl`);
+  const parentPath = join(testTmpRoot, `reparent-owner-${parentId}.jsonl`);
   realFs.writeFileSync(childPath, "{}", "utf8");
+  realFs.writeFileSync(parentPath, "{}", "utf8");
   const parentEntries = [
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
       data: { sessionId: parentId, definition: "agent", label: "parent" },
     },
-    ownershipResult(childId, parentId),
+    ownershipResult(childId, parentId, { path: childPath, label: "child" }),
   ];
-  const leadEntries = [ownershipResult(parentId)];
+  const leadEntries = [
+    ownershipResult(parentId, LEAD_SESSION_ID, {
+      path: parentPath,
+      label: "parent",
+    }),
+  ];
   nativeSessions.clear();
   nativeSessions.set(parentId, {
     id: parentId,
-    path: join(testTmpRoot, `reparent-owner-${parentId}.jsonl`),
+    path: parentPath,
     entries: parentEntries,
   });
   nativeSessions.set(childId, {
@@ -2104,30 +2215,41 @@ test("historical continuation re-parenting preserves every valid ownership path"
   try {
     const first = await request(leadEntries);
     assert.equal(first.details.ok, true, JSON.stringify(first.details));
+    const fromParent = await request(parentEntries, parentId);
+    assert.equal(
+      fromParent.details.ok,
+      true,
+      JSON.stringify(fromParent.details),
+    );
     // The completed continuation delivers a new result for the same Pi ID
     // directly to L, without erasing P's older child result.
-    leadEntries.push(ownershipResult(childId));
+    leadEntries.push(
+      ownershipResult(childId, LEAD_SESSION_ID, {
+        path: childPath,
+        label: "child",
+      }),
+    );
     const repeated = await request(leadEntries);
     assert.equal(repeated.details.ok, true, JSON.stringify(repeated.details));
     const unrelated = await request([], outsiderId);
     assert.equal(unrelated.details.error.category, "invalid_request");
-    const malformed = ownershipResult(childId, parentId);
+    const malformed = ownershipResult(childId, parentId, {
+      path: childPath,
+      label: "child",
+    });
     (malformed.details as any).status = "unknown";
     parentEntries.push(malformed);
-    assert.equal(
-      (await request(leadEntries)).details.error.category,
-      "invalid_request",
-    );
+    assert.equal((await request(leadEntries)).details.ok, true);
     parentEntries.pop();
     const childEntries = nativeSessions.get(childId)!.entries;
-    childEntries.push(ownershipResult(parentId, childId));
-    assert.equal(
-      (await request(leadEntries)).details.error.category,
-      "invalid_request",
+    childEntries.push(
+      ownershipResult(parentId, childId, { path: parentPath, label: "parent" }),
     );
+    assert.equal((await request(leadEntries)).details.ok, true);
   } finally {
     nativeSessions.clear();
     realFs.rmSync(childPath, { force: true });
+    realFs.rmSync(parentPath, { force: true });
   }
 });
 
@@ -2215,7 +2337,12 @@ test("session assignment fails closed on duplicate live representations", async 
       },
       undefined,
       undefined,
-      fakeContext([ownershipResult(session.id)]),
+      fakeContext([
+        ownershipResult(session.id, LEAD_SESSION_ID, {
+          path: session.path,
+          label: "session-conflict-label",
+        }),
+      ]),
     );
     assert.equal(result.details.error.category, "target_ambiguous");
     assert.equal(
