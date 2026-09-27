@@ -423,13 +423,20 @@ export function sameCwd(observed: unknown, expected: string): boolean {
   if (typeof observed !== "string") return false;
   return canonicalCwd(observed) === canonicalCwd(expected);
 }
-function matchesAttemptPane(pane: any, attempt: StartedHerdrAgent): boolean {
+function matchesAttemptTerminal(
+  pane: any,
+  attempt: StartedHerdrAgent,
+): boolean {
   return (
     pane?.pane_id === attempt.paneId &&
     pane.workspace_id === attempt.workspaceId &&
     pane.tab_id === attempt.tabId &&
-    pane.terminal_id === attempt.terminalId &&
-    sameCwd(pane.cwd, attempt.cwd)
+    pane.terminal_id === attempt.terminalId
+  );
+}
+function matchesAttemptPane(pane: any, attempt: StartedHerdrAgent): boolean {
+  return (
+    matchesAttemptTerminal(pane, attempt) && sameCwd(pane.cwd, attempt.cwd)
   );
 }
 function capturedShellProcess(process: PaneProcess) {
@@ -2047,9 +2054,9 @@ export async function rollbackHerdrStart(
     const pane = (
       await runHerdr(pi, ctx, ["pane", "get", started.paneId], { signal })
     ).pane;
-    if (!matchesAttemptPane(pane, started))
+    if (!matchesAttemptTerminal(pane, started))
       error("rollback", `pane ${started.paneId} ownership is unproven`);
-    if (started.launchMayHaveStarted) {
+    if (started.launchMayHaveStarted || !sameCwd(pane.cwd, started.cwd)) {
       const observed = await paneProcess(pi, ctx, started.paneId, signal);
       if (
         !expectedShell ||

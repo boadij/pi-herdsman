@@ -3816,7 +3816,7 @@ test("rollback cleans an exited created pane", async () => {
   else environment.HERDR_WORKSPACE_ID = previousWorkspace;
 });
 
-test("rollback closes an exactly owned exited created tab", async () => {
+test("rollback closes an exactly owned exited created tab despite cwd mismatch", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
   environment.HERDR_WORKSPACE_ID = "workspace-1";
@@ -3826,75 +3826,88 @@ test("rollback closes an exactly owned exited created tab", async () => {
     foreground_process_group_id: 10,
     foreground_processes: [{ pid: 10, argv0: "/bin/zsh" }],
   };
-  const calls: string[][] = [];
-  let tabPresent = true;
-  let panePresent = true;
   const response = (value: unknown) => ({
     code: 0,
     stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
-  const pi = {
-    exec: async (_command: string, args: string[]) => {
-      calls.push(args);
-      const key = args.slice(0, 2).join(" ");
-      if (key === "agent list") return response({ agents: [] });
-      if (key === "tab list")
-        return response({
-          tabs: tabPresent
-            ? [{ tab_id: "tab-1", workspace_id: "workspace-1" }]
-            : [],
-        });
-      if (key === "pane list")
-        return response({
-          panes: panePresent ? [{ pane_id: "pane-1", tab_id: "tab-1" }] : [],
-        });
-      if (key === "pane get")
-        return response({
-          pane: {
-            pane_id: "pane-1",
-            workspace_id: "workspace-1",
-            tab_id: "tab-1",
-            terminal_id: "terminal-1",
-            cwd: "/tmp",
-          },
-        });
-      if (key === "pane process-info") return response({ process_info: shell });
-      if (key === "pane close")
-        throw new Error("created tab must not be closed through its root pane");
-      if (key === "tab close") {
-        assert.equal(tabPresent, true);
-        assert.equal(panePresent, true);
-        tabPresent = false;
-        panePresent = false;
-        return { code: 0, stdout: "", stderr: "" };
-      }
-      throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
-    },
-  } as any;
   try {
-    await rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
-      herdrAgent: "agent-1",
-      workspaceId: "workspace-1",
-      tabId: "tab-1",
-      paneId: "pane-1",
-      terminalId: "terminal-1",
-      cwd: "/tmp",
-      createdTab: true,
-      launchMayHaveStarted: true,
-      shellProcess: shell,
-      sessionReference: { id: "session-1" },
-    });
+    for (const launchMayHaveStarted of [true, false]) {
+      const calls: string[][] = [];
+      let tabPresent = true;
+      let panePresent = true;
+      const pi = {
+        exec: async (_command: string, args: string[]) => {
+          calls.push(args);
+          const key = args.slice(0, 2).join(" ");
+          if (key === "agent list") return response({ agents: [] });
+          if (key === "tab list")
+            return response({
+              tabs: tabPresent
+                ? [{ tab_id: "tab-1", workspace_id: "workspace-1" }]
+                : [],
+            });
+          if (key === "pane list")
+            return response({
+              panes: panePresent
+                ? [{ pane_id: "pane-1", tab_id: "tab-1" }]
+                : [],
+            });
+          if (key === "pane get")
+            return response({
+              pane: {
+                pane_id: "pane-1",
+                workspace_id: "workspace-1",
+                tab_id: "tab-1",
+                terminal_id: "terminal-1",
+                cwd: "/tmp",
+              },
+            });
+          if (key === "pane process-info")
+            return response({ process_info: shell });
+          if (key === "pane close")
+            throw new Error(
+              "created tab must not be closed through its root pane",
+            );
+          if (key === "tab close") {
+            assert.equal(tabPresent, true);
+            assert.equal(panePresent, true);
+            tabPresent = false;
+            panePresent = false;
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+        },
+      } as any;
+      await rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
+        herdrAgent: "agent-1",
+        workspaceId: "workspace-1",
+        tabId: "tab-1",
+        paneId: "pane-1",
+        terminalId: "terminal-1",
+        cwd: "/tmp/requested",
+        createdTab: true,
+        launchMayHaveStarted,
+        shellProcess: shell,
+        sessionReference: { id: "session-1" },
+      });
+      assert.deepEqual(
+        calls
+          .filter((args) => args[1] === "close")
+          .map((args) => args.slice(0, 3)),
+        [["tab", "close", "tab-1"]],
+      );
+      assert.equal(
+        calls.filter((args) => args[1] === "process-info").length,
+        1,
+      );
+      assert.equal(tabPresent, false);
+      assert.equal(panePresent, false);
+    }
   } finally {
     if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
     else environment.HERDR_WORKSPACE_ID = previousWorkspace;
   }
-  assert.deepEqual(
-    calls.filter((args) => args[1] === "close").map((args) => args.slice(0, 3)),
-    [["tab", "close", "tab-1"]],
-  );
-  assert.equal(tabPresent, false);
-  assert.equal(panePresent, false);
 });
 
 test("exited-start rollback refuses agent, process, tab, and foreign-pane ownership changes", async () => {
