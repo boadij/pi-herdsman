@@ -88,6 +88,18 @@ order in [Development validation](docs/development/validation.md): run
 read-only checks `npm run check` and `git diff --check` before staging or
 committing.
 
+For changes that cross the real Pi/Herdr runtime boundary, use the isolated live
+smoke harness documented in [Smoke testing](docs/development/smoke-testing.md):
+
+```sh
+npm run smoke -- core
+npm run smoke -- continuation
+npm run smoke -- chief-tree
+```
+
+Run only the scenarios relevant to the change. Live smoke is opt-in and must
+complete before the final formatting/validation sequence.
+
 ### Testing architecture
 
 - Test behavior at its lowest authoritative layer.
