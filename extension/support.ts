@@ -1336,6 +1336,7 @@ export function delegatedLifecycleExecutor(
       : []),
     ...[...live.values()].map((state) => ({
       pane_id: state.paneId,
+      terminal_id: `terminal-${state.paneId}`,
       tab_id: tabByPane.get(state.paneId),
       workspace_id: WORKSPACE,
       cwd: state.cwd,
@@ -1349,6 +1350,7 @@ export function delegatedLifecycleExecutor(
       )
       .map((paneId) => ({
         pane_id: paneId,
+        terminal_id: `terminal-${paneId}`,
         tab_id: tabByPane.get(paneId) ?? "delegated-tab",
         workspace_id: WORKSPACE,
         cwd: testCwd,
@@ -1450,7 +1452,10 @@ export function delegatedLifecycleExecutor(
             id: AGENT_ID,
             result: {
               tab: { tab_id: createdTabId },
-              root_pane: { pane_id: rootPane },
+              root_pane: {
+                pane_id: rootPane,
+                terminal_id: `terminal-${rootPane}`,
+              },
             },
           }),
           stderr: "",
@@ -1472,6 +1477,7 @@ export function delegatedLifecycleExecutor(
               pane: state
                 ? {
                     pane_id: state.paneId,
+                    terminal_id: `terminal-${state.paneId}`,
                     tab_id: tabByPane.get(state.paneId),
                     workspace_id: WORKSPACE,
                     cwd: state.cwd,
@@ -1567,7 +1573,9 @@ export function delegatedLifecycleExecutor(
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { pane: { pane_id: paneId } },
+            result: {
+              pane: { pane_id: paneId, terminal_id: `terminal-${paneId}` },
+            },
           }),
           stderr: "",
           code: 0,
@@ -2529,7 +2537,10 @@ export function startupExecutor(
               id: AGENT_ID,
               result: {
                 tab: { tab_id: "startup-tab" },
-                root_pane: { pane_id: "startup-pane" },
+                root_pane: {
+                  pane_id: "startup-pane",
+                  terminal_id: "startup-terminal",
+                },
               },
             }),
             stderr: "",
@@ -2549,6 +2560,7 @@ export function startupExecutor(
                         pane_id: "startup-pane",
                         tab_id: "startup-tab",
                         workspace_id: WORKSPACE,
+                        terminal_id: "startup-terminal",
                         cwd: testCwd,
                         foreground_cwd: testCwd,
                         ...(runId && !stopped && readAgentState(mailbox)
@@ -2626,6 +2638,7 @@ export function startupExecutor(
                 pane_id: "startup-pane",
                 tab_id: "startup-tab",
                 workspace_id: WORKSPACE,
+                terminal_id: "startup-terminal",
                 cwd: testCwd,
                 agent_session: {
                   source: "herdr:pi",
@@ -2669,7 +2682,12 @@ export function startupExecutor(
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { pane: { pane_id: "startup-pane" } },
+            result: {
+              pane: {
+                pane_id: "startup-pane",
+                terminal_id: "startup-terminal",
+              },
+            },
           }),
           stderr: "",
           code: 0,

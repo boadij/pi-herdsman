@@ -44,8 +44,10 @@ export type StartedHerdrAgent = {
   workspaceId: string;
   tabId: string;
   paneId: string;
+  terminalId: string;
   cwd: string;
   createdTab: boolean;
+  launchMayHaveStarted: boolean;
   shellProcess?: PaneProcess;
   sessionReference?: ExpectedSession;
   agent?: HerdrRecord;
@@ -73,6 +75,7 @@ export class HerdrStartFailure extends Error {
 
 const SETTLE_TIMEOUT = 2_000;
 const START_DIAGNOSTIC_TIMEOUT = 2_000;
+const FRESH_PANE_BUSY_RETRY_TIMEOUT = 2_000;
 const HERDR_START_TIMEOUT_MIN = 3_001;
 const HERDR_START_TIMEOUT_MAX = 300_000;
 export const STARTUP_TIMEOUT_MIN =
@@ -419,6 +422,22 @@ function canonicalCwd(value: string): string {
 export function sameCwd(observed: unknown, expected: string): boolean {
   if (typeof observed !== "string") return false;
   return canonicalCwd(observed) === canonicalCwd(expected);
+}
+function matchesAttemptTerminal(
+  pane: any,
+  attempt: StartedHerdrAgent,
+): boolean {
+  return (
+    pane?.pane_id === attempt.paneId &&
+    pane.workspace_id === attempt.workspaceId &&
+    pane.tab_id === attempt.tabId &&
+    pane.terminal_id === attempt.terminalId
+  );
+}
+function matchesAttemptPane(pane: any, attempt: StartedHerdrAgent): boolean {
+  return (
+    matchesAttemptTerminal(pane, attempt) && sameCwd(pane.cwd, attempt.cwd)
+  );
 }
 function capturedShellProcess(process: PaneProcess) {
   return process.foreground_processes?.find(
@@ -961,6 +980,7 @@ export async function startHerdrAgent(
   const env = validateEnvironment(options.env ?? []);
   const release = await lockLifecycle(ctx, options.signal);
   let attempt: StartedHerdrAgent | undefined;
+  let retryAttempted = false;
   let stage = "topology";
   try {
     const cwd = canonicalCwd(options.cwd);
@@ -977,7 +997,7 @@ export async function startHerdrAgent(
       error("start", "caller pane is required for split placement");
     let tab: any;
     let panes: any[] | undefined;
-    let paneId: string | undefined;
+    let createdPane: any;
     let createdTab = false;
     const tabs =
       placement.kind === "tab" && !placement.tabId
@@ -1057,7 +1077,7 @@ export async function startHerdrAgent(
         },
       );
       tab = made.tab;
-      paneId = made.root_pane.pane_id;
+      createdPane = made.root_pane;
       createdTab = true;
     } else {
       const existingPanes =
@@ -1115,31 +1135,44 @@ export async function startHerdrAgent(
             timeout: startupCallTimeout(startupDeadline),
           },
         );
-        paneId = split.pane.pane_id;
+        createdPane = split.pane;
       }
     }
-    if (!paneId) error("start", "Herdr did not return a pane");
+    const paneId = createdPane?.pane_id;
+    const terminalId = createdPane?.terminal_id;
+    if (typeof paneId !== "string" || !paneId)
+      error("start", "Herdr did not return a pane");
+    if (typeof terminalId !== "string" || !terminalId)
+      error("start", `pane ${paneId} did not include terminal identity`);
     attempt = {
       herdrAgent: alias(workspaceId, options.label, options.runId),
       workspaceId,
       tabId: tab.tab_id,
       paneId,
+      terminalId,
       cwd,
       createdTab,
+      launchMayHaveStarted: false,
     };
     let started: any;
     stage = "pane_readiness";
-    let shell: PaneProcess;
     try {
-      shell = await proveShellReady(
+      await waitForShellMarker(
         pi,
         ctx,
         paneId,
-        undefined,
         startupDeadline,
         "start",
         options.signal,
       );
+      attempt.shellProcess = (await paneProcess(
+        pi,
+        ctx,
+        paneId,
+        options.signal,
+        startupDeadline,
+        true,
+      ))!;
     } catch (failure) {
       if (failure instanceof OperationError)
         throw withStartupDiagnostic(
@@ -1156,7 +1189,6 @@ export async function startHerdrAgent(
       throw failure;
     }
     stage = "ownership_capture";
-    attempt.shellProcess = shell;
     const currentPanes =
       (
         await runHerdr(pi, ctx, ["pane", "list", "--workspace", workspaceId], {
@@ -1167,12 +1199,8 @@ export async function startHerdrAgent(
     const currentPane = currentPanes.find(
       (item: any) => item.pane_id === paneId,
     );
-    if (
-      !currentPane ||
-      currentPane.workspace_id !== workspaceId ||
-      currentPane.tab_id !== tab.tab_id
-    )
-      error("start", `pane ${paneId} topology changed before launch`);
+    if (!matchesAttemptPane(currentPane, attempt))
+      error("start", `pane ${paneId} identity changed before launch`);
     if (createdTab) {
       const tabPanes = currentPanes.filter(
         (item: any) => item.tab_id === tab.tab_id,
@@ -1180,74 +1208,90 @@ export async function startHerdrAgent(
       if (tabPanes.length !== 1 || tabPanes[0]?.pane_id !== paneId)
         error("start", `tab ${tab.tab_id} topology changed before launch`);
     }
-    if (!sameCwd(currentPane.cwd, cwd))
-      error("start", `pane ${paneId} cwd does not match requested cwd`, {
-        expected_cwd: cwd,
-        observed_cwd:
-          typeof currentPane.cwd === "string" ? currentPane.cwd : null,
-      });
     stage = "agent_start";
-    const latest = await paneProcess(
-      pi,
-      ctx,
-      paneId,
-      options.signal,
-      startupDeadline,
-      true,
+    // ponytail: temporary Herdr #3208 workaround.
+    // Remove once the supported Herdr minimum waits through fresh-shell prompt children.
+    const retryDeadline = Math.min(
+      Date.now() + FRESH_PANE_BUSY_RETRY_TIMEOUT,
+      startupDeadline - START_DIAGNOSTIC_TIMEOUT,
     );
-    if (
-      !latest ||
-      latest.pane_id !== paneId ||
-      !sameShellProcessOwner(shell, latest)
-    )
-      error("start", `pane ${paneId} shell identity changed before launch`);
-    const remaining = startupCallTimeout(startupDeadline, childTimeout);
-    if (remaining < HERDR_START_TIMEOUT_MIN)
-      error("start", "startup deadline exhausted before agent start");
-    try {
-      started = await runHerdr(
-        pi,
-        ctx,
-        [
-          "agent",
-          "start",
-          attempt.herdrAgent,
-          "--kind",
-          "pi",
-          "--pane",
-          paneId,
-          "--timeout",
-          String(Math.min(remaining, childTimeout)),
-          "--",
-          ...(options.extensionPath
-            ? ["--extension", options.extensionPath]
-            : []),
-          "--extension",
-          HERDR_AGENT_STATE_EXTENSION,
-          ...(options.agentArgs ?? []),
-        ],
-        {
-          signal: options.signal,
-          // Outlive Herdr's own readiness deadline by the diagnostic window so
-          // its structured failure is the one reported. With the identical
-          // value this command's kill always won the race, and "Herdr command
-          // was killed" replaced Herdr's reason.
-          timeout: Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
-        },
-      );
-    } catch (failure) {
-      if (isUnstructuredResultFailure(failure))
-        throw withStartupDiagnostic(
-          failure,
-          await captureStartupDiagnostic(
-            pi,
-            ctx,
+    for (;;) {
+      const remaining = startupCallTimeout(startupDeadline, childTimeout);
+      if (remaining < HERDR_START_TIMEOUT_MIN)
+        error("start", "startup deadline exhausted before agent start");
+      try {
+        started = await runHerdr(
+          pi,
+          ctx,
+          [
+            "agent",
+            "start",
+            attempt.herdrAgent,
+            "--kind",
+            "pi",
+            "--pane",
             paneId,
-            startupDeadline,
-            options.signal,
-          ),
+            "--timeout",
+            String(Math.min(remaining, childTimeout)),
+            "--",
+            ...(options.extensionPath
+              ? ["--extension", options.extensionPath]
+              : []),
+            "--extension",
+            HERDR_AGENT_STATE_EXTENSION,
+            ...(options.agentArgs ?? []),
+          ],
+          {
+            signal: options.signal,
+            // Outlive Herdr's own readiness deadline by the diagnostic window so
+            // its structured failure is the one reported. With the identical
+            // value this command's kill always won the race, and "Herdr command
+            // was killed" replaced Herdr's reason.
+            timeout:
+              Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
+          },
         );
-      throw failure;
+        attempt.launchMayHaveStarted = true;
+        break;
+      } catch (failure) {
+        const busy =
+          failure instanceof OperationError &&
+          failure.detail.details?.herdrCode === "agent_pane_busy";
+        if (busy && Date.now() < retryDeadline) {
+          retryAttempted = true;
+          const pane = (
+            await runHerdr(pi, ctx, ["pane", "get", paneId], {
+              signal: options.signal,
+              timeout: startupCallTimeout(startupDeadline),
+            })
+          ).pane;
+          if (!matchesAttemptPane(pane, attempt))
+            error(
+              "start",
+              `pane ${paneId} identity changed during startup retry`,
+            );
+          const remainingRetry = retryDeadline - Date.now();
+          if (remainingRetry > 0)
+            await sleep(Math.min(POLL_INTERVAL, remainingRetry), undefined, {
+              signal: options.signal,
+            });
+          if (Date.now() >= retryDeadline) throw failure;
+          continue;
+        }
+        if (!busy) attempt.launchMayHaveStarted = true;
+        if (isUnstructuredResultFailure(failure))
+          throw withStartupDiagnostic(
+            failure,
+            await captureStartupDiagnostic(
+              pi,
+              ctx,
+              paneId,
+              startupDeadline,
+              options.signal,
+            ),
+          );
+        throw failure;
+      }
     }
     stage = "agent_result";
     const agent = started.agent;
@@ -1263,7 +1307,8 @@ export async function startHerdrAgent(
     attempt.agent = agent;
     return attempt;
   } catch (cause) {
-    if (attempt) throw new HerdrStartFailure(cause, stage, attempt, false);
+    if (attempt)
+      throw new HerdrStartFailure(cause, stage, attempt, retryAttempted);
     throw cause;
   } finally {
     release();
@@ -1397,15 +1442,14 @@ function normalizePaneProcess(
   });
 }
 
-async function proveShellReady(
+async function waitForShellMarker(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   paneId: string,
-  expected: PaneProcess | undefined,
   deadline: number,
   operation: "start" | "close" | "rollback",
   signal?: AbortSignal,
-): Promise<PaneProcess> {
+): Promise<void> {
   const timeout = (): number => {
     if (operation === "start") return startupCallTimeout(deadline);
     const remaining = deadline - Date.now();
@@ -1438,11 +1482,29 @@ async function proveShellReady(
       noResult: true,
     },
   );
+}
+
+async function proveShellReady(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  paneId: string,
+  expected: PaneProcess | undefined,
+  deadline: number,
+  operation: "start" | "close" | "rollback",
+  signal?: AbortSignal,
+): Promise<PaneProcess> {
+  await waitForShellMarker(pi, ctx, paneId, deadline, operation, signal);
+  const timeout =
+    operation === "start"
+      ? startupCallTimeout(deadline)
+      : deadline - Date.now();
+  if (timeout <= 0)
+    error(operation, `pane ${paneId} shell readiness deadline exhausted`);
   const result = await runHerdr(
     pi,
     ctx,
     ["pane", "process-info", "--pane", paneId],
-    { signal, timeout: timeout() },
+    { signal, timeout },
   );
   const value = result?.process_info;
   const shell = normalizePaneProcess(value, paneId, true);
@@ -1875,7 +1937,7 @@ export async function rollbackHerdrStart(
   const release = await lockLifecycle(ctx, signal);
   try {
     const expectedShell = started.shellProcess;
-    if (!expectedShell)
+    if (started.launchMayHaveStarted && !expectedShell)
       error("rollback", `pane ${started.paneId} process ownership is unproven`);
     const listedAgents = await runHerdr(pi, ctx, ["agent", "list"], {
       signal,
@@ -1892,7 +1954,9 @@ export async function rollbackHerdrStart(
     );
     if (replacement)
       error("rollback", `pane ${started.paneId} has a replacement agent`);
-    if (managed) {
+    if (!started.launchMayHaveStarted && managed)
+      error("rollback", `pane ${started.paneId} agent ownership changed`);
+    if (started.launchMayHaveStarted && managed) {
       const observedSession = sessionIdentity(managed.agent_session);
       const sessionReference =
         started.sessionReference ??
@@ -1990,16 +2054,20 @@ export async function rollbackHerdrStart(
     const pane = (
       await runHerdr(pi, ctx, ["pane", "get", started.paneId], { signal })
     ).pane;
-    if (
-      !pane ||
-      pane.pane_id !== started.paneId ||
-      pane.workspace_id !== started.workspaceId ||
-      pane.tab_id !== started.tabId
-    )
+    if (!matchesAttemptTerminal(pane, started))
       error("rollback", `pane ${started.paneId} ownership is unproven`);
-    const observed = await paneProcess(pi, ctx, started.paneId, signal);
-    if (!observed || !sameShellProcessOwner(expectedShell, observed))
-      error("rollback", `pane ${started.paneId} process ownership is unproven`);
+    if (started.launchMayHaveStarted || !sameCwd(pane.cwd, started.cwd)) {
+      const observed = await paneProcess(pi, ctx, started.paneId, signal);
+      if (
+        !expectedShell ||
+        !observed ||
+        !sameShellProcessOwner(expectedShell, observed)
+      )
+        error(
+          "rollback",
+          `pane ${started.paneId} process ownership is unproven`,
+        );
+    }
     if (!managed) {
       const listedAgents = await runHerdr(pi, ctx, ["agent", "list"], {
         signal,

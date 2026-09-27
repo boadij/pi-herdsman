@@ -1726,7 +1726,10 @@ test("session continuation rejects label overrides and occupied inherited labels
               id: AGENT_ID,
               result: {
                 tab: { tab_id: "occupied-test-tab" },
-                root_pane: { pane_id: "occupied-test-pane" },
+                root_pane: {
+                  pane_id: "occupied-test-pane",
+                  terminal_id: "occupied-test-terminal",
+                },
               },
             }),
             stderr: "",

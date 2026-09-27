@@ -41,6 +41,7 @@ import {
   type HerdrStartPlacement,
 } from "./herdr.ts";
 import { claimProcessLock } from "./lock.ts";
+import { OperationError } from "./errors.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 
 test("nested topology keeps the Herdr workspace authoritative", () => {
@@ -1142,6 +1143,7 @@ test("start injects mandatory extensions before definition args and configures t
                   pane_id: "pane-1",
                   workspace_id: "root-workspace",
                   tab_id: "tab-1",
+                  terminal_id: "terminal-1",
                   agent_status: "unknown",
                   cwd,
                   foreground_cwd: cwd,
@@ -1173,7 +1175,7 @@ test("start injects mandatory extensions before definition args and configures t
             id: 1,
             result: {
               tab: { tab_id: "tab-1", label: "agents" },
-              root_pane: { pane_id: "pane-1" },
+              root_pane: { pane_id: "pane-1", terminal_id: "terminal-1" },
             },
           }),
           stderr: "",
@@ -1345,7 +1347,7 @@ async function executeFailedStart(
       if (key === "tab create")
         return response({
           tab: { tab_id: "tab-1", label: "agents" },
-          root_pane: { pane_id: "pane-1" },
+          root_pane: { pane_id: "pane-1", terminal_id: "terminal-1" },
         });
       if (key === "pane list")
         return response({
@@ -1354,6 +1356,7 @@ async function executeFailedStart(
               pane_id: "pane-1",
               workspace_id: "root-workspace",
               tab_id: "tab-1",
+              terminal_id: "terminal-1",
               agent_status: "unknown",
               cwd,
               foreground_cwd: cwd,
@@ -1805,6 +1808,7 @@ test("foreground projection does not veto a ready shell before agent start", asy
               pane_id: paneSplit ? "pane-2" : "pane-1",
               workspace_id: "root-workspace",
               tab_id: "tab-1",
+              terminal_id: paneSplit ? "terminal-2" : "terminal-1",
               agent_status: "idle",
               foreground_cwd: "/transient-or-wrong",
               cwd,
@@ -1823,7 +1827,9 @@ test("foreground projection does not veto a ready shell before agent start", asy
         });
       if (key === "pane split") {
         paneSplit = true;
-        return response({ pane: { pane_id: "pane-2" } });
+        return response({
+          pane: { pane_id: "pane-2", terminal_id: "terminal-2" },
+        });
       }
       if (key === "pane layout")
         return response({
@@ -1906,7 +1912,7 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
       if (key === "tab create")
         return response({
           tab: { tab_id: tabId, label: "agents", workspace_id: workspaceId },
-          root_pane: { pane_id: paneId },
+          root_pane: { pane_id: paneId, terminal_id: "terminal-1" },
         });
       if (key === "pane list") {
         paneLists++;
@@ -1917,6 +1923,7 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
               pane_id: paneId,
               workspace_id: workspaceId,
               tab_id: tabId,
+              terminal_id: "terminal-1",
               agent_status: ready ? "unknown" : "working",
               cwd,
               ...(ready ? {} : { agent: "shell-starting" }),
@@ -1986,7 +1993,7 @@ test("fresh panes wait for shell and pane metadata before agent start", async ()
     calls.some((args) => args[0] === "tab" && args[1] === "list"),
     false,
   );
-  assert.equal(processInfoCalls, 2);
+  assert.equal(processInfoCalls, 1);
   assert.ok(start > paneListCalls[0]!);
   assert.ok(agentStartAt >= beganAt);
 });
@@ -2021,7 +2028,10 @@ test("startup does not launch while the exact readiness marker is pending", asyn
       if (key === "tab create")
         return response({
           tab: { tab_id: "pending-tab", label: "agents" },
-          root_pane: { pane_id: "pending-pane" },
+          root_pane: {
+            pane_id: "pending-pane",
+            terminal_id: "pending-terminal",
+          },
         });
       if (key === "pane run") {
         markerStarted();
@@ -2044,6 +2054,7 @@ test("startup does not launch while the exact readiness marker is pending", asyn
               pane_id: "pending-pane",
               workspace_id: "pending-workspace",
               tab_id: "pending-tab",
+              terminal_id: "pending-terminal",
               agent_status: "unknown",
               cwd: "/tmp/pending-agent",
               foreground_cwd: "/tmp/pending-agent",
@@ -2078,13 +2089,7 @@ test("startup does not launch while the exact readiness marker is pending", asyn
     );
     assert.deepEqual(
       readinessCalls.map((args) => args.slice(0, 2).join(" ")),
-      [
-        "pane run",
-        "pane wait-output",
-        "pane process-info",
-        "pane list",
-        "pane process-info",
-      ],
+      ["pane run", "pane wait-output", "pane process-info", "pane list"],
     );
     assert.equal(
       calls.filter((args) => args[0] === "agent" && args[1] === "start").length,
@@ -2115,7 +2120,10 @@ test("startup readiness failure captures the blocked pane diagnostic", async () 
       if (key === "tab create")
         return response({
           tab: { tab_id: "blocked-tab", label: "agents" },
-          root_pane: { pane_id: "blocked-pane" },
+          root_pane: {
+            pane_id: "blocked-pane",
+            terminal_id: "blocked-terminal",
+          },
         });
       if (key === "pane run") return response({});
       if (key === "pane wait-output")
@@ -2164,8 +2172,9 @@ type StartAgentCase =
   | "pane-mutation"
   | "extra-pane"
   | "cwd-mutation"
-  | "shell-pid-mutation"
-  | "busy-foreground-pgid"
+  | "terminal-mutation"
+  | "transient-busy"
+  | "busy-exhausted"
   | "malformed-process-info"
   | "mismatched-process-info-pane"
   | "success"
@@ -2182,6 +2191,7 @@ async function startAgentCase(
   const cwd = "/tmp/case-agent";
   const calls: string[][] = [];
   let processInfoCalls = 0;
+  let agentStarts = 0;
   const response = (value: unknown) => ({
     code: 0,
     stdout: JSON.stringify({ id: 1, result: value }),
@@ -2190,15 +2200,12 @@ async function startAgentCase(
   const processInfo = () => ({
     pane_id:
       kind === "mismatched-process-info-pane" ? "other-pane" : "case-pane",
-    shell_pid:
-      kind === "malformed-process-info"
-        ? "unknown"
-        : kind === "shell-pid-mutation" && processInfoCalls > 1
-          ? 99
-          : 12,
-    foreground_process_group_id:
-      kind === "busy-foreground-pgid" && processInfoCalls === 2 ? 99 : 12,
-    foreground_processes: [{ pid: 12, argv0: "/bin/zsh" }],
+    shell_pid: kind === "malformed-process-info" ? "unknown" : 12,
+    foreground_process_group_id: kind === "transient-busy" ? 99 : 12,
+    foreground_processes:
+      kind === "transient-busy"
+        ? [{ pid: 99, argv0: "/usr/bin/starship" }]
+        : [{ pid: 12, argv0: "/bin/zsh" }],
   });
   const pi = {
     exec: async (_command: string, args: string[]) => {
@@ -2208,7 +2215,7 @@ async function startAgentCase(
       if (key === "tab create")
         return response({
           tab: { tab_id: "case-tab", label: "agents" },
-          root_pane: { pane_id: "case-pane" },
+          root_pane: { pane_id: "case-pane", terminal_id: "case-terminal" },
         });
       if (key === "pane run") return response({});
       if (key === "pane wait-output") {
@@ -2244,13 +2251,16 @@ async function startAgentCase(
                 ? { pane_id: "other-pane" }
                 : kind === "cwd-mutation"
                   ? { cwd: "/tmp/other-agent" }
-                  : {};
+                  : kind === "terminal-mutation" && agentStarts > 0
+                    ? { terminal_id: "replacement-terminal" }
+                    : {};
         return response({
           panes: [
             {
               pane_id: "case-pane",
               workspace_id: "case-workspace",
               tab_id: "case-tab",
+              terminal_id: "case-terminal",
               agent_status: "unknown",
               cwd,
               foreground_cwd: cwd,
@@ -2273,8 +2283,39 @@ async function startAgentCase(
         processInfoCalls++;
         return response({ process_info: processInfo() });
       }
+      if (key === "pane get")
+        return response({
+          pane: {
+            pane_id: "case-pane",
+            terminal_id:
+              kind === "terminal-mutation"
+                ? "replacement-terminal"
+                : "case-terminal",
+            workspace_id: "case-workspace",
+            tab_id: "case-tab",
+            cwd,
+          },
+        });
       if (key === "pane read") return { code: 0, stdout: "", stderr: "" };
       if (key === "agent start") {
+        agentStarts++;
+        if (kind === "busy-exhausted" && agentStarts === 2) onMarker?.();
+        if (
+          kind === "terminal-mutation" ||
+          kind === "busy-exhausted" ||
+          (kind === "transient-busy" && agentStarts === 1)
+        )
+          return {
+            code: 1,
+            stdout: "",
+            stderr: JSON.stringify({
+              error: {
+                code: "agent_pane_busy",
+                message:
+                  "agent target pane case-pane is not an available shell",
+              },
+            }),
+          };
         return kind === "native-failure"
           ? { code: 1, stdout: "", stderr: "native start failed" }
           : response({
@@ -2311,9 +2352,7 @@ async function startAgentCase(
     return {
       calls,
       failure,
-      agentStarts: calls.filter(
-        (args) => args[0] === "agent" && args[1] === "start",
-      ).length,
+      agentStarts,
       startTimeout: Number(
         startArgs?.[startArgs.findIndex((arg) => arg === "--timeout") + 1],
       ),
@@ -2333,8 +2372,6 @@ test("startHerdrAgent rejects unstable readiness observations without starting a
     "pane-mutation",
     "extra-pane",
     "cwd-mutation",
-    "shell-pid-mutation",
-    "busy-foreground-pgid",
     "malformed-process-info",
     "mismatched-process-info-pane",
   ] as const) {
@@ -2355,12 +2392,69 @@ test("startHerdrAgent rejects unstable readiness observations without starting a
   }
 });
 
+test("fresh prompt child retries busy only on the same terminal", async () => {
+  const result = await startAgentCase("transient-busy");
+  assert.equal(result.failure, undefined);
+  assert.equal(result.agentStarts, 2);
+  assert.equal(
+    result.calls.filter((args) => args.slice(0, 2).join(" ") === "tab create")
+      .length,
+    1,
+  );
+  assert.equal(
+    result.calls.filter((args) => args.slice(0, 2).join(" ") === "pane run")
+      .length,
+    1,
+  );
+  assert.equal(
+    result.calls.filter(
+      (args) => args.slice(0, 2).join(" ") === "pane process-info",
+    ).length,
+    1,
+  );
+});
+
+test("busy retry refuses replacement terminal", async () => {
+  const result = await startAgentCase("terminal-mutation");
+  assert.ok(result.failure instanceof HerdrStartFailure);
+  assert.equal(result.failure.stage, "agent_start");
+  assert.equal(result.failure.retryAttempted, true);
+  assert.equal(result.agentStarts, 1);
+  assert.match(
+    String(result.failure.cause),
+    /identity changed during startup retry/,
+  );
+});
+
+test("busy exhaustion preserves pre-launch ownership", async () => {
+  const originalNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  let markerCalls = 0;
+  try {
+    const result = await startAgentCase("busy-exhausted", () => {
+      if (++markerCalls === 2) now += 2_100;
+    });
+    assert.ok(result.failure instanceof HerdrStartFailure);
+    assert.equal(result.failure.stage, "agent_start");
+    assert.equal(result.failure.retryAttempted, true);
+    assert.equal(result.failure.attempt.launchMayHaveStarted, false);
+    assert.equal(result.agentStarts, 2);
+    assert.equal(
+      (result.failure.cause as OperationError).detail.details?.herdrCode,
+      "agent_pane_busy",
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test("startHerdrAgent reports a requested cwd mismatch before agent start", async () => {
   const result = await startAgentCase("cwd-mutation");
   const failure = result.failure;
   assert.ok(failure instanceof HerdrStartFailure);
   assert.equal(failure.stage, "ownership_capture");
-  assert.match(String(failure.cause), /cwd does not match requested cwd/);
+  assert.match(String(failure.cause), /identity changed before launch/);
   assert.equal(result.agentStarts, 0);
   assert.equal(
     result.calls.some((args) => args[0] === "agent" && args[1] === "start"),
@@ -2372,10 +2466,18 @@ test("startHerdrAgent handles stable readiness and native-start outcomes", async
   const result = await startAgentCase("success");
   assert.equal(result.failure, undefined);
   assert.equal(result.agentStarts, 1);
+  assert.equal(
+    result.calls.filter(
+      (args) => args[0] === "pane" && args[1] === "process-info",
+    ).length,
+    1,
+  );
   await (async () => {
     const result = await startAgentCase("native-failure");
-    assert.ok(result.failure);
+    assert.ok(result.failure instanceof HerdrStartFailure);
     assert.equal(result.agentStarts, 1);
+    assert.equal(result.failure.attempt.launchMayHaveStarted, true);
+    assert.equal(result.failure.retryAttempted, false);
   })();
   await (async () => {
     const originalDateNow = Date.now;
@@ -2525,6 +2627,7 @@ async function placementCalls(config: {
                   pane_id: "new-pane",
                   workspace_id: workspaceId,
                   tab_id: tabId,
+                  terminal_id: "new-terminal",
                   agent_status: "unknown",
                   cwd,
                   foreground_cwd: cwd,
@@ -2535,7 +2638,9 @@ async function placementCalls(config: {
       if (key === "pane layout") return response({ layout: config.layout });
       if (key === "pane split") {
         split = true;
-        return response({ pane: { pane_id: "new-pane" } });
+        return response({
+          pane: { pane_id: "new-pane", terminal_id: "new-terminal" },
+        });
       }
       if (key === "pane process-info")
         return response({
@@ -3294,6 +3399,81 @@ test("strict close rejects a completed agent shell transition", async () => {
   );
 });
 
+test("pre-launch rollback closes only its exact terminal without process proof", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  try {
+    for (const terminalId of ["terminal-1", "replacement-terminal"]) {
+      const calls: string[][] = [];
+      let present = true;
+      const pi = {
+        exec: async (_command: string, args: string[]) => {
+          calls.push(args);
+          const key = args.slice(0, 2).join(" ");
+          if (key === "agent list") return response({ agents: [] });
+          if (key === "tab list")
+            return response({
+              tabs: [{ tab_id: "tab-1", workspace_id: "workspace-1" }],
+            });
+          if (key === "pane get")
+            return response({
+              pane: {
+                pane_id: "pane-1",
+                terminal_id: terminalId,
+                workspace_id: "workspace-1",
+                tab_id: "tab-1",
+                cwd: "/tmp",
+              },
+            });
+          if (key === "pane close") {
+            present = false;
+            return response({});
+          }
+          if (key === "pane list")
+            return response({ panes: present ? [{ pane_id: "pane-1" }] : [] });
+          throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+        },
+      } as any;
+      const attempt = {
+        herdrAgent: "agent-1",
+        workspaceId: "workspace-1",
+        tabId: "tab-1",
+        paneId: "pane-1",
+        terminalId: "terminal-1",
+        cwd: "/tmp",
+        createdTab: false,
+        launchMayHaveStarted: false,
+      };
+      if (terminalId === "terminal-1")
+        await rollbackHerdrStart(pi, { cwd: "/tmp" } as any, attempt);
+      else
+        await assert.rejects(
+          rollbackHerdrStart(pi, { cwd: "/tmp" } as any, attempt),
+          /ownership is unproven/,
+        );
+      assert.equal(
+        calls.some(
+          (args) => args[1] === "process-info" || args[1] === "send-keys",
+        ),
+        false,
+      );
+      assert.equal(
+        calls.some((args) => args[1] === "close"),
+        terminalId === "terminal-1",
+      );
+    }
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
 test("rollback refuses malformed or taken-over process ownership before cleanup", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
@@ -3378,8 +3558,10 @@ test("rollback refuses malformed or taken-over process ownership before cleanup"
           workspaceId: "workspace-1",
           tabId: "tab-1",
           paneId: "pane-1",
+          terminalId: "terminal-1",
           cwd: "/tmp",
           createdTab: false,
+          launchMayHaveStarted: true,
           shellProcess: {
             pane_id: "pane-1",
             shell_pid: 10,
@@ -3433,6 +3615,7 @@ test("rollback proves the boundary before keys and resources before close", asyn
     pane_id: "pane-1",
     workspace_id: "workspace-1",
     tab_id: "tab-1",
+    terminal_id: "terminal-1",
     cwd: "/tmp",
     agent_session: session,
   };
@@ -3494,8 +3677,10 @@ test("rollback proves the boundary before keys and resources before close", asyn
     workspaceId: "workspace-1",
     tabId: "tab-1",
     paneId: "pane-1",
+    terminalId: "terminal-1",
     cwd: "/tmp",
     createdTab: false,
+    launchMayHaveStarted: true,
     shellProcess: shell,
     sessionReference: { path: sessionPath },
   };
@@ -3589,6 +3774,7 @@ test("rollback cleans an exited created pane", async () => {
             pane_id: "pane-1",
             workspace_id: "workspace-1",
             tab_id: "tab-1",
+            terminal_id: "terminal-1",
             cwd: "/tmp",
           },
         });
@@ -3606,8 +3792,10 @@ test("rollback cleans an exited created pane", async () => {
     workspaceId: "workspace-1",
     tabId: "tab-1",
     paneId: "pane-1",
+    terminalId: "terminal-1",
     cwd: "/tmp",
     createdTab: false,
+    launchMayHaveStarted: true,
     shellProcess: shell,
     sessionReference: { id: "session-1" },
   });
@@ -3638,72 +3826,88 @@ test("rollback closes an exactly owned exited created tab despite cwd mismatch",
     foreground_process_group_id: 10,
     foreground_processes: [{ pid: 10, argv0: "/bin/zsh" }],
   };
-  const calls: string[][] = [];
-  let tabPresent = true;
-  let panePresent = true;
   const response = (value: unknown) => ({
     code: 0,
     stdout: JSON.stringify({ id: 1, result: value }),
     stderr: "",
   });
-  const pi = {
-    exec: async (_command: string, args: string[]) => {
-      calls.push(args);
-      const key = args.slice(0, 2).join(" ");
-      if (key === "agent list") return response({ agents: [] });
-      if (key === "tab list")
-        return response({
-          tabs: tabPresent
-            ? [{ tab_id: "tab-1", workspace_id: "workspace-1" }]
-            : [],
-        });
-      if (key === "pane list")
-        return response({
-          panes: panePresent ? [{ pane_id: "pane-1", tab_id: "tab-1" }] : [],
-        });
-      if (key === "pane get")
-        return response({
-          pane: {
-            pane_id: "pane-1",
-            workspace_id: "workspace-1",
-            tab_id: "tab-1",
-            cwd: "/tmp",
-          },
-        });
-      if (key === "pane process-info") return response({ process_info: shell });
-      if (key === "pane close")
-        throw new Error("created tab must not be closed through its root pane");
-      if (key === "tab close") {
-        assert.equal(tabPresent, true);
-        assert.equal(panePresent, true);
-        tabPresent = false;
-        panePresent = false;
-        return { code: 0, stdout: "", stderr: "" };
-      }
-      throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
-    },
-  } as any;
   try {
-    await rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
-      herdrAgent: "agent-1",
-      workspaceId: "workspace-1",
-      tabId: "tab-1",
-      paneId: "pane-1",
-      cwd: "/tmp/requested",
-      createdTab: true,
-      shellProcess: shell,
-      sessionReference: { id: "session-1" },
-    });
+    for (const launchMayHaveStarted of [true, false]) {
+      const calls: string[][] = [];
+      let tabPresent = true;
+      let panePresent = true;
+      const pi = {
+        exec: async (_command: string, args: string[]) => {
+          calls.push(args);
+          const key = args.slice(0, 2).join(" ");
+          if (key === "agent list") return response({ agents: [] });
+          if (key === "tab list")
+            return response({
+              tabs: tabPresent
+                ? [{ tab_id: "tab-1", workspace_id: "workspace-1" }]
+                : [],
+            });
+          if (key === "pane list")
+            return response({
+              panes: panePresent
+                ? [{ pane_id: "pane-1", tab_id: "tab-1" }]
+                : [],
+            });
+          if (key === "pane get")
+            return response({
+              pane: {
+                pane_id: "pane-1",
+                workspace_id: "workspace-1",
+                tab_id: "tab-1",
+                terminal_id: "terminal-1",
+                cwd: "/tmp",
+              },
+            });
+          if (key === "pane process-info")
+            return response({ process_info: shell });
+          if (key === "pane close")
+            throw new Error(
+              "created tab must not be closed through its root pane",
+            );
+          if (key === "tab close") {
+            assert.equal(tabPresent, true);
+            assert.equal(panePresent, true);
+            tabPresent = false;
+            panePresent = false;
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+        },
+      } as any;
+      await rollbackHerdrStart(pi, { cwd: "/tmp" } as any, {
+        herdrAgent: "agent-1",
+        workspaceId: "workspace-1",
+        tabId: "tab-1",
+        paneId: "pane-1",
+        terminalId: "terminal-1",
+        cwd: "/tmp/requested",
+        createdTab: true,
+        launchMayHaveStarted,
+        shellProcess: shell,
+        sessionReference: { id: "session-1" },
+      });
+      assert.deepEqual(
+        calls
+          .filter((args) => args[1] === "close")
+          .map((args) => args.slice(0, 3)),
+        [["tab", "close", "tab-1"]],
+      );
+      assert.equal(
+        calls.filter((args) => args[1] === "process-info").length,
+        1,
+      );
+      assert.equal(tabPresent, false);
+      assert.equal(panePresent, false);
+    }
   } finally {
     if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
     else environment.HERDR_WORKSPACE_ID = previousWorkspace;
   }
-  assert.deepEqual(
-    calls.filter((args) => args[1] === "close").map((args) => args.slice(0, 3)),
-    [["tab", "close", "tab-1"]],
-  );
-  assert.equal(tabPresent, false);
-  assert.equal(panePresent, false);
 });
 
 test("exited-start rollback refuses agent, process, tab, and foreign-pane ownership changes", async () => {
@@ -3766,6 +3970,7 @@ test("exited-start rollback refuses agent, process, tab, and foreign-pane owners
               pane_id: "pane-1",
               workspace_id: "workspace-1",
               tab_id: "tab-1",
+              terminal_id: "terminal-1",
               cwd: "/tmp",
             },
           });
@@ -3788,8 +3993,10 @@ test("exited-start rollback refuses agent, process, tab, and foreign-pane owners
         workspaceId: "workspace-1",
         tabId: "tab-1",
         paneId: "pane-1",
+        terminalId: "terminal-1",
         cwd: "/tmp",
         createdTab: changed === "panes",
+        launchMayHaveStarted: true,
         shellProcess: shell,
         sessionReference: { id: "session-1" },
       }),
