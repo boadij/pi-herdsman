@@ -282,7 +282,7 @@ After every smoke:
 - disposable herdr resources are closed by exact ID;
 - no repository source file changed unless the smoke explicitly required it.
 
-## Chief supervision live matrix
+## Project Manager / Chief supervision live matrix
 
 The manual checks below are **NOT RUN**, not claims of failure or success.
 Automated live scenario results are separate and do not replace these checks.

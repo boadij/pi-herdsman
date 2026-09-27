@@ -1,10 +1,8 @@
-# Lead peer reference
+# Peer reference
 
 [Documentation index](../README.md) · [Supervision concept](../concepts/supervision.md)
 
-Peer coordination is ordinary Lead-to-Lead communication. It does not change
-ownership: every Lead still owns its complete managed-agent tree, and Chief
-still supervises independent Leads without owning their agents.
+`peer` is horizontal coordination between live sessions of the **same coordinator role**: Lead ↔ Lead or Manager ↔ Manager. Discovery and transport are user-global, including across Herdr sockets; they are not project-filtered. Managed Agents and Chief have no peer presence. A healthy coordinator publishes a private generation-bound record in `runtime/peers-v2/peers/`; dead, stale, malformed, or replaced process-lock claims are ignored. Unhealthy coordination withdraws presence while retaining queued messages.
 
 ## Presence and identity
 
@@ -47,12 +45,11 @@ The Lead-only tools are `peer_list` and `peer_message`.
 {}
 ```
 
-returns the current ordinary live Leads other than this Lead. The result keeps
-this Lead separate from the peers:
+Returns this session separately from other same-role sessions:
 
 ```json
 {
-  "self": "<this Lead's exact full Pi session ID>",
+  "self": "<this exact Pi session ID>",
   "peers": [
     {
       "session": "<exact full Pi session ID>",
@@ -76,7 +73,7 @@ list has no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
 {
   "session": "<exact full Pi session ID from `peer_list`>",
   "message": "The integration is ready.",
-  "files": ["/tmp/checklist.md", "result:researcher#1"]
+  "files": ["result:researcher#1"]
 }
 ```
 
@@ -87,29 +84,3 @@ canonical result reference before the existing attachment preparation runs.
 Files and resolved refs therefore share the same submission-time UTF-8
 embedding, reference fallback, and configured byte limits. The durable peer
 record remains text-only and bounded by the 8 KiB coordination transport limit.
-
-Peer records use the global peer runtime's shared coordination inbox. Delivery
-uses Pi `deliverAs: "followUp"` with `triggerTurn: true`, survives a busy
-receiver, and is retried after transient delivery failure. Publication makes a
-best-effort final reread of the sender and target immediately before the atomic
-write and rejects the message when that reread observes a changed captured
-process-lock generation. Presentation metadata may be enriched independently
-and does not invalidate publication. Because the reread and inbox write use
-separate process locks, a replacement racing after the reread may still leave a
-durable message; delivery validates the current ordinary-Lead receiver record
-and target structure. A queued message remains valid after the sender exits, so
-sender shutdown does not strand an already published message. A queued peer
-message is retained while its receiver is Chief and is delivered after that
-session returns to ordinary Lead. Shutdown aborts
-in-flight delivery and removes the sender's presence before releasing its
-process lock.
-
-The recipient receives the message content as
-`Peer message from <sender lead ID>: <message>`. It is already addressed to the
-receiving Lead; the sender ID identifies the peer that sent it. Delivery still
-verifies the current ordinary-Lead receiver record and target structure before
-injecting that content.
-
-Peer transport shares the existing atomic, bounded, quarantined coordination
-inbox implementation with Chief traffic. Chief records retain their existing
-authority, descriptor, lease, pending-ask, and storage boundaries.
