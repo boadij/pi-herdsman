@@ -4469,3 +4469,38 @@ test("Large model truncation remains bounded at ordinary and boundary inputs", (
     assert.ok(result.content.split("\n").length <= 2000);
   }
 });
+
+
+test("Manager supervision presentation is role-aware and classifies direct Leads", () => {
+  const snapshot = {
+    leads: [
+      lead({
+        lead: "direct-lead",
+        agentCounts: { active: 0, blocked: 0, total: 0 },
+      }),
+    ],
+  };
+  const reports = supervisionPresentationReports(snapshot);
+  assert.deepEqual(
+    reports.map(({ role }) => role),
+    ["lead"],
+  );
+  assert.equal(
+    renderSupervisionLeads(snapshot, 120, { role: "manager" })[0],
+    "● manager · 1 lead",
+  );
+  assert.equal(
+    renderSupervisionLeads(snapshot, 120, {
+      role: "manager",
+      status: "unavailable",
+    })[0],
+    "● manager · unavailable",
+  );
+  const context = formatSupervisionContext(snapshot, {
+    status: "fresh",
+    role: "manager",
+  });
+  assert.match(context, /Latest validated Manager supervision snapshot\./);
+  assert.match(context, /direct_leads: 1/);
+  assert.doesNotMatch(context, /chief|managers:|unclaimed_direct_leads/iu);
+});

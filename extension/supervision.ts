@@ -1016,7 +1016,7 @@ export type PeerRuntime = SupervisionRuntime & {
 
 export type PeerRecord = Readonly<{
   version: 1;
-  role: PeerRole;
+  role?: PeerRole;
   piSessionId: string;
   paneId: string;
   tabId: string;
@@ -1096,7 +1096,6 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     ) &&
     [
       "version",
-      "role",
       "piSessionId",
       "paneId",
       "tabId",
@@ -1105,7 +1104,9 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
       "updatedAt",
     ].every((key) => Object.hasOwn(record, key)) &&
     record.version === 1 &&
-    (record.role === "lead" || record.role === "manager") &&
+    (record.role === undefined ||
+      record.role === "lead" ||
+      record.role === "manager") &&
     validSession(record.piSessionId) &&
     validNativeIdentity(record.paneId) &&
     validNativeIdentity(record.tabId) &&
@@ -1132,7 +1133,7 @@ export function samePeerLeadRecord(
 ): boolean {
   return (
     actual.version === expected.version &&
-    actual.role === expected.role &&
+    (actual.role ?? "lead") === (expected.role ?? "lead") &&
     actual.piSessionId === expected.piSessionId &&
     actual.paneId === expected.paneId &&
     actual.tabId === expected.tabId &&
@@ -1866,7 +1867,7 @@ export function removeProjectAssignment(
 
 export type CoordinatorState = {
   version: 1;
-  role: CoordinatorRole;
+  role?: CoordinatorRole;
   instanceId: string;
   piSessionId: string;
   pendingAsk?: { askId: string; question: string; text: string };
@@ -1998,16 +1999,18 @@ export function leadCoordinationStatePath(
 function validLeadState(value: unknown): value is CoordinatorState {
   if (!value || typeof value !== "object") return false;
   const r = value as Record<string, unknown>;
-  const keys = ["version", "role", "instanceId", "piSessionId", "updatedAt"];
+  const keys = ["version", "instanceId", "piSessionId", "updatedAt"];
   if (
-    Object.keys(r).some((k) => !keys.includes(k) && k !== "pendingAsk") ||
+    Object.keys(r).some(
+      (k) => !keys.includes(k) && k !== "role" && k !== "pendingAsk",
+    ) ||
     keys.some((k) => !Object.hasOwn(r, k))
   )
     return false;
   const ask = r.pendingAsk;
   return (
     r.version === 1 &&
-    (r.role === "lead" || r.role === "manager") &&
+    (r.role === undefined || r.role === "lead" || r.role === "manager") &&
     UUID.test(String(r.instanceId)) &&
     validSession(r.piSessionId) &&
     Number.isInteger(r.updatedAt) &&
@@ -2166,7 +2169,7 @@ export function projectSupervision(options: {
     const state = states.get(agent.sessionId);
     if (
       !state ||
-      state.role !== "lead" ||
+      (state.role ?? "lead") !== "lead" ||
       duplicateAgents.has(agent.sessionId) ||
       duplicateStates.has(agent.sessionId) ||
       agent.sessionId === options.chiefSessionId ||

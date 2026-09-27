@@ -7388,7 +7388,7 @@ export default function (pi: ExtensionAPI): void {
       !state ||
       state.instanceId !== leadInstanceId ||
       state.piSessionId !== ctx.sessionManager.getSessionId() ||
-      state.role !== (activeRole() === "manager" ? "manager" : "lead") ||
+      (state.role ?? "lead") !== (activeRole() === "manager" ? "manager" : "lead") ||
       state.pendingAsk?.askId !== pendingSupervisorAsk?.askId ||
       state.pendingAsk?.question !== pendingSupervisorAsk?.question ||
       state.pendingAsk?.text !== pendingSupervisorAsk?.text
@@ -7746,7 +7746,7 @@ export default function (pi: ExtensionAPI): void {
         );
         return (
           !!state &&
-          state.role === "lead" &&
+          (state.role ?? "lead") === "lead" &&
           state.piSessionId === record.fromSessionId &&
           (record.kind !== "lead_ask" ||
             state.pendingAsk?.askId === record.askId)
@@ -7847,7 +7847,7 @@ export default function (pi: ExtensionAPI): void {
         supervisionRuntime(),
         record.leadSessionId,
       );
-      if (!state || state.role !== "lead") return false;
+      if (!state || (state.role ?? "lead") !== "lead") return false;
       return (
         record.kind !== "lead_ask" || state.pendingAsk?.askId === record.askId
       );
@@ -7859,7 +7859,7 @@ export default function (pi: ExtensionAPI): void {
       return (
         !!chief &&
         !!state &&
-        state.role === "lead" &&
+        (state.role ?? "lead") === "lead" &&
         chief.piSessionId === record.fromSessionId &&
         chief.leaseId === record.leaseId &&
         record.leadSessionId === sessionId &&
@@ -8841,7 +8841,7 @@ export default function (pi: ExtensionAPI): void {
           if (
             !state ||
             !ask ||
-            state.role !== (activeRole() === "manager" ? "lead" : "manager")
+            (state.role ?? "lead") !== (activeRole() === "manager" ? "lead" : "manager")
           )
             continue;
           if (activeRole() === "manager") {
@@ -9537,7 +9537,7 @@ export default function (pi: ExtensionAPI): void {
           if (
             managed ||
             (state &&
-              (state.role !== "lead" || state.piSessionId !== assignment.id))
+              ((state.role ?? "lead") !== "lead" || state.piSessionId !== assignment.id))
           )
             throw new Error(
               "Existing session in new worktree has a conflicting role or identity",
@@ -11548,7 +11548,7 @@ export default function (pi: ExtensionAPI): void {
             const peers = listPeerLeadRecords(peerRuntime())
               .filter(
                 (record) =>
-                  record.role === activeRole() && record.piSessionId !== self,
+                  (record.role ?? "lead") === activeRole() && record.piSessionId !== self,
               )
               .map((record) => ({
                 session: record.piSessionId,
