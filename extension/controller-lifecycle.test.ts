@@ -84,11 +84,20 @@ const ownedSessionContext = (id: string, label: string) =>
         customType: "pi-herdsman-agent-result",
         details: {
           piSessionId: id,
+          piSessionFile: nativeSessions.get(id)?.path,
           ownerSessionId: LEAD_SESSION_ID,
           runId: randomUUID(),
           requestId: randomUUID(),
           agentLabel: label,
-          agentDefinition: "agent",
+          agentDefinition:
+            (
+              nativeSessions
+                .get(id)
+                ?.entries?.find(
+                  (entry: any) =>
+                    entry?.customType === "pi-herdsman-agent-definition",
+                ) as any
+            )?.data?.definition ?? "agent",
           status: "completed",
         },
       },
