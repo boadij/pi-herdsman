@@ -37,9 +37,9 @@ managed descendants do not load the probe.
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
 generations), and `chief-tree` (current Chief/session_tree behavior).
-`chief-tree` records ordinary Lead, Chief, and post-`session_tree` active-tool
-snapshots and verifies the current branch's expected contract: Chief differs
-from Lead, and selecting a pre-Chief branch retains Chief tools. It does not
+`chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool
+snapshots and verifies Chief differs from Lead while selecting a pre-Chief
+branch restores ordinary Lead tools. It does not
 replace the broader manual Chief supervision checks below.
 
 The harness must run inside Herdr with an active Pi model selection and uses
@@ -291,7 +291,7 @@ Automated live scenario results are separate and do not replace these checks.
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
 | Normal lead has Agent, supervisor, and peer semantic tools, not staff tools                                                                                                    | NOT RUN |
 | Active Chief has exactly the five staff semantic tools, not lead controller tools                                                                                              | NOT RUN |
-| Active Chief remains exactly `staff_*` after `/tree` restores a pre-Chief Lead branch                                                                                          | NOT RUN |
+| Selecting a pre-Chief Lead branch through `/tree` exits Chief mode and restores ordinary Lead lifecycle/tool state                                                             | NOT RUN |
 | Leaving Chief persists `role` plus exact `leadTools`; resume repairs stale restored `staff_*` before another model turn                                                        | NOT RUN |
 | A legitimate ordinary branch loadout is preserved instead of being overwritten by an older `leadTools` checkpoint                                                              | NOT RUN |
 | Persisted Chief resume collision becomes suspended                                                                                                                             | NOT RUN |
