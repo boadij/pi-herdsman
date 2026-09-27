@@ -355,6 +355,63 @@ export async function runHerdr(
   return stdoutJson.result;
 }
 
+export type WorktreeGroupScope = Readonly<{
+  repoKey: string;
+  primaryWorkspaceId: string;
+  workspaceIds: readonly string[];
+}>;
+
+export async function worktreeGroupScope(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  workspaceId: string,
+  signal?: AbortSignal,
+  timeout?: number,
+): Promise<WorktreeGroupScope> {
+  const workspace = (
+    await runHerdr(pi, ctx, ["workspace", "get", workspaceId], {
+      signal,
+      timeout,
+    })
+  )?.workspace;
+  const membership = workspace?.worktree;
+  if (typeof membership?.repo_key !== "string" || !membership.repo_key)
+    throw new Error("Workspace is not part of a Herdr Git worktree group");
+
+  const listed = await runHerdr(
+    pi,
+    ctx,
+    ["worktree", "list", "--workspace", workspaceId],
+    { signal, timeout },
+  );
+  const source = listed?.source;
+  if (!source || source.repo_key !== membership.repo_key)
+    throw new Error("Herdr worktree group topology changed");
+
+  const primaryWorkspaceId =
+    source.source_workspace_id ??
+    (membership.is_linked_worktree === false ? workspaceId : undefined);
+  if (typeof primaryWorkspaceId !== "string" || !primaryWorkspaceId)
+    throw new Error("Herdr primary workspace is unavailable");
+
+  return {
+    repoKey: source.repo_key,
+    primaryWorkspaceId,
+    workspaceIds: [
+      ...new Set([
+        primaryWorkspaceId,
+        ...(Array.isArray(listed.worktrees) ? listed.worktrees : []).flatMap(
+          (worktree: HerdrRecord) =>
+            typeof worktree?.open_workspace_id === "string" &&
+            worktree.open_workspace_id
+              ? [worktree.open_workspace_id]
+              : [],
+        ),
+      ]),
+    ],
+  };
+}
+
 function workspace(ctx: ExtensionContext): string {
   const value = process.env.HERDR_WORKSPACE_ID;
   if (!value) error("herdr context", "HERDR_WORKSPACE_ID is not set");
@@ -708,6 +765,16 @@ export type StartHerdrOptions = {
   signal?: AbortSignal;
 };
 
+export type StartHerdrInPaneOptions = Omit<
+  StartHerdrOptions,
+  "placement" | "placementRevalidator" | "direction" | "env"
+> & {
+  primaryWorkspaceId: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+};
+
 export type HerdrStartPlacement =
   | { kind: "tab"; label: string; tabId?: string }
   | { kind: "split"; paneId: string };
@@ -782,7 +849,7 @@ function isAbortError(value: unknown, signal?: AbortSignal): boolean {
   );
 }
 
-async function captureStartupDiagnostic(
+export async function captureStartupDiagnostic(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   paneId: string,
@@ -1163,7 +1230,7 @@ export async function startHerdrAgent(
         paneId,
         startupDeadline,
         "start",
-        options.signal,
+        `workspace ${currentWorkspaceId} is not in primary workspace ${primaryWorkspaceId}'s worktree group`,
       );
       attempt.shellProcess = (await paneProcess(
         pi,
@@ -1313,6 +1380,47 @@ export async function startHerdrAgent(
   } finally {
     release();
   }
+  setStage("agent_result");
+  const agent = started.agent;
+  const session = sessionIdentity(agent.agent_session);
+  attempt.herdrAgent = agent.name ?? attempt.herdrAgent;
+  attempt.sessionReference = session
+    ? session.kind === "id"
+      ? { id: session.value }
+      : { path: session.value }
+    : undefined;
+  attempt.agent = agent;
+  return attempt;
+}
+
+async function validateTargetPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  workspaceId: string,
+  tabId: string,
+  paneId: string,
+  cwd: string,
+  signal?: AbortSignal,
+  deadline?: number,
+): Promise<any[]> {
+  const panes =
+    (
+      await runHerdr(pi, ctx, ["pane", "list", "--workspace", workspaceId], {
+        signal,
+        ...(deadline === undefined
+          ? {}
+          : { timeout: startupCallTimeout(deadline) }),
+      })
+    ).panes ?? [];
+  const pane = panes.find((item: any) => item.pane_id === paneId);
+  if (!pane || pane.workspace_id !== workspaceId || pane.tab_id !== tabId)
+    error("start", `pane ${paneId} topology changed before launch`);
+  if (!sameCwd(pane.cwd, cwd))
+    error("start", `pane ${paneId} cwd does not match requested cwd`, {
+      expected_cwd: cwd,
+      observed_cwd: typeof pane.cwd === "string" ? pane.cwd : null,
+    });
+  return panes;
 }
 
 function validateEnvironment(
