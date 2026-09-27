@@ -8,6 +8,47 @@ Pi/herdr boundary.
 Use disposable agents and exact-ID cleanup. Do not disturb unrelated user
 workspaces or agents.
 
+## Automated isolated smoke
+
+Run the live harness from a Pi session managed by Herdr:
+
+```sh
+npm run smoke
+npm run smoke -- core
+npm run smoke -- continuation
+npm run smoke -- chief-tree
+```
+
+`npm run smoke` runs the default `core` scenario. The harness creates a
+disposable named Herdr session with isolated Herdr configuration/state, Pi
+configuration, and Pi session storage. It launches the current worktree's
+`dist/index.js` explicitly alongside Herdr's Pi integration. The invoking
+development Agent remains outside that candidate session and owns observation
+and cleanup. The harness removes only resources it created.
+
+The candidate Pi uses `--approve` for this one invocation, trusting
+project-local files so project Agent definitions can be discovered. This does
+not change the user's project trust setting. Pi's normal extension, skill,
+prompt-template, and context-file discovery is disabled; the Pi Agent directory,
+session directory, and Herdr XDG configuration/state directories remain isolated.
+`chief-tree` additionally loads a disposable, root-only Pi probe extension;
+managed descendants do not load the probe.
+
+The available scenarios are `core` (nested delegation and candidate-extension
+propagation), `continuation` (persisted Pi-session continuation across managed
+generations), and `chief-tree` (current Chief/session_tree behavior).
+`chief-tree` records ordinary Lead, Chief, and post-`session_tree` active-tool
+snapshots and verifies the current branch's expected contract: Chief differs
+from Lead, and selecting a pre-Chief branch retains Chief tools. It does not
+replace the broader manual Chief supervision checks below.
+
+The harness must run inside Herdr with an active Pi model selection and uses
+real provider credentials/usage. Live scenarios may fail; running one is not
+evidence of a pass. It does not replace or reconfigure the installed
+Herdsman, copy normal Pi settings or extensions, or run as part of
+`npm run validate`. Run selected scenarios according to the change being
+verified; `npm run smoke` defaults to `core`.
+
 ## Preconditions
 
 Verify:
@@ -133,6 +174,8 @@ no longer lists the temporary definition, and verify no repository file changed.
 
 ## `ask_owner` round trip
 
+Owner ask/reply remains manual, unautomated coverage.
+
 Give an agent a task whose correct continuation requires an owner choice.
 
 Verify:
@@ -244,9 +287,8 @@ After every smoke:
 
 ## Chief supervision live matrix
 
-No live Pi/herdr smoke was run for the current worktree. Every scenario below
-is **NOT RUN**, not a claim of failure or success. The automated tests are not
-substitutes for these checks.
+The manual checks below are **NOT RUN**, not claims of failure or success.
+Automated live scenario results are separate and do not replace these checks.
 
 | Scenario                                                                                                                                                                       | Result  |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
@@ -311,8 +353,5 @@ substitutes for these checks.
 | Ambient and overview rendering stay within the supplied width                                                                                                                  | NOT RUN |
 | Named herdr sockets independently support one Chief each                                                                                                                       | NOT RUN |
 
-Named herdr socket independence is also **NOT RUN** because no live Pi/herdr
-runtime was available for this worktree.
-
-The automated test gate is the available evidence for this worktree; see
-[Validation](validation.md).
+Named herdr socket independence remains **NOT RUN** in this manual matrix.
+See [Validation](validation.md) for the repository test gate.
