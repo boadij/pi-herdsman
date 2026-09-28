@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.0](https://github.com/boadij/pi-herdsman/compare/v0.17.1...v0.18.0) (2026-09-28)
+
+
+### Features
+
+* add deterministic host installer ([#167](https://github.com/boadij/pi-herdsman/issues/167)) ([91ad5b1](https://github.com/boadij/pi-herdsman/commit/91ad5b1238d3080832672e197669c239d4cbe74d))
+
+
+### Tests
+
+* decouple smoke model from invoking agent ([#174](https://github.com/boadij/pi-herdsman/issues/174)) ([472bc3a](https://github.com/boadij/pi-herdsman/commit/472bc3ae9469f950ce01d00f4ed26822414485ac))
+* make async synchronization deterministic ([#172](https://github.com/boadij/pi-herdsman/issues/172)) ([8360920](https://github.com/boadij/pi-herdsman/commit/8360920beaf59f09cf887d3daa29efcc10b4ec56))
+
 ## [0.17.1](https://github.com/boadij/pi-herdsman/compare/v0.17.0...v0.17.1) (2026-09-27)
 
 
