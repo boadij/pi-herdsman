@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   assistantResultForSession,
   chiefTreeFooter,
@@ -9,6 +12,7 @@ import {
   distinctPaneCount,
   parseToolSnapshots,
   chiefTreeBranchPlan,
+  managerRecoveryFreshPrompt,
   continuationResultsForPrompt,
   initialPromptForScenario,
   inspectPaneProcesses,
@@ -18,11 +22,46 @@ import {
   nestedPaneInput,
   nestedPaneText,
   submitPaneCommand,
+  submitManagerLeave,
   parseSmokeArgs,
+  formatSmokeFailure,
+  staffDelegateResults,
+  hasManagerResultRef,
+  assertManagerRootWorktreeGroup,
+  managerPrimaryCheckout,
+  managerWorktreeOpenArgs,
+  assertManagerOpenedPrimary,
+  deleteBranchIfPresent,
+  hasSuccessfulSupervisorMessage,
+  leadReadyCompleted,
+  verifiedLeadSession,
+  managerReadyAnswer,
+  exactIsolatedSession,
+  isolatedSessionDetails,
   preparePi,
   resolveSmokeModel,
   runScenario,
 } from "../scripts/smoke.mjs";
+
+test("missing managed session file is not ready yet", async () => {
+  const piSessions = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-"));
+  try {
+    assert.equal(
+      await isolatedSessionDetails(
+        { paths: { piSessions } },
+        {
+          agent_session: {
+            kind: "path",
+            value: join(piSessions, "pending.jsonl"),
+          },
+        },
+      ),
+      undefined,
+    );
+  } finally {
+    await rm(piSessions, { recursive: true, force: true });
+  }
+});
 
 test("smoke isolates nested Herdr routing and Pi paths", () => {
   const base = {
@@ -66,7 +105,12 @@ test("smoke isolates nested Herdr routing and Pi paths", () => {
 
 test("smoke CLI parses scenarios and one-off model overrides", async () => {
   assert.deepEqual(parseSmokeArgs([]), { scenario: "core", model: undefined });
-  for (const scenario of ["core", "continuation", "chief-tree"])
+  for (const scenario of [
+    "core",
+    "continuation",
+    "chief-tree",
+    "manager-recovery",
+  ])
     assert.equal(parseSmokeArgs([scenario]).scenario, scenario);
   assert.deepEqual(
     parseSmokeArgs(["chief-tree", "--model", "provider/model:high"]),
@@ -86,6 +130,16 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
   assert.throws(() => parseSmokeArgs(["--unknown"]));
   assert.throws(() => parseSmokeArgs(["wat"]), /unknown smoke scenario/);
   await assert.rejects(runScenario({}, "wat"), /unknown smoke scenario/);
+});
+
+test("smoke failure report separates stage from error details", () => {
+  assert.equal(
+    formatSmokeFailure(
+      new TypeError("leave wait timed out"),
+      "manager-leave-output-wait",
+    ),
+    "stage: manager-leave-output-wait\nerror: TypeError: leave wait timed out",
+  );
 });
 
 test("smoke model override wins without reading Git config", async () => {
@@ -164,6 +218,421 @@ test("chief-tree startup prompt creates one ordinary Lead branch for harness con
   const prompt = initialPromptForScenario("chief-tree", {});
   assert.equal(prompt, "Reply exactly with PI_HERDSMAN_CHIEF_TREE_STARTUP.");
   assert.doesNotMatch(prompt, /\/chief|\/tree/i);
+});
+
+test("manager-recovery starts with one ordinary Lead startup turn", () => {
+  assert.equal(
+    initialPromptForScenario("manager-recovery", {}),
+    "Reply exactly with PI_HERDSMAN_MANAGER_RECOVERY_STARTUP.",
+  );
+});
+
+test("manager-recovery fresh delegation specifies only fresh-delegation fields", () => {
+  const branch = "herdsman/smoke-manager-recovery-exact";
+  const prompt = managerRecoveryFreshPrompt(branch);
+  assert.match(prompt, /staff_delegate exactly once for a fresh assignment/);
+  assert.match(prompt, /`task` argument/);
+  assert.match(
+    prompt,
+    /`branch` argument to exactly herdsman\/smoke-manager-recovery-exact/,
+  );
+  assert.match(
+    prompt,
+    /Omit `assignment` and recovery-only fields \(`base` and `files`\)/,
+  );
+});
+
+test("staff delegate results retain only valid successful delegation payloads in order", () => {
+  const messages = [
+    { toolName: "unrelated", content: '{"ok":true,"action":"delegate"}' },
+    { toolName: "staff_delegate", content: "not JSON" },
+    {
+      toolName: "staff_delegate",
+      isError: true,
+      content: '{"ok":true,"action":"delegate"}',
+    },
+    {
+      toolName: "staff_delegate",
+      content: '{"ok":true,"action":"delegate","assignment":"fresh"}',
+    },
+    {
+      toolName: "staff_delegate",
+      content:
+        '{"ok":true,"action":"delegate","assignment":"recovered","recovered":true}',
+    },
+  ];
+  const contents = messages
+    .map((message, index) =>
+      JSON.stringify({
+        type: "message",
+        id: `entry-${index}`,
+        message: { role: "toolResult", ...message },
+      }),
+    )
+    .join("\n");
+  assert.deepEqual(staffDelegateResults(contents), [
+    { ok: true, action: "delegate", assignment: "fresh" },
+    { ok: true, action: "delegate", assignment: "recovered", recovered: true },
+  ]);
+});
+
+test("manager result ref is read from the delivered report-result custom message", () => {
+  const assignment = "assignment-id";
+  const contents = [
+    {
+      type: "message",
+      message: { role: "user", content: `Result ref: result:${assignment}` },
+    },
+    {
+      type: "custom_message",
+      customType: "other",
+      content: `Result ref: result:${assignment}`,
+    },
+    {
+      type: "custom_message",
+      customType: "pi-herdsman-report_result",
+      content: "Result ref: result:other-assignment",
+    },
+    {
+      type: "custom_message",
+      customType: "pi-herdsman-report_result",
+      content: `Lead result received.\nResult ref: result:${assignment}`,
+    },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+  assert.equal(hasManagerResultRef(contents, assignment), true);
+  assert.equal(hasManagerResultRef(contents, "missing"), false);
+});
+
+test("Manager recovery requires the primary workspace's verified Herdr worktree group", () => {
+  const workspace = {
+    worktree: { repo_key: "repo", is_linked_worktree: false },
+  };
+  assert.equal(
+    assertManagerRootWorktreeGroup("root", workspace, {
+      source: { repo_key: "repo" },
+      worktrees: [],
+    }),
+    "root",
+  );
+  assert.throws(
+    () =>
+      assertManagerRootWorktreeGroup(
+        "root",
+        {},
+        { source: { repo_key: "repo" } },
+      ),
+    /belong to a Herdr Git worktree group/,
+  );
+  assert.throws(
+    () =>
+      assertManagerRootWorktreeGroup("root", workspace, {
+        source: { repo_key: "other" },
+      }),
+    /could not verify worktree-group topology/,
+  );
+  assert.throws(
+    () =>
+      assertManagerRootWorktreeGroup(
+        "linked",
+        {
+          worktree: { repo_key: "repo", is_linked_worktree: true },
+        },
+        { source: { repo_key: "repo", source_workspace_id: "root" } },
+      ),
+    /requires root workspace linked to be the primary workspace/,
+  );
+});
+
+test("Manager recovery uses and verifies the isolated primary checkout", () => {
+  const checkout = "/repo/primary";
+  const hostWorkspace = {
+    worktree: {
+      repo_key: "repo",
+      is_linked_worktree: false,
+      checkout_path: checkout,
+    },
+  };
+  const hostTopology = {
+    source: {
+      repo_key: "repo",
+      source_workspace_id: "host",
+      source_checkout_path: checkout,
+    },
+  };
+  assert.equal(
+    managerPrimaryCheckout("host", hostWorkspace, hostTopology),
+    checkout,
+  );
+  assert.throws(
+    () =>
+      managerPrimaryCheckout("host", hostWorkspace, {
+        source: { ...hostTopology.source, source_workspace_id: "linked" },
+      }),
+    /requires root workspace host to be the primary workspace/,
+  );
+  assert.throws(
+    () =>
+      managerPrimaryCheckout("host", hostWorkspace, {
+        source: { ...hostTopology.source, source_checkout_path: "/repo/other" },
+      }),
+    /checkout paths do not match/,
+  );
+  assert.throws(
+    () =>
+      managerPrimaryCheckout("host", hostWorkspace, {
+        source: { repo_key: "repo", source_workspace_id: "host" },
+      }),
+    /source checkout path must be a non-empty absolute path/,
+  );
+
+  assert.deepEqual(managerWorktreeOpenArgs("isolated-root", checkout), [
+    "worktree",
+    "open",
+    "--workspace",
+    "isolated-root",
+    "--path",
+    checkout,
+    "--no-focus",
+  ]);
+  assert.throws(() =>
+    managerWorktreeOpenArgs("isolated-root", "relative/path"),
+  );
+
+  const workspace = {
+    workspace_id: "isolated-root",
+    worktree: {
+      repo_key: "repo",
+      is_linked_worktree: false,
+      checkout_path: checkout,
+    },
+  };
+  const topology = {
+    source: {
+      repo_key: "repo",
+      source_workspace_id: "isolated-root",
+      source_checkout_path: checkout,
+    },
+  };
+  assertManagerOpenedPrimary("isolated-root", checkout, workspace, topology);
+  assert.throws(() =>
+    assertManagerOpenedPrimary("isolated-root", checkout, workspace, {
+      source: { ...topology.source, repo_key: "other" },
+    }),
+  );
+  assert.throws(() =>
+    assertManagerOpenedPrimary("isolated-root", checkout, workspace, {
+      source: { ...topology.source, source_workspace_id: "elsewhere" },
+    }),
+  );
+  assert.throws(
+    () =>
+      assertManagerOpenedPrimary("isolated-root", checkout, workspace, {
+        source: { repo_key: "repo", source_workspace_id: "isolated-root" },
+      }),
+    /source checkout path must be a non-empty absolute path/,
+  );
+});
+
+test("smoke branch cleanup treats only a proven absent local branch as already clean", async () => {
+  const calls = [];
+  const absent = Object.assign(new Error("not found"), { code: 1 });
+  assert.equal(
+    await deleteBranchIfPresent("herdsman/smoke-exact", async (...args) => {
+      calls.push(args);
+      throw absent;
+    }),
+    false,
+  );
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0][1], [
+    "show-ref",
+    "--verify",
+    "--quiet",
+    "refs/heads/herdsman/smoke-exact",
+  ]);
+
+  calls.length = 0;
+  assert.equal(
+    await deleteBranchIfPresent("herdsman/smoke-exact", async (...args) => {
+      calls.push(args);
+      return { stdout: "", stderr: "", pid: 1 };
+    }),
+    true,
+  );
+  assert.deepEqual(
+    calls.map((call) => call[1][0]),
+    ["show-ref", "branch"],
+  );
+  await assert.rejects(
+    deleteBranchIfPresent("herdsman/smoke-exact", async () => {
+      throw Object.assign(new Error("git failed"), { code: 128 });
+    }),
+    /git failed/,
+  );
+});
+
+test("Manager recovery READY requires a successful supervisor_message tool result", () => {
+  const ready = "MANAGER_RECOVERY_READY";
+  const promptOnly = JSON.stringify({
+    type: "message",
+    message: { role: "user", content: `Please send ${ready}.` },
+  });
+  const call = JSON.stringify({
+    type: "message",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "ready-call",
+          name: "supervisor_message",
+          arguments: { message: ready },
+        },
+      ],
+    },
+  });
+  const result = (isError = false) =>
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "supervisor_message",
+        toolCallId: "ready-call",
+        isError,
+        content: "Message sent to supervisor.",
+      },
+    });
+  assert.equal(hasSuccessfulSupervisorMessage(promptOnly, ready), false);
+  assert.equal(
+    hasSuccessfulSupervisorMessage(`${call}\n${result(true)}`, ready),
+    false,
+  );
+  assert.equal(hasSuccessfulSupervisorMessage(call, ready), false);
+  assert.equal(
+    hasSuccessfulSupervisorMessage(`${call}\n${result()}`, ready),
+    true,
+  );
+  assert.equal(leadReadyCompleted(`${call}\n${result()}`, ready), false);
+  const stopped = JSON.stringify({
+    type: "message",
+    message: { role: "assistant", stopReason: "stop", content: "Waiting." },
+  });
+  assert.equal(
+    leadReadyCompleted(`${call}\n${stopped}\n${result()}`, ready),
+    false,
+  );
+  assert.equal(
+    leadReadyCompleted(`${result()}\n${call}\n${stopped}`, ready),
+    false,
+  );
+  assert.equal(
+    leadReadyCompleted(`${call}\n${result(true)}\n${stopped}`, ready),
+    false,
+  );
+  assert.equal(
+    leadReadyCompleted(`${call}\n${result()}\n${stopped}`, ready),
+    true,
+  );
+});
+
+test("Manager recovery READY never matches missing session identities", () => {
+  for (const [child, expected] of [
+    [undefined, undefined],
+    [undefined, "lead-id"],
+    [{ id: "lead-id" }, undefined],
+    [{ id: undefined }, undefined],
+    [{ id: "" }, ""],
+  ])
+    assert.equal(verifiedLeadSession(child, expected), false);
+  assert.equal(verifiedLeadSession({ id: "lead-id" }, "lead-id"), true);
+});
+
+test("Manager READY answer follows delivered message even on a separate followUp branch", () => {
+  const lead = "lead-id";
+  const entries = [
+    { type: "session", id: "chief-id" },
+    {
+      type: "message",
+      id: "delegation",
+      message: { role: "user", content: "delegate" },
+    },
+    {
+      type: "message",
+      id: "premature",
+      parentId: "delegation",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "PI_HERDSMAN_MANAGER_RECOVERY_READY",
+      },
+    },
+    {
+      type: "custom_message",
+      id: "receipt",
+      customType: "pi-herdsman-lead_message",
+      content: `From lead ${lead} to chief chief-id: MANAGER_RECOVERY_READY`,
+    },
+    {
+      type: "message",
+      id: "follow-up",
+      parentId: "receipt",
+      message: { role: "user", content: "followUp" },
+    },
+    {
+      type: "message",
+      id: "answer",
+      parentId: "follow-up",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "PI_HERDSMAN_MANAGER_RECOVERY_READY",
+      },
+    },
+  ];
+  const contents = (items) =>
+    items.map((entry) => JSON.stringify(entry)).join("\n");
+  assert.deepEqual(managerReadyAnswer(contents(entries.slice(0, 3)), lead), {
+    receipt: false,
+    answer: null,
+  });
+  assert.deepEqual(managerReadyAnswer(contents(entries.slice(0, 5)), lead), {
+    receipt: true,
+    answer: null,
+  });
+  assert.equal(
+    managerReadyAnswer(contents(entries), lead).answer?.id,
+    "answer",
+  );
+  assert.equal(
+    managerReadyAnswer(contents(entries), "wrong-lead").answer,
+    null,
+  );
+});
+
+test("ID-only Lead identity resolves only exact bounded isolated session", async () => {
+  const piSessions = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-"));
+  try {
+    const contents = JSON.stringify({ type: "session", id: "lead-id" });
+    await writeFile(join(piSessions, "opaque.jsonl"), contents);
+    assert.equal(
+      (await exactIsolatedSession({ paths: { piSessions } }, "lead-id"))
+        ?.contents,
+      contents,
+    );
+    assert.equal(
+      await exactIsolatedSession({ paths: { piSessions } }, "other"),
+      undefined,
+    );
+    await writeFile(join(piSessions, "duplicate.jsonl"), contents);
+    await assert.rejects(
+      exactIsolatedSession({ paths: { piSessions } }, "lead-id"),
+      /ambiguous/,
+    );
+  } finally {
+    await rm(piSessions, { recursive: true, force: true });
+  }
 });
 
 test("chief-tree requires a persisted post-Chief turn and targets the pre-Chief assistant branch", () => {
@@ -399,6 +868,37 @@ test("pane commands submit literal text with one explicit Enter", async () => {
     ["herdr", ["pane", "send-text", "w1:p2", "/chief"]],
     ["herdr", ["pane", "send-keys", "w1:p2", "enter"]],
   ]);
+});
+
+test("Manager leave submits text and Enter as one ordered pane operation", async () => {
+  const ctx = {
+    paths: {
+      herdrConfig: "/tmp/smoke/herdr.toml",
+      xdgConfig: "/tmp/smoke/xdg-config",
+      xdgState: "/tmp/smoke/xdg-state",
+      piAgent: "/tmp/smoke/pi-agent",
+      piSessions: "/tmp/smoke/pi-sessions",
+    },
+    sessionName: "pi-herdsman-smoke-test",
+  };
+  const calls = [];
+  await submitManagerLeave(ctx, "w1:p2", async (file, args, options) => {
+    calls.push([file, args]);
+    assert.equal(options.env.HERDR_SESSION, ctx.sessionName);
+    return { stdout: "", stderr: "", pid: 123 };
+  });
+  assert.deepEqual(calls, [
+    ["herdr", ["pane", "run", "w1:p2", "/manager leave"]],
+  ]);
+  let attempts = 0;
+  await assert.rejects(
+    submitManagerLeave(ctx, "w1:p2", async () => {
+      attempts++;
+      throw new Error("submission uncertain");
+    }),
+    /submission uncertain/,
+  );
+  assert.equal(attempts, 1);
 });
 
 test("Chief tree probe is opt-in, last in root extension order, and validates three tool snapshots", () => {

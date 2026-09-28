@@ -35,6 +35,7 @@ npm run smoke
 npm run smoke -- core
 npm run smoke -- continuation
 npm run smoke -- chief-tree
+npm run smoke -- manager-recovery
 ```
 
 `npm run smoke` runs the default `core` scenario. The harness creates a
@@ -54,7 +55,10 @@ managed descendants do not load the probe.
 
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
-generations), and `chief-tree` (current Chief/session_tree behavior).
+generations), `chief-tree` (current Chief/session_tree behavior), and
+`manager-recovery` (real Manager delegation, exact-session executor loss and
+recovery, no-duplicate-worktree identity, `supervisor_result` settlement,
+durable result retention, and successful Manager leave).
 `chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool
 snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
@@ -306,22 +310,18 @@ After every smoke:
 
 For Manager lifecycle acceptance, use the configured smoke model above in
 disposable real Pi/Herdr sessions. Record the assignment ID, branch, workspace,
-pane, Pi session ID, and exact-ID cleanup result for each sequence:
+pane, Pi session ID, and exact-ID cleanup result for each sequence. Automated
+`manager-recovery` covers the active-loss recovery lifecycle. The
+normal-completion sequence and broader supervision matrix remain useful manual
+acceptance where explicitly run.
 
 1. From an ordinary Lead in the primary workspace, activate `/manager` and
    `staff_delegate` a bounded task. Verify a real linked worktree and child
    Lead, then have that Lead call `supervisor_result`. Verify the Manager
    receives `report_result`, the assignment is removed, the canonical result
    remains, and `/manager leave` succeeds.
-2. Activate `/manager` and delegate another task. Once the assignment is
-   `active`, terminate only its delegated Pi process, leaving its checkout
-   available. Call `staff_delegate assignment=<same id>`. Verify the same
-   assignment, branch, and Pi session resume without another checkout; have
-   the Lead complete with `supervisor_result`, and verify the assignment is
-   removed after accepted delivery.
-
-These are manual acceptance checks, not automated smoke scenarios or claims
-that a run passed. Clean up only disposable resources by exact identity.
+   These manual acceptance checks are not claims that a run passed. Clean up only
+   disposable resources by exact identity.
 
 The manual checks below are **NOT RUN**, not claims of failure or success.
 Automated live scenario results are separate and do not replace these checks.
