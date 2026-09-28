@@ -7498,6 +7498,9 @@ export default function (pi: ExtensionAPI): void {
     return (
       !!current &&
       current.piSessionId === sessionId &&
+      current.leaseId === leaseId &&
+      pendingSupervisorAsk.supervisorSessionId === sessionId &&
+      pendingSupervisorAsk.supervisorLeaseId === leaseId &&
       ("repoKey" in current ? "manager" : "chief") ===
         pendingSupervisorAsk.supervisorRole
     );
@@ -8473,19 +8476,42 @@ export default function (pi: ExtensionAPI): void {
           assignment.phase,
         ),
     );
-    const reports = await directReports(ctx);
-    if (assignments.length || reports.some((report: any) => report.needsYou))
+    const pending = await countSupervisedPendingAsks?.(ctx);
+    if (assignments.length || !pending || pending.unknown || pending.count)
       throw new Error(
         "Cannot leave Manager while project assignments or Manager-bound asks remain unresolved",
       );
+    controllerRole = "lead";
+    try {
+      persistRole("lead");
+      if (!persistCoordinatorState())
+        throw new Error("Lead coordination state could not be persisted");
+    } catch (error) {
+      controllerRole = "manager";
+      try {
+        persistRole("manager");
+        if (!persistCoordinatorState())
+          throw new Error("Manager coordination state could not be restored");
+      } catch (rollbackError) {
+        roleSuspended = true;
+        markLeadCoordinationUnhealthy(ctx);
+        appendDurableError(pi, ctx, "pi_herdsman_role_error", rollbackError);
+        reconcileRoleTools();
+      }
+      throw error;
+    }
     ++peerPresenceGeneration;
     removePeerPresence();
-    managerLease.release();
+    try {
+      managerLease.release();
+    } catch (error) {
+      managerLease = undefined;
+      roleSuspended = true;
+      markLeadCoordinationUnhealthy(ctx);
+      reconcileRoleTools();
+      throw error;
+    }
     managerLease = undefined;
-    controllerRole = "lead";
-    persistRole("lead");
-    if (!persistCoordinatorState())
-      throw new Error("Lead coordination state could not be persisted");
     reconcileRoleTools();
     clearSupervisionUI?.();
     startNormalUI?.(ctx);

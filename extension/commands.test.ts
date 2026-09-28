@@ -17,6 +17,7 @@ import {
   claimChiefLease,
   listProjectAssignments,
   listCoordinationMessagePaths,
+  managerDescriptorPath,
   readChiefMessage,
   readManagerDescriptor,
   listPeerLeadRecords,
@@ -371,10 +372,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       "manager",
     );
     await first.commandOptions.get("manager").handler("leave", ctx1);
-    assert.deepEqual(first.pi.getActiveTools(), ["read", ...managerTools]);
+    assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
-      "manager",
+      "lead",
     );
     await first.events.get("session_shutdown")![0]();
     const replacement = fakeChiefPi({ activeTools: ["read"], exec });
@@ -394,6 +395,190 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
   } finally {
     await second.events.get("session_shutdown")?.[0]();
     await first.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("Manager leave retains its lease and role when persistence fails", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "manager-pane";
+  process.env.HERDR_TAB_ID = "manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-leave-failure-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec: (_command, args) =>
+      args[0] === "workspace" && args[1] === "get"
+        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        : args[0] === "worktree" && args[1] === "list"
+          ? respond({
+              source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+              worktrees: [],
+            })
+          : isAgentList(args)
+            ? respond({ agents: [] })
+            : isApiSnapshot(args)
+              ? respond({ snapshot: { agents: [], panes: [] } })
+              : respond({}),
+  });
+  const ctx = fakeContext() as any;
+  const notices: string[] = [];
+  ctx.ui.notify = (message: string) => notices.push(message);
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get("manager").handler("", ctx);
+    const leaseId = readManagerDescriptor(
+      supervisionRuntime(),
+      WORKSPACE,
+    )?.leaseId;
+    assert.ok(leaseId);
+    const originalAppend = pi.pi.appendEntry;
+    for (const failedType of ["pi-herdsman-role", "pi-herdsman-lead-state"]) {
+      let failed = false;
+      pi.pi.appendEntry = (type: string, data: unknown) => {
+        if (type === failedType && !failed) {
+          failed = true;
+          throw new Error(`injected ${type} failure`);
+        }
+        originalAppend(type, data);
+      };
+      await pi.commandOptions.get("manager").handler("leave", ctx);
+      pi.pi.appendEntry = originalAppend;
+      assert.equal(failed, true, notices.join("; "));
+      assert.ok(
+        notices.some(
+          (message) =>
+            message.includes(`injected ${failedType} failure`) ||
+            message.includes("Lead coordination state could not be persisted"),
+        ),
+      );
+      assert.equal(
+        readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+        leaseId,
+      );
+      assert.equal(
+        readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+        "manager",
+      );
+      assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
+    }
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+      undefined,
+    );
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+      "lead",
+    );
+    await pi.commandOptions.get("manager").handler("", ctx);
+    const suspendedLease = readManagerDescriptor(
+      supervisionRuntime(),
+      WORKSPACE,
+    )?.leaseId;
+    assert.ok(suspendedLease);
+    pi.pi.appendEntry = (type: string, data: unknown) => {
+      if (type === "pi-herdsman-role")
+        throw new Error("role storage unavailable");
+      originalAppend(type, data);
+    };
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    pi.pi.appendEntry = originalAppend;
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+      suspendedLease,
+    );
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID),
+      undefined,
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("Manager leave suspends authority when lease release fails", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "manager-pane";
+  process.env.HERDR_TAB_ID = "manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-release-failure-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec: (_command, args) =>
+      args[0] === "workspace" && args[1] === "get"
+        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        : args[0] === "worktree" && args[1] === "list"
+          ? respond({
+              source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+              worktrees: [],
+            })
+          : isAgentList(args)
+            ? respond({ agents: [] })
+            : isApiSnapshot(args)
+              ? respond({ snapshot: { agents: [], panes: [] } })
+              : respond({}),
+  });
+  const ctx = fakeContext() as any;
+  const notices: string[] = [];
+  ctx.ui.notify = (message: string) => notices.push(message);
+  registerExtension!(pi.pi as never);
+  const runtime = supervisionRuntime();
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get("manager").handler("", ctx);
+    const lock = `${managerDescriptorPath(runtime, WORKSPACE)}.lock`;
+    const owner = realFs.readdirSync(lock)[0];
+    assert.ok(owner);
+    const originalAppend = pi.pi.appendEntry;
+    pi.pi.appendEntry = (type: string, data: unknown) => {
+      originalAppend(type, data);
+      if (type === "pi-herdsman-lead-state")
+        realFs.writeFileSync(join(lock, owner), "{}");
+    };
+
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+
+    assert.ok(
+      notices.some((message) =>
+        message.includes(
+          "Unable to verify Manager supervision lease ownership",
+        ),
+      ),
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
+    assert.equal(
+      readLeadCoordinationState(runtime, LEAD_SESSION_ID),
+      undefined,
+    );
+    await pi.commandOptions.get("manager").handler("", ctx);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(runtime.root, { recursive: true, force: true });
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;

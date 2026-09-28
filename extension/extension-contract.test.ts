@@ -15,6 +15,7 @@ import {
   listCoordinationMessagePaths,
   invalidateLeadCoordinationState,
   listChiefMessagePaths,
+  readChiefDescriptor,
   readPeerLeadRecord,
   removePeerLeadRecord,
   removeChiefMessage,
@@ -3296,6 +3297,56 @@ test("registered lead and replacement chief exchange messages and asks", async (
       chiefListTool.execute("list", {}, undefined, undefined, chiefContext),
       /Supervisor lease is no longer active/,
     );
+    const leadInboxBeforeReentry = listChiefMessagePaths(
+      supervisionRuntime(),
+      leadId,
+    );
+    const reentered = fakePi({
+      exec,
+      entries: [...chiefEntries],
+      allTools: REGISTERED_ROLE_TOOLS,
+    });
+    registerExtension!(reentered.pi as never);
+    const reenteredContext = fakeContext(chiefEntries) as any;
+    reenteredContext.sessionManager = {
+      ...reenteredContext.sessionManager,
+      getSessionId: () => chiefId,
+      getSessionFile: () => chiefPath,
+    };
+    await reentered.events.get("session_start")![0](
+      undefined,
+      reenteredContext,
+    );
+    try {
+      const newLease = readChiefDescriptor(
+        supervisionRuntime().descriptor,
+      )?.leaseId;
+      assert.ok(newLease);
+      assert.notEqual(newLease, missingAsk.leaseId);
+      const sameSessionReply = reentered.tools.find(
+        (tool) => tool.name === "staff_reply",
+      )!;
+      await sameSessionReply.execute(
+        "reply",
+        { session: leadId, askId, message: "Wrong lease" },
+        undefined,
+        undefined,
+        reenteredContext,
+      );
+      await t.waitFor(() =>
+        assert.deepEqual(
+          listChiefMessagePaths(supervisionRuntime(), leadId),
+          leadInboxBeforeReentry,
+        ),
+      );
+      assert.equal(
+        readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk
+          ?.askId,
+        askId,
+      );
+    } finally {
+      await reentered.events.get("session_shutdown")![0]();
+    }
     chiefAgent = {
       ...chiefAgent,
       pane_id: "replacement-pane",
@@ -3350,20 +3401,21 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     assertToolResult(reply);
     assert.equal(reply.details?.session, leadId);
-    assert.equal("lead" in (reply.details ?? {}), false);
-    assert.equal(
-      reply.details?.next_action,
-      "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
-    );
     await t.waitFor(() =>
       assert.equal(
-        readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk,
-        undefined,
+        listChiefMessagePaths(supervisionRuntime(), leadId).length,
+        0,
       ),
     );
-    assert.match(
-      String(lead.sentMessageCalls.at(-1)?.message?.content),
-      /From chief .* to lead .*Use the service account/s,
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk
+        ?.askId,
+      askId,
+    );
+    assert.ok(
+      !lead.sentMessageCalls.some((call) =>
+        String(call.message?.content).includes("Use the service account"),
+      ),
     );
     const beforeFailedAsk = readLeadCoordinationState(
       supervisionRuntime(),
@@ -3371,9 +3423,9 @@ test("registered lead and replacement chief exchange messages and asks", async (
     );
     chiefAgent = { ...chiefAgent, pane_id: "stale-pane" };
     await assert.rejects(
-      leadAskTool.execute(
-        "ask",
-        { question: "This moved Chief must be rejected." },
+      leadTool.execute(
+        "message",
+        { message: "This moved Chief must be rejected." },
         undefined,
         undefined,
         leadContext,
