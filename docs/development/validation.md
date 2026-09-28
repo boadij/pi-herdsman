@@ -139,6 +139,8 @@ npm run smoke -- chief-tree
 ```
 
 `npm run smoke` defaults to `core`. Run it from an active Herdr-managed Pi
-session with a selected model; it incurs real provider usage and may fail.
+session; it incurs real provider usage and may fail. The smoke model is
+configured once through `pi-herdsman.smoke-model` in Git configuration, or
+overridden for one run with `--model`. See [Smoke testing](smoke-testing.md) for setup.
 Live smoke is opt-in and not part of `npm run validate`. See [Smoke testing](smoke-testing.md)
 for its one-invocation project trust scope and isolated runtime boundaries.

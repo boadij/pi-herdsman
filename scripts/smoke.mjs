@@ -16,12 +16,13 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const scenarioNames = ["core", "continuation", "chief-tree"];
+const SMOKE_MODEL_KEY = "pi-herdsman.smoke-model";
 const MAX_SOCKET_PATH_BYTES = 100;
 const MAX_SESSION_BYTES = 8 * 1024 * 1024;
 const MAX_CHIEF_TREE_RESULT_BYTES = 16 * 1024;
@@ -35,10 +36,42 @@ const HERDR_ROUTING_KEYS = [
 ];
 
 export function parseScenario(args) {
+  if (args.length > 1) throw new Error(`unexpected smoke argument: ${args[1]}`);
   const scenario = args[0] ?? "core";
   if (!scenarioNames.includes(scenario))
     throw new Error(`unknown smoke scenario: ${scenario}`);
   return scenario;
+}
+
+export function parseSmokeArgs(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { model: { type: "string" } },
+  });
+  return { scenario: parseScenario(positionals), model: values.model };
+}
+
+export async function resolveSmokeModel(override, execute = run) {
+  if (override !== undefined) {
+    const model = override.trim();
+    if (!model) throw new Error("smoke --model must not be empty");
+    return model;
+  }
+  try {
+    const { stdout } = await execute(
+      "git",
+      ["config", "--get", SMOKE_MODEL_KEY],
+      { cwd: repoRoot },
+    );
+    const model = stdout.trim();
+    if (model) return model;
+  } catch (error) {
+    if (error?.code !== 1) throw error;
+  }
+  throw new Error(
+    `smoke model is not configured; run: git config --local ${SMOKE_MODEL_KEY} 'provider/model:thinking' or pass --model`,
+  );
 }
 
 export function isolatedEnv(base, paths) {
@@ -100,8 +133,6 @@ export function candidateArgs(config) {
       : []),
     "--model",
     config.model,
-    "--thinking",
-    config.thinking,
   ];
   if (config.chiefTreeProbeExtension)
     assert.ok(
@@ -419,8 +450,6 @@ async function tryHerdr(args, options = {}) {
 function preflight() {
   if (process.env.HERDR_ENV !== "1" || !process.env.HERDR_WORKSPACE_ID)
     throw new Error("smoke must run from a Herdr-managed Pi session");
-  for (const key of ["PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"])
-    if (!process.env[key]) throw new Error(`smoke requires ${key}`);
 }
 
 async function createIsolation() {
@@ -465,21 +494,16 @@ async function linkIfPresent(source, target) {
   }
 }
 
-async function preparePi(paths, model) {
+export async function preparePi(paths, model, execute = run) {
   const sourceAgentDir =
     process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
   const env = isolatedEnv(process.env, paths);
-  const authArgs = [
-    "auth",
-    "check",
-    "--provider",
-    process.env.PI_PROVIDER,
-    "--model",
-    model,
-    "--no-refresh",
-  ];
+  const authArgs = ["auth", "check", "--model", model, "--no-refresh"];
   try {
-    await run("pi", authArgs, { env, stdio: ["ignore", "ignore", "ignore"] });
+    await execute("pi", authArgs, {
+      env,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
     return "ambient";
   } catch {
     if (
@@ -489,7 +513,10 @@ async function preparePi(paths, model) {
         "Pi auth check failed and no current auth.json is available",
       );
     try {
-      await run("pi", authArgs, { env, stdio: ["ignore", "ignore", "ignore"] });
+      await execute("pi", authArgs, {
+        env,
+        stdio: ["ignore", "ignore", "ignore"],
+      });
       return "auth.json symlink";
     } catch {
       throw new Error(
@@ -668,8 +695,6 @@ async function startCandidate(ctx) {
       ? { chiefTreeProbeExtension: ctx.chiefTreeProbeExtension }
       : {}),
     model: ctx.model,
-    thinking: ctx.thinking,
-    prompt,
   });
   await run(
     "herdr",
@@ -1501,9 +1526,10 @@ function cleanupEvidence(owned) {
 }
 
 async function main() {
-  const scenario = parseScenario(process.argv.slice(2));
+  const args = parseSmokeArgs(process.argv.slice(2));
   preflight();
-  const model = `${process.env.PI_PROVIDER}/${process.env.PI_MODEL}`;
+  const model = await resolveSmokeModel(args.model);
+  const scenario = args.scenario;
   await run("npm", ["run", "build"], { cwd: repoRoot });
   const paths = await createIsolation();
   const owned = {};
@@ -1527,7 +1553,6 @@ async function main() {
     sessionName: undefined,
     paths,
     model,
-    thinking: process.env.PI_REASONING_LEVEL,
     expectedPackage: `${pkg.name}@${pkg.version}`,
   };
   ctx.initialPrompt = initialPromptForScenario(scenario, ctx);
@@ -1547,6 +1572,7 @@ async function main() {
     ctx.rootPaneId = await startCandidate(ctx);
     await runScenario(ctx, scenario);
     console.log(`smoke ${scenario}: PASS`);
+    console.log(`model: ${ctx.model}`);
     console.log(`candidate: ${ctx.candidateExtension}`);
     if (scenario === "core") {
       console.log(`descendant panes: ${ctx.descendantCount}`);

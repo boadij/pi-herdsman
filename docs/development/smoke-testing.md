@@ -10,6 +10,24 @@ workspaces or agents.
 
 ## Automated isolated smoke
 
+Configure the smoke model once for the repository:
+
+```sh
+git config --local pi-herdsman.smoke-model \
+  'provider/model:thinking'
+```
+
+Repository Git configuration is shared by linked worktrees by default, so the
+same smoke profile applies when a Lead or managed Agent runs the harness from
+another worktree. A user-wide fallback can instead be configured with
+`git config --global`.
+
+Override it for one invocation with:
+
+```sh
+npm run smoke -- chief-tree --model 'provider/model:thinking'
+```
+
 Run the live harness from a Pi session managed by Herdr:
 
 ```sh
@@ -42,8 +60,10 @@ snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
 replace the broader manual Chief supervision checks below.
 
-The harness must run inside Herdr with an active Pi model selection and uses
-real provider credentials/usage. Live scenarios may fail; running one is not
+The harness must run inside Herdr and requires a configured smoke model or an
+explicit `--model` override. The smoke model is independent of the invoking Pi
+session's active model and reasoning level. Live smoke uses real provider
+credentials and usage. Live scenarios may fail; running one is not
 evidence of a pass. It does not replace or reconfigure the installed
 Herdsman, copy normal Pi settings or extensions, or run as part of
 `npm run validate`. Run selected scenarios according to the change being
