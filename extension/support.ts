@@ -1984,18 +1984,6 @@ export function testGate<T = void>(): {
   return { promise, resolve };
 }
 
-export async function waitForTestCondition(
-  condition: () => boolean,
-  message: string,
-  timeoutMs = 100,
-): Promise<void> {
-  for (let attempt = 0; attempt < timeoutMs; attempt++) {
-    if (condition()) return;
-    await new Promise<void>((resolve) => setTimeout(resolve, 1));
-  }
-  assert.fail(message);
-}
-
 export function consumeMailboxRequest(
   mailbox: string,
   onRequest: (request: RequestRecord) => void | Promise<void>,
@@ -2074,6 +2062,7 @@ export function createStagedAssignmentFixture(
   let preSubmitValidationReady = false;
   let acceptedRequestIdWritten: string | undefined;
   let workingObservations = 0;
+  let renderRequests = 0;
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
@@ -2207,7 +2196,7 @@ export function createStagedAssignmentFixture(
       assertWidgetContent(content);
       if (typeof content === "function")
         widget = content(
-          { requestRender: () => undefined },
+          { requestRender: () => renderRequests++ },
           {
             fg: (_color: string, text: string) => text,
             bold: (text: string) => text,
@@ -2255,6 +2244,9 @@ export function createStagedAssignmentFixture(
     },
     get workingObservations(): number {
       return workingObservations;
+    },
+    get renderRequests(): number {
+      return renderRequests;
     },
     releaseInitialStatus: () =>
       initialStatus.resolve(
