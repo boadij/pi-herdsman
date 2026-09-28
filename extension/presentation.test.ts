@@ -444,7 +444,15 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
       lead({
         lead: "ask",
         displayName: "ask",
+        needsYou: true,
         pendingAskId: "ask-1",
+        runtimeState: "blocked",
+      }),
+      lead({
+        lead: "orphan",
+        displayName: "orphan",
+        needsYou: false,
+        pendingAskId: "old-ask",
         runtimeState: "blocked",
       }),
     ]);
@@ -464,7 +472,14 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
     );
     assert.deepEqual(
       groups.get("BLOCKED")!.map((item) => item.lead),
-      ["blocked"],
+      ["blocked", "orphan"],
+    );
+    assert.equal(
+      renderSupervisionLeads(
+        [displays.find((item) => item.lead === "orphan")!],
+        120,
+      )[1]!.includes("!"),
+      false,
     );
     assert.equal(
       groups.get("NEEDS YOU")!.some((item) => item.lead === "blocked"),
@@ -536,7 +551,12 @@ test("Supervision display labels remain unique under suffix collisions", (t) => 
 test("Supervision rows cap ordinary leads, retain attention, and fit every width", (t) => {
   {
     const leads = [
-      lead({ lead: "ask", displayName: "attention", pendingAskId: "q" }),
+      lead({
+        lead: "ask",
+        displayName: "attention",
+        needsYou: true,
+        pendingAskId: "q",
+      }),
       ...Array.from({ length: 8 }, (_, index) =>
         lead({ lead: `lead-${index}`, displayName: `lead-${index}` }),
       ),

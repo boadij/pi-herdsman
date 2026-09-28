@@ -402,6 +402,121 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
   }
 });
 
+test("Manager replacement can leave with an ask bound to its old lease", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "manager-pane";
+  process.env.HERDR_TAB_ID = "manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-orphan-ask-${randomUUID()}.sock`,
+  );
+  const leadSession = `lead-${randomUUID()}`;
+  const lead = {
+    pane_id: "lead-pane",
+    tab_id: "lead-tab",
+    workspace_id: WORKSPACE,
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: leadSession,
+    },
+  };
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec: (_command, args) =>
+      args[0] === "workspace" && args[1] === "get"
+        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        : args[0] === "worktree" && args[1] === "list"
+          ? respond({
+              source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+              worktrees: [],
+            })
+          : isAgentList(args)
+            ? respond({ agents: [lead] })
+            : isApiSnapshot(args)
+              ? respond({ snapshot: { agents: [lead], panes: [lead] } })
+              : respond({}),
+  });
+  const ctx = fakeContext() as any;
+  const notices: string[] = [];
+  ctx.ui.notify = (message: string) => notices.push(message);
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get("manager").handler("", ctx);
+    const oldLease = readManagerDescriptor(supervisionRuntime(), WORKSPACE)!;
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    await pi.commandOptions.get("manager").handler("", ctx);
+    const replacement = readManagerDescriptor(supervisionRuntime(), WORKSPACE)!;
+    assert.notEqual(replacement.leaseId, oldLease.leaseId);
+    const ask = {
+      askId: randomUUID(),
+      question: "Decision?",
+      text: "Question: Decision?",
+      supervisorSessionId: oldLease.piSessionId,
+      supervisorLeaseId: oldLease.leaseId,
+      supervisorRole: "manager" as const,
+    };
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      instanceId: randomUUID(),
+      piSessionId: leadSession,
+      pendingAsk: ask,
+      updatedAt: Date.now(),
+    });
+    const roster = await pi.tools
+      .find((tool) => tool.name === "staff_list")!
+      .execute("list", {}, undefined, undefined, ctx);
+    assert.equal(roster.details.reports[0].pending_ask_id, ask.askId);
+    assert.equal(roster.details.reports[0].needs_you, false);
+
+    writeLeadCoordinationState(supervisionRuntime(), {
+      ...readLeadCoordinationState(supervisionRuntime(), leadSession)!,
+      pendingAsk: { ...ask, supervisorLeaseId: replacement.leaseId },
+      updatedAt: Date.now(),
+    });
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    assert.ok(
+      notices.some((message) =>
+        /Manager-bound asks remain unresolved/.test(message),
+      ),
+    );
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+      replacement.leaseId,
+    );
+
+    writeLeadCoordinationState(supervisionRuntime(), {
+      ...readLeadCoordinationState(supervisionRuntime(), leadSession)!,
+      pendingAsk: ask,
+      updatedAt: Date.now(),
+    });
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+      undefined,
+    );
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), leadSession)?.pendingAsk
+        ?.askId,
+      ask.askId,
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("Manager leave retains its lease and role when persistence fails", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "manager-pane";
@@ -2430,6 +2545,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
       pi_herdsman_role: "lead",
     },
   };
+  const leads = [lead];
   const entries: unknown[] = [];
   const pi = fakeChiefPi({
     activeTools: ["agent", "chief", "read"],
@@ -2441,7 +2557,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
           stdout: JSON.stringify({
             id: AGENT_ID,
             result: {
-              snapshot: { agents: [lead], panes: [lead] },
+              snapshot: { agents: leads, panes: leads },
             },
           }),
           stderr: "",
@@ -2451,7 +2567,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: { agents: [lead] },
+            result: { agents: leads },
           }),
           stderr: "",
           code: 0,
@@ -2591,9 +2707,44 @@ test("Chief activation replaces the lead widget and overview selection is intera
   overview.handleInput("\u001b[B");
   overview.handleInput("\r");
   await t.waitFor(() => assert.equal(overviewDone, 2, notices.join(" | ")));
+  const orphanSessionId = randomUUID();
+  const orphanedAsk = {
+    askId: randomUUID(),
+    question: "former chief question",
+    text: "Question: former chief question",
+    supervisorSessionId: "former-chief-session",
+    supervisorLeaseId: randomUUID(),
+    supervisorRole: "chief" as const,
+  };
+  leads.push({
+    ...lead,
+    pane_id: "other-lead-pane",
+    agent_session: { ...lead.agent_session, value: orphanSessionId },
+  });
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    instanceId: randomUUID(),
+    piSessionId: orphanSessionId,
+    pendingAsk: orphanedAsk,
+    updatedAt: Date.now(),
+  });
+  const actionableAskId = readLeadCoordinationState(
+    supervisionRuntime(),
+    PARENT_SESSION_ID,
+  )!.pendingAsk!.askId;
   const entriesBeforeCancel = entries.length;
   await pi.commandOptions.get("chief").handler("leave", context);
-  assert.match(confirmations[0], /Outstanding supervised lead asks: 1/);
+  assert.match(confirmations[0], /Actionable supervised lead asks: 1/);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), PARENT_SESSION_ID)
+      ?.pendingAsk?.askId,
+    actionableAskId,
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), orphanSessionId)?.pendingAsk
+      ?.askId,
+    orphanedAsk.askId,
+  );
   assert.equal(pi.pi.getActiveTools().includes("staff_list"), true);
   assert.equal(entries.length, entriesBeforeCancel);
   assert.equal(
@@ -2603,8 +2754,31 @@ test("Chief activation replaces the lead widget and overview selection is intera
     ),
     false,
   );
+  const replacedAsk = {
+    ...readLeadCoordinationState(supervisionRuntime(), PARENT_SESSION_ID)!
+      .pendingAsk!,
+    supervisorSessionId: "former-chief-session",
+    supervisorLeaseId: randomUUID(),
+    supervisorRole: "chief" as const,
+  };
+  writeLeadCoordinationState(supervisionRuntime(), {
+    ...readLeadCoordinationState(supervisionRuntime(), PARENT_SESSION_ID)!,
+    pendingAsk: replacedAsk,
+    updatedAt: Date.now(),
+  });
   confirmLeave = true;
   await pi.commandOptions.get("chief").handler("leave", context);
+  assert.match(confirmations[1], /No actionable supervised lead asks/);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), PARENT_SESSION_ID)
+      ?.pendingAsk?.askId,
+    replacedAsk.askId,
+  );
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), orphanSessionId)?.pendingAsk
+      ?.askId,
+    orphanedAsk.askId,
+  );
   assert.deepEqual(pi.pi.getActiveTools(), [
     "read",
     "agent_list",

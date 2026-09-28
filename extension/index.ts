@@ -8673,8 +8673,8 @@ export default function (pi: ExtensionAPI): void {
         pending === undefined || pending.unknown
           ? "Outstanding supervised lead asks could not be verified."
           : pending.count
-            ? `Outstanding supervised lead asks: ${pending.count}. They will remain pending.`
-            : "No outstanding supervised lead asks are currently known.";
+            ? `Actionable supervised lead asks: ${pending.count}. They will remain pending.`
+            : "No actionable supervised lead asks are currently known.";
       if (
         !(await ctx.ui.confirm(
           "Leave chief mode?",
@@ -9871,7 +9871,7 @@ export default function (pi: ExtensionAPI): void {
           await loadSupervisionSnapshot(ctx),
         );
         return {
-          count: leads.filter((lead) => lead.pendingAskId !== undefined).length,
+          count: leads.filter((lead) => lead.needsYou === true).length,
           unknown: false,
         };
       } catch {
@@ -10186,7 +10186,7 @@ export default function (pi: ExtensionAPI): void {
               description: `${lead.runtimeState} · ${
                 lead.agentCounts.total
               } agent${lead.agentCounts.total === 1 ? "" : "s"}${
-                lead.pendingAskId ? " · needs you" : ""
+                lead.needsYou === true ? " · needs you" : ""
               }`,
             }));
             selected = retainSupervisionSelection(selected, leads);

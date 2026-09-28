@@ -552,7 +552,7 @@ const SUPERVISION_GROUPS: readonly SupervisedLeadGroup[] = [
 export function classifySupervisedLead(
   lead: SupervisedLeadSnapshot,
 ): SupervisedLeadGroup {
-  if (lead.needsYou === true || lead.pendingAskId) return "NEEDS YOU";
+  if (lead.needsYou === true) return "NEEDS YOU";
   if (lead.runtimeState === "working") return "WORKING";
   if (lead.runtimeState === "blocked") return "BLOCKED";
   if (lead.runtimeState === "unknown") return "UNKNOWN";
@@ -731,7 +731,7 @@ export function renderSupervisionLeads(
     safeLine(header, width),
     ...shown.flatMap((lead, index) => {
       const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
-      const needsYou = lead.needsYou === true || !!lead.pendingAskId;
+      const needsYou = lead.needsYou === true;
       const marker =
         (lead.runtimeState === "idle" || lead.runtimeState === "done") &&
         (lead.agentCounts?.active ?? 0) > 0
