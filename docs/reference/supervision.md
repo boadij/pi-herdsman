@@ -19,16 +19,10 @@ An eligible ordinary Lead may activate `/chief`; a Manager cannot. Chief is a se
 
 Coordinator state is private, atomic, bounded, and tied to the exact Pi session and initialization generation. It identifies `role: "lead"|"manager"` and may contain one pending supervisor ask. The runtime is socket-scoped under `runtime/supervision-v2/`; project Manager descriptors, assignments, coordinators, and transport inboxes live there. Missing, stale, duplicate, malformed, or ambiguous live/coordination evidence fails closed. Metadata such as `pi_herdsman_role=manager` is display-only. Runtime state (`idle|working|blocked|done|unknown`) is observation, not completion or authorization. Agent counts use `active`, `blocked`, and `total`; active includes working, starting, and settling descendants.
 
-## `supervisor`: one edge upward
+## Chief and Manager coordination
 
-Chief is a mode of a lead session. While active, its model has exactly the tools `staff_list`, `staff_inspect`,
-`staff_transcript`, `staff_message`, and `staff_reply`. Project/workspace context files and skills are excluded from
-chief model context; workspace-specific work remains the responsibility of
-supervised leads. Chief supervises independent Leads, does not own their
-agents, and receives no owner controls. `/chief leave` restores the session's
-ordinary tools. Activating Chief mode also fails closed while managed mailbox
-state is unresolved, because the Lead cannot safely prove that it owns no
-managed agent work.
+Chief is a mode of a Lead session. While active, its model has exactly the tools `staff_list`, `staff_inspect`,
+`staff_transcript`, `staff_message`, and `staff_reply`. It supervises active Managers and ordinary Leads without an active project Manager; it cannot act on a Manager's Leads. Manager has those five staff tools plus `staff_delegate` for project Leads, `supervisor` for escalation to Chief, and `peer` for Manager peers. Staff actions in both modes target only direct reports. Neither mode owns the reports' Agents or receives owner controls. Project/workspace context files and skills are excluded from Chief model context; workspace-specific work remains the responsibility of supervised Leads. `/chief leave` restores the session's ordinary tools. Activating Chief mode fails closed while managed mailbox state is unresolved, because the Lead cannot safely prove that it owns no managed Agent work.
 
 ## Lead projection and actions
 
@@ -39,9 +33,11 @@ whether it is idle, working, blocked, done, or unknown.
 A non-empty persisted session candidate adds `staff_transcript` to
 `available_tools`; `available_tools` is advisory readiness, not transcript
 authorization. `staff_transcript` validates the current session header,
-version, and exact Pi session ID before returning evidence. A pending ask is
-separate attention state: it projects as `needs_you`, exposes the bounded
-question and ask ID, and adds `staff_reply`.
+version, and exact Pi session ID before returning evidence. A pending ask
+exposes the bounded question and ask ID. Bound asks project `needs_you` and
+add `staff_reply` only under their recorded supervisor session and lease.
+An ask without recorded supervisor identity also permits a current Chief to
+reply; it cannot be identified as orphaned after Chief replacement.
 
 The automatic `<supervision_state>` is a hidden Pi custom message hard-bounded
 to 16 KiB. A changed refresh appends a new snapshot; a byte-identical refresh
@@ -78,33 +74,38 @@ Chief mode publishes the role token `chief`. Metadata never grants lead
 eligibility, chief authority, or message authority. Failed metadata
 publication does not change communication authority.
 
-## Chief transport
+## Supervision transport
 
 Messages are bounded, versioned JSON files in the target session's hashed
 `inbox/` directory. Each record includes exact sender, target, `leadSessionId`,
-chief lease, kind, ID, text, and `createdAt`; asks and replies also include an
+`leaseId` (the relevant supervision lease for supervision records), kind, ID, text, and `createdAt`; asks and replies also include an
 ask ID. Attachments are consumed at submission and rendered into the ordinary
 text field using the same canonical file renderer and configured inline/mailbox
 limits as agent messages. The durable supervision record remains text-only.
 Extra fields are rejected. Transport kinds are:
 
 ```text
-chief_message
-lead_message
-lead_ask
-chief_reply
+chief_message (Chief → direct Lead or Manager)
+lead_message (Lead → direct Chief or Manager)
+lead_ask (Lead → direct Chief or Manager)
+chief_reply (Chief → direct Lead or Manager)
+manager_message (Manager → direct Lead, or Manager → Chief)
+manager_ask (Manager → Chief)
+manager_reply (Manager → direct Lead)
+manager_assignment (Manager → delegated Lead)
+report_result (assigned Lead → Manager)
 ```
 
-Records are delivered in `createdAt`, then ID order and accepted through Pi
-follow-up delivery. Chief messages may queue while a lead works. Same-session
+The shared record type also permits `peer_message` for peer traffic. Records are delivered in `createdAt`, then ID order and accepted through Pi
+follow-up delivery. Supervisor messages may queue while a report works. Same-session
 restart preserves queued records, accepted IDs are deduplicated, and an
-individual quarantined record does not block a new record for that lead.
+individual quarantined record does not block a new record for that session.
 Transient identity, authority, or delivery failures retain records. Exact
-identity and chief lease checks are never weakened.
+identity and current supervisor lease checks are never weakened.
 
 ## Supervisor tools
 
-The `supervisor_message` and `supervisor_ask` tools are available only to an ordinary Lead. Each operation has its own exact schema. Both require a currently valid Chief; descendants use `ask_owner`, never supervisor tools.
+The `supervisor_message` and `supervisor_ask` tools are available to ordinary Leads and Managers. Each operation has its own exact schema. An ordinary Lead routes to its active project Manager when one exists, otherwise to Chief; a Manager escalates to Chief. Both require a currently valid direct supervisor; managed Agents use `ask_owner`, never supervisor tools.
 
 ### `supervisor_message`
 
@@ -115,16 +116,15 @@ The `supervisor_message` and `supervisor_ask` tools are available only to an ord
 }
 ```
 
-Call `supervisor_message` for meaningful progress, reports, results, warnings, and
-completion. It queues one bounded `chief_message` and does not change lead
-coordination state.
+Call `supervisor_message` for meaningful progress, reports, warnings, and
+completion outside a delegated assignment. It queues one bounded `lead_message` from a Lead or `manager_message` from a Manager and does not change
+coordination state. An assigned Lead reports terminal completion through `supervisor_result`, not this tool.
 `supervisor_message` accepts optional `files`, including ordinary paths, reusable direct
 refs such as `result:implementation#1`, and canonical `result:<request-id>` refs
 already supplied as evidence. A direct ref resolves by exact agent label and
 index against the calling Pi session's current branch before ordinary file
-preparation. Chief normally owns no direct agents, so a branch-local semantic
-ref may not exist in the Chief session; canonical result references already
-supplied as file evidence can still be forwarded through `files`. Files use the
+preparation. Canonical result references already supplied as file evidence can
+be forwarded through `files`. Files use the
 same submission-time canonicalization, UTF-8 embedding, reference fallback, and
 configured byte limits as agent messages.
 
@@ -138,8 +138,8 @@ configured byte limits as agent messages.
 ```
 
 `supervisor_ask` accepts optional `files` with the same ordinary, semantic-ref, and
-canonical-ref semantics as `message`. Call `supervisor_ask` only when a chief decision is
-genuinely required. One pending ask is allowed per lead. The call durably
+canonical-ref semantics as `supervisor_message`. Call `supervisor_ask` only when a direct-supervisor decision is
+genuinely required. A Lead queues `lead_ask` to Manager or Chief; a Manager queues `manager_ask` to Chief. One pending ask is allowed per session and current supervisor lease; if that authority is replaced, the caller may ask again under the new lease. The call durably
 records its ask ID and clean question, then queues the prepared text. The
 prepared text, including attachment rendering, is persisted before publication
 so reconciliation can deliver it after a failed initial publication. It must be
@@ -148,7 +148,7 @@ reply.
 
 ## Staff tools
 
-The `staff_*` tools are available only to the active Chief. Their target `session` must be the exact full Pi session ID shown as `session` in a fresh automatic supervision snapshot or returned by `staff_list`; never use `display_name`.
+The `staff_*` tools are available to an active Chief or Manager; `staff_delegate` is Manager-only. For staff actions that take a target, `session` must be the exact full Pi session ID of a direct report shown as `session` in a fresh automatic supervision snapshot or returned by `staff_list`; never use `display_name` or a nested descendant ID.
 
 For general state questions and ordinary messages or replies, use the fresh automatic supervision snapshot directly; do not call `staff_list`, `staff_inspect`, or `staff_transcript` merely to poll progress. The `staff_message` and `staff_reply` tools
 perform their own authoritative validation. Use `staff_list` when the snapshot is
@@ -159,7 +159,7 @@ conversation/tool evidence materially matters.
 
 ### `staff_list`
 
-`staff` belongs to Chief and Manager. Chief sees active Managers, with bounded read-only Lead summaries and aggregate Lead/Agent counts. Without an active Manager, Chief may directly supervise ordinary Leads; with an active Manager, Leads in that Manager's worktree group report only to it and are not Chief targets. Manager sees **all** eligible ordinary Leads in its worktree group, not just Leads it delegated. Manager can inspect descendant Agent counts, but cannot target another Lead's Agents. Only Manager can delegate a project Lead. All targets use the exact full `session` Pi ID from a fresh roster; `display_name` and nested Lead IDs under Chief are never actionable.
+`staff_list` belongs to Chief and Manager. Chief sees active Managers, with bounded read-only Lead summaries and aggregate Lead/Agent counts. Without an active Manager, Chief may directly supervise ordinary Leads; with an active Manager, Leads in that Manager's worktree group report only to it and are not Chief targets. Manager sees **all** eligible ordinary Leads in its worktree group, not just Leads it delegated. Manager can inspect descendant Agent counts, but cannot target another Lead's Agents. Only Manager can delegate a project Lead. All targets use the exact full `session` Pi ID from a fresh roster; `display_name` and nested Lead IDs under Chief are never actionable.
 
 ```json
 {}
@@ -170,16 +170,12 @@ conversation/tool evidence materially matters.
 ### `staff_inspect`
 
 ```json
-{ "action": "transcript", "session": "<exact direct-report Pi session ID>" }
-```
-
-```json
 {
   "session": "<exact full Pi session ID shown in a fresh snapshot>"
 }
 ```
 
-`staff_inspect` is read-only and requires an active Chief and eligible exact session. It
+`staff_inspect` is read-only and requires an active Chief or Manager and an eligible exact direct-report session. It
 returns live identity-checked terminal/process evidence: Herdr's up to 80
 recent-unwrapped terminal lines with a Herdsman-local 16 KiB byte cap, plus
 separately bounded process evidence. The public
@@ -195,7 +191,7 @@ Pi session-message history.
 }
 ```
 
-`staff_transcript` is read-only and requires an active Chief and an eligible exact
+`staff_transcript` is read-only and requires an active Chief or Manager and an eligible exact direct-report
 session. A non-empty persisted session candidate adds `staff_transcript` to
 `available_tools`. `available_tools` is advisory readiness, not transcript
 authorization; the transcript action validates the current session header,
@@ -221,14 +217,16 @@ not send a message or change Lead state.
 
 The exact session must currently expose `staff_message`. Atomic creation of one
 bounded
-`chief_message` record queues a follow-up and does not wait for completion.
+`chief_message` or `manager_message` record queues a follow-up and does not wait for completion.
 `staff_message` accepts optional `files`, including ordinary paths, reusable
 direct refs, and canonical result refs. Semantic refs use the same exact
 label/index and current-branch rules as chief actions; Chief does not normally
 own direct agents, so canonical result references supplied as evidence remain
 the usual cross-session forwarding form through `files`.
 
-### `staff_reply`
+### `staff_delegate`
+
+Only an active Manager delegates a new project assignment. Provide a non-empty `task` and optional `branch`, `base`, and `files` (not a target `session`); omit `branch` to use the generated assignment branch.
 
 If `base` is omitted, the `HEAD` ref token is persisted before creation; it is not resolved to an immutable commit. Herdr determines the linked-worktree workspace path and label. Manager coordinates exactly one Herdr worktree group from its primary workspace. A delegated branch gets a linked Git worktree and linked-worktree workspace, but multiple Leads may share a workspace; one workspace does not imply one worktree. The Manager uses the exact returned workspace, tab, and pane identities and the normal bounded shell-readiness and ownership checks before starting Pi. It launches Pi with the assignment UUID as `--session-id` and verifies one exact-pane candidate with Lead coordination state under that expected session ID. Herdr must report a session identity; if it resolves, it must match the assignment ID. Pi may expose a session path before its initial JSONL file exists; this expected startup state does not block verification while the Lead state is published. Manager-created Leads inherit the Manager session's `ctx.isProjectTrusted()` decision for that run: a trusted Manager passes `--approve`, while an untrusted Manager passes `--no-approve`. Pi's trust-protected project resources are available only in the trusted case; `--no-approve` skips those protected resources without implying that all project-local files are skipped. This does not modify Pi's persistent trust store or elevate trust beyond the Manager's current decision. On success it returns assignment ID, exact Lead session ID, workspace ID, and branch. There is no caller-selected cwd, pane, Agent definition, focus, review, or merge policy. The linked-worktree workspace remains after completion.
 
@@ -243,6 +241,12 @@ assignment branch names (without task text).
 An uncertain external creation result is reconciled only by an explicit recovery request with no new delegation inputs:
 
 ```json
+{ "assignment": "<exact unresolved assignment ID>" }
+```
+
+### `staff_reply`
+
+```json
 {
   "session": "<exact full Pi session ID shown in a fresh snapshot>",
   "askId": "<exact pending ask ID>",
@@ -251,11 +255,11 @@ An uncertain external creation result is reconciled only by an explicit recovery
 }
 ```
 
-The exact session, unchanged pending ask ID, current lead identity, and chief
+The exact direct-report session, unchanged pending ask ID, current report identity, and supervisor
 lease must validate. The pending ask is cleared only after accepted delivery.
 `staff_reply` accepts optional `files` with the same ordinary, semantic-ref, and
-canonical-ref semantics. Lead activity returns asynchronously; continue only
-independent chief work, otherwise end the turn and do not poll.
+canonical-ref semantics. Report activity returns asynchronously; continue only
+independent coordination work, otherwise end the turn and do not poll.
 
 ## `/chief` and display
 

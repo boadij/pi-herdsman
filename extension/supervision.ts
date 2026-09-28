@@ -1870,9 +1870,35 @@ export type CoordinatorState = {
   role?: CoordinatorRole;
   instanceId: string;
   piSessionId: string;
-  pendingAsk?: { askId: string; question: string; text: string };
+  pendingAsk?: CoordinatorAsk;
   updatedAt: number;
 };
+export type CoordinatorAsk = {
+  askId: string;
+  question: string;
+  text: string;
+  supervisorSessionId?: string;
+  supervisorLeaseId?: string;
+  supervisorRole?: "chief" | "manager";
+};
+export function askMatchesSupervisor(
+  ask: CoordinatorAsk,
+  supervisor: {
+    piSessionId: string;
+    leaseId: string;
+    role: "chief" | "manager";
+  },
+): boolean {
+  return ask.supervisorRole
+    ? ask.supervisorRole === supervisor.role &&
+        ask.supervisorSessionId === supervisor.piSessionId &&
+        ask.supervisorLeaseId === supervisor.leaseId
+    : supervisor.role === "chief" &&
+        (ask.supervisorSessionId === undefined ||
+          ask.supervisorSessionId === supervisor.piSessionId) &&
+        (ask.supervisorLeaseId === undefined ||
+          ask.supervisorLeaseId === supervisor.leaseId);
+}
 export type LeadCoordinationState = CoordinatorState;
 
 export type SupervisedLead = {
@@ -2018,11 +2044,31 @@ function validLeadState(value: unknown): value is CoordinatorState {
     (ask === undefined ||
       (!!ask &&
         typeof ask === "object" &&
-        Object.keys(ask).length === 3 &&
+        Object.keys(ask).every((key) =>
+          [
+            "askId",
+            "question",
+            "text",
+            "supervisorSessionId",
+            "supervisorLeaseId",
+            "supervisorRole",
+          ].includes(key),
+        ) &&
         UUID.test((ask as any).askId) &&
         validLeadCoordinationQuestion((ask as any).question) &&
         typeof (ask as any).text === "string" &&
-        (ask as any).text.length > 0))
+        (ask as any).text.length > 0 &&
+        ((Object.keys(ask).length === 3 &&
+          !("supervisorRole" in ask) &&
+          !("supervisorSessionId" in ask) &&
+          !("supervisorLeaseId" in ask)) ||
+          ([5, 6].includes(Object.keys(ask).length) &&
+            validSession((ask as any).supervisorSessionId) &&
+            UUID.test((ask as any).supervisorLeaseId) &&
+            ((Object.keys(ask).length === 5 && !("supervisorRole" in ask)) ||
+              (Object.keys(ask).length === 6 &&
+                ((ask as any).supervisorRole === "chief" ||
+                  (ask as any).supervisorRole === "manager")))))))
   );
 }
 export function readLeadCoordinationState(
@@ -2126,6 +2172,11 @@ export function projectSupervision(options: {
   agents: LiveAgent[];
   managedAgents: ValidatedManagedAgentEvidence[];
   coordinationStates: LeadCoordinationState[];
+  supervisor?: {
+    piSessionId: string;
+    leaseId: string;
+    role: "chief" | "manager";
+  };
   workspaceProvenance?: ReadonlyMap<string, WorkspaceProvenance>;
   chiefSessionId?: string;
   excludedSessionIds?: ReadonlySet<string>;
@@ -2182,6 +2233,10 @@ export function projectSupervision(options: {
     )
       continue;
     const pending = state.pendingAsk;
+    const actionable =
+      pending &&
+      options.supervisor &&
+      askMatchesSupervisor(pending, options.supervisor);
     const runtimeState = agent.runtimeState ?? "unknown";
     const provenance =
       options.workspaceProvenance?.get(agent.workspaceId) ??
@@ -2221,7 +2276,7 @@ export function projectSupervision(options: {
       tabId: agent.tabId,
       paneId: agent.paneId,
       runtimeState,
-      needsYou: !!pending,
+      needsYou: !!actionable,
       ...(pending ? { pendingAskId: pending.askId } : {}),
       ...(pending ? { pendingAskQuestion: pending.question } : {}),
       agentCounts: { active: 0, blocked: 0, total: 0 },
@@ -2272,7 +2327,7 @@ export function projectSupervision(options: {
   }
   for (const lead of leads) {
     lead.availableActions.push("message");
-    if (lead.pendingAskId) lead.availableActions.push("reply");
+    if (lead.needsYou) lead.availableActions.push("reply");
   }
   leads.sort(
     (a, b) =>

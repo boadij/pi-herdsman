@@ -183,6 +183,7 @@ import {
   type PeerLeadRecord,
   type WorkspaceProvenance,
   projectSupervision,
+  askMatchesSupervisor,
   readLeadCoordinationState,
   invalidateLeadCoordinationState,
   leadCoordinationStatePath,
@@ -424,7 +425,7 @@ query them automatically. If the human task still depends on unfinished lead
 work, end the turn and wait for the next lead event.
 Runtime state is observation only. Verified leads expose staff_inspect and
 staff_message; a non-empty persisted session candidate adds staff_transcript to
-available_tools, and a pending ask adds staff_reply. available_tools is advisory
+available_tools, and an ask bound to your current lease adds staff_reply. available_tools is advisory
 readiness, not transcript authorization; staff_transcript validates the current
 session header, version, and exact Pi session ID before returning evidence.
 Snapshots never authorize mutations. Lead messages,
@@ -7049,15 +7050,7 @@ export default function (pi: ExtensionAPI): void {
         role: activeRole() === "manager" ? "manager" : "lead",
         instanceId: leadInstanceId,
         piSessionId: leadContext?.sessionManager.getSessionId() ?? "",
-        ...(pendingSupervisorAsk
-          ? {
-              pendingAsk: {
-                askId: pendingSupervisorAsk.askId,
-                question: pendingSupervisorAsk.question,
-                text: pendingSupervisorAsk.text,
-              },
-            }
-          : {}),
+        ...(pendingSupervisorAsk ? { pendingAsk: pendingSupervisorAsk } : {}),
         updatedAt: Date.now(),
       });
       leadCoordinationHealthy = true;
@@ -7405,7 +7398,12 @@ export default function (pi: ExtensionAPI): void {
         (activeRole() === "manager" ? "manager" : "lead") ||
       state.pendingAsk?.askId !== pendingSupervisorAsk?.askId ||
       state.pendingAsk?.question !== pendingSupervisorAsk?.question ||
-      state.pendingAsk?.text !== pendingSupervisorAsk?.text
+      state.pendingAsk?.text !== pendingSupervisorAsk?.text ||
+      state.pendingAsk?.supervisorSessionId !==
+        pendingSupervisorAsk?.supervisorSessionId ||
+      state.pendingAsk?.supervisorLeaseId !==
+        pendingSupervisorAsk?.supervisorLeaseId ||
+      state.pendingAsk?.supervisorRole !== pendingSupervisorAsk?.supervisorRole
     )
       throw new Error("Lead coordination state changed; retry the action");
   };
@@ -8052,12 +8050,11 @@ export default function (pi: ExtensionAPI): void {
       assertCurrentLeadCoordination(ctx);
       if (
         !chief ||
-        (pendingSupervisorAsk.supervisorSessionId !== undefined &&
-          chief.piSessionId !== pendingSupervisorAsk.supervisorSessionId) ||
-        (pendingSupervisorAsk.supervisorLeaseId !== undefined &&
-          chief.leaseId !== pendingSupervisorAsk.supervisorLeaseId) ||
-        (pendingSupervisorAsk.supervisorSessionId === undefined &&
-          "repoKey" in chief)
+        !askMatchesSupervisor(pendingSupervisorAsk, {
+          piSessionId: chief.piSessionId,
+          leaseId: chief.leaseId,
+          role: "repoKey" in chief ? "manager" : "chief",
+        })
       )
         return;
       const runtime = runtimeOverride ?? supervisionRuntime();
@@ -8895,6 +8892,11 @@ export default function (pi: ExtensionAPI): void {
           if (
             !state ||
             !ask ||
+            !askMatchesSupervisor(ask, {
+              piSessionId: chief.piSessionId,
+              leaseId: chief.leaseId,
+              role: "repoKey" in chief ? "manager" : "chief",
+            }) ||
             (activeRole() === "manager" && (state.role ?? "lead") !== "lead")
           )
             continue;
@@ -8958,6 +8960,11 @@ export default function (pi: ExtensionAPI): void {
               finalState.pendingAsk?.askId !== ask.askId ||
               finalState.pendingAsk?.question !== ask.question ||
               finalState.pendingAsk?.text !== ask.text ||
+              !askMatchesSupervisor(finalState.pendingAsk, {
+                piSessionId: chief.piSessionId,
+                leaseId: chief.leaseId,
+                role: "repoKey" in chief ? "manager" : "chief",
+              }) ||
               (activeRole() === "chief" &&
                 (state.role ?? "lead") === "lead" &&
                 managerClaimsScope(scope))
@@ -9151,6 +9158,23 @@ export default function (pi: ExtensionAPI): void {
           agents,
           managedAgents: agentEvidence,
           coordinationStates,
+          ...(activeRole() === "manager" && managerLease
+            ? {
+                supervisor: {
+                  piSessionId: managerLease.descriptor.piSessionId,
+                  leaseId: managerLease.descriptor.leaseId,
+                  role: "manager" as const,
+                },
+              }
+            : currentChief()
+              ? {
+                  supervisor: {
+                    piSessionId: currentChief()!.piSessionId,
+                    leaseId: currentChief()!.leaseId,
+                    role: "chief" as const,
+                  },
+                }
+              : {}),
           workspaceProvenance,
           excludedSessionIds: new Set([
             ...listManagerDescriptors(supervisionRuntime()).map(
@@ -9188,7 +9212,10 @@ export default function (pi: ExtensionAPI): void {
           scope.workspaceIds.includes(lead.workspaceId),
         );
       }
-      if (activeRole() !== "chief" || !(await currentChiefAuthority(ctx)))
+      if (activeRole() !== "chief")
+        throw new Error("Staff is available only to an active supervisor");
+      const chiefAuthority = await currentChiefAuthority(ctx);
+      if (!chiefAuthority)
         throw new Error("Staff is available only to an active supervisor");
       const managers = [];
       const allLeads = (
@@ -9269,7 +9296,14 @@ export default function (pi: ExtensionAPI): void {
                 ),
               }
             : {}),
-          needsYou: !!state.pendingAsk,
+          needsYou:
+            !!state.pendingAsk &&
+            !!chiefAuthority &&
+            askMatchesSupervisor(state.pendingAsk, {
+              piSessionId: chiefAuthority.piSessionId,
+              leaseId: chiefAuthority.leaseId,
+              role: "chief",
+            }),
           ...(state.pendingAsk
             ? {
                 pendingAskId: state.pendingAsk.askId,
@@ -9317,7 +9351,15 @@ export default function (pi: ExtensionAPI): void {
             })
               ? ["transcript" as const]
               : []),
-            ...(state.pendingAsk ? ["reply" as const] : []),
+            ...(state.pendingAsk &&
+            chiefAuthority &&
+            askMatchesSupervisor(state.pendingAsk, {
+              piSessionId: chiefAuthority.piSessionId,
+              leaseId: chiefAuthority.leaseId,
+              role: "chief",
+            })
+              ? ["reply" as const]
+              : []),
           ] as Array<"inspect" | "transcript" | "message" | "reply">,
         });
       }
@@ -11402,8 +11444,6 @@ export default function (pi: ExtensionAPI): void {
               await enterCoordinationPublication();
             try {
               assertCurrentLeadCoordination(ctx);
-              if (pendingSupervisorAsk)
-                throw new Error("A supervisor ask is already pending");
               if (!leadCoordinationHealthy)
                 throw new Error("Lead coordination state is unavailable");
               if (!(await currentSupervisor(ctx)))
@@ -11412,6 +11452,15 @@ export default function (pi: ExtensionAPI): void {
               const askId = randomUUID();
               const chief = await currentSupervisor(ctx);
               if (!chief) throw new Error("No active supervisor is available");
+              if (
+                pendingSupervisorAsk &&
+                askMatchesSupervisor(pendingSupervisorAsk, {
+                  piSessionId: chief.piSessionId,
+                  leaseId: chief.leaseId,
+                  role: "repoKey" in chief ? "manager" : "chief",
+                })
+              )
+                throw new Error("A supervisor ask is already pending");
               const recordId = chiefAskMessageId(
                 ctx.sessionManager.getSessionId(),
                 askId,
@@ -11461,6 +11510,8 @@ export default function (pi: ExtensionAPI): void {
                 askId,
                 recordId,
                 createdAt,
+                undefined,
+                { piSessionId: chief.piSessionId, leaseId: chief.leaseId },
               );
               assertCurrentLeadCoordination(ctx);
               if (process.env.HERDR_PANE_ID)
@@ -11965,6 +12016,30 @@ export default function (pi: ExtensionAPI): void {
             params.askId !== currentLead.pendingAskId
           )
             throw new Error("Lead ask ID is no longer pending");
+          const replyMatches = (
+            supervisor: { piSessionId: string; leaseId: string },
+            report: typeof lead,
+          ): boolean => {
+            const state = readLeadCoordinationState(
+              supervisionRuntime(),
+              reportSession(report),
+            );
+            return (
+              !!state &&
+              state.instanceId === report.instanceId &&
+              state.pendingAsk?.askId === params.askId &&
+              askMatchesSupervisor(state.pendingAsk, {
+                piSessionId: supervisor.piSessionId,
+                leaseId: supervisor.leaseId,
+                role: activeRole() === "chief" ? "chief" : "manager",
+              })
+            );
+          };
+          if (
+            params.action === "reply" &&
+            !replyMatches(finalChief, currentLead)
+          )
+            throw new Error("Lead ask belongs to a different supervisor lease");
           const recordId = randomUUID();
           const createdAt = Date.now();
           const text = await prepareCoordinationText(
@@ -12017,6 +12092,8 @@ export default function (pi: ExtensionAPI): void {
             params.askId !== writeLead.pendingAskId
           )
             throw new Error("Lead ask ID is no longer pending");
+          if (params.action === "reply" && !replyMatches(writeChief, writeLead))
+            throw new Error("Lead ask belongs to a different supervisor lease");
           const record: ChiefMessageRecord = {
             version: 1,
             id: recordId,

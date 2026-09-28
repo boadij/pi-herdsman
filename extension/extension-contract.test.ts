@@ -3196,6 +3196,78 @@ test("registered lead and replacement chief exchange messages and asks", async (
       beforeMixedBatchAskMessages,
     );
     leadToolBatch = ["supervisor_ask"];
+    const replacementLeaseId = randomUUID();
+    writeFileSync(configPath, "{}", "utf8");
+    support.configReadHook = () => {
+      support.configReadHook = undefined;
+      writeFileSync(
+        chiefDescriptorPath,
+        JSON.stringify({
+          ...JSON.parse(chiefDescriptor),
+          leaseId: replacementLeaseId,
+        }),
+      );
+    };
+    try {
+      await assert.rejects(
+        leadAskTool.execute(
+          "ask",
+          {
+            question: "Do not send to replacement during preparation",
+            files: [attachment],
+          },
+          undefined,
+          undefined,
+          leadContext,
+        ),
+        /Original supervisor authority is no longer active; ask remains pending/,
+      );
+      const orphan = readLeadCoordinationState(
+        supervisionRuntime(),
+        leadId,
+      )?.pendingAsk;
+      assert.ok(orphan);
+      assert.equal(
+        orphan.supervisorLeaseId,
+        JSON.parse(chiefDescriptor).leaseId,
+      );
+      assert.deepEqual(
+        listChiefMessagePaths(supervisionRuntime(), chiefId),
+        beforeMixedBatchAskMessages,
+      );
+      const recovery = await leadAskTool.execute(
+        "ask",
+        { question: "Ask the replacement instead" },
+        undefined,
+        undefined,
+        leadContext,
+      );
+      assertToolResult(recovery);
+      assert.notEqual(recovery.details.askId, orphan.askId);
+      assert.equal(
+        readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk
+          ?.supervisorLeaseId,
+        replacementLeaseId,
+      );
+      const recoveryRecord = listChiefMessagePaths(
+        supervisionRuntime(),
+        chiefId,
+      )
+        .map(readChiefMessage)
+        .find((record) => record.askId === recovery.details.askId);
+      assert.ok(recoveryRecord);
+      assert.equal(recoveryRecord.leaseId, replacementLeaseId);
+      removeChiefMessage(
+        supervisionRuntime(),
+        chiefId,
+        recoveryRecord.id,
+        recoveryRecord,
+      );
+    } finally {
+      support.configReadHook = undefined;
+      writeFileSync(chiefDescriptorPath, chiefDescriptor);
+      realFs.rmSync(configPath, { force: true });
+    }
     const ask = await leadAskTool.execute(
       "ask",
       {
@@ -3213,6 +3285,12 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.equal(state?.pendingAsk?.askId, askId);
     assert.equal(state?.pendingAsk?.question, "Which credential should I use?");
     assert.match(state?.pendingAsk?.text ?? "", /<file name="/);
+    assert.equal(state?.pendingAsk?.supervisorSessionId, chiefId);
+    assert.equal(
+      state?.pendingAsk?.supervisorLeaseId,
+      readChiefDescriptor(supervisionRuntime().descriptor)?.leaseId,
+    );
+    assert.equal(state?.pendingAsk?.supervisorRole, "chief");
     const missingAskPath = listChiefMessagePaths(
       supervisionRuntime(),
       chiefId,
@@ -3326,12 +3404,15 @@ test("registered lead and replacement chief exchange messages and asks", async (
       const sameSessionReply = reentered.tools.find(
         (tool) => tool.name === "staff_reply",
       )!;
-      await sameSessionReply.execute(
-        "reply",
-        { session: leadId, askId, message: "Wrong lease" },
-        undefined,
-        undefined,
-        reenteredContext,
+      await assert.rejects(
+        sameSessionReply.execute(
+          "reply",
+          { session: leadId, askId, message: "Wrong lease" },
+          undefined,
+          undefined,
+          reenteredContext,
+        ),
+        /does not currently allow reply|different supervisor lease/,
       );
       await t.waitFor(() =>
         assert.deepEqual(
@@ -3383,15 +3464,51 @@ test("registered lead and replacement chief exchange messages and asks", async (
       undefined,
       replacementContext,
     );
+    await replacement.events.get("before_agent_start")![0](
+      { systemPromptOptions: { contextFiles: [] } },
+      replacementContext,
+    );
+    assert.equal(
+      listChiefMessagePaths(supervisionRuntime(), replacementId).some(
+        (path) => readChiefMessage(path).askId === askId,
+      ),
+      false,
+      "replacement must not repair the orphaned ask under its new lease",
+    );
     const replacementTool = replacement.tools.find(
       (tool) => tool.name === "staff_reply",
     );
     assert.ok(replacementTool);
+    await assert.rejects(
+      replacementTool.execute(
+        "reply",
+        { session: leadId, askId, message: "Wrong supervisor" },
+        undefined,
+        undefined,
+        replacementContext,
+      ),
+      /does not currently allow reply|different supervisor lease/,
+    );
+    const replacementAsk = await leadAskTool.execute(
+      "ask",
+      { question: "Which credential now?" },
+      undefined,
+      undefined,
+      leadContext,
+    );
+    assertToolResult(replacementAsk);
+    const newAskId = replacementAsk.details.askId as string;
+    assert.notEqual(newAskId, askId);
+    assert.equal(
+      readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk
+        ?.supervisorSessionId,
+      replacementId,
+    );
     const reply = await replacementTool.execute(
       "reply",
       {
         session: leadId,
-        askId,
+        askId: newAskId,
         message: "Use the service account.",
         files: [attachment],
       },
@@ -3410,10 +3527,10 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk
         ?.askId,
-      askId,
+      undefined,
     );
     assert.ok(
-      !lead.sentMessageCalls.some((call) =>
+      lead.sentMessageCalls.some((call) =>
         String(call.message?.content).includes("Use the service account"),
       ),
     );

@@ -51,6 +51,7 @@ import {
   listChiefMessagePaths,
   normalizeHerdrLifecycleState,
   projectSupervision,
+  askMatchesSupervisor,
   quarantineChiefMessage,
   readChiefMessage,
   readLeadCoordinationState,
@@ -585,6 +586,74 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   );
 });
 
+test("durable ask binding gates projected replies and preserves legacy chief asks", () => {
+  const runtime = supervisionRuntime(socket());
+  const chief = { piSessionId: "chief", leaseId: id(), role: "chief" as const };
+  const bound = {
+    askId: id(),
+    question: "Q",
+    text: "Question: Q",
+    supervisorSessionId: chief.piSessionId,
+    supervisorLeaseId: chief.leaseId,
+    supervisorRole: chief.role,
+  };
+  const agent = {
+    sessionId: "lead",
+    sessionKind: "id" as const,
+    workspaceId: "work",
+    paneId: "pane",
+    tabId: "tab",
+  };
+  const projection = (
+    ask: LeadCoordinationState["pendingAsk"],
+    supervisor = chief,
+  ) =>
+    projectSupervision({
+      agents: [agent],
+      managedAgents: [],
+      coordinationStates: [state("lead", { pendingAsk: ask })],
+      supervisor,
+    }).leads[0];
+  writeLeadCoordinationState(runtime, state("lead", { pendingAsk: bound }));
+  assert.deepEqual(
+    readLeadCoordinationState(runtime, "lead")?.pendingAsk,
+    bound,
+  );
+  assert.equal(askMatchesSupervisor(bound, chief), true);
+  assert.equal(projection(bound).availableActions.includes("reply"), true);
+  const replacement = { ...chief, leaseId: id() };
+  assert.equal(askMatchesSupervisor(bound, replacement), false);
+  assert.equal(
+    projection(bound, replacement).availableActions.includes("reply"),
+    false,
+  );
+  assert.equal(projection(bound, replacement).needsYou, false);
+  assert.equal(
+    projection(bound, { ...chief, role: "manager" }).availableActions.includes(
+      "reply",
+    ),
+    false,
+  );
+  assert.equal(
+    projection(
+      { askId: id(), question: "Legacy", text: "Q" },
+      replacement,
+    ).availableActions.includes("reply"),
+    true,
+  );
+  for (const invalid of [
+    { ...bound, supervisorLeaseId: undefined },
+    { ...bound, supervisorRole: "other" },
+    { ...bound, unexpected: true },
+  ])
+    assert.throws(() =>
+      writeLeadCoordinationState(
+        runtime,
+        state("lead", { pendingAsk: invalid as never }),
+      ),
+    );
+});
+
 test("lead coordination state admits the exact UTF-8 16 KiB boundary", () => {
   const runtime = supervisionRuntime(socket());
   const askId = id();
@@ -714,6 +783,7 @@ test("supervision authority is coordination state, not metadata", () => {
   const snapshot = projectSupervision({
     agents: [lead],
     managedAgents: [],
+    supervisor: { piSessionId: "chief", leaseId: id(), role: "chief" },
     coordinationStates: [
       state(piSessionId, {
         pendingAsk: {

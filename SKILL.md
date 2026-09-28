@@ -453,7 +453,10 @@ does not block a new message to that lead.
 Every exact-identity-verified live lead exposes `staff_inspect` and `staff_message`,
 regardless of observed runtime state (`idle|working|blocked|done|unknown`). A
 non-empty persisted session candidate adds `staff_transcript` to
-`available_tools`; a pending ask adds `staff_reply`. `available_tools` is
+`available_tools`; a bound ask adds `staff_reply` only for its recorded supervisor
+session and lease. An ask without recorded supervisor identity also allows a
+current Chief to reply and cannot be identified as orphaned after replacement.
+`available_tools` is
 advisory readiness, not transcript authorization; the transcript action
 validates the current session header, version, and exact Pi session ID before
 returning evidence. Delivered content identifies direction and
