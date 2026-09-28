@@ -2571,7 +2571,11 @@ test("Manager claim between Chief ask scan and publication suppresses repair and
         };
       else if (args[0] === "worktree" && args[1] === "list") {
         result = {
-          source: { repo_key: "repo", source_workspace_id: WORKSPACE },
+          source: {
+            repo_key: "repo",
+            repo_name: "repo",
+            source_workspace_id: WORKSPACE,
+          },
           worktrees: [],
         };
         armed = true;

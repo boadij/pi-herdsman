@@ -460,10 +460,12 @@ export type SupervisedLeadSnapshot = Readonly<{
   role?: "lead" | "manager";
   lead: string;
   displayName: string;
+  branch?: string;
   project?: string;
   leadCounts?: Readonly<{ active: number; blocked: number; total: number }>;
   leads?: readonly Readonly<{
     session: string;
+    branch?: string;
     display_name: string;
     runtime_state: LifecyclePresentationState;
     needs_you: boolean;
@@ -500,6 +502,7 @@ function managerPresentationSnapshot(
     availableActions: manager.availableActions,
     leads: manager.leads.map((lead) => ({
       session: lead.session,
+      branch: "branch" in lead ? lead.branch : undefined,
       display_name: lead.displayName,
       runtime_state: lead.runtimeState,
       needs_you: lead.needsYou,
@@ -697,6 +700,51 @@ function safeLine(text: string, width: number): string {
   return truncateToWidth(text, Math.max(0, width), "…");
 }
 
+function supervisionCountLabel(managers: number, directLeads: number): string {
+  return (
+    [
+      managers ? `${managers} manager${managers === 1 ? "" : "s"}` : "",
+      directLeads
+        ? `${directLeads} direct lead${directLeads === 1 ? "" : "s"}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" · ") || "no reports"
+  );
+}
+
+function managerWorkRows(
+  snapshot: SupervisionPresentationSnapshot,
+  width: number,
+  cap: number,
+): string[] {
+  if (!("work" in snapshot) || !Array.isArray(snapshot.work)) return [];
+  const markers: Record<string, string> = {
+    working: "●",
+    blocked: "◉",
+    idle: "○",
+    paused: "○",
+    starting: "…",
+    finished: "✓",
+    broken: "!",
+  };
+  const work = snapshot.work;
+  const shown = work.slice(0, Math.max(0, cap));
+  return [
+    ...shown.map((item, index) => {
+      const prefix = `${index === work.length - 1 ? "└─" : "├─"} ${markers[item.state] ?? "?"} `;
+      const suffix = ` · ${item.state}`;
+      return safeLine(
+        `${prefix}${safeLine(item.branch, width - visibleWidth(prefix) - visibleWidth(suffix))}${suffix}`,
+        width,
+      );
+    }),
+    ...(work.length > shown.length
+      ? [safeLine(`└─ … ${work.length - shown.length} more · /manager`, width)]
+      : []),
+  ];
+}
+
 /** Renders the bounded ambient lead rows. */
 export function renderSupervisionLeads(
   reports: readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
@@ -723,40 +771,63 @@ export function renderSupervisionLeads(
   const hidden = ordinary.length - Math.min(ordinary.length, Math.max(0, cap));
   const managers = displays.filter((report) => report.role !== "lead").length;
   const leads = displays.length - managers;
+  const managerSnapshot =
+    role === "manager" && !Array.isArray(reports)
+      ? (reports as SupervisionPresentationSnapshot)
+      : undefined;
+  const project =
+    managerSnapshot && "project" in managerSnapshot
+      ? managerSnapshot.project
+      : undefined;
+  const workRows = managerSnapshot
+    ? managerWorkRows(managerSnapshot, width, cap)
+    : [];
+  const managedSessions = new Set(
+    managerSnapshot &&
+      "work" in managerSnapshot &&
+      Array.isArray(managerSnapshot.work)
+      ? managerSnapshot.work.map((item) => item.session)
+      : [],
+  );
   const header =
     role === "manager"
-      ? `● manager · ${leads} lead${leads === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`
-      : `● chief · ${managers} manager${managers === 1 ? "" : "s"} · ${leads} lead${leads === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`;
+      ? `● manager${project ? ` · ${project}` : ""}${status === "stale" ? " · stale" : ""}`
+      : `● chief · ${supervisionCountLabel(managers, leads)}${status === "stale" ? " · stale" : ""}`;
   return [
     safeLine(header, width),
-    ...shown.flatMap((lead, index) => {
-      const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
-      const needsYou = lead.needsYou === true;
-      const marker =
-        (lead.runtimeState === "idle" || lead.runtimeState === "done") &&
-        (lead.agentCounts?.active ?? 0) > 0
-          ? "◉"
-          : lifecycleMarker(lead.runtimeState);
-      const navigation = lead.lead === selectedLead ? ">" : "";
-      const attention = needsYou ? "!" : "";
-      const indicators = `${navigation}${attention}`;
-      const counts = lead.leadCounts;
-      const row = safeLine(
-        `${branch} ${indicators}${marker} ${lead.displayName}  ${lead.role === "lead" ? "lead · " : ""}${counts ? `${counts.total} leads · ` : ""}${leadAgentCounts(lead)}`,
-        width,
-      );
-      return [
-        row,
-        ...(lead.leads ?? [])
-          .slice(0, 3)
-          .map((child) =>
-            safeLine(
-              `   ${child.display_name}  ${child.runtime_state}${child.needs_you ? " · needs you" : ""} · ${child.agent_counts.total} agents`,
-              width,
+    ...workRows,
+    ...shown
+      .filter((lead) => role !== "manager" || !managedSessions.has(lead.lead))
+      .flatMap((lead, index) => {
+        const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
+        const needsYou = lead.needsYou === true;
+        const marker =
+          (lead.runtimeState === "idle" || lead.runtimeState === "done") &&
+          (lead.agentCounts?.active ?? 0) > 0
+            ? "◉"
+            : lifecycleMarker(lead.runtimeState);
+        const navigation = lead.lead === selectedLead ? ">" : "";
+        const attention = needsYou ? "!" : "";
+        const indicators = `${navigation}${attention}`;
+        const counts = lead.leadCounts;
+        const row = safeLine(
+          role === "manager"
+            ? `${branch} ${indicators}${marker} other Lead · ${lead.branch ?? lead.displayName}`
+            : `${branch} ${indicators}${marker} ${lead.displayName}${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`,
+          width,
+        );
+        return [
+          row,
+          ...(lead.leads ?? [])
+            .slice(0, 3)
+            .map((child) =>
+              safeLine(
+                `   ${child.branch ?? child.display_name} · ${child.runtime_state}${child.needs_you ? " · needs you" : ""}${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`,
+                width,
+              ),
             ),
-          ),
-      ];
-    }),
+        ];
+      }),
     ...(hidden > 0 ? [safeLine(`└─ … ${hidden} more · /${role}`, width)] : []),
   ];
 }
@@ -771,12 +842,12 @@ export function formatSupervisionNotification(
   const managers = ordered.filter((report) => report.role !== "lead").length;
   const leads = ordered.length - managers;
   const lines = [
-    `Pi Herdsman · ${managers} manager${managers === 1 ? "" : "s"} · ${leads} lead${leads === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`,
+    `Pi Herdsman · ${supervisionCountLabel(managers, leads)}${status === "stale" ? " · stale" : ""}`,
     ...ordered
       .slice(0, 8)
       .map(
         (lead) =>
-          `${lead.role === "lead" ? "lead · " : "manager · "}${classifySupervisedLead(lead).toLowerCase()}: ${lead.displayName}  ${lead.leadCounts ? `${lead.leadCounts.total} leads · ` : ""}${leadAgentCounts(lead)}`,
+          `${lead.role === "lead" ? "direct lead · " : "manager · "}${classifySupervisedLead(lead).toLowerCase()}: ${lead.displayName}${lead.leadCounts?.total ? ` · ${lead.leadCounts.total} lead${lead.leadCounts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${leadAgentCounts(lead)}` : ""}`,
       ),
   ];
   if (ordered.length > 8) lines.push(`… ${ordered.length - 8} more · /chief`);
@@ -932,7 +1003,8 @@ export function formatSupervisionContext(
 
 /** Width-aware compact widget for the ambient status area. */
 export function createSupervisionWidget(
-  getLeads: () => readonly SupervisedLeadSnapshot[],
+  getLeads: () =>
+    readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
   getStatus: () => SupervisionContextStatus,
   role: "chief" | "manager" = "chief",
 ): { render(width: number): string[]; invalidate(): void } {

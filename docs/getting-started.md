@@ -158,8 +158,8 @@ group, use `/manager` to explicitly claim the exclusive Manager lease for its
 Herdsman project scope; activation is refused while the session owns unresolved
 Agent work. Restored Manager sessions retain the Manager profile, supervision
 UI, and context without loading Lead Agent rosters or recovering Lead-owned
-Agents. `/manager leave` returns to Lead only after project assignments,
-Manager-addressed asks, and the Manager's own pending ask to Chief are resolved. Leads in
+Agents. `/manager leave` preserves project work; a live Lead waiting for this
+Manager's reply or the Manager's own pending ask to Chief can block leaving. Leads in
 linked-worktree workspaces cannot enter Manager mode. Manager is a dedicated
 project coordinator with a distinct coordination profile and only
 `staff`, `supervisor`, and `peer` among Herdsman tools. It does not own Agents
@@ -167,7 +167,11 @@ or implement work through them; delegated implementation belongs to Leads and
 their Agent trees. Worktree Leads are the execution boundary for project work
 delegated by Manager. See the
 [supervision reference](reference/supervision.md) for project eligibility,
-direct-report tools, durable assignments, and results.
+direct-report tools, durable assignments, and results. Start work with
+`staff_delegate` using a task and optional branch; resume by branch alone.
+`staff_close` pauses a Lead without deleting its work, while `staff_discard`
+abandons an assignment but keeps its branch and worktree. Re-enter Manager
+mode to see work left behind; a Lead can finish while no Manager is active.
 
 In an eligible Lead session, use `/chief` to supervise Managers across the
 current Herdr runtime. When a Herdsman project scope has no active Manager,

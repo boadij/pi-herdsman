@@ -118,6 +118,8 @@ const managerTools = [
   "staff_message",
   "staff_reply",
   "staff_delegate",
+  "staff_close",
+  "staff_discard",
 ];
 const chiefTools = [
   "staff_list",
@@ -270,7 +272,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.match(
       managerPrompt.systemPrompt,
-      /Manager role[\s\S]*exactly one Herdr worktree group[\s\S]*Actual implementation belongs to Leads and their Agent trees[\s\S]*Messages and results from direct-report Leads terminate here[\s\S]*your own escalation to Chief/i,
+      /Manager role[\s\S]*Manage project work by branch[\s\S]*Actual implementation belongs to Leads and their Agent trees[\s\S]*Messages and results from direct-report Leads terminate here[\s\S]*your own escalation to Chief/i,
     );
     assert.doesNotMatch(
       managerPrompt.systemPrompt,
@@ -293,8 +295,11 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     const staff = first.tools.find((tool) => tool.name === "staff_delegate");
     assert.ok(staff);
-    assert.ok(staff.parameters.properties.assignment);
-    assert.match(staff.description, /project assignment to a Lead/i);
+    assert.equal(staff.parameters.properties.assignment, undefined);
+    assert.match(
+      staff.description,
+      /project work or resume existing work by Git branch/i,
+    );
     assert.ok(
       Value.Check(staff.parameters, {
         task: "Build feature",
@@ -469,7 +474,11 @@ test("Manager replacement can leave with an ask bound to its old lease", async (
         ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
         : args[0] === "worktree" && args[1] === "list"
           ? respond({
-              source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
               worktrees: [],
             })
           : isAgentList(args)
@@ -518,9 +527,7 @@ test("Manager replacement can leave with an ask bound to its old lease", async (
     });
     await pi.commandOptions.get("manager").handler("leave", ctx);
     assert.ok(
-      notices.some((message) =>
-        /Manager-bound asks remain unresolved/.test(message),
-      ),
+      notices.some((message) => /Lead is waiting for a reply/.test(message)),
     );
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
@@ -590,7 +597,11 @@ test("Manager leave retains a Chief-bound ask until its Chief claim is dead", as
         ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
         : args[0] === "worktree" && args[1] === "list"
           ? respond({
-              source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
               worktrees: [],
             })
           : isAgentList(args)
@@ -740,7 +751,11 @@ test("Manager leave retains its lease and role when persistence fails", async ()
         ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
         : args[0] === "worktree" && args[1] === "list"
           ? respond({
-              source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
               worktrees: [],
             })
           : isAgentList(args)
@@ -851,7 +866,11 @@ test("Manager leave suspends authority when lease release fails", async () => {
         ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
         : args[0] === "worktree" && args[1] === "list"
           ? respond({
-              source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
               worktrees: [],
             })
           : isAgentList(args)
@@ -1092,7 +1111,17 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
           repo_key: "repo-key",
           repo_name: "project",
         },
-        worktrees: created ? [{ open_workspace_id: childWorkspace }] : [],
+        worktrees: created
+          ? [
+              {
+                open_workspace_id: childWorkspace,
+                branch: listProjectAssignments(
+                  supervisionRuntime(),
+                  WORKSPACE,
+                )[0]?.branch,
+              },
+            ]
+          : [],
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
       const branchIndex = args.indexOf("--branch");
@@ -1232,8 +1261,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       WORKSPACE,
     )[0];
     assert.equal(assignment?.phase, "active");
-    assert.equal(assignment?.leadSessionId, childSession);
-    assert.equal(assignment?.leadSessionId, assignment?.id);
+    assert.equal(assignment?.id, childSession);
     assert.equal(assignment?.branch, `herdsman/${assignment?.id}`);
     assert.equal(assignment?.workspaceId, childWorkspace);
     assert.equal(assignment?.paneId, "child-pane");
@@ -1244,10 +1272,10 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     );
     assert.equal(paths.length, 1);
     const delivery = readChiefMessage(paths[0]!);
-    assert.equal(delivery.kind, "manager_assignment");
+    assert.equal(delivery.kind, "project_assignment");
     assert.match(
       delivery.text,
-      /When this assignment is complete, report its result with supervisor_result\./,
+      /When this work is complete, report its result with supervisor_result\./,
     );
     assert.match(
       delivery.text,
@@ -1264,6 +1292,19 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
           args[0] === "agent" && args[1] === "start" && args.includes("--pane"),
       ),
     );
+    const managerLeaseId = readManagerDescriptor(
+      supervisionRuntime(),
+      WORKSPACE,
+    )!.leaseId;
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+      undefined,
+    );
+    assert.equal(
+      listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+      childSession,
+    );
     process.env.HERDR_WORKSPACE_ID = childWorkspace;
     process.env.HERDR_PANE_ID = "child-pane";
     process.env.HERDR_TAB_ID = "child-tab";
@@ -1273,6 +1314,15 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     leadCtx.sessionManager.getSessionId = () => childSession;
     try {
       await lead.events.get("session_start")![0](undefined, leadCtx);
+      await t.waitFor(() =>
+        assert.ok(
+          lead.sent.some(
+            (message: any) =>
+              message?.customType === "pi-herdsman-project_assignment",
+          ),
+          "Project assignment was not deliverable after Manager departure",
+        ),
+      );
       const supervisor = lead.tools.find(
         (tool) => tool.name === "supervisor_result",
       )!;
@@ -1288,13 +1338,14 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         leadCtx,
       );
       assert.equal(result.details.result, resultRef(assignment!.id));
+      assert.equal(result.details.queued, false);
       assert.match(
         readFileSync(resultPath(assignment!.id), "utf8"),
         /Lead result source:.*assignment/,
       );
       assert.equal(
         listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
-        "settling",
+        "active",
       );
     } finally {
       await lead.events.get("session_shutdown")![0]();
@@ -1302,6 +1353,36 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     process.env.HERDR_WORKSPACE_ID = WORKSPACE;
     process.env.HERDR_PANE_ID = "root-pane";
     process.env.HERDR_TAB_ID = "root-tab";
+    await pi.commandOptions.get("manager").handler("", ctx);
+    assert.notEqual(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+      managerLeaseId,
+    );
+    assert.equal(
+      listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+      childSession,
+    );
+    await assert.rejects(
+      pi.tools
+        .find((tool) => tool.name === "staff_discard")!
+        .execute(
+          "discard",
+          { branch: assignment!.branch },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      /already has durable result/,
+    );
+    await pi.events.get("before_agent_start")![0](
+      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+      ctx,
+    );
+    assert.ok(
+      listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
+        (path) => readChiefMessage(path).kind === "report_result",
+      ),
+    );
     await t.waitFor(
       () =>
         assert.ok(
@@ -1415,6 +1496,7 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
           source: {
             source_workspace_id: independentWorkspace,
             repo_key: "other-repo",
+            repo_name: "other",
           },
           worktrees: [],
         });

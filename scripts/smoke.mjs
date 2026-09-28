@@ -13,7 +13,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1051,7 +1051,11 @@ function continuationPrompt() {
 }
 
 export function managerRecoveryFreshPrompt(branch) {
-  return `Use staff_delegate exactly once for a fresh assignment. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`assignment\` and recovery-only fields (\`base\` and \`files\`).\n\nThe delegated task is:\n- do not modify any files;\n- immediately call supervisor_message with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait;\n- do not call supervisor_result until the Manager later sends exactly MANAGER_RECOVERY_FINISH via staff_message;\n- after that message, call supervisor_result with exactly MANAGER_RECOVERY_DONE.\n\nAfter MANAGER_RECOVERY_READY reaches you, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY.\nDo not send a staff_message yet and do not create another assignment.`;
+  return `Use staff_delegate exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call supervisor_message with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait;\n- do not call supervisor_result until the Manager later sends exactly MANAGER_RECOVERY_FINISH via staff_message;\n- after that message, call supervisor_result with exactly MANAGER_RECOVERY_DONE.\n\nAfter MANAGER_RECOVERY_READY reaches you, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY.\nDo not send a staff_message yet and do not create another assignment.`;
+}
+
+export function managerRecoveryResumePrompt(branch, session) {
+  return `Resume the existing work on branch ${branch}.\n\nCall staff_delegate using only:\n${JSON.stringify({ branch })}\n\nDo not start new work or supply task, base, or files.\n\nAfter recovery succeeds, send staff_message to session ${session} with exactly MANAGER_RECOVERY_FINISH.\n\nThen wait for that Lead's project result. Only after the result arrives, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_OK.`;
 }
 
 export function initialPromptForScenario(scenario, ctx) {
@@ -1783,8 +1787,7 @@ async function runManagerRecoverySmoke(ctx) {
   markStage("initial-assignment-validation");
   assert.equal(first.ok, true);
   assert.equal(first.action, "delegate");
-  assert.match(first.assignment, /^[0-9a-f-]{36}$/i);
-  assert.equal(first.assignment, first.session);
+  assert.match(first.session, /^[0-9a-f-]{36}$/i);
   assert.equal(first.branch, branch);
   assert.ok(first.workspace_id);
   const initialWorktrees = await matchingWorktrees();
@@ -1795,7 +1798,6 @@ async function runManagerRecoverySmoke(ctx) {
   assert.ok(worktreePath, "worktree path was not reported");
   ctx.managerRecovery = {
     ...ctx.managerRecovery,
-    assignmentId: first.assignment,
     sessionId: first.session,
     workspaceId,
     worktreePath,
@@ -1810,7 +1812,7 @@ async function runManagerRecoverySmoke(ctx) {
   assert.ok(initialAgent, "delegated Lead was not listed in its workspace");
   const paneId = initialAgent.pane_id;
   assert.ok(paneId);
-  assert.equal(await agentSessionId(ctx, initialAgent), first.assignment);
+  assert.equal(await agentSessionId(ctx, initialAgent), first.session);
   assert.equal(initialAgent.workspace_id, workspaceId);
   const panes = listedPanes(await nestedCommand(ctx, ["pane", "list"]));
   assert.ok(panes.some((pane) => pane.paneId === paneId));
@@ -1843,9 +1845,87 @@ async function runManagerRecoverySmoke(ctx) {
     firstPid: pid,
   };
 
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
+  const runtime = join(
+    ctx.paths.piAgent,
+    "pi-herdsman",
+    "runtime",
+    "supervision-v2",
+    hash(assertNestedSocketPathFits(ctx.paths, ctx.sessionName)),
+  );
+  const assignmentPath = join(
+    runtime,
+    "assignments",
+    hash(ctx.rootWorkspaceId),
+    `${first.session}.json`,
+  );
+  const managerPath = join(
+    runtime,
+    "managers",
+    `${hash(ctx.rootWorkspaceId)}.json`,
+  );
+  const assignmentRecord = async () => {
+    const details = await lstat(assignmentPath);
+    assert.ok(details.isFile() && !details.isSymbolicLink());
+    assert.ok(details.size <= 16 * 1024);
+    const record = JSON.parse(await readFile(assignmentPath, "utf8"));
+    assert.equal(record.id, first.session);
+    assert.equal(record.branch, branch);
+    assert.equal(record.workspaceId, workspaceId);
+    assert.equal(record.phase, "active");
+    return record;
+  };
+  const managerLease = async () =>
+    JSON.parse(await readFile(managerPath, "utf8")).leaseId;
+  await assignmentRecord();
+  const previousLease = await managerLease();
+  markStage("manager-turnover-leave");
+  await submitManagerLeave(ctx, ctx.rootPaneId);
+  await waitFor(
+    "manager-left",
+    async () => {
+      try {
+        await lstat(managerPath);
+        return false;
+      } catch (error) {
+        if (error.code === "ENOENT") return true;
+        throw error;
+      }
+    },
+    15_000,
+  );
+  await assignmentRecord();
+  assert.equal((await candidatePids(paneId)).includes(pid), true);
+  let retainedLead = false;
+  for (const agent of await agents())
+    if (
+      agent.pane_id === paneId &&
+      agent.workspace_id === workspaceId &&
+      (await agentSessionId(ctx, agent)) === first.session
+    )
+      retainedLead = true;
+  assert.ok(retainedLead, "exact Lead must survive Manager departure");
+  markStage("manager-turnover-reenter");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
+  await waitFor(
+    "manager-reentered",
+    async () => {
+      try {
+        const lease = await managerLease();
+        return lease !== previousLease ? lease : null;
+      } catch (error) {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      }
+    },
+    15_000,
+  );
+  await assignmentRecord();
+  assert.equal((await candidatePids(paneId)).includes(pid), true);
+
   let beforeKillAgent;
   for (const agent of await agents())
-    if ((await agentSessionId(ctx, agent)) === first.assignment) {
+    if ((await agentSessionId(ctx, agent)) === first.session) {
       beforeKillAgent = agent;
       break;
     }
@@ -1901,7 +1981,7 @@ async function runManagerRecoverySmoke(ctx) {
     worktreePath,
   );
 
-  const recoveryPrompt = `Recover the existing assignment ${first.assignment}.\n\nCall staff_delegate using only:\n{"assignment":"${first.assignment}"}\n\nDo not create a fresh assignment and do not change its branch, base, task, or files.\n\nAfter recovery succeeds, send staff_message to session ${first.assignment} with exactly MANAGER_RECOVERY_FINISH.\n\nThen wait for that Lead's project result. Only after the result arrives, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_OK.`;
+  const recoveryPrompt = managerRecoveryResumePrompt(branch, first.session);
   markStage("assignment-recovery");
   await promptRoot(recoveryPrompt);
   markStage("recovered-identity-validation");
@@ -1911,8 +1991,6 @@ async function runManagerRecoverySmoke(ctx) {
     return results?.length === 2 ? { session, results } : null;
   });
   const recovered = recovery.results[1];
-  assert.equal(recovered.recovered, true);
-  assert.equal(recovered.assignment, first.assignment);
   assert.equal(recovered.session, first.session);
   assert.equal(recovered.branch, first.branch);
   assert.equal(recovered.workspace_id, workspaceId);
@@ -1970,7 +2048,7 @@ async function runManagerRecoverySmoke(ctx) {
   assert.equal(staffDelegateResults(completed.contents).length, 2);
   assert.equal((await matchingWorktrees()).length, 1);
   assert.ok(
-    hasManagerResultRef(completed.contents, first.assignment),
+    hasManagerResultRef(completed.contents, first.session),
     "Manager transcript omitted canonical result ref",
   );
   assert.ok(completed.contents.includes("MANAGER_RECOVERY_DONE"));
@@ -1978,7 +2056,7 @@ async function runManagerRecoverySmoke(ctx) {
     ctx.paths.piAgent,
     "pi-herdsman",
     "results",
-    first.assignment,
+    first.session,
   );
   const assertResult = async () => {
     const details = await lstat(resultPath);
@@ -1988,7 +2066,9 @@ async function runManagerRecoverySmoke(ctx) {
   };
   markStage("pre-leave-result-validation");
   await assertResult();
-  ctx.managerRecovery.resultRef = `result:${first.assignment}`;
+  ctx.managerRecovery.resultRef = `result:${first.session}`;
+  markStage("settled-assignment-validation");
+  await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
   markStage("manager-leave-command-submission");
   await submitManagerLeave(ctx, ctx.rootPaneId);
   markStage("manager-leave-output-wait");

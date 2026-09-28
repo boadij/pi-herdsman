@@ -13,6 +13,7 @@ import {
   parseToolSnapshots,
   chiefTreeBranchPlan,
   managerRecoveryFreshPrompt,
+  managerRecoveryResumePrompt,
   continuationResultsForPrompt,
   initialPromptForScenario,
   inspectPaneProcesses,
@@ -227,19 +228,24 @@ test("manager-recovery starts with one ordinary Lead startup turn", () => {
   );
 });
 
-test("manager-recovery fresh delegation specifies only fresh-delegation fields", () => {
+test("manager-recovery starts work by task and branch, then resumes by branch only", () => {
   const branch = "herdsman/smoke-manager-recovery-exact";
   const prompt = managerRecoveryFreshPrompt(branch);
-  assert.match(prompt, /staff_delegate exactly once for a fresh assignment/);
+  assert.match(prompt, /staff_delegate exactly once to start new project work/);
   assert.match(prompt, /`task` argument/);
   assert.match(
     prompt,
     /`branch` argument to exactly herdsman\/smoke-manager-recovery-exact/,
   );
+  assert.match(prompt, /Omit `base` and `files`/);
+  assert.doesNotMatch(prompt, /`assignment`/);
+  const resume = managerRecoveryResumePrompt(branch, "session-exact");
   assert.match(
-    prompt,
-    /Omit `assignment` and recovery-only fields \(`base` and `files`\)/,
+    resume,
+    /staff_delegate using only:\n\{"branch":"herdsman\/smoke-manager-recovery-exact"\}/,
   );
+  assert.match(resume, /staff_message to session session-exact/);
+  assert.doesNotMatch(resume, /"assignment"|"task"|"base"|"files"/);
 });
 
 test("staff delegate results retain only valid successful delegation payloads in order", () => {
@@ -253,12 +259,13 @@ test("staff delegate results retain only valid successful delegation payloads in
     },
     {
       toolName: "staff_delegate",
-      content: '{"ok":true,"action":"delegate","assignment":"fresh"}',
+      content:
+        '{"ok":true,"action":"delegate","branch":"feat/fresh","session":"fresh"}',
     },
     {
       toolName: "staff_delegate",
       content:
-        '{"ok":true,"action":"delegate","assignment":"recovered","recovered":true}',
+        '{"ok":true,"action":"delegate","branch":"feat/fresh","session":"fresh","state":"working"}',
     },
   ];
   const contents = messages
@@ -271,8 +278,14 @@ test("staff delegate results retain only valid successful delegation payloads in
     )
     .join("\n");
   assert.deepEqual(staffDelegateResults(contents), [
-    { ok: true, action: "delegate", assignment: "fresh" },
-    { ok: true, action: "delegate", assignment: "recovered", recovered: true },
+    { ok: true, action: "delegate", branch: "feat/fresh", session: "fresh" },
+    {
+      ok: true,
+      action: "delegate",
+      branch: "feat/fresh",
+      session: "fresh",
+      state: "working",
+    },
   ]);
 });
 

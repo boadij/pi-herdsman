@@ -56,9 +56,10 @@ managed descendants do not load the probe.
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
 generations), `chief-tree` (current Chief/session_tree behavior), and
-`manager-recovery` (real Manager delegation, exact-session executor loss and
-recovery, no-duplicate-worktree identity, `supervisor_result` settlement,
-durable result retention, and successful Manager leave).
+`manager-recovery` (real Manager delegation, leave/re-entry with unresolved
+project work, branch-only recovery after exact-session executor loss,
+no-duplicate-worktree identity, `supervisor_result` settlement, durable result
+retention, and successful Manager leave).
 `chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool
 snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
@@ -309,9 +310,10 @@ After every smoke:
 ## Project Manager / Chief supervision live matrix
 
 For Manager lifecycle acceptance, use the configured smoke model above in
-disposable real Pi/Herdr sessions. Record the assignment ID, branch, workspace,
-pane, Pi session ID, and exact-ID cleanup result for each sequence. Automated
-`manager-recovery` covers the active-loss recovery lifecycle. The
+disposable real Pi/Herdr sessions. Record the branch, exact Pi session,
+workspace, pane, and exact-ID cleanup result for each sequence. Automated
+`manager-recovery` covers Manager turnover with unresolved work followed by
+executor-loss recovery using `staff_delegate` with branch only. The
 normal-completion sequence and broader supervision matrix remain useful manual
 acceptance where explicitly run.
 

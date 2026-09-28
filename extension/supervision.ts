@@ -109,7 +109,7 @@ export type ChiefMessageKind =
   | "manager_message"
   | "manager_ask"
   | "manager_reply"
-  | "manager_assignment"
+  | "project_assignment"
   | "report_result"
   | "peer_message";
 
@@ -171,7 +171,7 @@ const MESSAGE_KINDS = new Set<ChiefMessageKind>([
   "manager_message",
   "manager_ask",
   "manager_reply",
-  "manager_assignment",
+  "project_assignment",
   "report_result",
   "peer_message",
 ]);
@@ -783,17 +783,17 @@ function deliveredMessageContent(record: CoordinationMessageRecord): string {
   const prefix =
     record.kind === "chief_message" || record.kind === "chief_reply"
       ? `From chief ${record.fromSessionId} to lead ${record.leadSessionId}: `
-      : record.kind === "manager_message" ||
-          record.kind === "manager_reply" ||
-          record.kind === "manager_assignment"
-        ? `From manager ${record.fromSessionId} to lead ${record.leadSessionId}: `
-        : record.kind === "manager_ask"
-          ? `From manager ${record.fromSessionId} to chief ${record.toSessionId}: `
-          : record.kind === "report_result"
-            ? `Result from lead ${record.leadSessionId} to manager ${record.toSessionId}: `
-            : record.kind === "lead_message" || record.kind === "lead_ask"
-              ? `From lead ${record.leadSessionId} to chief ${record.toSessionId}: `
-              : `Peer message from ${record.fromSessionId}: `;
+      : record.kind === "project_assignment"
+        ? `Project assignment for lead ${record.leadSessionId}: `
+        : record.kind === "manager_message" || record.kind === "manager_reply"
+          ? `From manager ${record.fromSessionId} to lead ${record.leadSessionId}: `
+          : record.kind === "manager_ask"
+            ? `From manager ${record.fromSessionId} to chief ${record.toSessionId}: `
+            : record.kind === "report_result"
+              ? `Result from lead ${record.leadSessionId} to manager ${record.toSessionId}: `
+              : record.kind === "lead_message" || record.kind === "lead_ask"
+                ? `From lead ${record.leadSessionId} to chief ${record.toSessionId}: `
+                : `Peer message from ${record.fromSessionId}: `;
   return Buffer.from(`${prefix}${record.text}`, "utf8")
     .subarray(0, COORDINATION_MESSAGE_MAX_BYTES)
     .toString("utf8");
@@ -1674,11 +1674,10 @@ export type ProjectAssignment = {
   base: string;
   branch: string;
   text: string;
-  phase: "creating" | "starting" | "active" | "settling";
+  phase: "creating" | "starting" | "active";
   workspaceId?: string;
   paneId?: string;
   tabId?: string;
-  leadSessionId?: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -1713,7 +1712,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     "createdAt",
     "updatedAt",
   ];
-  const optional = ["workspaceId", "paneId", "tabId", "leadSessionId"];
+  const optional = ["workspaceId", "paneId", "tabId"];
   const placementKeys = ["workspaceId", "paneId", "tabId"] as const;
   const hasPlacement = placementKeys.every((key) =>
     validNativeIdentity(r[key]),
@@ -1721,12 +1720,8 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
   const hasNoPlacement = placementKeys.every((key) => r[key] === undefined);
   const phaseValid =
     r.phase === "creating"
-      ? hasNoPlacement && r.leadSessionId === undefined
-      : r.phase === "starting"
-        ? hasPlacement && r.leadSessionId === undefined
-        : (r.phase === "active" || r.phase === "settling") &&
-          hasPlacement &&
-          r.leadSessionId === r.id;
+      ? hasNoPlacement
+      : (r.phase === "starting" || r.phase === "active") && hasPlacement;
   return (
     required.every((key) => Object.hasOwn(r, key)) &&
     Object.keys(r).every(
@@ -1912,6 +1907,7 @@ export type LeadCoordinationState = CoordinatorState;
 
 export type SupervisedLead = {
   lead: string;
+  branch?: string;
   /** Internal: path to a non-empty persisted session candidate. */
   piSessionFile?: string;
   instanceId?: string;
@@ -1959,8 +1955,123 @@ export type ChiefManagerReportSnapshot = {
 };
 export type SupervisionSnapshot = {
   leads: SupervisedLead[];
+  project?: string;
+  work?: ProjectWorkSnapshot[];
   diagnostics?: string[];
 };
+export type ProjectWorkState =
+  | "starting"
+  | "working"
+  | "blocked"
+  | "idle"
+  | "paused"
+  | "finished"
+  | "broken";
+export type ProjectWorkSnapshot = Readonly<{
+  branch: string;
+  session: string;
+  state: ProjectWorkState;
+  task?: string;
+  workspaceId?: string;
+  paneId?: string;
+  result?: string;
+  issue?: string;
+}>;
+/** Derive work from one caller-validated Lead inventory and one Herdr worktree list. */
+export function projectWorkSnapshot(options: {
+  assignments: readonly ProjectAssignment[];
+  worktrees: readonly Readonly<{
+    branch: string;
+    open_workspace_id?: string | null;
+  }>[];
+  leads: readonly Pick<
+    SupervisedLead,
+    "lead" | "workspaceId" | "paneId" | "runtimeState"
+  >[];
+  /** Canonical result refs keyed by assignment session ID. */
+  results: ReadonlyMap<string, string>;
+}): ProjectWorkSnapshot[] {
+  return options.assignments.map((assignment) => {
+    const worktrees = options.worktrees.filter(
+      (item) => item.branch === assignment.branch,
+    );
+    const worktree = worktrees[0];
+    const occupants = options.leads.filter(
+      (lead) =>
+        lead.workspaceId ===
+        (worktree?.open_workspace_id ?? assignment.workspaceId),
+    );
+    const exact = options.leads.filter((lead) => lead.lead === assignment.id);
+    const result = options.results.get(assignment.id);
+    let state: ProjectWorkState;
+    let issue: string | undefined;
+    if (result !== undefined) state = "finished";
+    else if (
+      worktrees.length > 1 ||
+      options.assignments.filter(
+        (item) =>
+          item.repoKey === assignment.repoKey &&
+          item.branch === assignment.branch,
+      ).length > 1
+    ) {
+      state = "broken";
+      issue = "multiple records claim this branch";
+    } else if (assignment.phase === "creating") state = "starting";
+    else if (!worktree) {
+      state = "broken";
+      issue = "worktree is unavailable";
+    } else if (occupants.some((lead) => lead.lead !== assignment.id)) {
+      state = "broken";
+      issue = "another Lead is active in this worktree";
+    } else if (
+      exact.length > 1 ||
+      (exact.length === 1 &&
+        (exact[0]!.workspaceId !== assignment.workspaceId ||
+          exact[0]!.paneId !== assignment.paneId ||
+          worktree.open_workspace_id !== assignment.workspaceId))
+    ) {
+      state = "broken";
+      issue = "Lead placement is inconsistent";
+    } else if (assignment.phase === "starting") {
+      state =
+        worktree.open_workspace_id === assignment.workspaceId
+          ? "starting"
+          : "broken";
+      if (state === "broken")
+        issue = "worktree placement changed while starting";
+    } else if (exact.length === 1) {
+      const runtime = exact[0]!.runtimeState;
+      state =
+        runtime === "working" || runtime === "blocked" || runtime === "idle"
+          ? runtime
+          : "idle";
+    } else state = "paused";
+    const task = assignment.text
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/gu, " ")
+      .trim();
+    const characters = Array.from(task);
+    return {
+      branch: assignment.branch,
+      session: assignment.id,
+      state,
+      ...(task
+        ? {
+            task:
+              characters.length <= 160
+                ? task
+                : `${characters.slice(0, 159).join("")}…`,
+          }
+        : {}),
+      ...(assignment.workspaceId
+        ? { workspaceId: assignment.workspaceId }
+        : {}),
+      ...(assignment.paneId ? { paneId: assignment.paneId } : {}),
+      ...(result !== undefined ? { result } : {}),
+      ...(issue ? { issue } : {}),
+    };
+  });
+}
 export type SupervisionPresentationSnapshot =
   SupervisionSnapshot | ChiefManagerReportSnapshot;
 export type RuntimeState =
@@ -2280,6 +2391,7 @@ export function projectSupervision(options: {
       lead: agent.sessionId,
       instanceId: state.instanceId,
       displayName: `${workspaceLabel || agent.workspaceId}/${name}`,
+      ...(provenance?.branch ? { branch: provenance.branch } : {}),
       workspaceId: agent.workspaceId,
       ...(workspaceLabel ? { workspaceLabel } : {}),
       tabId: agent.tabId,

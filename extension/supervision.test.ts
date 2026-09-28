@@ -33,6 +33,7 @@ import {
   listProjectAssignments,
   removeProjectAssignment,
   projectAssignmentPath,
+  projectWorkSnapshot,
   PROJECT_ASSIGNMENT_MAX_BYTES,
   coordinationMessageBytes,
   coordinationMessagePath,
@@ -894,6 +895,7 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
     snapshot.leads.find((lead) => lead.lead === namedSession)!.displayName,
     "pi-herdsman/feat/supervision/pi-session",
   );
+  assert.equal(snapshot.leads[0]!.branch, "feat/supervision");
   assert.equal(
     snapshot.leads.some((lead) =>
       lead.displayName.includes("mac-system-theme"),
@@ -1872,25 +1874,20 @@ test("project assignments are strict, private, bounded, and removable", () => {
     { leadSessionId: assignment.id },
     { phase: "starting" },
     { phase: "starting", workspaceId: "child" },
-    { phase: "starting", ...placement, leadSessionId: assignment.id },
     { phase: "active" },
-    { phase: "active", ...placement },
-    { phase: "active", ...placement, leadSessionId: id() },
     { phase: "settling" },
     { phase: "settling", ...placement },
-    { phase: "settling", ...placement, leadSessionId: id() },
   ])
     assert.throws(
       () =>
         writeProjectAssignment(runtime, { ...assignment, ...invalid } as never),
       /Invalid project assignment/,
     );
-  for (const phase of ["starting", "active", "settling"] as const) {
+  for (const phase of ["starting", "active"] as const) {
     const valid = {
       ...assignment,
       phase,
       ...placement,
-      ...(phase !== "starting" ? { leadSessionId: assignment.id } : {}),
     };
     writeProjectAssignment(runtime, valid);
     assert.deepEqual(
@@ -1968,6 +1965,167 @@ test("project assignments are strict, private, bounded, and removable", () => {
   );
 });
 
+test("project work derives completion, liveness and broken topology without persisting state", () => {
+  const assignment = {
+    version: 1 as const,
+    id: id(),
+    primaryWorkspaceId: "root",
+    repoKey: "repo",
+    base: "HEAD",
+    branch: "feat/work",
+    text: "  implement\nwork  ",
+    phase: "active" as const,
+    workspaceId: "child",
+    paneId: "pane",
+    tabId: "tab",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const worktrees = [{ branch: assignment.branch, open_workspace_id: "child" }];
+  const lead = {
+    lead: assignment.id,
+    workspaceId: "child",
+    paneId: "pane",
+    runtimeState: "blocked" as const,
+  };
+  const project = (
+    changes: Partial<Parameters<typeof projectWorkSnapshot>[0]> = {},
+  ) =>
+    projectWorkSnapshot({
+      assignments: [assignment],
+      worktrees,
+      leads: [lead],
+      results: new Map(),
+      ...changes,
+    })[0]!;
+  assert.deepEqual(project(), {
+    branch: "feat/work",
+    session: assignment.id,
+    state: "blocked",
+    task: "implement work",
+    workspaceId: "child",
+    paneId: "pane",
+  });
+  assert.equal(project({ leads: [] }).state, "paused");
+  assert.equal(project({ worktrees: [], leads: [] }).state, "broken");
+  assert.equal(
+    project({ leads: [{ ...lead, lead: "other" }] }).issue,
+    "another Lead is active in this worktree",
+  );
+  assert.deepEqual(
+    project({
+      worktrees: [],
+      results: new Map([[assignment.id, `result:${assignment.id}`]]),
+    }).state,
+    "finished",
+  );
+  assert.equal(
+    project({ assignments: [{ ...assignment, phase: "creating" }] }).state,
+    "starting",
+  );
+});
+
+test("project work decision table marks ambiguous topology broken and derives paused or finished", () => {
+  const assignment = {
+    version: 1 as const,
+    id: id(),
+    primaryWorkspaceId: "root",
+    repoKey: "repo",
+    base: "HEAD",
+    branch: "feat/work",
+    text: "implement work",
+    phase: "active" as const,
+    workspaceId: "child",
+    paneId: "pane",
+    tabId: "tab",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const worktree = { branch: assignment.branch, open_workspace_id: "child" };
+  const lead = {
+    lead: assignment.id,
+    workspaceId: "child",
+    paneId: "pane",
+    runtimeState: "working" as const,
+  };
+  const cases = [
+    {
+      name: "exact live Lead",
+      input: { worktrees: [worktree], leads: [lead] },
+      state: "working",
+    },
+    {
+      name: "paused with its worktree retained",
+      input: { worktrees: [worktree], leads: [] },
+      state: "paused",
+    },
+    {
+      name: "finished from canonical result",
+      input: {
+        worktrees: [],
+        leads: [],
+        results: new Map([[assignment.id, `result:${assignment.id}`]]),
+      },
+      state: "finished",
+    },
+    {
+      name: "duplicate worktree topology",
+      input: { worktrees: [worktree, worktree], leads: [] },
+      state: "broken",
+      issue: "multiple records claim this branch",
+    },
+    {
+      name: "duplicate assignment reservation",
+      input: {
+        worktrees: [worktree],
+        leads: [],
+        assignments: [assignment, { ...assignment, id: id() }],
+      },
+      state: "broken",
+      issue: "multiple records claim this branch",
+    },
+    {
+      name: "duplicate exact Lead inventory",
+      input: { worktrees: [worktree], leads: [lead, lead] },
+      state: "broken",
+      issue: "Lead placement is inconsistent",
+    },
+    {
+      name: "starting placement changed",
+      assignment: { ...assignment, phase: "starting" as const },
+      input: {
+        worktrees: [{ ...worktree, open_workspace_id: "replacement" }],
+        leads: [],
+      },
+      state: "broken",
+      issue: "worktree placement changed while starting",
+    },
+    {
+      name: "exact Lead placement conflicts with assignment",
+      input: {
+        worktrees: [worktree],
+        leads: [{ ...lead, paneId: "other-pane" }],
+      },
+      state: "broken",
+      issue: "Lead placement is inconsistent",
+    },
+  ] as const;
+
+  for (const scenario of cases) {
+    const snapshot = projectWorkSnapshot({
+      assignments: scenario.input.assignments ?? [
+        scenario.assignment ?? assignment,
+      ],
+      worktrees: scenario.input.worktrees,
+      leads: scenario.input.leads,
+      results: scenario.input.results ?? new Map(),
+    });
+    assert.equal(snapshot[0]!.state, scenario.state, scenario.name);
+    if ("issue" in scenario)
+      assert.equal(snapshot[0]!.issue, scenario.issue, scenario.name);
+  }
+});
+
 test("Manager asks and project results use the one durable inbox", async () => {
   const runtime = supervisionRuntime(socket());
   const ask = message({
@@ -2004,4 +2162,37 @@ test("Manager asks and project results use the one durable inbox", async () => {
   assert.match(received[1]!, new RegExp(`result:${resultId}`));
   assert.match(received[1]!, /Result from lead lead to manager manager:/);
   assert.match(received[1]!, /I'm live/);
+});
+
+test("project assignment uses durable project transport, not Manager message framing", async () => {
+  const runtime = supervisionRuntime(socket());
+  const session = id();
+  const instruction = `Project assignment ${session}: implement work`;
+  const record = message({
+    kind: "project_assignment",
+    fromSessionId: "former-manager",
+    toSessionId: session,
+    leadSessionId: session,
+    text: instruction,
+  });
+  writeChiefMessage(record, runtime);
+  const delivered: any[] = [];
+  assert.equal(
+    await drainCoordinationInbox({
+      runtime,
+      sessionId: session,
+      isAuthorized: (candidate) =>
+        candidate.toSessionId === session && candidate.text === instruction,
+      isDelivered: () => false,
+      sendMessage: (payload) => {
+        delivered.push(payload);
+      },
+    }),
+    1,
+  );
+  assert.equal(delivered[0].customType, "pi-herdsman-project_assignment");
+  assert.equal(
+    delivered[0].content,
+    `Project assignment for lead ${session}: ${instruction}`,
+  );
 });

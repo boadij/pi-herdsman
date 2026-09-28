@@ -266,19 +266,19 @@ test("Supervision ambient projections share status and empty-state semantics", (
     };
 
     const fresh = projections("fresh");
-    assert.match(fresh.ambient, /1 lead/);
-    assert.match(fresh.widget, /1 lead/);
+    assert.match(fresh.ambient, /1 direct lead/);
+    assert.match(fresh.widget, /1 direct lead/);
     assert.match(fresh.ambient, /chief/);
     assert.doesNotMatch(fresh.ambient, /Chief/);
     assert.match(fresh.notification, /Pi Herdsman/);
-    assert.match(fresh.notification, /1 lead/);
+    assert.match(fresh.notification, /1 direct lead/);
     assert.doesNotMatch(fresh.ambient, /stale|unavailable/);
     assert.doesNotMatch(fresh.notification, /stale|unavailable/);
 
     const stale = projections("stale");
     for (const output of Object.values(stale)) assert.match(output, /stale/);
-    assert.match(stale.ambient, /1 lead/);
-    assert.match(stale.notification, /1 lead/);
+    assert.match(stale.ambient, /1 direct lead/);
+    assert.match(stale.notification, /1 direct lead/);
 
     const unavailable = projections("unavailable");
     for (const output of Object.values(unavailable)) {
@@ -288,17 +288,17 @@ test("Supervision ambient projections share status and empty-state semantics", (
   }
 
   {
-    assert.match(
-      renderSupervisionLeads([], 120, { status: "fresh" })[0]!,
-      /0 leads/,
+    assert.equal(
+      renderSupervisionLeads([], 120, { status: "fresh" })[0],
+      "● chief · no reports",
     );
-    assert.match(formatSupervisionNotification([], "fresh"), /0 leads/);
+    assert.match(formatSupervisionNotification([], "fresh"), /no reports/);
     assert.match(
       createSupervisionWidget(
         () => [],
         () => "fresh",
       ).render(120)[0]!,
-      /0 leads/,
+      /no reports/,
     );
   }
 });
@@ -306,11 +306,11 @@ test("Supervision ambient projections share status and empty-state semantics", (
 test("Chief ambient projection pluralizes counts and handles unavailable state", (t) => {
   {
     const cases = [
-      { leads: [], label: "0 leads" },
-      { leads: [lead()], label: "1 lead" },
+      { leads: [], label: "no reports" },
+      { leads: [lead()], label: "1 direct lead" },
       {
         leads: [lead(), lead({ lead: "session-b" })],
-        label: "2 leads",
+        label: "2 direct leads",
       },
     ];
     for (const { leads, label } of cases) {
@@ -372,8 +372,8 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       120,
     );
     const output = rows.join("\n");
-    assert.equal(rows[1], "├─ !◐ attention  lead · 1 agent · 1 active");
-    assert.equal(rows[2], "├─ ● working  lead · 1 agent · 1 active");
+    assert.equal(rows[1], "├─ !◐ attention · 1 agent");
+    assert.equal(rows[2], "├─ ● working · 1 agent");
     assert.equal(
       rows.some((line) => line === ""),
       false,
@@ -389,7 +389,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       ],
       () => "fresh",
     ).render(120);
-    assert.equal(widgetRows[1], "├─ ◉ widget-a  lead · 1 agent · 1 active");
+    assert.equal(widgetRows[1], "├─ ◉ widget-a · 1 agent");
     assert.equal(widgetRows[1]?.startsWith("├─ "), true);
     assert.equal(
       widgetRows.some((line) => line === ""),
@@ -415,7 +415,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       {},
       "selected",
     );
-    assert.equal(selectedRows[1], "└─ >!◐ selected  lead · no agents");
+    assert.equal(selectedRows[1], "└─ >!◐ selected");
   }
 
   {
@@ -562,7 +562,7 @@ test("Supervision rows cap ordinary leads, retain attention, and fit every width
       ),
     ];
     const rows = renderSupervisionLeads(leads, 200);
-    assert.match(rows[0]!, /9 leads/);
+    assert.match(rows[0]!, /9 direct leads/);
     assert.ok(rows.some((line) => line.includes("attention")));
     assert.match(rows.at(-1)!, /2 more/);
     for (let width = 1; width <= 120; width++)
@@ -4509,7 +4509,7 @@ test("Manager supervision presentation is role-aware and classifies direct Leads
   );
   assert.equal(
     renderSupervisionLeads(snapshot, 120, { role: "manager" })[0],
-    "● manager · 1 lead",
+    "● manager",
   );
   assert.equal(
     renderSupervisionLeads(snapshot, 120, {
@@ -4525,4 +4525,108 @@ test("Manager supervision presentation is role-aware and classifies direct Leads
   assert.match(context, /Latest validated Manager supervision snapshot\./);
   assert.match(context, /direct_leads: 1/);
   assert.doesNotMatch(context, /chief|managers:|unclaimed_direct_leads/iu);
+});
+
+test("Chief tree shows project and branch without internal paths or zero counts", () => {
+  const snapshot = {
+    managers: [
+      {
+        session: "manager-session",
+        displayName: "pi-herdsman",
+        project: "pi-herdsman",
+        workspaceId: "workspace",
+        paneId: "pane",
+        tabId: "tab",
+        runtimeState: "idle" as const,
+        needsYou: false,
+        agentCounts: { active: 0, blocked: 0, total: 0 },
+        leadCounts: { active: 0, blocked: 0, total: 1 },
+        availableActions: [],
+        leads: [
+          {
+            session: "opaque",
+            branch: "feat/session-usage-stats",
+            displayName: "pi-herdsman/feat/session-usage-stats/lead-12345678",
+            runtimeState: "idle" as const,
+            needsYou: false,
+            agentCounts: { active: 0, blocked: 0, total: 0 },
+          },
+        ],
+      },
+    ],
+  };
+  const rows = renderSupervisionLeads(snapshot, 120);
+  assert.equal(rows[0], "● chief · 1 manager");
+  assert.equal(rows[1], "└─ ○ pi-herdsman · 1 lead");
+  assert.equal(rows[2], "   feat/session-usage-stats · idle");
+  assert.doesNotMatch(
+    rows.join("\n"),
+    /\.git|0 agents|0 leads|manager-session|lead-12345678/,
+  );
+  assert.equal(
+    renderSupervisionLeads(
+      { ...snapshot, leads: [lead(), lead({ lead: "other" })] },
+      120,
+    )[0],
+    "● chief · 1 manager · 2 direct leads",
+  );
+});
+
+test("Manager widget prioritizes branch work and truncates all states to width", () => {
+  const work = (
+    [
+      "working",
+      "paused",
+      "broken",
+      "finished",
+      "blocked",
+      "idle",
+      "starting",
+    ] as const
+  ).map((state, index) => ({
+    branch: `feat/${state}-${"long".repeat(20)}`,
+    session: `managed-${index}`,
+    state,
+  }));
+  const snapshot = {
+    project: "pi-herdsman",
+    work,
+    leads: [
+      lead({
+        lead: "manual",
+        branch: "feat/manual",
+        displayName: "opaque/manual",
+      }),
+      lead({ lead: "managed-0", branch: work[0]!.branch }),
+    ],
+  };
+  const rows = renderSupervisionLeads(snapshot, 120, { role: "manager" });
+  assert.equal(rows[0], "● manager · pi-herdsman");
+  assert.match(rows[1]!, /● feat\/working.* · working/);
+  assert.match(rows[2]!, /○ feat\/paused.* · paused/);
+  assert.match(rows[3]!, /! feat\/broken.* · broken/);
+  assert.match(rows[4]!, /✓ feat\/finished.* · finished/);
+  assert.match(
+    renderSupervisionLeads(snapshot, 40, { role: "manager" })[1]!,
+    / · working$/,
+  );
+  assert.match(rows.join("\n"), /other Lead · feat\/manual/);
+  assert.doesNotMatch(
+    rows.join("\n"),
+    /opaque\/manual|managed-0|0 leads|\.git/,
+  );
+  for (let width = 1; width <= 120; width++)
+    assert.ok(
+      renderSupervisionLeads(snapshot, width, { role: "manager" }).every(
+        (row) => visibleWidth(row) <= width,
+      ),
+    );
+  assert.equal(
+    createSupervisionWidget(
+      () => ({ project: "pi-herdsman", work: [], leads: [] }),
+      () => "fresh",
+      "manager",
+    ).render(120)[0],
+    "● manager · pi-herdsman",
+  );
 });

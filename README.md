@@ -123,14 +123,20 @@ worktree group, a Lead can explicitly enter Manager mode with `/manager`;
 Leads in linked-worktree workspaces remain Leads. A Manager is a dedicated
 coordinator for Leads across the Herdsman project scope for that worktree
 group. Actual delegated implementation belongs to Leads and their Agent trees;
-Manager can create Leads in linked-worktree workspaces for independent work.
+Manager can start independent branch-based work with Leads in linked-worktree
+workspaces, reusing an unoccupied existing worktree when available.
 Manager coordinates exactly one Herdr worktree group from its primary
 workspace. A branch may have a linked Git worktree and workspace, but multiple
 Leads can share that same workspace; one workspace does not imply one
 worktree. Direct-report messages are handled by Manager locally rather than
 echoed upward, and assigned Leads complete work with `supervisor_result`;
 `supervisor_message` is for progress or coordination, not completion.
-Manager's `staff list` reports each assignment's branch without task text.
+Manager's `staff_list` and automatic context show work by branch, including
+paused work without a running Lead. Start with `staff_delegate(task, branch)`;
+resume with `staff_delegate(branch)`. `staff_close(session)` stops a Lead while
+preserving its work and Pi session; `staff_discard(branch)` abandons the
+assignment while retaining its Git branch and worktree. Leaving Manager mode
+also preserves project work; a later Manager can supervise it.
 Each delegated Lead inherits the Manager session's effective project-trust
 decision for that run: a trusted Manager launches Pi with `--approve`, and an
 untrusted Manager uses `--no-approve`. Pi's trust-protected project resources
@@ -211,12 +217,11 @@ agent and lead identity.
 
 Manager and Chief use role-specific supervision status and context. A restored
 Manager resumes its Manager profile and supervision UI without loading the Lead
-Agent roster or recovering Lead-owned Agents. Manager leave is blocked while
-assignments or pending asks on either supervision edge remain. See the
-[supervision reference](docs/reference/supervision.md) for delegation recovery
-and worktree/base-token guarantees. Independent branches can be delegated while
-another branch has an unresolved assignment; each branch has at most one
-nonterminal assignment, and recovery is selected only by its assignment ID.
+Agent roster or recovering Lead-owned Agents. Manager leave preserves project
+work, but a live Lead waiting for this Manager's answer or the Manager's own
+pending ask to Chief can block leaving. See the
+[supervision reference](docs/reference/supervision.md) for branch-based work
+and result handling. Independent branches can run in parallel.
 
 Bundled definitions are portable defaults, not required workflow stages. Global
 definitions can override them or add new roles with your preferred models,

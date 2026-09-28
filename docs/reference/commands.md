@@ -141,13 +141,16 @@ holds the lease, activation fails and the
 caller remains an ordinary Lead. Manager activation also refuses while the
 session owns unresolved Agent work. A restored Manager uses the same profile,
 supervision UI, and context as explicit activation, without the Lead Agent
-roster or Lead-owned Agent recovery. `/manager leave` is refused while project
-assignments, asks addressed to the Manager, or the Manager's own pending ask
-to Chief remain outstanding; otherwise it
+roster or Lead-owned Agent recovery. `/manager leave` preserves project work
+and is refused only when a Lead is waiting for this Manager's answer or the
+Manager's own ask to Chief remains pending; otherwise it
 relinquishes the lease and restores the exact Lead tool baseline, including
 `agent`, and Lead instruction profile. Invoking `/manager` while already active
 opens the overview without changing the role or lease. See
 [Supervision](supervision.md) for the role and project boundaries.
+The Manager overview lists branch-based work, including paused work whose Lead
+is no longer running. It offers resume, close, and discard actions as applicable;
+discard removes the assignment but keeps the Git branch and worktree.
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
 While Chief, `/chief` opens the overview and `/chief leave` exits the mode.

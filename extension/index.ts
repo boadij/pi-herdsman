@@ -184,6 +184,7 @@ import {
   type PeerLeadRecord,
   type WorkspaceProvenance,
   projectSupervision,
+  projectWorkSnapshot,
   askMatchesSupervisor,
   readLeadCoordinationState,
   invalidateLeadCoordinationState,
@@ -293,6 +294,8 @@ const MANAGER_TOOLS = [
   ...PEER_TOOLS,
   ...STAFF_TOOLS,
   "staff_delegate",
+  "staff_close",
+  "staff_discard",
 ] as const;
 const LEAD_COORDINATION_TOOLS = [
   ...AGENT_COORDINATION_TOOLS,
@@ -305,13 +308,22 @@ Own the assigned objective and any Agents you delegate to. Use supervisor_messag
 supervisor_ask, and supervisor_result for direct-supervisor coordination and
 peer_list/peer_message for peer coordination. Keep work inside your assigned scope.`;
 const MANAGER_ROLE_CHARTER = `## Manager role
-Coordinate exactly one Herdr worktree group from its primary workspace. Direct
-Leads are in that group. Use staff_delegate for a fresh linked-worktree Lead and
-the staff_* tools for direct-report coordination.
+Manage project work by branch. Use staff_delegate with task and optional branch
+to start work, reusing an unoccupied Herdr worktree if present. Use staff_delegate
+with branch only to resume. Never infer ownership from workspace membership:
+coordinate or close an unrelated Lead before starting another writer.
+staff_close stops a Lead and its Agent tree while preserving resumable work;
+staff_discard abandons work but keeps its Git branch and worktree. Manager mode
+is temporary: work and results survive departure and reconcile on return.
 
 Actual implementation belongs to Leads and their Agent trees. Never control
 Agents. Messages and results from direct-report Leads terminate here; use
 supervisor_message or supervisor_ask only for your own escalation to Chief.`;
+function projectAssignmentInstruction(
+  assignment: Pick<ProjectAssignment, "id" | "text">,
+): string {
+  return `Project assignment ${assignment.id}: ${assignment.text}\n\nWhen this work is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`;
+}
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const STALE_AFTER_MS = 10 * 60_000;
 const STALE_SCAN_MS = 30_000;
@@ -539,6 +551,15 @@ type Params =
   | { action: "transcript"; agent: string };
 type StaffParams =
   | { action: "list" }
+  | {
+      action: "delegate";
+      task?: string;
+      branch?: string;
+      base?: string;
+      files?: string[];
+    }
+  | { action: "close"; session: string }
+  | { action: "discard"; branch: string }
   | { action: "inspect" | "transcript"; session: string }
   | { action: "message"; session: string; message: string; files?: string[] }
   | {
@@ -5024,14 +5045,21 @@ type CloseCascadeOptions = {
 
 type StopFailure = { label: string; message: string };
 
-async function stopOwnedAgents(
+async function stopOwnedAgentsForSession(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
+  owner: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const owner = ctx.sessionManager.getSessionId();
   const snapshot = await managedAgentSnapshots(pi, ctx, signal);
   const visible = visibleAgentSnapshots(snapshot, { kind: "lead" }, owner);
+  if (
+    owner !== ctx.sessionManager.getSessionId() &&
+    visible.some((agent) => agent.presence.kind === "unknown")
+  )
+    throw new Error(
+      "Owned Agent presence is ambiguous; Lead and work were preserved",
+    );
   const reportable = [...visible]
     .sort((left, right) =>
       left.state.agentLabel.localeCompare(right.state.agentLabel),
@@ -5173,6 +5201,18 @@ async function stopOwnedAgents(
   if (discarded.length)
     lines.push("Discarded:", ...discarded.map((entry) => `  ${entry}`));
   return lines.join("\n");
+}
+async function stopOwnedAgents(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): Promise<string> {
+  return stopOwnedAgentsForSession(
+    pi,
+    ctx,
+    ctx.sessionManager.getSessionId(),
+    signal,
+  );
 }
 async function rollbackStartedAgent(
   pi: ExtensionAPI,
@@ -6735,11 +6775,38 @@ export default function (pi: ExtensionAPI): void {
   );
   const staffDelegateParameters = Type.Object(
     {
-      assignment: Type.Optional(Type.String({ pattern: "\\S" })),
-      task: Type.Optional(Type.String({ pattern: "\\S" })),
-      branch: Type.Optional(Type.String({ pattern: "\\S" })),
-      base: Type.Optional(Type.String({ pattern: "\\S" })),
+      task: Type.Optional(
+        Type.String({
+          pattern: "\\S",
+          description:
+            "Task for new project work. Omit when resuming existing work.",
+        }),
+      ),
+      branch: Type.Optional(
+        Type.String({
+          pattern: "\\S",
+          description:
+            "Git branch identifying the work. Required when resuming existing work.",
+        }),
+      ),
+      base: Type.Optional(
+        Type.String({
+          pattern: "\\S",
+          description:
+            "Base ref used only when a new worktree must be created.",
+        }),
+      ),
       files: FILES_SCHEMA,
+    },
+    { additionalProperties: false },
+  );
+  const staffDiscardParameters = Type.Object(
+    {
+      branch: Type.String({
+        pattern: "\\S",
+        description:
+          "Exact project work branch to abandon. The worktree and Git branch are preserved.",
+      }),
     },
     { additionalProperties: false },
   );
@@ -6901,6 +6968,8 @@ export default function (pi: ExtensionAPI): void {
     ...PEER_TOOLS,
     ...STAFF_TOOLS,
     "staff_delegate",
+    "staff_close",
+    "staff_discard",
   ]);
   let leadTools: string[] | undefined;
   const registeredToolNames = (): Set<string> =>
@@ -7859,8 +7928,7 @@ export default function (pi: ExtensionAPI): void {
         if (
           !assignment ||
           assignment.repoKey !== manager.repoKey ||
-          assignment.leadSessionId !== record.fromSessionId ||
-          assignment.phase !== "settling"
+          assignment.id !== record.fromSessionId
         )
           return false;
         try {
@@ -7909,6 +7977,31 @@ export default function (pi: ExtensionAPI): void {
           )))
       );
     }
+    if (record.kind === "project_assignment") {
+      const workspaceId = process.env.HERDR_WORKSPACE_ID;
+      if (
+        !workspaceId ||
+        record.toSessionId !== sessionId ||
+        record.leadSessionId !== sessionId
+      )
+        return false;
+      const scope = await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
+      if (!scope.workspaceIds.includes(workspaceId)) return false;
+      const matches = listProjectAssignments(
+        supervisionRuntime(),
+        scope.primaryWorkspaceId,
+      ).filter(
+        (assignment) =>
+          assignment.id === sessionId &&
+          assignment.repoKey === scope.repoKey &&
+          assignment.text &&
+          record.text === projectAssignmentInstruction(assignment),
+      );
+      return (
+        matches.length === 1 &&
+        readCanonicalProjectResult(sessionId) === undefined
+      );
+    }
     const chief = await currentManager(ctx);
     if (!chief) throw new Error("Manager lease could not be verified");
     const state = readLeadCoordinationState(supervisionRuntime(), sessionId);
@@ -7918,7 +8011,6 @@ export default function (pi: ExtensionAPI): void {
       record.fromSessionId === chief.piSessionId &&
       record.leadSessionId === sessionId &&
       (record.kind === "manager_message" ||
-        record.kind === "manager_assignment" ||
         (record.kind === "manager_reply" &&
           !!pendingSupervisorAsk &&
           (await pendingAskSupervisorIsCurrent(
@@ -8232,7 +8324,7 @@ export default function (pi: ExtensionAPI): void {
             !leadCoordinationHealthy ||
             (record.kind !== "manager_message" &&
               record.kind !== "manager_reply" &&
-              record.kind !== "manager_assignment" &&
+              record.kind !== "project_assignment" &&
               record.kind !== "chief_reply")
           )
             return;
@@ -8519,20 +8611,14 @@ export default function (pi: ExtensionAPI): void {
           "Cannot leave Manager while a supervisor ask remains unresolved",
         );
     }
-    const assignments = listProjectAssignments(
-      supervisionRuntime(),
-      managerLease.descriptor.workspaceId,
-    ).filter(
-      (assignment) =>
-        assignment.repoKey === managerLease!.descriptor.repoKey &&
-        ["creating", "starting", "active", "settling"].includes(
-          assignment.phase,
-        ),
-    );
     const pending = await countSupervisedPendingAsks?.(ctx);
-    if (assignments.length || !pending || pending.unknown || pending.count)
+    if (!pending || pending.unknown)
       throw new Error(
-        "Cannot leave Manager while project assignments or Manager-bound asks remain unresolved",
+        "Cannot verify whether a Lead is waiting for Manager; retry after supervision refreshes.",
+      );
+    if (pending.count)
+      throw new Error(
+        `Cannot leave Manager while ${pending.count} Lead${pending.count === 1 ? " is" : "s are"} waiting for a reply. Reply, close the Lead, or discard its work first.`,
       );
     controllerRole = "lead";
     try {
@@ -9046,24 +9132,13 @@ export default function (pi: ExtensionAPI): void {
           }
         }
         if (activeRole() === "manager" && "repoKey" in chief) {
-          for (const original of listProjectAssignments(
+          for (const assignment of listProjectAssignments(
             supervisionRuntime(),
             chief.workspaceId,
           )) {
-            if (original.repoKey !== chief.repoKey || !original.leadSessionId)
-              continue;
-            const result = readCanonicalProjectResult(original.id);
+            if (assignment.repoKey !== chief.repoKey) continue;
+            const result = readCanonicalProjectResult(assignment.id);
             if (result === undefined) continue;
-            let assignment = original;
-            if (assignment.phase === "active") {
-              assignment = {
-                ...assignment,
-                phase: "settling",
-                updatedAt: Date.now(),
-              };
-              writeProjectAssignment(supervisionRuntime(), assignment);
-            }
-            if (assignment.phase !== "settling") continue;
             const alreadyQueued = listChiefMessagePaths(
               supervisionRuntime(),
               chief.piSessionId,
@@ -9091,9 +9166,9 @@ export default function (pi: ExtensionAPI): void {
                 id: randomUUID(),
                 leaseId: chief.leaseId,
                 kind: "report_result",
-                fromSessionId: assignment.leadSessionId,
+                fromSessionId: assignment.id,
                 toSessionId: chief.piSessionId,
-                leadSessionId: assignment.leadSessionId,
+                leadSessionId: assignment.id,
                 text: projectResultNotification(assignment.id, result),
                 createdAt: Date.now(),
               });
@@ -9119,8 +9194,48 @@ export default function (pi: ExtensionAPI): void {
           leads: reports.filter((report: any) => report.role === "lead"),
         };
       }
-      if (activeRole() === "manager" && !includeAll)
-        return { leads: await directReports(ctx) };
+      if (activeRole() === "manager" && !includeAll) {
+        const manager = await currentManager(ctx);
+        if (!manager) throw new Error("Manager lease is no longer active");
+        const group = await worktreeGroupScope(
+          pi,
+          ctx,
+          manager.workspaceId,
+          ctx.signal,
+        );
+        const [leads, topology] = await Promise.all([
+          directReports(ctx, suppliedInventory, suppliedAgents),
+          runHerdr(
+            pi,
+            ctx,
+            ["worktree", "list", "--workspace", group.primaryWorkspaceId],
+            { signal: ctx.signal },
+          ),
+        ]);
+        if (
+          topology?.source?.repo_key !== group.repoKey ||
+          !Array.isArray(topology?.worktrees)
+        )
+          throw new Error("Herdr worktree topology is not authoritative");
+        const assignments = listProjectAssignments(
+          supervisionRuntime(),
+          group.primaryWorkspaceId,
+        ).filter((item) => item.repoKey === group.repoKey);
+        const results = new Map<string, string>();
+        for (const item of assignments)
+          if (readCanonicalProjectResult(item.id) !== undefined)
+            results.set(item.id, resultRef(item.id));
+        return {
+          project: group.repoName,
+          work: projectWorkSnapshot({
+            assignments,
+            worktrees: topology.worktrees,
+            leads,
+            results,
+          }),
+          leads,
+        };
+      }
       const inventory =
         suppliedInventory ?? (await herdrSessionSnapshot(pi, ctx, ctx.signal));
       const live = inventory.agents;
@@ -9242,7 +9357,11 @@ export default function (pi: ExtensionAPI): void {
         ...(diagnostics ? { diagnostics } : {}),
       };
     };
-    const directReports = async (ctx: ExtensionContext) => {
+    const directReports = async (
+      ctx: ExtensionContext,
+      suppliedInventory?: HerdrSessionSnapshot,
+      suppliedAgents?: Awaited<ReturnType<typeof managedAgentSnapshots>>,
+    ) => {
       if (activeRole() === "manager" && !roleSuspended) {
         const manager = await currentManager(ctx);
         if (
@@ -9259,8 +9378,8 @@ export default function (pi: ExtensionAPI): void {
         );
         const snapshot = await loadSupervisionSnapshot(
           ctx,
-          undefined,
-          undefined,
+          suppliedInventory,
+          suppliedAgents,
           true,
         );
         return snapshot.leads.filter((lead) =>
@@ -9333,8 +9452,8 @@ export default function (pi: ExtensionAPI): void {
         managers.push({
           session: descriptor.piSessionId,
           instanceId: state.instanceId,
-          displayName: `${descriptor.repoKey}/manager`,
-          project: descriptor.repoKey,
+          displayName: scope.repoName,
+          project: scope.repoName,
           workspaceId: descriptor.workspaceId,
           paneId: descriptor.paneId,
           tabId: descriptor.tabId,
@@ -9389,6 +9508,7 @@ export default function (pi: ExtensionAPI): void {
           leads: leads.slice(0, 32).map((lead) => ({
             session: lead.lead,
             displayName: lead.displayName,
+            ...(lead.branch ? { branch: lead.branch } : {}),
             runtimeState: lead.runtimeState,
             needsYou: lead.needsYou,
             agentCounts: lead.agentCounts,
@@ -9429,31 +9549,220 @@ export default function (pi: ExtensionAPI): void {
         ...unclaimedLeads.map((lead) => ({ ...lead, role: "lead" as const })),
       ];
     };
+    const closeProjectLeadExecution = async (
+      session: string,
+      target: any,
+      ctx: ExtensionContext,
+      signal?: AbortSignal,
+    ) => {
+      const summary = await stopOwnedAgentsForSession(pi, ctx, session, signal);
+      if (summary.includes("✗") || summary.includes("not closed"))
+        throw new Error(`Agent-tree cleanup failed: ${summary}`);
+      await stopHerdrAgentPreservingPane(
+        pi,
+        ctx,
+        target.name,
+        {
+          paneId: target.pane_id,
+          tabId: target.tab_id,
+          workspaceId: target.workspace_id,
+          cwd: target.cwd,
+          session: expectedSession(session),
+        },
+        signal,
+      );
+      if ((await liveLead(ctx, session)).length)
+        throw new Error("Lead remains live after stop; work was preserved");
+    };
+    const closeProjectLead = async (
+      session: string,
+      ctx: ExtensionContext,
+      signal?: AbortSignal,
+    ) => {
+      const manager = await currentManager(ctx);
+      if (
+        !manager ||
+        !managerLease ||
+        !sameManagerDescriptor(manager, managerLease.descriptor)
+      )
+        throw new Error("Manager lease is no longer active");
+      const scope = await worktreeGroupScope(
+        pi,
+        ctx,
+        manager.workspaceId,
+        signal,
+      );
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        manager.workspaceId,
+      ).find((item) => item.repoKey === manager.repoKey && item.id === session);
+      const close = async () => {
+        if (
+          assignment &&
+          readProjectAssignment(
+            supervisionRuntime(),
+            manager.workspaceId,
+            session,
+          )?.branch !== assignment.branch
+        )
+          throw new Error("Project assignment changed before close");
+        const live = (await liveLead(ctx, session)).filter((agent: any) =>
+          scope.workspaceIds.includes(agent.workspace_id),
+        );
+        if (live.length !== 1)
+          throw new Error("Exact live Lead was not found or is ambiguous");
+        const target = live[0];
+        if (
+          assignment &&
+          (target.workspace_id !== assignment.workspaceId ||
+            target.pane_id !== assignment.paneId)
+        )
+          throw new Error(
+            "Assignment Lead placement changed; work was preserved",
+          );
+        await closeProjectLeadExecution(session, target, ctx, signal);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Lead ${session} closed; project work preserved.`,
+            },
+          ],
+          details: {
+            ok: true,
+            action: "close",
+            session,
+            ...(assignment ? { branch: assignment.branch } : {}),
+          },
+        };
+      };
+      return assignment
+        ? withProjectDelegationLock(
+            `${manager.workspaceId}\0${assignment.branch}`,
+            close,
+          )
+        : close();
+    };
+    const discardProjectWork = async (
+      branch: string,
+      ctx: ExtensionContext,
+      signal?: AbortSignal,
+    ) => {
+      const manager = await currentManager(ctx);
+      if (
+        !manager ||
+        !managerLease ||
+        !sameManagerDescriptor(manager, managerLease.descriptor)
+      )
+        throw new Error("Manager lease is no longer active");
+      return withProjectDelegationLock(
+        `${manager.workspaceId}\0${branch}`,
+        async () => {
+          const scope = await worktreeGroupScope(
+            pi,
+            ctx,
+            manager.workspaceId,
+            signal,
+          );
+          const matches = listProjectAssignments(
+            supervisionRuntime(),
+            manager.workspaceId,
+          ).filter(
+            (item) =>
+              item.repoKey === manager.repoKey && item.branch === branch,
+          );
+          if (matches.length !== 1)
+            throw new Error(
+              `Exactly one project assignment is required on ${branch}`,
+            );
+          const assignment = matches[0]!;
+          if (readCanonicalProjectResult(assignment.id) !== undefined)
+            throw new Error(
+              `Work on ${branch} already has durable result ${resultRef(assignment.id)}; settle it instead of discarding it.`,
+            );
+          const live = await liveLead(ctx, assignment.id);
+          if (live.length > 1)
+            throw new Error("Ambiguous Lead identity; assignment preserved");
+          if (
+            live.length &&
+            (!scope.workspaceIds.includes(live[0].workspace_id) ||
+              live[0].pane_id !== assignment.paneId)
+          )
+            throw new Error(
+              "Assignment Lead placement changed; work was preserved",
+            );
+          if (live.length)
+            await closeProjectLeadExecution(
+              assignment.id,
+              live[0],
+              ctx,
+              signal,
+            );
+          else {
+            const summary = await stopOwnedAgentsForSession(
+              pi,
+              ctx,
+              assignment.id,
+              signal,
+            );
+            if (summary.includes("✗") || summary.includes("not closed"))
+              throw new Error(`Agent-tree cleanup failed: ${summary}`);
+          }
+          if (
+            !live.length &&
+            assignment.phase === "starting" &&
+            assignment.paneId
+          ) {
+            const processInfo = await runHerdr(
+              pi,
+              ctx,
+              ["pane", "process-info", "--pane", assignment.paneId],
+              { signal },
+            );
+            if (
+              processInfo?.process_info?.foreground_processes?.some(
+                (process: any) =>
+                  /(^|[\\/\s])pi(?:\s|$)/i.test(
+                    `${process?.argv0 ?? ""} ${process?.cmdline ?? ""}`,
+                  ),
+              )
+            )
+              throw new Error(
+                "A possible Pi executor remains; assignment preserved",
+              );
+          }
+          if ((await liveLead(ctx, assignment.id)).length)
+            throw new Error("Lead remains live; assignment preserved");
+          removeProjectAssignment(
+            supervisionRuntime(),
+            manager.workspaceId,
+            assignment.id,
+          );
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Work on ${branch} discarded; Git branch and worktree preserved.`,
+              },
+            ],
+            details: { ok: true, action: "discard", branch },
+          };
+        },
+      );
+    };
     const delegateProjectLead = async (
       params: any,
       ctx: ExtensionContext,
       signal?: AbortSignal,
     ) => {
-      const recovering = typeof params.assignment === "string";
-      if (recovering) {
-        if (params.task || params.branch || params.base || params.files?.length)
-          throw new Error(
-            "Resume the exact assignment without task, branch, base, or files",
-          );
-      } else if (typeof params.task !== "string" || !params.task.trim()) {
-        throw new Error("Fresh project delegation requires a non-empty task");
-      }
+      if (!params.branch && (!params.task || !params.task.trim()))
+        throw new Error("Starting new work without a branch requires task");
       const workspaceId = managerLease?.descriptor.workspaceId;
       if (!workspaceId) throw new Error("Manager lease is no longer active");
-      const runtime = supervisionRuntime();
-      const persisted = params.assignment
-        ? readProjectAssignment(runtime, workspaceId, params.assignment)
-        : undefined;
-      const freshId = persisted ? undefined : randomUUID();
-      const branch =
-        persisted?.branch ?? params.branch ?? `herdsman/${freshId}`;
+      const freshId = randomUUID();
+      const branch = params.branch ?? `herdsman/${freshId}`;
       return withProjectDelegationLock(`${workspaceId}\0${branch}`, () =>
-        delegateProjectLeadLocked(params, ctx, signal, freshId),
+        delegateProjectLeadLocked({ ...params, branch }, ctx, signal, freshId),
       );
     };
     const delegateProjectLeadLocked = async (
@@ -9485,68 +9794,44 @@ export default function (pi: ExtensionAPI): void {
       const primaryWorkspaceId = group.primaryWorkspaceId;
       const runtime = supervisionRuntime();
       const assignments = listProjectAssignments(runtime, manager.workspaceId);
-      const unresolved = params.assignment
-        ? readProjectAssignment(runtime, manager.workspaceId, params.assignment)
-        : undefined;
-      if (
-        params.assignment &&
-        (!unresolved ||
-          unresolved.repoKey !== manager.repoKey ||
-          unresolved.phase === "settling")
-      )
+      const matches = assignments.filter(
+        (item) =>
+          item.repoKey === manager.repoKey && item.branch === params.branch,
+      );
+      if (matches.length > 1)
         throw new Error(
-          unresolved?.phase === "settling"
-            ? `Assignment ${unresolved.id} is already settling; do not restart its Lead.`
-            : "The requested assignment is not unresolved here",
+          `Multiple project assignments claim branch ${params.branch}`,
+        );
+      const unresolved = matches[0];
+      if (unresolved) {
+        if (params.task || params.base || params.files?.length)
+          throw new Error(
+            `Work already exists on ${params.branch}; resume it with staff_delegate using only branch.`,
+          );
+      } else if (typeof params.task !== "string" || !params.task.trim())
+        throw new Error(
+          `No existing work was found on ${params.branch}; starting new work requires task.`,
         );
       const id = unresolved?.id ?? freshId!;
       const branch = unresolved?.branch ?? params.branch ?? `herdsman/${id}`;
-      if (!unresolved) {
-        const owner = assignments.find(
-          (candidate) =>
-            candidate.repoKey === manager.repoKey &&
-            candidate.branch === branch &&
-            ["creating", "starting", "active", "settling"].includes(
-              candidate.phase,
-            ),
-        );
-        if (owner) {
-          if (owner.phase === "creating" || owner.phase === "starting")
-            throw new Error(
-              `Branch ${branch} belongs to unresolved assignment ${owner.id}. Recover it with staff_delegate assignment=${owner.id}.`,
-            );
-          throw new Error(
-            owner.phase === "active"
-              ? `Branch ${branch} is owned by active assignment ${owner.id} (Lead session ${owner.leadSessionId}). Use the current Lead while it is live. If that exact Lead is gone, recover assignment ${owner.id} with staff_delegate assignment=${owner.id}.`
-              : `Branch ${branch} is owned by settling assignment ${owner.id}. Its durable result is being reconciled; do not redelegate the branch.`,
-          );
-        }
-      }
-      if (unresolved?.phase === "active") {
+      if (unresolved) {
         const durableResult = readCanonicalProjectResult(unresolved.id);
         if (durableResult !== undefined) {
-          const settling: ProjectAssignment = {
-            ...unresolved,
-            phase: "settling",
-            updatedAt: Date.now(),
-          };
-          writeProjectAssignment(runtime, settling);
           await reconcileSupervisorCoordination?.(ctx);
           return {
             content: [
               {
                 type: "text" as const,
-                text: `Assignment ${settling.id} already completed; ${resultRef(settling.id)} settlement resumed.`,
+                text: `Work on ${branch} is already finished; ${resultRef(id)} is awaiting settlement.`,
               },
             ],
             details: {
               ok: true,
               action: "delegate",
-              assignment: settling.id,
-              branch: settling.branch,
-              phase: "settling",
-              result: resultRef(settling.id),
-              recovered: true,
+              branch,
+              session: id,
+              state: "finished",
+              result: resultRef(id),
             },
           };
         }
@@ -9555,10 +9840,36 @@ export default function (pi: ExtensionAPI): void {
           throw new Error(
             `Assignment ${unresolved.id} has ambiguous live Lead identity`,
           );
-        if (live.length === 1)
-          throw new Error(
-            `Assignment ${unresolved.id} is still active in Lead session ${unresolved.id}; coordinate with that Lead instead of recovering it.`,
-          );
+        if (live.length === 1) {
+          if (
+            live[0].workspace_id !== unresolved.workspaceId ||
+            live[0].pane_id !== unresolved.paneId ||
+            live[0].tab_id !== unresolved.tabId ||
+            !readLeadCoordinationState(runtime, unresolved.id) ||
+            scanAgentStates().states.some(
+              ({ state }) => state.piSessionId === unresolved.id,
+            )
+          )
+            throw new Error(
+              `Lead session ${id} has conflicting placement or role; work was preserved.`,
+            );
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Work on ${branch} is already running in Lead ${id}.`,
+              },
+            ],
+            details: {
+              ok: true,
+              action: "delegate",
+              branch,
+              session: id,
+              state: "working",
+              already_running: true,
+            },
+          };
+        }
       }
       const topology = await runHerdr(
         pi,
@@ -9575,10 +9886,44 @@ export default function (pi: ExtensionAPI): void {
       const branchWorktrees = topology.worktrees.filter(
         (worktree: any) => worktree?.branch === branch,
       );
-      if (!unresolved && branchWorktrees.length)
+      if (branchWorktrees.length > 1)
+        throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
+      if (!unresolved && branchWorktrees.length && params.base)
         throw new Error(
-          `Herdr worktree already exists for branch ${branch}; fresh delegation cannot adopt it`,
+          "base applies only when Herdsman creates a new worktree",
         );
+      const assertUnoccupied = async (workspaceId: string) => {
+        const inventory = await herdrSessionSnapshot(pi, ctx, signal);
+        const managed = new Set(
+          scanAgentStates().states.map(({ state }) => state.piSessionId),
+        );
+        const leads = inventory.agents.filter((agent: any) => {
+          const session = herdrSessionId(agent);
+          if (
+            !session ||
+            !isPiAgent(agent) ||
+            agent.workspace_id !== workspaceId ||
+            managed.has(session) ||
+            session === id
+          )
+            return false;
+          const state = readLeadCoordinationState(
+            supervisionRuntime(),
+            session,
+          );
+          return state && (state.role ?? "lead") === "lead";
+        });
+        if (leads.length > 1)
+          throw new Error(
+            `Branch ${branch} has multiple live Leads; automatic delegation is ambiguous.`,
+          );
+        if (leads.length)
+          throw new Error(
+            `Branch ${branch} already has live Lead session ${herdrSessionId(leads[0])}. Coordinate with that Lead or close it before starting managed work on this branch.`,
+          );
+      };
+      if (branchWorktrees[0]?.open_workspace_id)
+        await assertUnoccupied(branchWorktrees[0].open_workspace_id);
       let assignment: ProjectAssignment;
       if (unresolved) assignment = unresolved;
       else {
@@ -9594,11 +9939,11 @@ export default function (pi: ExtensionAPI): void {
             version: 1,
             id,
             leaseId: manager.leaseId,
-            kind: "manager_assignment",
+            kind: "project_assignment",
             fromSessionId: manager.piSessionId,
             toSessionId: "x".repeat(512),
             leadSessionId: "x".repeat(512),
-            text: `Manager assignment ${id}: ${candidate}\n\nWhen this assignment is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`,
+            text: projectAssignmentInstruction({ id, text: candidate }),
             createdAt,
           }),
         );
@@ -9641,10 +9986,7 @@ export default function (pi: ExtensionAPI): void {
             throw new Error(
               `Herdr worktree for branch ${assignment.branch} has no exact path`,
             );
-          const placementStillOpen =
-            assignment.phase !== "creating" &&
-            worktree?.open_workspace_id === assignment.workspaceId;
-          if (!placementStillOpen) {
+          {
             const opened = await runHerdr(
               pi,
               ctx,
@@ -9695,16 +10037,10 @@ export default function (pi: ExtensionAPI): void {
               "Herdr created a worktree on a different branch than the persisted assignment",
             );
         } else {
-          if (unresolved) {
-            removeProjectAssignment(
-              runtime,
-              manager.workspaceId,
-              assignment.id,
-            );
+          if (unresolved)
             throw new Error(
-              `Assignment ${assignment.id} was abandoned because its persisted worktree no longer exists. Its branch reservation was released; retry a fresh delegation if desired.`,
+              `Work on ${branch} cannot be resumed because its worktree is unavailable. The assignment was preserved. Use staff_discard to abandon it explicitly.`,
             );
-          }
           throw new Error(
             "Persisted project assignment placement is not present in Herdr topology",
           );
@@ -9715,16 +10051,7 @@ export default function (pi: ExtensionAPI): void {
           )
         )
           throw new Error("Herdr did not return exact worktree identities");
-        if (assignment.phase === "active") {
-          const { leadSessionId: _oldLeadSessionId, ...recovering } =
-            assignment;
-          assignment = {
-            ...recovering,
-            phase: "starting",
-            updatedAt: Date.now(),
-          };
-          writeProjectAssignment(runtime, assignment);
-        }
+        await assertUnoccupied(workspaceId!);
         assignment = {
           ...assignment,
           phase: "starting",
@@ -9791,6 +10118,7 @@ export default function (pi: ExtensionAPI): void {
                 return /(^|[\\/\s])pi(?:\s|$)/i.test(executable);
               }));
           if (!piAlreadyRunning) {
+            await assertUnoccupied(workspaceId!);
             await startHerdrAgentInPane(pi, ctx, {
               primaryWorkspaceId,
               workspaceId,
@@ -9903,7 +10231,6 @@ export default function (pi: ExtensionAPI): void {
         assignment = {
           ...assignment,
           phase: "active",
-          leadSessionId,
           updatedAt: Date.now(),
         };
         writeProjectAssignment(supervisionRuntime(), assignment);
@@ -9914,11 +10241,11 @@ export default function (pi: ExtensionAPI): void {
           version: 1,
           id: randomUUID(),
           leaseId: manager.leaseId,
-          kind: "manager_assignment",
+          kind: "project_assignment",
           fromSessionId: manager.piSessionId,
           toSessionId: leadSessionId,
           leadSessionId,
-          text: `Manager assignment ${id}: ${assignment.text}\n\nWhen this assignment is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`,
+          text: projectAssignmentInstruction(assignment),
           createdAt: Date.now(),
         });
         return {
@@ -9928,7 +10255,6 @@ export default function (pi: ExtensionAPI): void {
               text: JSON.stringify({
                 ok: true,
                 action: "delegate",
-                assignment: id,
                 session: leadSessionId,
                 workspace_id: workspaceId,
                 branch: assignment.branch,
@@ -9939,7 +10265,6 @@ export default function (pi: ExtensionAPI): void {
           details: {
             ok: true,
             action: "delegate",
-            assignment: id,
             session: leadSessionId,
             workspace_id: workspaceId,
             branch: assignment.branch,
@@ -10264,16 +10589,33 @@ export default function (pi: ExtensionAPI): void {
                 : orderedSupervisionLeads(
                     supervisionPresentationReports(supervisionSnapshot),
                   );
-            const items: SelectItem[] = leads.map((lead) => ({
-              value: lead.lead,
-              label: lead.displayName,
-              description: `${lead.runtimeState} · ${
-                lead.agentCounts.total
-              } agent${lead.agentCounts.total === 1 ? "" : "s"}${
-                lead.needsYou === true ? " · needs you" : ""
-              }`,
-            }));
-            selected = retainSupervisionSelection(selected, leads);
+            const work =
+              activeRole() === "manager" &&
+              status !== "unavailable" &&
+              "work" in supervisionSnapshot
+                ? (supervisionSnapshot.work ?? [])
+                : [];
+            const items: SelectItem[] = [
+              ...work.map((item) => ({
+                value: item.branch,
+                label: item.branch,
+                description: item.state,
+              })),
+              ...leads
+                .filter(
+                  (lead) => !work.some((item) => item.session === lead.lead),
+                )
+                .map((lead) => ({
+                  value: lead.lead,
+                  label:
+                    activeRole() === "manager"
+                      ? `other Lead · ${lead.branch ?? lead.displayName}`
+                      : lead.displayName,
+                  description: `${lead.runtimeState}${lead.agentCounts.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}${lead.needsYou === true ? " · needs you" : ""}`,
+                })),
+            ];
+            if (!items.some((item) => item.value === selected))
+              selected = items[0]?.value;
             list = new SelectList(items, 8, selectTheme);
             const index = items.findIndex((item) => item.value === selected);
             if (index >= 0) list.setSelectedIndex(index);
@@ -10281,7 +10623,72 @@ export default function (pi: ExtensionAPI): void {
               if (item) selected = item.value;
             };
             list.onSelect = (item) => {
-              if (item) focusSelected(item.value);
+              if (!item) return;
+              if (!work.some((entry) => entry.branch === item.value)) {
+                if (activeRole() !== "manager")
+                  return focusSelected(item.value);
+                void (async () => {
+                  const action = await selectMenu(ctx, "Other Lead", [
+                    { value: "focus", label: "Focus" },
+                    { value: "close", label: "Close Lead" },
+                  ]);
+                  if (!action || !isCurrentOverview()) return;
+                  if (action === "focus") return focusSelected(item.value);
+                  await closeProjectLead(item.value, ctx, ctx.signal);
+                  await refreshSupervision(ctx);
+                  showOverview();
+                  tui.requestRender();
+                })().catch((error) =>
+                  ctx.ui.notify(
+                    String(error).replace(/^Error: /u, ""),
+                    "error",
+                  ),
+                );
+                return;
+              }
+              const branch = item.value;
+              const entry = work.find((item) => item.branch === branch);
+              if (!entry) return;
+              void (async () => {
+                const actions =
+                  entry.state === "finished"
+                    ? [{ value: "view", label: "View result" }]
+                    : entry.state === "broken"
+                      ? [{ value: "discard", label: "Discard work" }]
+                      : entry.state === "paused"
+                        ? [
+                            { value: "resume", label: "Resume" },
+                            { value: "discard", label: "Discard work" },
+                          ]
+                        : [
+                            { value: "focus", label: "Focus Lead" },
+                            { value: "close", label: "Close Lead" },
+                            { value: "discard", label: "Discard work" },
+                          ];
+                const action = await selectMenu(ctx, branch, actions);
+                if (!action || !isCurrentOverview()) return;
+                if (action === "focus") return focusSelected(entry.session);
+                if (action === "view")
+                  ctx.ui.notify(entry.result ?? "Result unavailable");
+                else if (action === "discard") {
+                  if (
+                    !(await ctx.ui.confirm(
+                      "Discard work?",
+                      "The assignment will be removed. The Git branch and worktree will be kept.",
+                    ))
+                  )
+                    return;
+                  await discardProjectWork(branch, ctx, ctx.signal);
+                } else if (action === "close")
+                  await closeProjectLead(entry.session, ctx, ctx.signal);
+                else if (action === "resume")
+                  await delegateProjectLead({ branch }, ctx, ctx.signal);
+                await refreshSupervision(ctx);
+                showOverview();
+                tui.requestRender();
+              })().catch((error) =>
+                ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error"),
+              );
             };
             list.onCancel = finish;
             container.clear();
@@ -10295,7 +10702,10 @@ export default function (pi: ExtensionAPI): void {
                     "accent",
                     status === "unavailable"
                       ? "Pi Herdsman · unavailable"
-                      : `Pi Herdsman · ${leads.length} herd${leads.length === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`,
+                      : activeRole() === "manager" &&
+                          "project" in supervisionSnapshot
+                        ? `Pi Herdsman · ${supervisionSnapshot.project}`
+                        : `Pi Herdsman · ${leads.length} herd${leads.length === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`,
                   ),
                 ),
                 0,
@@ -10315,6 +10725,7 @@ export default function (pi: ExtensionAPI): void {
             );
             renderedLeads = [
               status,
+              ...work.map((item) => `${item.branch}:${item.state}`),
               ...leads.map(
                 (lead) =>
                   `${lead.lead}:${lead.runtimeState}:${lead.pendingAskId ?? ""}:${lead.agentCounts.total}`,
@@ -10369,6 +10780,11 @@ export default function (pi: ExtensionAPI): void {
               if (mode === "peek" && peekLead) return container.render(width);
               const key = [
                 status,
+                ...("work" in supervisionSnapshot
+                  ? (supervisionSnapshot.work?.map(
+                      (item) => `${item.branch}:${item.state}`,
+                    ) ?? [])
+                  : []),
                 ...leads.map(
                   (lead) =>
                     `${lead.lead}:${lead.runtimeState}:${lead.pendingAskId ?? ""}:${lead.agentCounts.total}`,
@@ -11630,16 +12046,22 @@ export default function (pi: ExtensionAPI): void {
                 "Only an assigned Lead can report a project result",
               );
             assertCurrentLeadCoordination(ctx);
-            const manager = await currentManager(ctx);
-            if (!manager) throw new Error("No active Manager is available");
+            const workspaceId = process.env.HERDR_WORKSPACE_ID;
+            if (!workspaceId)
+              throw new Error("Assigned Lead has no Herdr workspace identity");
+            const scope = await worktreeGroupScope(
+              pi,
+              ctx,
+              workspaceId,
+              ctx.signal,
+            );
             const matches = listProjectAssignments(
               supervisionRuntime(),
-              manager.workspaceId,
+              scope.primaryWorkspaceId,
             ).filter(
               (assignment) =>
-                assignment.repoKey === manager.repoKey &&
-                assignment.leadSessionId ===
-                  ctx.sessionManager.getSessionId() &&
+                assignment.repoKey === scope.repoKey &&
+                assignment.id === ctx.sessionManager.getSessionId() &&
                 assignment.phase === "active",
             );
             if (matches.length !== 1)
@@ -11683,39 +12105,49 @@ export default function (pi: ExtensionAPI): void {
               throw new Error("Canonical result could not be persisted");
             if (!statSync(canonicalResultPath(assignment.id)).isFile())
               throw new Error("Canonical result is unavailable");
-            writeProjectAssignment(supervisionRuntime(), {
-              ...assignment,
-              phase: "settling",
-              updatedAt: Date.now(),
-            });
-            const fresh = await currentManager(ctx);
-            if (!fresh || !sameManagerDescriptor(fresh, manager))
-              throw new Error(
-                "Manager changed before result notification; result remains durable for reconciliation",
-              );
-            writeChiefMessage({
-              version: 1,
-              id: randomUUID(),
-              leaseId: manager.leaseId,
-              kind: "report_result",
-              fromSessionId: provenance.piSessionId,
-              toSessionId: manager.piSessionId,
-              leadSessionId: provenance.piSessionId,
-              text: projectResultNotification(assignment.id, persisted.content),
-              createdAt: Date.now(),
-            });
+            let queued = false;
+            try {
+              const manager = await currentManager(ctx);
+              if (
+                manager &&
+                manager.workspaceId === scope.primaryWorkspaceId &&
+                manager.repoKey === scope.repoKey &&
+                (await currentManager(ctx))?.leaseId === manager.leaseId
+              ) {
+                writeChiefMessage({
+                  version: 1,
+                  id: randomUUID(),
+                  leaseId: manager.leaseId,
+                  kind: "report_result",
+                  fromSessionId: assignment.id,
+                  toSessionId: manager.piSessionId,
+                  leadSessionId: assignment.id,
+                  text: projectResultNotification(
+                    assignment.id,
+                    persisted.content,
+                  ),
+                  createdAt: Date.now(),
+                });
+                queued = true;
+              }
+            } catch {
+              /* Canonical result is durable; the next Manager reconciles. */
+            }
             return {
               content: [
                 {
                   type: "text",
-                  text: `Result ${resultRef(assignment.id)} queued for Manager.`,
+                  text: queued
+                    ? `Result ${resultRef(assignment.id)} saved and queued for Manager.`
+                    : `Result ${resultRef(assignment.id)} saved; the next Manager will reconcile it.`,
                 },
               ],
               details: {
                 ok: true,
                 action: "result",
-                assignment: assignment.id,
+                branch: assignment.branch,
                 result: resultRef(assignment.id),
+                queued,
               },
             };
           }
@@ -11885,6 +12317,13 @@ export default function (pi: ExtensionAPI): void {
               throw new Error("Only Managers can delegate project work");
             return delegateProjectLead(params, ctx, signal);
           }
+          if (params.action === "close" || params.action === "discard") {
+            if (activeRole() !== "manager")
+              throw new Error("Only Managers can control project work");
+            return params.action === "close"
+              ? closeProjectLead(params.session, ctx, signal)
+              : discardProjectWork(params.branch, ctx, signal);
+          }
           const refresh = async () => directReports(ctx);
           const result = (value: Record<string, unknown>) => {
             const bounded = truncateModelText(JSON.stringify(value, null, 2), {
@@ -11922,25 +12361,20 @@ export default function (pi: ExtensionAPI): void {
               },
               ...(controllerRole === "manager" && managerLease
                 ? {
-                    assignments: listProjectAssignments(
-                      supervisionRuntime(),
-                      managerLease.descriptor.workspaceId,
-                    ).map((assignment) => ({
-                      id: assignment.id,
-                      phase: assignment.phase,
-                      ...(assignment.branch
-                        ? { branch: assignment.branch }
-                        : {}),
-                      ...(assignment.workspaceId
-                        ? { workspace_id: assignment.workspaceId }
-                        : {}),
-                      ...(assignment.paneId
-                        ? { pane_id: assignment.paneId }
-                        : {}),
-                      ...(assignment.leadSessionId
-                        ? { session: assignment.leadSessionId }
-                        : {}),
-                    })),
+                    work: (await loadSupervisionSnapshot(ctx)).work?.map(
+                      (item) => ({
+                        branch: item.branch,
+                        state: item.state,
+                        session: item.session,
+                        ...(item.workspaceId
+                          ? { workspace_id: item.workspaceId }
+                          : {}),
+                        ...(item.paneId ? { pane_id: item.paneId } : {}),
+                        ...(item.task ? { task: item.task } : {}),
+                        ...(item.result ? { result: item.result } : {}),
+                        ...(item.issue ? { issue: item.issue } : {}),
+                      }),
+                    ),
                   }
                 : {}),
               reports: reports.map((report: any) => ({
@@ -12363,7 +12797,7 @@ export default function (pi: ExtensionAPI): void {
             name: "staff_delegate",
             label: "staff delegate",
             description:
-              "Delegate one project assignment to a Lead in a linked Herdr worktree.",
+              "Start new project work or resume existing work by Git branch. Reuses an unoccupied Herdr worktree when available.",
             parameters: staffDelegateParameters,
             promptSnippet: undefined,
             constrainedSampling: { type: "json_schema", strict: "prefer" },
@@ -12385,6 +12819,54 @@ export default function (pi: ExtensionAPI): void {
               renderCoordinationCall("staff", "delegate", a, t, c),
             renderResult: (r: any, o: any, t: any, c: any) =>
               renderCoordinationResult("staff", "delegate", r, o, t, c),
+          });
+          pi.registerTool({
+            ...staffTool,
+            name: "staff_close",
+            label: "staff close",
+            description:
+              "Stop an exact direct Lead and its owned execution tree while preserving project work, Pi session, branch, and worktree.",
+            parameters: staffTargetParameters,
+            promptSnippet: undefined,
+            constrainedSampling: { type: "json_schema", strict: "prefer" },
+            execute: (
+              id: string,
+              p: any,
+              signal: AbortSignal | undefined,
+              update: unknown,
+              ctx: ExtensionContext,
+            ) =>
+              staffTool.execute(
+                id,
+                { action: "close", session: p.session },
+                signal,
+                update,
+                ctx,
+              ),
+          });
+          pi.registerTool({
+            ...staffTool,
+            name: "staff_discard",
+            label: "staff discard",
+            description:
+              "Abandon project work by branch, stopping its executor and removing the assignment while preserving Git branch and worktree.",
+            parameters: staffDiscardParameters,
+            promptSnippet: undefined,
+            constrainedSampling: { type: "json_schema", strict: "prefer" },
+            execute: (
+              id: string,
+              p: any,
+              signal: AbortSignal | undefined,
+              update: unknown,
+              ctx: ExtensionContext,
+            ) =>
+              staffTool.execute(
+                id,
+                { action: "discard", branch: p.branch },
+                signal,
+                update,
+                ctx,
+              ),
           });
         } finally {
           try {

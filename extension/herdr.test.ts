@@ -4212,6 +4212,7 @@ test("worktree group scope resolves primary and linked workspaces from Herdr top
           : {
               source: {
                 repo_key: "repo-key",
+                repo_name: "project",
                 source_workspace_id: "root",
               },
               worktrees: [
@@ -4229,6 +4230,7 @@ test("worktree group scope resolves primary and linked workspaces from Herdr top
   const linked = await worktreeGroupScope(pi, ctx, "linked");
   assert.deepEqual(primary, {
     repoKey: "repo-key",
+    repoName: "project",
     primaryWorkspaceId: "root",
     workspaceIds: ["root", "linked"],
   });
@@ -4271,16 +4273,27 @@ test("worktree group scope fails closed on missing or inconsistent topology evid
     /topology changed/,
   );
   await assert.rejects(
-    scope({ repo_key: "one", is_linked_worktree: true }, { repo_key: "one" }),
+    scope(
+      { repo_key: "one", is_linked_worktree: true },
+      { repo_key: "one", repo_name: "project" },
+    ),
     /primary workspace is unavailable/,
+  );
+  await assert.rejects(
+    scope(
+      { repo_key: "one", is_linked_worktree: true },
+      { repo_key: "one", source_workspace_id: "root" },
+    ),
+    /repository name is unavailable/,
   );
   assert.deepEqual(
     await scope(
       { repo_key: "one", is_linked_worktree: false },
-      { repo_key: "one" },
+      { repo_key: "one", repo_name: "project" },
     ),
     {
       repoKey: "one",
+      repoName: "project",
       primaryWorkspaceId: "linked",
       workspaceIds: ["linked"],
     },
@@ -4317,6 +4330,7 @@ test("existing-pane startup waits for shell readiness before starting Pi", async
         return response({
           source: {
             repo_key: "repo",
+            repo_name: "project",
             source_workspace_id: "primary-workspace",
           },
           worktrees: [{ open_workspace_id: "existing-workspace" }],
@@ -4421,6 +4435,7 @@ test("existing-pane startup requires group membership and an exact pane", async 
         return response({
           source: {
             repo_key: "repo",
+            repo_name: "project",
             source_workspace_id: "primary-workspace",
           },
           worktrees: targetIsMember

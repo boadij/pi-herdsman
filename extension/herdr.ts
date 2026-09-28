@@ -357,6 +357,7 @@ export async function runHerdr(
 
 export type WorktreeGroupScope = Readonly<{
   repoKey: string;
+  repoName: string;
   primaryWorkspaceId: string;
   workspaceIds: readonly string[];
 }>;
@@ -387,6 +388,8 @@ export async function worktreeGroupScope(
   const source = listed?.source;
   if (!source || source.repo_key !== membership.repo_key)
     throw new Error("Herdr worktree group topology changed");
+  if (typeof source.repo_name !== "string" || !source.repo_name)
+    throw new Error("Herdr repository name is unavailable");
 
   const primaryWorkspaceId =
     source.source_workspace_id ??
@@ -396,6 +399,7 @@ export async function worktreeGroupScope(
 
   return {
     repoKey: source.repo_key,
+    repoName: source.repo_name,
     primaryWorkspaceId,
     workspaceIds: [
       ...new Set([

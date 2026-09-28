@@ -9,11 +9,11 @@ Supervision normally follows Chief → Manager → Lead; without an active Manag
 | Session       | Herdsman tools                                                                    | Authority                                                                                     |
 | ------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Chief         | `staff` only                                                                      | Current Managers, and ordinary Leads without an active project Manager, on this Herdr runtime |
-| Manager       | `staff`, `supervisor`, `peer` plus ordinary project tools; no `agent`             | Ordinary Leads in one Herdsman project scope (one Herdr worktree group)                       |
+| Manager       | `staff`, `supervisor`, `peer` plus ordinary project tools; no `agent`             | Project work and ordinary Leads in one Herdr worktree group                                   |
 | Lead          | `agent`, `supervisor`, `peer` plus ordinary tools; no `staff`                     | Its owned Agent tree                                                                          |
 | Managed Agent | `ask_owner` and definition tools; `agent` only when delegation-enabled; no `peer` | Directly delegated permitted Agents only                                                      |
 
-Every session starts as an ordinary Lead. Herdr worktree topology identifies the primary workspace and linked-worktree workspaces by workspace IDs and repo key. A Lead in the primary workspace may enter Manager mode with `/manager`; Leads in linked-worktree workspaces cannot. Activation claims the exclusive Manager lease for the Herdsman project scope corresponding to that Herdr worktree group, and persists `role: "manager"` for the Pi session. If another live Manager holds the lease, activation fails and the caller remains an ordinary Lead. Activation also fails while the session owns unresolved managed-Agent work, preserving its existing control surface. `/manager leave` is refused while project assignments, asks addressed to that Manager, or the Manager's own pending ask to Chief remain outstanding; when clear, it releases the lease and restores Lead instructions and the exact Lead tool baseline, including `agent`. A restored Manager uses the same profile, supervision UI, and role-specific context as explicit activation; startup does not load a Lead Agent-definition roster or recover Lead-owned Agent runtimes. Manager uses a distinct coordination charter and has only `staff`, `supervisor`, and `peer` as Herdsman tools; it has no `agent` and cannot own Agents or implement work through them. Manager receives bounded automatic state for its direct Leads, not a Lead Agent-definition roster or Agent instructions. Manager coordinates project-level work across Leads and workspaces. Delegated implementation belongs to Leads and their Agent trees; linked-worktree workspaces are the execution boundary for Manager-delegated work. Manager authority requires the current lease and exact identity, not Herdr display metadata.
+Every session starts as an ordinary Lead. Herdr worktree topology identifies the primary workspace and linked-worktree workspaces by workspace IDs and repo key. A Lead in the primary workspace may enter Manager mode with `/manager`; Leads in linked-worktree workspaces cannot. Activation claims the exclusive Manager lease for that worktree group. If another live Manager holds the lease, activation fails and the caller remains an ordinary Lead. Activation also fails while the session owns unresolved managed-Agent work. `/manager leave` preserves project work and restores Lead instructions and the exact Lead tool baseline, including `agent`. A Lead waiting for this Manager's answer, or the Manager's own pending ask to Chief, can still block leaving. Re-entering Manager mode shows the same project work. Manager has no `agent` tools and cannot own Agents or implement work through them. It receives bounded automatic project-work and direct-Lead state. Delegated implementation belongs to Leads and their Agent trees; Manager authority requires the current lease and exact identity, not Herdr display metadata.
 
 An eligible ordinary Lead may activate `/chief`; a Manager cannot. Chief is a separate workspace-neutral session mode with one active lease per Herdr socket. The persisted `pi-herdsman-role` entry records `role: "lead"|"manager"|"chief"`; `leadTools` retains the exact ordinary Lead loadout needed when leaving either special role. Chief does not receive project context or Agent control. `/chief leave` restores ordinary Lead tools. An occupied lease on Chief resume suspends Chief authority. Chief and Manager activation fail while owned managed-Agent work cannot safely be excluded.
 
@@ -22,7 +22,7 @@ Coordinator state is private, atomic, bounded, and tied to the exact Pi session 
 ## Chief and Manager coordination
 
 Chief is a mode of a Lead session. While active, its model has exactly the tools `staff_list`, `staff_inspect`,
-`staff_transcript`, `staff_message`, and `staff_reply`. It supervises active Managers and ordinary Leads without an active project Manager; it cannot act on a Manager's Leads. Manager has those five staff tools plus `staff_delegate` for project Leads, `supervisor` for escalation to Chief, and `peer` for Manager peers. Staff actions in both modes target only direct reports. Neither mode owns the reports' Agents or receives owner controls. Project/workspace context files and skills are excluded from Chief model context; workspace-specific work remains the responsibility of supervised Leads. `/chief leave` restores the session's ordinary tools. Activating Chief mode fails closed while managed mailbox state is unresolved, because the Lead cannot safely prove that it owns no managed Agent work.
+`staff_transcript`, `staff_message`, and `staff_reply`. It supervises active Managers and ordinary Leads without an active project Manager; it cannot act on a Manager's Leads. Manager has those five staff tools plus `staff_delegate`, `staff_close`, and `staff_discard` for project work, `supervisor` for escalation to Chief, and `peer` for Manager peers. Staff actions in both modes target only direct reports; Manager's branch-based delegate and discard actions target project work. Neither mode owns the reports' Agents or receives owner controls. Project/workspace context files and skills are excluded from Chief model context; workspace-specific work remains the responsibility of supervised Leads. `/chief leave` restores the session's ordinary tools. Activating Chief mode fails closed while managed mailbox state is unresolved, because the Lead cannot safely prove that it owns no managed Agent work.
 
 ## Lead projection and actions
 
@@ -45,12 +45,12 @@ may omit the duplicate. The latest active snapshot supersedes earlier
 snapshots. Pi's ordinary branch and compaction rules determine which persisted
 snapshots participate in current model context.
 
-The `staff_list` representation contains `session` (the exact full Pi session ID),
+The Lead representation contains `session` (the exact full Pi session ID),
 `display_name` (a presentation-only label), identity fields, `runtime_state`,
 `needs_you`, optional pending-ask fields, `agent_counts`, and
-`available_tools`. `agent_counts` contains `active`, `blocked`, and `total`;
+`available_tools`, and optional branch provenance. `agent_counts` contains `active`, `blocked`, and `total`;
 `active` counts `working`, `settling`, and `starting` descendants. The automatic
-snapshot is state-only and uses `leads`, `agent_counts`, and `agents`, not
+snapshot is state-only and uses `leads`, Manager `project_work`, `agent_counts`, and `agents`, not
 inspect terminal/process evidence.
 Oversized output is truncated only at complete lead records and identifies
 omitted state. Use `staff_list` when a fresh complete roster is required.
@@ -92,7 +92,7 @@ chief_reply (Chief → direct Lead or Manager)
 manager_message (Manager → direct Lead, or Manager → Chief)
 manager_ask (Manager → Chief)
 manager_reply (Manager → direct Lead)
-manager_assignment (Manager → delegated Lead)
+project_assignment (project work → assigned Lead)
 report_result (assigned Lead → Manager)
 ```
 
@@ -101,7 +101,9 @@ follow-up delivery. Supervisor messages may queue while a report works. Same-ses
 restart preserves queued records, accepted IDs are deduplicated, and an
 individual quarantined record does not block a new record for that session.
 Transient identity, authority, or delivery failures retain records. Exact
-identity and current supervisor lease checks are never weakened.
+identity checks remain mandatory. A project assignment instruction remains
+authorized by its project work after the originating Manager leaves; ordinary
+Manager messages and replies still require their current supervisor lease.
 
 ## Supervisor tools
 
@@ -148,7 +150,7 @@ reply.
 
 ## Staff tools
 
-The `staff_*` tools are available to an active Chief or Manager; `staff_delegate` is Manager-only. For staff actions that take a target, `session` must be the exact full Pi session ID of a direct report shown as `session` in a fresh automatic supervision snapshot or returned by `staff_list`; never use `display_name` or a nested descendant ID.
+The shared `staff_*` tools are available to an active Chief or Manager; `staff_delegate`, `staff_close`, and `staff_discard` are Manager-only. Lead-targeted actions take the exact full Pi `session` ID of a direct report from a fresh snapshot or `staff_list`; branch-targeted work actions use the Git branch, not a Lead display name or assignment ID.
 
 For general state questions and ordinary messages or replies, use the fresh automatic supervision snapshot directly; do not call `staff_list`, `staff_inspect`, or `staff_transcript` merely to poll progress. The `staff_message` and `staff_reply` tools
 perform their own authoritative validation. Use `staff_list` when the snapshot is
@@ -166,6 +168,11 @@ conversation/tool evidence materially matters.
 ```
 
 `staff_list` returns a fresh supervision projection and fresh `available_tools`.
+For Manager, `work` lists branch, derived state, exact Lead session, and a
+bounded task summary; it includes paused or broken work even when no Lead is
+running. Its states are `starting`, `working`, `blocked`, `idle`, `paused`,
+`finished`, and `broken`. `reports` includes eligible direct Leads, including
+unassigned Leads. A branch is the work handle; the session is for Lead actions.
 
 ### `staff_inspect`
 
@@ -226,25 +233,62 @@ the usual cross-session forwarding form through `files`.
 
 ### `staff_delegate`
 
-Only an active Manager delegates a new project assignment. Provide a non-empty `task` and optional `branch`, `base`, and `files` (not a target `session`); omit `branch` to use the generated assignment branch. For recovery, provide only `assignment` with the exact persisted assignment ID (an empty `files` list is also accepted). Do not combine recovery with fresh-delegation inputs.
-
-If `base` is omitted, the `HEAD` ref token is persisted before creation; it is not resolved to an immutable commit. Herdr determines the linked-worktree workspace path and label. Manager coordinates exactly one Herdr worktree group from its primary workspace. A delegated branch gets a linked Git worktree and linked-worktree workspace, but multiple Leads may share a workspace; one workspace does not imply one worktree. The Manager uses the exact returned workspace, tab, and pane identities and the normal bounded shell-readiness and ownership checks before starting Pi. It launches Pi with the assignment UUID as `--session-id` and verifies one exact-pane candidate with Lead coordination state under that expected session ID. Herdr must report a session identity; if it resolves, it must match the assignment ID. Pi may expose a session path before its initial JSONL file exists; this expected startup state does not block verification while the Lead state is published. Manager-created Leads inherit the Manager session's `ctx.isProjectTrusted()` decision for that run: a trusted Manager passes `--approve`, while an untrusted Manager passes `--no-approve`. Pi's trust-protected project resources are available only in the trusted case; `--no-approve` skips those protected resources without implying that all project-local files are skipped. This does not modify Pi's persistent trust store or elevate trust beyond the Manager's current decision. On success it returns assignment ID, exact Lead session ID, workspace ID, and branch. There is no caller-selected cwd, pane, Agent definition, focus, review, or merge policy. The linked-worktree workspace remains after completion.
-
-The assignment delivered to a Lead says to report completion with
-`supervisor_result`; use `supervisor_message` only for nonterminal progress or
-coordination. The durable result settles the assignment after accepted Manager
-delivery. A direct-report Lead's messages and results are addressed to Manager:
-handle them locally rather than echoing them through `supervisor`, which a
-Manager uses only for its own escalation to Chief. Manager `staff list` reports
-assignment branch names (without task text).
-
-Use an explicit recovery request with no new delegation inputs for `creating`, `starting`, or `active` assignments:
+Only an active Manager can start or resume project work. Supply `task` to start
+new work, with optional `branch`, `base`, and `files`; without a branch,
+Herdsman generates one. Supply only `branch` to resume existing work:
 
 ```json
-{ "assignment": "<exact unresolved assignment ID>" }
+{ "task": "Implement the change", "branch": "feat/example" }
 ```
 
-An `active` assignment with a live Lead cannot be recovered; coordinate with that Lead instead. If its canonical `result:<assignment-id>` already exists, recovery moves it to `settling` without restarting the Lead. A `settling` assignment cannot be recovered as execution; its durable result is reconciled with the Manager. If an `active` assignment's worktree has definitively vanished, recovery retires the assignment and releases its branch reservation; delegate fresh work explicitly instead. A closed workspace for an existing worktree is reopened using Herdr's returned placement, without creating a second checkout. Unknown or conflicting evidence fails closed. While the Manager is active, reconciliation retries durable result delivery and removes the assignment only after accepted delivery; the result artifact remains.
+```json
+{ "branch": "feat/example" }
+```
+
+If a branch already has work, a new task, base, or files cannot replace it.
+If it has no work, a task is required. An existing unoccupied Herdr worktree
+is reused, whether open or closed; `base` applies only when creating a new
+worktree. A different live Lead occupying that worktree prevents a second
+managed writer. Workspace membership does not make a Lead the assignment
+owner. Herdr supplies exact workspace, tab, and pane placement. Manager-created
+Leads inherit the Manager's effective project-trust decision for that run:
+trusted passes `--approve`, untrusted passes `--no-approve`. This does not
+change Pi's persistent trust store. Pi resumes the same project session when
+work is paused; a repeated request for already-running work returns that Lead
+without launching another. A missing worktree leaves work marked `broken`
+instead of deleting it. A closed workspace is reopened without a second
+checkout; contradictory or ambiguous evidence fails closed.
+
+The Lead reports terminal completion with `supervisor_result`; use
+`supervisor_message` only for nonterminal progress or coordination. A durable
+result prevents a restart. Completion remains saved even if no Manager is
+active; the next Manager reconciles the result, then removes the assignment
+after accepted delivery. The canonical result remains available for later
+handoffs. A direct-report Lead's messages and results are handled by Manager,
+not echoed through its own `supervisor` escalation to Chief.
+
+### `staff_close`
+
+```json
+{ "session": "<exact live direct Lead session ID>" }
+```
+
+Stop the exact Lead and its owned Agent execution tree. For managed work this
+pauses execution but preserves the assignment, Pi session, Git branch, and
+worktree; resume with `staff_delegate` using its branch. An unassigned direct
+Lead can also be closed without creating an assignment. Failed or ambiguous
+cleanup does not silently discard work.
+
+### `staff_discard`
+
+```json
+{ "branch": "feat/example" }
+```
+
+Abandon managed work by branch: stop its execution tree and remove the
+assignment only after proving execution has stopped. The Git branch, worktree,
+and files remain. Durable completed results cannot be discarded; settle them
+instead. If exact execution cannot be proved absent, the assignment remains.
 
 ### `staff_reply`
 

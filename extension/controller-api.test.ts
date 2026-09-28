@@ -175,7 +175,11 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
       return respond({
-        source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+        source: {
+          source_workspace_id: WORKSPACE,
+          repo_key: "repo-key",
+          repo_name: "project",
+        },
         worktrees: topologyCreated
           ? listProjectAssignments(supervisionRuntime(), WORKSPACE).map(
               (assignment) => ({
@@ -348,7 +352,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       ctx,
     );
     assert.equal(staffList.details.ok, true);
-    assert.equal(staffList.details.assignments[0].branch, pending.branch);
+    assert.equal(staffList.details.work[0].branch, pending.branch);
     assert.equal(createCalls, 1, "roster reads must not retry creation");
     assert.equal(pending.phase, "creating");
     await assert.rejects(
@@ -362,18 +366,15 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
         undefined,
         ctx,
       ),
-      new RegExp(
-        `belongs to unresolved assignment ${pending.id}.*staff_delegate assignment=${pending.id}`,
-      ),
+      /Work already exists/,
     );
-    for (const phase of ["starting", "settling"] as const) {
+    for (const phase of ["starting", "active"] as const) {
       writeProjectAssignment(supervisionRuntime(), {
         ...pending,
         phase,
         workspaceId: childWorkspace,
         paneId: "child-pane",
         tabId: "child-tab",
-        ...(phase === "settling" ? { leadSessionId: pending.id } : {}),
         updatedAt: Math.max(Date.now(), pending.createdAt),
       });
       await assert.rejects(
@@ -387,9 +388,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
           undefined,
           ctx,
         ),
-        phase === "starting"
-          ? /belongs to unresolved assignment/
-          : /owned by settling assignment.*do not redelegate/,
+        /Work already exists/,
       );
     }
     writeProjectAssignment(supervisionRuntime(), pending);
@@ -413,23 +412,22 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     delayReadiness = true;
     for (const [field, value] of [
       ["task", "replacement task"],
-      ["branch", "smoke/replacement"],
       ["base", "main"],
     ] as const) {
       await assert.rejects(
         staff.execute(
           "delegate",
-          { assignment: pending.id, [field]: value },
+          { branch: pending.branch, [field]: value },
           undefined,
           undefined,
           ctx,
         ),
-        /Resume the exact assignment without task, branch, base, or files/,
+        /Work already exists/,
       );
     }
     const retryPromise = staff.execute(
       "delegate",
-      { assignment: pending.id },
+      { branch: pending.branch },
       undefined,
       undefined,
       ctx,
@@ -453,7 +451,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     releaseReadiness();
     const retry = await retryPromise;
     assert.equal(retry.details.ok, true, JSON.stringify(retry.details));
-    assert.equal(retry.details.assignment, pending.id);
+    assert.equal(retry.details.branch, pending.branch);
     assert.equal(retry.details.session, childSession);
     assert.equal(createCalls, 2);
     assert.equal(openCalls, 1);
@@ -464,7 +462,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       "active",
     );
     await pi.commandOptions.get("manager").handler("leave", ctx);
-    assert.ok(pi.pi.getActiveTools().includes("staff_delegate"));
+    assert.equal(pi.pi.getActiveTools().includes("staff_delegate"), false);
     assert.equal(
       listProjectAssignments(supervisionRuntime(), WORKSPACE).find(
         (item) => item.id === pending.id,
@@ -491,6 +489,9 @@ async function runManagerStartupScenario(
     | "mismatched-session"
     | "recovery"
     | "preexisting"
+    | "preexisting-closed"
+    | "occupied"
+    | "multiple"
     | "stale-placement"
     | "invalid-topology"
     | "concurrent"
@@ -500,7 +501,9 @@ async function runManagerStartupScenario(
     | "active-result-periodic"
     | "active-missing"
     | "active-closed"
-    | "settling",
+    | "close-resume"
+    | "active-discard"
+    | "close-failure",
   projectTrusted = false,
   t?: TestContext,
 ): Promise<void> {
@@ -514,12 +517,18 @@ async function runManagerStartupScenario(
     `delegate-fresh-${randomUUID()}.sock`,
   );
   const childWorkspace = `child-${randomUUID()}`;
+  const unrelatedSession = randomUUID();
+  const secondSession = randomUUID();
   let childSession = "";
   const childSessionPath = join(tmpdir(), `lead-${randomUUID()}.jsonl`);
   const childPath = "/tmp/manager-fresh-child";
   let created = false;
+  let createdBranch = "";
   let shellReady = false;
-  let started = mode === "recovery";
+  let started =
+    mode === "recovery" ||
+    mode === "active-live" ||
+    ["close-resume", "active-discard", "close-failure"].includes(mode);
   let startupObservations = 0;
   let createCalls = 0;
   let openCalls = 0;
@@ -561,22 +570,44 @@ async function runManagerStartupScenario(
         source:
           mode === "invalid-topology" &&
           worktreeListCalls === invalidTopologyCall
-            ? { source_workspace_id: "wrong-workspace", repo_key: "repo-key" }
-            : { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
-        worktrees:
-          mode === "preexisting"
-            ? [{ branch: "smoke/existing", path: childPath }]
-            : created
-              ? listProjectAssignments(supervisionRuntime(), WORKSPACE).map(
-                  (assignment) => ({
-                    branch: assignment.branch,
-                    path: childPath,
-                    ...(mode === "active-closed" && !openCalls
-                      ? {}
-                      : { open_workspace_id: childWorkspace }),
-                  }),
-                )
-              : [],
+            ? {
+                source_workspace_id: "wrong-workspace",
+                repo_key: "repo-key",
+                repo_name: "project",
+              }
+            : {
+                source_workspace_id: WORKSPACE,
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
+        worktrees: [
+          "preexisting",
+          "preexisting-closed",
+          "occupied",
+          "multiple",
+        ].includes(mode)
+          ? [
+              {
+                branch: "smoke/existing",
+                path: childPath,
+                ...(["occupied", "multiple"].includes(mode) ||
+                (mode.startsWith("preexisting") && openCalls)
+                  ? { open_workspace_id: childWorkspace }
+                  : {}),
+              },
+            ]
+          : created
+            ? (mode === "active-discard"
+                ? [{ branch: createdBranch }]
+                : listProjectAssignments(supervisionRuntime(), WORKSPACE)
+              ).map((assignment) => ({
+                branch: assignment.branch,
+                path: childPath,
+                ...(mode === "active-closed" && !openCalls
+                  ? {}
+                  : { open_workspace_id: childWorkspace }),
+              }))
+            : [],
       });
     }
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
@@ -584,6 +615,7 @@ async function runManagerStartupScenario(
       created = true;
       const branch = args[args.indexOf("--branch") + 1];
       assert.ok(branch);
+      createdBranch = branch;
       return respond({
         workspace: { workspace_id: childWorkspace },
         tab: { tab_id: "child-tab" },
@@ -593,7 +625,18 @@ async function runManagerStartupScenario(
     }
     if (command === "herdr" && args[0] === "worktree" && args[1] === "open") {
       openCalls++;
-      if (mode !== "active-closed")
+      if (
+        mode !== "active-closed" &&
+        mode !== "preexisting" &&
+        mode !== "preexisting-closed" &&
+        ![
+          "active-loss",
+          "active-live",
+          "active-result",
+          "active-result-periodic",
+          "recovery",
+        ].includes(mode)
+      )
         throw new Error("fresh worktree must not be opened again");
       return respond({
         workspace: { workspace_id: childWorkspace },
@@ -625,14 +668,34 @@ async function runManagerStartupScenario(
           tab_id: "child-tab",
           terminal_id: "child-terminal",
           cwd: childPath,
+          ...(["close-resume", "active-discard", "close-failure"].includes(
+            mode,
+          ) && started
+            ? {
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: childSession,
+                },
+              }
+            : {}),
         },
+      });
+    if (command === "herdr" && args[0] === "tab" && args[1] === "list")
+      return respond({
+        tabs: [{ tab_id: "child-tab", workspace_id: childWorkspace }],
       });
     if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
       return respond({
         process_info: {
           pane_id: "child-pane",
           shell_pid: 33,
-          foreground_process_group_id: 33,
+          foreground_process_group_id:
+            started &&
+            ["close-resume", "active-discard", "close-failure"].includes(mode)
+              ? 44
+              : 33,
           foreground_processes: [
             {
               pid: started ? 44 : 33,
@@ -663,6 +726,12 @@ async function runManagerStartupScenario(
     }
     if (command === "herdr" && args[0] === "pane" && args[1] === "run")
       return respond({});
+    if (command === "herdr" && args[0] === "agent" && args[1] === "send-keys") {
+      if (mode === "close-failure") throw new Error("stop refused");
+      started = false;
+      startupObservations = 0;
+      return respond({});
+    }
     if (
       command === "herdr" &&
       args[0] === "pane" &&
@@ -763,10 +832,38 @@ async function runManagerStartupScenario(
       return respond({
         snapshot: {
           panes: [],
-          agents:
-            started &&
-            startupObservations >= 2 &&
-            mode !== "missing-herdr-session"
+          agents: ["occupied", "multiple"].includes(mode)
+            ? [
+                {
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: unrelatedSession,
+                  },
+                  workspace_id: childWorkspace,
+                  pane_id: "child-pane",
+                  tab_id: "child-tab",
+                },
+                ...(mode === "multiple"
+                  ? [
+                      {
+                        agent_session: {
+                          source: "herdr:pi",
+                          agent: "pi",
+                          kind: "id",
+                          value: secondSession,
+                        },
+                        workspace_id: childWorkspace,
+                        pane_id: "child-pane",
+                        tab_id: "child-tab",
+                      },
+                    ]
+                  : []),
+              ]
+            : started &&
+                startupObservations >= 2 &&
+                mode !== "missing-herdr-session"
               ? [
                   {
                     agent_session:
@@ -792,6 +889,8 @@ async function runManagerStartupScenario(
                     workspace_id: childWorkspace,
                     pane_id: "child-pane",
                     tab_id: "child-tab",
+                    name: "lead",
+                    cwd: childPath,
                   },
                 ]
               : [],
@@ -802,7 +901,39 @@ async function runManagerStartupScenario(
       return respond({
         agents: [
           managerAgent,
-          ...(mode === "active-live"
+          ...(["occupied", "multiple"].includes(mode)
+            ? [
+                {
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: unrelatedSession,
+                  },
+                  workspace_id: childWorkspace,
+                  pane_id: "child-pane",
+                  tab_id: "child-tab",
+                },
+              ]
+            : []),
+          ...(mode === "multiple"
+            ? [
+                {
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: secondSession,
+                  },
+                  workspace_id: childWorkspace,
+                  pane_id: "second-pane",
+                  tab_id: "child-tab",
+                },
+              ]
+            : []),
+          ...(mode === "active-live" ||
+          (["close-resume", "active-discard", "close-failure"].includes(mode) &&
+            started)
             ? [
                 {
                   agent_session: {
@@ -814,13 +945,32 @@ async function runManagerStartupScenario(
                   workspace_id: childWorkspace,
                   pane_id: "child-pane",
                   tab_id: "child-tab",
+                  name: "lead",
+                  cwd: childPath,
                 },
               ]
             : []),
         ],
       });
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
-      return respond({ agent: managerAgent });
+      return respond({
+        agent:
+          args[2] === "lead" || args[2] === "child-pane"
+            ? {
+                name: "lead",
+                workspace_id: childWorkspace,
+                pane_id: "child-pane",
+                tab_id: "child-tab",
+                cwd: childPath,
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: childSession,
+                },
+              }
+            : managerAgent,
+      });
     return respond({});
   };
   const pi = fakeChiefPi({ activeTools: ["read"], exec });
@@ -829,6 +979,22 @@ async function runManagerStartupScenario(
     t!.mock.timers.enable({ apis: ["setInterval"] });
   try {
     const ctx = fakeContext() as any;
+    if (["occupied", "multiple"].includes(mode))
+      writeLeadCoordinationState(supervisionRuntime(), {
+        version: 1,
+        role: "lead",
+        instanceId: randomUUID(),
+        piSessionId: unrelatedSession,
+        updatedAt: Date.now(),
+      });
+    if (mode === "multiple")
+      writeLeadCoordinationState(supervisionRuntime(), {
+        version: 1,
+        role: "lead",
+        instanceId: randomUUID(),
+        piSessionId: secondSession,
+        updatedAt: Date.now(),
+      });
     ctx.isProjectTrusted = () => projectTrusted;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
@@ -846,11 +1012,14 @@ async function runManagerStartupScenario(
       "active-result-periodic",
       "active-missing",
       "active-closed",
-      "settling",
+      "close-resume",
+      "active-discard",
+      "close-failure",
     ].includes(mode);
     if (activeMode) {
       childSession = staleId;
       created = mode !== "active-missing";
+      if (created) createdBranch = "smoke/recover";
       writeProjectAssignment(supervisionRuntime(), {
         version: 1,
         id: staleId,
@@ -859,12 +1028,11 @@ async function runManagerStartupScenario(
         branch: "smoke/recover",
         base: "HEAD",
         text: "recover exact Lead",
-        phase: mode === "settling" ? "settling" : "active",
+        phase: "active",
         workspaceId:
           mode === "active-closed" ? "closed-workspace" : childWorkspace,
         paneId: mode === "active-closed" ? "closed-pane" : "child-pane",
         tabId: mode === "active-closed" ? "closed-tab" : "child-tab",
-        leadSessionId: staleId,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
@@ -872,6 +1040,22 @@ async function runManagerStartupScenario(
         mkdirSync(dirname(resultPath(staleId)), { recursive: true });
         writeFileSync(resultPath(staleId), "completed");
       }
+      if (mode === "active-live")
+        writeLeadCoordinationState(supervisionRuntime(), {
+          version: 1,
+          role: "lead",
+          instanceId: randomUUID(),
+          piSessionId: staleId,
+          updatedAt: Date.now(),
+        });
+      if (["close-resume", "active-discard", "close-failure"].includes(mode))
+        writeLeadCoordinationState(supervisionRuntime(), {
+          version: 1,
+          role: "lead",
+          instanceId: randomUUID(),
+          piSessionId: staleId,
+          updatedAt: Date.now(),
+        });
     }
     if (mode === "stale-placement" || mode === "invalid-topology")
       writeProjectAssignment(supervisionRuntime(), {
@@ -898,12 +1082,20 @@ async function runManagerStartupScenario(
           !activeMode
             ? { task: "deliver the fresh assignment" }
             : {}),
-          ...(mode === "preexisting" ? { branch: "smoke/existing" } : {}),
-          ...(mode === "concurrent" ? { branch: "smoke/concurrent" } : {}),
-          ...(["stale-placement", "invalid-topology"].includes(mode) ||
-          activeMode
-            ? { assignment: staleId }
+          ...([
+            "preexisting",
+            "preexisting-closed",
+            "occupied",
+            "multiple",
+          ].includes(mode)
+            ? { branch: "smoke/existing" }
             : {}),
+          ...(mode === "concurrent" ? { branch: "smoke/concurrent" } : {}),
+          ...(["stale-placement", "invalid-topology"].includes(mode)
+            ? { branch: "smoke/vanished" }
+            : activeMode
+              ? { branch: "smoke/recover" }
+              : {}),
         },
         undefined,
         undefined,
@@ -917,7 +1109,7 @@ async function runManagerStartupScenario(
           await t!.waitFor(() => {
             assert.equal(
               listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
-              "settling",
+              "active",
             );
             assert.ok(
               listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
@@ -925,29 +1117,65 @@ async function runManagerStartupScenario(
               ),
             );
           });
-        } else if (mode === "active-live" || mode === "settling")
-          await assert.rejects(
-            execute(),
-            mode === "settling"
-              ? /already settling/
-              : /still active in Lead session/,
-          );
-        else if (mode === "active-missing") {
-          await assert.rejects(
-            execute(),
-            /was abandoned.*branch reservation was released/,
-          );
+        } else if (mode === "active-live") {
+          const running = await execute();
+          assert.equal(running.details.already_running, true);
+          assert.equal(running.details.session, staleId);
+        } else if (
+          ["close-resume", "active-discard", "close-failure"].includes(mode)
+        ) {
+          const control = (name: string, value: unknown) =>
+            pi.tools
+              .find((tool) => tool.name === name)!
+              .execute(name, value, undefined, undefined, ctx);
+          if (mode === "close-failure") {
+            await assert.rejects(control("staff_close", { session: staleId }));
+            assert.equal(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              staleId,
+            );
+          } else if (mode === "close-resume") {
+            const closed = await control("staff_close", { session: staleId });
+            assert.equal(closed.details.branch, "smoke/recover");
+            assert.equal(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              staleId,
+            );
+            assert.equal(started, false);
+            started = true;
+            const resumed = await execute();
+            assert.equal(resumed.details.session, staleId);
+            assert.equal(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]
+                ?.workspaceId,
+              childWorkspace,
+            );
+          } else {
+            const discarded = await control("staff_discard", {
+              branch: "smoke/recover",
+            });
+            assert.equal(discarded.details.ok, true);
+            assert.deepEqual(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE),
+              [],
+            );
+            assert.equal(created, true);
+            assert.equal(createdBranch, "smoke/recover");
+            assert.equal(started, false);
+          }
+          return;
+        } else if (mode === "active-missing") {
+          await assert.rejects(execute(), /assignment was preserved/i);
           assert.deepEqual(
             listProjectAssignments(supervisionRuntime(), WORKSPACE),
-            [],
+            [listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]],
           );
         } else {
           const recovered = await execute();
-          assert.equal(recovered.details.recovered, true);
-          assert.equal(recovered.details.assignment, staleId);
+          assert.equal(recovered.details.session, staleId);
           assert.equal(recovered.details.branch, "smoke/recover");
           if (mode === "active-result") {
-            assert.equal(recovered.details.phase, "settling");
+            assert.equal(recovered.details.state, "finished");
             assert.equal(
               readFileSync(resultPath(staleId), "utf8"),
               "completed",
@@ -993,10 +1221,13 @@ async function runManagerStartupScenario(
           startCalls,
           ["active-loss", "active-closed"].includes(mode) ? 1 : 0,
         );
-        assert.equal(openCalls, mode === "active-closed" ? 1 : 0);
+        assert.equal(
+          openCalls,
+          ["active-closed", "active-loss"].includes(mode) ? 1 : 0,
+        );
         assert.equal(
           listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
-          ["active-missing", "active-result"].includes(mode) ? 0 : 1,
+          mode === "active-result" ? 0 : 1,
         );
       } finally {
         if (mode === "active-result" || mode === "active-result-periodic")
@@ -1014,9 +1245,7 @@ async function runManagerStartupScenario(
         results.filter(
           (result) =>
             result.status === "rejected" &&
-            /belongs to unresolved assignment|owned by active assignment/.test(
-              String(result.reason),
-            ),
+            /Work already exists/.test(String(result.reason)),
         ).length,
         1,
       );
@@ -1061,29 +1290,74 @@ async function runManagerStartupScenario(
       assert.equal(startupObservations, 2);
       return;
     }
-    if (mode === "preexisting") {
-      await assert.rejects(execute(), /worktree already exists/);
+    if (mode === "preexisting" || mode === "preexisting-closed") {
+      await execute();
       assert.equal(
         listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
-        0,
+        1,
       );
       assert.equal(createCalls, 0);
+      assert.equal(startCalls, 1);
+      assert.equal(openCalls, 1);
+      return;
+    }
+    if (mode === "occupied") {
+      await assert.rejects(
+        execute(),
+        new RegExp(`already has live Lead session ${unrelatedSession}`),
+      );
+      assert.deepEqual(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE),
+        [],
+      );
       assert.equal(startCalls, 0);
+      return;
+    }
+    if (mode === "multiple") {
+      await assert.rejects(execute(), /multiple live Leads/);
+      assert.deepEqual(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE),
+        [],
+      );
       return;
     }
     if (mode === "stale-placement") {
       await assert.rejects(
         execute(),
         new RegExp(
-          `Assignment ${staleId} was abandoned[\\s\\S]*branch reservation was released; retry a fresh delegation`,
+          `Work on smoke/vanished cannot be resumed[\\s\\S]*assignment was preserved`,
         ),
       );
       assert.equal(
         listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
-        0,
+        1,
       );
       assert.equal(createCalls, 0);
       assert.equal(startCalls, 0);
+      await assert.rejects(
+        pi.tools
+          .find((tool) => tool.name === "staff_close")!
+          .execute("close", { session: staleId }, undefined, undefined, ctx),
+        /Exact live Lead was not found/,
+      );
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+        staleId,
+      );
+      const discarded = await pi.tools
+        .find((tool) => tool.name === "staff_discard")!
+        .execute(
+          "discard",
+          { branch: "smoke/vanished" },
+          undefined,
+          undefined,
+          ctx,
+        );
+      assert.equal(discarded.details.ok, true);
+      assert.deepEqual(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE),
+        [],
+      );
       return;
     }
     if (mode === "invalid-topology") {
@@ -1152,14 +1426,7 @@ async function runManagerStartupScenario(
           undefined,
           ctx,
         ),
-        (error: Error) => {
-          assert.match(error.message, /owned by active assignment/);
-          assert.match(error.message, new RegExp(assignment.id));
-          assert.match(error.message, new RegExp(childSession));
-          assert.match(error.message, /staff_delegate assignment=/);
-          assert.doesNotMatch(error.message, /staff\.delegate assignment=/);
-          return true;
-        },
+        /Work already exists/,
       );
       await assert.rejects(
         staff.execute(
@@ -1172,7 +1439,7 @@ async function runManagerStartupScenario(
           undefined,
           ctx,
         ),
-        /Herdr session identity does not match the Manager assignment/,
+        /already has live Lead session/,
       );
       assert.equal(createCalls, 2);
       assert.equal(
@@ -1188,7 +1455,7 @@ async function runManagerStartupScenario(
       assert.ok(
         messages.some(
           (message) =>
-            message.kind === "manager_assignment" &&
+            message.kind === "project_assignment" &&
             message.leadSessionId === childSession &&
             message.text.includes("deliver the fresh assignment"),
         ),
@@ -1196,7 +1463,7 @@ async function runManagerStartupScenario(
     }
     if (mode === "unmaterialized-path") {
       assert.equal(realFs.existsSync(childSessionPath), true);
-      assert.equal(assignment.leadSessionId, assignment.id);
+      assert.equal(assignment.id, childSession);
     }
   } finally {
     realFs.rmSync(childSessionPath, { force: true });
@@ -1231,18 +1498,29 @@ test("Manager recovery waits on existing exact Pi without restarting it", () =>
   runManagerStartupScenario("recovery"));
 for (const [mode, label] of [
   ["active-loss", "relaunches the exact lost Lead"],
-  ["active-live", "refuses a live exact Lead"],
+  ["active-live", "returns a live exact Lead idempotently"],
   ["active-result", "settles a durable result without restarting"],
-  ["active-missing", "retires an assignment whose worktree vanished"],
+  ["active-missing", "retains an assignment whose worktree vanished"],
   ["active-closed", "reopens a closed worktree workspace"],
-  ["settling", "refuses executor recovery while settling"],
 ] as const)
   test(`Manager ${label}`, (t) => runManagerStartupScenario(mode, false, t));
 test("Manager periodically repairs an active assignment with a durable result", (t) =>
   runManagerStartupScenario("active-result-periodic", false, t));
-test("Manager never adopts a preexisting branch worktree for fresh delegation", () =>
+test("Manager close preserves the exact assignment and resumes its session", () =>
+  runManagerStartupScenario("close-resume"));
+test("Manager discard stops the active executor and preserves its worktree", () =>
+  runManagerStartupScenario("active-discard"));
+test("Manager retains assignment when exact Lead stop fails", () =>
+  runManagerStartupScenario("close-failure"));
+test("Manager adopts a preexisting branch worktree for fresh delegation", () =>
   runManagerStartupScenario("preexisting"));
-test("Manager retires only an explicitly recovered assignment with vanished placement", () =>
+test("Manager opens and adopts a closed preexisting branch worktree", () =>
+  runManagerStartupScenario("preexisting-closed"));
+test("Manager refuses an occupied worktree without reserving work", () =>
+  runManagerStartupScenario("occupied"));
+test("Manager refuses ambiguous multiple Leads in a worktree", () =>
+  runManagerStartupScenario("multiple"));
+test("Manager retains explicitly resumed work with vanished placement", () =>
   runManagerStartupScenario("stale-placement"));
 test("Manager serializes simultaneous same-branch delegation", () =>
   runManagerStartupScenario("concurrent"));

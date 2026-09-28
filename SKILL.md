@@ -483,10 +483,18 @@ Pi Herdsman uses one durable vocabulary:
 - a **Manager** explicitly assumes dedicated project coordination from that
   group's primary workspace, has no `agent` capability, and does not own Leads'
   Agents; delegated implementation belongs to Leads and their Agent trees;
-- a Manager recovers a `creating`, `starting`, or proven-not-live `active` project
-  assignment with `staff_delegate assignment=<id>` alone; a live Lead is not
-  restarted, a durable result settles without restart, and `settling` is not
-  executor recovery;
+- project work belongs to the project, not a Manager session. Its Git branch is
+  the work handle: a Manager starts work with `staff_delegate` using `task` and
+  optional `branch`, reusing an unoccupied Herdr worktree when available; use
+  `staff_delegate` with `branch` only to resume existing work. An already-running
+  Lead is not restarted, and a durable result is not restarted;
+- `staff_close` stops an exact Lead and its owned Agent tree while preserving
+  resumable work, its Pi session, branch, and worktree. `staff_discard` abandons
+  work by branch, stopping its executor and removing the assignment while
+  preserving the Git branch and worktree. Never infer ownership from worktree
+  membership or start an overlapping writer beside another Lead;
+- `/manager leave` preserves project work. A Lead can complete work without an
+  active Manager; its durable result is reconciled by the next Manager;
 - a **herd** is one Lead and the complete Agent tree it owns;
 - a **Lead** owns its Agents and reports upward to its active project Manager,
   or Chief when no Manager is active;
