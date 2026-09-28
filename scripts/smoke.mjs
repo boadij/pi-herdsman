@@ -326,56 +326,25 @@ export function hasManagerResultRef(contents, assignmentId) {
   );
 }
 
-export function assertManagerRootWorktreeGroup(
-  workspaceId,
-  workspace,
-  topology,
-) {
+export function managerSourceCheckout(workspaceId, workspace, topology) {
   const membership = workspace?.worktree;
   assert.ok(
     typeof membership?.repo_key === "string" && membership.repo_key,
-    `manager-recovery requires root workspace ${workspaceId} to belong to a Herdr Git worktree group`,
+    `workspace ${workspaceId} is not in a Herdr Git worktree group`,
   );
   assert.equal(
     topology?.source?.repo_key,
     membership.repo_key,
-    `manager-recovery could not verify worktree-group topology for root workspace ${workspaceId}`,
-  );
-  const primaryWorkspaceId =
-    topology.source.source_workspace_id ??
-    (membership.is_linked_worktree === false ? workspaceId : undefined);
-  assert.equal(
-    primaryWorkspaceId,
-    workspaceId,
-    `manager-recovery requires root workspace ${workspaceId} to be the primary workspace of its Herdr Git worktree group`,
-  );
-  return primaryWorkspaceId;
-}
-
-export function managerPrimaryCheckout(workspaceId, workspace, topology) {
-  assert.equal(
-    assertManagerRootWorktreeGroup(workspaceId, workspace, topology),
-    workspaceId,
-    `manager-recovery requires host workspace ${workspaceId} to be the primary checkout`,
-  );
-  const checkoutPath = workspace?.worktree?.checkout_path;
-  assert.ok(
-    isAbsolute(checkoutPath),
-    "primary workspace checkout path must be absolute",
+    `worktree-group topology does not match workspace ${workspaceId}`,
   );
   const sourceCheckoutPath = topology?.source?.source_checkout_path;
   assert.ok(
     typeof sourceCheckoutPath === "string" &&
       sourceCheckoutPath.length > 0 &&
       isAbsolute(sourceCheckoutPath),
-    "worktree source checkout path must be a non-empty absolute path",
+    "Herdr primary checkout path is unavailable",
   );
-  assert.equal(
-    resolve(sourceCheckoutPath),
-    resolve(checkoutPath),
-    "primary workspace and worktree source checkout paths do not match",
-  );
-  return resolve(checkoutPath);
+  return resolve(sourceCheckoutPath);
 }
 
 export function managerWorktreeOpenArgs(workspaceId, primaryCheckoutPath) {
@@ -523,21 +492,43 @@ export function managerReadyAnswer(contents, leadSessionId) {
       entry.content ===
         `From lead ${leadSessionId} to chief ${rootSessionId}: MANAGER_RECOVERY_READY`,
   );
+  const readyMarkers = entries.flatMap((entry, index) =>
+    entry.type === "message" &&
+    entry.message?.role === "assistant" &&
+    messageText(entry.message.content)
+      .split(/\r?\n/)
+      .some((line) => line.trim() === "PI_HERDSMAN_MANAGER_RECOVERY_READY")
+      ? [{ entry, index }]
+      : [],
+  );
   const answer =
     receipt < 0
       ? null
-      : entries.slice(receipt + 1).find(
-          (entry) =>
-            entry.type === "message" &&
-            entry.message?.role === "assistant" &&
-            entry.message.stopReason === "stop" &&
-            messageText(entry.message.content)
-              .split(/\r?\n/)
-              .some(
-                (line) => line.trim() === "PI_HERDSMAN_MANAGER_RECOVERY_READY",
-              ),
-        );
-  return { receipt: receipt >= 0, answer: answer ?? null };
+      : readyMarkers.find(
+          ({ entry, index }) =>
+            index > receipt && entry.message.stopReason === "stop",
+        )?.entry;
+  const prematureReady = readyMarkers.some(
+    ({ index }) => receipt < 0 || index < receipt,
+  );
+  const prematureFinish = entries.some(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "assistant" &&
+      Array.isArray(entry.message.content) &&
+      entry.message.content.some(
+        (block) =>
+          block?.type === "toolCall" &&
+          block.name === "staff_message" &&
+          block.arguments?.message === "MANAGER_RECOVERY_FINISH",
+      ),
+  );
+  return {
+    receipt: receipt >= 0,
+    answer: answer ?? null,
+    prematureReady,
+    prematureFinish,
+  };
 }
 
 export function managerReadyEntryEvidence(contents, leadSessionId) {
@@ -1051,7 +1042,7 @@ function continuationPrompt() {
 }
 
 export function managerRecoveryFreshPrompt(branch) {
-  return `Use staff_delegate exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call supervisor_message with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait;\n- do not call supervisor_result until the Manager later sends exactly MANAGER_RECOVERY_FINISH via staff_message;\n- after that message, call supervisor_result with exactly MANAGER_RECOVERY_DONE.\n\nAfter MANAGER_RECOVERY_READY reaches you, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY.\nDo not send a staff_message yet and do not create another assignment.`;
+  return `Use staff_delegate exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call supervisor_message with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait;\n- do not call supervisor_result until the Manager later sends exactly MANAGER_RECOVERY_FINISH via staff_message;\n- after that message, call supervisor_result with exactly MANAGER_RECOVERY_DONE.\n\nManager handshake: after staff_delegate returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any staff_message. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn. Do not send MANAGER_RECOVERY_FINISH; the later recovery prompt is the only instruction to do so.`;
 }
 
 export function managerRecoveryResumePrompt(branch, session) {
@@ -1740,10 +1731,15 @@ async function runManagerRecoverySmoke(ctx) {
     const leadCompleted =
       childVerified &&
       leadReadyCompleted(childSession.contents, "MANAGER_RECOVERY_READY");
-    const { receipt, answer } =
+    const { receipt, answer, prematureReady, prematureFinish } =
       session && results.length === 1
         ? managerReadyAnswer(session.contents, results[0].session)
-        : { receipt: false, answer: null };
+        : {
+            receipt: false,
+            answer: null,
+            prematureReady: false,
+            prematureFinish: false,
+          };
     ctx.managerRecovery.readyEvidence = {
       delegationCount: results.length,
       childFound: !!child,
@@ -1759,6 +1755,8 @@ async function runManagerRecoverySmoke(ctx) {
       leadCompleted: !!leadCompleted,
       receipt,
       managerAnswer: !!answer,
+      prematureReady,
+      prematureFinish,
       rootRecent: session
         ? summarizeSession(session.contents).recentMessages.slice(-6)
         : [],
@@ -1779,7 +1777,12 @@ async function runManagerRecoverySmoke(ctx) {
             }))
         : [],
     };
-    return results.length === 1 && leadCompleted && receipt && answer
+    return results.length === 1 &&
+      leadCompleted &&
+      receipt &&
+      answer &&
+      !prematureReady &&
+      !prematureFinish
       ? { results, answer }
       : null;
   });
@@ -2537,7 +2540,7 @@ async function main() {
           env: process.env,
         }),
       );
-      ctx.primaryCheckoutPath = managerPrimaryCheckout(
+      ctx.primaryCheckoutPath = managerSourceCheckout(
         hostWorkspaceId,
         hostWorkspace,
         hostTopology,

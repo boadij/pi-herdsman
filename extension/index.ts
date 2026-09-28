@@ -568,14 +568,6 @@ type StaffParams =
       askId: string;
       message: string;
       files?: string[];
-    }
-  | {
-      action: "delegate";
-      assignment?: string;
-      task?: string;
-      branch?: string;
-      base?: string;
-      files?: string[];
     };
 type PeerParams =
   | { action: "list" }
@@ -10715,7 +10707,12 @@ export default function (pi: ExtensionAPI): void {
             container.addChild(list);
             container.addChild(
               new TuiText(
-                theme.fg("muted", "Space peek · Enter focus · Esc close"),
+                theme.fg(
+                  "muted",
+                  activeRole() === "manager"
+                    ? "Enter actions · Esc close"
+                    : "Space peek · Enter focus · Esc close",
+                ),
                 0,
                 0,
               ),

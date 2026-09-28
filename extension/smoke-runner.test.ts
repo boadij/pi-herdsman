@@ -28,8 +28,7 @@ import {
   formatSmokeFailure,
   staffDelegateResults,
   hasManagerResultRef,
-  assertManagerRootWorktreeGroup,
-  managerPrimaryCheckout,
+  managerSourceCheckout,
   managerWorktreeOpenArgs,
   assertManagerOpenedPrimary,
   deleteBranchIfPresent,
@@ -239,6 +238,13 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   );
   assert.match(prompt, /Omit `base` and `files`/);
   assert.doesNotMatch(prompt, /`assignment`/);
+  assert.match(
+    prompt,
+    /after staff_delegate returns, end this turn immediately/,
+  );
+  assert.match(prompt, /Wait until the exact MANAGER_RECOVERY_READY message/);
+  assert.match(prompt, /Only after that delivered message, reply exactly/);
+  assert.match(prompt, /Do not send MANAGER_RECOVERY_FINISH/);
   const resume = managerRecoveryResumePrompt(branch, "session-exact");
   assert.match(
     resume,
@@ -318,89 +324,53 @@ test("manager result ref is read from the delivered report-result custom message
   assert.equal(hasManagerResultRef(contents, "missing"), false);
 });
 
-test("Manager recovery requires the primary workspace's verified Herdr worktree group", () => {
-  const workspace = {
-    worktree: { repo_key: "repo", is_linked_worktree: false },
-  };
-  assert.equal(
-    assertManagerRootWorktreeGroup("root", workspace, {
-      source: { repo_key: "repo" },
-      worktrees: [],
-    }),
-    "root",
-  );
-  assert.throws(
-    () =>
-      assertManagerRootWorktreeGroup(
-        "root",
-        {},
-        { source: { repo_key: "repo" } },
-      ),
-    /belong to a Herdr Git worktree group/,
-  );
-  assert.throws(
-    () =>
-      assertManagerRootWorktreeGroup("root", workspace, {
-        source: { repo_key: "other" },
-      }),
-    /could not verify worktree-group topology/,
-  );
-  assert.throws(
-    () =>
-      assertManagerRootWorktreeGroup(
-        "linked",
-        {
-          worktree: { repo_key: "repo", is_linked_worktree: true },
-        },
-        { source: { repo_key: "repo", source_workspace_id: "root" } },
-      ),
-    /requires root workspace linked to be the primary workspace/,
-  );
-});
-
-test("Manager recovery uses and verifies the isolated primary checkout", () => {
+test("Manager recovery resolves Herdr's primary checkout from any linked host workspace", () => {
   const checkout = resolve("/repo/primary");
   const hostWorkspace = {
     worktree: {
       repo_key: "repo",
-      is_linked_worktree: false,
+      is_linked_worktree: true,
       checkout_path: checkout,
     },
   };
   const hostTopology = {
     source: {
       repo_key: "repo",
-      source_workspace_id: "host",
+      source_workspace_id: "primary",
       source_checkout_path: checkout,
     },
   };
   assert.equal(
-    managerPrimaryCheckout("host", hostWorkspace, hostTopology),
+    managerSourceCheckout("host", hostWorkspace, hostTopology),
     checkout,
   );
   assert.throws(
-    () =>
-      managerPrimaryCheckout("host", hostWorkspace, {
-        source: { ...hostTopology.source, source_workspace_id: "linked" },
-      }),
-    /requires root workspace host to be the primary workspace/,
+    () => managerSourceCheckout("host", {}, hostTopology),
+    /not in a Herdr Git worktree group/,
   );
   assert.throws(
     () =>
-      managerPrimaryCheckout("host", hostWorkspace, {
+      managerSourceCheckout("host", hostWorkspace, {
+        source: { ...hostTopology.source, repo_key: "other" },
+      }),
+    /topology does not match workspace/,
+  );
+  assert.throws(
+    () =>
+      managerSourceCheckout("host", hostWorkspace, {
+        source: { repo_key: "repo" },
+      }),
+    /primary checkout path is unavailable/,
+  );
+  assert.throws(
+    () =>
+      managerSourceCheckout("host", hostWorkspace, {
         source: {
           ...hostTopology.source,
-          source_checkout_path: resolve("/repo/other"),
+          source_checkout_path: "relative/path",
         },
       }),
-    /checkout paths do not match/,
-  );
-  assert.throws(
-    () =>
-      managerPrimaryCheckout("host", hostWorkspace, {
-        source: { repo_key: "repo", source_workspace_id: "host" },
-      }),
-    /source checkout path must be a non-empty absolute path/,
+    /primary checkout path is unavailable/,
   );
 
   assert.deepEqual(managerWorktreeOpenArgs("isolated-root", checkout), [
@@ -612,18 +582,59 @@ test("Manager READY answer follows delivered message even on a separate followUp
   assert.deepEqual(managerReadyAnswer(contents(entries.slice(0, 3)), lead), {
     receipt: false,
     answer: null,
+    prematureReady: true,
+    prematureFinish: false,
   });
   assert.deepEqual(managerReadyAnswer(contents(entries.slice(0, 5)), lead), {
     receipt: true,
     answer: null,
+    prematureReady: true,
+    prematureFinish: false,
   });
+  const noPrematureAnswer = entries.filter((entry) => entry.id !== "premature");
+  assert.deepEqual(
+    managerReadyAnswer(contents(noPrematureAnswer.slice(0, 3)), lead),
+    {
+      receipt: true,
+      answer: null,
+      prematureReady: false,
+      prematureFinish: false,
+    },
+  );
   assert.equal(
-    managerReadyAnswer(contents(entries), lead).answer?.id,
+    managerReadyAnswer(contents(noPrematureAnswer), lead).answer?.id,
     "answer",
+  );
+  assert.equal(
+    managerReadyAnswer(contents(entries), lead).prematureReady,
+    true,
   );
   assert.equal(
     managerReadyAnswer(contents(entries), "wrong-lead").answer,
     null,
+  );
+  const prematureFinish = [
+    ...noPrematureAnswer.slice(0, 4),
+    {
+      type: "message",
+      id: "finish-call",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "finish-tool-call",
+            name: "staff_message",
+            arguments: { message: "MANAGER_RECOVERY_FINISH" },
+          },
+        ],
+      },
+    },
+    ...noPrematureAnswer.slice(4),
+  ];
+  assert.equal(
+    managerReadyAnswer(contents(prematureFinish), lead).prematureFinish,
+    true,
   );
 });
 

@@ -119,7 +119,7 @@ const ownershipResult = (
   },
 });
 
-test("Manager retry correlates an ambiguous worktree create by persisted branch", async () => {
+test("Manager retry correlates an ambiguous worktree create by persisted branch", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
   process.env.HERDR_TAB_ID = "root-tab";
@@ -127,6 +127,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     tmpdir(),
     `delegate-recovery-${randomUUID()}.sock`,
   );
+  const socketPath = process.env.HERDR_SOCKET_PATH;
   const childWorkspace = `child-${randomUUID()}`;
   let childSession = "";
   let topologyCreated = false;
@@ -469,6 +470,76 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       )?.phase,
       "active",
       "Manager leave must retain assignment ownership until completion",
+    );
+
+    setLeadEnvironment();
+    process.env.HERDR_PANE_ID = "child-pane";
+    process.env.HERDR_SOCKET_PATH = socketPath;
+    writeLeadCoordinationState(supervisionRuntime(), {
+      version: 1,
+      role: "lead",
+      instanceId: randomUUID(),
+      piSessionId: childSession,
+      updatedAt: Date.now(),
+    });
+    const leadPi = fakeChiefPi({ activeTools: ["read"], exec });
+    registerExtension!(leadPi.pi as never);
+    const leadContext = fakeContext() as any;
+    leadContext.sessionManager = {
+      ...leadContext.sessionManager,
+      getSessionId: () => childSession,
+      getSessionFile: () => `/tmp/${childSession}.jsonl`,
+    };
+    await leadPi.events.get("session_start")![0](undefined, leadContext);
+    const resultTool = leadPi.tools.find(
+      (tool) => tool.name === "supervisor_result",
+    )!;
+    const result = await resultTool.execute(
+      "result",
+      { result: "finished without a Manager" },
+      undefined,
+      undefined,
+      leadContext,
+    );
+    assert.equal(result.details.queued, false);
+    assert.ok(
+      listProjectAssignments(supervisionRuntime(), WORKSPACE).some(
+        (assignment) => assignment.id === pending.id,
+      ),
+    );
+    assert.match(
+      readFileSync(resultPath(childSession), "utf8"),
+      /finished without a Manager/,
+    );
+    await leadPi.events.get("session_shutdown")?.[0]();
+
+    process.env.HERDR_PANE_ID = "root-pane";
+    process.env.HERDR_TAB_ID = "root-tab";
+    await pi.commandOptions.get("manager").handler("", ctx);
+    await pi.events.get("before_agent_start")![0](
+      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+      ctx,
+    );
+    await t.waitFor(
+      () => {
+        assert.ok(
+          pi.sent.some(
+            (message: any) =>
+              message?.customType === "pi-herdsman-report_result" &&
+              JSON.stringify(message).includes("finished without a Manager"),
+          ),
+        );
+        assert.ok(
+          !listProjectAssignments(supervisionRuntime(), WORKSPACE).some(
+            (assignment) => assignment.id === pending.id,
+          ),
+        );
+      },
+      { timeout: 3000 },
+    );
+    assert.match(
+      readFileSync(resultPath(childSession), "utf8"),
+      /finished without a Manager/,
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
