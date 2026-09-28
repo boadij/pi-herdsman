@@ -187,7 +187,7 @@ process.stdin.on("end", () => {
 }
 
 test(
-  "installer reconciles the released stack and repeat runs skip matching components",
+  "installer migrates a pinned Herdsman source and repeat runs skip matching components",
   { skip: process.platform === "win32" },
   () => {
     const setup = fixture();
@@ -213,10 +213,7 @@ test(
           "u",
         ),
       );
-      assert.match(
-        firstLog,
-        /pi install npm:pi-herdsman --no-approve/u,
-      );
+      assert.match(firstLog, /pi install npm:pi-herdsman --no-approve/u);
       assert.match(firstLog, /herdr integration install pi/u);
       assert.match(
         firstLog,
