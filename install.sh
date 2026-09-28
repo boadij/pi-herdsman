@@ -134,11 +134,12 @@ if (major < 22 || (major === 22 && minor < 19)) process.exit(1);
   fi
 
   if pi list --no-approve 2>/dev/null |
-    grep -F "npm:$PACKAGE@$herdsman_version" >/dev/null 2>&1; then
+    awk '{ print $1 }' |
+    grep -Fx "npm:$PACKAGE" >/dev/null 2>&1; then
     log "Pi Herdsman $herdsman_version already installed"
   else
     log "installing Pi Herdsman $herdsman_version"
-    pi install "npm:$PACKAGE@$herdsman_version" --no-approve
+    pi install "npm:$PACKAGE" --no-approve
   fi
 
   log "installing Herdr Pi integration"
