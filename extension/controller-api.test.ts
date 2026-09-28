@@ -825,6 +825,8 @@ async function runManagerStartupScenario(
   };
   const pi = fakeChiefPi({ activeTools: ["read"], exec });
   registerExtension!(pi.pi as never);
+  if (mode === "active-result-periodic")
+    t!.mock.timers.enable({ apis: ["setInterval"] });
   try {
     const ctx = fakeContext() as any;
     ctx.isProjectTrusted = () => projectTrusted;
@@ -911,24 +913,18 @@ async function runManagerStartupScenario(
     if (activeMode) {
       try {
         if (mode === "active-result-periodic") {
-          await t!.waitFor(
-            () => {
-              assert.equal(
-                listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]
-                  ?.phase,
-                "settling",
-              );
-              assert.ok(
-                listChiefMessagePaths(
-                  supervisionRuntime(),
-                  LEAD_SESSION_ID,
-                ).some(
-                  (path) => readChiefMessage(path).kind === "report_result",
-                ),
-              );
-            },
-            { timeout: 5000 },
-          );
+          t!.mock.timers.tick(2000);
+          await t!.waitFor(() => {
+            assert.equal(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
+              "settling",
+            );
+            assert.ok(
+              listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
+                (path) => readChiefMessage(path).kind === "report_result",
+              ),
+            );
+          });
         } else if (mode === "active-live" || mode === "settling")
           await assert.rejects(
             execute(),
