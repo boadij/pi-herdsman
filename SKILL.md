@@ -483,6 +483,10 @@ Pi Herdsman uses one durable vocabulary:
 - a **Manager** explicitly assumes dedicated project coordination from that
   group's primary workspace, has no `agent` capability, and does not own Leads'
   Agents; delegated implementation belongs to Leads and their Agent trees;
+- a Manager recovers a `creating`, `starting`, or proven-not-live `active` project
+  assignment with `staff_delegate assignment=<id>` alone; a live Lead is not
+  restarted, a durable result settles without restart, and `settling` is not
+  executor recovery;
 - a **herd** is one Lead and the complete Agent tree it owns;
 - a **Lead** owns its Agents and reports upward to its active project Manager,
   or Chief when no Manager is active;

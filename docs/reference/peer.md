@@ -6,23 +6,23 @@
 
 ## Presence and identity
 
-An ordinary Lead publishes one private `PeerLeadRecord` under the
-user-global `runtime/peers-v1/peers/` directory beneath the Herdsman data root.
+An ordinary Lead or active Manager publishes one private peer record under the
+user-global `runtime/peers-v2/peers/` directory beneath the Herdsman data root.
 This peer runtime is independent of the socket-scoped supervision runtime, so
-ordinary Leads attached to different Herdr sockets share peer discovery and
+same-role coordinators attached to different Herdr sockets share peer discovery and
 transport. The record publishes the exact Pi session, Herdr pane, tab,
-workspace, and current Lead cwd with the `{ pid, id }` claim for that Lead's
+workspace, and current coordinator cwd with the `{ pid, id }` claim for that session's
 per-session process lock immediately. The current session name, repository,
 branch, and workspace label are optional presentation metadata; repository,
-branch, and workspace label are enriched asynchronously without delaying Lead
-startup or Chief leave. Peer cwd is always the Lead's current `ctx.cwd`, never
+branch, and workspace label are enriched asynchronously without delaying coordination
+startup. Peer cwd is always the session's current `ctx.cwd`, never
 a Herdr provenance or source-checkout path. The record is
 valid only while the record's claim is the exact live process-lock generation.
 Missing, malformed, duplicate, replaced, or dead-lock evidence is ignored.
-Chief and suspended Lead sessions do not publish peer presence. Enumeration
+Chief and suspended sessions do not publish peer presence. Enumeration
 scans every canonical filename in the global registry, then filters malformed
 or dead records; one stale record does not hide later live peers.
-An ordinary Lead withdraws peer presence whenever its current Lead coordination
+The coordinator withdraws peer presence whenever its current coordination
 generation becomes unhealthy. Successful durable recovery republishes a fresh
 presence generation rather than reviving the prior claim.
 
@@ -33,13 +33,13 @@ reread of the captured sender and target generations immediately before
 writing. Presentation-only enrichment does not invalidate a message, and a
 replacement process-lock claim observed by that reread rejects it. The target's
 held presence lock and the inbox message lock are separate, so a replacement
-can race after the reread. Delivery validates the current ordinary-Lead target
+can race after the reread. Delivery validates the current same-role target
 record and target structure only. Managed agents, Chief sessions, display
 labels, and metadata are never peer targets.
 
 ## Peer tools
 
-The Lead-only tools are `peer_list` and `peer_message`.
+Ordinary Leads and active Managers have `peer_list` and `peer_message`.
 
 ```json
 {}

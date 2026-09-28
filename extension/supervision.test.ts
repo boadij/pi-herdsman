@@ -1844,6 +1844,7 @@ test("project assignments are strict, private, bounded, and removable", () => {
     primaryWorkspaceId: "root",
     repoKey: "repo",
     base: "HEAD",
+    branch: "herdsman/test",
     text: "task",
     phase: "creating" as const,
     createdAt: 1,
@@ -1864,6 +1865,40 @@ test("project assignments are strict, private, bounded, and removable", () => {
     readProjectAssignment(runtime, "root", assignment.id),
     assignment,
   );
+  const placement = { workspaceId: "child", tabId: "tab", paneId: "pane" };
+  for (const invalid of [
+    { branch: undefined },
+    { workspaceId: "child" },
+    { leadSessionId: assignment.id },
+    { phase: "starting" },
+    { phase: "starting", workspaceId: "child" },
+    { phase: "starting", ...placement, leadSessionId: assignment.id },
+    { phase: "active" },
+    { phase: "active", ...placement },
+    { phase: "active", ...placement, leadSessionId: id() },
+    { phase: "settling" },
+    { phase: "settling", ...placement },
+    { phase: "settling", ...placement, leadSessionId: id() },
+  ])
+    assert.throws(
+      () =>
+        writeProjectAssignment(runtime, { ...assignment, ...invalid } as never),
+      /Invalid project assignment/,
+    );
+  for (const phase of ["starting", "active", "settling"] as const) {
+    const valid = {
+      ...assignment,
+      phase,
+      ...placement,
+      ...(phase !== "starting" ? { leadSessionId: assignment.id } : {}),
+    };
+    writeProjectAssignment(runtime, valid);
+    assert.deepEqual(
+      readProjectAssignment(runtime, "root", assignment.id),
+      valid,
+    );
+  }
+  writeProjectAssignment(runtime, assignment);
   assert.throws(() =>
     writeProjectAssignment(runtime, { ...assignment, extra: true } as never),
   );

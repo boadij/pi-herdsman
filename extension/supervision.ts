@@ -1672,13 +1672,13 @@ export type ProjectAssignment = {
   primaryWorkspaceId: string;
   repoKey: string;
   base: string;
+  branch: string;
   text: string;
   phase: "creating" | "starting" | "active" | "settling";
   workspaceId?: string;
   paneId?: string;
   tabId?: string;
   leadSessionId?: string;
-  branch?: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -1707,18 +1707,26 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     "primaryWorkspaceId",
     "repoKey",
     "base",
+    "branch",
     "text",
     "phase",
     "createdAt",
     "updatedAt",
   ];
-  const optional = [
-    "workspaceId",
-    "paneId",
-    "tabId",
-    "leadSessionId",
-    "branch",
-  ];
+  const optional = ["workspaceId", "paneId", "tabId", "leadSessionId"];
+  const placementKeys = ["workspaceId", "paneId", "tabId"] as const;
+  const hasPlacement = placementKeys.every((key) =>
+    validNativeIdentity(r[key]),
+  );
+  const hasNoPlacement = placementKeys.every((key) => r[key] === undefined);
+  const phaseValid =
+    r.phase === "creating"
+      ? hasNoPlacement && r.leadSessionId === undefined
+      : r.phase === "starting"
+        ? hasPlacement && r.leadSessionId === undefined
+        : (r.phase === "active" || r.phase === "settling") &&
+          hasPlacement &&
+          r.leadSessionId === r.id;
   return (
     required.every((key) => Object.hasOwn(r, key)) &&
     Object.keys(r).every(
@@ -1729,9 +1737,10 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     validNativeIdentity(r.primaryWorkspaceId) &&
     validNativeIdentity(r.repoKey) &&
     validNativeIdentity(r.base) &&
+    validNativeIdentity(r.branch) &&
     typeof r.text === "string" &&
     r.text.length > 0 &&
-    ["creating", "starting", "active", "settling"].includes(String(r.phase)) &&
+    phaseValid &&
     optional.every(
       (key) => !Object.hasOwn(r, key) || validNativeIdentity(r[key]),
     ) &&

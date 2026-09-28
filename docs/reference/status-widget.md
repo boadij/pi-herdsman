@@ -23,7 +23,7 @@ means selected, `!` means `needs_you`, `●` means working, `◐` means blocked,
 `◉`. Workspace labels are presentation text inside each lead row, not
 additional hierarchy nodes. The widget always retains
 attention reports, caps ordinary reports, and shows omitted reports in a final
-`└─ … N more · /chief` row.
+`└─ … N more · /chief` or `└─ … N more · /manager` row, according to the active role.
 
 ## Installation
 

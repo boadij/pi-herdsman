@@ -145,7 +145,8 @@ roster or Lead-owned Agent recovery. `/manager leave` is refused while project
 assignments, asks addressed to the Manager, or the Manager's own pending ask
 to Chief remain outstanding; otherwise it
 relinquishes the lease and restores the exact Lead tool baseline, including
-`agent`, and Lead instruction profile. See
+`agent`, and Lead instruction profile. Invoking `/manager` while already active
+opens the overview without changing the role or lease. See
 [Supervision](supervision.md) for the role and project boundaries.
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.

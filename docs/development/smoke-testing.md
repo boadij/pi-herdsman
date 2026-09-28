@@ -304,6 +304,25 @@ After every smoke:
 
 ## Project Manager / Chief supervision live matrix
 
+For Manager lifecycle acceptance, use the configured smoke model above in
+disposable real Pi/Herdr sessions. Record the assignment ID, branch, workspace,
+pane, Pi session ID, and exact-ID cleanup result for each sequence:
+
+1. From an ordinary Lead in the primary workspace, activate `/manager` and
+   `staff_delegate` a bounded task. Verify a real linked worktree and child
+   Lead, then have that Lead call `supervisor_result`. Verify the Manager
+   receives `report_result`, the assignment is removed, the canonical result
+   remains, and `/manager leave` succeeds.
+2. Activate `/manager` and delegate another task. Once the assignment is
+   `active`, terminate only its delegated Pi process, leaving its checkout
+   available. Call `staff_delegate assignment=<same id>`. Verify the same
+   assignment, branch, and Pi session resume without another checkout; have
+   the Lead complete with `supervisor_result`, and verify the assignment is
+   removed after accepted delivery.
+
+These are manual acceptance checks, not automated smoke scenarios or claims
+that a run passed. Clean up only disposable resources by exact identity.
+
 The manual checks below are **NOT RUN**, not claims of failure or success.
 Automated live scenario results are separate and do not replace these checks.
 

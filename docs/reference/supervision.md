@@ -226,7 +226,7 @@ the usual cross-session forwarding form through `files`.
 
 ### `staff_delegate`
 
-Only an active Manager delegates a new project assignment. Provide a non-empty `task` and optional `branch`, `base`, and `files` (not a target `session`); omit `branch` to use the generated assignment branch.
+Only an active Manager delegates a new project assignment. Provide a non-empty `task` and optional `branch`, `base`, and `files` (not a target `session`); omit `branch` to use the generated assignment branch. For recovery, provide only `assignment` with the exact persisted assignment ID (an empty `files` list is also accepted). Do not combine recovery with fresh-delegation inputs.
 
 If `base` is omitted, the `HEAD` ref token is persisted before creation; it is not resolved to an immutable commit. Herdr determines the linked-worktree workspace path and label. Manager coordinates exactly one Herdr worktree group from its primary workspace. A delegated branch gets a linked Git worktree and linked-worktree workspace, but multiple Leads may share a workspace; one workspace does not imply one worktree. The Manager uses the exact returned workspace, tab, and pane identities and the normal bounded shell-readiness and ownership checks before starting Pi. It launches Pi with the assignment UUID as `--session-id` and verifies one exact-pane candidate with Lead coordination state under that expected session ID. Herdr must report a session identity; if it resolves, it must match the assignment ID. Pi may expose a session path before its initial JSONL file exists; this expected startup state does not block verification while the Lead state is published. Manager-created Leads inherit the Manager session's `ctx.isProjectTrusted()` decision for that run: a trusted Manager passes `--approve`, while an untrusted Manager passes `--no-approve`. Pi's trust-protected project resources are available only in the trusted case; `--no-approve` skips those protected resources without implying that all project-local files are skipped. This does not modify Pi's persistent trust store or elevate trust beyond the Manager's current decision. On success it returns assignment ID, exact Lead session ID, workspace ID, and branch. There is no caller-selected cwd, pane, Agent definition, focus, review, or merge policy. The linked-worktree workspace remains after completion.
 
@@ -238,11 +238,13 @@ handle them locally rather than echoing them through `supervisor`, which a
 Manager uses only for its own escalation to Chief. Manager `staff list` reports
 assignment branch names (without task text).
 
-An uncertain external creation result is reconciled only by an explicit recovery request with no new delegation inputs:
+Use an explicit recovery request with no new delegation inputs for `creating`, `starting`, or `active` assignments:
 
 ```json
 { "assignment": "<exact unresolved assignment ID>" }
 ```
+
+An `active` assignment with a live Lead cannot be recovered; coordinate with that Lead instead. If its canonical `result:<assignment-id>` already exists, recovery moves it to `settling` without restarting the Lead. A `settling` assignment cannot be recovered as execution; its durable result is reconciled with the Manager. If an `active` assignment's worktree has definitively vanished, recovery retires the assignment and releases its branch reservation; delegate fresh work explicitly instead. A closed workspace for an existing worktree is reopened using Herdr's returned placement, without creating a second checkout. Unknown or conflicting evidence fails closed. While the Manager is active, reconciliation retries durable result delivery and removes the assignment only after accepted delivery; the result artifact remains.
 
 ### `staff_reply`
 
@@ -261,6 +263,6 @@ lease must validate. The pending ask is cleared only after accepted delivery.
 canonical-ref semantics. Report activity returns asynchronously; continue only
 independent coordination work, otherwise end the turn and do not poll.
 
-## `/chief` and display
+## `/manager`, `/chief`, and display
 
-From an eligible ordinary Lead, `/manager` enters Manager mode; `/manager leave` returns to Lead. From an eligible Lead, `/chief` activates Chief; when already Chief it opens the interactive overview. `/chief leave` exits after confirmation where UI is available. A Chief can focus only its exact direct reports. Attention (`needs_you`) is separate from lifecycle; descendant summaries are observational only. A Manager cannot activate Chief. The status and overview are not authority: every action revalidates the exact direct-report identity and current lease.
+From an eligible ordinary Lead, `/manager` enters Manager mode; when already Manager it opens the interactive overview. `/manager leave` returns to Lead. From an eligible Lead, `/chief` activates Chief; when already Chief it opens the interactive overview. `/chief leave` exits after confirmation where UI is available. Supervisors can focus only their exact direct reports. Attention (`needs_you`) is separate from lifecycle; descendant summaries are observational only. A Manager cannot activate Chief. The status and overview are not authority: every action revalidates the exact direct-report identity and current lease.

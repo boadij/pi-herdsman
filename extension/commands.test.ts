@@ -377,6 +377,35 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
       "manager",
     );
+    const managerLeaseId = readManagerDescriptor(
+      supervisionRuntime(),
+      WORKSPACE,
+    )?.leaseId;
+    const activeManagerTools = first.pi.getActiveTools();
+    let overviewOpened = false;
+    ctx1.mode = "tui";
+    ctx1.ui.custom = async (factory: any) =>
+      new Promise((resolve) => {
+        const component = factory(
+          { requestRender: () => undefined },
+          {
+            fg: (_color: string, value: string) => value,
+            bold: (value: string) => value,
+          },
+          {},
+          resolve,
+        );
+        overviewOpened = true;
+        assert.match(component.render(120).join("\n"), /Pi Herdsman/);
+        component.handleInput("\u001b");
+      });
+    await first.commandOptions.get("manager").handler("", ctx1);
+    assert.equal(overviewOpened, true);
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
+      managerLeaseId,
+    );
+    assert.deepEqual(first.pi.getActiveTools(), activeManagerTools);
     await first.commandOptions.get("manager").handler("leave", ctx1);
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
     assert.equal(
