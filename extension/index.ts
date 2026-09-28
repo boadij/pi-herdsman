@@ -8459,10 +8459,38 @@ export default function (pi: ExtensionAPI): void {
   ): Promise<string> => {
     if (controllerRole !== "manager" || !managerLease)
       throw new Error("Manager mode is not active");
-    if (pendingSupervisorAsk)
-      throw new Error(
-        "Cannot leave Manager while a supervisor ask remains unresolved",
-      );
+    if (pendingSupervisorAsk) {
+      assertCurrentLeadCoordination(ctx);
+      const chief = await currentChiefAuthority(ctx);
+      let chiefAbsent = false;
+      if (!chief) {
+        const runtime = supervisionRuntime();
+        try {
+          statSync(runtime.descriptor);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          try {
+            statSync(runtime.lock);
+          } catch (lockError) {
+            if ((lockError as NodeJS.ErrnoException).code !== "ENOENT")
+              throw lockError;
+            chiefAbsent = true;
+          }
+        }
+      }
+      if (
+        !chiefAbsent &&
+        (!chief ||
+          askMatchesSupervisor(pendingSupervisorAsk, {
+            piSessionId: chief.piSessionId,
+            leaseId: chief.leaseId,
+            role: "chief",
+          }))
+      )
+        throw new Error(
+          "Cannot leave Manager while a supervisor ask remains unresolved",
+        );
+    }
     const assignments = listProjectAssignments(
       supervisionRuntime(),
       managerLease.descriptor.workspaceId,

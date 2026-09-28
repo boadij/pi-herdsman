@@ -517,6 +517,130 @@ test("Manager replacement can leave with an ask bound to its old lease", async (
   }
 });
 
+test("Manager leave retains a Chief-bound ask after the Chief departs", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "manager-pane";
+  process.env.HERDR_TAB_ID = "manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-chief-ask-${randomUUID()}.sock`,
+  );
+  const chiefId = `chief-${randomUUID()}`;
+  const chiefAgent = {
+    pane_id: "chief-pane",
+    tab_id: "chief-tab",
+    workspace_id: WORKSPACE,
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: chiefId,
+    },
+  };
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const lease = claimChiefLease({
+    piSessionId: chiefId,
+    paneId: chiefAgent.pane_id,
+    tabId: chiefAgent.tab_id,
+    workspaceId: WORKSPACE,
+  });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec: (_command, args) =>
+      args[0] === "workspace" && args[1] === "get"
+        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        : args[0] === "worktree" && args[1] === "list"
+          ? respond({
+              source: { source_workspace_id: WORKSPACE, repo_key: "repo-key" },
+              worktrees: [],
+            })
+          : isAgentList(args)
+            ? respond({ agents: [chiefAgent] })
+            : args[0] === "agent" && args[1] === "get"
+              ? respond({ agent: chiefAgent })
+              : isApiSnapshot(args)
+                ? respond({
+                    snapshot: { agents: [chiefAgent], panes: [chiefAgent] },
+                  })
+                : respond({}),
+  });
+  const ctx = fakeContext(
+    [],
+    [
+      {
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", name: "supervisor_ask" }],
+        },
+      },
+    ],
+  ) as any;
+  const notices: string[] = [];
+  ctx.ui.notify = (message: string) => notices.push(message);
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get("manager").handler("", ctx);
+    await pi.tools
+      .find((tool) => tool.name === "supervisor_ask")!
+      .execute("ask", { question: "Decision?" }, undefined, undefined, ctx);
+    const ask = readLeadCoordinationState(
+      supervisionRuntime(),
+      ctx.sessionManager.getSessionId(),
+    )?.pendingAsk;
+    assert.equal(ask?.supervisorLeaseId, lease.descriptor.leaseId);
+
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    assert.ok(
+      notices.some((message) =>
+        /supervisor ask remains unresolved/.test(message),
+      ),
+    );
+    assert.ok(readManagerDescriptor(supervisionRuntime(), WORKSPACE));
+
+    const descriptorPath = supervisionRuntime().descriptor;
+    const descriptor = readFileSync(descriptorPath, "utf8");
+    writeFileSync(descriptorPath, "invalid descriptor");
+    try {
+      const before = notices.length;
+      await pi.commandOptions.get("manager").handler("leave", ctx);
+      assert.ok(
+        notices
+          .slice(before)
+          .some((message) => /supervisor ask remains unresolved/.test(message)),
+      );
+      assert.ok(readManagerDescriptor(supervisionRuntime(), WORKSPACE));
+    } finally {
+      writeFileSync(descriptorPath, descriptor);
+    }
+
+    lease.release();
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+      undefined,
+    );
+    assert.deepEqual(
+      readLeadCoordinationState(
+        supervisionRuntime(),
+        ctx.sessionManager.getSessionId(),
+      )?.pendingAsk,
+      ask,
+    );
+  } finally {
+    lease.release();
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("Manager leave retains its lease and role when persistence fails", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "manager-pane";
