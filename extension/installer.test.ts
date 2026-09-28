@@ -57,7 +57,7 @@ function fixture({ badChecksum = false } = {}) {
   writeFileSync(log, "");
   writeFileSync(piVersion, "0.1.0\n");
   writeFileSync(herdrVersion, "0.1.0\n");
-  writeFileSync(piList, "");
+  writeFileSync(piList, `  npm:pi-herdsman@${packageJson.version}\n`);
 
   executable(
     herdrAsset,
@@ -120,7 +120,7 @@ case "\${1:-}" in
   list) cat "$FAKE_PI_LIST" ;;
   install)
     printf 'pi %s\\n' "$*" >> "$FAKE_LOG"
-    printf '  npm:pi-herdsman@%s\\n' "$FAKE_HERDSMAN_VERSION" > "$FAKE_PI_LIST"
+    printf '  %s\\n' "$2" > "$FAKE_PI_LIST"
     ;;
 esac
 `,
@@ -182,13 +182,12 @@ process.stdin.on("end", () => {
       FAKE_HERDR_ASSET: herdrAsset,
       FAKE_PI_TARGET: packageJson.piHerdsman.runtime.pi,
       FAKE_HERDR_TARGET: packageJson.piHerdsman.runtime.herdr.version,
-      FAKE_HERDSMAN_VERSION: packageJson.version,
     },
   };
 }
 
 test(
-  "installer reconciles the released stack and repeat runs skip matching components",
+  "installer migrates a pinned Herdsman source and repeat runs skip matching components",
   { skip: process.platform === "win32" },
   () => {
     const setup = fixture();
@@ -214,10 +213,7 @@ test(
           "u",
         ),
       );
-      assert.match(
-        firstLog,
-        new RegExp(`pi install npm:pi-herdsman@${packageJson.version} --no-approve`, "u"),
-      );
+      assert.match(firstLog, /pi install npm:pi-herdsman --no-approve/u);
       assert.match(firstLog, /herdr integration install pi/u);
       assert.match(
         firstLog,
