@@ -18,7 +18,9 @@ import {
   nestedPaneInput,
   nestedPaneText,
   submitPaneCommand,
-  parseScenario,
+  parseSmokeArgs,
+  preparePi,
+  resolveSmokeModel,
   runScenario,
 } from "../scripts/smoke.mjs";
 
@@ -62,12 +64,100 @@ test("smoke isolates nested Herdr routing and Pi paths", () => {
   assert.equal(base.HERDR_SESSION, "parent");
 });
 
-test("smoke scenario parsing accepts the three supported scenarios and defaults to core", async () => {
-  assert.equal(parseScenario([]), "core");
+test("smoke CLI parses scenarios and one-off model overrides", async () => {
+  assert.deepEqual(parseSmokeArgs([]), { scenario: "core", model: undefined });
   for (const scenario of ["core", "continuation", "chief-tree"])
-    assert.equal(parseScenario([scenario]), scenario);
-  assert.throws(() => parseScenario(["wat"]), /unknown smoke scenario/);
+    assert.equal(parseSmokeArgs([scenario]).scenario, scenario);
+  assert.deepEqual(
+    parseSmokeArgs(["chief-tree", "--model", "provider/model:high"]),
+    {
+      scenario: "chief-tree",
+      model: "provider/model:high",
+    },
+  );
+  assert.deepEqual(
+    parseSmokeArgs(["--model", "provider/model:xhigh", "continuation"]),
+    {
+      scenario: "continuation",
+      model: "provider/model:xhigh",
+    },
+  );
+  assert.throws(() => parseSmokeArgs(["core", "extra"]));
+  assert.throws(() => parseSmokeArgs(["--unknown"]));
+  assert.throws(() => parseSmokeArgs(["wat"]), /unknown smoke scenario/);
   await assert.rejects(runScenario({}, "wat"), /unknown smoke scenario/);
+});
+
+test("smoke model override wins without reading Git config", async () => {
+  assert.equal(
+    await resolveSmokeModel(" provider/model:high ", async () => {
+      throw new Error("Git config should not be read");
+    }),
+    "provider/model:high",
+  );
+  await assert.rejects(
+    resolveSmokeModel("  ", async () => {
+      throw new Error("Git config should not be read");
+    }),
+    /smoke --model must not be empty/,
+  );
+});
+
+test("smoke model falls back to effective Git config", async () => {
+  const model = await resolveSmokeModel(
+    undefined,
+    async (file, args, options) => {
+      assert.equal(file, "git");
+      assert.deepEqual(args, ["config", "--get", "pi-herdsman.smoke-model"]);
+      assert.ok(options.cwd);
+      return { stdout: "provider/model:xhigh\n", stderr: "", pid: 1 };
+    },
+  );
+  assert.equal(model, "provider/model:xhigh");
+});
+
+test("smoke model requires configuration when no override exists", async () => {
+  const missing = Object.assign(new Error("not found"), { code: 1 });
+  await assert.rejects(
+    resolveSmokeModel(undefined, async () => {
+      throw missing;
+    }),
+    /git config --local pi-herdsman\.smoke-model/,
+  );
+});
+
+test("smoke model propagates Git failures", async () => {
+  const failure = Object.assign(new Error("invalid Git config"), { code: 3 });
+  await assert.rejects(
+    resolveSmokeModel(undefined, async () => {
+      throw failure;
+    }),
+    (error) => error === failure,
+  );
+});
+
+test("smoke auth resolves credentials from the configured model", async () => {
+  const paths = {
+    herdrConfig: "/smoke/herdr.toml",
+    xdgConfig: "/smoke/xdg-config",
+    xdgState: "/smoke/xdg-state",
+    piAgent: "/smoke/pi-agent",
+    piSessions: "/smoke/pi-sessions",
+    authLink: "/smoke/pi-agent/auth.json",
+  };
+  const calls = [];
+  const mechanism = await preparePi(
+    paths,
+    "provider/model:high",
+    async (file, args) => {
+      calls.push([file, args]);
+      return { stdout: "", stderr: "", pid: 1 };
+    },
+  );
+  assert.equal(mechanism, "ambient");
+  assert.deepEqual(calls, [
+    ["pi", ["auth", "check", "--model", "provider/model:high", "--no-refresh"]],
+  ]);
 });
 
 test("chief-tree startup prompt creates one ordinary Lead branch for harness controls", () => {
@@ -315,8 +405,7 @@ test("Chief tree probe is opt-in, last in root extension order, and validates th
   const config = {
     candidateExtension: "/candidate/dist/index.js",
     herdrStateExtension: "/isolated/herdr-agent-state.ts",
-    model: "provider/model",
-    thinking: "high",
+    model: "provider/model:high",
   };
   assert.deepEqual(candidateArgs(config), [
     "--approve",
@@ -330,8 +419,6 @@ test("Chief tree probe is opt-in, last in root extension order, and validates th
     config.herdrStateExtension,
     "--model",
     config.model,
-    "--thinking",
-    config.thinking,
   ]);
   const args = candidateArgs({
     ...config,
@@ -346,8 +433,6 @@ test("Chief tree probe is opt-in, last in root extension order, and validates th
     "/isolated/chief-tree-tools.mjs",
     "--model",
     config.model,
-    "--thinking",
-    config.thinking,
   ]);
   const resultPath = "/tmp/pi-herdsman-smoke/chief-tree-tools.json";
   const source = chiefTreeProbeSource(resultPath);
