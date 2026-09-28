@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   assistantResultForSession,
   chiefTreeFooter,
@@ -346,7 +346,7 @@ test("Manager recovery requires the primary workspace's verified Herdr worktree 
 });
 
 test("Manager recovery uses and verifies the isolated primary checkout", () => {
-  const checkout = "/repo/primary";
+  const checkout = resolve("/repo/primary");
   const hostWorkspace = {
     worktree: {
       repo_key: "repo",
@@ -375,7 +375,10 @@ test("Manager recovery uses and verifies the isolated primary checkout", () => {
   assert.throws(
     () =>
       managerPrimaryCheckout("host", hostWorkspace, {
-        source: { ...hostTopology.source, source_checkout_path: "/repo/other" },
+        source: {
+          ...hostTopology.source,
+          source_checkout_path: resolve("/repo/other"),
+        },
       }),
     /checkout paths do not match/,
   );
