@@ -611,6 +611,15 @@ test("Manager leave retains a Chief-bound ask until its Chief claim is dead", as
 
     const descriptorPath = supervisionRuntime().descriptor;
     const descriptor = readFileSync(descriptorPath, "utf8");
+    unlinkSync(descriptorPath);
+    const beforeMissingDescriptor = notices.length;
+    await pi.commandOptions.get("manager").handler("leave", ctx);
+    assert.ok(
+      notices
+        .slice(beforeMissingDescriptor)
+        .some((message) => /supervisor ask remains unresolved/.test(message)),
+    );
+    assert.ok(readManagerDescriptor(supervisionRuntime(), WORKSPACE));
     writeFileSync(descriptorPath, "invalid descriptor");
     try {
       const before = notices.length;
@@ -653,6 +662,8 @@ test("Manager leave retains a Chief-bound ask until its Chief claim is dead", as
     writeFileSync(descriptorPath, JSON.stringify(staleDescriptor));
     writeFileSync(owner, "invalid claim");
     await blocked();
+    unlinkSync(descriptorPath);
+    await blocked(); // Missing descriptor does not excuse a malformed lock.
     writeFileSync(owner, JSON.stringify(deadClaim));
     await pi.commandOptions.get("manager").handler("leave", ctx);
     assert.equal(

@@ -8467,7 +8467,18 @@ export default function (pi: ExtensionAPI): void {
       if (!chief) {
         const runtime = supervisionRuntime();
         if (!statSync(runtime.descriptor, { throwIfNoEntry: false })) {
-          chiefAbsent = !statSync(runtime.lock, { throwIfNoEntry: false });
+          if (!statSync(runtime.lock, { throwIfNoEntry: false })) {
+            chiefAbsent = true;
+          } else {
+            try {
+              chiefAbsent = !readProcessLockStatus(
+                runtime.lock,
+                "Chief supervision lease",
+              ).live;
+            } catch {
+              // Malformed or unverifiable ownership cannot establish departure.
+            }
+          }
         } else {
           try {
             const descriptor = readChiefDescriptor(runtime.descriptor);
