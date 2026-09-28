@@ -77,7 +77,6 @@ import support, {
   stopSummary,
   testGate,
   visibleWidth,
-  waitForTestCondition,
   agentMailboxPath,
   writeResult,
   writeAgentState,
@@ -537,7 +536,7 @@ test("linked and non-project sessions derive ordinary Lead tools", async () => {
   }
 });
 
-test("Manager delegate persists an exact worktree Lead assignment", async () => {
+test("Manager delegate persists an exact worktree Lead assignment", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
   process.env.HERDR_TAB_ID = "root-tab";
@@ -800,13 +799,16 @@ test("Manager delegate persists an exact worktree Lead assignment", async () => 
     process.env.HERDR_WORKSPACE_ID = WORKSPACE;
     process.env.HERDR_PANE_ID = "root-pane";
     process.env.HERDR_TAB_ID = "root-tab";
-    await waitForTestCondition(
+    await t.waitFor(
       () =>
-        pi.sent.some(
-          (message: any) => message?.customType === "pi-herdsman-report_result",
+        assert.ok(
+          pi.sent.some(
+            (message: any) =>
+              message?.customType === "pi-herdsman-report_result",
+          ),
+          "Manager did not receive the durable Lead result",
         ),
-      "Manager did not receive the durable Lead result",
-      1800,
+      { timeout: 1800 },
     );
     const resultNotification = pi.sent.find(
       (message: any) => message?.customType === "pi-herdsman-report_result",
@@ -1167,7 +1169,7 @@ test("ordinary Lead peer presence disappears in Chief mode and on shutdown", asy
   }
 });
 
-test("coordination failure withdraws peer presence and recovery republishes a fresh generation", async () => {
+test("coordination failure withdraws peer presence and recovery republishes a fresh generation", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   process.env.HERDR_TAB_ID = "lead-tab";
@@ -1277,9 +1279,11 @@ test("coordination failure withdraws peer presence and recovery republishes a fr
     assert.equal(leadStateAttempts, 2);
     assert.equal(rollbackObservedWithdrawal, true);
 
-    await waitForTestCondition(
-      () => !!readPeerLeadRecord(peerRuntime(), sessionId),
-      "healthy Lead did not republish peer presence",
+    await t.waitFor(() =>
+      assert.ok(
+        readPeerLeadRecord(peerRuntime(), sessionId),
+        "healthy Lead did not republish peer presence",
+      ),
     );
 
     const recovered = readPeerLeadRecord(peerRuntime(), sessionId);
@@ -1295,7 +1299,7 @@ test("coordination failure withdraws peer presence and recovery republishes a fr
   }
 });
 
-test("Chief leave restores minimal peer presence before provenance resolves", async () => {
+test("Chief leave restores minimal peer presence before provenance resolves", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   process.env.HERDR_TAB_ID = "lead-tab";
@@ -1368,13 +1372,11 @@ test("Chief leave restores minimal peer presence before provenance resolves", as
     assert.equal(restored.workspaceLabel, undefined);
 
     releaseProvenance.resolve();
-    await waitForTestCondition(() => {
+    await t.waitFor(() => {
       const current = readPeerLeadRecord(runtime, sessionId);
-      return (
-        current?.claim.id === restored.claim.id &&
-        current.workspaceLabel === "fresh-generation"
-      );
-    }, "stale Chief-generation provenance replaced the restored peer presence");
+      assert.equal(current?.claim.id, restored.claim.id);
+      assert.equal(current?.workspaceLabel, "fresh-generation");
+    });
     assert.equal(
       readPeerLeadRecord(runtime, sessionId)?.workspaceLabel,
       "fresh-generation",
@@ -2385,7 +2387,6 @@ test("Chief activation replaces the lead widget and overview selection is intera
   const customCallsBeforePeek = customCalls;
   overview.handleInput(" ");
   await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setTimeout(resolve, 25));
   assert.equal(customCalls, customCallsBeforePeek);
   overview.handleInput("\u001b");
   assert.equal(overviewDone, 0);
@@ -2393,21 +2394,18 @@ test("Chief activation replaces the lead widget and overview selection is intera
   assert.ok(overview);
   overview.handleInput(" ");
   await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setTimeout(resolve, 25));
   overview.handleInput(" ");
   assert.equal(overviewDone, 0);
   await pi.commandOptions.get("chief").handler("", context);
   overview.handleInput(" ");
   await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setTimeout(resolve, 25));
   overview.handleInput("\u0003");
   assert.equal(overviewDone, 1);
   await pi.commandOptions.get("chief").handler("", context);
   assert.ok(overview);
   overview.handleInput("\u001b[B");
   overview.handleInput("\r");
-  await new Promise<void>((resolve) => setTimeout(resolve, 25));
-  assert.equal(overviewDone, 2, notices.join(" | "));
+  await t.waitFor(() => assert.equal(overviewDone, 2, notices.join(" | ")));
   const entriesBeforeCancel = entries.length;
   await pi.commandOptions.get("chief").handler("leave", context);
   assert.match(confirmations[0], /Outstanding supervised lead asks: 1/);
@@ -2691,7 +2689,6 @@ async function openChiefOverview(
   await pi.commandOptions.get("chief").handler("", context);
   await new Promise<void>((resolve) => setImmediate(resolve));
   await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setTimeout(resolve, 25));
   if (populated)
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
@@ -2703,7 +2700,6 @@ async function openChiefOverview(
     await pi.commandOptions.get("chief").handler("", context);
   await new Promise<void>((resolve) => setImmediate(resolve));
   await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setTimeout(resolve, 25));
   return {
     pi,
     context,
@@ -5495,7 +5491,6 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   await pi.events.get("session_start")![0](undefined, context);
   await Promise.resolve();
   await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
   (refreshTimer as () => void)();
   await Promise.resolve();
   await Promise.resolve();
@@ -5662,7 +5657,7 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
   resetAgentMailbox(mailbox);
 });
 
-test("fresh assignment refreshes the widget after validation", async () => {
+test("fresh assignment refreshes the widget after validation", async (t) => {
   setLeadEnvironment();
   const label = "fresh-start-widget-agent";
   const sessionPath = join(
@@ -6011,14 +6006,18 @@ test("fresh assignment refreshes the widget after validation", async () => {
       undefined,
       context,
     );
-    await waitForTestCondition(
-      () => resolveInitialStatus !== undefined,
-      "assignment did not request initial status",
+    await t.waitFor(() =>
+      assert.ok(
+        resolveInitialStatus,
+        "assignment did not request initial status",
+      ),
     );
     resolveInitialStatus!({ stdout: snapshot(true), stderr: "", code: 0 });
-    await waitForTestCondition(
-      () => resolveIntegration !== undefined,
-      "assignment did not reach integration validation",
+    await t.waitFor(() =>
+      assert.ok(
+        resolveIntegration,
+        "assignment did not reach integration validation",
+      ),
     );
     assert.match(widget!.render(160).join("\n"), /herd/);
     resolveIntegration!({
@@ -6026,9 +6025,11 @@ test("fresh assignment refreshes the widget after validation", async () => {
       stderr: "",
       code: 0,
     });
-    await waitForTestCondition(
-      () => releaseInitialHandoff !== undefined,
-      "assignment did not reach initial request handoff",
+    await t.waitFor(() =>
+      assert.ok(
+        releaseInitialHandoff,
+        "assignment did not reach initial request handoff",
+      ),
     );
     const pendingList = await agentTool(pi, "list").execute(
       "id",
@@ -6062,9 +6063,8 @@ test("fresh assignment refreshes the widget after validation", async () => {
       firstStatusAfterValidation >= 0,
       "fresh runtime refresh must occur after validation and before submit validation",
     );
-    await waitForTestCondition(
-      () => widget!.render(160).join("\n").includes("1 working"),
-      "widget did not refresh to working after validation",
+    await t.waitFor(() =>
+      assert.match(widget!.render(160).join("\n"), /1 working/),
     );
     const rendered = widget!.render(160).join("\n");
     assert.match(rendered, /1 working/);
@@ -6085,10 +6085,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
     );
     assert.equal(failed.details.ok, true, JSON.stringify(failed.details));
     assert.equal(pi.sentMessageCalls.length, 1);
-    await waitForTestCondition(
-      () => widget!.render(160).join("\n").includes("herd"),
-      "widget did not refresh after failed submission",
-    );
+    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /herd/));
     assert.match(widget!.render(160).join("\n"), /herd/);
 
     failValidation = true;
@@ -6106,10 +6103,7 @@ test("fresh assignment refreshes the widget after validation", async () => {
       context,
     );
     assert.equal(invalid.details.ok, false);
-    await waitForTestCondition(
-      () => widget!.render(160).join("\n").includes("herd"),
-      "widget did not refresh after failed validation",
-    );
+    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /herd/));
     assert.match(widget!.render(160).join("\n"), /herd/);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();

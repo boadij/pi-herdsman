@@ -61,7 +61,6 @@ import support, {
   startupExecutor,
   testTmpRoot,
   truncateModelText,
-  waitForTestCondition,
   agentMailboxPath,
   writeAsk,
   writeRequest,
@@ -228,7 +227,7 @@ test("combined status reports a completed agent as pending, not active", async (
   }
 });
 
-test("conflicting same-request entries do not suppress an exact combined result", async () => {
+test("conflicting same-request entries do not suppress an exact combined result", async (t) => {
   setLeadEnvironment();
   const child = {
     ...managedState(
@@ -344,9 +343,12 @@ test("conflicting same-request entries do not suppress an exact combined result"
     assert.equal((pi.sent[0] as any).details.activeDirectChildCount, 0);
     assert.equal((pi.sent[0] as any).details.pendingDirectResultCount, 0);
     await pi.events.get("agent_settled")![0](undefined, context);
-    await waitForTestCondition(
-      () => readResult(childMailbox, REQUEST_ID) === undefined,
-      "exact persisted result did not clean up",
+    await t.waitFor(() =>
+      assert.equal(
+        readResult(childMailbox, REQUEST_ID),
+        undefined,
+        "exact persisted result did not clean up",
+      ),
     );
     assert.equal(
       pi.sentMessageCalls.some(
@@ -1254,6 +1256,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
 });
 
 test("recovery requires the official session and retries one failed delivery", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   setLeadEnvironment();
   const label = "recovery-agent";
   const identity = {
@@ -1304,8 +1307,10 @@ test("recovery requires the official session and retries one failed delivery", a
     undefined,
     fakeContext(mismatch.entries),
   );
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  t.mock.timers.tick(250);
+  await Promise.resolve();
   assert.equal(mismatch.sent.length, 0);
+  assert.ok(readResult(mailbox, REQUEST_ID));
   mismatch.events.get("session_shutdown")?.[0]();
 
   resetAgentMailbox(mailbox);
@@ -1349,8 +1354,6 @@ test("recovery requires the official session and retries one failed delivery", a
     },
   });
   registerExtension!(recovering.pi as never);
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   await recovering.events.get("session_start")![0](
     undefined,
     fakeContext(entries),
@@ -1398,7 +1401,6 @@ test("recovery requires the official session and retries one failed delivery", a
   assert.equal(readResult(mailbox, REQUEST_ID), undefined);
   assert.deepEqual(lifecycle.closeOrder, [label]);
   recovering.events.get("session_shutdown")?.[0]();
-  t.mock.timers.reset();
   realFs.rmSync(identity.piSessionFile, { force: true });
 });
 
@@ -1543,7 +1545,6 @@ test("completed and failed one-shot agents converge after durable delivery", asy
     },
   });
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, fakeContext(entries));
@@ -1629,7 +1630,6 @@ test("one-shot close failure retains the result for exact cleanup retry", async 
     },
   });
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, fakeContext(entries));
@@ -1711,7 +1711,6 @@ test("delivered-result cascade retries descendant mailbox cleanup failure", asyn
     },
   });
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, fakeContext(entries));
@@ -1897,7 +1896,7 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
   }
 });
 
-test("settlement redelivers an unpersisted child result in the same session", async () => {
+test("settlement redelivers an unpersisted child result in the same session", async (t) => {
   setLeadEnvironment();
 
   const label = "settled-redelivery-child";
@@ -1963,14 +1962,20 @@ test("settlement redelivers an unpersisted child result in the same session", as
 
     await pi.events.get("agent_settled")![0](undefined, context);
 
-    await waitForTestCondition(
-      () => deliveries === 2,
-      "settlement did not redeliver the lost child result",
+    await t.waitFor(() =>
+      assert.equal(
+        deliveries,
+        2,
+        "settlement did not redeliver the lost child result",
+      ),
     );
 
-    await waitForTestCondition(
-      () => readResult(mailbox, REQUEST_ID) === undefined,
-      "redelivered child result did not clean up",
+    await t.waitFor(() =>
+      assert.equal(
+        readResult(mailbox, REQUEST_ID),
+        undefined,
+        "redelivered child result did not clean up",
+      ),
     );
 
     assert.equal(deliveries, 2);
@@ -2028,7 +2033,6 @@ test("recovered no-live result removal retry never cleans up a replacement", asy
     piSessionFile: `/tmp/${label}-replacement.jsonl`,
   };
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   const removalAttemptsBefore = support.resultRemovalAttempts;
   support.failNextResultRemoval = true;
   try {
@@ -3027,7 +3031,6 @@ test("delivered result remains while agent state is active", async () => {
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, fakeContext(entries));
-    await new Promise((resolve) => setTimeout(resolve, 100));
     assert.ok(readResult(mailbox, REQUEST_ID));
     assert.equal(
       pi.sentMessageCalls.some(
@@ -3037,7 +3040,6 @@ test("delivered result remains while agent state is active", async () => {
       false,
     );
     await pi.events.get("session_start")![0](undefined, fakeContext(entries));
-    await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(
       pi.sentMessageCalls.some(
         ({ message }) =>
@@ -3211,7 +3213,6 @@ test("accepted result delivery survives session identity failure in status guida
     },
   });
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
@@ -3273,7 +3274,6 @@ test("result is removed after agent state reaches completed", async (t) => {
   });
   registerExtension!(pi.pi as never);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   await pi.events.get("session_start")![0](undefined, fakeContext(entries));
   await Promise.resolve();
   await Promise.resolve();
@@ -3348,7 +3348,6 @@ test("result is removed after agent state reaches completed", async (t) => {
 
 test("live result cleanup keeps a later request owned by the mailbox", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   for (const durableSecondResult of [false, true]) {
     setLeadEnvironment();
     const label = `root-result-race-${durableSecondResult ? "result" : "request"}`;
@@ -3446,7 +3445,6 @@ test("live result cleanup keeps a later request owned by the mailbox", async (t)
 
 test("lost result cleanup keeps a later request owned by the mailbox", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   for (const durableSecondResult of [false, true]) {
     setLeadEnvironment();
     const label = `lost-result-race-${durableSecondResult ? "result" : "request"}`;
@@ -4087,7 +4085,6 @@ test("stale scanner starts immediately, reschedules, deduplicates, and retries f
   });
   registerExtension!(pi.pi as never);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   await pi.events.get("session_start")![0](undefined, fakeContext());
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
@@ -4272,7 +4269,6 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   const parent = managedState("stale-parent");
   const child = {
     ...managedState("stale-child", REQUEST_ID, recoveryIdentity("stale-child")),
@@ -4646,7 +4642,6 @@ test("stale working parents remain visible while waiting parents project blocked
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   const parent = {
     ...managedState(
       "stale-working-parent",
@@ -4803,7 +4798,6 @@ test("health attention stays idle-only and does not queue resolved stale work", 
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   const label = "busy-health-agent";
   const identity = recoveryIdentity(label);
   const mailbox = agentMailboxPath(WORKSPACE, label);
@@ -4898,7 +4892,6 @@ test("physical unknown attention is one-shot and fail-closed", async (t) => {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   const label = "unknown-health-agent";
   const identity = recoveryIdentity(label);
   const mailbox = agentMailboxPath(WORKSPACE, label);
@@ -4946,7 +4939,6 @@ test("delivered owner asks repeat without duplicating first delivery", async (t)
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   const label = "repeat-owner-ask";
   const identity = recoveryIdentity(label);
   const state = {
@@ -5138,7 +5130,6 @@ test("health reconciliation publishes at most one attention per scan", async (t)
   });
   registerExtension!(pi.pi as never);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   await pi.events.get("session_start")![0](undefined, fakeContext());
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
@@ -5217,7 +5208,6 @@ test("lost managed agents remain visible and repeatedly notify their owner", asy
     exec: lifecycle.exec,
   });
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, fakeContext());
@@ -6259,7 +6249,6 @@ test("stale scanner keeps one inventory in flight and retries rejection", async 
   });
   registerExtension!(pi.pi as never);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   await pi.events.get("session_start")![0](undefined, fakeContext());
   await Promise.resolve();
   await new Promise((resolve) => setImmediate(resolve));
@@ -6346,7 +6335,6 @@ test("stale scanner shutdown invalidates old inventory generation", async (t) =>
   });
   registerExtension!(pi.pi as never);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
   await pi.events.get("session_start")![0](undefined, fakeContext());
   await Promise.resolve();
   t.mock.timers.tick(30_000);

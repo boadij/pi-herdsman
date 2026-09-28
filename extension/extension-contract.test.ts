@@ -66,7 +66,6 @@ import support, {
   skillBlock,
   startupExecutor,
   testTmpRoot,
-  waitForTestCondition,
   agentMailboxPath,
   writeRequest,
   writeAsk,
@@ -891,7 +890,7 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
   }
 });
 
-test("peer provenance enrichment never replaces the Lead cwd", async () => {
+test("peer provenance enrichment never replaces the Lead cwd", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   process.env.HERDR_TAB_ID = "lead-tab";
@@ -960,15 +959,13 @@ test("peer provenance enrichment never replaces the Lead cwd", async () => {
 
     await starting;
     releaseWorktree.resolve();
-    await waitForTestCondition(() => {
+    await t.waitFor(() => {
       const record = readPeerLeadRecord(runtime, sessionId);
-      return (
-        record?.cwd === context.cwd &&
-        record.repo === "pi-herdsman" &&
-        record.branch === "feature/linked" &&
-        record.workspaceLabel === "pi-herdsman/feature/linked"
-      );
-    }, "linked-worktree provenance did not enrich peer presence");
+      assert.equal(record?.cwd, context.cwd);
+      assert.equal(record.repo, "pi-herdsman");
+      assert.equal(record.branch, "feature/linked");
+      assert.equal(record.workspaceLabel, "pi-herdsman/feature/linked");
+    });
     const enriched = readPeerLeadRecord(runtime, sessionId);
     assert.equal(enriched?.cwd, context.cwd);
     assert.equal(enriched?.repo, "pi-herdsman");
@@ -2051,7 +2048,7 @@ test("a replacement chief never falls back to the previous session supervision",
   }
 });
 
-test("an obsolete background supervision refresh cannot publish after chief transition", async () => {
+test("an obsolete background supervision refresh cannot publish after chief transition", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -2154,7 +2151,7 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     const command = pi.commandOptions.get("chief");
     assert.ok(command);
     const background = command.handler("", context);
-    await waitForTestCondition(() => releaseBlocked !== undefined);
+    await t.waitFor(() => assert.ok(releaseBlocked, "refresh did not start"));
 
     sessionId = chiefB;
     await sessionStart(undefined, context);
@@ -2284,7 +2281,8 @@ test("Chief supervision context is persistent, deduplicated, and compaction-awar
   }
 });
 
-test("Chief preflight gate defers idle inbox delivery until agent_start", async () => {
+test("Chief preflight gate defers idle inbox delivery until agent_start", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -2391,7 +2389,7 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
 
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    assert.equal(realFs.existsSync(runtime.descriptor), true);
     const descriptor = JSON.parse(readFileSync(runtime.descriptor, "utf8")) as {
       leaseId: string;
     };
@@ -2422,12 +2420,15 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
       { systemPromptOptions: { contextFiles: [] } },
       context,
     );
-    await waitForTestCondition(
-      () => refreshStarted === 2,
+    assert.equal(
+      refreshStarted,
+      2,
       "Overlapping Chief preflights did not start",
     );
     assert.equal(context.isIdle(), true);
-    await new Promise<void>((resolve) => setTimeout(resolve, 650));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(500);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sentMessageCalls.length, 0);
     assert.equal(
       listChiefMessagePaths(runtime, chiefId).some(
@@ -2445,7 +2446,8 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
     assert.equal(pi.sentMessageCalls.length, 0);
 
     await pi.events.get("agent_start")![0](undefined, context);
-    await new Promise<void>((resolve) => setTimeout(resolve, 650));
+    t.mock.timers.tick(500);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sentMessageCalls.length, 0);
 
     releaseBlocked.shift()!();
@@ -2457,15 +2459,13 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
     assert.equal(pi.sentMessageCalls.length, 0);
 
     await pi.events.get("agent_start")![0](undefined, context);
-    await waitForTestCondition(
-      () =>
-        pi.sentMessageCalls.some((call) =>
-          String((call.message as any)?.content).includes(
-            "queued before Chief preflight completes",
-          ),
-        ),
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(500);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      pi.sentMessageCalls.length,
+      2,
       "Chief inbox delivery did not resume after agent_start",
-      2000,
     );
     assert.equal(
       (pi.sentMessageCalls[0]?.message as any)?.customType,
@@ -2518,7 +2518,7 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
   }
 });
 
-test("Manager claim between Chief ask scan and publication suppresses repair and stale delivery", async () => {
+test("Manager claim between Chief ask scan and publication suppresses repair and stale delivery", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -2602,8 +2602,8 @@ test("Manager claim between Chief ask scan and publication suppresses repair and
   };
   try {
     await pi.events.get("session_start")![0](undefined, context);
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
     const runtime = supervisionRuntime();
+    assert.equal(realFs.existsSync(runtime.descriptor), true);
     const askId = randomUUID();
     writeLeadCoordinationState(runtime, {
       version: 1,
@@ -2639,13 +2639,16 @@ test("Manager claim between Chief ask scan and publication suppresses repair and
       createdAt: Date.now(),
     });
     await pi.events.get("agent_start")![0](undefined, context);
-    await waitForTestCondition(
+    await t.waitFor(
       () =>
-        !listChiefMessagePaths(runtime, chiefId).some(
-          (path) => readChiefMessage(path).askId === askId,
+        assert.equal(
+          listChiefMessagePaths(runtime, chiefId).some(
+            (path) => readChiefMessage(path).askId === askId,
+          ),
+          false,
+          "Chief did not reject the stale Lead ask",
         ),
-      "Chief did not reject the stale Lead ask",
-      2000,
+      { timeout: 2000 },
     );
     assert.equal(
       pi.sentMessageCalls.some(({ message }) =>
@@ -2663,7 +2666,7 @@ test("Manager claim between Chief ask scan and publication suppresses repair and
   }
 });
 
-test("registered lead and replacement chief exchange messages and asks", async () => {
+test("registered lead and replacement chief exchange messages and asks", async (t) => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `supervision-contract-${randomUUID()}.sock`);
   const leadId = LEAD_SESSION_ID;
@@ -3082,10 +3085,11 @@ test("registered lead and replacement chief exchange messages and asks", async (
       supervisionRuntime(),
       leadId,
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 550));
-    assert.ok(
-      lead.sentMessageCalls.some((call) =>
-        /<file name="/.test(String(call.message?.content ?? "")),
+    await t.waitFor(() =>
+      assert.ok(
+        lead.sentMessageCalls.some((call) =>
+          /<file name="/.test(String(call.message?.content ?? "")),
+        ),
       ),
     );
     assert.deepEqual(
@@ -3115,24 +3119,27 @@ test("registered lead and replacement chief exchange messages and asks", async (
       leadContext,
     );
     assertToolResult(message);
-    await waitForTestCondition(
+    await t.waitFor(
       () => {
         const calls = chief.sentMessageCalls.slice(chiefDeliveryStart);
-        return (
+        assert.ok(
           calls.some(
             (call) =>
               (call.message as any)?.customType ===
               "pi-herdsman-supervision-context",
-          ) &&
+          ),
+          "Chief did not receive supervision context",
+        );
+        assert.ok(
           calls.some((call) =>
             /From lead .* to chief .*progress update/.test(
               String((call.message as any)?.content ?? ""),
             ),
-          )
+          ),
+          "Chief did not receive the lead follow-up",
         );
       },
-      "Chief did not receive supervision context and the lead follow-up",
-      2000,
+      { timeout: 2_000 },
     );
     const deliveryCalls = chief.sentMessageCalls.slice(chiefDeliveryStart);
     assert.equal(
@@ -3232,7 +3239,16 @@ test("registered lead and replacement chief exchange messages and asks", async (
       chiefContext,
     );
     await chief.events.get("agent_start")![0](undefined, chiefContext);
-    await new Promise<void>((resolve) => setTimeout(resolve, 650));
+    await t.waitFor(() =>
+      assert.equal(
+        chief.sentMessageCalls.filter((call) =>
+          /From lead .*<file name=.*Which credential should I use\?/su.test(
+            String(call.message?.content ?? ""),
+          ),
+        ).length,
+        1,
+      ),
+    );
     const repairedAskDeliveries = chief.sentMessageCalls.filter((call) =>
       /From lead .*<file name=.*Which credential should I use\?/su.test(
         String(call.message?.content ?? ""),
@@ -3339,10 +3355,11 @@ test("registered lead and replacement chief exchange messages and asks", async (
       reply.details?.next_action,
       "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 550));
-    assert.equal(
-      readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk,
-      undefined,
+    await t.waitFor(() =>
+      assert.equal(
+        readLeadCoordinationState(supervisionRuntime(), leadId)?.pendingAsk,
+        undefined,
+      ),
     );
     assert.match(
       String(lead.sentMessageCalls.at(-1)?.message?.content),
@@ -3488,14 +3505,20 @@ test("registered lead and replacement chief exchange messages and asks", async (
   }
 });
 
-test("lead metadata omits coordination state and follows session names", async () => {
+test("lead metadata omits coordination state and follows session names", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   const pi = fakePi({ sessionName: "first name" });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
   await pi.events.get("session_start")![0](undefined, context);
-  await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  await t.waitFor(() =>
+    assert.ok(
+      pi.calls.some(
+        (args) => args[0] === "pane" && args[1] === "report-metadata",
+      ),
+    ),
+  );
   const metadata = pi.calls.find(
     (args) => args[0] === "pane" && args[1] === "report-metadata",
   );
@@ -4042,7 +4065,7 @@ test("lead metadata reports preserve session event order", async () => {
   delete process.env.HERDR_PANE_ID;
 });
 
-test("lead metadata failures do not escape the serialized queue", async () => {
+test("lead metadata failures do not escape the serialized queue", async (t) => {
   for (const [label, firstResult] of [
     ["empty output", { stdout: "", stderr: "", code: 0 }],
     ["rejected exec", new Error("metadata unavailable")],
@@ -4086,7 +4109,7 @@ test("lead metadata failures do not escape the serialized queue", async () => {
         undefined,
       );
       await pi.events.get("session_info_changed")![0]({ name: label }, context);
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      await t.waitFor(() => assert.equal(metadataCalls, 2));
       assert.equal(unhandled.length, 0);
       assert.equal(metadataCalls, 2);
     } finally {

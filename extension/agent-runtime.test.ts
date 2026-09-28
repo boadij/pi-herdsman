@@ -49,7 +49,6 @@ import support, {
   writeRequest,
   writeResult,
   writeAgentState,
-  waitForTestCondition,
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
@@ -71,7 +70,8 @@ test("managed agents cancel native session replacement", () => {
   agent.events.get("session_shutdown")?.[0]();
 });
 
-test("managed requests pump through Pi semantic input", async () => {
+test("managed requests pump through Pi semantic input", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
   const mailbox = setAgentEnvironment("pump-agent");
   let context: ReturnType<typeof fakeAgentContext>;
   let transformed: unknown;
@@ -100,13 +100,7 @@ test("managed requests pump through Pi semantic input", async () => {
       createdAt: Date.now(),
     };
     writeRequest(mailbox, request);
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (readAgentState(mailbox)?.lastAck?.requestId === request.requestId)
-        break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      if (attempt === 99)
-        assert.fail("mailbox pump did not accept the request");
-    }
+    t.mock.timers.tick(250);
     assert.deepEqual(transformed, { action: "transform", text: request.text });
     assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
     assert.equal(
@@ -118,7 +112,7 @@ test("managed requests pump through Pi semantic input", async () => {
       false,
     );
     assert.deepEqual(agent.sentUsers, [controlMarker(request.requestId)]);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    t.mock.timers.tick(250);
     assert.deepEqual(agent.sentUsers, [controlMarker(request.requestId)]);
     removeRequest(mailbox, request.requestId);
     (context as any).isIdle = () => false;
@@ -130,12 +124,8 @@ test("managed requests pump through Pi semantic input", async () => {
       createdAt: Date.now(),
     };
     writeRequest(mailbox, steer);
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (readAgentState(mailbox)?.lastAck?.requestId === steer.requestId)
-        break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      if (attempt === 99) assert.fail("mailbox pump did not accept steering");
-    }
+    t.mock.timers.tick(250);
+    assert.equal(readAgentState(mailbox)?.lastAck?.requestId, steer.requestId);
     assert.deepEqual(transformed, {
       action: "transform",
       text: steer.text,
@@ -162,12 +152,11 @@ test("managed requests pump through Pi semantic input", async () => {
       createdAt: Date.now(),
     };
     writeRequest(mailbox, interrupt);
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (readAgentState(mailbox)?.lastAck?.requestId === interrupt.requestId)
-        break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      if (attempt === 99) assert.fail("mailbox pump did not accept interrupt");
-    }
+    t.mock.timers.tick(250);
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      interrupt.requestId,
+    );
     assert.equal(aborted, 1);
     assert.deepEqual(agent.sentUserCalls, [
       {
@@ -341,7 +330,7 @@ test("managed interrupt continues the same assignment after abort settlement", a
   }
 });
 
-test("managed session start immediately recovers a durable request", async () => {
+test("managed session start immediately recovers a durable request", async (t) => {
   const mailbox = setAgentEnvironment("pump-recovery-agent");
   const persisted = managedState("pump-recovery-agent");
   writeAgentState(mailbox, persisted);
@@ -368,13 +357,13 @@ test("managed session start immediately recovers a durable request", async () =>
   context = fakeAgentContext();
   try {
     await agent.events.get("session_start")![0](undefined, context);
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (readAgentState(mailbox)?.lastAck?.requestId === request.requestId)
-        break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      if (attempt === 99)
-        assert.fail("session-start recovery did not consume the request");
-    }
+    await t.waitFor(() =>
+      assert.equal(
+        readAgentState(mailbox)?.lastAck?.requestId,
+        request.requestId,
+        "session-start recovery did not consume the request",
+      ),
+    );
     assert.deepEqual(agent.sentUsers, [controlMarker(request.requestId)]);
     assert.equal(
       readAgentState(mailbox)?.lastAck?.requestId,
@@ -494,7 +483,8 @@ test("managed input handles duplicate markers before and after cleanup idempoten
   }
 });
 
-test("managed pump retransmits an unacknowledged marker", async () => {
+test("managed pump retransmits an unacknowledged marker", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
   const mailbox = setAgentEnvironment("pump-in-flight-agent");
   const agent = fakePi({ sendUserMessage: () => undefined });
   registerExtension!(agent.pi as never);
@@ -515,13 +505,11 @@ test("managed pump retransmits an unacknowledged marker", async () => {
       createdAt: Date.now(),
     };
     writeRequest(mailbox, request);
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    assert.ok(agent.sentUsers.length >= 2);
-    assert.ok(
-      agent.sentUsers.every(
-        (marker) => marker === controlMarker(request.requestId),
-      ),
-    );
+    const marker = controlMarker(request.requestId);
+    t.mock.timers.tick(250);
+    assert.deepEqual(agent.sentUsers, [marker]);
+    t.mock.timers.tick(250);
+    assert.deepEqual(agent.sentUsers, [marker, marker]);
     assert.ok(readRequest(mailbox, request.requestId));
   } finally {
     agent.events.get("session_shutdown")?.[0]();
@@ -529,7 +517,8 @@ test("managed pump retransmits an unacknowledged marker", async () => {
   }
 });
 
-test("managed pump retries a request after acknowledgement persistence fails", async () => {
+test("managed pump retries a request after acknowledgement persistence fails", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
   const mailbox = setAgentEnvironment("pump-retry-agent");
   let context: ReturnType<typeof fakeContext>;
   let forcedFailures = 0;
@@ -560,21 +549,13 @@ test("managed pump retries a request after acknowledgement persistence fails", a
       createdAt: Date.now(),
     };
     writeRequest(mailbox, request);
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (agent.sentUsers.length >= 1) break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      if (attempt === 99) assert.fail("mailbox pump did not submit request");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      t.mock.timers.tick(250);
+      assert.equal(readAgentState(mailbox)?.lastAck, undefined);
     }
     assert.ok(readRequest(mailbox, request.requestId));
-    assert.equal(readAgentState(mailbox)?.lastAck, undefined);
-    for (let attempt = 0; attempt < 250; attempt++) {
-      if (readAgentState(mailbox)?.lastAck?.requestId === request.requestId)
-        break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      if (attempt === 249)
-        assert.fail("mailbox pump did not retry the request");
-    }
-    assert.ok(agent.sentUsers.length >= 2);
+    t.mock.timers.tick(250);
+    assert.equal(agent.sentUsers.length, 4);
     assert.equal(
       agent.entries.filter(
         (entry: any) => entry.customType === "pi_herdsman_state_error",
@@ -681,7 +662,8 @@ test("registered agent writes state, handles input, and settles one result", asy
   assert.equal(readAgentState(mailbox)?.lastActivityAt, undefined);
 });
 
-test("result persistence waits for the assignment lock", async () => {
+test("result persistence waits for the assignment lock", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
   const mailbox = setAgentEnvironment("locked-result-agent");
   const agent = fakePi();
   const context = fakeContext();
@@ -717,7 +699,7 @@ test("result persistence waits for the assignment lock", async () => {
   } finally {
     release();
   }
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  t.mock.timers.tick(250);
   assert.equal(readResult(mailbox, request.requestId)?.text, "done");
   assert.equal(readAgentState(mailbox)?.completedRequestId, request.requestId);
   agent.events.get("session_shutdown")?.[0]();
@@ -757,7 +739,6 @@ test("assignment-lock contention does not consume result write attempts", async 
   );
   t.mock.timers.enable({ apis: ["setInterval"] });
   t.after(() => {
-    t.mock.timers.reset();
     support.failNextMailboxWrite = false;
   });
   try {
@@ -904,7 +885,6 @@ test("agent bounds result persistence failure and exposes owner recovery evidenc
   );
   realFs.mkdirSync(join(mailbox, `result-${request.requestId}.json`));
   t.mock.timers.enable({ apis: ["setInterval"] });
-  t.after(() => t.mock.timers.reset());
   await agent.events.get("agent_settled")![0](undefined, context);
   for (let attempt = 0; attempt < 7; attempt++) {
     t.mock.timers.tick(250);
@@ -1041,7 +1021,7 @@ test("agent rejects task replay while result persistence recovery is present", (
   resetAgentMailbox(mailbox);
 });
 
-test("agent ask_owner blocks settlement and reply resumes the same assignment", async () => {
+test("agent ask_owner blocks settlement and reply resumes the same assignment", async (t) => {
   const mailbox = setAgentEnvironment();
   let context: ReturnType<typeof fakeAgentContext>;
   let pumpReply = false;
@@ -1184,11 +1164,13 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   };
   pumpReply = true;
   writeRequest(mailbox, reply);
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (readAgentState(mailbox)?.lastAck?.requestId === reply.requestId) break;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    if (attempt === 99) assert.fail("mailbox pump did not deliver the reply");
-  }
+  await t.waitFor(() =>
+    assert.equal(
+      readAgentState(mailbox)?.lastAck?.requestId,
+      reply.requestId,
+      "mailbox pump did not deliver the reply",
+    ),
+  );
   assert.deepEqual(transformed, {
     action: "transform",
     text: "Owner reply:\n\nUse ALPHA.\n\nContinue the original assignment using this answer.",
@@ -1992,7 +1974,6 @@ test("startup and completion metadata preserve available model and thinking valu
   );
   const callsBeforeSettlement = agent.calls.length;
   await agent.events.get("agent_settled")![0](undefined, context);
-  await new Promise((resolve) => setTimeout(resolve, 10));
   const laterCalls = agent.calls.slice(callsBeforeSettlement);
   assert.equal(
     laterCalls.some(
@@ -2047,7 +2028,7 @@ test("successful presentation clears are not repeated by unrelated metadata upda
   agent.events.get("session_shutdown")?.[0]();
 });
 
-test("metadata failure retries the latest desired state", async () => {
+test("metadata failure retries the latest desired state", async (t) => {
   const mailbox = setAgentEnvironment();
   let metadataAttempts = 0;
   const agent = fakePi({
@@ -2068,8 +2049,7 @@ test("metadata failure retries the latest desired state", async () => {
     { model: { provider: "openai", id: "gpt-5" } },
     context,
   );
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  assert.equal(metadataAttempts, 2);
+  await t.waitFor(() => assert.equal(metadataAttempts, 2));
   assert.ok(agent.calls.some((args) => args.includes("managed=1")));
   assert.ok(agent.calls.some((args) => args.includes("role=agent")));
   assert.ok(agent.calls.some((args) => args.includes("model=openai/gpt-5")));
@@ -2149,12 +2129,12 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
   registerExtension!(agent.pi as never);
   const context = fakeContext();
   agent.events.get("session_start")![0](undefined, context);
-  await waitForTestCondition(
-    () =>
-      readAgentState(mailbox) !== undefined &&
-      agent.callResults.length === agent.calls.length,
-    "agent startup did not settle",
-    2000,
+  await t.waitFor(
+    () => {
+      assert.ok(readAgentState(mailbox), "agent startup did not settle");
+      assert.equal(agent.callResults.length, agent.calls.length);
+    },
+    { timeout: 2_000 },
   );
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
@@ -2174,29 +2154,40 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { text: controlMarker(request.requestId) },
     context,
   );
-  await waitForTestCondition(
-    () => readAgentState(mailbox)?.activeRequestId === request.requestId,
-    "task request was not accepted",
-    2000,
+  await t.waitFor(
+    () =>
+      assert.equal(
+        readAgentState(mailbox)?.activeRequestId,
+        request.requestId,
+        "task request was not accepted",
+      ),
+    { timeout: 2_000 },
   );
   assert.equal(typeof readAgentState(mailbox)?.lastActivityAt, "number");
   agent.events.get("model_select")![0](
     { model: { provider: "openai", id: "gpt-5" } },
     context,
   );
-  await waitForTestCondition(
+  await t.waitFor(
     () =>
-      agent.callResults.filter(
-        ({ args, succeeded }) =>
-          !succeeded && args.includes(`task=${taskText}`),
-      ).length >= 2,
-    "task metadata failures were not observed",
-    2000,
+      assert.equal(
+        agent.callResults.filter(
+          ({ args, succeeded }) =>
+            !succeeded && args.includes(`task=${taskText}`),
+        ).length,
+        2,
+        "task metadata failures were not observed",
+      ),
+    { timeout: 2_000 },
   );
-  await waitForTestCondition(
-    () => agent.callResults.length === agent.calls.length,
-    "task metadata calls did not settle",
-    2000,
+  await t.waitFor(
+    () =>
+      assert.equal(
+        agent.callResults.length,
+        agent.calls.length,
+        "task metadata calls did not settle",
+      ),
+    { timeout: 2_000 },
   );
   assert.ok(agent.calls.some((args) => args.includes(`task=${request.text}`)));
   assert.ok(agent.calls.some((args) => args.includes(`task=${request.text}`)));
@@ -2207,27 +2198,33 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { message: { role: "assistant", content: "completed" } },
     context,
   );
-  await waitForTestCondition(
-    () => agent.callResults.length === agent.calls.length,
-    "turn metadata did not settle",
-    2000,
+  await t.waitFor(
+    () =>
+      assert.equal(
+        agent.callResults.length,
+        agent.calls.length,
+        "turn metadata did not settle",
+      ),
+    { timeout: 2_000 },
   );
   const callsBeforeSettlement = agent.calls.length;
   assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
   completionMetadataStarted = true;
   agent.events.get("agent_settled")![0](undefined, context);
-  await waitForTestCondition(
+  await t.waitFor(
     () =>
-      agent.callResults
-        .slice(callsBeforeSettlement)
-        .some(
-          ({ args, succeeded }) =>
-            args.includes("--clear-token") &&
-            args.includes("task") &&
-            !succeeded,
-        ),
-    "first completion metadata clear did not fail",
-    2000,
+      assert.ok(
+        agent.callResults
+          .slice(callsBeforeSettlement)
+          .some(
+            ({ args, succeeded }) =>
+              args.includes("--clear-token") &&
+              args.includes("task") &&
+              !succeeded,
+          ),
+        "first completion metadata clear did not fail",
+      ),
+    { timeout: 2_000 },
   );
   assert.ok(
     agent.calls
@@ -2246,14 +2243,19 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { model: { provider: "openai", id: "gpt-5" } },
     context,
   );
-  await waitForTestCondition(
+  await t.waitFor(
     () =>
-      agent.callResults.filter(
-        ({ args, succeeded }) =>
-          args.includes("--clear-token") && args.includes("task") && !succeeded,
-      ).length >= 2,
-    "second completion metadata clear did not fail",
-    2000,
+      assert.equal(
+        agent.callResults.filter(
+          ({ args, succeeded }) =>
+            args.includes("--clear-token") &&
+            args.includes("task") &&
+            !succeeded,
+        ).length,
+        2,
+        "second completion metadata clear did not fail",
+      ),
+    { timeout: 2_000 },
   );
   assert.equal(
     agent.calls
@@ -2270,17 +2272,19 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
     { model: { provider: "openai", id: "gpt-5.1" } },
     context,
   );
-  await waitForTestCondition(
+  await t.waitFor(
     () =>
-      agent.callResults.some(
-        ({ args, succeeded }) =>
-          succeeded &&
-          args.includes("--clear-token") &&
-          args.includes("task") &&
-          args.includes("model=openai/gpt-5.1"),
+      assert.ok(
+        agent.callResults.some(
+          ({ args, succeeded }) =>
+            succeeded &&
+            args.includes("--clear-token") &&
+            args.includes("task") &&
+            args.includes("model=openai/gpt-5.1"),
+        ),
+        "completion metadata clear did not recover",
       ),
-    "completion metadata clear did not recover",
-    2000,
+    { timeout: 2_000 },
   );
   assert.equal(completionFailures, 2);
   const completionClears = agent.callResults.filter(

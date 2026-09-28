@@ -67,7 +67,6 @@ import {
   setAgentEnvironment,
   startupExecutor,
   watchedResultPaths,
-  waitForTestCondition,
   agentMailboxPath,
   writeAsk,
   writePromptDefinition,
@@ -1188,7 +1187,7 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
   }
 });
 
-test("staged fresh assignment bridges pending start through working", async () => {
+test("staged fresh assignment bridges pending start through working", async (t) => {
   const fixture = createStagedAssignmentFixture("agent");
   const list = () =>
     registeredAgentTool(fixture.pi, "list").execute(
@@ -1209,12 +1208,13 @@ test("staged fresh assignment bridges pending start through working", async () =
       undefined,
       fixture.context,
     );
-    await waitForTestCondition(
-      () =>
+    await t.waitFor(() =>
+      assert.ok(
         fixture.pi.calls.some(
           (args) => args[0] === "agent" && args[1] === "start",
         ),
-      "assignment did not reach the gated startup",
+        "assignment did not reach the gated startup",
+      ),
     );
     fixture.releaseInitialStatus();
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1225,9 +1225,11 @@ test("staged fresh assignment bridges pending start through working", async () =
     );
 
     fixture.releaseStart();
-    await waitForTestCondition(
-      () => fixture.preSubmitValidationReady,
-      "assignment did not reach pre-submit validation",
+    await t.waitFor(() =>
+      assert.ok(
+        fixture.preSubmitValidationReady,
+        "assignment did not reach pre-submit validation",
+      ),
     );
     const beforeAck = await list();
     assert.equal(fixture.requestObserved, false);
@@ -1238,9 +1240,11 @@ test("staged fresh assignment bridges pending start through working", async () =
     assert.match(renderedBeforeAck, /agent/);
 
     fixture.releasePreSubmitValidation();
-    await waitForTestCondition(
-      () => fixture.requestObserved,
-      "assignment did not reach the gated request handoff",
+    await t.waitFor(() =>
+      assert.ok(
+        fixture.requestObserved,
+        "assignment did not reach the gated request handoff",
+      ),
     );
     fixture.releaseAcknowledgement();
     const result = await starting;
@@ -1272,10 +1276,14 @@ test("staged fresh assignment bridges pending start through working", async () =
       working.details.agents[0].available_tools.includes("agent_delegate"),
       false,
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 2100));
-    const renderedWorking = fixture.widgetValue.render(160).join("\n");
-    assert.match(renderedWorking, /1 working/);
-    assert.doesNotMatch(renderedWorking, /starting/);
+    await t.waitFor(
+      () => {
+        const rendered = fixture.widgetValue.render(160).join("\n");
+        assert.match(rendered, /1 working/);
+        assert.doesNotMatch(rendered, /starting/);
+      },
+      { timeout: 3_000 },
+    );
     assert.equal(working.details.agents.length, 1);
     assert.ok(fixture.workingObservations > 0);
 
@@ -1287,7 +1295,7 @@ test("staged fresh assignment bridges pending start through working", async () =
   }
 });
 
-test("fixture mailbox consumer retries a failed acknowledgement callback", async () => {
+test("fixture mailbox consumer retries a failed acknowledgement callback", async (t) => {
   const mailbox = setAgentEnvironment("fixture-retry-agent");
   const state = managedState("fixture-retry-agent");
   writeAgentState(mailbox, state);
@@ -1321,9 +1329,12 @@ test("fixture mailbox consumer retries a failed acknowledgement callback", async
   });
   try {
     writeRequest(mailbox, request);
-    await waitForTestCondition(
-      () => readAgentState(mailbox)?.lastAck?.requestId === request.requestId,
-      "fixture mailbox consumer did not retry acknowledgement",
+    await t.waitFor(() =>
+      assert.equal(
+        readAgentState(mailbox)?.lastAck?.requestId,
+        request.requestId,
+        "fixture mailbox consumer did not retry acknowledgement",
+      ),
     );
     assert.equal(attempts, 2);
   } finally {
@@ -1451,7 +1462,7 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
   }
 });
 
-test("staged fresh assignment removes a fast completion without observing working", async () => {
+test("staged fresh assignment removes a fast completion without observing working", async (t) => {
   const fixture = createStagedAssignmentFixture("agent", true);
   const list = () =>
     registeredAgentTool(fixture.pi, "list").execute(
@@ -1472,22 +1483,27 @@ test("staged fresh assignment removes a fast completion without observing workin
       undefined,
       fixture.context,
     );
-    await waitForTestCondition(
-      () =>
+    await t.waitFor(() =>
+      assert.ok(
         fixture.pi.calls.some(
           (args) => args[0] === "agent" && args[1] === "start",
         ),
-      "fast assignment did not reach the gated startup",
+        "fast assignment did not reach the gated startup",
+      ),
     );
     fixture.releaseStart();
-    await waitForTestCondition(
-      () => fixture.preSubmitValidationReady,
-      "fast assignment did not reach pre-submit validation",
+    await t.waitFor(() =>
+      assert.ok(
+        fixture.preSubmitValidationReady,
+        "fast assignment did not reach pre-submit validation",
+      ),
     );
     fixture.releasePreSubmitValidation();
-    await waitForTestCondition(
-      () => fixture.requestObserved,
-      "fast assignment did not reach the gated request handoff",
+    await t.waitFor(() =>
+      assert.ok(
+        fixture.requestObserved,
+        "fast assignment did not reach the gated request handoff",
+      ),
     );
     fixture.releaseAcknowledgement();
     const result = await starting;
@@ -1505,18 +1521,22 @@ test("staged fresh assignment removes a fast completion without observing workin
     assert.match(renderedBeforeCompletion, /starting/);
     assert.doesNotMatch(renderedBeforeCompletion, /settling/);
     fixture.completeFast(requestId);
-    await waitForTestCondition(
-      () =>
+    await t.waitFor(() =>
+      assert.ok(
         fixture.pi.sent.some(
           (message: any) => message.customType === "pi-herdsman-agent-result",
         ),
-      "fast completion result was not delivered",
+        "fast completion result was not delivered",
+      ),
     );
     assert.equal(requestId, fixture.requestId);
     assert.equal(fixture.workingObservations, 0);
-    await waitForTestCondition(
-      () => !readAgentState(fixture.mailbox),
-      "fast completion cleanup did not remove the mailbox",
+    await t.waitFor(() =>
+      assert.equal(
+        readAgentState(fixture.mailbox),
+        undefined,
+        "fast completion cleanup did not remove the mailbox",
+      ),
     );
     const afterCleanup = await list();
     assert.deepEqual(afterCleanup.details.agents, []);
@@ -1527,10 +1547,26 @@ test("staged fresh assignment removes a fast completion without observing workin
     assert.doesNotMatch(renderedAfterCleanup, /working/);
     const laterRefresh = await list();
     assert.deepEqual(laterRefresh.details.agents, []);
-    await new Promise<void>((resolve) => setTimeout(resolve, 2100));
-    const renderedAfterRefresh = fixture.widgetValue.render(160).join("\n");
-    assert.doesNotMatch(renderedAfterRefresh, /starting/);
-    assert.doesNotMatch(renderedAfterRefresh, /working/);
+    const snapshotsBeforeRefresh =
+      fixture.pi.calls.filter(isApiSnapshot).length;
+    const rendersBeforeRefresh = fixture.renderRequests;
+    await t.waitFor(
+      () => {
+        assert.ok(
+          fixture.pi.calls.filter(isApiSnapshot).length >
+            snapshotsBeforeRefresh,
+          "status refresh did not read a later snapshot",
+        );
+        assert.ok(
+          fixture.renderRequests > rendersBeforeRefresh,
+          "status refresh did not update the widget",
+        );
+        const rendered = fixture.widgetValue.render(160).join("\n");
+        assert.doesNotMatch(rendered, /starting/);
+        assert.doesNotMatch(rendered, /working/);
+      },
+      { timeout: 3_000 },
+    );
   } finally {
     fixture.shutdown();
   }
@@ -1633,7 +1669,7 @@ test("lead herd runs start once and stay open through intermediate settlement", 
   }
 });
 
-test("restored herd run keeps its start and closes after settlement", async () => {
+test("restored herd run keeps its start and closes after settlement", async (t) => {
   setLeadEnvironment();
   const startedAt = 1_700_000_000_000;
   const entries: unknown[] = [
@@ -1661,11 +1697,13 @@ test("restored herd run keeps its start and closes after settlement", async () =
       await handler(undefined, context);
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler(undefined, context);
-    await waitForTestCondition(
-      () =>
+    await t.waitFor(() =>
+      assert.equal(
         herdEntries().filter((entry) => entry.data?.phase === "finished")
-          .length === 1,
-      "restored herd run did not finish after settlement",
+          .length,
+        1,
+        "restored herd run did not finish after settlement",
+      ),
     );
     const finished = herdEntries().find(
       (entry) => entry.data?.phase === "finished",
@@ -1831,7 +1869,7 @@ test("completed and mismatched herd history does not resurrect", async () => {
   }
 });
 
-test("restored herd waits for direct durable cleanup before finishing", async () => {
+test("restored herd waits for direct durable cleanup before finishing", async (t) => {
   setLeadEnvironment();
   const label = `recovered-herd-${randomUUID().slice(0, 8)}`;
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
@@ -1864,11 +1902,13 @@ test("restored herd waits for direct durable cleanup before finishing", async ()
     resetAgentMailbox(startup.mailbox);
     for (const handler of pi.events.get("agent_settled") ?? [])
       await handler(undefined, context);
-    await waitForTestCondition(
-      () =>
+    await t.waitFor(() =>
+      assert.equal(
         herdEntries().filter((entry) => entry.data?.phase === "finished")
-          .length === 1,
-      "herd run did not finish after direct durable cleanup",
+          .length,
+        1,
+        "herd run did not finish after direct durable cleanup",
+      ),
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -4197,7 +4237,7 @@ test("assignment launch handles delayed official Pi session identity", async () 
   }
 });
 
-test("managed startup accepts matching mailbox state after five seconds", async () => {
+test("managed startup accepts matching mailbox state after five seconds", async (t) => {
   setLeadEnvironment();
   const label = "delayed-mailbox-startup";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
@@ -4226,10 +4266,7 @@ test("managed startup accepts matching mailbox state after five seconds", async 
       undefined,
       fakeContext(),
     );
-    await waitForTestCondition(
-      () => delayedState !== undefined,
-      "agent start did not run",
-    );
+    await t.waitFor(() => assert.ok(delayedState, "agent start did not run"));
     const result = await resultPromise;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
   } finally {
