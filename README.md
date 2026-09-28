@@ -223,6 +223,12 @@ them:
 
 Neither extension is required or installed by Pi Herdsman.
 
+## Community
+
+Questions, workflows, examples, and ideas are welcome in [GitHub Discussions](https://github.com/boadij/pi-herdsman/discussions).
+
+For reproducible bugs and concrete actionable work, use [GitHub Issues](https://github.com/boadij/pi-herdsman/issues).
+
 ## Documentation
 
 Choose the path that matches what you are doing:
