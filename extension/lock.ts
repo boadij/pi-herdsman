@@ -91,6 +91,15 @@ export function readLiveProcessLock(
   path: string,
   name = "process lock",
 ): ProcessLockClaim {
+  const { claim, live } = readProcessLockStatus(path, name);
+  if (!live) throw new Error(`Unable to verify ${name}`);
+  return claim;
+}
+
+export function readProcessLockStatus(
+  path: string,
+  name = "process lock",
+): { claim: ProcessLockClaim; live: boolean } {
   const verifyMessage = `Unable to verify ${name}`;
   let entries: string[];
   try {
@@ -103,8 +112,7 @@ export function readLiveProcessLock(
   const owner = entries[0];
   try {
     const claim = readProcessLockClaim(path, owner);
-    if (!processExists(claim.pid)) throw new Error(verifyMessage);
-    return claim;
+    return { claim, live: processExists(claim.pid) };
   } catch (error) {
     throw new Error(verifyMessage, { cause: error });
   }

@@ -145,6 +145,7 @@ import {
   acquireProcessLock,
   claimProcessLock,
   ProcessLockOccupiedError,
+  readProcessLockStatus,
 } from "./lock.ts";
 import {
   claimChiefLease,
@@ -8465,16 +8466,21 @@ export default function (pi: ExtensionAPI): void {
       let chiefAbsent = false;
       if (!chief) {
         const runtime = supervisionRuntime();
-        try {
-          statSync(runtime.descriptor);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if (!statSync(runtime.descriptor, { throwIfNoEntry: false })) {
+          chiefAbsent = !statSync(runtime.lock, { throwIfNoEntry: false });
+        } else {
           try {
-            statSync(runtime.lock);
-          } catch (lockError) {
-            if ((lockError as NodeJS.ErrnoException).code !== "ENOENT")
-              throw lockError;
-            chiefAbsent = true;
+            const descriptor = readChiefDescriptor(runtime.descriptor);
+            const { claim, live } = readProcessLockStatus(
+              runtime.lock,
+              "Chief supervision lease",
+            );
+            chiefAbsent =
+              !live &&
+              descriptor.claim.pid === claim.pid &&
+              descriptor.claim.id === claim.id;
+          } catch {
+            // Malformed or unverifiable ownership cannot establish departure.
           }
         }
       }

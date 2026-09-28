@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
@@ -517,7 +523,7 @@ test("Manager replacement can leave with an ask bound to its old lease", async (
   }
 });
 
-test("Manager leave retains a Chief-bound ask after the Chief departs", async () => {
+test("Manager leave retains a Chief-bound ask until its Chief claim is dead", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "manager-pane";
   process.env.HERDR_TAB_ID = "manager-tab";
@@ -582,6 +588,7 @@ test("Manager leave retains a Chief-bound ask after the Chief departs", async ()
   const notices: string[] = [];
   ctx.ui.notify = (message: string) => notices.push(message);
   registerExtension!(pi.pi as never);
+  let stale = false;
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
@@ -618,7 +625,35 @@ test("Manager leave retains a Chief-bound ask after the Chief departs", async ()
       writeFileSync(descriptorPath, descriptor);
     }
 
-    lease.release();
+    const runtime = supervisionRuntime();
+    const deadClaim = { pid: 2147483647, id: randomUUID() };
+    const owner = join(runtime.lock, `${deadClaim.pid}-${deadClaim.id}`);
+    unlinkSync(
+      join(
+        runtime.lock,
+        `${lease.descriptor.claim.pid}-${lease.descriptor.claim.id}`,
+      ),
+    );
+    stale = true;
+    writeFileSync(owner, JSON.stringify(deadClaim));
+    const staleDescriptor = { ...lease.descriptor, claim: deadClaim };
+    writeFileSync(descriptorPath, JSON.stringify(staleDescriptor));
+    const blocked = async () => {
+      const before = notices.length;
+      await pi.commandOptions.get("manager").handler("leave", ctx);
+      assert.ok(
+        notices
+          .slice(before)
+          .some((message) => /supervisor ask remains unresolved/.test(message)),
+      );
+      assert.ok(readManagerDescriptor(runtime, WORKSPACE));
+    };
+    writeFileSync(descriptorPath, JSON.stringify(lease.descriptor));
+    await blocked(); // A dead lock belonging to a different descriptor is ambiguous.
+    writeFileSync(descriptorPath, JSON.stringify(staleDescriptor));
+    writeFileSync(owner, "invalid claim");
+    await blocked();
+    writeFileSync(owner, JSON.stringify(deadClaim));
     await pi.commandOptions.get("manager").handler("leave", ctx);
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE),
@@ -632,6 +667,10 @@ test("Manager leave retains a Chief-bound ask after the Chief departs", async ()
       ask,
     );
   } finally {
+    if (stale) {
+      rmSync(lease.runtime.descriptor, { force: true });
+      rmSync(lease.runtime.lock, { recursive: true, force: true });
+    }
     lease.release();
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
