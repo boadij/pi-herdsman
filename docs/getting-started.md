@@ -14,7 +14,14 @@ You need:
 - Pi `>=0.87.0 <0.88.0` (supported);
 - Node `>=22.19.0`.
 
-Install the package and herdr Pi integration:
+On Linux or macOS, install the current released, tested stack:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
+```
+
+If you already manage Pi and herdr yourself, install only Pi Herdsman and the
+herdr Pi integration:
 
 ```sh
 pi install npm:pi-herdsman

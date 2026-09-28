@@ -46,6 +46,19 @@ to you.
 
 ## Install
 
+### Linux / macOS bootstrap
+
+Install the released, tested Pi / Herdr / Pi Herdsman stack:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
+```
+
+The bootstrapper requires Node `>=22.19.0` and npm. It reconciles the exact Pi
+and Herdr versions declared by the current Pi Herdsman release, pins that Pi
+Herdsman release, verifies the Herdr download, and refreshes the Herdr Pi
+integration. Re-run it to update or repair the stack.
+
 ### Existing Pi / herdr
 
 ```sh
