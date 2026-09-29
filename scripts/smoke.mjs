@@ -623,6 +623,133 @@ function sessionEntries(contents) {
     });
 }
 
+export function savedSessionHeaderEvidence(contents, expectedSessionId) {
+  const header = sessionEntries(contents).find(
+    (entry) => entry.type === "session",
+  );
+  return {
+    expectedSessionId,
+    actualSessionId: typeof header?.id === "string" ? header.id : null,
+    sessionHeaderFound: !!header,
+    sessionIdMatches: header?.id === expectedSessionId,
+  };
+}
+
+export function continuationSessionEvidence(
+  contents,
+  expectedSessionId,
+  followup,
+) {
+  return {
+    ...savedSessionHeaderEvidence(contents, expectedSessionId),
+    exactFollowupFound: sessionEntries(contents).some(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message?.role === "user" &&
+        messageText(entry.message.content) === followup,
+    ),
+  };
+}
+
+async function sessionPathEvidence(ctx, path, expectedSessionId) {
+  const absolutePath = resolve(path);
+  const isolatedSessions = resolve(ctx.paths.piSessions);
+  const relativePath = relative(isolatedSessions, absolutePath);
+  const evidence = {
+    path: absolutePath,
+    exists: null,
+    ...savedSessionHeaderEvidence("", expectedSessionId),
+  };
+  if (
+    !relativePath ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath)
+  )
+    return { ...evidence, error: "outside isolated session directory" };
+
+  let details;
+  try {
+    details = await lstat(absolutePath);
+  } catch (error) {
+    if (error.code === "ENOENT") return { ...evidence, exists: false };
+    return { ...evidence, error: String(error.message).slice(0, 200) };
+  }
+  evidence.exists = true;
+  if (
+    !details.isFile() ||
+    details.isSymbolicLink() ||
+    details.size > MAX_SESSION_BYTES
+  )
+    return { ...evidence, error: "not a bounded regular session file" };
+  try {
+    return {
+      ...evidence,
+      ...savedSessionHeaderEvidence(
+        await readFile(absolutePath, "utf8"),
+        expectedSessionId,
+      ),
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") return { ...evidence, exists: false };
+    return { ...evidence, error: String(error.message).slice(0, 200) };
+  }
+}
+
+export async function managerChildSessionEvidence(
+  ctx,
+  agents,
+  workspaceId,
+  expectedSessionId,
+) {
+  const candidates = [];
+  for (const agent of agents
+    .filter((item) => item.workspace_id === workspaceId)
+    .slice(0, 10)) {
+    const identity = agent.agent_session;
+    const candidate = {
+      identityKind: identity?.kind ?? null,
+      reportedSessionId:
+        identity?.kind === "id" && typeof identity.value === "string"
+          ? identity.value
+          : null,
+    };
+    if (identity?.kind === "path" && typeof identity.value === "string")
+      Object.assign(
+        candidate,
+        await sessionPathEvidence(ctx, identity.value, expectedSessionId),
+      );
+    else if (identity?.kind === "id" && typeof identity.value === "string") {
+      try {
+        const session = await exactIsolatedSession(ctx, identity.value);
+        if (session)
+          Object.assign(candidate, {
+            path: session.path,
+            exists: true,
+            ...savedSessionHeaderEvidence(session.contents, expectedSessionId),
+          });
+      } catch (error) {
+        candidate.error = String(error.message).slice(0, 200);
+      }
+    }
+    candidates.push(candidate);
+  }
+
+  let expectedSessionFile = null;
+  try {
+    const session = await exactIsolatedSession(ctx, expectedSessionId);
+    if (session)
+      expectedSessionFile = {
+        path: session.path,
+        exists: true,
+        ...savedSessionHeaderEvidence(session.contents, expectedSessionId),
+      };
+  } catch (error) {
+    expectedSessionFile = { error: String(error.message).slice(0, 200) };
+  }
+  return { workspaceId, expectedSessionId, candidates, expectedSessionFile };
+}
+
 function messageText(content) {
   if (typeof content === "string") return content;
   return Array.isArray(content)
@@ -1552,6 +1679,11 @@ async function runContinuationSmoke(ctx) {
       const contents = await readFile(firstSession.path, "utf8");
       const entries = sessionEntries(contents);
       const header = entries.find((entry) => entry.type === "session");
+      const evidence = continuationSessionEvidence(
+        contents,
+        firstSession.id,
+        followup,
+      );
       const continued = entries.some(
         (entry) =>
           entry.type === "message" &&
@@ -1559,9 +1691,10 @@ async function runContinuationSmoke(ctx) {
             "Without rereading package.json",
           ),
       );
+      ctx.continuationSessionEvidence = evidence;
       if (header?.id !== firstSession.id || !continued)
         throw new Error(
-          "continuation-session-identity: persisted ID or remembered-context follow-up was not preserved",
+          `continuation-session-identity: persisted ID or remembered-context follow-up was not preserved; evidence: ${JSON.stringify(evidence)}`,
         );
       await waitForDescendantsToExit(ctx);
       const finalSession = await rootSessionSnapshot(ctx);
@@ -1683,9 +1816,27 @@ async function runManagerRecoverySmoke(ctx) {
       try {
         const session = await rootSnapshot();
         const results = session ? staffDelegateResults(session.contents) : [];
-        ctx.managerRecovery.readyEvidence.entries = session
+        const evidence = ctx.managerRecovery.readyEvidence;
+        evidence.entries = session
           ? managerReadyEntryEvidence(session.contents, results[0]?.session)
           : [];
+        if (
+          results.length === 1 &&
+          typeof results[0].session === "string" &&
+          typeof results[0].workspace_id === "string"
+        )
+          try {
+            evidence.childSession = await managerChildSessionEvidence(
+              ctx,
+              await agents(),
+              results[0].workspace_id,
+              results[0].session,
+            );
+          } catch (error) {
+            evidence.childSession = {
+              error: String(error.message).slice(0, 200),
+            };
+          }
       } catch (error) {
         ctx.managerRecovery.readyEvidence.entriesError = String(error).slice(
           0,
@@ -2447,6 +2598,7 @@ async function collectDiagnostics(ctx, owned) {
   const env = nestedControlEnv(process.env, ctx.paths, ctx.sessionName);
   diagnostics.chiefTreeProbe = ctx.chiefTreeProbeDiagnostics ?? null;
   diagnostics.managerRecovery = ctx.managerRecovery ?? null;
+  diagnostics.continuationSession = ctx.continuationSessionEvidence ?? null;
   diagnostics.agents = await tryHerdr(["agent", "list"], { env });
   diagnostics.panes = await tryHerdr(["pane", "list"], { env });
   diagnostics.observedCoreProcesses = ctx.coreProcessEvidence ?? [];

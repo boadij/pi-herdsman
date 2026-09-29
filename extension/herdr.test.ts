@@ -209,7 +209,16 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
       request = JSON.parse(buffer.slice(0, newline));
       socket.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
       if (connections === 1) {
-        socket.write(JSON.stringify({ event: "pane.closed" }) + "\n");
+        socket.write(
+          JSON.stringify({
+            id: request.id,
+            error: {
+              code: "events_lost",
+              message:
+                "event subscription fell behind retained history; resubscribe and resync with session.snapshot",
+            },
+          }) + "\n",
+        );
         socket.end();
       }
     });

@@ -234,7 +234,7 @@ tools, extensions, skills, and instructions.
 ## Requirements
 
 - [herdr](https://github.com/herdrdev/herdr) `>=0.9.1`
-- Pi `>=0.87.0 <0.88.0` (supported)
+- Pi `0.99.1` (tested runtime)
 - Node `>=22.19.0`
 
 Package CI validates the minimum supported Node 22.19.0 runtime. The container

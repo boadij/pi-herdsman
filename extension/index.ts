@@ -11888,6 +11888,7 @@ export default function (pi: ExtensionAPI): void {
       supervisorTool = {
         name: "supervisor_message",
         label: "supervisor message",
+        exposure: "model-only",
         promptSnippet:
           "Report progress to or ask the current direct supervisor",
         description:
@@ -12269,6 +12270,7 @@ export default function (pi: ExtensionAPI): void {
       peerTool = {
         name: "peer_message",
         label: "peer message",
+        exposure: "model-only",
         promptSnippet: "Discover and message live same-role peers",
         description:
           "Send a message to another live same-role Lead or Manager session by exact session ID.",
@@ -12392,6 +12394,7 @@ export default function (pi: ExtensionAPI): void {
       const staffTool = {
         name: "staff_message",
         label: "staff message",
+        exposure: "model-only",
         promptSnippet:
           "Supervise direct reports; Managers may delegate new linked-worktree Leads",
         executionMode: "sequential",
@@ -14331,6 +14334,7 @@ export default function (pi: ExtensionAPI): void {
     const agentTool = {
       name: "agent_list",
       label: "agent list",
+      exposure: "model-only",
       promptSnippet:
         "Delegate and coordinate work with owned asynchronous agents",
       promptGuidelines: [
@@ -15093,6 +15097,7 @@ export default function (pi: ExtensionAPI): void {
   pi.registerTool({
     name: "ask_owner",
     label: "Ask owner",
+    exposure: "model-only",
     promptSnippet:
       "Ask this managed agent's direct owner for a required decision",
     description:

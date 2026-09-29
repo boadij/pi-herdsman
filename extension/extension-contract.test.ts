@@ -87,6 +87,7 @@ function assertToolResult(result: any): asserts result is {
 }
 
 function assertPortableToolSchema(tool: any): void {
+  assert.equal(tool.exposure, "model-only");
   assert.equal(tool.parameters?.type, "object");
   assert.ok(tool.parameters?.properties);
   assert.equal(tool.parameters?.additionalProperties, false);
@@ -382,6 +383,8 @@ test("Chief activation exposes only semantic staff tools", async () => {
         `${name} cross-operation input`,
       );
     }
+    for (const name of ["staff_delegate", "staff_close", "staff_discard"])
+      assert.equal(tools.get(name)?.exposure, "model-only", name);
   } finally {
     await chief.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;

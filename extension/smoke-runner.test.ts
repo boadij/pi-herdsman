@@ -17,6 +17,8 @@ import {
   managerRecoveryResumeOnlyPrompt,
   managerRecoveryResumePrompt,
   continuationResultsForPrompt,
+  continuationSessionEvidence,
+  managerChildSessionEvidence,
   initialPromptForScenario,
   inspectPaneProcesses,
   isolatedEnv,
@@ -29,6 +31,7 @@ import {
   submitManagerLeave,
   parseSmokeArgs,
   formatSmokeFailure,
+  savedSessionHeaderEvidence,
   staffDelegateResults,
   staffCloseResults,
   hasManagerResultRef,
@@ -62,6 +65,83 @@ test("missing managed session file is not ready yet", async () => {
       ),
       undefined,
     );
+  } finally {
+    await rm(piSessions, { recursive: true, force: true });
+  }
+});
+
+test("saved-session evidence separates header identity from exact continuation text", () => {
+  const followup = "Continue this exact saved session.";
+  const contents = [
+    { type: "session", id: "actual-session" },
+    {
+      type: "message",
+      message: { role: "user", content: followup },
+    },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+
+  assert.deepEqual(savedSessionHeaderEvidence(contents, "expected-session"), {
+    expectedSessionId: "expected-session",
+    actualSessionId: "actual-session",
+    sessionHeaderFound: true,
+    sessionIdMatches: false,
+  });
+  assert.deepEqual(
+    continuationSessionEvidence(contents, "expected-session", followup),
+    {
+      expectedSessionId: "expected-session",
+      actualSessionId: "actual-session",
+      sessionHeaderFound: true,
+      sessionIdMatches: false,
+      exactFollowupFound: true,
+    },
+  );
+  assert.equal(
+    continuationSessionEvidence(contents, "actual-session", `${followup} `)
+      .exactFollowupFound,
+    false,
+  );
+});
+
+test("manager readiness evidence includes a workspace child's mismatched session header", async () => {
+  const piSessions = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-"));
+  const path = join(piSessions, "lead.jsonl");
+  try {
+    await writeFile(
+      path,
+      `${JSON.stringify({ type: "session", id: "actual-session" })}\n${JSON.stringify({ secret: "not diagnostic" })}\n`,
+    );
+    const evidence = await managerChildSessionEvidence(
+      { paths: { piSessions } },
+      [
+        {
+          workspace_id: "assigned-workspace",
+          agent_session: { kind: "path", value: path },
+        },
+      ],
+      "assigned-workspace",
+      "expected-session",
+    );
+
+    assert.deepEqual(evidence, {
+      workspaceId: "assigned-workspace",
+      expectedSessionId: "expected-session",
+      candidates: [
+        {
+          identityKind: "path",
+          reportedSessionId: null,
+          path,
+          exists: true,
+          expectedSessionId: "expected-session",
+          actualSessionId: "actual-session",
+          sessionHeaderFound: true,
+          sessionIdMatches: false,
+        },
+      ],
+      expectedSessionFile: null,
+    });
   } finally {
     await rm(piSessions, { recursive: true, force: true });
   }
