@@ -91,20 +91,6 @@ export function parseSmokeArgs(args) {
   };
 }
 
-export function managerDiagnosticEnvArg(extensionPath) {
-  assert.ok(
-    typeof extensionPath === "string" && isAbsolute(extensionPath),
-    "manager diagnostic extension path must be absolute",
-  );
-  return `PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION=${extensionPath}`;
-}
-
-export function managerDiagnosticExtensionSource() {
-  return `export default function () {
-  process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = "1";
-}\n`;
-}
-
 export function managerDiagnosticLines(contents) {
   if (typeof contents !== "string") return [];
   const safeLines = [];
@@ -217,6 +203,20 @@ export function managerDiagnosticLines(contents) {
     }
   }
   return safeLines;
+}
+
+export async function captureManagerLeadDiagnostics(
+  ctx,
+  paneId,
+  readPane = nestedPaneText,
+) {
+  if (!ctx.managerRecoveryDiagnostics) return;
+  ctx.managerRecovery.leadDiagnostics = [];
+  try {
+    ctx.managerRecovery.leadDiagnostics = managerDiagnosticLines(
+      await readPane(ctx, paneId, "recent-unwrapped"),
+    );
+  } catch {}
 }
 
 export function formatSmokeFailure(error, stage) {
@@ -1147,7 +1147,7 @@ async function startNestedHerdr(
   paths,
   owned,
   primaryCheckoutPath,
-  managerDiagnosticExtension,
+  managerRecoveryDiagnostics,
 ) {
   const id = randomUUID().slice(0, 12);
   const sessionName = `pi-herdsman-smoke-${id}`;
@@ -1174,8 +1174,8 @@ async function startNestedHerdr(
       `PI_CODING_AGENT_DIR=${paths.piAgent}`,
       "--env",
       `PI_CODING_AGENT_SESSION_DIR=${paths.piSessions}`,
-      ...(managerDiagnosticExtension
-        ? ["--env", managerDiagnosticEnvArg(managerDiagnosticExtension)]
+      ...(managerRecoveryDiagnostics
+        ? ["--env", "PI_HERDSMAN_MANAGER_DIAGNOSTICS=1"]
         : []),
     ],
     { env: process.env },
@@ -2149,12 +2149,13 @@ async function runManagerRecoverySmoke(ctx) {
         answer &&
         !prematureReady &&
         !prematureFinish
-        ? { results, answer }
+        ? { results, answer, child }
         : null;
     },
     ctx.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
   );
   const first = ready.results[0];
+  await captureManagerLeadDiagnostics(ctx, ready.child.pane_id);
   markStage("initial-assignment-validation");
   assert.equal(first.ok, true);
   assert.equal(first.action, "delegate");
@@ -3017,15 +3018,6 @@ async function main() {
     managerReadyTimeoutMs:
       args.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
     managerRecoveryDiagnostics: args.managerRecoveryDiagnostics,
-    ...(args.managerRecoveryDiagnostics
-      ? {
-          managerDiagnosticExtension: join(
-            paths.piAgent,
-            "extensions",
-            "manager-recovery-diagnostics.mjs",
-          ),
-        }
-      : {}),
     expectedPackage: `${pkg.name}@${pkg.version}`,
     owned,
   };
@@ -3054,12 +3046,6 @@ async function main() {
     }
     ctx.authMechanism = await preparePi(paths, model);
     await prepareHerdr(paths);
-    if (ctx.managerDiagnosticExtension)
-      await writeFile(
-        ctx.managerDiagnosticExtension,
-        managerDiagnosticExtensionSource(),
-        { flag: "wx" },
-      );
     if (ctx.chiefTreeProbeExtension)
       await writeFile(
         ctx.chiefTreeProbeExtension,
@@ -3070,7 +3056,7 @@ async function main() {
       paths,
       owned,
       ctx.rootCwd,
-      ctx.managerDiagnosticExtension,
+      ctx.managerRecoveryDiagnostics,
     );
     ctx.sessionName = owned.sessionName;
     await waitForNestedHerdr(ctx);

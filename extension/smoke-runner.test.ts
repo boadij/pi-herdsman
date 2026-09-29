@@ -31,9 +31,8 @@ import {
   submitManagerLeave,
   parseSmokeArgs,
   formatSmokeFailure,
-  managerDiagnosticEnvArg,
-  managerDiagnosticExtensionSource,
   managerDiagnosticLines,
+  captureManagerLeadDiagnostics,
   savedSessionHeaderEvidence,
   staffDelegateResults,
   staffCloseResults,
@@ -284,18 +283,7 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
   );
 });
 
-test("manager diagnostics use a proven child extension argument and bounded pane evidence", () => {
-  const extension = join(tmpdir(), "manager-recovery-diagnostics.mjs");
-  assert.equal(
-    managerDiagnosticEnvArg(extension),
-    `PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION=${extension}`,
-  );
-  assert.throws(() => managerDiagnosticEnvArg("relative.mjs"));
-  assert.match(
-    managerDiagnosticExtensionSource(),
-    /PI_HERDSMAN_MANAGER_DIAGNOSTICS = "1"/,
-  );
-
+test("manager diagnostics retain bounded pane evidence", () => {
   const prefix = "[pi-herdsman-manager-diagnostic] ";
   const events = [
     { event: "session_start_reached" },
@@ -415,6 +403,54 @@ test("manager drain checkpoints are allowlisted, deduplicated and bounded withou
     ].map((category) => ({ event: "inbox_catch", category })),
   ])
     assert.deepEqual(managerDiagnosticLines(encode(event)), [encode(event)]);
+});
+
+test("successful manager recovery projects opt-in Lead diagnostics without changing acceptance", async () => {
+  const prefix = "[pi-herdsman-manager-diagnostic] ";
+  const ctx = {
+    managerRecoveryDiagnostics: true,
+    managerRecovery: {
+      stage: "lead-ready-handshake",
+      sessionId: "lead-session",
+    },
+  };
+  await captureManagerLeadDiagnostics(
+    ctx,
+    "lead-pane",
+    async (context, paneId, source) => {
+      assert.equal(context, ctx);
+      assert.equal(paneId, "lead-pane");
+      assert.equal(source, "recent-unwrapped");
+      return [
+        "private pane text",
+        `${prefix}{"event":"session_start_reached","payload":"private"}`,
+        `${prefix}{"event":"session_start_reached"}`,
+        `${prefix}{"event":"inbox_preflight","reason":"pass"}`,
+        `${prefix}{"event":"unknown","payload":"private"}`,
+      ].join("\n");
+    },
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.managerRecovery)), {
+    stage: "lead-ready-handshake",
+    sessionId: "lead-session",
+    leadDiagnostics: [
+      `${prefix}{"event":"session_start_reached"}`,
+      `${prefix}{"event":"inbox_preflight","reason":"pass"}`,
+    ],
+  });
+
+  await captureManagerLeadDiagnostics(ctx, "lead-pane", async () => {
+    throw new Error("pane unavailable");
+  });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(ctx.managerRecovery)).leadDiagnostics,
+    [],
+  );
+  const disabled = { managerRecoveryDiagnostics: false, managerRecovery: {} };
+  await captureManagerLeadDiagnostics(disabled, "lead-pane", async () => {
+    assert.fail("diagnostics must remain opt-in");
+  });
+  assert.deepEqual(disabled.managerRecovery, {});
 });
 
 test("smoke failure report separates stage from error details", () => {

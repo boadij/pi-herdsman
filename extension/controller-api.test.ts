@@ -1498,16 +1498,6 @@ async function runManagerStartupScenario(
         ),
         ["--session-id", starting.id, approvalFlag],
       );
-      const diagnosticExtension =
-        process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION;
-      if (diagnosticExtension)
-        assert.ok(
-          args.some(
-            (arg, index) =>
-              arg === "--extension" && args[index + 1] === diagnosticExtension,
-          ),
-          "opt-in diagnostics must be passed as a supported Pi extension argument",
-        );
       assert.deepEqual(Object.keys(starting).sort(), [
         "branch",
         "id",
@@ -2527,20 +2517,6 @@ async function runManagerStartupScenario(
 
 test("Manager activates only after mocked Lead-state publication", () =>
   runManagerStartupScenario("success"));
-test("Manager passes an opted-in diagnostic extension to the child Pi", async () => {
-  const previous = process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION;
-  process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION = join(
-    tmpdir(),
-    `manager-diagnostics-${randomUUID()}.mjs`,
-  );
-  try {
-    await runManagerStartupScenario("success");
-  } finally {
-    if (previous === undefined)
-      delete process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION;
-    else process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION = previous;
-  }
-});
 test("trusted Manager starts its Lead with approval and the assignment session ID", () =>
   runManagerStartupScenario("success", true));
 test("untrusted Manager starts its Lead without approval and with the assignment session ID", () =>

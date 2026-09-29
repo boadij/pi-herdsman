@@ -10334,12 +10334,6 @@ export default function (pi: ExtensionAPI): void {
               }));
           if (!piAlreadyRunning) {
             await assertUnoccupied(workspaceId!);
-            const diagnosticExtension =
-              process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION;
-            if (diagnosticExtension && !isAbsolute(diagnosticExtension))
-              throw new Error(
-                "Manager diagnostic extension path must be absolute",
-              );
             await startHerdrAgentInPane(pi, ctx, {
               primaryWorkspaceId,
               workspaceId,
@@ -10353,9 +10347,6 @@ export default function (pi: ExtensionAPI): void {
                 "--session-id",
                 assignment.id,
                 ctx.isProjectTrusted() ? "--approve" : "--no-approve",
-                ...(diagnosticExtension
-                  ? ["--extension", diagnosticExtension]
-                  : []),
               ],
               signal,
             });
