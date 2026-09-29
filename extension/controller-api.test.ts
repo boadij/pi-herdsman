@@ -1254,17 +1254,18 @@ async function runManagerStartupScenario(
       try {
         if (mode === "active-result-periodic") {
           t!.mock.timers.tick(2000);
-          await t!.waitFor(() => {
-            assert.equal(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
-              "active",
-            );
-            assert.ok(
-              listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
-                (path) => readChiefMessage(path).kind === "report_result",
-              ),
-            );
-          });
+          // The interval callback intentionally fire-and-forgets an async refresh.
+          // Yield once so its promise chain drains before asserting its effects.
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          assert.equal(
+            listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
+            "active",
+          );
+          assert.ok(
+            listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
+              (path) => readChiefMessage(path).kind === "report_result",
+            ),
+          );
         } else if (mode === "active-live") {
           const running = await execute();
           assert.equal(running.details.already_running, true);
