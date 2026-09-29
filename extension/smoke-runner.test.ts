@@ -13,6 +13,8 @@ import {
   parseToolSnapshots,
   chiefTreeBranchPlan,
   managerRecoveryFreshPrompt,
+  managerRecoveryClosePrompt,
+  managerRecoveryResumeOnlyPrompt,
   managerRecoveryResumePrompt,
   continuationResultsForPrompt,
   initialPromptForScenario,
@@ -28,6 +30,7 @@ import {
   parseSmokeArgs,
   formatSmokeFailure,
   staffDelegateResults,
+  staffCloseResults,
   hasManagerResultRef,
   managerSourceCheckout,
   managerWorktreeOpenArgs,
@@ -277,10 +280,54 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   assert.doesNotMatch(resume, /"assignment"|"task"|"base"|"files"/);
 });
 
+test("manager-recovery pauses and resumes by exact durable handles", () => {
+  const session = "01a0ed33-3720-75bd-908c-44c05c6a2fd9";
+  const branch = "herdsman/smoke-manager-recovery-exact";
+  const close = managerRecoveryClosePrompt(session);
+  assert.match(close, /staff_close exactly once/);
+  assert.ok(close.includes(JSON.stringify({ session })));
+  assert.match(close, /PI_HERDSMAN_MANAGER_RECOVERY_PAUSED/);
+  const resume = managerRecoveryResumeOnlyPrompt(branch);
+  assert.match(resume, /staff_delegate exactly once/);
+  assert.ok(resume.includes(JSON.stringify({ branch })));
+  assert.match(resume, /PI_HERDSMAN_MANAGER_RECOVERY_RESUMED/);
+});
+
+test("smoke parses successful staff_close results only", () => {
+  const result = {
+    ok: true,
+    action: "close",
+    session: "lead-session",
+    branch: "feat/example",
+  };
+  const contents = [
+    {
+      toolName: "staff_close",
+      content: [{ type: "text", text: "Lead closed; project work preserved." }],
+      details: result,
+    },
+    { toolName: "staff_delegate", content: JSON.stringify(result) },
+    { toolName: "staff_close", isError: true, content: JSON.stringify(result) },
+  ]
+    .map((message) =>
+      JSON.stringify({
+        type: "message",
+        message: { role: "toolResult", ...message },
+      }),
+    )
+    .join("\n");
+  assert.deepEqual(staffCloseResults(contents), [result]);
+});
+
 test("staff delegate results retain only valid successful delegation payloads in order", () => {
   const messages = [
     { toolName: "unrelated", content: '{"ok":true,"action":"delegate"}' },
     { toolName: "staff_delegate", content: "not JSON" },
+    {
+      toolName: "staff_delegate",
+      content: "not JSON",
+      details: { ok: true, action: "delegate", session: "must-not-match" },
+    },
     {
       toolName: "staff_delegate",
       isError: true,

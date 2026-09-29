@@ -56,10 +56,11 @@ managed descendants do not load the probe.
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
 generations), `chief-tree` (current Chief/session_tree behavior), and
-`manager-recovery` (real Manager delegation, leave/re-entry with unresolved
-project work, branch-only recovery after exact-session executor loss,
-no-duplicate-worktree identity, `supervisor_result` settlement, durable result
-retention, and successful Manager leave).
+`manager-recovery` (real Manager delegation and direct Lead routing, graceful
+`staff_close` pause with branch-only same-session resume, Manager leave/re-entry,
+branch-only recovery after exact-session executor loss, no-duplicate-worktree
+identity, `supervisor_result` settlement, durable result retention, and
+successful Manager leave).
 `chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool
 snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
@@ -309,21 +310,14 @@ After every smoke:
 
 ## Project Manager / Chief supervision live matrix
 
-For Manager lifecycle acceptance, use the configured smoke model above in
-disposable real Pi/Herdr sessions. Record the branch, exact Pi session,
-workspace, pane, and exact-ID cleanup result for each sequence. Automated
-`manager-recovery` covers Manager turnover with unresolved work followed by
-executor-loss recovery using `staff_delegate` with branch only. The
-normal-completion sequence and broader supervision matrix remain useful manual
-acceptance where explicitly run.
+`manager-recovery` is the canonical automated live Manager lifecycle check. It
+covers fresh delegation, direct Lead-to-Manager routing, graceful pause/resume,
+Manager turnover, executor-loss recovery, result settlement, durable result
+retention, and exact cleanup.
 
-1. From an ordinary Lead in the primary workspace, activate `/manager` and
-   `staff_delegate` a bounded task. Verify a real linked worktree and child
-   Lead, then have that Lead call `supervisor_result`. Verify the Manager
-   receives `report_result`, the assignment is removed, the canonical result
-   remains, and `/manager leave` succeeds.
-   These manual acceptance checks are not claims that a run passed. Clean up only
-   disposable resources by exact identity.
+The broader matrix below remains optional exploratory acceptance for supervision
+behavior not covered by the automated scenarios. A NOT RUN entry is not a claim
+of failure.
 
 The manual checks below are **NOT RUN**, not claims of failure or success.
 Automated live scenario results are separate and do not replace these checks.
