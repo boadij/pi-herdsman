@@ -294,23 +294,33 @@ export function chiefTreeSelectedRow(output, marker) {
   return rows.length === 1 && /^[ \t│├└─⊟⊞]*›\s/.test(rows[0]);
 }
 
-export function staffDelegateResults(contents) {
+function successfulStaffResults(contents, toolName, action) {
   return sessionEntries(contents).flatMap((entry) => {
     const message = entry.message;
     if (
       entry.type !== "message" ||
       message?.role !== "toolResult" ||
-      message.toolName !== "staff_delegate" ||
+      message.toolName !== toolName ||
       message.isError
     )
       return [];
     try {
       const value = JSON.parse(messageText(message.content));
-      return value?.ok === true && value.action === "delegate" ? [value] : [];
+      return value?.ok === true && value.action === action ? [value] : [];
     } catch {
-      return [];
+      // staff_close reports human-readable content; Pi persists its structured details.
+      const value = message.details;
+      return value?.ok === true && value.action === action ? [value] : [];
     }
   });
+}
+
+export function staffDelegateResults(contents) {
+  return successfulStaffResults(contents, "staff_delegate", "delegate");
+}
+
+export function staffCloseResults(contents) {
+  return successfulStaffResults(contents, "staff_close", "close");
 }
 
 export function hasManagerResultRef(contents, assignmentId) {
@@ -1044,6 +1054,14 @@ export function managerRecoveryFreshPrompt(branch) {
 
 export function managerRecoveryResumePrompt(branch, session) {
   return `Resume the existing work on branch ${branch}.\n\nCall staff_delegate using only:\n${JSON.stringify({ branch })}\n\nDo not start new work or supply task, base, or files.\n\nAfter recovery succeeds, send staff_message to session ${session} with exactly MANAGER_RECOVERY_FINISH.\n\nThen wait for that Lead's project result. Only after the result arrives, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_OK.`;
+}
+
+export function managerRecoveryClosePrompt(session) {
+  return `Pause the existing project work.\n\nCall staff_close exactly once using only:\n${JSON.stringify({ session })}\n\nDo not call any other tool.\n\nAfter staff_close succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_PAUSED`;
+}
+
+export function managerRecoveryResumeOnlyPrompt(branch) {
+  return `Resume the existing project work.\n\nCall staff_delegate exactly once using only:\n${JSON.stringify({ branch })}\n\nDo not supply task, base, or files.\nDo not call any other tool.\n\nAfter staff_delegate succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
 }
 
 export function initialPromptForScenario(scenario, ctx) {
@@ -1827,8 +1845,8 @@ async function runManagerRecoverySmoke(ctx) {
     1,
     "expected one child candidate process",
   );
-  const pid = initialProcesses[0].pid;
-  assert.ok(pid);
+  const initialPid = initialProcesses[0].pid;
+  assert.ok(initialPid);
   const pane = (
     resultOf(await nestedCommand(ctx, ["pane", "list"])).panes ?? []
   ).find((item) => (item.pane_id ?? item.id) === paneId);
@@ -1842,7 +1860,7 @@ async function runManagerRecoverySmoke(ctx) {
     ...ctx.managerRecovery,
     paneId,
     tabId: pane.tab_id,
-    firstPid: pid,
+    firstPid: initialPid,
   };
 
   const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -1879,6 +1897,119 @@ async function runManagerRecoverySmoke(ctx) {
     JSON.parse(await readFile(managerPath, "utf8")).leaseId;
   markStage("initial-assignment-validation");
   await assignmentRecord();
+  const closePrompt = managerRecoveryClosePrompt(first.session);
+  markStage("graceful-close");
+  await promptRoot(closePrompt);
+  await waitFor(
+    "graceful-close",
+    async () => {
+      const session = await rootSnapshot();
+      if (!session) return null;
+      const closes = staffCloseResults(session.contents);
+      if (closes.length !== 1) return null;
+      const close = closes[0];
+      if (
+        close.session !== first.session ||
+        close.branch !== branch ||
+        !assistantResultForSession(
+          session,
+          closePrompt,
+          "PI_HERDSMAN_MANAGER_RECOVERY_PAUSED",
+        )
+      )
+        return null;
+      const pids = await candidatePids(paneId).catch(() => []);
+      if (pids.length !== 0) return null;
+      for (const agent of await agents())
+        if (
+          agent.pane_id === paneId &&
+          agent.workspace_id === workspaceId &&
+          (await agentSessionId(ctx, agent)) === first.session
+        )
+          return null;
+      return close;
+    },
+    30_000,
+  );
+  markStage("graceful-close-validation");
+  await assignmentRecord();
+  assert.ok(
+    await paneExists(paneId),
+    "staff_close removed the preserved assignment pane",
+  );
+  const pausedWorktrees = await matchingWorktrees();
+  assert.equal(pausedWorktrees.length, 1);
+  assert.equal(
+    pausedWorktrees[0].path ?? pausedWorktrees[0].worktree_path,
+    worktreePath,
+  );
+
+  const resumePrompt = managerRecoveryResumeOnlyPrompt(branch);
+  markStage("graceful-resume");
+  await promptRoot(resumePrompt);
+  const resumed = await waitFor("graceful-resume", async () => {
+    const session = await rootSnapshot();
+    if (!session) return null;
+    const results = staffDelegateResults(session.contents);
+    if (
+      results.length !== 2 ||
+      !assistantResultForSession(
+        session,
+        resumePrompt,
+        "PI_HERDSMAN_MANAGER_RECOVERY_RESUMED",
+      )
+    )
+      return null;
+    return results[1];
+  });
+  markStage("graceful-resume-validation");
+  assert.equal(resumed.session, first.session);
+  assert.equal(resumed.branch, first.branch);
+  assert.equal(resumed.workspace_id, workspaceId);
+  await assignmentRecord();
+  const resumedWorktrees = await matchingWorktrees();
+  assert.equal(resumedWorktrees.length, 1);
+  assert.equal(
+    resumedWorktrees[0].path ?? resumedWorktrees[0].worktree_path,
+    worktreePath,
+  );
+  const resumedPane = (
+    resultOf(await nestedCommand(ctx, ["pane", "list"])).panes ?? []
+  ).find((item) => (item.pane_id ?? item.id) === paneId);
+  assert.ok(resumedPane);
+  assert.equal(resumedPane.workspace_id, workspaceId);
+  assert.equal(resumedPane.tab_id, ctx.managerRecovery.tabId);
+  assert.equal(
+    resolve(resumedPane.cwd ?? resumedPane.working_directory),
+    resolve(worktreePath),
+  );
+  let resumedAgent;
+  for (const agent of await agents())
+    if (
+      agent.pane_id === paneId &&
+      agent.workspace_id === workspaceId &&
+      (await agentSessionId(ctx, agent)) === first.session
+    ) {
+      resumedAgent = agent;
+      break;
+    }
+  assert.ok(resumedAgent, "resumed Lead was not listed in its original pane");
+  const resumedProcesses = await waitFor(
+    "graceful-resume-process",
+    async () => {
+      const processes = candidateProcess(
+        resultOf(await paneInfo(paneId)),
+        ctx.candidateExtension,
+        ctx.herdrStateExtension,
+      );
+      return processes.length === 1 && processes[0].pid !== initialPid
+        ? processes
+        : null;
+    },
+    30_000,
+  );
+  const resumedPid = resumedProcesses[0].pid;
+  ctx.managerRecovery.resumedPid = resumedPid;
   const previousLease = await managerLease();
   markStage("manager-turnover-leave");
   await submitManagerLeave(ctx, ctx.rootPaneId);
@@ -1896,7 +2027,7 @@ async function runManagerRecoverySmoke(ctx) {
     15_000,
   );
   await assignmentRecord();
-  assert.equal((await candidatePids(paneId)).includes(pid), true);
+  assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
   let retainedLead = false;
   for (const agent of await agents())
     if (
@@ -1922,7 +2053,7 @@ async function runManagerRecoverySmoke(ctx) {
     15_000,
   );
   await assignmentRecord();
-  assert.equal((await candidatePids(paneId)).includes(pid), true);
+  assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
 
   let beforeKillAgent;
   for (const agent of await agents())
@@ -1940,7 +2071,7 @@ async function runManagerRecoverySmoke(ctx) {
     ctx.herdrStateExtension,
   );
   assert.equal(proven.length, 1);
-  assert.equal(proven[0].pid, pid);
+  assert.equal(proven[0].pid, resumedPid);
   assert.ok(
     leadReadyCompleted(
       (beforeKillAgent.agent_session?.kind === "id"
@@ -1951,7 +2082,7 @@ async function runManagerRecoverySmoke(ctx) {
     ),
     "Lead READY turn was not completed immediately before kill",
   );
-  process.kill(pid, "SIGKILL");
+  process.kill(resumedPid, "SIGKILL");
   markStage("executor-loss-verification");
   await waitFor(
     "executor-loss",
@@ -1967,7 +2098,7 @@ async function runManagerRecoverySmoke(ctx) {
           stillLive = true;
           break;
         }
-      return !currentPids.includes(pid) && !stillLive;
+      return !currentPids.includes(resumedPid) && !stillLive;
     },
     30_000,
   );
@@ -1989,13 +2120,13 @@ async function runManagerRecoverySmoke(ctx) {
   const recovery = await waitFor("recovery", async () => {
     const session = await rootSnapshot();
     const results = session && staffDelegateResults(session.contents);
-    return results?.length === 2 ? { session, results } : null;
+    return results?.length === 3 ? { session, results } : null;
   });
-  const recovered = recovery.results[1];
+  const recovered = recovery.results[2];
   assert.equal(recovered.session, first.session);
   assert.equal(recovered.branch, first.branch);
   assert.equal(recovered.workspace_id, workspaceId);
-  assert.equal(recovery.results.length, 2);
+  assert.equal(recovery.results.length, 3);
   const afterWorktrees = await matchingWorktrees();
   assert.equal(afterWorktrees.length, 1);
   assert.equal(
@@ -2024,11 +2155,13 @@ async function runManagerRecoverySmoke(ctx) {
       ctx.candidateExtension,
       ctx.herdrStateExtension,
     );
-    return processes.length === 1 && processes[0].pid !== pid
+    return processes.length === 1 && processes[0].pid !== resumedPid
       ? processes
       : null;
   });
   const recoveredPid = recoveredProcesses[0].pid;
+  assert.notEqual(recoveredPid, initialPid);
+  assert.notEqual(recoveredPid, resumedPid);
   ctx.managerRecovery.recoveredPid = recoveredPid;
 
   const finalMarker = "PI_HERDSMAN_MANAGER_RECOVERY_OK";
@@ -2046,7 +2179,7 @@ async function runManagerRecoverySmoke(ctx) {
     return assistant ? session : null;
   });
   markStage("final-transcript-assertions");
-  assert.equal(staffDelegateResults(completed.contents).length, 2);
+  assert.equal(staffDelegateResults(completed.contents).length, 3);
   assert.equal((await matchingWorktrees()).length, 1);
   assert.ok(
     hasManagerResultRef(completed.contents, first.session),
