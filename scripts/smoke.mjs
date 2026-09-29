@@ -1881,28 +1881,36 @@ async function runManagerRecoverySmoke(ctx) {
     runtime,
     "assignments",
     hash(ctx.rootWorkspaceId),
-    `${first.session}.json`,
+    `${hash(branch)}.json`,
   );
   const managerPath = join(
     runtime,
     "managers",
     `${hash(ctx.rootWorkspaceId)}.json`,
   );
-  const assignmentRecord = async () => {
+  const assignmentBytes = async () => {
     const details = await lstat(assignmentPath);
     assert.ok(details.isFile() && !details.isSymbolicLink());
     assert.ok(details.size <= 16 * 1024);
-    const record = JSON.parse(await readFile(assignmentPath, "utf8"));
-    assert.equal(record.id, first.session);
-    assert.equal(record.branch, branch);
-    assert.equal(record.workspaceId, workspaceId);
-    assert.equal(record.phase, "active");
-    return record;
+    return readFile(assignmentPath, "utf8");
   };
   const managerLease = async () =>
     JSON.parse(await readFile(managerPath, "utf8")).leaseId;
   markStage("initial-assignment-validation");
-  await assignmentRecord();
+  const initialAssignmentBytes = await assignmentBytes();
+  const record = JSON.parse(initialAssignmentBytes);
+  assert.equal(record.id, first.session);
+  assert.equal(record.branch, branch);
+  assert.deepEqual(
+    Object.keys(record).sort(),
+    ["branch", "id", "repoKey", "text", "version"].sort(),
+  );
+  const assertUnchangedAssignment = async () =>
+    assert.equal(
+      await assignmentBytes(),
+      initialAssignmentBytes,
+      "runtime recovery must not mutate durable project intent",
+    );
   const closePrompt = managerRecoveryClosePrompt(first.session);
   markStage("graceful-close");
   await promptRoot(closePrompt);
@@ -1933,7 +1941,7 @@ async function runManagerRecoverySmoke(ctx) {
     30_000,
   );
   markStage("graceful-close-validation");
-  await assignmentRecord();
+  await assertUnchangedAssignment();
   assert.ok(
     await paneExists(paneId),
     "staff_close removed the preserved assignment pane",
@@ -1967,7 +1975,7 @@ async function runManagerRecoverySmoke(ctx) {
   assert.equal(resumed.session, first.session);
   assert.equal(resumed.branch, first.branch);
   assert.equal(resumed.workspace_id, workspaceId);
-  await assignmentRecord();
+  await assertUnchangedAssignment();
   const resumedWorktrees = await matchingWorktrees();
   assert.equal(resumedWorktrees.length, 1);
   assert.equal(
@@ -2028,7 +2036,7 @@ async function runManagerRecoverySmoke(ctx) {
     },
     15_000,
   );
-  await assignmentRecord();
+  await assertUnchangedAssignment();
   assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
   let retainedLead = false;
   for (const agent of await agents())
@@ -2054,7 +2062,7 @@ async function runManagerRecoverySmoke(ctx) {
     },
     15_000,
   );
-  await assignmentRecord();
+  await assertUnchangedAssignment();
   assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
 
   const beforeKillAgents = [];
@@ -2168,6 +2176,7 @@ async function runManagerRecoverySmoke(ctx) {
   assert.notEqual(recoveredPid, initialPid);
   assert.notEqual(recoveredPid, resumedPid);
   ctx.managerRecovery.recoveredPid = recoveredPid;
+  await assertUnchangedAssignment();
 
   const finalMarker = "PI_HERDSMAN_MANAGER_RECOVERY_OK";
   markStage("completion-marker");

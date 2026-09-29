@@ -22,6 +22,7 @@ import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import {
   claimChiefLease,
   listProjectAssignments,
+  projectAssignmentPath,
   listCoordinationMessagePaths,
   managerDescriptorPath,
   readChiefMessage,
@@ -1125,10 +1126,10 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
       const branchIndex = args.indexOf("--branch");
-      const assignment = listProjectAssignments(
+      const [assignment] = listProjectAssignments(
         supervisionRuntime(),
         WORKSPACE,
-      ).find((item) => item.phase === "creating");
+      );
       assert.ok(assignment);
       assert.equal(args[branchIndex + 1], `herdsman/${assignment.id}`);
       assert.equal(assignment.branch, args[branchIndex + 1]);
@@ -1179,10 +1180,10 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       return respond({});
     if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
       started = true;
-      const assignment = listProjectAssignments(
+      const [assignment] = listProjectAssignments(
         supervisionRuntime(),
         WORKSPACE,
-      ).find((item) => item.phase === "starting");
+      );
       assert.ok(assignment);
       const sessionIdIndex = args.indexOf("--session-id");
       assert.notEqual(sessionIdIndex, -1);
@@ -1260,12 +1261,32 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       supervisionRuntime(),
       WORKSPACE,
     )[0];
-    assert.equal(assignment?.phase, "active");
+    assert.ok(assignment);
     assert.equal(assignment?.id, childSession);
     assert.equal(assignment?.branch, `herdsman/${assignment?.id}`);
-    assert.equal(assignment?.workspaceId, childWorkspace);
-    assert.equal(assignment?.paneId, "child-pane");
-    assert.equal(assignment?.tabId, "child-tab");
+    const assignmentBytes = readFileSync(
+      projectAssignmentPath(supervisionRuntime(), WORKSPACE, assignment.branch),
+      "utf8",
+    );
+    assert.deepEqual(Object.keys(JSON.parse(assignmentBytes)).sort(), [
+      "branch",
+      "id",
+      "repoKey",
+      "text",
+      "version",
+    ]);
+    assert.equal(outcome.details.workspace_id, childWorkspace);
+    assert.ok(
+      pi.calls.some(
+        (args) =>
+          args[0] === "agent" &&
+          args[1] === "start" &&
+          args.includes("--pane") &&
+          args.includes("child-pane") &&
+          args.includes("--session-id") &&
+          args.includes(childSession),
+      ),
+    );
     const paths = listCoordinationMessagePaths(
       supervisionRuntime(),
       childSession,
@@ -1344,8 +1365,15 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         /Lead result source:.*assignment/,
       );
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
-        "active",
+        readFileSync(
+          projectAssignmentPath(
+            supervisionRuntime(),
+            WORKSPACE,
+            assignment.branch,
+          ),
+          "utf8",
+        ),
+        assignmentBytes,
       );
     } finally {
       await lead.events.get("session_shutdown")![0]();

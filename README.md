@@ -132,11 +132,15 @@ worktree. Direct-report messages are handled by Manager locally rather than
 echoed upward, and assigned Leads complete work with `supervisor_result`;
 `supervisor_message` is for progress or coordination, not completion.
 Manager's `staff_list` and automatic context show work by branch, including
-paused work without a running Lead. Start with `staff_delegate(task, branch)`;
-resume with `staff_delegate(branch)`. `staff_close(session)` stops a Lead while
+paused work without a running Lead. Project status is `active`, `paused`,
+`finished`, or `conflict`; a live Lead's runtime state is separate. Start with
+`staff_delegate(task, branch)`; resume with `staff_delegate(branch)`.
+`staff_close(session)` stops a Lead while
 preserving its work and Pi session; `staff_discard(branch)` abandons the
 assignment while retaining its Git branch and worktree. Leaving Manager mode
 also preserves project work; a later Manager can supervise it.
+If an existing assignment's checkout is unavailable, restore/open it to resume
+or discard the assignment and delegate again; it is not recreated automatically.
 Each delegated Lead inherits the Manager session's effective project-trust
 decision for that run: a trusted Manager launches Pi with `--approve`, and an
 untrusted Manager uses `--no-approve`. Pi's trust-protected project resources

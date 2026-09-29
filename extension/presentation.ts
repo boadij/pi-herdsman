@@ -31,6 +31,8 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type {
+  ProjectWorkSnapshot,
+  SupervisionSnapshot,
   SupervisionPresentationSnapshot,
   SupervisedManager,
 } from "./supervision.ts";
@@ -713,36 +715,42 @@ function supervisionCountLabel(managers: number, directLeads: number): string {
   );
 }
 
-function managerWorkRows(
-  snapshot: SupervisionPresentationSnapshot,
-  width: number,
-  cap: number,
-): string[] {
-  if (!("work" in snapshot) || !Array.isArray(snapshot.work)) return [];
-  const markers: Record<string, string> = {
-    working: "●",
-    blocked: "◉",
-    idle: "○",
-    paused: "○",
-    starting: "…",
-    finished: "✓",
-    broken: "!",
-  };
-  const work = snapshot.work;
-  const shown = work.slice(0, Math.max(0, cap));
+export type ManagerSupervisionItem =
+  | { kind: "work"; work: ProjectWorkSnapshot; lead?: SupervisedLeadDisplay }
+  | { kind: "lead"; lead: SupervisedLeadDisplay };
+
+/** The single ordered relationship projection used by Manager views. */
+export function managerSupervisionItems(
+  snapshot: SupervisionSnapshot,
+): ManagerSupervisionItem[] {
+  const leads = orderedSupervisionLeads(
+    supervisionPresentationReports(snapshot).filter(
+      (lead) => lead.role === "lead",
+    ),
+  );
+  const bySession = new Map(leads.map((lead) => [lead.lead, lead]));
+  const work = snapshot.work ?? [];
+  const assigned = new Set(work.map((item) => item.session));
   return [
-    ...shown.map((item, index) => {
-      const prefix = `${index === work.length - 1 ? "└─" : "├─"} ${markers[item.state] ?? "?"} `;
-      const suffix = ` · ${item.state}`;
-      return safeLine(
-        `${prefix}${safeLine(item.branch, width - visibleWidth(prefix) - visibleWidth(suffix))}${suffix}`,
-        width,
-      );
-    }),
-    ...(work.length > shown.length
-      ? [safeLine(`└─ … ${work.length - shown.length} more · /manager`, width)]
-      : []),
+    ...work.map((item) => ({
+      kind: "work" as const,
+      work: item,
+      lead: bySession.get(item.session),
+    })),
+    ...leads
+      .filter((lead) => !assigned.has(lead.lead))
+      .map((lead) => ({
+        kind: "lead" as const,
+        lead,
+      })),
   ];
+}
+
+function supervisionLeadMarker(lead: SupervisedLeadDisplay): string {
+  return (lead.runtimeState === "idle" || lead.runtimeState === "done") &&
+    (lead.agentCounts?.active ?? 0) > 0
+    ? "◉"
+    : lifecycleMarker(lead.runtimeState);
 }
 
 /** Renders the bounded ambient lead rows. */
@@ -779,55 +787,77 @@ export function renderSupervisionLeads(
     managerSnapshot && "project" in managerSnapshot
       ? managerSnapshot.project
       : undefined;
-  const workRows = managerSnapshot
-    ? managerWorkRows(managerSnapshot, width, cap)
-    : [];
-  const managedSessions = new Set(
-    managerSnapshot &&
-      "work" in managerSnapshot &&
-      Array.isArray(managerSnapshot.work)
-      ? managerSnapshot.work.map((item) => item.session)
-      : [],
-  );
   const header =
     role === "manager"
       ? `● manager${project ? ` · ${project}` : ""}${status === "stale" ? " · stale" : ""}`
       : `● chief · ${supervisionCountLabel(managers, leads)}${status === "stale" ? " · stale" : ""}`;
-  return [
-    safeLine(header, width),
-    ...workRows,
-    ...shown
-      .filter((lead) => role !== "manager" || !managedSessions.has(lead.lead))
-      .flatMap((lead, index) => {
-        const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
-        const needsYou = lead.needsYou === true;
-        const marker =
-          (lead.runtimeState === "idle" || lead.runtimeState === "done") &&
-          (lead.agentCounts?.active ?? 0) > 0
-            ? "◉"
-            : lifecycleMarker(lead.runtimeState);
-        const navigation = lead.lead === selectedLead ? ">" : "";
-        const attention = needsYou ? "!" : "";
-        const indicators = `${navigation}${attention}`;
-        const counts = lead.leadCounts;
-        const row = safeLine(
-          role === "manager"
-            ? `${branch} ${indicators}${marker} other Lead · ${lead.branch ?? lead.displayName}`
-            : `${branch} ${indicators}${marker} ${lead.displayName}${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`,
+  if (
+    managerSnapshot &&
+    "leads" in managerSnapshot &&
+    !("managers" in managerSnapshot)
+  ) {
+    const items = managerSupervisionItems(managerSnapshot);
+    const visible = items.slice(0, Math.max(0, cap));
+    const remaining = items.length - visible.length;
+    const workMarkers = {
+      active: "●",
+      paused: "○",
+      finished: "✓",
+      conflict: "!",
+    };
+    return [
+      safeLine(header, width),
+      ...visible.map((item, index) => {
+        const branch = index === visible.length - 1 && !remaining ? "└─" : "├─";
+        const lead = item.lead;
+        const attention = lead?.needsYou ? "!" : "";
+        const navigation = lead && lead.lead === selectedLead ? ">" : "";
+        if (item.kind === "lead")
+          return safeLine(
+            `${branch} ${navigation}${attention}${supervisionLeadMarker(item.lead)} ${item.lead.branch ?? item.lead.displayName} · Lead`,
+            width,
+          );
+        const marker = lead
+          ? supervisionLeadMarker(lead)
+          : workMarkers[item.work.status];
+        const prefix = `${branch} ${navigation}${attention}${marker} `;
+        const suffix = ` · ${item.work.status}`;
+        return safeLine(
+          `${prefix}${safeLine(item.work.branch, width - visibleWidth(prefix) - visibleWidth(suffix))}${suffix}`,
           width,
         );
-        return [
-          row,
-          ...(lead.leads ?? [])
-            .slice(0, 3)
-            .map((child) =>
-              safeLine(
-                `   ${child.branch ?? child.display_name} · ${child.runtime_state}${child.needs_you ? " · needs you" : ""}${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`,
-                width,
-              ),
-            ),
-        ];
       }),
+      ...(remaining
+        ? [safeLine(`└─ … ${remaining} more · /manager`, width)]
+        : []),
+    ];
+  }
+  return [
+    safeLine(header, width),
+    ...shown.flatMap((lead, index) => {
+      const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
+      const needsYou = lead.needsYou === true;
+      const marker = supervisionLeadMarker(lead);
+      const navigation = lead.lead === selectedLead ? ">" : "";
+      const attention = needsYou ? "!" : "";
+      const indicators = `${navigation}${attention}`;
+      const counts = lead.leadCounts;
+      const row = safeLine(
+        `${branch} ${indicators}${marker} ${lead.displayName}${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`,
+        width,
+      );
+      return [
+        row,
+        ...(lead.leads ?? [])
+          .slice(0, 3)
+          .map((child) =>
+            safeLine(
+              `   ${child.branch ?? child.display_name} · ${child.runtime_state}${child.needs_you ? " · needs you" : ""}${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`,
+              width,
+            ),
+          ),
+      ];
+    }),
     ...(hidden > 0 ? [safeLine(`└─ … ${hidden} more · /${role}`, width)] : []),
   ];
 }
@@ -869,7 +899,7 @@ function supervisionValue(value: unknown): string {
     .replaceAll(">", "\\u003e");
 }
 
-/** Formats validated supervision for hidden persistent Chief context. */
+/** Formats validated supervision for hidden persistent Chief or Manager context. */
 export function formatSupervisionContext(
   snapshot: SupervisionPresentationSnapshot | undefined,
   options: { status: SupervisionContextStatus; role?: "chief" | "manager" },
@@ -938,6 +968,23 @@ export function formatSupervisionContext(
         ),
       ].join("\n"),
     );
+  if (
+    role === "manager" &&
+    snapshot &&
+    "work" in snapshot &&
+    snapshot.work?.length
+  ) {
+    sections.push("project_work:");
+    sections.push(
+      ...snapshot.work.map(
+        (work) =>
+          `  ${supervisionValue(work.branch)} · ${supervisionValue(work.status)}` +
+          `${work.runtimeState ? ` · runtime=${supervisionValue(work.runtimeState)}` : ""}` +
+          ` · session=${supervisionValue(work.session)}` +
+          `${work.issue ? ` · ${supervisionValue(work.issue)}` : ""}`,
+      ),
+    );
+  }
   for (const displayed of orderedSupervisionLeads(reports)) {
     const lead = leads.get(displayed.lead);
     if (!lead) continue;

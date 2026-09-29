@@ -1696,88 +1696,48 @@ export function claimManagerLease(
   };
 }
 
-export type ProjectAssignment = {
+export type ProjectAssignment = Readonly<{
   version: 1;
   id: string;
-  primaryWorkspaceId: string;
   repoKey: string;
-  base: string;
   branch: string;
   text: string;
-  phase: "creating" | "starting" | "active";
-  workspaceId?: string;
-  paneId?: string;
-  tabId?: string;
-  createdAt: number;
-  updatedAt: number;
-};
+}>;
 export const PROJECT_ASSIGNMENT_MAX_BYTES = 16 * 1024;
 
 export function projectAssignmentPath(
   runtime: SupervisionRuntime,
   primaryWorkspaceId: string,
-  id: string,
+  branch: string,
 ): string {
-  if (!validNativeIdentity(primaryWorkspaceId) || !UUID.test(id))
+  if (!validNativeIdentity(primaryWorkspaceId) || !validNativeIdentity(branch))
     throw new Error("Invalid project assignment identity");
   return join(
     runtime.assignments,
     createHash("sha256").update(primaryWorkspaceId).digest("hex"),
-    `${id}.json`,
+    `${createHash("sha256").update(branch).digest("hex")}.json`,
   );
 }
 
 function validProjectAssignment(value: unknown): value is ProjectAssignment {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const r = value as Record<string, unknown>;
-  const required = [
-    "version",
-    "id",
-    "primaryWorkspaceId",
-    "repoKey",
-    "base",
-    "branch",
-    "text",
-    "phase",
-    "createdAt",
-    "updatedAt",
-  ];
-  const optional = ["workspaceId", "paneId", "tabId"];
-  const placementKeys = ["workspaceId", "paneId", "tabId"] as const;
-  const hasPlacement = placementKeys.every((key) =>
-    validNativeIdentity(r[key]),
-  );
-  const hasNoPlacement = placementKeys.every((key) => r[key] === undefined);
-  const phaseValid =
-    r.phase === "creating"
-      ? hasNoPlacement
-      : (r.phase === "starting" || r.phase === "active") && hasPlacement;
+  const required = ["version", "id", "repoKey", "branch", "text"];
   return (
     required.every((key) => Object.hasOwn(r, key)) &&
-    Object.keys(r).every(
-      (key) => required.includes(key) || optional.includes(key),
-    ) &&
+    Object.keys(r).length === required.length &&
     r.version === 1 &&
     UUID.test(String(r.id)) &&
-    validNativeIdentity(r.primaryWorkspaceId) &&
     validNativeIdentity(r.repoKey) &&
-    validNativeIdentity(r.base) &&
     validNativeIdentity(r.branch) &&
     typeof r.text === "string" &&
-    r.text.length > 0 &&
-    phaseValid &&
-    optional.every(
-      (key) => !Object.hasOwn(r, key) || validNativeIdentity(r[key]),
-    ) &&
-    Number.isInteger(r.createdAt) &&
-    (r.createdAt as number) >= 0 &&
-    Number.isInteger(r.updatedAt) &&
-    (r.updatedAt as number) >= (r.createdAt as number)
+    r.text.length > 0
   );
 }
 
 export function writeProjectAssignment(
   runtime: SupervisionRuntime,
+  primaryWorkspaceId: string,
   assignment: ProjectAssignment,
 ): string {
   if (!validProjectAssignment(assignment))
@@ -1787,8 +1747,8 @@ export function writeProjectAssignment(
     throw new Error("Project assignment is too large");
   const path = projectAssignmentPath(
     runtime,
-    assignment.primaryWorkspaceId,
-    assignment.id,
+    primaryWorkspaceId,
+    assignment.branch,
   );
   const directory = dirname(path);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -1820,9 +1780,16 @@ export function writeProjectAssignment(
 export function readProjectAssignment(
   runtime: SupervisionRuntime,
   primaryWorkspaceId: string,
-  id: string,
+  branch: string,
 ): ProjectAssignment | undefined {
-  const path = projectAssignmentPath(runtime, primaryWorkspaceId, id);
+  const path = projectAssignmentPath(runtime, primaryWorkspaceId, branch);
+  return readProjectAssignmentFile(path, branch);
+}
+
+function readProjectAssignmentFile(
+  path: string,
+  branch?: string,
+): ProjectAssignment | undefined {
   let value: unknown;
   try {
     if (statSync(path).size > PROJECT_ASSIGNMENT_MAX_BYTES)
@@ -1840,7 +1807,11 @@ export function readProjectAssignment(
   }
   if (!validProjectAssignment(value))
     throw projectAssignmentReadError(path, "invalid assignment schema");
-  if (value.id !== id || value.primaryWorkspaceId !== primaryWorkspaceId)
+  if (
+    (branch !== undefined && value.branch !== branch) ||
+    basename(path) !==
+      `${createHash("sha256").update(value.branch).digest("hex")}.json`
+  )
     throw projectAssignmentReadError(path, "assignment identity mismatch");
   return value;
 }
@@ -1861,7 +1832,7 @@ export function listProjectAssignments(
   primaryWorkspaceId: string,
 ): ProjectAssignment[] {
   const directory = dirname(
-    projectAssignmentPath(runtime, primaryWorkspaceId, randomUUID()),
+    projectAssignmentPath(runtime, primaryWorkspaceId, "lookup"),
   );
   let entries: string[];
   try {
@@ -1871,26 +1842,40 @@ export function listProjectAssignments(
     throw error;
   }
   return entries
-    .filter((entry) => UUID.test(entry.slice(0, -5)) && entry.endsWith(".json"))
-    .sort()
+    .filter((entry) => /^[a-f0-9]{64}\.json$/.test(entry))
     .map((entry) => {
-      const id = entry.slice(0, -5);
-      const assignment = readProjectAssignment(runtime, primaryWorkspaceId, id);
+      const assignment = readProjectAssignmentFile(join(directory, entry));
       if (!assignment)
         throw projectAssignmentReadError(
           join(directory, entry),
           "file disappeared while listing",
         );
       return assignment;
-    });
+    })
+    .sort((a, b) => a.branch.localeCompare(b.branch));
+}
+
+export function findProjectAssignmentBySession(
+  runtime: SupervisionRuntime,
+  primaryWorkspaceId: string,
+  repoKey: string,
+  sessionId: string,
+): ProjectAssignment | undefined {
+  const matches = listProjectAssignments(runtime, primaryWorkspaceId).filter(
+    (assignment) =>
+      assignment.repoKey === repoKey && assignment.id === sessionId,
+  );
+  if (matches.length > 1)
+    throw new Error(`Multiple project assignments claim session ${sessionId}`);
+  return matches[0];
 }
 
 export function removeProjectAssignment(
   runtime: SupervisionRuntime,
   primaryWorkspaceId: string,
-  id: string,
+  branch: string,
 ): void {
-  const path = projectAssignmentPath(runtime, primaryWorkspaceId, id);
+  const path = projectAssignmentPath(runtime, primaryWorkspaceId, branch);
   try {
     unlinkSync(path);
     fsyncDirectory(dirname(path));
@@ -1989,21 +1974,13 @@ export type SupervisionSnapshot = {
   work?: ProjectWorkSnapshot[];
   diagnostics?: string[];
 };
-export type ProjectWorkState =
-  | "starting"
-  | "working"
-  | "blocked"
-  | "idle"
-  | "paused"
-  | "finished"
-  | "broken";
+export type ProjectWorkStatus = "active" | "paused" | "finished" | "conflict";
 export type ProjectWorkSnapshot = Readonly<{
   branch: string;
   session: string;
-  state: ProjectWorkState;
+  status: ProjectWorkStatus;
+  runtimeState?: RuntimeState;
   task?: string;
-  workspaceId?: string;
-  paneId?: string;
   result?: string;
   issue?: string;
 }>;
@@ -2016,7 +1993,7 @@ export function projectWorkSnapshot(options: {
   }>[];
   leads: readonly Pick<
     SupervisedLead,
-    "lead" | "workspaceId" | "paneId" | "runtimeState"
+    "lead" | "workspaceId" | "runtimeState"
   >[];
   /** Canonical result refs keyed by assignment session ID. */
   results: ReadonlyMap<string, string>;
@@ -2025,57 +2002,37 @@ export function projectWorkSnapshot(options: {
     const worktrees = options.worktrees.filter(
       (item) => item.branch === assignment.branch,
     );
-    const worktree = worktrees[0];
-    const occupants = options.leads.filter(
-      (lead) =>
-        lead.workspaceId ===
-        (worktree?.open_workspace_id ?? assignment.workspaceId),
-    );
     const exact = options.leads.filter((lead) => lead.lead === assignment.id);
     const result = options.results.get(assignment.id);
-    let state: ProjectWorkState;
+    let status: ProjectWorkStatus;
+    let runtimeState: RuntimeState | undefined;
     let issue: string | undefined;
-    if (result !== undefined) state = "finished";
-    else if (
-      worktrees.length > 1 ||
-      options.assignments.filter(
-        (item) =>
-          item.repoKey === assignment.repoKey &&
-          item.branch === assignment.branch,
-      ).length > 1
-    ) {
-      state = "broken";
-      issue = "multiple records claim this branch";
-    } else if (assignment.phase === "creating") state = "starting";
-    else if (!worktree) {
-      state = "broken";
-      issue = "worktree is unavailable";
-    } else if (occupants.some((lead) => lead.lead !== assignment.id)) {
-      state = "broken";
-      issue = "another Lead is active in this worktree";
-    } else if (
-      exact.length > 1 ||
-      (exact.length === 1 &&
-        (exact[0]!.workspaceId !== assignment.workspaceId ||
-          exact[0]!.paneId !== assignment.paneId ||
-          worktree.open_workspace_id !== assignment.workspaceId))
-    ) {
-      state = "broken";
-      issue = "Lead placement is inconsistent";
-    } else if (assignment.phase === "starting") {
-      state =
-        worktree.open_workspace_id === assignment.workspaceId
-          ? "starting"
-          : "broken";
-      if (state === "broken")
-        issue = "worktree placement changed while starting";
-    } else if (exact.length === 1) {
-      const runtime = exact[0]!.runtimeState;
-      state =
-        runtime === "working" || runtime === "blocked" || runtime === "idle"
-          ? runtime
-          : "idle";
-    } else state = "paused";
+    if (result !== undefined) status = "finished";
+    else if (worktrees.length > 1 || exact.length > 1) {
+      status = "conflict";
+      issue = "project runtime identity is ambiguous";
+    } else {
+      const workspaceId = worktrees[0]?.open_workspace_id ?? undefined;
+      const occupants = workspaceId
+        ? options.leads.filter((lead) => lead.workspaceId === workspaceId)
+        : [];
+      if (
+        exact.length === 1 &&
+        (!workspaceId || exact[0]!.workspaceId !== workspaceId)
+      ) {
+        status = "conflict";
+        issue = "assigned Lead is running outside its branch worktree";
+      } else if (occupants.some((lead) => lead.lead !== assignment.id)) {
+        status = "conflict";
+        issue = "another Lead is active in this worktree";
+      } else if (exact.length === 1) {
+        status = "active";
+        runtimeState = exact[0]!.runtimeState;
+      } else {
+        status = "paused";
+        if (worktrees.length === 0) issue = "worktree is unavailable";
+      }
+    }
     const task = assignment.text
       .replace(/[\u0000-\u001f\u007f]/g, " ")
       .replace(/\s+/gu, " ")
@@ -2084,7 +2041,8 @@ export function projectWorkSnapshot(options: {
     return {
       branch: assignment.branch,
       session: assignment.id,
-      state,
+      status,
+      ...(runtimeState ? { runtimeState } : {}),
       ...(task
         ? {
             task:
@@ -2093,10 +2051,6 @@ export function projectWorkSnapshot(options: {
                 : `${characters.slice(0, 159).join("")}…`,
           }
         : {}),
-      ...(assignment.workspaceId
-        ? { workspaceId: assignment.workspaceId }
-        : {}),
-      ...(assignment.paneId ? { paneId: assignment.paneId } : {}),
       ...(result !== undefined ? { result } : {}),
       ...(issue ? { issue } : {}),
     };
