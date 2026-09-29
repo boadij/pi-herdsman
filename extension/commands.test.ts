@@ -1230,7 +1230,26 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         },
       });
     if (command === "herdr" && isAgentList(args))
-      return respond({ agents: [managerAgent] });
+      return respond({
+        agents: [
+          managerAgent,
+          ...(started
+            ? [
+                {
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: childSession,
+                  },
+                  workspace_id: childWorkspace,
+                  pane_id: "child-pane",
+                  tab_id: "child-tab",
+                },
+              ]
+            : []),
+        ],
+      });
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
       return respond({ agent: managerAgent });
     return respond({});

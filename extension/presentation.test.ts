@@ -4658,6 +4658,35 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
   );
 });
 
+test("Manager work status outranks live Lead markers except when active", () => {
+  for (const [status, marker] of [
+    ["active", "●"],
+    ["paused", "○"],
+    ["conflict", "!"],
+    ["finished", "✓"],
+  ] as const) {
+    for (const needsYou of [false, true]) {
+      const snapshot = {
+        work: [{ branch: "feat/example", session: "assigned", status }],
+        leads: [
+          lead({
+            lead: "assigned",
+            runtimeState: "working",
+            needsYou,
+          }),
+        ],
+      };
+      assert.deepEqual(
+        renderSupervisionLeads(snapshot, 120, { role: "manager" }, "assigned"),
+        [
+          "● manager",
+          `└─ >${needsYou ? "!" : ""}${marker} feat/example · ${status}`,
+        ],
+      );
+    }
+  }
+});
+
 test("Manager mixed tree has one final connector and independent Leads share the row cap", () => {
   const snapshot = {
     project: "pi-herdsman",

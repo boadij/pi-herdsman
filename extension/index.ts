@@ -7991,9 +7991,30 @@ export default function (pi: ExtensionAPI): void {
           assignment.text &&
           record.text === projectAssignmentInstruction(assignment),
       );
+      const assignment = matches.length === 1 ? matches[0] : undefined;
+      if (!assignment || readCanonicalProjectResult(sessionId) !== undefined)
+        return false;
+      const topology = await runHerdr(
+        pi,
+        ctx,
+        ["worktree", "list", "--workspace", scope.primaryWorkspaceId],
+        { signal: ctx.signal },
+      );
+      if (
+        topology?.source?.source_workspace_id !== scope.primaryWorkspaceId ||
+        topology?.source?.repo_key !== scope.repoKey ||
+        !Array.isArray(topology?.worktrees)
+      )
+        return false;
+      const worktrees = topology.worktrees.filter(
+        (worktree: any) => worktree.branch === assignment.branch,
+      );
+      const live = await liveLead(ctx, sessionId);
       return (
-        matches.length === 1 &&
-        readCanonicalProjectResult(sessionId) === undefined
+        worktrees.length === 1 &&
+        live.length === 1 &&
+        scope.workspaceIds.includes(live[0].workspace_id) &&
+        worktrees[0].open_workspace_id === live[0].workspace_id
       );
     }
     const chief = await currentManager(ctx);
@@ -9742,11 +9763,11 @@ export default function (pi: ExtensionAPI): void {
                   { signal },
                 );
               } catch (error) {
-                if (
-                  error instanceof OperationError &&
-                  error.detail.details?.herdrCode === "not_found"
-                )
-                  continue;
+                const code =
+                  error instanceof OperationError
+                    ? error.detail.details?.herdrCode
+                    : undefined;
+                if (code === "not_found" || code === "pane_not_found") continue;
                 throw error;
               }
               if (
@@ -10621,7 +10642,13 @@ export default function (pi: ExtensionAPI): void {
                       ? {
                           value: entry.work.branch,
                           label: entry.work.branch,
-                          description: entry.work.status,
+                          description: [
+                            entry.work.status,
+                            entry.work.runtimeState,
+                            entry.work.issue,
+                          ]
+                            .filter(Boolean)
+                            .join(" · "),
                         }
                       : {
                           value: entry.lead.lead,
@@ -10674,11 +10701,19 @@ export default function (pi: ExtensionAPI): void {
               const branch = item.value;
               const entry = work.find((item) => item.branch === branch);
               if (!entry) return;
+              const liveLead = managerSupervisionItems(
+                supervisionSnapshot,
+              ).some(
+                (item) =>
+                  item.kind === "work" &&
+                  item.work.branch === branch &&
+                  !!item.lead,
+              );
               void (async () => {
                 const actions =
                   entry.status === "finished"
                     ? [{ value: "view", label: "View result" }]
-                    : entry.status === "conflict"
+                    : entry.status === "conflict" && !liveLead
                       ? [{ value: "discard", label: "Discard work" }]
                       : entry.status === "paused"
                         ? [
@@ -10755,7 +10790,10 @@ export default function (pi: ExtensionAPI): void {
             );
             renderedLeads = [
               status,
-              ...work.map((item) => `${item.branch}:${item.status}`),
+              ...work.map(
+                (item) =>
+                  `${item.branch}:${item.status}:${item.runtimeState ?? ""}:${item.issue ?? ""}`,
+              ),
               ...leads.map(
                 (lead) =>
                   `${lead.lead}:${lead.runtimeState}:${lead.pendingAskId ?? ""}:${lead.agentCounts.total}`,
@@ -10812,7 +10850,8 @@ export default function (pi: ExtensionAPI): void {
                 status,
                 ...("work" in supervisionSnapshot
                   ? (supervisionSnapshot.work?.map(
-                      (item) => `${item.branch}:${item.status}`,
+                      (item) =>
+                        `${item.branch}:${item.status}:${item.runtimeState ?? ""}:${item.issue ?? ""}`,
                     ) ?? [])
                   : []),
                 ...leads.map(
@@ -12109,9 +12148,12 @@ export default function (pi: ExtensionAPI): void {
             const matches = topology.worktrees.filter(
               (item: any) => item.branch === assignment.branch,
             );
+            const live = await liveLead(ctx, assignment.id);
             if (
               matches.length !== 1 ||
-              matches[0].open_workspace_id !== workspaceId
+              live.length !== 1 ||
+              !scope.workspaceIds.includes(live[0].workspace_id) ||
+              matches[0].open_workspace_id !== live[0].workspace_id
             )
               throw new Error(
                 "Assigned Lead is not running in its project branch worktree",
@@ -12146,7 +12188,7 @@ export default function (pi: ExtensionAPI): void {
               assignment: assignment.id,
               cwd: ctx.cwd,
               piSessionId: ctx.sessionManager.getSessionId(),
-              workspaceId: process.env.HERDR_WORKSPACE_ID,
+              workspaceId: live[0].workspace_id,
               ...(assignment.branch ? { branch: assignment.branch } : {}),
             };
             const body = `Lead result source: ${JSON.stringify(provenance)}\n\n${prepared.text}`;

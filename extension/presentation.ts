@@ -817,9 +817,10 @@ export function renderSupervisionLeads(
             `${branch} ${navigation}${attention}${supervisionLeadMarker(item.lead)} ${item.lead.branch ?? item.lead.displayName} · Lead`,
             width,
           );
-        const marker = lead
-          ? supervisionLeadMarker(lead)
-          : workMarkers[item.work.status];
+        const marker =
+          item.work.status === "active" && lead
+            ? supervisionLeadMarker(lead)
+            : workMarkers[item.work.status];
         const prefix = `${branch} ${navigation}${attention}${marker} `;
         const suffix = ` · ${item.work.status}`;
         return safeLine(
