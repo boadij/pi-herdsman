@@ -1905,6 +1905,7 @@ export function sameObservedSessionPath(left: string, right: string): boolean {
   try {
     canonicalRight = realpathSync(right);
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw new Error(
       `could not canonicalize exact Pi session path ${right}: ${String(error)}`,
     );

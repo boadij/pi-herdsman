@@ -1069,6 +1069,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
   );
   const childWorkspace = `child-${randomUUID()}`;
   let childSession = `lead-${randomUUID()}`;
+  const childSessionPath = () => join(tmpdir(), `${childSession}.jsonl`);
   let created = false;
   let started = false;
   const respond = (result: unknown) => ({
@@ -1202,8 +1203,8 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
           agent_session: {
             source: "herdr:pi",
             agent: "pi",
-            kind: "id",
-            value: childSession,
+            kind: "path",
+            value: childSessionPath(),
           },
         },
       });
@@ -1218,8 +1219,8 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
                   agent_session: {
                     source: "herdr:pi",
                     agent: "pi",
-                    kind: "id",
-                    value: childSession,
+                    kind: "path",
+                    value: childSessionPath(),
                   },
                   workspace_id: childWorkspace,
                   pane_id: "child-pane",
@@ -1239,8 +1240,8 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
                   agent_session: {
                     source: "herdr:pi",
                     agent: "pi",
-                    kind: "id",
-                    value: childSession,
+                    kind: "path",
+                    value: childSessionPath(),
                   },
                   workspace_id: childWorkspace,
                   pane_id: "child-pane",
@@ -1352,7 +1353,9 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     registerExtension!(lead.pi as never);
     const leadCtx = fakeContext() as any;
     leadCtx.sessionManager.getSessionId = () => childSession;
+    leadCtx.sessionManager.getSessionFile = childSessionPath;
     try {
+      assert.equal(realFs.existsSync(childSessionPath()), false);
       await lead.events.get("session_start")![0](undefined, leadCtx);
       await t.waitFor(() =>
         assert.ok(
@@ -1363,6 +1366,38 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
           "Project assignment was not deliverable after Manager departure",
         ),
       );
+      assert.equal(realFs.existsSync(childSessionPath()), false);
+      lead.pi.sendUserMessage("Begin the assigned work.");
+      const firstUserMessage = {
+        type: "message",
+        id: "first-user-message",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Begin the assigned work." }],
+        },
+      };
+      realFs.writeFileSync(
+        childSessionPath(),
+        [
+          JSON.stringify({
+            type: "session",
+            version: 3,
+            id: childSession,
+            timestamp: new Date().toISOString(),
+            cwd: "/tmp/manager-child",
+          }),
+          JSON.stringify(firstUserMessage),
+        ].join("\n") + "\n",
+      );
+      nativeSessions.set(childSessionPath(), {
+        id: childSession,
+        path: childSessionPath(),
+        cwd: "/tmp/manager-child",
+        entries: [firstUserMessage],
+      });
+      assert.equal(realFs.existsSync(childSessionPath()), true);
       const supervisor = lead.tools.find(
         (tool) => tool.name === "supervisor_result",
       )!;
@@ -1396,6 +1431,8 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       );
     } finally {
       await lead.events.get("session_shutdown")![0]();
+      nativeSessions.delete(childSessionPath());
+      realFs.rmSync(childSessionPath(), { force: true });
     }
     process.env.HERDR_WORKSPACE_ID = WORKSPACE;
     process.env.HERDR_PANE_ID = "root-pane";

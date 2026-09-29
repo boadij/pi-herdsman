@@ -31,6 +31,9 @@ import {
   submitManagerLeave,
   parseSmokeArgs,
   formatSmokeFailure,
+  managerDiagnosticEnvArg,
+  managerDiagnosticExtensionSource,
+  managerDiagnosticLines,
   savedSessionHeaderEvidence,
   staffDelegateResults,
   staffCloseResults,
@@ -210,7 +213,12 @@ test("nested Herdr hashes the API socket while checking both socket limits", () 
 });
 
 test("smoke CLI parses scenarios and one-off model overrides", async () => {
-  assert.deepEqual(parseSmokeArgs([]), { scenario: "core", model: undefined });
+  assert.deepEqual(parseSmokeArgs([]), {
+    scenario: "core",
+    model: undefined,
+    managerReadyTimeoutMs: undefined,
+    managerRecoveryDiagnostics: false,
+  });
   for (const scenario of [
     "core",
     "continuation",
@@ -223,6 +231,8 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     {
       scenario: "chief-tree",
       model: "provider/model:high",
+      managerReadyTimeoutMs: undefined,
+      managerRecoveryDiagnostics: false,
     },
   );
   assert.deepEqual(
@@ -230,12 +240,181 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     {
       scenario: "continuation",
       model: "provider/model:xhigh",
+      managerReadyTimeoutMs: undefined,
+      managerRecoveryDiagnostics: false,
     },
   );
   assert.throws(() => parseSmokeArgs(["core", "extra"]));
   assert.throws(() => parseSmokeArgs(["--unknown"]));
   assert.throws(() => parseSmokeArgs(["wat"]), /unknown smoke scenario/);
   await assert.rejects(runScenario({}, "wat"), /unknown smoke scenario/);
+});
+
+test("manager-recovery timeout is bounded and scoped to its ready handshake", () => {
+  assert.deepEqual(
+    parseSmokeArgs([
+      "manager-recovery",
+      "--manager-ready-timeout-ms",
+      "45000",
+      "--manager-recovery-diagnostics",
+    ]),
+    {
+      scenario: "manager-recovery",
+      model: undefined,
+      managerReadyTimeoutMs: 45_000,
+      managerRecoveryDiagnostics: true,
+    },
+  );
+  for (const timeout of ["0", "-1", "1.5", "600001", "many"])
+    assert.throws(
+      () =>
+        parseSmokeArgs([
+          "manager-recovery",
+          `--manager-ready-timeout-ms=${timeout}`,
+        ]),
+      /positive integer no greater than 600000/,
+    );
+  assert.throws(
+    () => parseSmokeArgs(["core", "--manager-ready-timeout-ms", "45000"]),
+    /only valid for manager-recovery/,
+  );
+  assert.throws(
+    () => parseSmokeArgs(["core", "--manager-recovery-diagnostics"]),
+    /only valid for manager-recovery/,
+  );
+});
+
+test("manager diagnostics use a proven child extension argument and bounded pane evidence", () => {
+  const extension = join(tmpdir(), "manager-recovery-diagnostics.mjs");
+  assert.equal(
+    managerDiagnosticEnvArg(extension),
+    `PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION=${extension}`,
+  );
+  assert.throws(() => managerDiagnosticEnvArg("relative.mjs"));
+  assert.match(
+    managerDiagnosticExtensionSource(),
+    /PI_HERDSMAN_MANAGER_DIAGNOSTICS = "1"/,
+  );
+
+  const prefix = "[pi-herdsman-manager-diagnostic] ";
+  const events = [
+    { event: "session_start_reached" },
+    { event: "initial_inbox_drain_start" },
+    {
+      event: "project_assignment_authorization",
+      outcome: "rejected",
+      reason: "live_lead_mismatch",
+    },
+    {
+      event: "project_assignment_send",
+      outcome: "resolved",
+      triggerTurn: true,
+    },
+    {
+      event: "project_assignment_authorization",
+      outcome: "authorized",
+      reason: "matched",
+    },
+    {
+      event: "project_assignment_send",
+      outcome: "rejected",
+      triggerTurn: false,
+      payload: "secret",
+    },
+  ];
+  const lines = managerDiagnosticLines(
+    [
+      "unrelated pane content containing a secret",
+      ...events.map((event) => `${prefix}${JSON.stringify(event)}`),
+    ].join("\n"),
+  );
+  assert.equal(lines.length, 4);
+  assert.ok(lines.every((line) => line.startsWith(prefix)));
+  assert.doesNotMatch(lines.join("\n"), /secret/);
+  assert.ok(lines.every((line) => line.length <= 512));
+  assert.deepEqual(
+    lines,
+    events.slice(0, 4).map((event) => `${prefix}${JSON.stringify(event)}`),
+  );
+});
+
+test("manager drain checkpoints are allowlisted, deduplicated and bounded without private fields", () => {
+  const prefix = "[pi-herdsman-manager-diagnostic] ";
+  const events = [
+    { event: "session_start_reached" },
+    { event: "initial_inbox_drain_start" },
+    ...["scope", "topology", "live_lead"].flatMap((stage) => [
+      { event: `project_assignment_${stage}_start` },
+      { event: `project_assignment_${stage}_complete` },
+    ]),
+    {
+      event: "project_assignment_authorization",
+      outcome: "authorized",
+      reason: "matched",
+    },
+    {
+      event: "project_assignment_send",
+      outcome: "resolved",
+      triggerTurn: true,
+    },
+    { event: "inbox_preflight", reason: "pass" },
+    { event: "inbox_preflight_recheck", reason: "pass" },
+    { event: "inbox_peer_presence", reason: "missing" },
+    { event: "inbox_candidates", count: 1000 },
+    { event: "inbox_drain_complete", count: 1, sessionStable: true },
+    { event: "inbox_catch", category: "drain" },
+  ];
+  const encode = (event: object) => `${prefix}${JSON.stringify(event)}`;
+  const lines = managerDiagnosticLines(
+    [
+      `${prefix}{malformed`,
+      ...[
+        { event: "unknown", payload: "secret" },
+        { event: "inbox_preflight", reason: "secret" },
+        { event: "inbox_peer_presence", reason: "stale" },
+        { event: "inbox_candidates", count: -1 },
+        { event: "inbox_candidates", count: 1001 },
+        { event: "inbox_candidates", count: 0.5 },
+        { event: "inbox_candidates", count: "1" },
+        { event: "inbox_drain_complete", count: 0, sessionStable: "secret" },
+        { event: "inbox_catch", category: "secret" },
+      ].map(encode),
+      ...events.map((event) =>
+        encode({
+          ...event,
+          sessionId: "secret",
+          path: "secret",
+          payload: "secret",
+        }),
+      ),
+      ...Array.from({ length: 40 }, () =>
+        encode({ event: "inbox_candidates", count: 0 }),
+      ),
+    ].join("\n"),
+  );
+  assert.deepEqual(lines, events.map(encode));
+  assert.equal(lines.length, 16);
+  assert.doesNotMatch(lines.join("\n"), /secret|sessionId|payload|path/);
+  assert.ok(lines.every((line) => line.length <= 512));
+  assert.deepEqual(managerDiagnosticLines(undefined), []);
+
+  for (const event of [
+    { event: "inbox_preflight", reason: "held" },
+    { event: "inbox_preflight_recheck", reason: "stale" },
+    { event: "inbox_preflight_recheck", reason: "held" },
+    { event: "inbox_peer_presence", reason: "pass" },
+    { event: "inbox_candidates", count: 0 },
+    { event: "inbox_drain_complete", count: 0, sessionStable: false },
+    ...[
+      "cleanup",
+      "authorization",
+      "send",
+      "reconcile",
+      "candidate_scan",
+      "transaction",
+    ].map((category) => ({ event: "inbox_catch", category })),
+  ])
+    assert.deepEqual(managerDiagnosticLines(encode(event)), [encode(event)]);
 });
 
 test("smoke failure report separates stage from error details", () => {

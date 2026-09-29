@@ -279,8 +279,33 @@ test("linked Lead routes to exact Manager, fails closed on incomplete authority,
   }
 });
 
-for (const moved of [false, true])
-  test(`project assignment delivery ${moved ? "denies an exact Lead moved to a sibling worktree" : "accepts its branch worktree Lead"}`, async (t) => {
+for (const scenario of [
+  {
+    name: "accepts its branch worktree Lead",
+    moved: false,
+    mismatchedPath: false,
+    prospectivePath: false,
+  },
+  {
+    name: "accepts its prospective session path before the file exists",
+    moved: false,
+    mismatchedPath: false,
+    prospectivePath: true,
+  },
+  {
+    name: "denies an exact Lead moved to a sibling worktree",
+    moved: true,
+    mismatchedPath: false,
+    prospectivePath: false,
+  },
+  {
+    name: "denies a mismatched prospective session path",
+    moved: false,
+    mismatchedPath: true,
+    prospectivePath: false,
+  },
+])
+  test(`project assignment delivery ${scenario.name}`, async (t) => {
     setLeadEnvironment();
     process.env.HERDR_SOCKET_PATH = join(
       tmpdir(),
@@ -291,6 +316,19 @@ for (const moved of [false, true])
     process.env.HERDR_TAB_ID = "lead-tab";
     const sessionId = randomUUID();
     const managerId = randomUUID();
+    const sessionPath = join(tmpdir(), `${sessionId}.jsonl`);
+    if (scenario.mismatchedPath) writeFileSync(sessionPath, "");
+    if (scenario.prospectivePath)
+      assert.equal(realFs.existsSync(sessionPath), false);
+    const previousDiagnostics = process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
+    const previousConsoleError = console.error;
+    const diagnosticOutput: string[] = [];
+    if (scenario.prospectivePath) {
+      process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = "1";
+      console.error = (...values: unknown[]) => {
+        diagnosticOutput.push(values.join(" "));
+      };
+    } else delete process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
     const runtime = supervisionRuntime();
     const assignment = {
       version: 1 as const,
@@ -318,19 +356,36 @@ for (const moved of [false, true])
       agent_session: {
         source: "herdr:pi",
         agent: "pi",
-        kind: "id",
-        value: sessionId,
+        kind:
+          scenario.mismatchedPath || scenario.prospectivePath ? "path" : "id",
+        value: scenario.mismatchedPath
+          ? join(tmpdir(), `${sessionId}-other.jsonl`)
+          : scenario.prospectivePath
+            ? sessionPath
+            : sessionId,
       },
-      workspace_id: moved ? "sibling-workspace" : "branch-workspace",
+      workspace_id: scenario.moved ? "sibling-workspace" : "branch-workspace",
       pane_id: "lead-pane",
       tab_id: "lead-tab",
     };
+    const manager = {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "path",
+        value: join(tmpdir(), `${managerId}.jsonl`),
+      },
+      workspace_id: WORKSPACE,
+      pane_id: "manager-pane",
+      tab_id: "manager-tab",
+    };
+    const inventory = [manager, agent];
     const pi = fakeChiefPi({
       exec: (_command, args) => {
         let result: unknown = {};
         if (isApiSnapshot(args))
-          result = { snapshot: { agents: [agent], panes: [] } };
-        else if (isAgentList(args)) result = { agents: [agent] };
+          result = { snapshot: { agents: inventory, panes: [] } };
+        else if (isAgentList(args)) result = { agents: inventory };
         else if (args[0] === "agent" && args[1] === "get") result = { agent };
         else if (args[0] === "workspace" && args[1] === "get")
           result = {
@@ -369,7 +424,7 @@ for (const moved of [false, true])
     ctx.sessionManager = {
       ...ctx.sessionManager,
       getSessionId: () => sessionId,
-      getSessionFile: () => `/tmp/${sessionId}.jsonl`,
+      getSessionFile: () => sessionPath,
     };
     try {
       await pi.events.get("session_start")![0](undefined, ctx);
@@ -380,8 +435,71 @@ for (const moved of [false, true])
         (message: any) =>
           message.customType === "pi-herdsman-project_assignment",
       );
-      assert.equal(delivered.length, moved ? 0 : 1);
-      if (!moved) assert.equal(delivered[0].details.id, sessionId);
+      assert.equal(
+        delivered.length,
+        scenario.moved || scenario.mismatchedPath ? 0 : 1,
+      );
+      if (!scenario.moved && !scenario.mismatchedPath)
+        assert.equal(delivered[0].details.id, sessionId);
+      if (scenario.prospectivePath) {
+        assert.equal(realFs.existsSync(sessionPath), false);
+        const diagnosticEvents = diagnosticOutput
+          .filter((line) =>
+            line.startsWith("[pi-herdsman-manager-diagnostic] "),
+          )
+          .map((line) =>
+            JSON.parse(line.slice("[pi-herdsman-manager-diagnostic] ".length)),
+          );
+        assert.deepEqual(
+          diagnosticEvents.map(({ event }) => event),
+          [
+            "session_start_reached",
+            "initial_inbox_drain_start",
+            "inbox_preflight",
+            "inbox_preflight_recheck",
+            "inbox_candidates",
+            "project_assignment_scope_start",
+            "project_assignment_scope_complete",
+            "project_assignment_topology_start",
+            "project_assignment_topology_complete",
+            "project_assignment_live_lead_start",
+            "project_assignment_live_lead_complete",
+            "project_assignment_authorization",
+            "project_assignment_send",
+            "inbox_peer_presence",
+            "inbox_drain_complete",
+          ],
+        );
+        const authorization = diagnosticEvents.find(
+          ({ event }) => event === "project_assignment_authorization",
+        );
+        const send = diagnosticEvents.find(
+          ({ event }) => event === "project_assignment_send",
+        );
+        assert.equal(authorization.outcome, "authorized");
+        assert.equal(authorization.reason, "matched");
+        assert.equal(send.outcome, "resolved");
+        assert.equal(send.triggerTurn, true);
+        assert.doesNotMatch(
+          diagnosticOutput
+            .filter((line) =>
+              line.startsWith("[pi-herdsman-manager-diagnostic] "),
+            )
+            .join("\n"),
+          new RegExp(`${sessionId}|${assignment.text}`),
+        );
+        writeFileSync(
+          sessionPath,
+          `${JSON.stringify({
+            type: "session",
+            version: 3,
+            id: sessionId,
+            timestamp: new Date().toISOString(),
+            cwd: "/tmp",
+          })}\n`,
+        );
+        assert.equal(realFs.existsSync(sessionPath), true);
+      }
       const report = () =>
         pi.tools
           .find((tool) => tool.name === "supervisor_result")!
@@ -392,13 +510,13 @@ for (const moved of [false, true])
             undefined,
             ctx,
           );
-      if (moved) {
+      if (scenario.moved) {
         await assert.rejects(
           report(),
           /not running in its project branch worktree/,
         );
         assert.equal(realFs.existsSync(resultPath(sessionId)), false);
-      } else {
+      } else if (!scenario.mismatchedPath && !scenario.prospectivePath) {
         await report();
         assert.match(
           readFileSync(resultPath(sessionId), "utf8"),
@@ -406,6 +524,15 @@ for (const moved of [false, true])
         );
       }
     } finally {
+      if (scenario.mismatchedPath) realFs.rmSync(sessionPath, { force: true });
+      if (scenario.prospectivePath) {
+        realFs.rmSync(sessionPath, { force: true });
+        console.error = previousConsoleError;
+        if (previousDiagnostics === undefined)
+          delete process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
+        else process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = previousDiagnostics;
+      } else if (previousDiagnostics !== undefined)
+        process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = previousDiagnostics;
       await pi.events.get("session_shutdown")?.[0]();
       delete process.env.HERDR_SOCKET_PATH;
       setLeadEnvironment();
@@ -1371,6 +1498,16 @@ async function runManagerStartupScenario(
         ),
         ["--session-id", starting.id, approvalFlag],
       );
+      const diagnosticExtension =
+        process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION;
+      if (diagnosticExtension)
+        assert.ok(
+          args.some(
+            (arg, index) =>
+              arg === "--extension" && args[index + 1] === diagnosticExtension,
+          ),
+          "opt-in diagnostics must be passed as a supported Pi extension argument",
+        );
       assert.deepEqual(Object.keys(starting).sort(), [
         "branch",
         "id",
@@ -2390,6 +2527,20 @@ async function runManagerStartupScenario(
 
 test("Manager activates only after mocked Lead-state publication", () =>
   runManagerStartupScenario("success"));
+test("Manager passes an opted-in diagnostic extension to the child Pi", async () => {
+  const previous = process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION;
+  process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION = join(
+    tmpdir(),
+    `manager-diagnostics-${randomUUID()}.mjs`,
+  );
+  try {
+    await runManagerStartupScenario("success");
+  } finally {
+    if (previous === undefined)
+      delete process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION;
+    else process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION = previous;
+  }
+});
 test("trusted Manager starts its Lead with approval and the assignment session ID", () =>
   runManagerStartupScenario("success", true));
 test("untrusted Manager starts its Lead without approval and with the assignment session ID", () =>

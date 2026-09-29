@@ -32,6 +32,9 @@ const SMOKE_MODEL_KEY = "pi-herdsman.smoke-model";
 const MAX_SOCKET_PATH_BYTES = 100;
 const MAX_SESSION_BYTES = 8 * 1024 * 1024;
 const MAX_CHIEF_TREE_RESULT_BYTES = 16 * 1024;
+const DEFAULT_MANAGER_READY_TIMEOUT_MS = 6 * 60_000;
+const MAX_MANAGER_READY_TIMEOUT_MS = 10 * 60_000;
+const MANAGER_DIAGNOSTIC_PREFIX = "[pi-herdsman-manager-diagnostic] ";
 const HERDR_ROUTING_KEYS = [
   "HERDR_SOCKET_PATH",
   "HERDR_CLIENT_SOCKET_PATH",
@@ -53,9 +56,167 @@ export function parseSmokeArgs(args) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { model: { type: "string" } },
+    options: {
+      model: { type: "string" },
+      "manager-ready-timeout-ms": { type: "string" },
+      "manager-recovery-diagnostics": { type: "boolean" },
+    },
   });
-  return { scenario: parseScenario(positionals), model: values.model };
+  const scenario = parseScenario(positionals);
+  const timeout = values["manager-ready-timeout-ms"];
+  const managerReadyTimeoutMs =
+    timeout === undefined ? undefined : Number(timeout);
+  if (
+    timeout !== undefined &&
+    (scenario !== "manager-recovery" ||
+      !/^\d+$/.test(timeout) ||
+      !Number.isSafeInteger(managerReadyTimeoutMs) ||
+      managerReadyTimeoutMs < 1 ||
+      managerReadyTimeoutMs > MAX_MANAGER_READY_TIMEOUT_MS)
+  )
+    throw new Error(
+      `--manager-ready-timeout-ms must be a positive integer no greater than ${MAX_MANAGER_READY_TIMEOUT_MS}, and is only valid for manager-recovery`,
+    );
+  const managerRecoveryDiagnostics =
+    values["manager-recovery-diagnostics"] ?? false;
+  if (managerRecoveryDiagnostics && scenario !== "manager-recovery")
+    throw new Error(
+      "--manager-recovery-diagnostics is only valid for manager-recovery",
+    );
+  return {
+    scenario,
+    model: values.model,
+    managerReadyTimeoutMs,
+    managerRecoveryDiagnostics,
+  };
+}
+
+export function managerDiagnosticEnvArg(extensionPath) {
+  assert.ok(
+    typeof extensionPath === "string" && isAbsolute(extensionPath),
+    "manager diagnostic extension path must be absolute",
+  );
+  return `PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION=${extensionPath}`;
+}
+
+export function managerDiagnosticExtensionSource() {
+  return `export default function () {
+  process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = "1";
+}\n`;
+}
+
+export function managerDiagnosticLines(contents) {
+  if (typeof contents !== "string") return [];
+  const safeLines = [];
+  const seen = new Set();
+  for (const line of contents.split(/\r?\n/)) {
+    const prefixIndex = line.indexOf(MANAGER_DIAGNOSTIC_PREFIX);
+    if (prefixIndex < 0) continue;
+    let diagnostic;
+    try {
+      diagnostic = JSON.parse(
+        line.slice(prefixIndex + MANAGER_DIAGNOSTIC_PREFIX.length),
+      );
+    } catch {
+      continue;
+    }
+    let safe;
+    if (
+      [
+        "session_start_reached",
+        "initial_inbox_drain_start",
+        "project_assignment_scope_start",
+        "project_assignment_scope_complete",
+        "project_assignment_topology_start",
+        "project_assignment_topology_complete",
+        "project_assignment_live_lead_start",
+        "project_assignment_live_lead_complete",
+      ].includes(diagnostic?.event)
+    )
+      safe = { event: diagnostic.event };
+    else if (
+      [
+        "inbox_preflight",
+        "inbox_preflight_recheck",
+        "inbox_peer_presence",
+      ].includes(diagnostic?.event) &&
+      (diagnostic.event === "inbox_peer_presence"
+        ? ["pass", "missing"]
+        : diagnostic.event === "inbox_preflight_recheck"
+          ? ["pass", "held", "stale"]
+          : ["pass", "held"]
+      ).includes(diagnostic.reason)
+    )
+      safe = { event: diagnostic.event, reason: diagnostic.reason };
+    else if (
+      ["inbox_candidates", "inbox_drain_complete"].includes(
+        diagnostic?.event,
+      ) &&
+      Number.isInteger(diagnostic.count) &&
+      diagnostic.count >= 0 &&
+      diagnostic.count <= 1000 &&
+      (diagnostic.event !== "inbox_drain_complete" ||
+        typeof diagnostic.sessionStable === "boolean")
+    )
+      safe = {
+        event: diagnostic.event,
+        count: diagnostic.count,
+        ...(diagnostic.event === "inbox_drain_complete"
+          ? { sessionStable: diagnostic.sessionStable }
+          : {}),
+      };
+    else if (
+      diagnostic?.event === "inbox_catch" &&
+      [
+        "cleanup",
+        "authorization",
+        "send",
+        "drain",
+        "reconcile",
+        "candidate_scan",
+        "transaction",
+      ].includes(diagnostic.category)
+    )
+      safe = { event: diagnostic.event, category: diagnostic.category };
+    else if (
+      diagnostic?.event === "project_assignment_authorization" &&
+      ["authorized", "rejected", "error"].includes(diagnostic.outcome) &&
+      [
+        "matched",
+        "target_or_workspace_mismatch",
+        "lease_mismatch",
+        "workspace_scope_mismatch",
+        "assignment_evidence_mismatch",
+        "worktree_topology_mismatch",
+        "branch_placement_mismatch",
+        "live_lead_mismatch",
+        "workspace_placement_mismatch",
+        "authorization_exception",
+      ].includes(diagnostic.reason)
+    )
+      safe = {
+        event: diagnostic.event,
+        outcome: diagnostic.outcome,
+        reason: diagnostic.reason,
+      };
+    else if (
+      diagnostic?.event === "project_assignment_send" &&
+      ["resolved", "rejected"].includes(diagnostic.outcome) &&
+      typeof diagnostic.triggerTurn === "boolean"
+    )
+      safe = {
+        event: diagnostic.event,
+        outcome: diagnostic.outcome,
+        triggerTurn: diagnostic.triggerTurn,
+      };
+    if (safe && !seen.has(safe.event) && seen.size < 16) {
+      seen.add(safe.event);
+      safeLines.push(
+        `${MANAGER_DIAGNOSTIC_PREFIX}${JSON.stringify(safe)}`.slice(0, 512),
+      );
+    }
+  }
+  return safeLines;
 }
 
 export function formatSmokeFailure(error, stage) {
@@ -982,7 +1143,12 @@ async function prepareHerdr(paths) {
   await access(paths.herdrStateExtension);
 }
 
-async function startNestedHerdr(paths, owned, primaryCheckoutPath) {
+async function startNestedHerdr(
+  paths,
+  owned,
+  primaryCheckoutPath,
+  managerDiagnosticExtension,
+) {
   const id = randomUUID().slice(0, 12);
   const sessionName = `pi-herdsman-smoke-${id}`;
   owned.sessionName = sessionName;
@@ -1008,6 +1174,9 @@ async function startNestedHerdr(paths, owned, primaryCheckoutPath) {
       `PI_CODING_AGENT_DIR=${paths.piAgent}`,
       "--env",
       `PI_CODING_AGENT_SESSION_DIR=${paths.piSessions}`,
+      ...(managerDiagnosticExtension
+        ? ["--env", managerDiagnosticEnvArg(managerDiagnosticExtension)]
+        : []),
     ],
     { env: process.env },
   );
@@ -1725,7 +1894,10 @@ async function runContinuationSmoke(ctx) {
 async function runManagerRecoverySmoke(ctx) {
   const deadline = Date.now() + 6 * 60_000;
   const branch = `herdsman/smoke-manager-recovery-${randomUUID()}`;
-  ctx.managerRecovery = { branch };
+  ctx.managerRecovery = {
+    branch,
+    leadReadyTimeoutMs: ctx.managerReadyTimeoutMs,
+  };
   const markStage = (stage) => {
     ctx.managerRecovery.stage = stage;
   };
@@ -1824,19 +1996,39 @@ async function runManagerRecoverySmoke(ctx) {
           results.length === 1 &&
           typeof results[0].session === "string" &&
           typeof results[0].workspace_id === "string"
-        )
+        ) {
+          let listedAgents = [];
           try {
+            listedAgents = await agents();
             evidence.childSession = await managerChildSessionEvidence(
               ctx,
-              await agents(),
+              listedAgents,
               results[0].workspace_id,
               results[0].session,
             );
+            if (ctx.managerRecoveryDiagnostics) {
+              const lead = listedAgents.find(
+                (agent) =>
+                  agent.workspace_id === results[0].workspace_id &&
+                  typeof agent.pane_id === "string" &&
+                  agent.pane_id !== ctx.rootPaneId,
+              );
+              if (lead) {
+                try {
+                  evidence.leadDiagnostics = managerDiagnosticLines(
+                    await nestedPaneText(ctx, lead.pane_id, "recent-unwrapped"),
+                  );
+                } catch {
+                  evidence.leadDiagnostics = [];
+                }
+              } else evidence.leadDiagnostics = [];
+            }
           } catch (error) {
             evidence.childSession = {
               error: String(error.message).slice(0, 200),
             };
           }
+        }
       } catch (error) {
         ctx.managerRecovery.readyEvidence.entriesError = String(error).slice(
           0,
@@ -1874,90 +2066,94 @@ async function runManagerRecoverySmoke(ctx) {
   markStage("fresh-delegation");
   await promptRoot(prompt);
   markStage("lead-ready-handshake");
-  const ready = await waitFor("ready", async () => {
-    const session = await rootSnapshot();
-    const results = session ? staffDelegateResults(session.contents) : [];
-    let child;
-    if (
-      results.length === 1 &&
-      typeof results[0].session === "string" &&
-      results[0].session.length > 0
-    )
-      for (const agent of await agents())
-        if (
-          agent.workspace_id === results[0].workspace_id &&
-          (await agentSessionId(ctx, agent)) === results[0].session
-        ) {
-          child = agent;
-          break;
-        }
-    const childSession =
-      child &&
-      (child.agent_session?.kind === "id"
-        ? await exactIsolatedSession(ctx, results[0].session)
-        : await isolatedSessionDetails(ctx, child));
-    const childVerified = verifiedLeadSession(
-      childSession,
-      results[0]?.session,
-    );
-    const leadCompleted =
-      childVerified &&
-      leadReadyCompleted(childSession.contents, "MANAGER_RECOVERY_READY");
-    const { receipt, answer, prematureReady, prematureFinish } =
-      session && results.length === 1
-        ? managerReadyAnswer(session.contents, results[0].session)
-        : {
-            receipt: false,
-            answer: null,
-            prematureReady: false,
-            prematureFinish: false,
-          };
-    ctx.managerRecovery.readyEvidence = {
-      delegationCount: results.length,
-      childFound: !!child,
-      childIdentity: child?.agent_session?.kind ?? null,
-      childSessionVerified: !!childVerified,
-      leadReadyResult: !!(
+  const ready = await waitFor(
+    "ready",
+    async () => {
+      const session = await rootSnapshot();
+      const results = session ? staffDelegateResults(session.contents) : [];
+      let child;
+      if (
+        results.length === 1 &&
+        typeof results[0].session === "string" &&
+        results[0].session.length > 0
+      )
+        for (const agent of await agents())
+          if (
+            agent.workspace_id === results[0].workspace_id &&
+            (await agentSessionId(ctx, agent)) === results[0].session
+          ) {
+            child = agent;
+            break;
+          }
+      const childSession =
+        child &&
+        (child.agent_session?.kind === "id"
+          ? await exactIsolatedSession(ctx, results[0].session)
+          : await isolatedSessionDetails(ctx, child));
+      const childVerified = verifiedLeadSession(
+        childSession,
+        results[0]?.session,
+      );
+      const leadCompleted =
         childVerified &&
-        hasSuccessfulSupervisorMessage(
-          childSession.contents,
-          "MANAGER_RECOVERY_READY",
-        )
-      ),
-      leadCompleted: !!leadCompleted,
-      receipt,
-      managerAnswer: !!answer,
-      prematureReady,
-      prematureFinish,
-      rootRecent: session
-        ? summarizeSession(session.contents).recentMessages.slice(-6)
-        : [],
-      leadRecent: childSession
-        ? summarizeSession(childSession.contents).recentMessages.slice(-6)
-        : [],
-      rootCustom: session
-        ? sessionEntries(session.contents)
-            .filter(
-              (entry) =>
-                entry.type === "custom_message" &&
-                entry.customType === "pi-herdsman-lead_message",
-            )
-            .slice(-3)
-            .map((entry) => ({
-              type: entry.customType,
-              content: String(entry.content).slice(0, 200),
-            }))
-        : [],
-    };
-    return results.length === 1 &&
-      leadCompleted &&
-      receipt &&
-      answer &&
-      !prematureReady &&
-      !prematureFinish
-      ? { results, answer }
-      : null;
-  });
+        leadReadyCompleted(childSession.contents, "MANAGER_RECOVERY_READY");
+      const { receipt, answer, prematureReady, prematureFinish } =
+        session && results.length === 1
+          ? managerReadyAnswer(session.contents, results[0].session)
+          : {
+              receipt: false,
+              answer: null,
+              prematureReady: false,
+              prematureFinish: false,
+            };
+      ctx.managerRecovery.readyEvidence = {
+        delegationCount: results.length,
+        childFound: !!child,
+        childIdentity: child?.agent_session?.kind ?? null,
+        childSessionVerified: !!childVerified,
+        leadReadyResult: !!(
+          childVerified &&
+          hasSuccessfulSupervisorMessage(
+            childSession.contents,
+            "MANAGER_RECOVERY_READY",
+          )
+        ),
+        leadCompleted: !!leadCompleted,
+        receipt,
+        managerAnswer: !!answer,
+        prematureReady,
+        prematureFinish,
+        rootRecent: session
+          ? summarizeSession(session.contents).recentMessages.slice(-6)
+          : [],
+        leadRecent: childSession
+          ? summarizeSession(childSession.contents).recentMessages.slice(-6)
+          : [],
+        rootCustom: session
+          ? sessionEntries(session.contents)
+              .filter(
+                (entry) =>
+                  entry.type === "custom_message" &&
+                  entry.customType === "pi-herdsman-lead_message",
+              )
+              .slice(-3)
+              .map((entry) => ({
+                type: entry.customType,
+                content: String(entry.content).slice(0, 200),
+              }))
+          : [],
+      };
+      return results.length === 1 &&
+        leadCompleted &&
+        receipt &&
+        answer &&
+        !prematureReady &&
+        !prematureFinish
+        ? { results, answer }
+        : null;
+    },
+    ctx.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
+  );
   const first = ready.results[0];
   markStage("initial-assignment-validation");
   assert.equal(first.ok, true);
@@ -2818,6 +3014,18 @@ async function main() {
     sessionName: undefined,
     paths,
     model,
+    managerReadyTimeoutMs:
+      args.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
+    managerRecoveryDiagnostics: args.managerRecoveryDiagnostics,
+    ...(args.managerRecoveryDiagnostics
+      ? {
+          managerDiagnosticExtension: join(
+            paths.piAgent,
+            "extensions",
+            "manager-recovery-diagnostics.mjs",
+          ),
+        }
+      : {}),
     expectedPackage: `${pkg.name}@${pkg.version}`,
     owned,
   };
@@ -2846,13 +3054,24 @@ async function main() {
     }
     ctx.authMechanism = await preparePi(paths, model);
     await prepareHerdr(paths);
+    if (ctx.managerDiagnosticExtension)
+      await writeFile(
+        ctx.managerDiagnosticExtension,
+        managerDiagnosticExtensionSource(),
+        { flag: "wx" },
+      );
     if (ctx.chiefTreeProbeExtension)
       await writeFile(
         ctx.chiefTreeProbeExtension,
         chiefTreeProbeSource(ctx.chiefTreeResultFile),
         { flag: "wx" },
       );
-    await startNestedHerdr(paths, owned, ctx.rootCwd);
+    await startNestedHerdr(
+      paths,
+      owned,
+      ctx.rootCwd,
+      ctx.managerDiagnosticExtension,
+    );
     ctx.sessionName = owned.sessionName;
     await waitForNestedHerdr(ctx);
     ctx.rootPaneId = await startCandidate(ctx);

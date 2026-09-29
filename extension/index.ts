@@ -6638,6 +6638,42 @@ export default function (pi: ExtensionAPI): void {
             allowedAgentDefinitions: new Set(allowedAgentDefinitions),
           }
         : undefined;
+  const managerDiagnosticEvents = new Set<string>();
+  const managerDiagnosticAllowlist = new Set([
+    "session_start_reached",
+    "initial_inbox_drain_start",
+    "project_assignment_authorization",
+    "project_assignment_send",
+    "project_assignment_scope_start",
+    "project_assignment_scope_complete",
+    "project_assignment_topology_start",
+    "project_assignment_topology_complete",
+    "project_assignment_live_lead_start",
+    "project_assignment_live_lead_complete",
+    "inbox_preflight",
+    "inbox_preflight_recheck",
+    "inbox_peer_presence",
+    "inbox_candidates",
+    "inbox_drain_complete",
+    "inbox_catch",
+  ]);
+  const managerDiagnostic = (
+    event: string,
+    details: Record<string, boolean | string | number> = {},
+  ): void => {
+    if (
+      controllerScope?.kind !== "lead" ||
+      process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS !== "1" ||
+      !managerDiagnosticAllowlist.has(event) ||
+      managerDiagnosticEvents.has(event) ||
+      managerDiagnosticEvents.size >= 16
+    )
+      return;
+    managerDiagnosticEvents.add(event);
+    console.error(
+      `[pi-herdsman-manager-diagnostic] ${JSON.stringify({ event, ...details })}`,
+    );
+  };
   const FILES_SCHEMA = Type.Optional(
     Type.Array(
       Type.String({
@@ -7585,15 +7621,21 @@ export default function (pi: ExtensionAPI): void {
         pendingSupervisorAsk.supervisorRole
     );
   };
-  const liveAgent = async (ctx: ExtensionContext, sessionId: string) =>
-    (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents.filter(
+  const liveAgent = async (
+    ctx: ExtensionContext,
+    sessionId: string,
+    sessionPath?: string,
+  ) => {
+    const expected = expectedSession(sessionId, sessionPath);
+    return (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents.filter(
       (agent: any) =>
         isPiAgent(agent) &&
-        herdrSessionId(agent) === sessionId &&
+        matchesExpectedSession(agent.agent_session, expected) &&
         typeof agent.pane_id === "string" &&
         typeof agent.tab_id === "string" &&
         typeof agent.workspace_id === "string",
     );
+  };
   const remoteChiefAgent = async (
     ctx: ExtensionContext,
     descriptor: ChiefDescriptor,
@@ -7631,8 +7673,13 @@ export default function (pi: ExtensionAPI): void {
     }
     return current;
   };
-  const liveLead = async (ctx: ExtensionContext, sessionId: string) => {
-    const matches = await liveAgent(ctx, sessionId);
+  const liveLead = async (
+    ctx: ExtensionContext,
+    sessionId: string,
+    sessionPath?: string,
+  ) => {
+    const expected = expectedSession(sessionId, sessionPath);
+    const matches = await liveAgent(ctx, sessionId, sessionPath);
     const agentSnapshot = await managedAgentSnapshots(
       pi,
       ctx,
@@ -7646,7 +7693,7 @@ export default function (pi: ExtensionAPI): void {
     return matches.filter(
       (agent: any) =>
         !agents &&
-        herdrSessionId(agent) === sessionId &&
+        matchesExpectedSession(agent.agent_session, expected) &&
         !!readLeadCoordinationState(supervisionRuntime(), sessionId),
     );
   };
@@ -7808,6 +7855,16 @@ export default function (pi: ExtensionAPI): void {
   const managerClaimsScope = (
     scope: Awaited<ReturnType<typeof worktreeGroupScope>> | undefined,
   ): boolean => !!managerForScope(scope);
+  const projectAssignmentAuthorized = (
+    authorized: boolean,
+    reason: string,
+  ): boolean => {
+    managerDiagnostic("project_assignment_authorization", {
+      outcome: authorized ? "authorized" : "rejected",
+      reason,
+    });
+    return authorized;
+  };
   const authorizeChiefRecord = async (
     record: ChiefMessageRecord,
     ctx: ExtensionContext,
@@ -7978,9 +8035,15 @@ export default function (pi: ExtensionAPI): void {
         record.toSessionId !== sessionId ||
         record.leadSessionId !== sessionId
       )
-        return false;
+        return projectAssignmentAuthorized(
+          false,
+          "target_or_workspace_mismatch",
+        );
+      managerDiagnostic("project_assignment_scope_start");
       const scope = await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
-      if (!scope.workspaceIds.includes(workspaceId)) return false;
+      managerDiagnostic("project_assignment_scope_complete");
+      if (!scope.workspaceIds.includes(workspaceId))
+        return projectAssignmentAuthorized(false, "workspace_scope_mismatch");
       const matches = listProjectAssignments(
         supervisionRuntime(),
         scope.primaryWorkspaceId,
@@ -7993,29 +8056,47 @@ export default function (pi: ExtensionAPI): void {
       );
       const assignment = matches.length === 1 ? matches[0] : undefined;
       if (!assignment || readCanonicalProjectResult(sessionId) !== undefined)
-        return false;
+        return projectAssignmentAuthorized(
+          false,
+          "assignment_evidence_mismatch",
+        );
+      managerDiagnostic("project_assignment_topology_start");
       const topology = await runHerdr(
         pi,
         ctx,
         ["worktree", "list", "--workspace", scope.primaryWorkspaceId],
         { signal: ctx.signal },
       );
+      managerDiagnostic("project_assignment_topology_complete");
       if (
         topology?.source?.source_workspace_id !== scope.primaryWorkspaceId ||
         topology?.source?.repo_key !== scope.repoKey ||
         !Array.isArray(topology?.worktrees)
       )
-        return false;
+        return projectAssignmentAuthorized(false, "worktree_topology_mismatch");
       const worktrees = topology.worktrees.filter(
         (worktree: any) => worktree.branch === assignment.branch,
       );
-      const live = await liveLead(ctx, sessionId);
-      return (
-        worktrees.length === 1 &&
-        live.length === 1 &&
-        scope.workspaceIds.includes(live[0].workspace_id) &&
-        worktrees[0].open_workspace_id === live[0].workspace_id
+      if (worktrees.length !== 1)
+        return projectAssignmentAuthorized(false, "branch_placement_mismatch");
+      managerDiagnostic("project_assignment_live_lead_start");
+      const live = await liveLead(
+        ctx,
+        sessionId,
+        ctx.sessionManager.getSessionFile(),
       );
+      managerDiagnostic("project_assignment_live_lead_complete");
+      if (live.length !== 1)
+        return projectAssignmentAuthorized(false, "live_lead_mismatch");
+      if (
+        !scope.workspaceIds.includes(live[0].workspace_id) ||
+        worktrees[0].open_workspace_id !== live[0].workspace_id
+      )
+        return projectAssignmentAuthorized(
+          false,
+          "workspace_placement_mismatch",
+        );
+      return projectAssignmentAuthorized(true, "matched");
     }
     const chief = await currentManager(ctx);
     if (!chief) throw new Error("Manager lease could not be verified");
@@ -8261,30 +8342,68 @@ export default function (pi: ExtensionAPI): void {
         sessionId: ctx.sessionManager.getSessionId(),
         signal: chiefInboxAbortController?.signal,
         cleanupError: (error: unknown) => {
+          managerDiagnostic("inbox_catch", { category: "cleanup" });
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         },
         isDelivered: (id: string) => messageDelivered(ctx, id),
         isAuthorized: async (record: ChiefMessageRecord) => {
           if (record.kind === "peer_message")
             return authorizePeerRecord(record, ctx);
-          if (verifyLease) {
-            const chief =
-              activeRole() === "chief" ||
-              (activeRole() === "manager" &&
-                (record.kind === "chief_message" ||
-                  record.kind === "chief_reply"))
-                ? await currentChiefAuthority(ctx)
-                : await currentManager(ctx);
-            if (!chief)
-              throw new Error("Supervisor lease could not be verified");
-            if (record.toSessionId !== ctx.sessionManager.getSessionId())
-              return false;
-            if (record.leaseId !== chief.leaseId) return false;
+          try {
+            if (verifyLease) {
+              const chief =
+                activeRole() === "chief" ||
+                (activeRole() === "manager" &&
+                  (record.kind === "chief_message" ||
+                    record.kind === "chief_reply"))
+                  ? await currentChiefAuthority(ctx)
+                  : await currentManager(ctx);
+              if (!chief)
+                throw new Error("Supervisor lease could not be verified");
+              if (record.toSessionId !== ctx.sessionManager.getSessionId())
+                return record.kind === "project_assignment"
+                  ? projectAssignmentAuthorized(
+                      false,
+                      "target_or_workspace_mismatch",
+                    )
+                  : false;
+              if (record.leaseId !== chief.leaseId)
+                return record.kind === "project_assignment"
+                  ? projectAssignmentAuthorized(false, "lease_mismatch")
+                  : false;
+            }
+            return await authorizeChiefRecord(record, ctx, verifyLiveChief);
+          } catch (error) {
+            managerDiagnostic("inbox_catch", { category: "authorization" });
+            if (record.kind === "project_assignment")
+              managerDiagnostic("project_assignment_authorization", {
+                outcome: "error",
+                reason: "authorization_exception",
+              });
+            throw error;
           }
-          return authorizeChiefRecord(record, ctx, verifyLiveChief);
         },
-        sendMessage: (message: unknown, options: any) =>
-          pi.sendMessage(message, options),
+        sendMessage: async (message: unknown, options: any) => {
+          const projectAssignment =
+            (message as any)?.customType === "pi-herdsman-project_assignment";
+          try {
+            const result = await pi.sendMessage(message, options);
+            if (projectAssignment)
+              managerDiagnostic("project_assignment_send", {
+                outcome: "resolved",
+                triggerTurn: options?.triggerTurn === true,
+              });
+            return result;
+          } catch (error) {
+            managerDiagnostic("inbox_catch", { category: "send" });
+            if (projectAssignment)
+              managerDiagnostic("project_assignment_send", {
+                outcome: "rejected",
+                triggerTurn: options?.triggerTurn === true,
+              });
+            throw error;
+          }
+        },
         transaction: {
           begin: (record: ChiefMessageRecord) => {
             const token = {
@@ -8300,7 +8419,12 @@ export default function (pi: ExtensionAPI): void {
             return token;
           },
           revalidate: (token: unknown, phase: string) => {
-            revalidateTransaction(token, phase);
+            try {
+              revalidateTransaction(token, phase);
+            } catch (error) {
+              managerDiagnostic("inbox_catch", { category: "transaction" });
+              throw error;
+            }
           },
           clear: (token: unknown) => {
             for (const [id, value] of transactions)
@@ -8376,8 +8500,18 @@ export default function (pi: ExtensionAPI): void {
       };
     };
     const drainInbox = async (initial = false): Promise<number> => {
+      if (initial) managerDiagnostic("initial_inbox_drain_start");
       const sessionId = ctx.sessionManager.getSessionId();
-      if (chiefStartPreflightHeld(ctx)) return 0;
+      const complete = (count: number): number => {
+        managerDiagnostic("inbox_drain_complete", {
+          count: Math.min(count, 1000),
+          sessionStable: sessionId === ctx.sessionManager.getSessionId(),
+        });
+        return count;
+      };
+      const held = chiefStartPreflightHeld(ctx);
+      managerDiagnostic("inbox_preflight", { reason: held ? "held" : "pass" });
+      if (held) return complete(0);
       if (
         (chiefMode === "active" || activeRole() === "manager") &&
         ctx.isIdle() &&
@@ -8401,22 +8535,51 @@ export default function (pi: ExtensionAPI): void {
           pi.sendMessage(message, { triggerTurn: false });
       }
 
-      if (!isCurrent() || chiefStartPreflightHeld(ctx)) return 0;
+      const current = isCurrent();
+      const recheckHeld = current && chiefStartPreflightHeld(ctx);
+      managerDiagnostic("inbox_preflight_recheck", {
+        reason: !current ? "stale" : recheckHeld ? "held" : "pass",
+      });
+      if (!current || recheckHeld) return complete(0);
+      if (
+        controllerScope?.kind === "lead" &&
+        process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS === "1" &&
+        !managerDiagnosticEvents.has("inbox_candidates")
+      ) {
+        try {
+          managerDiagnostic("inbox_candidates", {
+            count: Math.min(
+              listChiefMessagePaths(runtime, sessionId).length,
+              1000,
+            ),
+          });
+        } catch {
+          managerDiagnostic("inbox_catch", { category: "candidate_scan" });
+        }
+      }
       if (initial) {
         const chief = await drainCoordinationInbox(inboxOptions(false));
-        if (!currentPeerPresenceValid(ctx)) return chief;
+        const peerPresent = currentPeerPresenceValid(ctx);
+        managerDiagnostic("inbox_peer_presence", {
+          reason: peerPresent ? "pass" : "missing",
+        });
+        if (!peerPresent) return complete(chief);
         const peer = await drainCoordinationInbox(
           inboxOptions(false, true, peerInboxRuntime),
         );
-        return chief + peer;
+        return complete(chief + peer);
       }
       const active = chiefMode === "active" || activeRole() === "manager";
       const chief = await drainCoordinationInbox(inboxOptions(active, active));
-      if (!currentPeerPresenceValid(ctx)) return chief;
+      const peerPresent = currentPeerPresenceValid(ctx);
+      managerDiagnostic("inbox_peer_presence", {
+        reason: peerPresent ? "pass" : "missing",
+      });
+      if (!peerPresent) return complete(chief);
       const peer = await drainCoordinationInbox(
         inboxOptions(active, active, peerInboxRuntime),
       );
-      return chief + peer;
+      return complete(chief + peer);
     };
     const schedule = (): void => {
       if (
@@ -8433,15 +8596,21 @@ export default function (pi: ExtensionAPI): void {
             if (!isCurrent()) return;
             return drainInbox();
           })
-          .catch(() => {})
+          .catch(() => {
+            managerDiagnostic("inbox_catch", { category: "drain" });
+          })
           .finally(schedule);
       }, 500);
       chiefInboxTimer.unref?.();
     };
     void reconcilePendingAsk(ctx, runtime, isCurrent)
-      .catch(() => {})
+      .catch(() => {
+        managerDiagnostic("inbox_catch", { category: "reconcile" });
+      })
       .then(() => drainInbox(true))
-      .catch(() => {})
+      .catch(() => {
+        managerDiagnostic("inbox_catch", { category: "drain" });
+      })
       .finally(schedule);
   };
   const activationGuard = (
@@ -10165,6 +10334,12 @@ export default function (pi: ExtensionAPI): void {
               }));
           if (!piAlreadyRunning) {
             await assertUnoccupied(workspaceId!);
+            const diagnosticExtension =
+              process.env.PI_HERDSMAN_MANAGER_DIAGNOSTIC_EXTENSION;
+            if (diagnosticExtension && !isAbsolute(diagnosticExtension))
+              throw new Error(
+                "Manager diagnostic extension path must be absolute",
+              );
             await startHerdrAgentInPane(pi, ctx, {
               primaryWorkspaceId,
               workspaceId,
@@ -10178,6 +10353,9 @@ export default function (pi: ExtensionAPI): void {
                 "--session-id",
                 assignment.id,
                 ctx.isProjectTrusted() ? "--approve" : "--no-approve",
+                ...(diagnosticExtension
+                  ? ["--extension", diagnosticExtension]
+                  : []),
               ],
               signal,
             });
@@ -13967,6 +14145,7 @@ export default function (pi: ExtensionAPI): void {
       void refreshStatus(ctx, generation);
     };
     pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
+      managerDiagnostic("session_start_reached");
       startupDefinitionRoster = undefined;
       clearChiefStartPreflight();
       ++sessionGeneration;
