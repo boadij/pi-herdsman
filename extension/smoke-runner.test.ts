@@ -20,6 +20,7 @@ import {
   isolatedEnv,
   listedPanes,
   nestedControlEnv,
+  nestedHerdrApiSocketPath,
   nestedPaneInput,
   nestedPaneText,
   submitPaneCommand,
@@ -101,6 +102,25 @@ test("smoke isolates nested Herdr routing and Pi paths", () => {
     HERDR_SESSION: "smoke-123",
   });
   assert.equal(base.HERDR_SESSION, "parent");
+});
+
+test("nested Herdr hashes the API socket while checking both socket limits", () => {
+  const paths = { xdgConfig: "/tmp/xdg" };
+  assert.equal(
+    nestedHerdrApiSocketPath(paths, "smoke"),
+    "/tmp/xdg/herdr/sessions/smoke/herdr.sock",
+  );
+  const directory = "/tmp/xdg/herdr/sessions/";
+  const clientOnlyTooLong = "x".repeat(
+    99 - Buffer.byteLength(directory + "/herdr.sock"),
+  );
+  assert.ok(
+    Buffer.byteLength(directory + clientOnlyTooLong + "/herdr.sock") + 1 <= 100,
+  );
+  assert.throws(
+    () => nestedHerdrApiSocketPath(paths, clientOnlyTooLong),
+    /herdr-client\.sock path is too long/,
+  );
 });
 
 test("smoke CLI parses scenarios and one-off model overrides", async () => {

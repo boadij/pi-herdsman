@@ -104,20 +104,17 @@ export function nestedControlEnv(base, paths, sessionName) {
   return { ...isolatedEnv(base, paths), HERDR_SESSION: sessionName };
 }
 
-function assertNestedSocketPathFits(paths, sessionName) {
-  const socketPath = join(
-    paths.xdgConfig,
-    "herdr",
-    "sessions",
-    sessionName,
-    "herdr-client.sock",
-  );
-  const bytesIncludingTerminator = Buffer.byteLength(socketPath) + 1;
-  assert.ok(
-    bytesIncludingTerminator <= MAX_SOCKET_PATH_BYTES,
-    `nested Herdr socket path is too long (${bytesIncludingTerminator} bytes; maximum ${MAX_SOCKET_PATH_BYTES})`,
-  );
-  return socketPath;
+export function nestedHerdrApiSocketPath(paths, sessionName) {
+  const directory = join(paths.xdgConfig, "herdr", "sessions", sessionName);
+  for (const name of ["herdr.sock", "herdr-client.sock"]) {
+    const bytesIncludingTerminator =
+      Buffer.byteLength(join(directory, name)) + 1;
+    assert.ok(
+      bytesIncludingTerminator <= MAX_SOCKET_PATH_BYTES,
+      `nested Herdr ${name} path is too long (${bytesIncludingTerminator} bytes; maximum ${MAX_SOCKET_PATH_BYTES})`,
+    );
+  }
+  return join(directory, "herdr.sock");
 }
 
 export function candidateArgs(config) {
@@ -846,7 +843,7 @@ async function startNestedHerdr(paths, owned, primaryCheckoutPath) {
   const id = randomUUID().slice(0, 12);
   const sessionName = `pi-herdsman-smoke-${id}`;
   owned.sessionName = sessionName;
-  assertNestedSocketPathFits(paths, sessionName);
+  nestedHerdrApiSocketPath(paths, sessionName);
   const host = await herdr(
     [
       "tab",
@@ -1854,7 +1851,7 @@ async function runManagerRecoverySmoke(ctx) {
     "pi-herdsman",
     "runtime",
     "supervision-v2",
-    hash(assertNestedSocketPathFits(ctx.paths, ctx.sessionName)),
+    hash(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName)),
   );
   const assignmentPath = join(
     runtime,
@@ -1880,6 +1877,7 @@ async function runManagerRecoverySmoke(ctx) {
   };
   const managerLease = async () =>
     JSON.parse(await readFile(managerPath, "utf8")).leaseId;
+  markStage("initial-assignment-validation");
   await assignmentRecord();
   const previousLease = await managerLease();
   markStage("manager-turnover-leave");
