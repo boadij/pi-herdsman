@@ -325,6 +325,11 @@ test("staff delegate results retain only valid successful delegation payloads in
     { toolName: "staff_delegate", content: "not JSON" },
     {
       toolName: "staff_delegate",
+      content: "not JSON",
+      details: { ok: true, action: "delegate", session: "must-not-match" },
+    },
+    {
+      toolName: "staff_delegate",
       isError: true,
       content: '{"ok":true,"action":"delegate"}',
     },

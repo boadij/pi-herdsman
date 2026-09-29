@@ -294,33 +294,39 @@ export function chiefTreeSelectedRow(output, marker) {
   return rows.length === 1 && /^[ \t│├└─⊟⊞]*›\s/.test(rows[0]);
 }
 
-function successfulStaffResults(contents, toolName, action) {
+export function staffDelegateResults(contents) {
   return sessionEntries(contents).flatMap((entry) => {
     const message = entry.message;
     if (
       entry.type !== "message" ||
       message?.role !== "toolResult" ||
-      message.toolName !== toolName ||
+      message.toolName !== "staff_delegate" ||
       message.isError
     )
       return [];
     try {
       const value = JSON.parse(messageText(message.content));
-      return value?.ok === true && value.action === action ? [value] : [];
+      return value?.ok === true && value.action === "delegate" ? [value] : [];
     } catch {
-      // staff_close reports human-readable content; Pi persists its structured details.
-      const value = message.details;
-      return value?.ok === true && value.action === action ? [value] : [];
+      return [];
     }
   });
 }
 
-export function staffDelegateResults(contents) {
-  return successfulStaffResults(contents, "staff_delegate", "delegate");
-}
-
 export function staffCloseResults(contents) {
-  return successfulStaffResults(contents, "staff_close", "close");
+  return sessionEntries(contents).flatMap((entry) => {
+    const message = entry.message;
+    if (
+      entry.type !== "message" ||
+      message?.role !== "toolResult" ||
+      message.toolName !== "staff_close" ||
+      message.isError
+    )
+      return [];
+    // staff_close reports human-readable content; Pi persists its structured details.
+    const value = message.details;
+    return value?.ok === true && value.action === "close" ? [value] : [];
+  });
 }
 
 export function hasManagerResultRef(contents, assignmentId) {
@@ -1921,12 +1927,7 @@ async function runManagerRecoverySmoke(ctx) {
       const pids = await candidatePids(paneId).catch(() => []);
       if (pids.length !== 0) return null;
       for (const agent of await agents())
-        if (
-          agent.pane_id === paneId &&
-          agent.workspace_id === workspaceId &&
-          (await agentSessionId(ctx, agent)) === first.session
-        )
-          return null;
+        if ((await agentSessionId(ctx, agent)) === first.session) return null;
       return close;
     },
     30_000,
@@ -1983,17 +1984,18 @@ async function runManagerRecoverySmoke(ctx) {
     resolve(resumedPane.cwd ?? resumedPane.working_directory),
     resolve(worktreePath),
   );
-  let resumedAgent;
+  const resumedAgents = [];
   for (const agent of await agents())
-    if (
-      agent.pane_id === paneId &&
-      agent.workspace_id === workspaceId &&
-      (await agentSessionId(ctx, agent)) === first.session
-    ) {
-      resumedAgent = agent;
-      break;
-    }
-  assert.ok(resumedAgent, "resumed Lead was not listed in its original pane");
+    if ((await agentSessionId(ctx, agent)) === first.session)
+      resumedAgents.push(agent);
+  assert.equal(
+    resumedAgents.length,
+    1,
+    "resume must produce exactly one live Lead for the assignment session",
+  );
+  const resumedAgent = resumedAgents[0];
+  assert.equal(resumedAgent.pane_id, paneId);
+  assert.equal(resumedAgent.workspace_id, workspaceId);
   const resumedProcesses = await waitFor(
     "graceful-resume-process",
     async () => {
@@ -2055,13 +2057,16 @@ async function runManagerRecoverySmoke(ctx) {
   await assignmentRecord();
   assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
 
-  let beforeKillAgent;
+  const beforeKillAgents = [];
   for (const agent of await agents())
-    if ((await agentSessionId(ctx, agent)) === first.session) {
-      beforeKillAgent = agent;
-      break;
-    }
-  assert.ok(beforeKillAgent, "exact assignment disappeared before kill");
+    if ((await agentSessionId(ctx, agent)) === first.session)
+      beforeKillAgents.push(agent);
+  assert.equal(
+    beforeKillAgents.length,
+    1,
+    "expected one exact Lead before kill",
+  );
+  const beforeKillAgent = beforeKillAgents[0];
   assert.equal(beforeKillAgent.pane_id, paneId);
   assert.equal(beforeKillAgent.workspace_id, workspaceId);
   const beforeKillInfo = resultOf(await paneInfo(paneId));
