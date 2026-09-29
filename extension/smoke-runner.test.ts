@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import {
   assistantResultForSession,
   chiefTreeFooter,
@@ -108,14 +108,17 @@ test("nested Herdr hashes the API socket while checking both socket limits", () 
   const paths = { xdgConfig: "/tmp/xdg" };
   assert.equal(
     nestedHerdrApiSocketPath(paths, "smoke"),
-    "/tmp/xdg/herdr/sessions/smoke/herdr.sock",
+    join(paths.xdgConfig, "herdr", "sessions", "smoke", "herdr.sock"),
   );
-  const directory = "/tmp/xdg/herdr/sessions/";
+  const directory = join(paths.xdgConfig, "herdr", "sessions");
   const clientOnlyTooLong = "x".repeat(
-    99 - Buffer.byteLength(directory + "/herdr.sock"),
+    99 -
+      Buffer.byteLength(join(directory, "herdr.sock")) -
+      Buffer.byteLength(sep),
   );
   assert.ok(
-    Buffer.byteLength(directory + clientOnlyTooLong + "/herdr.sock") + 1 <= 100,
+    Buffer.byteLength(join(directory, clientOnlyTooLong, "herdr.sock")) + 1 <=
+      100,
   );
   assert.throws(
     () => nestedHerdrApiSocketPath(paths, clientOnlyTooLong),
