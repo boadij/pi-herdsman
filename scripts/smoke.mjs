@@ -796,20 +796,92 @@ export function savedSessionHeaderEvidence(contents, expectedSessionId) {
   };
 }
 
-export function continuationSessionEvidence(
-  contents,
-  expectedSessionId,
-  followup,
-) {
+export function continuationSessionEvidence(contents, expectedSessionId, task) {
+  const normalize = (text) => text.replace(/\s+/g, " ").trim().toLowerCase();
+  const taskFound = typeof task === "string" && normalize(task).length > 0;
+  const header = savedSessionHeaderEvidence(contents, expectedSessionId);
   return {
-    ...savedSessionHeaderEvidence(contents, expectedSessionId),
-    exactFollowupFound: sessionEntries(contents).some(
-      (entry) =>
-        entry.type === "message" &&
-        entry.message?.role === "user" &&
-        messageText(entry.message.content) === followup,
-    ),
+    sessionHeaderFound: header.sessionHeaderFound,
+    sessionIdMatches: header.sessionIdMatches,
+    continuationTaskFound: taskFound,
+    taskInstructionFound:
+      taskFound &&
+      sessionEntries(contents).some(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "user" &&
+          normalize(messageText(entry.message.content)).includes(
+            normalize(task),
+          ),
+      ),
   };
+}
+
+export function correlatedContinuationTask(
+  contents,
+  resultId,
+  expectedSessionId,
+  prompt,
+) {
+  const entries = sessionEntries(contents);
+  const byId = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  const ancestors = [];
+  const visited = new Set();
+  let entry = byId.get(resultId);
+  let promptFound = false;
+  while (entry && !visited.has(entry.id)) {
+    visited.add(entry.id);
+    if (
+      entry.type === "message" &&
+      entry.message?.role === "user" &&
+      messageText(entry.message.content) === prompt
+    ) {
+      promptFound = true;
+      break;
+    }
+    ancestors.unshift(entry);
+    entry = byId.get(entry.parentId);
+  }
+  if (!promptFound) return null;
+  for (let index = ancestors.length - 1; index >= 0; index--) {
+    const message = ancestors[index].message;
+    if (
+      ancestors[index].type !== "message" ||
+      message?.role !== "toolResult" ||
+      message.toolName !== "agent_continue" ||
+      message.isError ||
+      message.details?.ok !== true ||
+      message.details.action !== "continue" ||
+      message.details.session_id !== expectedSessionId
+    )
+      continue;
+    for (const candidate of ancestors.slice(0, index).reverse()) {
+      if (
+        candidate.type !== "message" ||
+        candidate.message?.role !== "assistant" ||
+        !Array.isArray(candidate.message.content)
+      )
+        continue;
+      const call = candidate.message.content.find(
+        (block) =>
+          block?.type === "toolCall" &&
+          block.name === "agent_continue" &&
+          typeof block.id === "string" &&
+          block.id === message.toolCallId,
+      );
+      if (!call) continue;
+      const task = call.arguments?.task;
+      // Keep the exact task in memory only; reject oversized tasks rather than truncate them.
+      return typeof task === "string" &&
+        task.trim() &&
+        Buffer.byteLength(task) <= 16 * 1024
+        ? task
+        : null;
+    }
+  }
+  return null;
 }
 
 async function sessionPathEvidence(ctx, path, expectedSessionId) {
@@ -1846,22 +1918,22 @@ async function runContinuationSmoke(ctx) {
           `continuation-follow-up: expected exactly one final result, observed ${matchingResults.length}`,
         );
       const contents = await readFile(firstSession.path, "utf8");
-      const entries = sessionEntries(contents);
-      const header = entries.find((entry) => entry.type === "session");
       const evidence = continuationSessionEvidence(
         contents,
         firstSession.id,
-        followup,
-      );
-      const continued = entries.some(
-        (entry) =>
-          entry.type === "message" &&
-          messageText(entry.message?.content).includes(
-            "Without rereading package.json",
-          ),
+        correlatedContinuationTask(
+          session.contents,
+          result.id,
+          firstSession.id,
+          followup,
+        ),
       );
       ctx.continuationSessionEvidence = evidence;
-      if (header?.id !== firstSession.id || !continued)
+      if (
+        !evidence.sessionIdMatches ||
+        !evidence.continuationTaskFound ||
+        !evidence.taskInstructionFound
+      )
         throw new Error(
           `continuation-session-identity: persisted ID or remembered-context follow-up was not preserved; evidence: ${JSON.stringify(evidence)}`,
         );

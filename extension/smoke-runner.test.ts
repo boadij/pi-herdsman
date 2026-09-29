@@ -18,6 +18,7 @@ import {
   managerRecoveryResumePrompt,
   continuationResultsForPrompt,
   continuationSessionEvidence,
+  correlatedContinuationTask,
   managerChildSessionEvidence,
   initialPromptForScenario,
   inspectPaneProcesses,
@@ -72,7 +73,7 @@ test("missing managed session file is not ready yet", async () => {
   }
 });
 
-test("saved-session evidence separates header identity from exact continuation text", () => {
+test("saved-session evidence separates header identity from continuation task instruction", () => {
   const followup = "Continue this exact saved session.";
   const contents = [
     { type: "session", id: "actual-session" },
@@ -93,16 +94,198 @@ test("saved-session evidence separates header identity from exact continuation t
   assert.deepEqual(
     continuationSessionEvidence(contents, "expected-session", followup),
     {
-      expectedSessionId: "expected-session",
-      actualSessionId: "actual-session",
       sessionHeaderFound: true,
       sessionIdMatches: false,
-      exactFollowupFound: true,
+      continuationTaskFound: true,
+      taskInstructionFound: true,
     },
   );
   assert.equal(
-    continuationSessionEvidence(contents, "actual-session", `${followup} `)
-      .exactFollowupFound,
+    continuationSessionEvidence(
+      contents,
+      "actual-session",
+      "missing instruction",
+    ).taskInstructionFound,
+    false,
+  );
+});
+
+test("continuation task evidence accepts the paraphrased task only in child user text", () => {
+  const task =
+    "Recall the exact package name from your previous assignment; do not reread package.json. Return PI_HERDSMAN_CONTINUATION_SECOND.";
+  const rootPrompt =
+    "Without rereading package.json, return the remembered package name.";
+  for (const [role, content, expected] of [
+    [
+      "user",
+      `Assignment:\n${task.toLowerCase().replaceAll(" ", "\n")}\nEnd assignment.`,
+      true,
+    ],
+    ["user", rootPrompt, false],
+    ["assistant", task, false],
+  ] as const) {
+    const contents = [
+      { type: "session", id: "saved-session" },
+      {
+        type: "message",
+        message: {
+          role,
+          content,
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+    const evidence = continuationSessionEvidence(
+      contents,
+      "saved-session",
+      task,
+    );
+    assert.equal(evidence.sessionIdMatches, true);
+    assert.equal(evidence.taskInstructionFound, expected);
+    assert.equal(
+      continuationSessionEvidence(contents, "saved-session", null)
+        .taskInstructionFound,
+      false,
+    );
+  }
+});
+
+test("continuation task parser correlates tool call, successful session result and response ancestry", () => {
+  const task = "Recall the exact package name; return SECOND.";
+  const prompt = "Without rereading package.json...";
+  const entries = [
+    {
+      type: "message",
+      id: "prompt",
+      message: { role: "user", content: prompt },
+    },
+    {
+      type: "message",
+      id: "call",
+      parentId: "prompt",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "other-call",
+            name: "agent_continue",
+            arguments: { task: "wrong task" },
+          },
+          {
+            type: "toolCall",
+            id: "continue-call",
+            name: "agent_continue",
+            arguments: { session: "/saved/child.jsonl", task },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "tool-result",
+      parentId: "call",
+      message: {
+        role: "toolResult",
+        toolName: "agent_continue",
+        toolCallId: "continue-call",
+        details: { ok: true, action: "continue", session_id: "child" },
+      },
+    },
+    {
+      type: "message",
+      id: "response",
+      parentId: "tool-result",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "package SECOND",
+      },
+    },
+  ];
+  const encode = (value: unknown[]) =>
+    value.map((entry) => JSON.stringify(entry)).join("\n");
+  assert.equal(
+    correlatedContinuationTask(encode(entries), "response", "child", prompt),
+    task,
+  );
+  assert.equal(
+    correlatedContinuationTask(
+      encode(entries),
+      "response",
+      "wrong-child",
+      prompt,
+    ),
+    null,
+  );
+  assert.equal(
+    correlatedContinuationTask(
+      encode(entries),
+      "missing-response",
+      "child",
+      prompt,
+    ),
+    null,
+  );
+  assert.equal(
+    correlatedContinuationTask(
+      encode(entries),
+      "response",
+      "child",
+      "another prompt",
+    ),
+    null,
+  );
+  for (const mutation of [
+    (copy: any[]) => {
+      copy[2].message.toolCallId = "missing-call";
+    },
+    (copy: any[]) => {
+      copy[2].message.isError = true;
+    },
+    (copy: any[]) => {
+      copy[2].message.details.ok = false;
+    },
+    (copy: any[]) => {
+      copy[3].parentId = "prompt";
+    },
+    (copy: any[]) => {
+      copy.splice(3, 0, {
+        type: "message",
+        id: "new-prompt",
+        parentId: "tool-result",
+        message: { role: "user", content: prompt },
+      });
+      copy[4].parentId = "new-prompt";
+    },
+    (copy: any[]) => {
+      delete copy[1].message.content[1].arguments.task;
+    },
+    (copy: any[]) => {
+      copy[1].message.content[1].arguments.task = " ";
+    },
+    (copy: any[]) => {
+      copy[1].message.content[1].arguments.task = "x".repeat(16 * 1024 + 1);
+    },
+  ]) {
+    const copy = structuredClone(entries);
+    mutation(copy);
+    assert.equal(
+      correlatedContinuationTask(encode(copy), "response", "child", prompt),
+      null,
+    );
+  }
+  const child = encode([
+    { type: "session", id: "wrong-child" },
+    { type: "message", message: { role: "user", content: task } },
+  ]);
+  const evidence = continuationSessionEvidence(child, "child", task);
+  assert.equal(evidence.sessionIdMatches, false);
+  assert.equal(evidence.taskInstructionFound, true);
+  assert.doesNotMatch(JSON.stringify(evidence), /wrong-child|Recall/);
+  assert.equal(
+    continuationSessionEvidence(child, "child", null).continuationTaskFound,
     false,
   );
 });
