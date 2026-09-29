@@ -9553,7 +9553,7 @@ export default function (pi: ExtensionAPI): void {
       await stopHerdrAgentPreservingPane(
         pi,
         ctx,
-        target.name,
+        target.pane_id,
         {
           paneId: target.pane_id,
           tabId: target.tab_id,
@@ -12840,6 +12840,10 @@ export default function (pi: ExtensionAPI): void {
                 update,
                 ctx,
               ),
+            renderCall: (a: unknown, t: any, c: any) =>
+              renderCoordinationCall("staff", "close", a, t, c),
+            renderResult: (r: any, o: any, t: any, c: any) =>
+              renderCoordinationResult("staff", "close", r, o, t, c),
           });
           pi.registerTool({
             ...staffTool,
@@ -12864,6 +12868,10 @@ export default function (pi: ExtensionAPI): void {
                 update,
                 ctx,
               ),
+            renderCall: (a: unknown, t: any, c: any) =>
+              renderCoordinationCall("staff", "discard", a, t, c),
+            renderResult: (r: any, o: any, t: any, c: any) =>
+              renderCoordinationResult("staff", "discard", r, o, t, c),
           });
         } finally {
           try {

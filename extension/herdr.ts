@@ -1964,7 +1964,8 @@ async function proveExactRunningAgent(
   const agentSession = sessionIdentity(agent?.agent_session);
   if (
     !agent ||
-    agent.name !== herdrAgent ||
+    (agent.name !== herdrAgent &&
+      !(herdrAgent === expected.paneId && paneId === herdrAgent)) ||
     !paneId ||
     !workspaceId ||
     !cwd ||

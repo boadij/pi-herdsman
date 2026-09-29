@@ -574,7 +574,8 @@ async function runManagerStartupScenario(
     | "active-closed"
     | "close-resume"
     | "active-discard"
-    | "close-failure",
+    | "close-failure"
+    | "unassigned-close",
   projectTrusted = false,
   t?: TestContext,
 ): Promise<void> {
@@ -668,9 +669,11 @@ async function runManagerStartupScenario(
               },
             ]
           : created
-            ? (mode === "active-discard"
-                ? [{ branch: createdBranch }]
-                : listProjectAssignments(supervisionRuntime(), WORKSPACE)
+            ? (mode === "unassigned-close"
+                ? [{ branch: "smoke/unassigned" }]
+                : mode === "active-discard"
+                  ? [{ branch: createdBranch }]
+                  : listProjectAssignments(supervisionRuntime(), WORKSPACE)
               ).map((assignment) => ({
                 branch: assignment.branch,
                 path: childPath,
@@ -739,9 +742,12 @@ async function runManagerStartupScenario(
           tab_id: "child-tab",
           terminal_id: "child-terminal",
           cwd: childPath,
-          ...(["close-resume", "active-discard", "close-failure"].includes(
-            mode,
-          ) && started
+          ...([
+            "close-resume",
+            "active-discard",
+            "close-failure",
+            "unassigned-close",
+          ].includes(mode) && started
             ? {
                 agent_session: {
                   source: "herdr:pi",
@@ -764,7 +770,12 @@ async function runManagerStartupScenario(
           shell_pid: 33,
           foreground_process_group_id:
             started &&
-            ["close-resume", "active-discard", "close-failure"].includes(mode)
+            [
+              "close-resume",
+              "active-discard",
+              "close-failure",
+              "unassigned-close",
+            ].includes(mode)
               ? 44
               : 33,
           foreground_processes: [
@@ -798,6 +809,21 @@ async function runManagerStartupScenario(
     if (command === "herdr" && args[0] === "pane" && args[1] === "run")
       return respond({});
     if (command === "herdr" && args[0] === "agent" && args[1] === "send-keys") {
+      if (
+        [
+          "close-resume",
+          "active-discard",
+          "close-failure",
+          "unassigned-close",
+        ].includes(mode)
+      )
+        assert.deepEqual(args, [
+          "agent",
+          "send-keys",
+          "child-pane",
+          "ctrl+c",
+          "ctrl+d",
+        ]);
       if (mode === "close-failure") throw new Error("stop refused");
       started = false;
       startupObservations = 0;
@@ -960,7 +986,6 @@ async function runManagerStartupScenario(
                     workspace_id: childWorkspace,
                     pane_id: "child-pane",
                     tab_id: "child-tab",
-                    name: "lead",
                     cwd: childPath,
                   },
                 ]
@@ -1003,7 +1028,12 @@ async function runManagerStartupScenario(
               ]
             : []),
           ...(mode === "active-live" ||
-          (["close-resume", "active-discard", "close-failure"].includes(mode) &&
+          ([
+            "close-resume",
+            "active-discard",
+            "close-failure",
+            "unassigned-close",
+          ].includes(mode) &&
             started)
             ? [
                 {
@@ -1016,7 +1046,6 @@ async function runManagerStartupScenario(
                   workspace_id: childWorkspace,
                   pane_id: "child-pane",
                   tab_id: "child-tab",
-                  name: "lead",
                   cwd: childPath,
                 },
               ]
@@ -1028,7 +1057,6 @@ async function runManagerStartupScenario(
         agent:
           args[2] === "lead" || args[2] === "child-pane"
             ? {
-                name: "lead",
                 workspace_id: childWorkspace,
                 pane_id: "child-pane",
                 tab_id: "child-tab",
@@ -1173,6 +1201,55 @@ async function runManagerStartupScenario(
         ctx,
       )
     );
+    if (mode === "unassigned-close") {
+      childSession = staleId;
+      created = true;
+      started = true;
+      writeLeadCoordinationState(supervisionRuntime(), {
+        version: 1,
+        role: "lead",
+        instanceId: randomUUID(),
+        piSessionId: staleId,
+        updatedAt: Date.now(),
+      });
+      assert.deepEqual(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE),
+        [],
+      );
+      const closed = await pi.tools
+        .find((tool) => tool.name === "staff_close")!
+        .execute("close", { session: staleId }, undefined, undefined, ctx);
+      assert.equal(closed.details.ok, true);
+      assert.equal(closed.details.session, staleId);
+      assert.equal("branch" in closed.details, false);
+      assert.equal(started, false);
+      const liveAgents = JSON.parse(
+        (await exec("herdr", ["agent", "list"])).stdout,
+      ).result.agents;
+      assert.equal(
+        liveAgents.some((agent: any) => agent.agent_session?.value === staleId),
+        false,
+      );
+      assert.deepEqual(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE),
+        [],
+      );
+      const paneList = JSON.parse(
+        (await exec("herdr", ["pane", "list"])).stdout,
+      ).result.panes;
+      assert.ok(paneList.some((pane: any) => pane.pane_id === "child-pane"));
+      const worktreeList = JSON.parse(
+        (await exec("herdr", ["worktree", "list"])).stdout,
+      ).result.worktrees;
+      assert.ok(
+        worktreeList.some(
+          (worktree: any) =>
+            worktree.branch === "smoke/unassigned" &&
+            worktree.path === childPath,
+        ),
+      );
+      return;
+    }
     if (activeMode) {
       try {
         if (mode === "active-result-periodic") {
@@ -1213,6 +1290,12 @@ async function runManagerStartupScenario(
               staleId,
             );
             assert.equal(started, false);
+            assert.equal(created, true);
+            assert.ok(
+              JSON.parse(
+                (await exec("herdr", ["pane", "list"])).stdout,
+              ).result.panes.some((pane: any) => pane.pane_id === "child-pane"),
+            );
             started = true;
             const resumed = await execute();
             assert.equal(resumed.details.session, staleId);
@@ -1233,6 +1316,20 @@ async function runManagerStartupScenario(
             assert.equal(created, true);
             assert.equal(createdBranch, "smoke/recover");
             assert.equal(started, false);
+            assert.ok(
+              JSON.parse(
+                (await exec("herdr", ["pane", "list"])).stdout,
+              ).result.panes.some((pane: any) => pane.pane_id === "child-pane"),
+            );
+            assert.ok(
+              JSON.parse(
+                (await exec("herdr", ["worktree", "list"])).stdout,
+              ).result.worktrees.some(
+                (worktree: any) =>
+                  worktree.branch === "smoke/recover" &&
+                  worktree.path === childPath,
+              ),
+            );
           }
           return;
         } else if (mode === "active-missing") {
@@ -1583,6 +1680,8 @@ test("Manager discard stops the active executor and preserves its worktree", () 
   runManagerStartupScenario("active-discard"));
 test("Manager retains assignment when exact Lead stop fails", () =>
   runManagerStartupScenario("close-failure"));
+test("Manager closes an unassigned direct Lead and preserves its worktree", () =>
+  runManagerStartupScenario("unassigned-close"));
 test("Manager adopts a preexisting branch worktree for fresh delegation", () =>
   runManagerStartupScenario("preexisting"));
 test("Manager opens and adopts a closed preexisting branch worktree", () =>

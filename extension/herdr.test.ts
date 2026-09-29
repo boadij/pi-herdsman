@@ -2773,6 +2773,132 @@ test("placement validates a non-lead caller and selects the largest agent axis",
   }
 });
 
+test("unnamed pane-targeted stop settles only with exact ownership", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const session = {
+    source: "herdr:pi",
+    agent: "pi",
+    kind: "id",
+    value: "session-1",
+  };
+  const pane = {
+    pane_id: "pane-1",
+    workspace_id: "workspace-1",
+    tab_id: "tab-1",
+    cwd: "/tmp",
+    agent_session: session,
+  };
+  const running = {
+    pane_id: "pane-1",
+    shell_pid: 10,
+    foreground_process_group_id: 20,
+    foreground_processes: [
+      { pid: 10, argv0: "/bin/zsh" },
+      { pid: 20, argv0: "/usr/bin/pi" },
+    ],
+  };
+  const shell = {
+    ...running,
+    foreground_process_group_id: 10,
+    foreground_processes: [{ pid: 10, argv0: "/bin/zsh" }],
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  try {
+    for (const variant of [
+      "valid",
+      "pane",
+      "session",
+      "process",
+      "missing expected pane",
+    ]) {
+      const calls: string[][] = [];
+      let observations = 0;
+      let stopped = false;
+      const pi = {
+        exec: async (_command: string, args: string[]) => {
+          calls.push(args);
+          const key = args.slice(0, 2).join(" ");
+          if (key === "agent get")
+            return response({
+              agent: {
+                ...pane,
+                pane_id: variant === "pane" ? "pane-2" : "pane-1",
+                agent_session:
+                  variant === "session"
+                    ? { ...session, value: "session-2" }
+                    : session,
+              },
+            });
+          if (key === "pane get") return response({ pane });
+          if (key === "tab list")
+            return response({
+              tabs: [{ tab_id: "tab-1", workspace_id: "workspace-1" }],
+            });
+          if (key === "pane process-info")
+            return response({
+              process_info: stopped
+                ? shell
+                : variant === "process" && observations++ === 1
+                  ? { ...running, foreground_process_group_id: 99 }
+                  : running,
+            });
+          if (key === "agent send-keys") {
+            stopped = true;
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          if (key === "agent list")
+            return response({ agents: stopped ? [] : [pane] });
+          throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+        },
+      } as any;
+      const stop = stopHerdrAgentPreservingPane(
+        pi,
+        { cwd: "/tmp" } as any,
+        "pane-1",
+        {
+          ...(variant === "missing expected pane" ? {} : { paneId: "pane-1" }),
+          tabId: "tab-1",
+          workspaceId: "workspace-1",
+          cwd: "/tmp",
+          session: { id: "session-1" },
+        },
+      );
+      if (variant === "valid") await stop;
+      else await assert.rejects(stop, /ownership is unproven/);
+      assert.deepEqual(
+        calls.filter((args) => args[0] === "agent" && args[1] === "send-keys"),
+        variant === "valid"
+          ? [["agent", "send-keys", "pane-1", "ctrl+c", "ctrl+d"]]
+          : [],
+        variant,
+      );
+      assert.equal(
+        calls.some((args) => args[0] === "pane" && args[1] === "close"),
+        false,
+      );
+      if (variant === "valid") {
+        assert.equal(
+          calls.filter((args) => args[1] === "get" && args[0] === "agent")
+            .length,
+          2,
+        );
+        assert.ok(
+          calls.some((args) => args[0] === "pane" && args[1] === "get"),
+        );
+      }
+    }
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
 test("preserving stop refuses a process takeover at the destructive boundary", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
