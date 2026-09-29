@@ -17,6 +17,7 @@ import {
   acquireProcessLock,
   isProcessLockClaim,
   readLiveProcessLock,
+  readProcessLockStatus,
   type ProcessLockClaim,
 } from "./lock.ts";
 import { herdsmanDataRoot } from "./storage.ts";
@@ -1479,6 +1480,10 @@ export type ManagerLease = {
   runtime: SupervisionRuntime;
   release: () => void;
 };
+export type ManagerDescriptorStatus = Readonly<{
+  descriptor: ManagerDescriptor;
+  live: boolean;
+}>;
 
 export function managerDescriptorPath(
   runtime: SupervisionRuntime,
@@ -1540,18 +1545,27 @@ export function sameManagerDescriptor(
   );
 }
 
-export function readManagerDescriptor(
+export function readManagerDescriptorStatus(
   runtime: SupervisionRuntime,
   workspaceId: string,
-): ManagerDescriptor | undefined {
+): ManagerDescriptorStatus | undefined {
   const path = managerDescriptorPath(runtime, workspaceId);
+  const lockPath = `${path}.lock`;
   let content: string;
   try {
     if (statSync(path).size > CHIEF_DESCRIPTOR_MAX_BYTES)
       throw new Error("descriptor too large");
     content = readFileSync(path, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        if (!statSync(lockPath, { throwIfNoEntry: false })) return undefined;
+      } catch (lockError) {
+        throw new Error("Unable to verify Manager descriptor", {
+          cause: lockError,
+        });
+      }
+    }
     throw new Error("Unable to verify Manager descriptor", { cause: error });
   }
   let descriptor: unknown;
@@ -1565,13 +1579,29 @@ export function readManagerDescriptor(
     descriptor.workspaceId !== workspaceId
   )
     throw new Error("Unable to verify Manager descriptor");
-  const claim = readLiveProcessLock(
-    `${path}.lock`,
-    "Manager supervision lease",
-  );
-  if (claim.pid !== descriptor.claim.pid || claim.id !== descriptor.claim.id)
+  let status: ReturnType<typeof readProcessLockStatus>;
+  try {
+    status = readProcessLockStatus(lockPath, "Manager supervision lease");
+  } catch (error) {
+    throw new Error("Unable to verify Manager descriptor", { cause: error });
+  }
+  if (
+    status.claim.pid !== descriptor.claim.pid ||
+    status.claim.id !== descriptor.claim.id
+  )
     throw new Error("Manager process-lock generation changed");
-  return descriptor;
+  return { descriptor, live: status.live };
+}
+
+export function readManagerDescriptor(
+  runtime: SupervisionRuntime,
+  workspaceId: string,
+): ManagerDescriptor | undefined {
+  const status = readManagerDescriptorStatus(runtime, workspaceId);
+  if (!status) return undefined;
+  if (!status.live)
+    throw new Error("Unable to verify Manager supervision lease");
+  return status.descriptor;
 }
 
 export function listManagerDescriptors(

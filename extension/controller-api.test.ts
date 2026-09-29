@@ -18,6 +18,9 @@ import {
   listChiefMessagePaths,
   readChiefMessage,
   supervisionRuntime,
+  claimChiefLease,
+  claimManagerLease,
+  managerDescriptorPath,
   writeProjectAssignment,
   writeLeadCoordinationState,
 } from "./supervision.ts";
@@ -117,6 +120,168 @@ const ownershipResult = (
     agentDefinition: options.definition ?? "agent",
     status: "completed",
   },
+});
+
+test("linked Lead routes to exact Manager, fails closed on incomplete authority, then falls back to Chief", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `manager-routing-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.HERDR_WORKSPACE_ID = "linked-workspace";
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  const chiefId = randomUUID();
+  const managerId = randomUUID();
+  const leadId = randomUUID();
+  const runtime = supervisionRuntime();
+  const chief = claimChiefLease({
+    piSessionId: chiefId,
+    paneId: "chief-pane",
+    tabId: "chief-tab",
+    workspaceId: WORKSPACE,
+  });
+  const manager = claimManagerLease({
+    piSessionId: managerId,
+    paneId: "manager-pane",
+    tabId: "manager-tab",
+    workspaceId: WORKSPACE,
+    repoKey: "repo-key",
+  });
+  const descriptorPath = managerDescriptorPath(runtime, WORKSPACE);
+  const descriptor = readFileSync(descriptorPath, "utf8");
+  let managerReleased = false;
+  const agents = [
+    [chiefId, "chief-pane", "chief-tab", WORKSPACE],
+    [managerId, "manager-pane", "manager-tab", WORKSPACE],
+    [leadId, "lead-pane", "lead-tab", "linked-workspace"],
+  ].map(([id, pane_id, tab_id, workspace_id]) => ({
+    agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: id },
+    pane_id,
+    tab_id,
+    workspace_id,
+  }));
+  const exec = (_command: string, args: string[]) => {
+    let result: unknown = {};
+    if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+    else if (isAgentList(args)) result = { agents };
+    else if (args[0] === "agent" && args[1] === "get")
+      result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
+    else if (args[0] === "workspace" && args[1] === "get")
+      result = {
+        workspace: {
+          worktree: { repo_key: "repo-key", is_linked_worktree: true },
+        },
+      };
+    else if (args[0] === "worktree" && args[1] === "list")
+      result = {
+        source: {
+          repo_key: "repo-key",
+          repo_name: "project",
+          source_workspace_id: WORKSPACE,
+        },
+        worktrees: [{ open_workspace_id: "linked-workspace" }],
+      };
+    return {
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    };
+  };
+  const pi = fakeChiefPi({ exec });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext() as any;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => leadId,
+    getSessionFile: () => `/tmp/${leadId}.jsonl`,
+  };
+  try {
+    writeProjectAssignment(runtime, {
+      version: 1,
+      id: leadId,
+      primaryWorkspaceId: WORKSPACE,
+      repoKey: "repo-key",
+      base: "HEAD",
+      branch: "smoke/routing",
+      text: "routing assignment",
+      phase: "active",
+      workspaceId: "linked-workspace",
+      paneId: "lead-pane",
+      tabId: "lead-tab",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    writeLeadCoordinationState(runtime, {
+      version: 1,
+      role: "manager",
+      instanceId: randomUUID(),
+      piSessionId: managerId,
+      updatedAt: Date.now(),
+    });
+    await pi.events.get("session_start")![0](undefined, ctx);
+    const tool = pi.tools.find(
+      (candidate) => candidate.name === "supervisor_message",
+    )!;
+    const send = (message: string) =>
+      tool.execute("message", { message }, undefined, undefined, ctx);
+    const records = (id: string) =>
+      listChiefMessagePaths(runtime, id).map((path) => readChiefMessage(path));
+
+    const direct = await send("SMOKE_READY_1");
+    assert.equal(direct.details.chiefSessionId, managerId);
+    assert.ok(
+      records(managerId).some(
+        (record) =>
+          record.kind === "lead_message" &&
+          record.text === "SMOKE_READY_1" &&
+          record.toSessionId === managerId &&
+          record.fromSessionId === leadId &&
+          record.leaseId === manager.descriptor.leaseId,
+      ),
+    );
+    assert.equal(
+      records(chiefId).some((record) => record.kind === "lead_message"),
+      false,
+    );
+
+    realFs.unlinkSync(descriptorPath);
+    await assert.rejects(
+      send("MUST_NOT_REACH_CHIEF"),
+      /Manager descriptor|Manager authority/,
+    );
+    assert.equal(records(chiefId).length, 0);
+    assert.equal(
+      records(managerId).some(
+        (record) => record.text === "MUST_NOT_REACH_CHIEF",
+      ),
+      false,
+    );
+
+    writeFileSync(descriptorPath, descriptor);
+    manager.release();
+    managerReleased = true;
+    const fallback = await send("CHIEF_FALLBACK_OK");
+    assert.equal(fallback.details.chiefSessionId, chiefId);
+    assert.ok(
+      records(chiefId).some(
+        (record) =>
+          record.kind === "lead_message" &&
+          record.text === "CHIEF_FALLBACK_OK" &&
+          record.toSessionId === chiefId &&
+          record.fromSessionId === leadId &&
+          record.leaseId === chief.descriptor.leaseId,
+      ),
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    if (!managerReleased) {
+      if (!realFs.existsSync(descriptorPath))
+        writeFileSync(descriptorPath, descriptor);
+      manager.release();
+    }
+    chief.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
 });
 
 test("Manager retry correlates an ambiguous worktree create by persisted branch", async (t) => {

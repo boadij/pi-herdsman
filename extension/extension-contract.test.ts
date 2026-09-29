@@ -1852,6 +1852,35 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
           stderr: "",
           code: 0,
         };
+      if (args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                worktree: { repo_key: "repo", is_linked_worktree: false },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       return { stdout: "{}", stderr: "", code: 0 };
     },
   });

@@ -172,6 +172,7 @@ import {
   type ProjectAssignment,
   claimManagerLease,
   readManagerDescriptor,
+  readManagerDescriptorStatus,
   listManagerDescriptors,
   sameManagerDescriptor,
   writeProjectAssignment,
@@ -7489,15 +7490,24 @@ export default function (pi: ExtensionAPI): void {
       return undefined;
     }
   };
+  const managerForScope = (
+    scope: Awaited<ReturnType<typeof worktreeGroupScope>> | undefined,
+  ): ManagerDescriptor | undefined => {
+    if (!scope) return undefined;
+    const status = readManagerDescriptorStatus(
+      supervisionRuntime(),
+      scope.primaryWorkspaceId,
+    );
+    if (!status || !status.live) return undefined;
+    if (status.descriptor.repoKey !== scope.repoKey)
+      throw new Error("Manager authority does not match project");
+    return status.descriptor;
+  };
   const currentManager = async (
     ctx: ExtensionContext,
   ): Promise<ManagerDescriptor | undefined> => {
     const workspaceId = process.env.HERDR_WORKSPACE_ID;
-    if (
-      !workspaceId ||
-      listManagerDescriptors(supervisionRuntime()).length === 0
-    )
-      return undefined;
+    if (!workspaceId) return undefined;
     let scope;
     try {
       scope = await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
@@ -7510,11 +7520,8 @@ export default function (pi: ExtensionAPI): void {
         return undefined;
       throw error;
     }
-    const descriptor = readManagerDescriptor(
-      supervisionRuntime(),
-      scope.primaryWorkspaceId,
-    );
-    if (!descriptor || descriptor.repoKey !== scope.repoKey) return undefined;
+    const descriptor = managerForScope(scope);
+    if (!descriptor) return undefined;
     const state = readLeadCoordinationState(
       supervisionRuntime(),
       descriptor.piSessionId,
@@ -7798,14 +7805,7 @@ export default function (pi: ExtensionAPI): void {
   };
   const managerClaimsScope = (
     scope: Awaited<ReturnType<typeof worktreeGroupScope>> | undefined,
-  ): boolean =>
-    // The held lease/descriptor precedes Manager role persistence.
-    !!scope &&
-    listManagerDescriptors(supervisionRuntime()).some(
-      (manager) =>
-        manager.repoKey === scope.repoKey &&
-        manager.workspaceId === scope.primaryWorkspaceId,
-    );
+  ): boolean => !!managerForScope(scope);
   const authorizeChiefRecord = async (
     record: ChiefMessageRecord,
     ctx: ExtensionContext,

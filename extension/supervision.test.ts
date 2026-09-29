@@ -25,7 +25,9 @@ import {
   chiefLeaseIsHeld,
   claimChiefLease,
   claimManagerLease,
+  managerDescriptorPath,
   readManagerDescriptor,
+  readManagerDescriptorStatus,
   listManagerDescriptors,
   sameManagerDescriptor,
   writeProjectAssignment,
@@ -1836,6 +1838,36 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
     first.release();
     second.release();
   }
+});
+
+test("Manager descriptor status distinguishes live, incomplete, and absent authority", () => {
+  const runtime = supervisionRuntime(socket());
+  const workspaceId = "root";
+  assert.equal(readManagerDescriptorStatus(runtime, workspaceId), undefined);
+  const lease = claimManagerLease(
+    {
+      piSessionId: id(),
+      paneId: "pane",
+      tabId: "tab",
+      workspaceId,
+      repoKey: "repo",
+    },
+    runtime,
+  );
+  try {
+    assert.deepEqual(readManagerDescriptorStatus(runtime, workspaceId), {
+      descriptor: lease.descriptor,
+      live: true,
+    });
+    unlinkSync(managerDescriptorPath(runtime, workspaceId));
+    assert.throws(
+      () => readManagerDescriptorStatus(runtime, workspaceId),
+      /Unable to verify Manager descriptor/,
+    );
+  } finally {
+    lease.release();
+  }
+  assert.equal(readManagerDescriptorStatus(runtime, workspaceId), undefined);
 });
 
 test("project assignments are strict, private, bounded, and removable", () => {
