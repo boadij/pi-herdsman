@@ -490,72 +490,148 @@ export function staffCloseResults(contents) {
   });
 }
 
-export function hasManagerResultRef(contents, assignmentId) {
-  const resultRef = `Result ref: result:${assignmentId}`;
+export function hasManagerResultReceipt(contents, branch, sessionId) {
   return sessionEntries(contents).some(
     (entry) =>
       entry.type === "custom_message" &&
       entry.customType === "pi-herdsman-report_result" &&
-      messageText(entry.content).includes(resultRef),
+      entry.details?.branch === branch &&
+      entry.details?.fromSessionId === sessionId &&
+      entry.details?.leadSessionId === sessionId,
   );
 }
 
-export function managerSourceCheckout(workspaceId, workspace, topology) {
-  const membership = workspace?.worktree;
+export function managerResultDelivery(contents, branch, sessionId) {
+  const entries = sessionEntries(contents);
+  const receipts = entries.filter(
+    (entry) =>
+      entry.type === "custom_message" &&
+      entry.customType === "pi-herdsman-report_result" &&
+      entry.details?.branch === branch &&
+      entry.details?.fromSessionId === sessionId &&
+      entry.details?.leadSessionId === sessionId,
+  );
+  if (receipts.length !== 1) return null;
+  const receipt = receipts[0];
+  const content = messageText(receipt.content);
   assert.ok(
-    typeof membership?.repo_key === "string" && membership.repo_key,
-    `workspace ${workspaceId} is not in a Herdr Git worktree group`,
+    content.startsWith(`Project work ${branch} finished:\n\n`),
+    "result notification omitted its semantic branch heading",
+  );
+  assert.ok(
+    content.includes("MANAGER_RECOVERY_DONE"),
+    "result content was not delivered",
+  );
+  assert.ok(
+    !content.includes(sessionId),
+    "result prose leaked assignment identity",
+  );
+  assert.doesNotMatch(content, /result:[0-9a-f-]{36}/i);
+  const index = entries.indexOf(receipt);
+  const followUp = entries
+    .slice(index + 1)
+    .find(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message?.role === "user" &&
+        entry.parentId === receipt.id,
+    );
+  const byId = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  const descendedFromFollowUp = (entry) => {
+    const visited = new Set();
+    let parent = entry.parentId;
+    while (parent && !visited.has(parent)) {
+      if (parent === followUp?.id) return true;
+      visited.add(parent);
+      parent = byId.get(parent)?.parentId;
+    }
+    return false;
+  };
+  const answer =
+    followUp &&
+    entries
+      .slice(index + 1)
+      .find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "assistant" &&
+          entry.message.stopReason === "stop" &&
+          messageText(entry.message.content).trim() ===
+            "PI_HERDSMAN_MANAGER_RECOVERY_OK" &&
+          descendedFromFollowUp(entry),
+      );
+  return answer ? { receipt, answer } : null;
+}
+
+export function assertManagerResultSettlement({
+  resultPersisted,
+  delivered,
+  assignmentExists,
+}) {
+  assert.equal(
+    resultPersisted,
+    true,
+    "canonical result must be persisted first",
   );
   assert.equal(
-    topology?.source?.repo_key,
-    membership.repo_key,
-    `worktree-group topology does not match workspace ${workspaceId}`,
+    assignmentExists,
+    !delivered,
+    delivered
+      ? "accepted result delivery must settle the assignment"
+      : "undelivered result must preserve the assignment",
   );
-  const sourceCheckoutPath = topology?.source?.source_checkout_path;
-  assert.ok(
-    typeof sourceCheckoutPath === "string" &&
-      sourceCheckoutPath.length > 0 &&
-      isAbsolute(sourceCheckoutPath),
-    "Herdr primary checkout path is unavailable",
-  );
-  return resolve(sourceCheckoutPath);
 }
 
-export function managerWorktreeOpenArgs(workspaceId, primaryCheckoutPath) {
-  assert.ok(workspaceId, "isolated root workspace ID is required");
-  assert.ok(
-    isAbsolute(primaryCheckoutPath),
-    "primary checkout path must be absolute",
-  );
-  return [
-    "worktree",
-    "open",
-    "--workspace",
-    workspaceId,
-    "--path",
-    primaryCheckoutPath,
-    "--no-focus",
-  ];
+export function supervisorResultAccepted(contents, branch) {
+  return sessionEntries(contents).some((entry) => {
+    const message = entry.message;
+    return (
+      entry.type === "message" &&
+      message?.role === "toolResult" &&
+      message.toolName === "supervisor_result" &&
+      !message.isError &&
+      message.details?.ok === true &&
+      message.details.action === "result" &&
+      message.details.branch === branch &&
+      message.details.queued === false
+    );
+  });
 }
 
-export function assertManagerOpenedPrimary(
+export async function prepareManagerRepository(paths, execute = run) {
+  const cwd = join(paths.root, "project");
+  await mkdir(cwd);
+  await execute("git", ["init", "--initial-branch=main", cwd]);
+  await execute(
+    "git",
+    [
+      "-c",
+      "user.name=Herdsman Smoke",
+      "-c",
+      "user.email=smoke@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "Smoke root",
+    ],
+    { cwd },
+  );
+  return cwd;
+}
+
+export function assertManagerFreshPrimary(
   workspaceId,
   primaryCheckoutPath,
   workspace,
   topology,
 ) {
   assert.equal(workspace?.workspace_id, workspaceId);
-  const membership = workspace?.worktree;
-  assert.equal(
-    membership?.is_linked_worktree,
-    false,
-    "isolated root workspace is not the primary checkout",
-  );
-  assert.equal(
-    membership?.checkout_path && resolve(membership.checkout_path),
-    primaryCheckoutPath,
-  );
-  assert.equal(membership?.repo_key, topology?.source?.repo_key);
+  assert.ok(topology?.source?.repo_key);
+  assert.ok(topology?.source?.repo_name);
   assert.equal(topology?.source?.source_workspace_id, workspaceId);
   const sourceCheckoutPath = topology?.source?.source_checkout_path;
   assert.ok(
@@ -565,20 +641,36 @@ export function assertManagerOpenedPrimary(
     "worktree source checkout path must be a non-empty absolute path",
   );
   assert.equal(resolve(sourceCheckoutPath), primaryCheckoutPath);
+  assert.ok(Array.isArray(topology.worktrees));
+  assert.ok(
+    topology.worktrees.length <= 1,
+    "bootstrap must have no linked worktrees",
+  );
+  assert.ok(
+    topology.worktrees.every(
+      (item) =>
+        !item.open_workspace_id || item.open_workspace_id === workspaceId,
+    ),
+    "bootstrap unexpectedly contains a linked workspace",
+  );
 }
 
-export async function deleteBranchIfPresent(branch, execute = run) {
+export async function deleteBranchIfPresent(
+  branch,
+  execute = run,
+  cwd = repoRoot,
+) {
   try {
     await execute(
       "git",
       ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
-      { cwd: repoRoot },
+      { cwd },
     );
   } catch (error) {
     if (error?.code === 1) return false;
     throw error;
   }
-  await execute("git", ["branch", "-D", branch], { cwd: repoRoot });
+  await execute("git", ["branch", "-D", branch], { cwd });
   return true;
 }
 
@@ -1379,10 +1471,9 @@ async function startCandidate(ctx) {
   assert.equal(resolve(pane.cwd ?? pane.working_directory), ctx.rootCwd);
   ctx.rootPaneId = paneId;
   const prompt = ctx.initialPrompt;
-  assert.equal(
-    typeof prompt,
-    "string",
-    "candidate initial prompt must be selected before startup",
+  assert.ok(
+    prompt === undefined || typeof prompt === "string",
+    "candidate initial prompt must be a string when present",
   );
   const args = candidateArgs({
     candidateExtension: ctx.candidateExtension,
@@ -1394,7 +1485,12 @@ async function startCandidate(ctx) {
   });
   await run(
     "herdr",
-    ["pane", "run", paneId, shellCommand(["pi", ...args, prompt])],
+    [
+      "pane",
+      "run",
+      paneId,
+      shellCommand(["pi", ...args, ...(prompt === undefined ? [] : [prompt])]),
+    ],
     {
       env: nestedControlEnv(process.env, ctx.paths, ctx.sessionName),
     },
@@ -1423,11 +1519,11 @@ function continuationPrompt() {
 }
 
 export function managerRecoveryFreshPrompt(branch) {
-  return `Use staff_delegate exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call supervisor_message with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait;\n- do not call supervisor_result until the Manager later sends exactly MANAGER_RECOVERY_FINISH via staff_message;\n- after that message, call supervisor_result with exactly MANAGER_RECOVERY_DONE.\n\nManager handshake: after staff_delegate returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any staff_message. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn. Do not send MANAGER_RECOVERY_FINISH; the later recovery prompt is the only instruction to do so.`;
+  return `Use staff_delegate exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call supervisor_message with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait for further instruction.\n\nManager handshake: after staff_delegate returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any staff_message. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn.`;
 }
 
-export function managerRecoveryResumePrompt(branch, session) {
-  return `Resume the existing work on branch ${branch}.\n\nCall staff_delegate using only:\n${JSON.stringify({ branch })}\n\nDo not start new work or supply task, base, or files.\n\nAfter recovery succeeds, send staff_message to session ${session} with exactly MANAGER_RECOVERY_FINISH.\n\nThen wait for that Lead's project result. Only after the result arrives, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_OK.`;
+export function managerRecoveryResumePrompt(branch) {
+  return `Resume the existing work on branch ${branch}.\n\nCall staff_delegate using only:\n${JSON.stringify({ branch })}\n\nDo not start new work or supply task, base, or files.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn. Do not message the Lead. When the result for this branch is later delivered, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_OK; do not output that marker before delivery.`;
 }
 
 export function managerRecoveryClosePrompt(session) {
@@ -1447,7 +1543,7 @@ export function initialPromptForScenario(scenario, ctx) {
     case "chief-tree":
       return "Reply exactly with PI_HERDSMAN_CHIEF_TREE_STARTUP.";
     case "manager-recovery":
-      return "Reply exactly with PI_HERDSMAN_MANAGER_RECOVERY_STARTUP.";
+      return undefined;
     default:
       throw new Error(`unknown smoke scenario: ${scenario}`);
   }
@@ -1974,10 +2070,11 @@ async function runManagerRecoverySmoke(ctx) {
     ctx.managerRecovery.stage = stage;
   };
   ctx.owned.managerBranch = branch;
-  const startupMarker = "PI_HERDSMAN_MANAGER_RECOVERY_STARTUP";
   const rootSnapshot = async () => rootSessionSnapshot(ctx);
   const promptRoot = (prompt) =>
     nestedCommand(ctx, ["agent", "prompt", ctx.rootPaneId, prompt]);
+  const promptAgent = (paneId, prompt) =>
+    nestedCommand(ctx, ["agent", "prompt", paneId, prompt]);
   const agents = async () =>
     resultOf(await nestedCommand(ctx, ["agent", "list"])).agents ?? [];
   const worktrees = async () => {
@@ -1992,18 +2089,6 @@ async function runManagerRecoverySmoke(ctx) {
     return result.worktrees ?? [];
   };
   const primaryPath = ctx.primaryCheckoutPath;
-  const opened = resultOf(
-    await nestedCommand(
-      ctx,
-      managerWorktreeOpenArgs(ctx.rootWorkspaceId, primaryPath),
-    ),
-  );
-  assert.equal(opened.workspace?.workspace_id, ctx.rootWorkspaceId);
-  assert.equal(
-    opened.worktree?.path && resolve(opened.worktree.path),
-    primaryPath,
-  );
-  assert.equal(opened.worktree?.is_linked_worktree, false);
   const rootWorkspace = resultOf(
     await nestedCommand(ctx, ["workspace", "get", ctx.rootWorkspaceId]),
   ).workspace;
@@ -2015,21 +2100,12 @@ async function runManagerRecoverySmoke(ctx) {
       ctx.rootWorkspaceId,
     ]),
   );
-  assertManagerOpenedPrimary(
+  assertManagerFreshPrimary(
     ctx.rootWorkspaceId,
     primaryPath,
     rootWorkspace,
     rootTopology,
   );
-  assert.equal(
-    opened.workspace.worktree?.repo_key,
-    rootTopology.source.repo_key,
-  );
-  assert.equal(
-    resolve(opened.workspace.worktree?.checkout_path ?? ""),
-    primaryPath,
-  );
-  assert.equal(opened.workspace.worktree?.is_linked_worktree, false);
   const matchingWorktrees = async () =>
     (await worktrees()).filter((item) => item.branch === branch);
   const paneInfo = (paneId) =>
@@ -2113,14 +2189,23 @@ async function runManagerRecoverySmoke(ctx) {
     );
   };
 
-  markStage("startup-marker");
-  await waitFor("startup", async () => {
-    const session = await rootSnapshot();
-    return (
-      session &&
-      assistantResultForSession(session, ctx.initialPrompt, startupMarker)
-    );
-  });
+  markStage("fresh-session-identity");
+  const freshRoot = await waitFor(
+    "fresh-session",
+    async () =>
+      (await agents()).find(
+        (agent) =>
+          agent.pane_id === ctx.rootPaneId &&
+          agent.agent_session?.kind === "id",
+      ),
+    30_000,
+  );
+  assert.ok(freshRoot.agent_session.value);
+  assert.equal(
+    await exactIsolatedSession(ctx, freshRoot.agent_session.value),
+    undefined,
+    "Manager bootstrap must precede Pi transcript persistence",
+  );
   markStage("manager-mode-command");
   await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
   markStage("manager-mode-active-wait");
@@ -2133,6 +2218,11 @@ async function runManagerRecoverySmoke(ctx) {
     "--timeout",
     "15000",
   ]);
+  assert.equal(
+    await exactIsolatedSession(ctx, freshRoot.agent_session.value),
+    undefined,
+    "/manager must not manufacture a conversation",
+  );
 
   const prompt = managerRecoveryFreshPrompt(branch);
   markStage("fresh-delegation");
@@ -2546,14 +2636,21 @@ async function runManagerRecoverySmoke(ctx) {
     worktreePath,
   );
 
-  const recoveryPrompt = managerRecoveryResumePrompt(branch, first.session);
+  const recoveryPrompt = managerRecoveryResumePrompt(branch);
   markStage("assignment-recovery");
   await promptRoot(recoveryPrompt);
   markStage("recovered-identity-validation");
   const recovery = await waitFor("recovery", async () => {
     const session = await rootSnapshot();
     const results = session && staffDelegateResults(session.contents);
-    return results?.length === 3 ? { session, results } : null;
+    return results?.length === 3 &&
+      assistantResultForSession(
+        session,
+        recoveryPrompt,
+        "PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED",
+      )
+      ? { session, results }
+      : null;
   });
   const recovered = recovery.results[2];
   assert.equal(recovered.session, first.session);
@@ -2598,28 +2695,6 @@ async function runManagerRecoverySmoke(ctx) {
   ctx.managerRecovery.recoveredPid = recoveredPid;
   await assertUnchangedAssignment();
 
-  const finalMarker = "PI_HERDSMAN_MANAGER_RECOVERY_OK";
-  markStage("completion-marker");
-  const completed = await waitFor("completion", async () => {
-    const session = await rootSnapshot();
-    if (!session) return null;
-    const assistant = assistantResultsForPrompt(
-      session.contents,
-      recoveryPrompt,
-      finalMarker,
-      (text, marker) =>
-        text.split(/\r?\n/).some((line) => line.trim() === marker),
-    )[0];
-    return assistant ? session : null;
-  });
-  markStage("final-transcript-assertions");
-  assert.equal(staffDelegateResults(completed.contents).length, 3);
-  assert.equal((await matchingWorktrees()).length, 1);
-  assert.ok(
-    hasManagerResultRef(completed.contents, first.session),
-    "Manager transcript omitted canonical result ref",
-  );
-  assert.ok(completed.contents.includes("MANAGER_RECOVERY_DONE"));
   const resultPath = join(
     ctx.paths.piAgent,
     "pi-herdsman",
@@ -2633,8 +2708,94 @@ async function runManagerRecoverySmoke(ctx) {
     assert.match(await readFile(resultPath, "utf8"), /MANAGER_RECOVERY_DONE/);
   };
   markStage("pre-leave-result-validation");
+  const currentLease = await managerLease();
+  markStage("manager-away-before-result");
+  await submitManagerLeave(ctx, ctx.rootPaneId);
+  await waitFor(
+    "manager-left-before-result",
+    async () => {
+      try {
+        await lstat(managerPath);
+        return false;
+      } catch (error) {
+        if (error.code === "ENOENT") return true;
+        throw error;
+      }
+    },
+    15_000,
+  );
+  await promptAgent(
+    paneId,
+    `Complete branch ${branch} now. Call supervisor_result exactly once with only {"result":"MANAGER_RECOVERY_DONE"}; do not call any other tool.`,
+  );
+  const leadResult = await waitFor(
+    "result-persisted-manager-away",
+    async () => {
+      const session = await exactIsolatedSession(ctx, first.session);
+      if (!session || !supervisorResultAccepted(session.contents, branch))
+        return null;
+      try {
+        await lstat(resultPath);
+        return session;
+      } catch (error) {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      }
+    },
+  );
+  assert.ok(supervisorResultAccepted(leadResult.contents, branch));
   await assertResult();
-  ctx.managerRecovery.resultRef = `result:${first.session}`;
+  await assertUnchangedAssignment();
+  const beforeReconcile = await rootSnapshot();
+  assert.ok(beforeReconcile, "Manager session transcript was not persisted");
+  assert.equal(
+    hasManagerResultReceipt(beforeReconcile.contents, branch, first.session),
+    false,
+    "result was delivered while Manager was absent",
+  );
+  assertManagerResultSettlement({
+    resultPersisted: true,
+    delivered: false,
+    assignmentExists: true,
+  });
+
+  markStage("manager-result-reconciliation");
+  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
+  await waitFor(
+    "manager-reentered-for-result",
+    async () => {
+      try {
+        const lease = await managerLease();
+        return lease !== currentLease ? lease : null;
+      } catch (error) {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      }
+    },
+    15_000,
+  );
+  await promptRoot(
+    `Check for the durable result for branch ${branch}. Do not output PI_HERDSMAN_MANAGER_RECOVERY_OK until that result is delivered.`,
+  );
+  markStage("completion-marker");
+  const completed = await waitFor("completion", async () => {
+    const session = await rootSnapshot();
+    if (!session) return null;
+    return managerResultDelivery(session.contents, branch, first.session)
+      ? session
+      : null;
+  });
+  markStage("final-transcript-assertions");
+  assert.equal(staffDelegateResults(completed.contents).length, 3);
+  assert.equal((await matchingWorktrees()).length, 1);
+  assert.ok(managerResultDelivery(completed.contents, branch, first.session));
+  assert.ok(completed.contents.includes("MANAGER_RECOVERY_DONE"));
+  await assertManagerResultSettlement({
+    resultPersisted: true,
+    delivered: true,
+    assignmentExists: false,
+  });
+  ctx.managerRecovery.resultDelivered = branch;
   markStage("settled-assignment-validation");
   await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
   markStage("manager-leave-command-submission");
@@ -3007,7 +3168,11 @@ async function cleanup(paths, owned, ctx) {
     if (managerWorktreeSafe) {
       try {
         assert.equal(owned.managerBranch, ctx.managerRecovery.branch);
-        await deleteBranchIfPresent(owned.managerBranch);
+        await deleteBranchIfPresent(
+          owned.managerBranch,
+          run,
+          ctx.primaryCheckoutPath ?? repoRoot,
+        );
       } catch (error) {
         failures.push(
           `manager branch ${owned.managerBranch}: ${error.message}`,
@@ -3093,28 +3258,15 @@ async function main() {
     expectedPackage: `${pkg.name}@${pkg.version}`,
     owned,
   };
-  ctx.rootCwd = repoRoot;
   ctx.initialPrompt = initialPromptForScenario(scenario, ctx);
   let failure;
   try {
+    ctx.rootCwd =
+      scenario === "manager-recovery"
+        ? await prepareManagerRepository(paths)
+        : repoRoot;
     if (scenario === "manager-recovery") {
-      const hostWorkspaceId = process.env.HERDR_WORKSPACE_ID;
-      const hostWorkspace = resultOf(
-        await herdr(["workspace", "get", hostWorkspaceId], {
-          env: process.env,
-        }),
-      ).workspace;
-      const hostTopology = resultOf(
-        await herdr(["worktree", "list", "--workspace", hostWorkspaceId], {
-          env: process.env,
-        }),
-      );
-      ctx.primaryCheckoutPath = managerSourceCheckout(
-        hostWorkspaceId,
-        hostWorkspace,
-        hostTopology,
-      );
-      ctx.rootCwd = ctx.primaryCheckoutPath;
+      ctx.primaryCheckoutPath = ctx.rootCwd;
     }
     ctx.authMechanism = await preparePi(paths, model);
     await prepareHerdr(paths);

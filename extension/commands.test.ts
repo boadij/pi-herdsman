@@ -1486,10 +1486,19 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       assert.equal(result.details.branch, assignment!.branch);
       assert.equal("result" in result.details, false);
       assert.equal(result.details.queued, false);
-      assert.match(
-        readFileSync(resultPath(assignment!.id), "utf8"),
-        /Lead result source:.*branch/,
+      const savedResult = readFileSync(resultPath(assignment!.id), "utf8");
+      assert.ok(
+        savedResult.startsWith(
+          `Lead result source: ${JSON.stringify({ branch: assignment!.branch, cwd: leadCtx.cwd })}\n\n`,
+        ),
       );
+      assert.equal(savedResult.includes(assignment!.id), false);
+      assert.equal(savedResult.includes(childWorkspace), false);
+      assert.doesNotMatch(
+        savedResult,
+        /"assignment":|"piSessionId":|"workspaceId":/,
+      );
+      assert.match(savedResult, /Finished implementation/);
       assert.equal(
         readFileSync(
           projectAssignmentPath(
@@ -1565,6 +1574,14 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       /Result ref:|result:/,
     );
     assert.match(String(resultNotification.content), /Finished implementation/);
+    assert.equal(
+      String(resultNotification.content).includes(assignment!.id),
+      false,
+    );
+    assert.equal(
+      String(resultNotification.content).includes(childWorkspace),
+      false,
+    );
     assert.deepEqual(
       listProjectAssignments(supervisionRuntime(), WORKSPACE),
       [],

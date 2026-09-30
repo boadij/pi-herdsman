@@ -2314,6 +2314,54 @@ async function runManagerStartupScenario(
           listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
           mode === "active-result" ? 0 : 1,
         );
+        if (mode === "active-result-periodic") {
+          const components: any[] = [];
+          const notifications: string[] = [];
+          ctx.hasUI = true;
+          ctx.ui.notify = (text: string) => notifications.push(text);
+          ctx.ui.custom = async (factory: any) => {
+            let done: (value: unknown) => void = () => undefined;
+            const selected = new Promise((resolve) => {
+              done = resolve;
+            });
+            components.push(
+              factory(
+                { requestRender: () => undefined },
+                {
+                  fg: (_color: string, text: string) => text,
+                  bold: (text: string) => text,
+                },
+                {},
+                done,
+              ),
+            );
+            return components.length === 1 ? undefined : selected;
+          };
+          await pi.commandOptions.get("manager").handler("", ctx);
+          assert.match(components[0].render(120).join("\n"), /smoke\/recover/);
+          components[0].handleInput("\r");
+          await t!.waitFor(() => assert.equal(components.length, 2));
+          assert.match(components[1].render(120).join("\n"), /View result/);
+          components[1].handleInput("\r");
+          await t!.waitFor(() =>
+            assert.deepEqual(notifications, ["completed"]),
+          );
+          assert.equal(
+            notifications[0],
+            readFileSync(resultPath(staleId), "utf8"),
+          );
+          assert.equal(notifications[0].includes(resultRef(staleId)), false);
+          assert.equal(
+            listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+            staleId,
+          );
+          assert.equal(
+            listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).filter(
+              (path) => readChiefMessage(path).kind === "report_result",
+            ).length,
+            1,
+          );
+        }
         if (mode === "active-missing" || mode === "active-live") {
           const { SelectList } = await import("@earendil-works/pi-tui");
           let renderedList: any;
@@ -2917,7 +2965,7 @@ for (const [mode, label] of [
   ["active-closed", "reopens a closed worktree workspace"],
 ] as const)
   test(`Manager ${label}`, (t) => runManagerStartupScenario(mode, false, t));
-test("Manager periodically repairs an active assignment with a durable result", (t) =>
+test("Manager periodically repairs an active assignment and View result shows canonical content", (t) =>
   runManagerStartupScenario("active-result-periodic", false, t));
 test("Manager close preserves the exact assignment and resumes its session", () =>
   runManagerStartupScenario("close-resume"));

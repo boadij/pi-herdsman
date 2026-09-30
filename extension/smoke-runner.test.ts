@@ -37,10 +37,12 @@ import {
   savedSessionHeaderEvidence,
   staffDelegateResults,
   staffCloseResults,
-  hasManagerResultRef,
-  managerSourceCheckout,
-  managerWorktreeOpenArgs,
-  assertManagerOpenedPrimary,
+  assertManagerResultSettlement,
+  hasManagerResultReceipt,
+  managerResultDelivery,
+  supervisorResultAccepted,
+  prepareManagerRepository,
+  assertManagerFreshPrimary,
   deleteBranchIfPresent,
   hasSuccessfulSupervisorMessage,
   leadReadyCompleted,
@@ -724,11 +726,8 @@ test("chief-tree startup prompt creates one ordinary Lead branch for harness con
   assert.doesNotMatch(prompt, /\/chief|\/tree/i);
 });
 
-test("manager-recovery starts with one ordinary Lead startup turn", () => {
-  assert.equal(
-    initialPromptForScenario("manager-recovery", {}),
-    "Reply exactly with PI_HERDSMAN_MANAGER_RECOVERY_STARTUP.",
-  );
+test("manager-recovery starts without a chat prompt", () => {
+  assert.equal(initialPromptForScenario("manager-recovery", {}), undefined);
 });
 
 test("manager-recovery starts work by task and branch, then resumes by branch only", () => {
@@ -748,13 +747,14 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   );
   assert.match(prompt, /Wait until the exact MANAGER_RECOVERY_READY message/);
   assert.match(prompt, /Only after that delivered message, reply exactly/);
-  assert.match(prompt, /Do not send MANAGER_RECOVERY_FINISH/);
-  const resume = managerRecoveryResumePrompt(branch, "session-exact");
+  assert.doesNotMatch(prompt, /MANAGER_RECOVERY_FINISH/);
+  const resume = managerRecoveryResumePrompt(branch);
   assert.match(
     resume,
     /staff_delegate using only:\n\{"branch":"herdsman\/smoke-manager-recovery-exact"\}/,
   );
-  assert.match(resume, /staff_message to session session-exact/);
+  assert.match(resume, /PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED/);
+  assert.doesNotMatch(resume, /staff_message|session-exact/);
   assert.doesNotMatch(resume, /"assignment"|"task"|"base"|"files"/);
 });
 
@@ -843,130 +843,156 @@ test("staff delegate results retain only valid successful delegation payloads in
   ]);
 });
 
-test("manager result ref is read from the delivered report-result custom message", () => {
-  const assignment = "assignment-id";
+test("Manager result delivery is branch-keyed, semantic, and followed by its triggered turn", () => {
+  const branch = "feature/bootstrap";
+  const sessionId = "lead-session";
   const contents = [
     {
+      type: "custom_message",
+      id: "inbox-message",
+      customType: "pi-herdsman-report_result",
+      details: { branch, fromSessionId: sessionId, leadSessionId: sessionId },
+      content: `Project work ${branch} finished:\n\nMANAGER_RECOVERY_DONE`,
+    },
+    {
       type: "message",
-      message: { role: "user", content: `Result ref: result:${assignment}` },
+      id: "follow-up",
+      parentId: "inbox-message",
+      message: { role: "user", content: "result" },
     },
     {
-      type: "custom_message",
-      customType: "other",
-      content: `Result ref: result:${assignment}`,
-    },
-    {
-      type: "custom_message",
-      customType: "pi-herdsman-report_result",
-      content: "Result ref: result:other-assignment",
-    },
-    {
-      type: "custom_message",
-      customType: "pi-herdsman-report_result",
-      content: `Lead result received.\nResult ref: result:${assignment}`,
+      type: "message",
+      parentId: "follow-up",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "PI_HERDSMAN_MANAGER_RECOVERY_OK",
+      },
     },
   ]
     .map((entry) => JSON.stringify(entry))
     .join("\n");
-  assert.equal(hasManagerResultRef(contents, assignment), true);
-  assert.equal(hasManagerResultRef(contents, "missing"), false);
+  assert.deepEqual(managerResultDelivery(contents, branch, sessionId), {
+    receipt: contents.split("\n").map(JSON.parse)[0],
+    answer: contents.split("\n").map(JSON.parse)[2],
+  });
+  assert.equal(managerResultDelivery(contents, "other", sessionId), null);
+  assert.equal(hasManagerResultReceipt(contents, branch, sessionId), true);
+  assert.doesNotMatch(contents, /result:[0-9a-f-]{36}/i);
+  assertManagerResultSettlement({
+    resultPersisted: true,
+    delivered: false,
+    assignmentExists: true,
+  });
+  assertManagerResultSettlement({
+    resultPersisted: true,
+    delivered: true,
+    assignmentExists: false,
+  });
+  assert.throws(
+    () =>
+      assertManagerResultSettlement({
+        resultPersisted: false,
+        delivered: false,
+        assignmentExists: true,
+      }),
+    /persisted first/,
+  );
+  assert.throws(
+    () =>
+      assertManagerResultSettlement({
+        resultPersisted: true,
+        delivered: false,
+        assignmentExists: false,
+      }),
+    /undelivered result must preserve/,
+  );
 });
 
-test("Manager recovery resolves Herdr's primary checkout from any linked host workspace", () => {
-  const checkout = resolve("/repo/primary");
-  const hostWorkspace = {
-    worktree: {
-      repo_key: "repo",
-      is_linked_worktree: true,
-      checkout_path: checkout,
-    },
-  };
-  const hostTopology = {
-    source: {
-      repo_key: "repo",
-      source_workspace_id: "primary",
-      source_checkout_path: checkout,
-    },
-  };
-  assert.equal(
-    managerSourceCheckout("host", hostWorkspace, hostTopology),
-    checkout,
-  );
-  assert.throws(
-    () => managerSourceCheckout("host", {}, hostTopology),
-    /not in a Herdr Git worktree group/,
-  );
-  assert.throws(
-    () =>
-      managerSourceCheckout("host", hostWorkspace, {
-        source: { ...hostTopology.source, repo_key: "other" },
-      }),
-    /topology does not match workspace/,
-  );
-  assert.throws(
-    () =>
-      managerSourceCheckout("host", hostWorkspace, {
-        source: { repo_key: "repo" },
-      }),
-    /primary checkout path is unavailable/,
-  );
-  assert.throws(
-    () =>
-      managerSourceCheckout("host", hostWorkspace, {
-        source: {
-          ...hostTopology.source,
-          source_checkout_path: "relative/path",
+test("Manager-away supervisor_result persists before notification reconciliation", () => {
+  const entries = [
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "supervisor_result",
+        details: {
+          ok: true,
+          action: "result",
+          branch: "feature/bootstrap",
+          queued: false,
         },
-      }),
-    /primary checkout path is unavailable/,
-  );
-
-  assert.deepEqual(managerWorktreeOpenArgs("isolated-root", checkout), [
-    "worktree",
-    "open",
-    "--workspace",
-    "isolated-root",
-    "--path",
-    checkout,
-    "--no-focus",
-  ]);
-  assert.throws(() =>
-    managerWorktreeOpenArgs("isolated-root", "relative/path"),
-  );
-
-  const workspace = {
-    workspace_id: "isolated-root",
-    worktree: {
-      repo_key: "repo",
-      is_linked_worktree: false,
-      checkout_path: checkout,
+      },
     },
-  };
-  const topology = {
-    source: {
-      repo_key: "repo",
-      source_workspace_id: "isolated-root",
-      source_checkout_path: checkout,
-    },
-  };
-  assertManagerOpenedPrimary("isolated-root", checkout, workspace, topology);
-  assert.throws(() =>
-    assertManagerOpenedPrimary("isolated-root", checkout, workspace, {
-      source: { ...topology.source, repo_key: "other" },
-    }),
-  );
-  assert.throws(() =>
-    assertManagerOpenedPrimary("isolated-root", checkout, workspace, {
-      source: { ...topology.source, source_workspace_id: "elsewhere" },
-    }),
-  );
-  assert.throws(
-    () =>
-      assertManagerOpenedPrimary("isolated-root", checkout, workspace, {
-        source: { repo_key: "repo", source_workspace_id: "isolated-root" },
+  ];
+  const contents = entries.map((entry) => JSON.stringify(entry)).join("\n");
+  assert.equal(supervisorResultAccepted(contents, "feature/bootstrap"), true);
+  assert.equal(supervisorResultAccepted(contents, "other"), false);
+  assert.equal(
+    supervisorResultAccepted(
+      JSON.stringify({
+        type: "message",
+        message: { ...entries[0].message, isError: true },
       }),
-    /source checkout path must be a non-empty absolute path/,
+      "feature/bootstrap",
+    ),
+    false,
   );
+});
+
+test("Manager smoke creates a fresh Git primary without pre-opening a worktree", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-herdsman-manager-smoke-"));
+  try {
+    const calls = [];
+    const checkout = await prepareManagerRepository({ root }, async (...args) =>
+      calls.push(args),
+    );
+    assert.equal(checkout, join(root, "project"));
+    assert.deepEqual(
+      calls.map((call) => call[1][0]),
+      ["init", "-c"],
+    );
+    assert.deepEqual(calls[1][1].slice(-4), [
+      "commit",
+      "--allow-empty",
+      "-m",
+      "Smoke root",
+    ]);
+    assertManagerFreshPrimary(
+      "root",
+      checkout,
+      { workspace_id: "root" },
+      {
+        source: {
+          repo_key: "repo",
+          repo_name: "project",
+          source_workspace_id: "root",
+          source_checkout_path: checkout,
+        },
+        worktrees: [{ open_workspace_id: "root" }],
+      },
+    );
+    assert.throws(
+      () =>
+        assertManagerFreshPrimary(
+          "root",
+          checkout,
+          { workspace_id: "root" },
+          {
+            source: {
+              repo_key: "repo",
+              repo_name: "project",
+              source_workspace_id: "root",
+              source_checkout_path: checkout,
+            },
+            worktrees: [{ open_workspace_id: "linked" }],
+          },
+        ),
+      /linked workspace/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("smoke branch cleanup treats only a proven absent local branch as already clean", async () => {
