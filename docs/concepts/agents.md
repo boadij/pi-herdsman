@@ -127,7 +127,7 @@ agent label     → stable logical name across sequential generations; live cont
 
 ## See also
 
-- [Pi Herdsman](supervision.md) for the separate supervision model.
+- [Coordination](coordination.md) for the separate coordination model.
 - [Lifecycle](lifecycle.md)
 - [Delegation](delegation.md)
 - [Agent states](../reference/agent-states.md)

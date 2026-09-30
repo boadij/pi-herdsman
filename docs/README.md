@@ -2,113 +2,68 @@
 
 [Repository README](../README.md)
 
-This directory is the canonical product documentation for `pi-herdsman`.
+Choose the shortest path that matches what you are trying to do. Exact behavior
+lives on one canonical concept or reference page so entry pages stay small and
+do not drift into competing contracts.
 
-Pi Herdsman is built around asynchronous orchestration: managed agents can continue
-independently while the lead Pi session remains the user's interactive session.
-The exact lifecycle semantics live on [Lifecycle](concepts/lifecycle.md).
-
-The documentation follows one-source-of-truth ownership: every public concept
-has one canonical page. Audience pages route readers to those pages instead of
-copying their full contracts.
-
-## Choose your path
-
-### Use Pi Herdsman from the UI
+## New to Pi Herdsman?
 
 Start with [Getting started](getting-started.md).
 
-This path is for people who want to install Pi Herdsman, delegate work without
-leaving the lead conversation, configure agent definitions and placement,
-observe managed agents, focus their panes, and use lead controls
-without reading the structured model-facing API first.
+It covers installation, the first asynchronous Agent delegation, `/agents`,
+configuration, and where to go next.
 
-Continue with:
+## Orchestrate project work
 
-- [`/agents` commands](reference/commands.md)
-- [Status widget](reference/status-widget.md)
-- [Configuration](reference/configuration.md)
-- [Agent definitions](guides/agent-definitions.md)
-- [Customizing bundled agents](guides/customizing-agents.md)
-- [Agent-definition schema](reference/agent-definition-schema.md)
+Use [Project orchestration](guides/project-orchestration.md) to coordinate
+independent branch-based work through Manager and multiple Leads.
+
+Read [Coordination](concepts/coordination.md) when you need the underlying role,
+authority, project-scope, and ownership model.
+
+## Understand Agents
+
+- [Agents and identity](concepts/agents.md)
+- [Delegation](concepts/delegation.md)
+- [Lifecycle](concepts/lifecycle.md)
+- [Handoffs and files](guides/handoffs.md)
 - [Recovery](guides/recovery.md)
 
-### Deploy Pi Herdsman in a container
+## Customize Pi Herdsman
 
-Use the canonical [container deployment guide](guides/container-deployment.md)
-for the SSH-ready Docker image, persistent state, updates, and optional
-Tailscale networking.
+- [Agent definitions](guides/agent-definitions.md)
+- [Customizing bundled Agents](guides/customizing-agents.md)
+- [Agent-definition schema](reference/agent-definition-schema.md)
+- [Configuration](reference/configuration.md)
+- [Container deployment](guides/container-deployment.md)
 
-### Coordinate through agent APIs
+## Use the coordination API
 
-Start with [Agent coordination API](agent-api.md).
-
-This path is for model and agent coordination behavior: non-blocking assignment,
-exact agent identity, lifecycle, delegation, owner clarification, handoffs, and
-failure handling.
-
-Continue with:
+Start with [Coordination API](coordination-api.md), then use the focused
+references for exact contracts:
 
 - [Agent tools](reference/agent.md)
-- [`ask_owner` API](reference/ask-owner.md)
-- [Agents and identity](concepts/agents.md)
-- [Lifecycle](concepts/lifecycle.md)
-- [Delegation](concepts/delegation.md)
-- [Handoffs and files](guides/handoffs.md)
+- [`ask_owner`](reference/ask-owner.md)
+- [Staff tools](reference/staff.md)
+- [Supervisor tools](reference/supervisor.md)
+- [Peer tools](reference/peer.md)
 - [Agent states](reference/agent-states.md)
 - [Errors](reference/errors.md)
 
-For structural project Manager and runtime Chief supervision, read
-[Supervision](concepts/supervision.md) and its
-[complete reference contract](reference/supervision.md).
+Human-facing surfaces are documented separately:
 
-### Develop Pi Herdsman
+- [Commands](reference/commands.md)
+- [Status widget](reference/status-widget.md)
 
-Maintainer-only material stays separate from both product paths:
+## Develop Pi Herdsman
+
+Maintainer-only material stays separate from product use:
 
 - [Validation](development/validation.md)
 - [Smoke testing](development/smoke-testing.md)
 - [Documentation maintenance](development/documentation.md)
 - [Instruction and interface design](development/instruction-interface-design.md)
 
-The repository directories still group pages by content type (`concepts`,
-`guides`, `reference`, and `development`). The documentation index is
-audience-first so readers do not need to understand that internal grouping
-before choosing the material relevant to them.
-
-## Canonical ownership
-
-| Subject                               | Canonical page                                                                  |
-| ------------------------------------- | ------------------------------------------------------------------------------- |
-| Human UI first use                    | [Getting started](getting-started.md)                                           |
-| Container deployment                  | [Container deployment](guides/container-deployment.md)                          |
-| Agent/API first use                   | [Agent coordination API](agent-api.md)                                          |
-| Asynchronous orchestration            | [Lifecycle](concepts/lifecycle.md)                                              |
-| Agent identity                        | [Agents and identity](concepts/agents.md)                                       |
-| State transitions                     | [Lifecycle](concepts/lifecycle.md)                                              |
-| Delegation model                      | [Delegation](concepts/delegation.md)                                            |
-| Creating definitions                  | [Agent definitions](guides/agent-definitions.md)                                |
-| Overrides and prompt composition      | [Customizing bundled agents](guides/customizing-agents.md)                      |
-| `files`, body references, and results | [Handoffs and files](guides/handoffs.md)                                        |
-| Operator recovery                     | [Recovery](guides/recovery.md)                                                  |
-| `agent` request contract              | [Agent tools](reference/agent.md)                                               |
-| `ask_owner` contract                  | [`ask_owner` API](reference/ask-owner.md)                                       |
-| Pi Herdsman supervision concept       | [Supervision](concepts/supervision.md)                                          |
-| Chief and staff tools                 | [Supervision reference](reference/supervision.md)                               |
-| Frontmatter fields                    | [Agent-definition schema](reference/agent-definition-schema.md)                 |
-| Public agent states                   | [Agent states](reference/agent-states.md)                                       |
-| `/agents` human commands              | [`/agents` commands](reference/commands.md)                                     |
-| Settings                              | [Configuration](reference/configuration.md)                                     |
-| TUI agent widget                      | [Status widget](reference/status-widget.md)                                     |
-| Error categories                      | [Errors](reference/errors.md)                                                   |
-| Repository checks                     | [Validation](development/validation.md)                                         |
-| Live acceptance                       | [Smoke testing](development/smoke-testing.md)                                   |
-| Instruction and interface design      | [Instruction and interface design](development/instruction-interface-design.md) |
-
-When another page needs one of these subjects, it summarizes only enough to
-establish context and links to the canonical page instead of restating the full
-contract.
-
-Root `SKILL.md` remains optional model-facing reinforcement of the
-self-contained runtime operational contract plus deeper coordination guidance.
-Runtime remains authoritative and does not depend on the skill.
+The repository directories are organized by content type. The index is
+task-first so readers do not need to understand that structure before finding
+the right page.

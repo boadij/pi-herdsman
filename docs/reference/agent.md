@@ -1,6 +1,6 @@
 # Agent tools
 
-[Documentation index](../README.md) · [supervision reference](supervision.md)
+[Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
 Managed-agent operations are exposed as nine distinct tools:
 

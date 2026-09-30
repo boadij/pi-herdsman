@@ -1,4 +1,4 @@
-# `/agents` commands
+# Commands
 
 [Documentation index](../README.md)
 
@@ -22,12 +22,16 @@ diagnostic that includes the running Pi Herdsman package version.
 /agents definitions
 /agents placement [tab|subtree|split]
 /agents stop
+/manager
+/manager leave
+/chief
+/chief leave
 ```
 
 The plain command opens a native Pi selection menu titled with the running
 Pi Herdsman package version for both `/agents` and `/herdsman`, with `Running`,
-`Session stats`, `Definitions`, `Layout`, `Context retirement  on|off`, `Message limits`, and
-`Stop all…` destinations. The
+`Session stats`, `Definitions`, `Layout`, `Context retirement  on|off`, `Message limits`,
+and `Stop all…` destinations. The
 Message limits view edits the user-wide inline attachment and mailbox payload
 limits. It is available only to a lead Pi session with UI. Current
 values and presets show a rough token equivalent using four UTF-8 bytes per
@@ -35,19 +39,24 @@ token. The enforced limits are bytes, not tokens.
 
 ## `/agents stats`
 
-Shows accumulated provider-reported token usage and cost for the current Pi
-session plus transitively owned managed-Agent Pi sessions whose exact persisted
-identity can be verified. Usage follows Pi's session accounting across the whole
-session history, including assistant responses, model-attributed usage entries,
-tool-result model usage, compaction, and branch summaries.
-Input includes cached and uncached tokens, with cache writes shown within
-uncached input. The combined Models section attributes assistant responses to
-their response model, usage entries to their recorded model, and tool and
-summary usage to `Tools/summaries`, sorted by cost.
+Shows accumulated Pi-native token usage and cost for the current Pi session plus
+transitively owned managed-Agent Pi sessions whose exact persisted identity can
+be verified.
+
+Usage follows Pi's session accounting across the whole session history,
+including assistant responses, model-attributed usage entries, tool-result model
+usage, compaction, and branch summaries. Input includes cached and uncached
+tokens, with cache writes shown within uncached input.
+
+The Models section attributes assistant responses to their response model,
+usage entries to their recorded model, and tool/summary usage to
+`Tools/summaries`, sorted by cost.
 
 Repeated continuations of the same Pi session are counted once. Peer Leads,
-supervised Leads, and unrelated Pi sessions are excluded. Unavailable or
-identity-mismatched owned sessions are skipped and the totals marked incomplete.
+Manager/Chief staff, supervised Leads, and unrelated Pi sessions are excluded.
+A Manager or Chief still sees usage for its own current Pi session. Missing,
+malformed, or identity-mismatched owned-session evidence is skipped and marks
+coverage incomplete instead of guessing or scanning global sessions.
 
 ## `/agents definitions`
 
@@ -150,10 +159,12 @@ Use ordinary `agent_close` for normal targeted model-driven control.
 
 ## Project Manager and Chief
 
-Every session starts as a Lead. A Lead in the primary workspace of a Herdr
-worktree group can use `/manager` to claim the exclusive Manager lease for
-its Herdsman project scope and enter the Manager profile. Leads in
-linked-worktree workspaces cannot enter Manager mode. If another live Manager
+Every session starts as a Lead. A Lead in an ordinary Git primary Herdr
+workspace can use `/manager` to claim the exclusive Manager lease for its
+Herdsman project scope and enter the Manager profile. No prior chat turn or
+existing linked worktree is required; the first project delegation can create
+the first linked worktree. Leads in linked-worktree workspaces cannot enter
+Manager mode. If another live Manager
 holds the lease, activation fails and the
 caller remains an ordinary Lead. Manager activation also refuses while the
 session owns unresolved Agent work. A restored Manager uses the same profile,
@@ -164,7 +175,7 @@ Manager's own ask to Chief remains pending; otherwise it
 relinquishes the lease and restores the exact Lead tool baseline, including
 `agent`, and Lead instruction profile. Invoking `/manager` while already active
 opens the overview without changing the role or lease. See
-[Supervision](supervision.md) for the role and project boundaries.
+[Coordination](../concepts/coordination.md) for the role and project boundaries.
 The Manager overview lists branch-based work, including paused work whose Lead
 is no longer running. It offers resume, close, and discard actions as applicable;
 discard removes the assignment but keeps the Git branch and worktree.
@@ -177,7 +188,9 @@ Manager; a Manager's roster contains Leads from its worktree group.
 
 ## See also
 
-- [`/chief` and chief mode](supervision.md)
+- [Coordination](../concepts/coordination.md)
+- [Staff tools](staff.md)
+- [Supervisor tools](supervisor.md)
 - [Agent tools](agent.md)
 - [Configuration](configuration.md)
 - [Status widget](status-widget.md)

@@ -2,62 +2,66 @@
 
 [Documentation index](../README.md)
 
-The documentation is deliberately split by responsibility so each feature stays
-on its canonical page while readers can enter through audience-specific paths.
+Pi Herdsman documentation uses one canonical owner per public concept. Entry
+pages route readers to those owners instead of growing parallel copies of the
+same contract.
+
+[ADR 0011](../adr/0011-use-progressive-disclosure-and-single-owner-documentation.md)
+records the architectural decision behind this structure.
 
 ## Ownership rule
 
-Every public concept has one canonical page.
+When another page needs an owned concept:
 
-Use the ownership table in [the documentation index](../README.md).
+- summarize only enough to establish context
+- link to the canonical page
+- do not copy its complete contract or table
+- delete stale duplicate wording instead of preserving compatibility prose
 
-When another page needs the same concept:
+Runtime behavior and public source/tests remain authoritative when prose
+disagrees.
 
-- summarize only enough to establish context;
-- link to the canonical page;
-- do not paste the complete table or contract again.
+## Canonical ownership
 
-Audience entry pages are navigation, not competing ownership. They may establish
-reading order and show a minimal first-use example, but exhaustive behavior stays
-on the canonical concept, guide, or reference page.
-
-Asynchronous orchestration is owned by [Lifecycle](../concepts/lifecycle.md).
-README, Getting started, and Agent coordination API may repeat the concise user
-or caller consequence, but they must link back to Lifecycle for the exact
-contract.
+| Subject | Canonical owner |
+| --- | --- |
+| Product positioning and repository first impression | [`README.md`](../../README.md) |
+| First successful use | [Getting started](../getting-started.md) |
+| Model-facing API navigation | [Coordination API](../coordination-api.md) |
+| Roles, authority, project scope, and system boundaries | [Coordination](../concepts/coordination.md) |
+| Agent identity | [Agents and identity](../concepts/agents.md) |
+| Delegation and execution ownership | [Delegation](../concepts/delegation.md) |
+| Asynchronous Agent lifecycle | [Lifecycle](../concepts/lifecycle.md) |
+| Manager workflow | [Project orchestration](../guides/project-orchestration.md) |
+| Creating Agent definitions | [Agent definitions](../guides/agent-definitions.md) |
+| Overrides and prompt composition | [Customizing bundled Agents](../guides/customizing-agents.md) |
+| Handoffs, files, and result references | [Handoffs and files](../guides/handoffs.md) |
+| Operator recovery | [Recovery](../guides/recovery.md) |
+| Container deployment | [Container deployment](../guides/container-deployment.md) |
+| `agent_*` contract | [Agent tools](../reference/agent.md) |
+| `ask_owner` contract | [`ask_owner`](../reference/ask-owner.md) |
+| `staff_*` and project-work contract | [Staff tools](../reference/staff.md) |
+| `supervisor_*` contract | [Supervisor tools](../reference/supervisor.md) |
+| `peer_*` contract | [Peer tools](../reference/peer.md) |
+| Slash commands | [Commands](../reference/commands.md) |
+| Agent-definition fields | [Agent-definition schema](../reference/agent-definition-schema.md) |
+| Public Agent states | [Agent states](../reference/agent-states.md) |
+| Settings | [Configuration](../reference/configuration.md) |
+| TUI status presentation | [Status widget](../reference/status-widget.md) |
+| Error categories | [Errors](../reference/errors.md) |
+| Repository checks | [Validation](validation.md) |
+| Live acceptance | [Smoke testing](smoke-testing.md) |
+| Instruction/interface design | [Instruction and interface design](instruction-interface-design.md) |
 
 ## Page types
 
-### Audience entry points
+### Entry pages
 
-The documentation index routes readers first by audience:
+The root README, documentation index, Getting Started, and Coordination API are
+navigation and orientation surfaces.
 
-- [Getting started](../getting-started.md) is the shortest human UI and
-  configuration path;
-- [Agent coordination API](../agent-api.md) is the model and agent coordination
-  reading path;
-- development pages are maintainer-only.
-
-These pages should link across audiences when useful, but must not grow parallel
-copies of the same API, lifecycle, configuration, or presentation contract.
-
-The physical `concepts`, `guides`, `reference`, and `development` directories
-remain content-type organization. Do not add another documentation hierarchy or
-navigation manifest just to represent audiences.
-
-### Getting started
-
-Shortest human path from prerequisites to useful Pi Herdsman delegation,
-continued lead-session interaction, UI, configuration, and observability.
-
-Do not turn it into a structured API reference.
-
-### Agent coordination API
-
-Reading order and first-use orientation for model and agent-facing coordination.
-
-Link to the exact `agent`, `ask_owner`, lifecycle, delegation, handoff, state,
-and error owners instead of restating their full contracts.
+They may contain the smallest useful example, but exhaustive behavior belongs
+to the canonical concept, guide, or reference owner.
 
 ### Concepts
 
@@ -67,15 +71,15 @@ Do not enumerate every request field.
 
 ### Guides
 
-Task-oriented procedures and examples.
+Explain how to accomplish a task.
 
-Link to reference for exhaustive semantics.
+Use realistic workflow examples and link to reference for exhaustive semantics.
 
 ### Reference
 
-Exact accepted values, precedence, states, and API rules.
+Specify exact accepted values, state, precedence, and operation behavior.
 
-Avoid tutorial narrative.
+Avoid tutorial narrative and product positioning.
 
 ### Development
 
@@ -85,89 +89,77 @@ Do not mix these procedures into normal user setup.
 
 ### `SKILL.md`
 
-Optional model-facing reinforcement of the runtime operational contract plus
-deeper strategy, rationale, examples, and recovery guidance.
-
-It does not own product API schemas or runtime behavior.
+`SKILL.md` is optional model-facing reinforcement of runtime behavior plus
+strategy, rationale, examples, and recovery guidance. It is not a second
+normative owner for public schemas or runtime semantics.
 
 ## Runtime and skill authority
 
-Runtime behavior and runtime model contracts own operational semantics.
-
-`SKILL.md` may reinforce high-salience runtime invariants and add strategy,
-rationale, examples, and recovery detail, but it is not a second normative
-owner.
+Runtime model contracts own operational semantics.
 
 When runtime guidance changes:
 
-- update the authoritative runtime contract first;
-- update affected skill or documentation projections;
-- remove obsolete reinforcement rather than preserving historical wording;
-- keep the runtime sufficient when `SKILL.md` is not loaded.
+- update the authoritative runtime contract first
+- update affected documentation or skill projections
+- remove obsolete reinforcement
+- keep runtime behavior sufficient when `SKILL.md` is not loaded
 
-A behavioral invariant may be reinforced at multiple model-facing decision
-points when timing or salience materially affects reliability. Those projections
-must preserve one meaning and must not evolve into independent rules.
-
-Do not add runtime skill loading, prompt generation, or another synchronization
-framework merely to keep prose copies aligned.
+A high-salience invariant may appear at multiple model decision points when that
+materially improves reliability, but every projection must preserve one
+meaning. Do not add a synchronization framework merely to keep prose copies
+aligned.
 
 ## Style
 
-- Plain Markdown.
-- Relative repository links.
-- One H1 per file.
-- Short descriptive headings.
-- Current behavior only.
-- Spell the visible product name `Pi Herdsman`, the package and repository identifier `pi-herdsman`, the local coordination directory `.pi-herdsman`, the configuration file `config.json`, and the upstream dependency `herdr`.
-- No backlog task numbers in product docs.
-- Keep canonical user and reference pages focused on current behavior.
-- Examples must match current accepted schemas.
-- Never document unshipped backlog behavior as available.
-- Avoid em dashes in product documentation.
+- Plain Markdown
+- Relative repository links
+- One H1 per file
+- Short descriptive headings
+- Current behavior only
+- Progressive disclosure from outcome to exact contract
+- Prefer a diagram or table only when it removes prose
+- Spell the visible product `Pi Herdsman`, package/repository `pi-herdsman`, local coordination directory `.pi-herdsman`, configuration file `config.json`, and upstream dependency `herdr`
+- No backlog task numbers in product docs
+- Examples must match current accepted schemas
+- Do not document unshipped backlog behavior as available
+- Avoid em dashes in product documentation
 
 ## Cross-links
 
-Every page under `docs/` links back to the documentation index.
+Every page under `docs/` links to the documentation index.
 
-Audience entry pages may also link directly to each other so a reader can switch
-paths without returning to the index.
-
-Use a `See also` section when the neighboring concept is useful.
-
-Do not create a separate nav manifest or documentation framework unless plain
-Markdown stops meeting a demonstrated need.
+Use a `See also` section only for genuinely adjacent material. Do not create a
+navigation manifest, generated docs framework, redirect layer, or duplicate
+audience hierarchy while plain Markdown remains sufficient.
 
 ## Source verification
 
-When implementation and existing prose disagree:
+When implementation and prose disagree:
 
-1. public source/test behavior is authoritative;
-2. current accepted runtime evidence can clarify integration behavior;
-3. stale prose should be deleted, not preserved as an alternative contract.
+1. public source/test behavior is authoritative
+2. current accepted runtime evidence can clarify integration behavior
+3. stale prose is deleted rather than preserved as another contract
 
-Particularly verify the runtime implementation for `agent`, `ask_owner`,
-`/agents`, `/chief`, `staff`, states, definition schema/composition, text-file snapshots,
-state projection, error categories, and presentation behavior;
+Particularly verify runtime implementation for `agent_*`, `ask_owner`,
+`staff_*`, `supervisor_*`, `peer_*`, `/agents`, `/manager`, `/chief`, states,
+definition composition, project work, recovery, and presentation behavior.
 
-- `package.json` for supported Pi versions and package resources.
+Use `package.json` for supported Pi versions and package resources.
 
 ## Link integrity
 
 Before handoff, resolve every repository-relative Markdown link. Links must
-target current repository pages and anchors; do not reference deleted pages or
-removed examples.
+target current repository pages and anchors.
 
 ## Update policy
 
 A feature should normally change:
 
-- its one canonical reference page;
-- a guide or concept only when user workflow or mental model changes;
-- an audience entry page only when its reading path or first-use experience
-  changes;
-- README only when first-use or product capability changes;
-- SKILL only when controller coordination guidance changes.
+- its canonical reference page when exact behavior changes
+- a concept when the mental model or invariant changes
+- a guide when the user workflow changes
+- an entry page only when the reading path or first-use experience changes
+- README only when product positioning, first-use, or headline capability changes
+- `SKILL.md` only when model-facing coordination guidance changes
 
-Update only the surfaces whose current ownership or links change; keep README,
-SKILL, smoke testing, guides, and status docs aligned with their responsibilities.
+Update only the surfaces whose ownership or reader path changed.

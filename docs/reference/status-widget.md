@@ -12,7 +12,7 @@ reports (Managers and ordinary Leads without an active project Manager). It
 shows both categories together when both exist, not managed Agent rows. An
 active Manager receives a work-centric branch projection rather than the
 ordinary Lead Agent widget. Chief's complete overview, peek, and focus behavior
-is documented in the [supervision reference](supervision.md). Supervision and
+is documented in the [command reference](commands.md#project-manager-and-chief). Supervision and
 Agent widgets are never combined.
 
 The Chief supervision rows use `├─` for non-final visible reports and `└─` for the
@@ -27,18 +27,21 @@ attention reports, caps ordinary reports, and shows omitted reports in a final
 
 Chief's header shows only nonzero categories (`manager`, `direct lead`), or
 `no reports`. Manager's header shows the project name and lists managed
-branches as work, including paused and broken work without live Leads:
+branches as work, including work without live Leads:
 
 ```text
 ● manager · pi-herdsman
-├─ ● feat/example · working
+├─ ● feat/example · active
 └─ ○ fix/other · paused
 ```
 
-Manager work markers are `●` working, `◉` blocked, `○` paused or idle, `…`
-starting, `✓` finished, and `!` broken. Unassigned live Leads are shown
-separately, not treated as managed work. Branches are display handles; exact
-session identity is revalidated for control actions.
+Manager work status is `active`, `paused`, `finished`, or `conflict`.
+An active row uses the live Lead's lifecycle marker when an executor is present;
+otherwise it uses `●`. Paused uses `○`, finished uses `✓`, and conflict
+uses `!`. The row suffix is project status, not the Lead's runtime state.
+Unassigned live Leads are shown separately, not treated as managed work.
+Branches are display handles; exact session identity is revalidated for control
+actions.
 
 ## Installation
 
