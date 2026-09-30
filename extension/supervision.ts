@@ -785,14 +785,14 @@ export function chiefAskQueued(
 function deliveredMessageContent(record: CoordinationMessageRecord): string {
   const prefix =
     record.kind === "chief_message" || record.kind === "chief_reply"
-      ? `From chief ${record.fromSessionId} to lead ${record.leadSessionId}: `
-      : record.kind === "manager_message" || record.kind === "manager_reply"
-        ? `From manager ${record.fromSessionId} to lead ${record.leadSessionId}: `
-        : record.kind === "manager_ask"
-          ? `From manager ${record.fromSessionId} to chief ${record.toSessionId}: `
-          : record.kind === "lead_message" || record.kind === "lead_ask"
-            ? `From lead ${record.leadSessionId} to chief ${record.toSessionId}: `
-            : `Peer message from ${record.fromSessionId}: `;
+      ? `From chief ${record.fromSessionId}: `
+      : record.kind === "manager_message" ||
+          record.kind === "manager_ask" ||
+          record.kind === "manager_reply"
+        ? `From manager ${record.fromSessionId}: `
+        : record.kind === "lead_message" || record.kind === "lead_ask"
+          ? `From lead ${record.fromSessionId}: `
+          : `Peer message from ${record.fromSessionId}: `;
   const content =
     record.kind === "project_assignment"
       ? `Project assignment for branch ${record.branch}:\n\n${record.text}`

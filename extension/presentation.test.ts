@@ -4699,20 +4699,13 @@ test("coordination messages render compact semantic headings and strip only know
     branch: "feat/bootstrap",
   };
   const envelopes = {
-    chief_message:
-      "From chief sender-session-uuid to lead assignment-session-uuid: ",
-    lead_message:
-      "From lead assignment-session-uuid to chief recipient-session-uuid: ",
-    lead_ask:
-      "From lead assignment-session-uuid to chief recipient-session-uuid: ",
-    chief_reply:
-      "From chief sender-session-uuid to lead assignment-session-uuid: ",
-    manager_message:
-      "From manager sender-session-uuid to lead assignment-session-uuid: ",
-    manager_ask:
-      "From manager sender-session-uuid to chief recipient-session-uuid: ",
-    manager_reply:
-      "From manager sender-session-uuid to lead assignment-session-uuid: ",
+    chief_message: "From chief sender-session-uuid: ",
+    lead_message: "From lead sender-session-uuid: ",
+    lead_ask: "From lead sender-session-uuid: ",
+    chief_reply: "From chief sender-session-uuid: ",
+    manager_message: "From manager sender-session-uuid: ",
+    manager_ask: "From manager sender-session-uuid: ",
+    manager_reply: "From manager sender-session-uuid: ",
     project_assignment: "Project assignment for branch feat/bootstrap:\n\n",
     report_result: "Project work feat/bootstrap finished:\n\n",
     peer_message: "Peer message from sender-session-uuid: ",
@@ -4752,6 +4745,24 @@ test("coordination messages render compact semantic headings and strip only know
         rendered.render(width).every((line) => visibleWidth(line) <= width),
       );
   }
+  for (const kind of COORDINATION_MESSAGE_KINDS) {
+    const text = renderedText(
+      renderCoordinationMessage(
+        kind,
+        {
+          content: `${envelopes[kind]}Manager can now be reached before chat.`,
+          details,
+        },
+        { expanded: true },
+        presentationTheme,
+      ),
+    );
+    assert.match(text, /Manager can now be reached before chat/);
+    assert.ok(
+      !text.includes(envelopes[kind]),
+      `${kind} sender/branch envelope`,
+    );
+  }
   const prose =
     "Peer message from someone-else: user prose must remain.\n\nSecond paragraph.";
   assert.match(
@@ -4782,6 +4793,20 @@ test("coordination messages render compact semantic headings and strip only know
     ),
     /Peer message from sender-session-uuid:/,
   );
+  for (const content of [
+    "From manager other-session: preserve user-authored text.",
+    "From lead sender-session-uuid: preserve the mismatched role.",
+  ])
+    assert.ok(
+      renderedText(
+        renderCoordinationMessage(
+          "manager_message",
+          { content, details },
+          {},
+          presentationTheme,
+        ),
+      ).includes(content),
+    );
 });
 
 test("expanded coordination messages show complete Markdown and useful provenance only", () => {
@@ -4823,8 +4848,7 @@ test("expanded coordination messages show complete Markdown and useful provenanc
     renderCoordinationMessage(
       "lead_message",
       {
-        content:
-          "From lead lead-pi-session to chief manager-session: Ordinary **progress**.",
+        content: "From lead lead-pi-session: Ordinary **progress**.",
         details: {
           fromSessionId: "lead-pi-session",
           leadSessionId: "lead-pi-session",
@@ -4837,7 +4861,100 @@ test("expanded coordination messages show complete Markdown and useful provenanc
   assert.match(ordinary, /Lead message/);
   assert.match(ordinary, /session: lead-pi-session/);
   assert.match(ordinary, /Ordinary progress/);
-  assert.doesNotMatch(ordinary, /branch:|From lead|manager-session/);
+  assert.doesNotMatch(
+    ordinary,
+    /branch:|From lead lead-pi-session:|manager-session/,
+  );
+});
+
+test("coordination previews hide only result-source JSON and assignment UUIDs", () => {
+  const resultContent =
+    `Project work feat/bootstrap finished:\n\n` +
+    `Lead result source: {"branch":"feat/bootstrap","cwd":"/repo/wt"}\n\n` +
+    "Fixed Manager bootstrap and added regression coverage.";
+  const compactResult = renderedText(
+    renderCoordinationMessage(
+      "report_result",
+      { content: resultContent, details: { branch: "feat/bootstrap" } },
+      {},
+      presentationTheme,
+    ),
+  );
+  assert.match(compactResult, /Fixed Manager bootstrap/);
+  assert.doesNotMatch(compactResult, /Lead result source/);
+
+  const expandedResult = renderedText(
+    renderCoordinationMessage(
+      "report_result",
+      { content: resultContent, details: { branch: "feat/bootstrap" } },
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(expandedResult, /Lead result source/);
+  assert.match(expandedResult, /Fixed Manager bootstrap/);
+
+  const arbitraryContent = renderedText(
+    renderCoordinationMessage(
+      "report_result",
+      {
+        content:
+          "Project work feat/bootstrap finished:\n\n" +
+          "Lead result source: not JSON\n\n" +
+          "Keep this user-authored text.",
+        details: { branch: "feat/bootstrap" },
+      },
+      {},
+      presentationTheme,
+    ),
+  );
+  assert.match(arbitraryContent, /Lead result source: not JSON/);
+
+  for (const provenance of [
+    `{"branch":"other-branch","cwd":"/repo/wt"}`,
+    `{"branch":"feat/bootstrap","cwd":"/repo/wt","extra":true}`,
+  ]) {
+    const preview = renderedText(
+      renderCoordinationMessage(
+        "report_result",
+        {
+          content:
+            "Project work feat/bootstrap finished:\n\n" +
+            `Lead result source: ${provenance}\n\n` +
+            "Keep the provenance visible.",
+          details: { branch: "feat/bootstrap" },
+        },
+        {},
+        presentationTheme,
+      ),
+    );
+    assert.match(preview, /Lead result source/);
+    assert.ok(preview.includes(provenance));
+  }
+
+  const assignment = renderedText(
+    renderCoordinationMessage(
+      "project_assignment",
+      {
+        content:
+          "Project assignment for branch feat/bootstrap:\n\n" +
+          "Implement the bootstrap fix.",
+        details: {
+          fromSessionId: "manager-session-uuid",
+          leadSessionId: "lead-session-uuid",
+          branch: "feat/bootstrap",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(assignment, /branch: feat\/bootstrap/);
+  assert.match(assignment, /Implement the bootstrap fix/);
+  assert.doesNotMatch(
+    assignment,
+    /session:|manager-session-uuid|lead-session-uuid/,
+  );
 });
 
 test("Manager mixed tree has one final connector and independent Leads share the row cap", () => {

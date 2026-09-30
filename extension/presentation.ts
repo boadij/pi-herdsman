@@ -2824,7 +2824,6 @@ export function renderCoordinationMessage(
   const branch = d?.branch ?? "project work";
   let heading: string;
   let prefix: string | undefined;
-  let routed = false;
   switch (kind) {
     case "lead_message":
     case "lead_ask":
@@ -2832,29 +2831,23 @@ export function renderCoordinationMessage(
         kind === "lead_ask"
           ? statusLine(theme, "warning", "?", "Lead needs input")
           : "Lead message";
-      if (d?.leadSessionId) {
-        prefix = `From lead ${d.leadSessionId} to chief `;
-        routed = true;
-      }
+      if (d?.fromSessionId) prefix = `From lead ${d.fromSessionId}: `;
       break;
     case "chief_message":
     case "chief_reply":
       heading = kind === "chief_reply" ? "Chief reply" : "Chief message";
-      if (d?.fromSessionId && d?.leadSessionId)
-        prefix = `From chief ${d.fromSessionId} to lead ${d.leadSessionId}: `;
+      if (d?.fromSessionId) prefix = `From chief ${d.fromSessionId}: `;
       break;
     case "manager_message":
-    case "manager_reply":
-      heading = kind === "manager_reply" ? "Manager reply" : "Manager message";
-      if (d?.fromSessionId && d?.leadSessionId)
-        prefix = `From manager ${d.fromSessionId} to lead ${d.leadSessionId}: `;
-      break;
     case "manager_ask":
-      heading = statusLine(theme, "warning", "?", "Manager needs input");
-      if (d?.fromSessionId) {
-        prefix = `From manager ${d.fromSessionId} to chief `;
-        routed = true;
-      }
+    case "manager_reply":
+      heading =
+        kind === "manager_ask"
+          ? statusLine(theme, "warning", "?", "Manager needs input")
+          : kind === "manager_reply"
+            ? "Manager reply"
+            : "Manager message";
+      if (d?.fromSessionId) prefix = `From manager ${d.fromSessionId}: `;
       break;
     case "peer_message":
       heading = "Peer message";
@@ -2870,16 +2863,14 @@ export function renderCoordinationMessage(
       break;
   }
   let body = message.content ?? "";
-  if (prefix && body.startsWith(prefix)) {
-    const rest = body.slice(prefix.length);
-    // Chief-bound envelopes omit the recipient from renderer details.
-    const recipient = routed ? /^[^\s:]+: /u.exec(rest)?.[0] : "";
-    if (recipient !== undefined) body = rest.slice(recipient.length);
-  }
+  if (prefix && body.startsWith(prefix)) body = body.slice(prefix.length);
   const content = new Container();
   content.addChild(new WidthSafeText(heading, 0, 0));
   if (options.expanded) {
-    const session = d?.fromSessionId ?? d?.leadSessionId;
+    const session =
+      kind === "project_assignment"
+        ? undefined
+        : (d?.fromSessionId ?? d?.leadSessionId);
     const metadata = [
       ...(d?.branch ? [`branch: ${d.branch}`] : []),
       ...(session ? [`session: ${session}`] : []),
@@ -2893,7 +2884,34 @@ export function renderCoordinationMessage(
       content.addChild(new Markdown(body, 0, 0, getMarkdownTheme()));
     }
   } else {
-    const preview = collapseDisplayText(body);
+    let previewBody = body;
+    const provenancePrefix = "Lead result source: ";
+    if (kind === "report_result" && previewBody.startsWith(provenancePrefix)) {
+      const separator = previewBody.indexOf("\n\n");
+      if (separator !== -1) {
+        try {
+          const provenance: unknown = JSON.parse(
+            previewBody.slice(provenancePrefix.length, separator),
+          );
+          if (
+            provenance !== null &&
+            typeof provenance === "object" &&
+            Object.keys(provenance).length === 2 &&
+            Object.hasOwn(provenance, "branch") &&
+            Object.hasOwn(provenance, "cwd") &&
+            "branch" in provenance &&
+            typeof provenance.branch === "string" &&
+            "cwd" in provenance &&
+            typeof provenance.cwd === "string" &&
+            provenance.branch === d?.branch
+          )
+            previewBody = previewBody.slice(separator + 2);
+        } catch {
+          // Keep content that does not have the deterministic JSON header.
+        }
+      }
+    }
+    const preview = collapseDisplayText(previewBody);
     if (preview)
       content.addChild(
         new Markdown(preview, 2, 0, getMarkdownTheme(), {

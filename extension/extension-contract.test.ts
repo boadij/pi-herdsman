@@ -3190,11 +3190,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.match(chiefMessages[0], /<file name=.*Message:/su);
     assert.equal(
       chiefMessages[1],
-      "From chief " +
-        chiefId +
-        " to lead " +
-        leadId +
-        ": second from the chief",
+      `From chief ${chiefId}: second from the chief`,
     );
 
     const chiefDeliveryStart = chief.sentMessageCalls.length;
@@ -3219,7 +3215,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         );
         assert.ok(
           calls.some((call) =>
-            /From lead .* to chief .*progress update/.test(
+            /From lead .*: progress update/.test(
               String((call.message as any)?.content ?? ""),
             ),
           ),
@@ -3236,7 +3232,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.deepEqual(deliveryCalls[0]?.options, { triggerTurn: false });
     assert.match(
       String((deliveryCalls[1]?.message as any)?.content),
-      /From lead .* to chief .*progress update/,
+      /From lead .*: progress update/,
     );
     assert.deepEqual(deliveryCalls[1]?.options, {
       deliverAs: "followUp",

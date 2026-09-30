@@ -1467,9 +1467,9 @@ test("inbox orders valid records by createdAt and retains transient failures", a
     },
   });
   assert.deepEqual(seen, [
-    "From lead lead to chief chief: ten",
-    "From lead lead to chief chief: twenty",
-    "From lead lead to chief chief: thirty",
+    "From lead lead: ten",
+    "From lead lead: twenty",
+    "From lead lead: thirty",
   ]);
 });
 
@@ -1506,7 +1506,7 @@ test("terminal authorization rejection deletes, and sender is model-visible", as
       content = (payload as any).content;
     },
   });
-  assert.match(content, /^From lead api\/backend to chief chief: hello$/);
+  assert.match(content, /^From lead api\/backend: hello$/);
   const rejected = message();
   writeChiefMessage(rejected, runtime);
   await drainCoordinationInbox({
@@ -1545,48 +1545,115 @@ test("in-flight authorization cleanup becomes a no-op after invalidation", async
   assert.equal(listChiefMessagePaths(runtime, "chief").length, 1);
 });
 
-test("both directions identify the actual sender and target in bounded content", async () => {
+test("coordination envelopes identify senders without claiming recipient roles", async () => {
   const runtime = supervisionRuntime(socket());
-  const askId = id();
-  const leadAsk = message({
-    kind: "lead_ask",
-    fromSessionId: "lead-session",
-    toSessionId: "chief-session",
-    leadSessionId: "lead-session",
-    askId,
-    text: "Which credential should I use?",
+  const routes = [
+    {
+      name: "Lead -> Chief",
+      kind: "lead_ask",
+      senderRole: "lead",
+      fromSessionId: "lead-session",
+      recipientRole: "chief",
+      toSessionId: "chief-from-lead",
+      leadSessionId: "lead-session",
+    },
+    {
+      name: "Lead -> Manager",
+      kind: "lead_message",
+      senderRole: "lead",
+      fromSessionId: "lead-session",
+      recipientRole: "manager",
+      toSessionId: "manager-from-lead",
+      leadSessionId: "lead-session",
+    },
+    {
+      name: "Manager -> Chief",
+      kind: "manager_message",
+      senderRole: "manager",
+      fromSessionId: "manager-session",
+      recipientRole: "chief",
+      toSessionId: "chief-from-manager",
+      leadSessionId: "manager-session",
+    },
+    {
+      name: "Chief -> Lead",
+      kind: "chief_reply",
+      senderRole: "chief",
+      fromSessionId: "chief-session",
+      recipientRole: "lead",
+      toSessionId: "lead-from-chief",
+      leadSessionId: "lead-session",
+    },
+    {
+      name: "Chief -> Manager",
+      kind: "chief_message",
+      senderRole: "chief",
+      fromSessionId: "chief-session",
+      recipientRole: "manager",
+      toSessionId: "manager-from-chief",
+      leadSessionId: "manager-session",
+    },
+    {
+      name: "Manager -> Lead reply",
+      kind: "manager_reply",
+      senderRole: "manager",
+      fromSessionId: "manager-session",
+      recipientRole: "lead",
+      toSessionId: "lead-from-manager",
+      leadSessionId: "lead-session",
+    },
+  ] as const;
+  const traffic = routes.map((route) => {
+    const record = message({
+      kind: route.kind,
+      fromSessionId: route.fromSessionId,
+      toSessionId: route.toSessionId,
+      leadSessionId: route.leadSessionId,
+      ...(["lead_ask", "chief_reply", "manager_ask", "manager_reply"].includes(
+        route.kind,
+      )
+        ? { askId: id() }
+        : {}),
+      text: "Which credential should I use?",
+    });
+    writeChiefMessage(record, runtime);
+    return { route, record };
   });
-  const chiefReply = message({
-    kind: "chief_reply",
-    fromSessionId: "chief-session",
-    toSessionId: "lead-session",
-    leadSessionId: "lead-session",
-    askId,
-    text: "Use the service account.",
-  });
-  writeChiefMessage(leadAsk, runtime);
-  writeChiefMessage(chiefReply, runtime);
-  const content: string[] = [];
-  await drainCoordinationInbox({
-    runtime,
-    sessionId: "chief-session",
-    isAuthorized: () => true,
-    isDelivered: () => false,
-    sendMessage: (payload) => content.push((payload as any).content),
-  });
-  await drainCoordinationInbox({
-    runtime,
-    sessionId: "lead-session",
-    isAuthorized: () => true,
-    isDelivered: () => false,
-    sendMessage: (payload) => content.push((payload as any).content),
-  });
-  assert.deepEqual(content, [
-    "From lead lead-session to chief chief-session: Which credential should I use?",
-    "From chief chief-session to lead lead-session: Use the service account.",
-  ]);
+  const delivered: { id: string; content: string }[] = [];
+  for (const { route, record } of traffic) {
+    assert.equal(
+      await drainCoordinationInbox({
+        runtime,
+        sessionId: route.toSessionId,
+        isAuthorized: (candidate) => candidate.id === record.id,
+        isDelivered: () => false,
+        sendMessage: (payload) =>
+          delivered.push({
+            id: (payload as any).details.id,
+            content: (payload as any).content,
+          }),
+      }),
+      1,
+      route.name,
+    );
+  }
+  for (const [index, { route, record }] of traffic.entries()) {
+    assert.equal(delivered[index]!.id, record.id, route.name);
+    assert.equal(
+      delivered[index]!.content,
+      `From ${route.senderRole} ${route.fromSessionId}: ${record.text}`,
+      route.name,
+    );
+    assert.doesNotMatch(
+      delivered[index]!.content,
+      new RegExp(`\\bto ${route.recipientRole}\\b`),
+      route.name,
+    );
+  }
   assert.ok(
-    content.every((value) => Buffer.byteLength(value, "utf8") <= 8 * 1024),
+    delivered.every(
+      ({ content }) => Buffer.byteLength(content, "utf8") <= 8 * 1024,
+    ),
   );
 });
 
@@ -2196,7 +2263,7 @@ test("Manager asks and project results use the one durable inbox", async () => {
         received.push((payload as { content: string }).content),
     });
   assert.deepEqual(received, [
-    "From manager manager to chief chief: hello",
+    "From manager manager: hello",
     `Project work ${result.branch} finished:\n\n${result.text}`,
   ]);
   assert.doesNotMatch(received[1]!, /result:|Result from lead/);

@@ -7488,13 +7488,22 @@ export default function (pi: ExtensionAPI): void {
     }
     persistLeadCoordination();
   };
-  const messageDelivered = (ctx: ExtensionContext, id: string): boolean =>
+  const messageDelivered = (
+    ctx: ExtensionContext,
+    record: ChiefMessageRecord,
+  ): boolean =>
+    record.toSessionId === ctx.sessionManager.getSessionId() &&
     ctx.sessionManager
       .getEntries()
       .some(
         (entry: any) =>
-          entry?.customType?.startsWith?.("pi-herdsman-") &&
-          entry?.details?.id === id,
+          entry?.customType === `pi-herdsman-${record.kind}` &&
+          entry?.details?.id === record.id &&
+          entry?.details?.leaseId === record.leaseId &&
+          entry?.details?.fromSessionId === record.fromSessionId &&
+          entry?.details?.leadSessionId === record.leadSessionId &&
+          entry?.details?.askId === record.askId &&
+          entry?.details?.branch === record.branch,
       );
   const assertCurrentLeadCoordination = (ctx: ExtensionContext): void => {
     if (!leadCoordinationHealthy) {
@@ -8306,6 +8315,7 @@ export default function (pi: ExtensionAPI): void {
       string,
       {
         id: string;
+        record: ChiefMessageRecord;
         generation: number;
         sessionId: string;
         instanceId: string;
@@ -8347,7 +8357,10 @@ export default function (pi: ExtensionAPI): void {
           managerDiagnostic("inbox_catch", { category: "cleanup" });
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         },
-        isDelivered: (id: string) => messageDelivered(ctx, id),
+        isDelivered: (id: string) => {
+          const record = transactions.get(id)?.record;
+          return record ? messageDelivered(ctx, record) : false;
+        },
         isAuthorized: async (record: ChiefMessageRecord) => {
           if (record.kind === "peer_message")
             return authorizePeerRecord(record, ctx);
@@ -8389,6 +8402,10 @@ export default function (pi: ExtensionAPI): void {
           const projectAssignment =
             (message as any)?.customType === "pi-herdsman-project_assignment";
           try {
+            if (!ctx.isIdle())
+              throw new Error(
+                "Coordination delivery deferred while recipient is active",
+              );
             const result = await pi.sendMessage(message, options);
             if (projectAssignment)
               managerDiagnostic("project_assignment_send", {
@@ -8438,6 +8455,14 @@ export default function (pi: ExtensionAPI): void {
         accepted: async (record: ChiefMessageRecord) => {
           const transaction = transactions.get(record.id);
           void transaction;
+          if (
+            activeRole() === "manager" &&
+            record.kind === "report_result" &&
+            !messageDelivered(ctx, record)
+          )
+            throw new Error(
+              "Manager result notification is not durably delivered",
+            );
           if (
             activeRole() === "manager" &&
             record.kind === "report_result" &&
@@ -8510,6 +8535,7 @@ export default function (pi: ExtensionAPI): void {
         });
         return count;
       };
+      if (!ctx.isIdle()) return complete(0);
       const held = chiefStartPreflightHeld(ctx);
       managerDiagnostic("inbox_preflight", { reason: held ? "held" : "pass" });
       if (held) return complete(0);

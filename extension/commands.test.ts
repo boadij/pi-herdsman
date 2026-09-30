@@ -1325,10 +1325,14 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       return respond({ agent: managerAgent });
     return respond({});
   };
-  const pi = fakeChiefPi({ activeTools: ["read"], exec });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec,
+    persistMessages: true,
+  });
   registerExtension!(pi.pi as never);
   try {
-    const ctx = fakeContext() as any;
+    const ctx = fakeContext(pi.entries) as any;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     const staff = pi.tools.find((tool) => tool.name === "staff_delegate")!;
@@ -1581,6 +1585,14 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     assert.equal(
       String(resultNotification.content).includes(childWorkspace),
       false,
+    );
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry?.customType === "pi-herdsman-report_result" &&
+          entry?.details?.branch === assignment!.branch,
+      ),
+      "Manager result notification was not durably persisted",
     );
     assert.deepEqual(
       listProjectAssignments(supervisionRuntime(), WORKSPACE),

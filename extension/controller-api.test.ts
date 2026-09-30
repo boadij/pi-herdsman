@@ -1001,10 +1001,14 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       return respond({ agent: managerAgent });
     return respond({});
   };
-  const pi = fakeChiefPi({ activeTools: ["read"], exec });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec,
+    persistMessages: true,
+  });
   registerExtension!(pi.pi as never);
   try {
-    const ctx = fakeContext() as any;
+    const ctx = fakeContext(pi.entries) as any;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     const staff = pi.tools.find((tool) => tool.name === "staff_delegate")!;
@@ -1290,6 +1294,7 @@ async function runManagerStartupScenario(
     | "active-loss"
     | "active-live"
     | "active-result"
+    | "active-result-streaming"
     | "active-result-periodic"
     | "active-missing"
     | "active-closed"
@@ -1316,6 +1321,10 @@ async function runManagerStartupScenario(
   let childSession = "";
   const childSessionPath = join(tmpdir(), `lead-${randomUUID()}.jsonl`);
   const childPath = "/tmp/manager-fresh-child";
+  let recipientIdle = true;
+  let armAuthorizationRace = false;
+  let authorizationWorktreeLists = 0;
+  let reportResultSends = 0;
   let created = false;
   let createdBranch = "";
   let shellReady = false;
@@ -1373,6 +1382,17 @@ async function runManagerStartupScenario(
     tab_id: "root-tab",
   };
   const exec = async (command: string, args: string[]) => {
+    if (
+      mode === "active-result-streaming" &&
+      armAuthorizationRace &&
+      command === "herdr" &&
+      args[0] === "worktree" &&
+      args[1] === "list" &&
+      ++authorizationWorktreeLists === 7
+    ) {
+      armAuthorizationRace = false;
+      recipientIdle = false;
+    }
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
@@ -1456,6 +1476,7 @@ async function runManagerStartupScenario(
           "active-loss",
           "active-live",
           "active-result",
+          "active-result-streaming",
           "active-result-periodic",
           "recovery",
         ].includes(mode)
@@ -1945,12 +1966,32 @@ async function runManagerStartupScenario(
     }
     return respond({});
   };
-  const pi = fakeChiefPi({ activeTools: ["read"], exec });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec,
+    persistMessages: mode === "active-result",
+    sendMessage: (message: any) => {
+      if (
+        mode === "active-result-streaming" &&
+        message?.customType === "pi-herdsman-report_result"
+      ) {
+        // Pi 0.99.1's extension send callback is fire-and-forget; message_end
+        // adds the durable session entry later, simulated explicitly below.
+        reportResultSends++;
+        recipientIdle = false;
+      }
+    },
+  });
   registerExtension!(pi.pi as never);
   if (mode === "active-result-periodic")
     t!.mock.timers.enable({ apis: ["setInterval"] });
   try {
-    const ctx = fakeContext() as any;
+    const ctx = fakeContext(
+      ["active-result", "active-result-streaming"].includes(mode)
+        ? pi.entries
+        : [],
+    ) as any;
+    ctx.isIdle = () => recipientIdle;
     if (["occupied", "multiple"].includes(mode))
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
@@ -1981,6 +2022,7 @@ async function runManagerStartupScenario(
       "active-loss",
       "active-live",
       "active-result",
+      "active-result-streaming",
       "active-result-periodic",
       "active-missing",
       "active-closed",
@@ -1999,7 +2041,13 @@ async function runManagerStartupScenario(
         branch: "smoke/recover",
         text: "recover exact Lead",
       });
-      if (mode === "active-result" || mode === "active-result-periodic") {
+      if (
+        [
+          "active-result",
+          "active-result-streaming",
+          "active-result-periodic",
+        ].includes(mode)
+      ) {
         mkdirSync(dirname(resultPath(staleId)), { recursive: true });
         writeFileSync(resultPath(staleId), "completed");
       }
@@ -2254,10 +2302,269 @@ async function runManagerStartupScenario(
             [listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]],
           );
         } else {
+          if (mode === "active-result-streaming") recipientIdle = false;
           const recovered = await execute();
           assert.equal(recovered.details.session, staleId);
           assert.equal(recovered.details.branch, "smoke/recover");
-          if (mode === "active-result") {
+          if (mode === "active-result-streaming") {
+            assert.equal(recovered.details.status, "finished");
+            const reportResults = () =>
+              listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID)
+                .map((path) => readChiefMessage(path))
+                .filter((message) => message.kind === "report_result");
+            assert.equal(reportResults().length, 1);
+            const queuedResult = reportResults()[0]!;
+            assert.equal(
+              readFileSync(resultPath(staleId), "utf8"),
+              "completed",
+            );
+
+            const worktreeListsWhileBusy = worktreeListCalls;
+            await new Promise<void>((resolve) => setTimeout(resolve, 650));
+            assert.equal(worktreeListCalls, worktreeListsWhileBusy);
+            assert.equal(reportResultSends, 0);
+            assert.equal(reportResults().length, 1);
+            assert.equal(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              staleId,
+            );
+
+            recipientIdle = true;
+            armAuthorizationRace = true;
+            // A Manager inbox poll refreshes five topology views before lease
+            // and report-result authorization perform their two lookups.
+            await t!.waitFor(
+              () => assert.equal(authorizationWorktreeLists, 7),
+              { timeout: 3000 },
+            );
+            await new Promise<void>((resolve) => setTimeout(resolve, 50));
+            assert.equal(reportResultSends, 0);
+            assert.equal(reportResults().length, 1);
+            assert.equal(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              staleId,
+            );
+
+            const receiptCases = [
+              {
+                label: "record ID",
+                mutate: (details: any) => ({
+                  ...details,
+                  id: randomUUID(),
+                }),
+              },
+              {
+                label: "lease ID",
+                mutate: (details: any) => ({
+                  ...details,
+                  leaseId: randomUUID(),
+                }),
+              },
+              {
+                label: "sender session",
+                mutate: (details: any) => ({
+                  ...details,
+                  fromSessionId: randomUUID(),
+                }),
+              },
+              {
+                label: "lead session",
+                mutate: (details: any) => ({
+                  ...details,
+                  leadSessionId: randomUUID(),
+                }),
+              },
+              {
+                label: "unexpected ask ID",
+                mutate: (details: any) => ({
+                  ...details,
+                  askId: randomUUID(),
+                }),
+              },
+              {
+                label: "branch",
+                mutate: (details: any) => ({
+                  ...details,
+                  branch: "smoke/other-branch",
+                }),
+              },
+              {
+                label: "custom type",
+                customType: "pi-herdsman-lead_message",
+                mutate: (details: any) => details,
+              },
+              {
+                label: "recipient session",
+                foreignRecipient: true,
+                mutate: (details: any) => details,
+              },
+            ];
+            const hasExactReceipt = (record: any) =>
+              record.toSessionId === ctx.sessionManager.getSessionId() &&
+              pi.entries.some(
+                (entry: any) =>
+                  entry?.customType === `pi-herdsman-${record.kind}` &&
+                  entry?.details?.id === record.id &&
+                  entry?.details?.leaseId === record.leaseId &&
+                  entry?.details?.fromSessionId === record.fromSessionId &&
+                  entry?.details?.leadSessionId === record.leadSessionId &&
+                  entry?.details?.askId === record.askId &&
+                  entry?.details?.branch === record.branch,
+              );
+            const assignmentExists = () =>
+              listProjectAssignments(supervisionRuntime(), WORKSPACE).some(
+                (assignment) => assignment.id === staleId,
+              );
+            const reportResultExists = (id: string) =>
+              reportResults().some((record) => record.id === id);
+            const resultRecord = (id: string) => ({
+              version: 1 as const,
+              id,
+              leaseId: queuedResult.leaseId,
+              kind: "report_result" as const,
+              fromSessionId: staleId,
+              toSessionId: LEAD_SESSION_ID,
+              leadSessionId: staleId,
+              branch: queuedResult.branch,
+              text: queuedResult.text,
+              createdAt: Date.now(),
+            });
+
+            for (const [index, receiptCase] of receiptCases.entries()) {
+              let record = queuedResult;
+              if (index > 0) {
+                writeProjectAssignment(supervisionRuntime(), WORKSPACE, {
+                  version: 1,
+                  id: staleId,
+                  repoKey: "repo-key",
+                  branch: queuedResult.branch!,
+                  text: "recover exact Lead",
+                });
+                record = resultRecord(randomUUID());
+                writeChiefMessage(record, supervisionRuntime());
+              }
+
+              const expectedDetails = {
+                id: record.id,
+                leaseId: record.leaseId,
+                fromSessionId: record.fromSessionId,
+                leadSessionId: record.leadSessionId,
+                branch: record.branch,
+              };
+              const receipt = {
+                type: "custom_message",
+                customType:
+                  receiptCase.customType ?? "pi-herdsman-report_result",
+                content: `stale receipt with wrong ${receiptCase.label}`,
+                display: true,
+                details: receiptCase.mutate(expectedDetails),
+              };
+              if (receiptCase.foreignRecipient) {
+                const foreignSession = {
+                  sessionId: randomUUID(),
+                  entries: [receipt],
+                };
+                assert.notEqual(
+                  foreignSession.sessionId,
+                  ctx.sessionManager.getSessionId(),
+                );
+                assert.equal(foreignSession.entries.includes(receipt), true);
+                assert.equal(pi.entries.includes(receipt), false);
+              } else {
+                pi.entries.push(receipt);
+              }
+              assert.equal(hasExactReceipt(record), false);
+              recipientIdle = true;
+              const expectedSendCount = reportResultSends + 1;
+              await t!.waitFor(
+                () => assert.equal(reportResultSends, expectedSendCount),
+                { timeout: 3000 },
+              );
+              await t!.waitFor(
+                () => {
+                  assert.equal(reportResultExists(record.id), true);
+                  assert.equal(assignmentExists(), true);
+                },
+                { timeout: 3000 },
+              );
+              assert.equal(hasExactReceipt(record), false);
+
+              if (!receiptCase.foreignRecipient) {
+                const receiptIndex = pi.entries.indexOf(receipt);
+                assert.notEqual(receiptIndex, -1);
+                pi.entries.splice(receiptIndex, 1);
+              }
+              const delivery = pi.sentMessageCalls.find(
+                (call: any) =>
+                  (call.message as any)?.customType ===
+                    "pi-herdsman-report_result" &&
+                  (call.message as any)?.details?.id === record.id,
+              );
+              assert.ok(delivery);
+              const sentResult = delivery.message as any;
+              assert.deepEqual(delivery.options, {
+                deliverAs: "followUp",
+                triggerTurn: true,
+              });
+              pi.entries.push({
+                type: "custom_message",
+                customType: sentResult.customType,
+                content: sentResult.content,
+                display: sentResult.display,
+                details: { ...sentResult.details },
+              });
+
+              const sendCount = reportResultSends;
+              recipientIdle = true;
+              await t!.waitFor(
+                () => {
+                  assert.equal(reportResultExists(record.id), false);
+                  assert.equal(assignmentExists(), false);
+                },
+                { timeout: 3000 },
+              );
+              assert.equal(reportResultSends, sendCount);
+            }
+
+            assert.equal(reportResults().length, 0);
+            assert.deepEqual(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE),
+              [],
+            );
+
+            // A record targeted at another session is rejected independently
+            // of receipt matching; it cannot settle the durable assignment.
+            const wrongTarget = resultRecord(randomUUID());
+            writeProjectAssignment(supervisionRuntime(), WORKSPACE, {
+              version: 1,
+              id: staleId,
+              repoKey: "repo-key",
+              branch: wrongTarget.branch!,
+              text: "recover exact Lead",
+            });
+            writeChiefMessage(wrongTarget, supervisionRuntime());
+            const wrongTargetPath = listChiefMessagePaths(
+              supervisionRuntime(),
+              LEAD_SESSION_ID,
+            ).find((path) => readChiefMessage(path).id === wrongTarget.id);
+            assert.ok(wrongTargetPath);
+            writeFileSync(
+              wrongTargetPath,
+              `${JSON.stringify({
+                ...wrongTarget,
+                toSessionId: randomUUID(),
+              })}\n`,
+            );
+            realFs.rmSync(resultPath(staleId), { force: true });
+            const sendCount = reportResultSends;
+            recipientIdle = true;
+            await t!.waitFor(
+              () => assert.equal(reportResultExists(wrongTarget.id), false),
+              { timeout: 3000 },
+            );
+            assert.equal(assignmentExists(), true);
+            assert.equal(reportResultSends, sendCount);
+          } else if (mode === "active-result") {
             assert.equal(recovered.details.status, "finished");
             assert.equal("result" in recovered.details, false);
             assert.equal(
@@ -2444,7 +2751,13 @@ async function runManagerStartupScenario(
           }
         }
       } finally {
-        if (mode === "active-result" || mode === "active-result-periodic")
+        if (
+          [
+            "active-result",
+            "active-result-streaming",
+            "active-result-periodic",
+          ].includes(mode)
+        )
           realFs.rmSync(resultPath(staleId), { force: true });
       }
       return;
@@ -2967,6 +3280,11 @@ for (const [mode, label] of [
   test(`Manager ${label}`, (t) => runManagerStartupScenario(mode, false, t));
 test("Manager periodically repairs an active assignment and View result shows canonical content", (t) =>
   runManagerStartupScenario("active-result-periodic", false, t));
+test(
+  "Manager defers result delivery while streaming and settles it after idle delivery",
+  { timeout: 20000 },
+  (t) => runManagerStartupScenario("active-result-streaming", false, t),
+);
 test("Manager close preserves the exact assignment and resumes its session", () =>
   runManagerStartupScenario("close-resume"));
 test("Manager discard stops the active executor and preserves its worktree", () =>
