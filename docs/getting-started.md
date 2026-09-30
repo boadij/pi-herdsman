@@ -10,7 +10,7 @@ You do not need to call structured coordination tools yourself.
 You need:
 
 - [herdr](https://github.com/herdrdev/herdr) `>=0.9.1`
-- Pi `0.99.1` (tested runtime)
+- Pi `0.99.2` (tested runtime)
 - Node `>=22.19.0`
 
 On Linux or macOS, install the released, tested stack:

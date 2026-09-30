@@ -1989,7 +1989,7 @@ async function runManagerStartupScenario(
         mode === "active-result-streaming" &&
         message?.customType === "pi-herdsman-report_result"
       ) {
-        // Pi 0.99.1's extension send callback is fire-and-forget; message_end
+        // Pi 0.99.2's extension send callback is fire-and-forget; message_end
         // adds the durable session entry later, simulated explicitly below.
         reportResultSends++;
         recipientIdle = false;
