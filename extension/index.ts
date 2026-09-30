@@ -10445,9 +10445,12 @@ export default function (pi: ExtensionAPI): void {
             ),
           );
         }
-        const fresh = await currentManager(ctx);
-        if (!fresh || !sameManagerDescriptor(fresh, manager))
-          throw new Error("Manager changed during delegation");
+        const assertManagerCurrent = async () => {
+          const fresh = await currentManager(ctx);
+          if (!fresh || !sameManagerDescriptor(fresh, manager))
+            throw new Error("Manager changed during delegation");
+        };
+        await assertManagerCurrent();
         writeChiefMessage({
           version: 1,
           id: assignment.id,
@@ -10476,6 +10479,7 @@ export default function (pi: ExtensionAPI): void {
           await delay(100, undefined, { signal });
         }
         if (!rediscovered) {
+          await assertManagerCurrent();
           const observed = sessionIdentity(lead.agent_session);
           const resolvedSessionId = herdrSessionId(lead);
           if (
@@ -10505,6 +10509,7 @@ export default function (pi: ExtensionAPI): void {
             "Lead started but its exact Pi session identity did not materialize; assignment preserved",
           );
         }
+        await assertManagerCurrent();
         return {
           content: [
             {

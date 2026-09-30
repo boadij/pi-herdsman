@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import {
+import fs, {
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -9,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer, type Socket } from "node:net";
 import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -3058,6 +3059,134 @@ test("preserving stop rejects malformed session identity observations", async ()
     calls.some((args) => args[1] === "send-keys"),
     false,
   );
+});
+
+test("Pi session header reads are bounded, handle short reads, and close descriptors", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-header-"));
+  const path = join(root, "not-the-header-id.jsonl");
+  const limit = 16 * 1024;
+  const header = JSON.stringify({ type: "session", id: "header-😀" });
+  const fullBudgetHeader =
+    header + " ".repeat(limit - Buffer.byteLength(header));
+  const read = fs.readSync;
+  const close = fs.closeSync;
+  let bytesRead = 0;
+  let shortReads = false;
+  let readError: NodeJS.ErrnoException | undefined;
+  const closed: number[] = [];
+  t.mock.method(
+    fs,
+    "readSync",
+    (
+      fd: number,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number,
+    ) => {
+      assert.equal(offset, position);
+      assert.ok(position + length <= limit);
+      if (readError) throw readError;
+      const bytes = read(
+        fd,
+        buffer,
+        offset,
+        shortReads ? Math.min(length, 1) : length,
+        position,
+      );
+      bytesRead += bytes;
+      return bytes;
+    },
+  );
+  t.mock.method(fs, "closeSync", (fd: number) => {
+    closed.push(fd);
+    close(fd);
+  });
+  syncBuiltinESMExports();
+  try {
+    for (const scenario of [
+      {
+        name: "large body",
+        content: `${header}\n${"x".repeat(2 * 1024 * 1024)}`,
+      },
+      {
+        name: "short reads through UTF-8 and newline",
+        content: `${header}\nignored`,
+        short: true,
+      },
+      { name: "short reads to EOF", content: header, short: true },
+      { name: "empty", content: "", empty: true },
+      {
+        name: "newline in final permitted byte",
+        content: `${fullBudgetHeader.slice(0, -1)}\nignored`,
+      },
+      // Even valid JSON exactly filling the budget needs a newline within it.
+      {
+        name: "unterminated at limit",
+        content: fullBudgetHeader,
+        error: /exceeds 16 KiB/,
+      },
+      {
+        name: "newline beyond limit",
+        content: `${fullBudgetHeader}\n`,
+        error: /exceeds 16 KiB/,
+      },
+      {
+        name: "oversized unterminated",
+        content: `${fullBudgetHeader} `,
+        error: /exceeds 16 KiB/,
+      },
+      { name: "malformed", content: "not JSON\n", error: /JSON/ },
+      {
+        name: "read error",
+        content: header,
+        ioError: "EIO",
+        error: /injected read failure/,
+      },
+      {
+        name: "ENOENT during read is not a missing file",
+        content: header,
+        ioError: "ENOENT",
+        error: /injected read failure/,
+      },
+    ]) {
+      writeFileSync(path, scenario.content);
+      bytesRead = 0;
+      closed.length = 0;
+      shortReads = scenario.short ?? false;
+      readError = scenario.ioError
+        ? Object.assign(new Error("injected read failure"), {
+            code: scenario.ioError,
+          })
+        : undefined;
+      if (scenario.error)
+        assert.throws(
+          () => readPiSessionHeaderId(path),
+          scenario.error,
+          scenario.name,
+        );
+      else
+        assert.equal(
+          readPiSessionHeaderId(path),
+          scenario.empty ? undefined : "header-😀",
+          scenario.name,
+        );
+      assert.ok(bytesRead <= limit, scenario.name);
+      if (scenario.name === "large body") assert.equal(bytesRead, limit);
+      if (scenario.short)
+        assert.equal(
+          bytesRead,
+          Buffer.byteLength(scenario.content.split("\n")[0]) +
+            (scenario.content.includes("\n") ? 1 : 0),
+        );
+      assert.equal(closed.length, 1, scenario.name);
+      assert.throws(() => fs.fstatSync(closed[0]), /EBADF/, scenario.name);
+    }
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("session matching keeps id and canonical path observations kind-aware", () => {

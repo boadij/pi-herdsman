@@ -5,7 +5,14 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -1920,16 +1927,46 @@ export function sameObservedSessionPath(left: string, right: string): boolean {
 }
 // Missing/empty prospective files are unresolved; invalid content and I/O errors
 // throw so ownership matching cannot mistake them for prospective files.
+// Read at most 16 KiB, including the newline. Unterminated headers must be
+// shorter than this limit; transcript bodies never increase the read budget.
+const PI_SESSION_HEADER_BYTE_LIMIT = 16 * 1024;
 export function readPiSessionHeaderId(path: string): string | undefined {
-  let content: string;
+  let fd: number;
   try {
-    content = readFileSync(path, "utf8");
+    fd = openSync(path, "r");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-  if (content.length === 0) return undefined;
-  const header = JSON.parse(content.split("\n", 1)[0]);
+  let content: string;
+  try {
+    const buffer = Buffer.alloc(PI_SESSION_HEADER_BYTE_LIMIT);
+    let length = 0;
+    let newline = -1;
+    while (length < buffer.length) {
+      const bytes = readSync(
+        fd,
+        buffer,
+        length,
+        buffer.length - length,
+        length,
+      );
+      if (bytes === 0) break;
+      newline = buffer.subarray(length, length + bytes).indexOf(0x0a);
+      if (newline !== -1) {
+        newline += length;
+        break;
+      }
+      length += bytes;
+    }
+    if (newline === -1 && length === buffer.length)
+      throw new Error("Pi session header exceeds 16 KiB read limit");
+    if (newline === -1 && length === 0) return undefined;
+    content = buffer.toString("utf8", 0, newline === -1 ? length : newline);
+  } finally {
+    closeSync(fd);
+  }
+  const header = JSON.parse(content);
   if (
     header?.type !== "session" ||
     typeof header.id !== "string" ||

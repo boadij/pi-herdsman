@@ -1128,6 +1128,8 @@ async function runManagerStartupScenario(
     | "conflict"
     | "managed-agent"
     | "unmaterialized-path"
+    | "identity-manager-lost-timeout"
+    | "identity-manager-lost-success"
     | "identity-timeout"
     | "identity-zero-byte-timeout"
     | "identity-unproven"
@@ -1658,6 +1660,18 @@ async function runManagerStartupScenario(
         );
       if (prospective && delivered && started) {
         identityObservations++;
+        if (
+          mode.startsWith("identity-manager-lost-") &&
+          identityObservations === 1
+        ) {
+          assert.equal(realFs.existsSync(childSessionPath), false);
+          const descriptorPath = managerDescriptorPath(
+            supervisionRuntime(),
+            WORKSPACE,
+          );
+          realFs.unlinkSync(descriptorPath);
+          realFs.rmSync(`${descriptorPath}.lock`, { recursive: true });
+        }
         if (mode === "unmaterialized-path" && identityObservations === 2)
           identityPolled();
         if (
@@ -1675,10 +1689,16 @@ async function runManagerStartupScenario(
             "identity-unproven",
             "identity-mismatch",
             "identity-cleanup-mismatch",
+            "identity-manager-lost-timeout",
           ].includes(mode)
         )
           Date.now = () => originalNow() + 60_000;
-        if (mode === "identity-mismatch" || mode === "identity-ambiguity") {
+        if (
+          mode === "identity-mismatch" ||
+          mode === "identity-ambiguity" ||
+          (mode === "identity-manager-lost-success" &&
+            identityObservations === 2)
+        ) {
           realFs.writeFileSync(
             childSessionPath,
             JSON.stringify({
@@ -2499,9 +2519,11 @@ async function runManagerStartupScenario(
     if (mode.startsWith("identity-")) {
       await assert.rejects(
         execute(),
-        mode === "identity-ambiguity"
-          ? /identity became ambiguous/
-          : /identity did not materialize; assignment preserved/,
+        mode.startsWith("identity-manager-lost-")
+          ? /Manager changed during delegation/
+          : mode === "identity-ambiguity"
+            ? /identity became ambiguous/
+            : /identity did not materialize; assignment preserved/,
       );
       const assignment = listProjectAssignments(
         supervisionRuntime(),
@@ -2514,6 +2536,16 @@ async function runManagerStartupScenario(
         "text",
         "version",
       ]);
+      if (mode.startsWith("identity-manager-lost-")) {
+        assert.equal(assignment.id, childSession);
+        assert.equal(created, true);
+        assert.equal(
+          realFs.existsSync(childSessionPath),
+          mode === "identity-manager-lost-success",
+        );
+        if (mode === "identity-manager-lost-success")
+          assert.equal(nativeSessions.get(childSession)?.id, childSession);
+      }
       assert.equal(
         listChiefMessagePaths(supervisionRuntime(), childSession).length,
         1,
@@ -2712,6 +2744,12 @@ test("Manager startup rejects managed Agent identity without Lead state", () =>
   runManagerStartupScenario("managed-agent"));
 test("Manager waits for prospective Lead identity to materialize before success and immediate close", () =>
   runManagerStartupScenario("unmaterialized-path"));
+for (const mode of [
+  "identity-manager-lost-timeout",
+  "identity-manager-lost-success",
+] as const)
+  test(`Manager rechecks authority after assignment publication on ${mode}`, () =>
+    runManagerStartupScenario(mode));
 for (const mode of [
   "identity-timeout",
   "identity-zero-byte-timeout",
