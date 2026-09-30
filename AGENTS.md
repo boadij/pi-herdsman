@@ -43,6 +43,14 @@ must preserve one meaning and must not evolve into independent rules.
 Do not add runtime skill loading, generated prompt files, a prompt registry, or
 another synchronization subsystem merely to keep prose copies aligned.
 
+## Architecture decisions
+
+Before making a durable architectural change, inspect relevant records in
+`docs/adr/`. Do not contradict an active ADR without superseding it in the
+same change. Record only durable, non-obvious architectural decisions; keep
+local implementation facts in code or comments and agent operating instructions
+in `AGENTS.md`.
+
 ## Code map
 
 - `extension/index.ts`: Extension integration and controller/agent lifecycle.
