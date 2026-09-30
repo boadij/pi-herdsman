@@ -4593,111 +4593,123 @@ test("shell ownership uses captured identity without a shell allowlist", () => {
   );
 });
 
-test("worktree group scope resolves primary and linked workspaces from Herdr topology", async () => {
+test("worktree group scope derives project before linked worktrees exist", async () => {
   const calls: string[][] = [];
   const pi = {
     exec: async (_command: string, args: string[]) => {
       calls.push(args);
-      const workspaceId = args.at(-1);
-      const result =
-        args[0] === "workspace"
-          ? {
-              workspace: {
-                worktree: {
-                  repo_key: "repo-key",
-                  is_linked_worktree: workspaceId !== "root",
-                },
-              },
-            }
-          : {
-              source: {
-                repo_key: "repo-key",
-                repo_name: "project",
-                source_workspace_id: "root",
-              },
-              worktrees: [
+      const result = {
+        source: {
+          repo_key: "repo-key",
+          repo_name: "project",
+          source_workspace_id: "root",
+        },
+        worktrees:
+          args.at(-1) === "linked"
+            ? [
                 { open_workspace_id: "root" },
                 { open_workspace_id: "linked" },
                 { open_workspace_id: "linked" },
                 { open_workspace_id: null },
-              ],
-            };
+                { open_workspace_id: "" },
+              ]
+            : [],
+      };
       return { code: 0, stdout: JSON.stringify({ id: 1, result }), stderr: "" };
     },
   } as any;
   const ctx = { cwd: "/tmp" } as any;
   const primary = await worktreeGroupScope(pi, ctx, "root");
-  const linked = await worktreeGroupScope(pi, ctx, "linked");
   assert.deepEqual(primary, {
     repoKey: "repo-key",
     repoName: "project",
     primaryWorkspaceId: "root",
+    workspaceIds: ["root"],
+  });
+  assert.deepEqual(calls, [["worktree", "list", "--workspace", "root"]]);
+  const linked = await worktreeGroupScope(pi, ctx, "linked");
+  assert.deepEqual(linked, {
+    ...primary,
     workspaceIds: ["root", "linked"],
   });
-  assert.deepEqual(linked, primary);
   assert.notEqual(linked.primaryWorkspaceId, "linked"); // /manager requires the primary workspace.
   assert.deepEqual(calls, [
-    ["workspace", "get", "root"],
     ["worktree", "list", "--workspace", "root"],
-    ["workspace", "get", "linked"],
     ["worktree", "list", "--workspace", "linked"],
   ]);
 });
 
 test("worktree group scope fails closed on missing or inconsistent topology evidence", async () => {
   const ctx = { cwd: "/tmp" } as any;
-  const scope = (membership: any, source: any) =>
+  const scope = (source: any, worktrees: any) =>
     worktreeGroupScope(
       {
-        exec: async (_command: string, args: string[]) => ({
+        exec: async () => ({
           code: 0,
           stderr: "",
           stdout: JSON.stringify({
             id: 1,
-            result:
-              args[0] === "workspace"
-                ? { workspace: { worktree: membership } }
-                : { source, worktrees: [] },
+            result: { source, worktrees },
           }),
         }),
       } as any,
       ctx,
       "linked",
     );
+  const source = {
+    repo_key: "repo-key",
+    repo_name: "project",
+    source_workspace_id: "root",
+  };
+  for (const key of Object.keys(source)) {
+    for (const value of [undefined, "", 42]) {
+      await assert.rejects(
+        scope({ ...source, [key]: value }, []),
+        /Herdr project topology is unavailable/,
+      );
+    }
+  }
+  for (const worktrees of [undefined, null, {}]) {
+    await assert.rejects(
+      scope(source, worktrees),
+      /Herdr project topology is unavailable/,
+    );
+  }
   await assert.rejects(
-    scope(undefined, undefined),
-    /not part of a Herdr Git worktree group/,
+    scope(undefined, []),
+    /Herdr project topology is unavailable/,
   );
   await assert.rejects(
-    scope({ repo_key: "one", is_linked_worktree: true }, { repo_key: "two" }),
-    /topology changed/,
+    scope(source, [{ open_workspace_id: "other" }]),
+    /Herdr project topology changed/,
   );
-  await assert.rejects(
-    scope(
-      { repo_key: "one", is_linked_worktree: true },
-      { repo_key: "one", repo_name: "project" },
-    ),
-    /primary workspace is unavailable/,
-  );
-  await assert.rejects(
-    scope(
-      { repo_key: "one", is_linked_worktree: true },
-      { repo_key: "one", source_workspace_id: "root" },
-    ),
-    /repository name is unavailable/,
-  );
-  assert.deepEqual(
-    await scope(
-      { repo_key: "one", is_linked_worktree: false },
-      { repo_key: "one", repo_name: "project" },
-    ),
-    {
-      repoKey: "one",
-      repoName: "project",
-      primaryWorkspaceId: "linked",
-      workspaceIds: ["linked"],
-    },
-  );
+});
+
+test("worktree group scope propagates native Herdr errors", async () => {
+  for (const code of ["not_git_worktree", "workspace_not_found"]) {
+    await assert.rejects(
+      worktreeGroupScope(
+        {
+          exec: async () => ({
+            code: 1,
+            stdout: JSON.stringify({
+              error: { code, message: "Native topology failure" },
+            }),
+            stderr: "",
+          }),
+        } as any,
+        { cwd: "/tmp" } as any,
+        "root",
+      ),
+      (failure: unknown) => {
+        assert.ok(failure instanceof OperationError);
+        assert.equal(failure.detail.details?.herdrCode, code);
+        assert.equal(failure.detail.operation, "herdr worktree list");
+        assert.equal(failure.message, "Native topology failure");
+        return true;
+      },
+    );
+  }
 });
 
 test("existing-pane startup waits for shell readiness before starting Pi", async () => {

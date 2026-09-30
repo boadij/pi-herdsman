@@ -376,16 +376,6 @@ export async function worktreeGroupScope(
   signal?: AbortSignal,
   timeout?: number,
 ): Promise<WorktreeGroupScope> {
-  const target = (
-    await runHerdr(pi, ctx, ["workspace", "get", workspaceId], {
-      signal,
-      timeout,
-    })
-  )?.workspace;
-  const membership = target?.worktree;
-  if (typeof membership?.repo_key !== "string" || !membership.repo_key)
-    throw new Error("Workspace is not part of a Herdr Git worktree group");
-
   const listed = await runHerdr(
     pi,
     ctx,
@@ -393,33 +383,39 @@ export async function worktreeGroupScope(
     { signal, timeout },
   );
   const source = listed?.source;
-  if (!source || source.repo_key !== membership.repo_key)
-    throw new Error("Herdr worktree group topology changed");
-  if (typeof source.repo_name !== "string" || !source.repo_name)
-    throw new Error("Herdr repository name is unavailable");
+  const worktrees = listed?.worktrees;
+  if (
+    typeof source?.repo_key !== "string" ||
+    !source.repo_key ||
+    typeof source?.repo_name !== "string" ||
+    !source.repo_name ||
+    typeof source?.source_workspace_id !== "string" ||
+    !source.source_workspace_id ||
+    !Array.isArray(worktrees)
+  ) {
+    throw new Error("Herdr project topology is unavailable");
+  }
 
-  const primaryWorkspaceId =
-    source.source_workspace_id ??
-    (membership.is_linked_worktree === false ? workspaceId : undefined);
-  if (typeof primaryWorkspaceId !== "string" || !primaryWorkspaceId)
-    throw new Error("Herdr primary workspace is unavailable");
+  const workspaceIds = [
+    ...new Set([
+      source.source_workspace_id,
+      ...worktrees.flatMap((worktree: HerdrRecord) =>
+        typeof worktree?.open_workspace_id === "string" &&
+        worktree.open_workspace_id
+          ? [worktree.open_workspace_id]
+          : [],
+      ),
+    ]),
+  ];
+  if (!workspaceIds.includes(workspaceId)) {
+    throw new Error("Herdr project topology changed");
+  }
 
   return {
     repoKey: source.repo_key,
     repoName: source.repo_name,
-    primaryWorkspaceId,
-    workspaceIds: [
-      ...new Set([
-        primaryWorkspaceId,
-        ...(Array.isArray(listed.worktrees) ? listed.worktrees : []).flatMap(
-          (worktree: HerdrRecord) =>
-            typeof worktree?.open_workspace_id === "string" &&
-            worktree.open_workspace_id
-              ? [worktree.open_workspace_id]
-              : [],
-        ),
-      ]),
-    ],
+    primaryWorkspaceId: source.source_workspace_id,
+    workspaceIds,
   };
 }
 

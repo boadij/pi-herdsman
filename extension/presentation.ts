@@ -31,6 +31,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type {
+  CoordinationMessageKind,
   ProjectWorkSnapshot,
   SupervisionSnapshot,
   SupervisionPresentationSnapshot,
@@ -972,6 +973,26 @@ export function formatSupervisionContext(
   if (
     role === "manager" &&
     snapshot &&
+    "openWorkspaces" in snapshot &&
+    snapshot.openWorkspaces?.length
+  ) {
+    sections.push("open_workspaces:");
+    sections.push(
+      ...snapshot.openWorkspaces.map((workspace) => {
+        const branch = workspace.branch
+          ? `${supervisionValue(workspace.branch)} · `
+          : "";
+        const relation = workspace.linked ? "linked" : "primary";
+        return (
+          `  ${branch}workspace=${supervisionValue(workspace.workspaceId)}` +
+          ` · ${relation}`
+        );
+      }),
+    );
+  }
+  if (
+    role === "manager" &&
+    snapshot &&
     "work" in snapshot &&
     snapshot.work?.length
   ) {
@@ -981,7 +1002,6 @@ export function formatSupervisionContext(
         (work) =>
           `  ${supervisionValue(work.branch)} · ${supervisionValue(work.status)}` +
           `${work.runtimeState ? ` · runtime=${supervisionValue(work.runtimeState)}` : ""}` +
-          ` · session=${supervisionValue(work.session)}` +
           `${work.issue ? ` · ${supervisionValue(work.issue)}` : ""}`,
       ),
     );
@@ -2804,6 +2824,122 @@ function renderMessageBox(
   );
   box.addChild(content);
   return box;
+}
+
+export function renderCoordinationMessage(
+  kind: CoordinationMessageKind,
+  message: {
+    content?: string;
+    details?: {
+      fromSessionId?: string;
+      leadSessionId?: string;
+      askId?: string;
+      branch?: string;
+    };
+  },
+  options: { expanded?: boolean; outputPad?: number },
+  theme: any,
+): TuiBox {
+  const d = message.details;
+  const branch = d?.branch ?? "project work";
+  let heading: string;
+  let prefix: string | undefined;
+  switch (kind) {
+    case "lead_message":
+    case "lead_ask":
+      heading =
+        kind === "lead_ask"
+          ? statusLine(theme, "warning", "?", "Lead needs input")
+          : "Lead message";
+      if (d?.fromSessionId) prefix = `From lead ${d.fromSessionId}: `;
+      break;
+    case "chief_message":
+    case "chief_reply":
+      heading = kind === "chief_reply" ? "Chief reply" : "Chief message";
+      if (d?.fromSessionId) prefix = `From chief ${d.fromSessionId}: `;
+      break;
+    case "manager_message":
+    case "manager_ask":
+    case "manager_reply":
+      heading =
+        kind === "manager_ask"
+          ? statusLine(theme, "warning", "?", "Manager needs input")
+          : kind === "manager_reply"
+            ? "Manager reply"
+            : "Manager message";
+      if (d?.fromSessionId) prefix = `From manager ${d.fromSessionId}: `;
+      break;
+    case "peer_message":
+      heading = "Peer message";
+      if (d?.fromSessionId) prefix = `Peer message from ${d.fromSessionId}: `;
+      break;
+    case "project_assignment":
+      heading = statusLine(theme, "accent", "→", `${branch} assigned`);
+      if (d?.branch) prefix = `Project assignment for branch ${d.branch}:\n\n`;
+      break;
+    case "report_result":
+      heading = statusLine(theme, "success", "✓", `${branch} finished`);
+      if (d?.branch) prefix = `Project work ${d.branch} finished:\n\n`;
+      break;
+  }
+  let body = message.content ?? "";
+  if (prefix && body.startsWith(prefix)) body = body.slice(prefix.length);
+  const content = new Container();
+  content.addChild(new WidthSafeText(heading, 0, 0));
+  if (options.expanded) {
+    const session =
+      kind === "project_assignment"
+        ? undefined
+        : (d?.fromSessionId ?? d?.leadSessionId);
+    const metadata = [
+      ...(d?.branch ? [`branch: ${d.branch}`] : []),
+      ...(session ? [`session: ${session}`] : []),
+    ];
+    if (metadata.length) {
+      content.addChild(new Spacer(1));
+      content.addChild(new WidthSafeText(metadata.join("\n"), 0, 0));
+    }
+    if (body) {
+      content.addChild(new Spacer(1));
+      content.addChild(new Markdown(body, 0, 0, getMarkdownTheme()));
+    }
+  } else {
+    let previewBody = body;
+    const provenancePrefix = "Lead result source: ";
+    if (kind === "report_result" && previewBody.startsWith(provenancePrefix)) {
+      const separator = previewBody.indexOf("\n\n");
+      if (separator !== -1) {
+        try {
+          const provenance: unknown = JSON.parse(
+            previewBody.slice(provenancePrefix.length, separator),
+          );
+          if (
+            provenance !== null &&
+            typeof provenance === "object" &&
+            Object.keys(provenance).length === 2 &&
+            Object.hasOwn(provenance, "branch") &&
+            Object.hasOwn(provenance, "cwd") &&
+            "branch" in provenance &&
+            typeof provenance.branch === "string" &&
+            "cwd" in provenance &&
+            typeof provenance.cwd === "string" &&
+            provenance.branch === d?.branch
+          )
+            previewBody = previewBody.slice(separator + 2);
+        } catch {
+          // Keep content that does not have the deterministic JSON header.
+        }
+      }
+    }
+    const preview = collapseDisplayText(previewBody);
+    if (preview)
+      content.addChild(
+        new Markdown(preview, 2, 0, getMarkdownTheme(), {
+          color: (text) => humanText(theme, "muted", text),
+        }),
+      );
+  }
+  return renderMessageBox(content, theme, options.outputPad ?? 0);
 }
 
 export function renderCompletionMessage(

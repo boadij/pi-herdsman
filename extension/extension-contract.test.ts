@@ -10,6 +10,7 @@ import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import {
+  COORDINATION_MESSAGE_KINDS,
   claimChiefLease,
   claimManagerLease,
   listCoordinationMessagePaths,
@@ -275,8 +276,33 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   );
   assert.deepEqual(
     pi.tools.map((tool) => tool.name).sort(),
-    [...semanticNames].sort(),
+    [
+      ...semanticNames,
+      "staff_list",
+      "staff_inspect",
+      "staff_transcript",
+      "staff_message",
+      "staff_reply",
+      "staff_delegate",
+      "staff_close",
+      "staff_discard",
+    ].sort(),
   );
+  for (const name of [
+    "staff_list",
+    "staff_inspect",
+    "staff_transcript",
+    "staff_message",
+    "staff_reply",
+    "staff_delegate",
+    "staff_close",
+    "staff_discard",
+  ]) {
+    const tool = tools.get(name)!;
+    assert.equal(tool.defaultActive, false);
+    assert.equal(typeof tool.renderCall, "function");
+    assert.equal(typeof tool.renderResult, "function");
+  }
   pi.events.get("session_shutdown")?.[0]();
 
   const mailbox = setAgentEnvironment("contract-leaf-agent");
@@ -488,6 +514,29 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     allTools: REGISTERED_ROLE_TOOLS,
   });
   registerExtension!(lead.pi as never);
+  const historicalStaffMessage = lead.tools.find(
+    (tool) => tool.name === "staff_message",
+  )!;
+  assert.ok(historicalStaffMessage);
+  assert.equal(historicalStaffMessage.defaultActive, false);
+  assert.equal(typeof historicalStaffMessage.renderCall, "function");
+  assert.equal(typeof historicalStaffMessage.renderResult, "function");
+  const historicalArgs = {
+    session: "lead-historical-session",
+    message: "Please continue the prior assignment",
+  };
+  const historicalCall = historicalStaffMessage.renderCall(
+    historicalArgs,
+    {
+      fg: (_color: string, value: string) => value,
+      bold: (value: string) => value,
+    },
+    { args: historicalArgs, argsComplete: true },
+  );
+  assert.match(
+    historicalCall.render(160).join("\n"),
+    /^staff message  lead-his/,
+  );
   const leadContext = fakeContext() as any;
   await lead.events.get("session_start")![0](undefined, leadContext);
   assert.deepEqual(lead.commands.sort(), [
@@ -526,7 +575,21 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   assert.deepEqual(
     lead.tools.map((tool) => tool.name).sort(),
-    [...SEMANTIC_TOOL_CASES.map(([name]) => name)].sort(),
+    [
+      ...SEMANTIC_TOOL_CASES.map(([name]) => name),
+      "staff_list",
+      "staff_inspect",
+      "staff_transcript",
+      "staff_message",
+      "staff_reply",
+      "staff_delegate",
+      "staff_close",
+      "staff_discard",
+    ].sort(),
+  );
+  assert.equal(
+    lead.pi.getActiveTools().some((name) => name.startsWith("staff_")),
+    false,
   );
   for (const tool of lead.tools) {
     assertPortableToolSchema(tool);
@@ -559,7 +622,8 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "pi-herdsman-agent-result",
       "pi-herdsman-agent-stale",
       "pi-herdsman-stop-summary",
-    ],
+      ...COORDINATION_MESSAGE_KINDS.map((kind) => `pi-herdsman-${kind}`),
+    ].sort(),
   );
   assert.equal(lead.commands.includes("subagents"), false);
   assert.equal(lead.events.has("before_agent_start"), true);
@@ -2440,11 +2504,16 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
           stderr: "",
           code: 0,
         };
-      if (args[0] === "workspace" && args[1] === "get")
+      if (args[0] === "worktree" && args[1] === "list")
         return {
-          stdout: JSON.stringify({ id: AGENT_ID, result: { workspace: {} } }),
+          stdout: JSON.stringify({
+            error: {
+              code: "not_git_worktree",
+              message: "Workspace is not a Git worktree",
+            },
+          }),
           stderr: "",
-          code: 0,
+          code: 1,
         };
       return { stdout: "{}", stderr: "", code: 0 };
     },
@@ -2814,11 +2883,16 @@ test("registered lead and replacement chief exchange messages and asks", async (
   let failChiefAliasLookup = false;
   let replacement: ReturnType<typeof fakePi> | undefined;
   const exec = (_command: string, args: string[]) => {
-    if (args[0] === "workspace" && args[1] === "get")
+    if (args[0] === "worktree" && args[1] === "list")
       return {
-        stdout: JSON.stringify({ id: AGENT_ID, result: { workspace: {} } }),
+        stdout: JSON.stringify({
+          error: {
+            code: "not_git_worktree",
+            message: "Workspace is not a Git worktree",
+          },
+        }),
         stderr: "",
-        code: 0,
+        code: 1,
       };
     if (isAgentList(args))
       return {
@@ -3178,11 +3252,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.match(chiefMessages[0], /<file name=.*Message:/su);
     assert.equal(
       chiefMessages[1],
-      "From chief " +
-        chiefId +
-        " to lead " +
-        leadId +
-        ": second from the chief",
+      `From chief ${chiefId}: second from the chief`,
     );
 
     const chiefDeliveryStart = chief.sentMessageCalls.length;
@@ -3207,7 +3277,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
         );
         assert.ok(
           calls.some((call) =>
-            /From lead .* to chief .*progress update/.test(
+            /From lead .*: progress update/.test(
               String((call.message as any)?.content ?? ""),
             ),
           ),
@@ -3224,7 +3294,7 @@ test("registered lead and replacement chief exchange messages and asks", async (
     assert.deepEqual(deliveryCalls[0]?.options, { triggerTurn: false });
     assert.match(
       String((deliveryCalls[1]?.message as any)?.content),
-      /From lead .* to chief .*progress update/,
+      /From lead .*: progress update/,
     );
     assert.deepEqual(deliveryCalls[1]?.options, {
       deliverAs: "followUp",

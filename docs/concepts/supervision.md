@@ -16,8 +16,11 @@ Chief
 Chief supervises active Managers on its Herdr runtime, and ordinary Leads when their Herdsman project scope has no active Manager; Manager supervises ordinary Leads in one Herdsman project scope. Each project scope corresponds to one Herdr worktree group: its primary workspace and linked-worktree workspaces. A Lead owns its complete managed-Agent tree. Delegation-enabled Agents may own their permitted direct Agents. Chief may observe bounded descendant Lead and Agent summaries but acts only on its direct reports; Manager may observe a Lead's Agent descendants but acts only on Leads. Neither supervisor owns descendants across an intermediate coordinator.
 
 Manager coordinates one Herdr worktree group from its primary workspace.
-Project work belongs to a branch and survives Manager turnover; a Lead is its
-current executor. Herdr owns worktree placement and Pi owns session continuity.
+An ordinary Git primary workspace needs no existing linked-worktree membership
+to activate Manager; the first `staff_delegate` can create the first linked
+worktree. The Git branch is the semantic project-work handle and survives
+Manager turnover; a Lead is its current executor. Project assignment and result
+UUIDs remain internal. Herdr owns worktree placement and Pi owns session continuity.
 Multiple Leads may physically run in one workspace, but workspace membership
 does not establish assignment ownership.
 
@@ -103,6 +106,6 @@ Never target a lead by its display label. Staff tools revalidate identity, owner
 neither sends a message or changes Lead state. Use the fresh automatic snapshot
 for ordinary state and coordination. Do not call `staff_list`, `staff_inspect`, or `staff_transcript` merely to poll progress.
 
-Idle runtime state and `supervisor_message` are not task completion. An assigned Lead calls `supervisor_result` to save its durable outcome, even if no Manager is active. Use `supervisor_message` only for nonterminal progress or coordination. The next Manager reconciles a saved result; after accepted delivery the assignment is removed while its result artifact remains for later handoffs. Completed work cannot be discarded. Worktrees remain after completion. Herdsman does not prescribe backlog, review, or merge policy.
+Idle runtime state and `supervisor_message` are not task completion. An assigned Lead calls `supervisor_result` to save its durable outcome and queue a durable notification for the active Manager. If no Manager is active, the result remains saved for the next Manager to reconcile. Use `supervisor_message` only for nonterminal progress or coordination. After accepted result delivery the assignment is removed while its result artifact remains for later handoffs. Completed work cannot be discarded. Worktrees remain after completion. Herdsman does not prescribe backlog, review, or merge policy.
 
 The automatic bounded `<supervision_state>` is state-only, untrusted observation. A fresh snapshot suffices for general state questions; use `staff_list` when a refreshed roster is needed, `inspect` for live terminal/process evidence, and `transcript` for persisted conversation/tool evidence. Every action revalidates direct-report identity and current authority.

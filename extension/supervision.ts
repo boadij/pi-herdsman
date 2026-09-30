@@ -71,6 +71,7 @@ export type ChiefDescriptor = {
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
+  piSessionFile?: string;
   paneId: string;
   tabId?: string;
   workspaceId: string;
@@ -102,17 +103,20 @@ export type ChiefLease = {
   release: () => void;
 };
 
-export type ChiefMessageKind =
-  | "chief_message"
-  | "lead_message"
-  | "lead_ask"
-  | "chief_reply"
-  | "manager_message"
-  | "manager_ask"
-  | "manager_reply"
-  | "project_assignment"
-  | "report_result"
-  | "peer_message";
+export const COORDINATION_MESSAGE_KINDS = [
+  "chief_message",
+  "lead_message",
+  "lead_ask",
+  "chief_reply",
+  "manager_message",
+  "manager_ask",
+  "manager_reply",
+  "project_assignment",
+  "report_result",
+  "peer_message",
+] as const;
+
+export type ChiefMessageKind = (typeof COORDINATION_MESSAGE_KINDS)[number];
 
 /** Shared durable transport record used by Chief and Lead peer traffic. */
 export type CoordinationMessageKind = ChiefMessageKind;
@@ -126,6 +130,7 @@ export type ChiefMessageRecord = {
   toSessionId: string;
   leadSessionId: string;
   askId?: string;
+  branch?: string;
   text: string;
   createdAt: number;
 };
@@ -164,18 +169,7 @@ const CHIEF_DESCRIPTOR_MAX_BYTES = 2048;
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const MESSAGE_KINDS = new Set<ChiefMessageKind>([
-  "chief_message",
-  "lead_message",
-  "lead_ask",
-  "chief_reply",
-  "manager_message",
-  "manager_ask",
-  "manager_reply",
-  "project_assignment",
-  "report_result",
-  "peer_message",
-]);
+const MESSAGE_KINDS = new Set<ChiefMessageKind>(COORDINATION_MESSAGE_KINDS);
 
 function validSession(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 512;
@@ -201,7 +195,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "text",
     "createdAt",
   ];
-  const optional = ["askId"];
+  const optional = ["askId", "branch"];
   if (
     Object.keys(record).some(
       (key) => !keys.includes(key) && !optional.includes(key),
@@ -211,6 +205,15 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     (Object.hasOwn(record, "askId") && !UUID.test(String(record.askId)))
   )
     return false;
+  const projectMessage =
+    record.kind === "project_assignment" || record.kind === "report_result";
+  if (
+    projectMessage
+      ? !validNativeIdentity(record.branch)
+      : record.branch !== undefined
+  ) {
+    return false;
+  }
   return (
     record.version === 1 &&
     typeof record.id === "string" &&
@@ -574,13 +577,10 @@ export function readChiefMessage(path: string): ChiefMessageRecord {
   }
 }
 
-export function listChiefMessagePaths(
+function allChiefMessagePaths(
   runtime: SupervisionRuntime,
   toSessionId: string,
-  limit = COORDINATION_INBOX_SCAN_LIMIT,
 ): string[] {
-  if (!Number.isInteger(limit) || limit < 0)
-    throw new Error("Invalid inbox limit");
   const directory = inboxFor(runtime, toSessionId);
   let entries: string[];
   try {
@@ -611,8 +611,20 @@ export function listChiefMessagePaths(
         a.record.id.localeCompare(b.record.id)
       );
     })
-    .slice(0, Math.min(limit, COORDINATION_INBOX_SCAN_LIMIT))
     .map(({ path }) => path);
+}
+
+export function listChiefMessagePaths(
+  runtime: SupervisionRuntime,
+  toSessionId: string,
+  limit = COORDINATION_INBOX_SCAN_LIMIT,
+): string[] {
+  if (!Number.isInteger(limit) || limit < 0)
+    throw new Error("Invalid inbox limit");
+  return allChiefMessagePaths(runtime, toSessionId).slice(
+    0,
+    Math.min(limit, COORDINATION_INBOX_SCAN_LIMIT),
+  );
 }
 
 export function removeChiefMessage(
@@ -780,22 +792,57 @@ export function chiefAskQueued(
   });
 }
 
+/** Return whether this exact supervisor reply is durably queued for its Lead. */
+export function coordinationReplyQueued(
+  runtime: SupervisionRuntime,
+  toSessionId: string,
+  leadSessionId: string,
+  askId: string,
+  supervisor: {
+    piSessionId: string;
+    leaseId: string;
+    role: "chief" | "manager";
+  },
+): boolean {
+  const expectedKind =
+    supervisor.role === "chief" ? "chief_reply" : "manager_reply";
+  return allChiefMessagePaths(runtime, toSessionId).some((path) => {
+    const id = basename(path, ".json");
+    if (chiefMessageQuarantined(runtime, toSessionId, id)) return false;
+    try {
+      const record = readChiefMessage(path);
+      return (
+        record.kind === expectedKind &&
+        record.toSessionId === toSessionId &&
+        record.leadSessionId === leadSessionId &&
+        record.askId === askId &&
+        record.fromSessionId === supervisor.piSessionId &&
+        record.leaseId === supervisor.leaseId
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
 function deliveredMessageContent(record: CoordinationMessageRecord): string {
   const prefix =
     record.kind === "chief_message" || record.kind === "chief_reply"
-      ? `From chief ${record.fromSessionId} to lead ${record.leadSessionId}: `
-      : record.kind === "project_assignment"
-        ? `Project assignment for lead ${record.leadSessionId}: `
-        : record.kind === "manager_message" || record.kind === "manager_reply"
-          ? `From manager ${record.fromSessionId} to lead ${record.leadSessionId}: `
-          : record.kind === "manager_ask"
-            ? `From manager ${record.fromSessionId} to chief ${record.toSessionId}: `
-            : record.kind === "report_result"
-              ? `Result from lead ${record.leadSessionId} to manager ${record.toSessionId}: `
-              : record.kind === "lead_message" || record.kind === "lead_ask"
-                ? `From lead ${record.leadSessionId} to chief ${record.toSessionId}: `
-                : `Peer message from ${record.fromSessionId}: `;
-  return Buffer.from(`${prefix}${record.text}`, "utf8")
+      ? `From chief ${record.fromSessionId}: `
+      : record.kind === "manager_message" ||
+          record.kind === "manager_ask" ||
+          record.kind === "manager_reply"
+        ? `From manager ${record.fromSessionId}: `
+        : record.kind === "lead_message" || record.kind === "lead_ask"
+          ? `From lead ${record.fromSessionId}: `
+          : `Peer message from ${record.fromSessionId}: `;
+  const content =
+    record.kind === "project_assignment"
+      ? `Project assignment for branch ${record.branch}:\n\n${record.text}`
+      : record.kind === "report_result"
+        ? `Project work ${record.branch} finished:\n\n${record.text}`
+        : `${prefix}${record.text}`;
+  return Buffer.from(content, "utf8")
     .subarray(0, COORDINATION_MESSAGE_MAX_BYTES)
     .toString("utf8");
 }
@@ -904,8 +951,10 @@ export async function drainCoordinationInbox(
             details: {
               id: record.id,
               leaseId: record.leaseId,
+              fromSessionId: record.fromSessionId,
               leadSessionId: record.leadSessionId,
               ...(record.askId ? { askId: record.askId } : {}),
+              ...(record.branch ? { branch: record.branch } : {}),
             },
           },
           { deliverAs: "followUp", triggerTurn: true },
@@ -1281,7 +1330,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     "workspaceId",
     "createdAt",
   ];
-  const optional = ["tabId"];
+  const optional = ["tabId", "piSessionFile"];
   return (
     Object.keys(record).every(
       (key) => keys.includes(key) || optional.includes(key),
@@ -1297,6 +1346,9 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     typeof record.piSessionId === "string" &&
     record.piSessionId.length > 0 &&
     record.piSessionId.length <= 512 &&
+    (record.piSessionFile === undefined ||
+      (typeof record.piSessionFile === "string" &&
+        record.piSessionFile.length > 0)) &&
     typeof record.paneId === "string" &&
     record.paneId.length > 0 &&
     record.paneId.length <= 512 &&
@@ -1381,6 +1433,7 @@ export function sameChiefDescriptor(
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
+    actual.piSessionFile === expected.piSessionFile &&
     actual.paneId === expected.paneId &&
     actual.tabId === expected.tabId &&
     actual.workspaceId === expected.workspaceId &&
@@ -1394,6 +1447,9 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
     typeof identity.piSessionId !== "string" ||
     !identity.piSessionId ||
     identity.piSessionId.length > 512 ||
+    (identity.piSessionFile !== undefined &&
+      (typeof identity.piSessionFile !== "string" ||
+        !identity.piSessionFile)) ||
     typeof identity.paneId !== "string" ||
     !identity.paneId ||
     identity.paneId.length > 512 ||
@@ -1423,6 +1479,9 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
+    ...(identity.piSessionFile !== undefined
+      ? { piSessionFile: identity.piSessionFile }
+      : {}),
     paneId: identity.paneId,
     ...(identity.tabId ? { tabId: identity.tabId } : {}),
     workspaceId: identity.workspaceId,
@@ -1465,6 +1524,7 @@ export type ManagerDescriptor = {
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
+  piSessionFile?: string;
   paneId: string;
   tabId: string;
   workspaceId: string;
@@ -1473,7 +1533,12 @@ export type ManagerDescriptor = {
 };
 export type ManagerIdentity = Pick<
   ManagerDescriptor,
-  "piSessionId" | "paneId" | "tabId" | "workspaceId" | "repoKey"
+  | "piSessionId"
+  | "piSessionFile"
+  | "paneId"
+  | "tabId"
+  | "workspaceId"
+  | "repoKey"
 > & { createdAt?: number };
 export type ManagerLease = {
   descriptor: ManagerDescriptor;
@@ -1512,12 +1577,16 @@ function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
     "createdAt",
   ];
   return (
-    Object.keys(r).length === keys.length &&
+    Object.keys(r).every(
+      (key) => keys.includes(key) || key === "piSessionFile",
+    ) &&
     keys.every((key) => Object.hasOwn(r, key)) &&
     r.version === 1 &&
     UUID.test(String(r.leaseId)) &&
     isProcessLockClaim(r.claim) &&
     validSession(r.piSessionId) &&
+    (r.piSessionFile === undefined ||
+      (typeof r.piSessionFile === "string" && r.piSessionFile.length > 0)) &&
     validNativeIdentity(r.paneId) &&
     validNativeIdentity(r.tabId) &&
     validNativeIdentity(r.workspaceId) &&
@@ -1537,6 +1606,7 @@ export function sameManagerDescriptor(
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
+    actual.piSessionFile === expected.piSessionFile &&
     actual.paneId === expected.paneId &&
     actual.tabId === expected.tabId &&
     actual.workspaceId === expected.workspaceId &&
@@ -1643,6 +1713,9 @@ export function claimManagerLease(
   if (
     !identity ||
     !validSession(identity.piSessionId) ||
+    (identity.piSessionFile !== undefined &&
+      (typeof identity.piSessionFile !== "string" ||
+        !identity.piSessionFile)) ||
     !validNativeIdentity(identity.paneId) ||
     !validNativeIdentity(identity.tabId) ||
     !validNativeIdentity(identity.workspaceId) ||
@@ -1662,6 +1735,9 @@ export function claimManagerLease(
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
+    ...(identity.piSessionFile !== undefined
+      ? { piSessionFile: identity.piSessionFile }
+      : {}),
     paneId: identity.paneId,
     tabId: identity.tabId,
     workspaceId: identity.workspaceId,
@@ -1707,14 +1783,14 @@ export const PROJECT_ASSIGNMENT_MAX_BYTES = 16 * 1024;
 
 export function projectAssignmentPath(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
+  repoKey: string,
   branch: string,
 ): string {
-  if (!validNativeIdentity(primaryWorkspaceId) || !validNativeIdentity(branch))
+  if (!validNativeIdentity(repoKey) || !validNativeIdentity(branch))
     throw new Error("Invalid project assignment identity");
   return join(
     runtime.assignments,
-    createHash("sha256").update(primaryWorkspaceId).digest("hex"),
+    createHash("sha256").update(repoKey).digest("hex"),
     `${createHash("sha256").update(branch).digest("hex")}.json`,
   );
 }
@@ -1737,9 +1813,8 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
 
 export function writeProjectAssignment(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
   assignment: ProjectAssignment,
-): string {
+): void {
   if (!validProjectAssignment(assignment))
     throw new Error("Invalid project assignment");
   const content = `${JSON.stringify(assignment)}\n`;
@@ -1747,7 +1822,7 @@ export function writeProjectAssignment(
     throw new Error("Project assignment is too large");
   const path = projectAssignmentPath(
     runtime,
-    primaryWorkspaceId,
+    assignment.repoKey,
     assignment.branch,
   );
   const directory = dirname(path);
@@ -1766,7 +1841,6 @@ export function writeProjectAssignment(
     renameSync(temporary, path);
     chmodSync(path, 0o600);
     fsyncDirectory(directory);
-    return path;
   } finally {
     if (fd !== undefined) closeSync(fd);
     try {
@@ -1779,15 +1853,16 @@ export function writeProjectAssignment(
 
 export function readProjectAssignment(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
+  repoKey: string,
   branch: string,
 ): ProjectAssignment | undefined {
-  const path = projectAssignmentPath(runtime, primaryWorkspaceId, branch);
-  return readProjectAssignmentFile(path, branch);
+  const path = projectAssignmentPath(runtime, repoKey, branch);
+  return readProjectAssignmentFile(path, repoKey, branch);
 }
 
 function readProjectAssignmentFile(
   path: string,
+  repoKey: string,
   branch?: string,
 ): ProjectAssignment | undefined {
   let value: unknown;
@@ -1808,6 +1883,9 @@ function readProjectAssignmentFile(
   if (!validProjectAssignment(value))
     throw projectAssignmentReadError(path, "invalid assignment schema");
   if (
+    value.repoKey !== repoKey ||
+    basename(dirname(path)) !==
+      createHash("sha256").update(repoKey).digest("hex") ||
     (branch !== undefined && value.branch !== branch) ||
     basename(path) !==
       `${createHash("sha256").update(value.branch).digest("hex")}.json`
@@ -1829,11 +1907,9 @@ function projectAssignmentReadError(path: string, reason: string): Error {
 
 export function listProjectAssignments(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
+  repoKey: string,
 ): ProjectAssignment[] {
-  const directory = dirname(
-    projectAssignmentPath(runtime, primaryWorkspaceId, "lookup"),
-  );
+  const directory = dirname(projectAssignmentPath(runtime, repoKey, "lookup"));
   let entries: string[];
   try {
     entries = readdirSync(directory);
@@ -1844,7 +1920,10 @@ export function listProjectAssignments(
   return entries
     .filter((entry) => /^[a-f0-9]{64}\.json$/.test(entry))
     .map((entry) => {
-      const assignment = readProjectAssignmentFile(join(directory, entry));
+      const assignment = readProjectAssignmentFile(
+        join(directory, entry),
+        repoKey,
+      );
       if (!assignment)
         throw projectAssignmentReadError(
           join(directory, entry),
@@ -1857,25 +1936,20 @@ export function listProjectAssignments(
 
 export function findProjectAssignmentBySession(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
   repoKey: string,
   sessionId: string,
-): ProjectAssignment | undefined {
-  const matches = listProjectAssignments(runtime, primaryWorkspaceId).filter(
-    (assignment) =>
-      assignment.repoKey === repoKey && assignment.id === sessionId,
+): ProjectAssignment[] {
+  return listProjectAssignments(runtime, repoKey).filter(
+    (assignment) => assignment.id === sessionId,
   );
-  if (matches.length > 1)
-    throw new Error(`Multiple project assignments claim session ${sessionId}`);
-  return matches[0];
 }
 
 export function removeProjectAssignment(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
+  repoKey: string,
   branch: string,
 ): void {
-  const path = projectAssignmentPath(runtime, primaryWorkspaceId, branch);
+  const path = projectAssignmentPath(runtime, repoKey, branch);
   try {
     unlinkSync(path);
     fsyncDirectory(dirname(path));
@@ -1972,8 +2046,15 @@ export type SupervisionSnapshot = {
   leads: SupervisedLead[];
   project?: string;
   work?: ProjectWorkSnapshot[];
+  openWorkspaces?: readonly OpenProjectWorkspace[];
   diagnostics?: string[];
 };
+export type OpenProjectWorkspace = Readonly<{
+  workspaceId: string;
+  branch?: string;
+  path: string;
+  linked: boolean;
+}>;
 export type ProjectWorkStatus = "active" | "paused" | "finished" | "conflict";
 export type ProjectWorkSnapshot = Readonly<{
   branch: string;
@@ -1981,7 +2062,6 @@ export type ProjectWorkSnapshot = Readonly<{
   status: ProjectWorkStatus;
   runtimeState?: RuntimeState;
   task?: string;
-  result?: string;
   issue?: string;
 }>;
 /** Derive work from one caller-validated Lead inventory and one Herdr worktree list. */
@@ -1995,19 +2075,19 @@ export function projectWorkSnapshot(options: {
     SupervisedLead,
     "lead" | "workspaceId" | "runtimeState"
   >[];
-  /** Canonical result refs keyed by assignment session ID. */
-  results: ReadonlyMap<string, string>;
+  /** Completed assignment session IDs backed by canonical results. */
+  finished: ReadonlySet<string>;
 }): ProjectWorkSnapshot[] {
   return options.assignments.map((assignment) => {
     const worktrees = options.worktrees.filter(
       (item) => item.branch === assignment.branch,
     );
     const exact = options.leads.filter((lead) => lead.lead === assignment.id);
-    const result = options.results.get(assignment.id);
+    const finished = options.finished.has(assignment.id);
     let status: ProjectWorkStatus;
     let runtimeState: RuntimeState | undefined;
     let issue: string | undefined;
-    if (result !== undefined) status = "finished";
+    if (finished) status = "finished";
     else if (worktrees.length > 1 || exact.length > 1) {
       status = "conflict";
       issue = "project runtime identity is ambiguous";
@@ -2051,7 +2131,6 @@ export function projectWorkSnapshot(options: {
                 : `${characters.slice(0, 159).join("")}…`,
           }
         : {}),
-      ...(result !== undefined ? { result } : {}),
       ...(issue ? { issue } : {}),
     };
   });
@@ -2276,6 +2355,8 @@ export function projectSupervision(options: {
   agents: LiveAgent[];
   managedAgents: ValidatedManagedAgentEvidence[];
   coordinationStates: LeadCoordinationState[];
+  answeredAskIds?: ReadonlySet<string>;
+  openWorkspaces?: readonly OpenProjectWorkspace[];
   supervisor?: {
     piSessionId: string;
     leaseId: string;
@@ -2340,7 +2421,8 @@ export function projectSupervision(options: {
     const actionable =
       pending &&
       options.supervisor &&
-      askMatchesSupervisor(pending, options.supervisor);
+      askMatchesSupervisor(pending, options.supervisor) &&
+      !options.answeredAskIds?.has(pending.askId);
     const runtimeState = agent.runtimeState ?? "unknown";
     const provenance =
       options.workspaceProvenance?.get(agent.workspaceId) ??
@@ -2439,7 +2521,12 @@ export function projectSupervision(options: {
       a.displayName.localeCompare(b.displayName) ||
       a.lead.localeCompare(b.lead),
   );
-  return { leads };
+  return {
+    leads,
+    ...(options.openWorkspaces
+      ? { openWorkspaces: options.openWorkspaces }
+      : {}),
+  };
 }
 
 export function serializeSupervision(snapshot: SupervisionSnapshot) {

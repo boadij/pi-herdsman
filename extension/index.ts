@@ -165,6 +165,7 @@ import {
   writeChiefAskMessage,
   chiefMessageBytes,
   COORDINATION_MESSAGE_MAX_BYTES,
+  coordinationReplyQueued,
   sessionLeadRoleState,
   type ChiefLease,
   type SessionRole,
@@ -206,6 +207,7 @@ import {
   samePeerLeadGeneration,
   writePeerLeadRecord,
   drainCoordinationInbox,
+  COORDINATION_MESSAGE_KINDS,
 } from "./supervision.ts";
 import {
   fail,
@@ -232,6 +234,7 @@ import {
   renderAgentStaleMessage,
   renderAgentLostMessage,
   renderAgentAttentionMessage,
+  renderCoordinationMessage,
   renderCoordinationCall,
   renderCoordinationResult,
   truncateModelText,
@@ -324,9 +327,9 @@ Actual implementation belongs to Leads and their Agent trees. Never control
 Agents. Messages and results from direct-report Leads terminate here; use
 supervisor_message or supervisor_ask only for your own escalation to Chief.`;
 function projectAssignmentInstruction(
-  assignment: Pick<ProjectAssignment, "id" | "text">,
+  assignment: Pick<ProjectAssignment, "text">,
 ): string {
-  return `Project assignment ${assignment.id}: ${assignment.text}\n\nWhen this work is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`;
+  return `${assignment.text}\n\nWhen this work is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`;
 }
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const STALE_AFTER_MS = 10 * 60_000;
@@ -1312,9 +1315,8 @@ function formatPersistedTranscript(entries: readonly ProjectedSessionEntry[]): {
   return { text: blocks.join("\n\n"), truncated };
 }
 
-function projectResultNotification(id: string, content: string): string {
-  const bounded = truncateTail(content, { maxBytes: 5 * 1024 }).content;
-  return `Result ref: ${resultRef(id)}\n\n${bounded}`;
+function projectResultMessage(content: string): string {
+  return truncateTail(content, { maxBytes: 5 * 1024 }).content;
 }
 
 function readCanonicalProjectResult(id: string): string | undefined {
@@ -1326,12 +1328,6 @@ function readCanonicalProjectResult(id: string): string | undefined {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-}
-
-function projectResultId(text: string): string {
-  return text.startsWith("result:")
-    ? text.slice(7)
-    : (/^Result ref: result:([0-9a-f-]{36})\n\n/.exec(text)?.[1] ?? "");
 }
 
 function readPersistedTranscript(target: PersistedTranscriptTarget): {
@@ -6581,6 +6577,13 @@ export default function (pi: ExtensionAPI): void {
   pi.registerEntryRenderer(HERD_RUN_ENTRY, (entry, _options, theme) =>
     renderHerdRunEntry(entry, theme),
   );
+  for (const kind of COORDINATION_MESSAGE_KINDS) {
+    pi.registerMessageRenderer(
+      `pi-herdsman-${kind}`,
+      (message, options, theme) =>
+        renderCoordinationMessage(kind, message, options, theme),
+    );
+  }
   pi.registerMessageRenderer(
     "pi-herdsman-stop-summary",
     (message, _options, theme) => renderStopSummary(message, theme),
@@ -7486,13 +7489,22 @@ export default function (pi: ExtensionAPI): void {
     }
     persistLeadCoordination();
   };
-  const messageDelivered = (ctx: ExtensionContext, id: string): boolean =>
+  const messageDelivered = (
+    ctx: ExtensionContext,
+    record: ChiefMessageRecord,
+  ): boolean =>
+    record.toSessionId === ctx.sessionManager.getSessionId() &&
     ctx.sessionManager
-      .getEntries()
+      .getBranch()
       .some(
         (entry: any) =>
-          entry?.customType?.startsWith?.("pi-herdsman-") &&
-          entry?.details?.id === id,
+          entry?.customType === `pi-herdsman-${record.kind}` &&
+          entry?.details?.id === record.id &&
+          entry?.details?.leaseId === record.leaseId &&
+          entry?.details?.fromSessionId === record.fromSessionId &&
+          entry?.details?.leadSessionId === record.leadSessionId &&
+          entry?.details?.askId === record.askId &&
+          entry?.details?.branch === record.branch,
       );
   const assertCurrentLeadCoordination = (ctx: ExtensionContext): void => {
     if (!leadCoordinationHealthy) {
@@ -7551,9 +7563,8 @@ export default function (pi: ExtensionAPI): void {
       scope = await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
     } catch (error) {
       if (
-        String(error).includes(
-          "Workspace is not part of a Herdr Git worktree group",
-        )
+        error instanceof OperationError &&
+        error.detail.details?.herdrCode === "not_git_worktree"
       )
         return undefined;
       throw error;
@@ -7641,9 +7652,14 @@ export default function (pi: ExtensionAPI): void {
     descriptor: ChiefDescriptor,
   ): Promise<any | undefined> => {
     const inventory = (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents;
+    const expected = expectedSession(
+      descriptor.piSessionId,
+      descriptor.piSessionFile,
+    );
     const matches = inventory.filter(
       (agent: any) =>
-        isPiAgent(agent) && herdrSessionId(agent) === descriptor.piSessionId,
+        isPiAgent(agent) &&
+        matchesExpectedSession(agent.agent_session, expected),
     );
     if (
       matches.length !== 1 ||
@@ -7665,7 +7681,10 @@ export default function (pi: ExtensionAPI): void {
         { signal: ctx.signal },
       );
       const alias = result?.agent;
-      if (!isPiAgent(alias) || herdrSessionId(alias) !== descriptor.piSessionId)
+      if (
+        !isPiAgent(alias) ||
+        !matchesExpectedSession(alias.agent_session, expected)
+      )
         return undefined;
     } catch {
       // A failed alias lookup is not identity proof.
@@ -7889,11 +7908,10 @@ export default function (pi: ExtensionAPI): void {
             ctx.signal,
           );
         } catch (error) {
-          if (
-            !String(error).includes(
-              "Workspace is not part of a Herdr Git worktree group",
-            )
-          )
+          if (!(
+            error instanceof OperationError &&
+            error.detail.details?.herdrCode === "not_git_worktree"
+          ))
             throw error;
         }
         if (managerClaimsScope(scope)) return false;
@@ -7971,19 +7989,20 @@ export default function (pi: ExtensionAPI): void {
       )
         return false;
       if (record.kind === "report_result") {
-        const id = projectResultId(record.text);
-        const assignment = listProjectAssignments(
+        const assignment = readProjectAssignment(
           supervisionRuntime(),
-          manager.workspaceId,
-        ).find((item) => item.id === id);
+          manager.repoKey,
+          record.branch!,
+        );
         if (
           !assignment ||
           assignment.repoKey !== manager.repoKey ||
-          assignment.id !== record.fromSessionId
+          assignment.id !== record.fromSessionId ||
+          assignment.id !== record.leadSessionId
         )
           return false;
         try {
-          return statSync(canonicalResultPath(id)).isFile();
+          return statSync(canonicalResultPath(assignment.id)).isFile();
         } catch {
           return false;
         }
@@ -8046,10 +8065,11 @@ export default function (pi: ExtensionAPI): void {
         return projectAssignmentAuthorized(false, "workspace_scope_mismatch");
       const matches = listProjectAssignments(
         supervisionRuntime(),
-        scope.primaryWorkspaceId,
+        scope.repoKey,
       ).filter(
         (assignment) =>
           assignment.id === sessionId &&
+          record.branch === assignment.branch &&
           assignment.repoKey === scope.repoKey &&
           assignment.text &&
           record.text === projectAssignmentInstruction(assignment),
@@ -8304,6 +8324,7 @@ export default function (pi: ExtensionAPI): void {
       string,
       {
         id: string;
+        record: ChiefMessageRecord;
         generation: number;
         sessionId: string;
         instanceId: string;
@@ -8345,7 +8366,10 @@ export default function (pi: ExtensionAPI): void {
           managerDiagnostic("inbox_catch", { category: "cleanup" });
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         },
-        isDelivered: (id: string) => messageDelivered(ctx, id),
+        isDelivered: (id: string) => {
+          const record = transactions.get(id)?.record;
+          return record ? messageDelivered(ctx, record) : false;
+        },
         isAuthorized: async (record: ChiefMessageRecord) => {
           if (record.kind === "peer_message")
             return authorizePeerRecord(record, ctx);
@@ -8387,6 +8411,10 @@ export default function (pi: ExtensionAPI): void {
           const projectAssignment =
             (message as any)?.customType === "pi-herdsman-project_assignment";
           try {
+            if (!ctx.isIdle())
+              throw new Error(
+                "Coordination delivery deferred while recipient is active",
+              );
             const result = await pi.sendMessage(message, options);
             if (projectAssignment)
               managerDiagnostic("project_assignment_send", {
@@ -8434,8 +8462,14 @@ export default function (pi: ExtensionAPI): void {
           },
         },
         accepted: async (record: ChiefMessageRecord) => {
-          const transaction = transactions.get(record.id);
-          void transaction;
+          if (
+            activeRole() === "manager" &&
+            record.kind === "report_result" &&
+            !messageDelivered(ctx, record)
+          )
+            throw new Error(
+              "Manager result notification is not durably delivered",
+            );
           if (
             activeRole() === "manager" &&
             record.kind === "report_result" &&
@@ -8446,24 +8480,23 @@ export default function (pi: ExtensionAPI): void {
               managerLease.descriptor.leaseId
             )
               throw new Error("Manager lease changed during result delivery");
-            const assignmentId = projectResultId(record.text);
-            if (!assignmentId)
-              throw new Error(
-                "Manager result notification has no assignment ref",
-              );
-            const assignment = findProjectAssignmentBySession(
+            const assignment = readProjectAssignment(
               supervisionRuntime(),
-              managerLease.descriptor.workspaceId,
               managerLease.descriptor.repoKey,
-              assignmentId,
+              record.branch!,
             );
-            if (!assignment)
+            if (
+              !assignment ||
+              assignment.repoKey !== managerLease.descriptor.repoKey ||
+              assignment.id !== record.fromSessionId ||
+              assignment.id !== record.leadSessionId
+            )
               throw new Error(
-                "Manager result notification no longer has a matching project assignment",
+                "Manager result notification no longer matches project work",
               );
             removeProjectAssignment(
               supervisionRuntime(),
-              managerLease.descriptor.workspaceId,
+              managerLease.descriptor.repoKey,
               assignment.branch,
             );
             return;
@@ -8509,6 +8542,7 @@ export default function (pi: ExtensionAPI): void {
         });
         return count;
       };
+      if (!ctx.isIdle()) return complete(0);
       const held = chiefStartPreflightHeld(ctx);
       managerDiagnostic("inbox_preflight", { reason: held ? "held" : "pass" });
       if (held) return complete(0);
@@ -8651,9 +8685,8 @@ export default function (pi: ExtensionAPI): void {
       scope = await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
     } catch (error) {
       if (
-        String(error).includes(
-          "Workspace is not part of a Herdr Git worktree group",
-        )
+        error instanceof OperationError &&
+        error.detail.details?.herdrCode === "not_git_worktree"
       ) {
         persistRole("lead");
         return;
@@ -8669,6 +8702,7 @@ export default function (pi: ExtensionAPI): void {
     try {
       managerLease = claimManagerLease({
         piSessionId: ctx.sessionManager.getSessionId(),
+        piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
         tabId,
         workspaceId,
@@ -8684,7 +8718,6 @@ export default function (pi: ExtensionAPI): void {
       );
       return;
     }
-    registerSupervisionTool?.();
   };
   const activateManager = async (
     ctx: ExtensionCommandContext,
@@ -8710,6 +8743,7 @@ export default function (pi: ExtensionAPI): void {
     try {
       lease = claimManagerLease({
         piSessionId: ctx.sessionManager.getSessionId(),
+        piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
         tabId,
         workspaceId,
@@ -8728,7 +8762,8 @@ export default function (pi: ExtensionAPI): void {
       persistRole("manager");
       if (!persistCoordinatorState())
         throw new Error("Manager coordination state could not be persisted");
-      registerSupervisionTool?.();
+      if (!(await remoteChiefAgent(ctx, lease.descriptor)))
+        throw new Error("Manager could not be verified in Herdr");
       reconcileRoleTools();
       clearNormalUI?.();
       startSupervisionUI?.(ctx);
@@ -8746,6 +8781,7 @@ export default function (pi: ExtensionAPI): void {
       try {
         persistRole("lead");
       } catch {}
+      persistLeadCoordination();
       reconcileRoleTools();
       clearSupervisionUI?.();
       startNormalUI?.(ctx);
@@ -8852,9 +8888,7 @@ export default function (pi: ExtensionAPI): void {
     await publishLeadRole(ctx, "inactive", chiefModeGeneration);
     return "Manager mode left.";
   };
-  let supervisionToolRegistered = false;
   let chiefActivationRollback = false;
-  let registerSupervisionTool: (() => void) | undefined;
   const activateChief = async (
     ctx: ExtensionCommandContext,
     resumed = false,
@@ -8876,6 +8910,7 @@ export default function (pi: ExtensionAPI): void {
     try {
       lease = claimChiefLease({
         piSessionId: sessionId,
+        piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
         tabId,
         workspaceId,
@@ -8914,10 +8949,7 @@ export default function (pi: ExtensionAPI): void {
     }
     let enteredChief = false;
     try {
-      // Capture this before lazy registration: a host registerTool() may
-      // auto-activate its tool and may throw after doing so.
       if (!resumed) leadTools = normalizeLeadTools(pi.getActiveTools());
-      registerSupervisionTool?.();
       try {
         unlinkSync(leadCoordinationStatePath(supervisionRuntime(), sessionId));
       } catch (error) {
@@ -9254,11 +9286,10 @@ export default function (pi: ExtensionAPI): void {
                 ctx.signal,
               );
             } catch (error) {
-              if (
-                !String(error).includes(
-                  "Workspace is not part of a Herdr Git worktree group",
-                )
-              )
+              if (!(
+                error instanceof OperationError &&
+                error.detail.details?.herdrCode === "not_git_worktree"
+              ))
                 throw error;
             }
             if (managerClaimsScope(scope)) continue;
@@ -9328,9 +9359,8 @@ export default function (pi: ExtensionAPI): void {
         if (activeRole() === "manager" && "repoKey" in chief) {
           for (const assignment of listProjectAssignments(
             supervisionRuntime(),
-            chief.workspaceId,
+            chief.repoKey,
           )) {
-            if (assignment.repoKey !== chief.repoKey) continue;
             const result = readCanonicalProjectResult(assignment.id);
             if (result === undefined) continue;
             const alreadyQueued = listChiefMessagePaths(
@@ -9341,10 +9371,10 @@ export default function (pi: ExtensionAPI): void {
                 const record = readChiefMessage(path);
                 return (
                   record.kind === "report_result" &&
-                  (record.text === resultRef(assignment.id) ||
-                    record.text.startsWith(
-                      `Result ref: ${resultRef(assignment.id)}\n\n`,
-                    )) &&
+                  record.branch === assignment.branch &&
+                  record.fromSessionId === assignment.id &&
+                  record.leadSessionId === assignment.id &&
+                  record.toSessionId === chief.piSessionId &&
                   record.leaseId === chief.leaseId
                 );
               } catch {
@@ -9363,7 +9393,8 @@ export default function (pi: ExtensionAPI): void {
                 fromSessionId: assignment.id,
                 toSessionId: chief.piSessionId,
                 leadSessionId: assignment.id,
-                text: projectResultNotification(assignment.id, result),
+                branch: assignment.branch,
+                text: projectResultMessage(result),
                 createdAt: Date.now(),
               });
           }
@@ -9413,20 +9444,36 @@ export default function (pi: ExtensionAPI): void {
           throw new Error("Herdr worktree topology is not authoritative");
         const assignments = listProjectAssignments(
           supervisionRuntime(),
-          group.primaryWorkspaceId,
-        ).filter((item) => item.repoKey === group.repoKey);
-        const results = new Map<string, string>();
+          group.repoKey,
+        );
+        const openWorkspaces = topology.worktrees.flatMap((worktree: any) =>
+          typeof worktree?.open_workspace_id === "string" &&
+          worktree.open_workspace_id
+            ? [
+                {
+                  workspaceId: worktree.open_workspace_id,
+                  ...(typeof worktree.branch === "string" && worktree.branch
+                    ? { branch: worktree.branch }
+                    : {}),
+                  path: String(worktree.path ?? ""),
+                  linked: worktree.is_linked_worktree === true,
+                },
+              ]
+            : [],
+        );
+        const finished = new Set<string>();
         for (const item of assignments)
           if (readCanonicalProjectResult(item.id) !== undefined)
-            results.set(item.id, resultRef(item.id));
+            finished.add(item.id);
         return {
           project: group.repoName,
           work: projectWorkSnapshot({
             assignments,
             worktrees: topology.worktrees,
             leads,
-            results,
+            finished,
           }),
+          openWorkspaces,
           leads,
         };
       }
@@ -9517,28 +9564,44 @@ export default function (pi: ExtensionAPI): void {
           throw error;
         }
       });
+      const supervisor =
+        activeRole() === "manager" && managerLease
+          ? {
+              piSessionId: managerLease.descriptor.piSessionId,
+              leaseId: managerLease.descriptor.leaseId,
+              role: "manager" as const,
+            }
+          : currentChief()
+            ? {
+                piSessionId: currentChief()!.piSessionId,
+                leaseId: currentChief()!.leaseId,
+                role: "chief" as const,
+              }
+            : undefined;
+      const answeredAskIds = new Set<string>();
+      if (supervisor)
+        for (const state of coordinationStates) {
+          const pendingAsk = state.pendingAsk;
+          if (
+            pendingAsk &&
+            askMatchesSupervisor(pendingAsk, supervisor) &&
+            coordinationReplyQueued(
+              supervisionRuntime(),
+              state.piSessionId,
+              state.piSessionId,
+              pendingAsk.askId,
+              supervisor,
+            )
+          )
+            answeredAskIds.add(pendingAsk.askId);
+        }
       return {
         ...projectSupervision({
           agents,
           managedAgents: agentEvidence,
           coordinationStates,
-          ...(activeRole() === "manager" && managerLease
-            ? {
-                supervisor: {
-                  piSessionId: managerLease.descriptor.piSessionId,
-                  leaseId: managerLease.descriptor.leaseId,
-                  role: "manager" as const,
-                },
-              }
-            : currentChief()
-              ? {
-                  supervisor: {
-                    piSessionId: currentChief()!.piSessionId,
-                    leaseId: currentChief()!.leaseId,
-                    role: "chief" as const,
-                  },
-                }
-              : {}),
+          ...(supervisor ? { supervisor } : {}),
+          answeredAskIds,
           workspaceProvenance,
           excludedSessionIds: new Set([
             ...listManagerDescriptors(supervisionRuntime()).map(
@@ -9786,18 +9849,20 @@ export default function (pi: ExtensionAPI): void {
         manager.workspaceId,
         signal,
       );
-      const assignment = findProjectAssignmentBySession(
+      const assignments = findProjectAssignmentBySession(
         supervisionRuntime(),
-        manager.workspaceId,
         manager.repoKey,
         session,
       );
+      if (assignments.length > 1)
+        throw new Error("Multiple project assignments match the Lead session");
+      const assignment = assignments[0];
       const close = async () => {
         if (
           assignment &&
           readProjectAssignment(
             supervisionRuntime(),
-            manager.workspaceId,
+            manager.repoKey,
             assignment.branch,
           )?.branch !== assignment.branch
         )
@@ -9826,7 +9891,7 @@ export default function (pi: ExtensionAPI): void {
       };
       return assignment
         ? withProjectDelegationLock(
-            `${manager.workspaceId}\0${assignment.branch}`,
+            `${manager.repoKey}\0${assignment.branch}`,
             close,
           )
         : close();
@@ -9844,7 +9909,7 @@ export default function (pi: ExtensionAPI): void {
       )
         throw new Error("Manager lease is no longer active");
       return withProjectDelegationLock(
-        `${manager.workspaceId}\0${branch}`,
+        `${manager.repoKey}\0${branch}`,
         async () => {
           const scope = await worktreeGroupScope(
             pi,
@@ -9854,14 +9919,14 @@ export default function (pi: ExtensionAPI): void {
           );
           const assignment = readProjectAssignment(
             supervisionRuntime(),
-            manager.workspaceId,
+            manager.repoKey,
             branch,
           );
           if (!assignment || assignment.repoKey !== manager.repoKey)
             throw new Error(`Project assignment was not found on ${branch}`);
           if (readCanonicalProjectResult(assignment.id) !== undefined)
             throw new Error(
-              `Work on ${branch} already has durable result ${resultRef(assignment.id)}; settle it instead of discarding it.`,
+              `Work on ${branch} already has a durable result; settle it instead of discarding it.`,
             );
           const topology = await runHerdr(
             pi,
@@ -9960,7 +10025,7 @@ export default function (pi: ExtensionAPI): void {
             );
           removeProjectAssignment(
             supervisionRuntime(),
-            manager.workspaceId,
+            manager.repoKey,
             assignment.branch,
           );
           return {
@@ -9982,11 +10047,12 @@ export default function (pi: ExtensionAPI): void {
     ) => {
       if (!params.branch && (!params.task || !params.task.trim()))
         throw new Error("Starting new work without a branch requires task");
-      const workspaceId = managerLease?.descriptor.workspaceId;
-      if (!workspaceId) throw new Error("Manager lease is no longer active");
+      const repoKey = managerLease?.descriptor.repoKey;
+      if (!repoKey) throw new Error("Manager lease is no longer active");
       const freshId = randomUUID();
-      const branch = params.branch ?? `herdsman/${freshId}`;
-      return withProjectDelegationLock(`${workspaceId}\0${branch}`, () =>
+      const branch =
+        params.branch ?? `herdsman/work-${randomUUID().slice(0, 8)}`;
+      return withProjectDelegationLock(`${repoKey}\0${branch}`, () =>
         delegateProjectLeadLocked({ ...params, branch }, ctx, signal, freshId),
       );
     };
@@ -10020,7 +10086,7 @@ export default function (pi: ExtensionAPI): void {
       const runtime = supervisionRuntime();
       const unresolved = readProjectAssignment(
         runtime,
-        manager.workspaceId,
+        manager.repoKey,
         params.branch,
       );
       if (unresolved && unresolved.repoKey !== manager.repoKey)
@@ -10035,7 +10101,10 @@ export default function (pi: ExtensionAPI): void {
           `No existing work was found on ${params.branch}; starting new work requires task.`,
         );
       const id = unresolved?.id ?? freshId!;
-      const branch = unresolved?.branch ?? params.branch ?? `herdsman/${id}`;
+      const branch =
+        unresolved?.branch ??
+        params.branch ??
+        `herdsman/work-${randomUUID().slice(0, 8)}`;
       if (unresolved) {
         const durableResult = readCanonicalProjectResult(unresolved.id);
         if (durableResult !== undefined) {
@@ -10044,7 +10113,7 @@ export default function (pi: ExtensionAPI): void {
             content: [
               {
                 type: "text" as const,
-                text: `Work on ${branch} is already finished; ${resultRef(id)} is awaiting settlement.`,
+                text: `Work on ${branch} is already finished and awaiting settlement.`,
               },
             ],
             details: {
@@ -10053,7 +10122,6 @@ export default function (pi: ExtensionAPI): void {
               branch,
               session: id,
               status: "finished",
-              result: resultRef(id),
             },
           };
         }
@@ -10102,6 +10170,7 @@ export default function (pi: ExtensionAPI): void {
           fromSessionId: manager.piSessionId,
           toSessionId: id,
           leadSessionId: id,
+          branch: unresolved!.branch,
           text: projectAssignmentInstruction(unresolved!),
           createdAt: Date.now(),
         });
@@ -10176,7 +10245,8 @@ export default function (pi: ExtensionAPI): void {
             fromSessionId: manager.piSessionId,
             toSessionId: "x".repeat(512),
             leadSessionId: "x".repeat(512),
-            text: projectAssignmentInstruction({ id, text: candidate }),
+            branch,
+            text: projectAssignmentInstruction({ text: candidate }),
             createdAt,
           }),
         );
@@ -10193,7 +10263,7 @@ export default function (pi: ExtensionAPI): void {
           branch,
           text,
         };
-        writeProjectAssignment(runtime, primaryWorkspaceId, assignment);
+        writeProjectAssignment(runtime, assignment);
       }
       try {
         let workspaceId: string | undefined;
@@ -10459,6 +10529,7 @@ export default function (pi: ExtensionAPI): void {
           fromSessionId: manager.piSessionId,
           toSessionId: leadSessionId,
           leadSessionId,
+          branch: assignment.branch,
           text: projectAssignmentInstruction(assignment),
           createdAt: Date.now(),
         });
@@ -10780,11 +10851,7 @@ export default function (pi: ExtensionAPI): void {
       const descriptor = readChiefDescriptor(supervisionRuntime().descriptor);
       const candidate = await remoteChiefAgent(ctx, descriptor);
       const current = readChiefDescriptor(supervisionRuntime().descriptor);
-      if (
-        !isPiAgent(candidate) ||
-        herdrSessionId(candidate) !== descriptor.piSessionId ||
-        !sameChiefDescriptor(current, descriptor)
-      )
+      if (!candidate || !sameChiefDescriptor(current, descriptor))
         throw new Error("Chief changed; reopen the command.");
       await runHerdr(pi, ctx, ["agent", "focus", candidate.pane_id], {
         signal: ctx.signal,
@@ -10951,7 +11018,10 @@ export default function (pi: ExtensionAPI): void {
                 if (!action || !isCurrentOverview()) return;
                 if (action === "focus") return focusSelected(entry.session);
                 if (action === "view")
-                  ctx.ui.notify(entry.result ?? "Result unavailable");
+                  ctx.ui.notify(
+                    readCanonicalProjectResult(entry.session) ??
+                      "Result unavailable",
+                  );
                 else if (action === "discard") {
                   if (
                     !(await ctx.ui.confirm(
@@ -12349,12 +12419,19 @@ export default function (pi: ExtensionAPI): void {
             );
             const assignment = findProjectAssignmentBySession(
               supervisionRuntime(),
-              scope.primaryWorkspaceId,
               scope.repoKey,
               ctx.sessionManager.getSessionId(),
             );
-            if (!assignment)
+            if (assignment.length !== 1)
               throw new Error("Exactly one project assignment is required");
+            const [projectAssignment] = assignment;
+            if (
+              projectAssignment.repoKey !== scope.repoKey ||
+              projectAssignment.id !== ctx.sessionManager.getSessionId()
+            )
+              throw new Error(
+                "Project assignment identity is not authoritative",
+              );
             const topology = await runHerdr(
               pi,
               ctx,
@@ -12369,9 +12446,9 @@ export default function (pi: ExtensionAPI): void {
             )
               throw new Error("Herdr worktree topology is not authoritative");
             const matches = topology.worktrees.filter(
-              (item: any) => item.branch === assignment.branch,
+              (item: any) => item.branch === projectAssignment.branch,
             );
-            const live = await liveLead(ctx, assignment.id);
+            const live = await liveLead(ctx, projectAssignment.id);
             if (
               matches.length !== 1 ||
               live.length !== 1 ||
@@ -12397,37 +12474,34 @@ export default function (pi: ExtensionAPI): void {
             );
             const currentAssignment = readProjectAssignment(
               supervisionRuntime(),
-              scope.primaryWorkspaceId,
-              assignment.branch,
+              scope.repoKey,
+              projectAssignment.branch,
             );
             if (
-              currentAssignment?.id !== assignment.id ||
-              currentAssignment.repoKey !== assignment.repoKey
+              currentAssignment?.id !== projectAssignment.id ||
+              currentAssignment.repoKey !== projectAssignment.repoKey
             )
               throw new Error(
                 "Project assignment changed before result could be saved",
               );
             const provenance = {
-              assignment: assignment.id,
+              branch: projectAssignment.branch,
               cwd: ctx.cwd,
-              piSessionId: ctx.sessionManager.getSessionId(),
-              workspaceId: live[0].workspace_id,
-              ...(assignment.branch ? { branch: assignment.branch } : {}),
             };
             const body = `Lead result source: ${JSON.stringify(provenance)}\n\n${prepared.text}`;
             const persisted = truncateModelText(body, {
               keep: "head",
-              sessionId: provenance.piSessionId,
-              key: assignment.id,
-              requestId: assignment.id,
+              sessionId: ctx.sessionManager.getSessionId(),
+              key: projectAssignment.id,
+              requestId: projectAssignment.id,
               persist: "completion",
             });
             if (
               persisted.persistenceError ||
-              persisted.resultRef !== resultRef(assignment.id)
+              persisted.resultRef !== resultRef(projectAssignment.id)
             )
               throw new Error("Canonical result could not be persisted");
-            if (!statSync(canonicalResultPath(assignment.id)).isFile())
+            if (!statSync(canonicalResultPath(projectAssignment.id)).isFile())
               throw new Error("Canonical result is unavailable");
             let queued = false;
             try {
@@ -12443,13 +12517,11 @@ export default function (pi: ExtensionAPI): void {
                   id: randomUUID(),
                   leaseId: manager.leaseId,
                   kind: "report_result",
-                  fromSessionId: assignment.id,
+                  fromSessionId: projectAssignment.id,
                   toSessionId: manager.piSessionId,
-                  leadSessionId: assignment.id,
-                  text: projectResultNotification(
-                    assignment.id,
-                    persisted.content,
-                  ),
+                  leadSessionId: projectAssignment.id,
+                  branch: projectAssignment.branch,
+                  text: projectResultMessage(persisted.content),
                   createdAt: Date.now(),
                 });
                 queued = true;
@@ -12462,15 +12534,14 @@ export default function (pi: ExtensionAPI): void {
                 {
                   type: "text",
                   text: queued
-                    ? `Result ${resultRef(assignment.id)} saved and queued for Manager.`
-                    : `Result ${resultRef(assignment.id)} saved; the next Manager will reconcile it.`,
+                    ? `Result for ${projectAssignment.branch} saved and queued for Manager.`
+                    : `Result for ${projectAssignment.branch} saved; the next Manager will reconcile it.`,
                 },
               ],
               details: {
                 ok: true,
                 action: "result",
-                branch: assignment.branch,
-                result: resultRef(assignment.id),
+                branch: projectAssignment.branch,
                 queued,
               },
             };
@@ -12616,6 +12687,7 @@ export default function (pi: ExtensionAPI): void {
       const staffTool = {
         name: "staff_message",
         label: "staff message",
+        defaultActive: false,
         exposure: "model-only",
         promptSnippet:
           "Supervise direct reports; Managers may delegate new linked-worktree Leads",
@@ -12678,6 +12750,10 @@ export default function (pi: ExtensionAPI): void {
                 : await currentManager(ctx))
             )
               throw new Error("Supervisor lease is no longer active");
+            const managerSnapshot =
+              controllerRole === "manager" && managerLease
+                ? await loadSupervisionSnapshot(ctx)
+                : undefined;
             return result({
               ok: true,
               action: "list",
@@ -12685,21 +12761,26 @@ export default function (pi: ExtensionAPI): void {
                 role: activeRole(),
                 session: ctx.sessionManager.getSessionId(),
               },
-              ...(controllerRole === "manager" && managerLease
+              ...(managerSnapshot
                 ? {
-                    work: (await loadSupervisionSnapshot(ctx)).work?.map(
-                      (item) => ({
-                        branch: item.branch,
-                        status: item.status,
-                        session: item.session,
-                        ...(item.runtimeState
-                          ? { runtime_state: item.runtimeState }
+                    work: managerSnapshot.work?.map((item) => ({
+                      branch: item.branch,
+                      status: item.status,
+                      ...(item.runtimeState
+                        ? { runtime_state: item.runtimeState }
+                        : {}),
+                      ...(item.task ? { task: item.task } : {}),
+                      ...(item.issue ? { issue: item.issue } : {}),
+                    })),
+                    open_workspaces:
+                      managerSnapshot.openWorkspaces?.map((workspace) => ({
+                        workspace: workspace.workspaceId,
+                        ...(workspace.branch
+                          ? { branch: workspace.branch }
                           : {}),
-                        ...(item.task ? { task: item.task } : {}),
-                        ...(item.result ? { result: item.result } : {}),
-                        ...(item.issue ? { issue: item.issue } : {}),
-                      }),
-                    ),
+                        path: workspace.path,
+                        linked: workspace.linked,
+                      })) ?? [],
                   }
                 : {}),
               reports: reports.map((report: any) => ({
@@ -12983,258 +13064,222 @@ export default function (pi: ExtensionAPI): void {
             context,
           ),
       };
-      registerSupervisionTool = () => {
-        if (supervisionToolRegistered) return;
-        const activeTools = pi.getActiveTools();
-        try {
-          pi.registerTool({
-            ...staffTool,
-            name: "staff_list",
-            label: "staff_list",
-            description: "List direct-report supervision state.",
-            parameters: emptyParameters,
-            promptSnippet: undefined,
-            constrainedSampling: { type: "json_schema", strict: "prefer" },
-            execute: (
-              id: string,
-              _p: unknown,
-              signal: AbortSignal | undefined,
-              update: unknown,
-              ctx: ExtensionContext,
-            ) => staffTool.execute(id, { action: "list" }, signal, update, ctx),
-            renderCall: (a: unknown, t: any, c: any) =>
-              renderCoordinationCall("staff", "list", a, t, c),
-            renderResult: (r: any, o: any, t: any, c: any) =>
-              renderCoordinationResult("staff", "list", r, o, t, c),
-          });
-          pi.registerTool({
-            ...staffTool,
-            name: "staff_inspect",
-            label: "staff inspect",
-            description:
-              "Read bounded live terminal/process evidence for a direct report.",
-            parameters: staffTargetParameters,
-            promptSnippet: undefined,
-            constrainedSampling: { type: "json_schema", strict: "prefer" },
-            execute: (
-              id: string,
-              p: any,
-              signal: AbortSignal | undefined,
-              update: unknown,
-              ctx: ExtensionContext,
-            ) =>
-              staffTool.execute(
-                id,
-                { action: "inspect", session: p.session },
-                signal,
-                update,
-                ctx,
-              ),
-            renderCall: (a: unknown, t: any, c: any) =>
-              renderCoordinationCall("staff", "inspect", a, t, c),
-            renderResult: (r: any, o: any, t: any, c: any) =>
-              renderCoordinationResult("staff", "inspect", r, o, t, c),
-          });
-          pi.registerTool({
-            ...staffTool,
-            name: "staff_transcript",
-            label: "staff transcript",
-            description:
-              "Read bounded persisted Pi conversation/tool evidence for a direct report.",
-            parameters: staffTargetParameters,
-            promptSnippet: undefined,
-            constrainedSampling: { type: "json_schema", strict: "prefer" },
-            execute: (
-              id: string,
-              p: any,
-              signal: AbortSignal | undefined,
-              update: unknown,
-              ctx: ExtensionContext,
-            ) =>
-              staffTool.execute(
-                id,
-                { action: "transcript", session: p.session },
-                signal,
-                update,
-                ctx,
-              ),
-            renderCall: (a: unknown, t: any, c: any) =>
-              renderCoordinationCall("staff", "transcript", a, t, c),
-            renderResult: (r: any, o: any, t: any, c: any) =>
-              renderCoordinationResult("staff", "transcript", r, o, t, c),
-          });
-          pi.registerTool({
-            ...staffTool,
-            name: "staff_message",
-            label: "staff message",
-            description: "Send a durable follow-up message to a direct report.",
-            parameters: staffMessageParameters,
-            promptSnippet: undefined,
-            constrainedSampling: { type: "json_schema", strict: "prefer" },
-            execute: (
-              id: string,
-              p: any,
-              signal: AbortSignal | undefined,
-              update: unknown,
-              ctx: ExtensionContext,
-            ) =>
-              staffTool.execute(
-                id,
-                { action: "message", ...p },
-                signal,
-                update,
-                ctx,
-              ),
-            renderCall: (a: unknown, t: any, c: any) =>
-              renderCoordinationCall("staff", "message", a, t, c),
-            renderResult: (r: any, o: any, t: any, c: any) =>
-              renderCoordinationResult("staff", "message", r, o, t, c),
-          });
-          pi.registerTool({
-            ...staffTool,
-            name: "staff_reply",
-            label: "staff reply",
-            description: "Answer the exact pending ask from a direct report.",
-            parameters: staffReplyParameters,
-            promptSnippet: undefined,
-            constrainedSampling: { type: "json_schema", strict: "prefer" },
-            execute: (
-              id: string,
-              p: any,
-              signal: AbortSignal | undefined,
-              update: unknown,
-              ctx: ExtensionContext,
-            ) =>
-              staffTool.execute(
-                id,
-                { action: "reply", ...p },
-                signal,
-                update,
-                ctx,
-              ),
-            renderCall: (a: unknown, t: any, c: any) =>
-              renderCoordinationCall("staff", "reply", a, t, c),
-            renderResult: (r: any, o: any, t: any, c: any) =>
-              renderCoordinationResult("staff", "reply", r, o, t, c),
-          });
-          pi.registerTool({
-            ...staffTool,
-            name: "staff_delegate",
-            label: "staff delegate",
-            description:
-              "Start new project work or resume existing work by Git branch. Reuses an unoccupied Herdr worktree when available.",
-            parameters: staffDelegateParameters,
-            promptSnippet: undefined,
-            constrainedSampling: { type: "json_schema", strict: "prefer" },
-            execute: (
-              id: string,
-              p: any,
-              signal: AbortSignal | undefined,
-              update: unknown,
-              ctx: ExtensionContext,
-            ) =>
-              staffTool.execute(
-                id,
-                { action: "delegate", ...p },
-                signal,
-                update,
-                ctx,
-              ),
-            renderCall: (a: unknown, t: any, c: any) =>
-              renderCoordinationCall("staff", "delegate", a, t, c),
-            renderResult: (r: any, o: any, t: any, c: any) =>
-              renderCoordinationResult("staff", "delegate", r, o, t, c),
-          });
-          pi.registerTool({
-            ...staffTool,
-            name: "staff_close",
-            label: "staff close",
-            description:
-              "Stop an exact direct Lead and its owned execution tree while preserving project work, Pi session, branch, and worktree.",
-            parameters: staffTargetParameters,
-            promptSnippet: undefined,
-            constrainedSampling: { type: "json_schema", strict: "prefer" },
-            execute: (
-              id: string,
-              p: any,
-              signal: AbortSignal | undefined,
-              update: unknown,
-              ctx: ExtensionContext,
-            ) =>
-              staffTool.execute(
-                id,
-                { action: "close", session: p.session },
-                signal,
-                update,
-                ctx,
-              ),
-            renderCall: (a: unknown, t: any, c: any) =>
-              renderCoordinationCall("staff", "close", a, t, c),
-            renderResult: (r: any, o: any, t: any, c: any) =>
-              renderCoordinationResult("staff", "close", r, o, t, c),
-          });
-          pi.registerTool({
-            ...staffTool,
-            name: "staff_discard",
-            label: "staff discard",
-            description:
-              "Abandon project work by branch, stopping its executor and removing the assignment while preserving Git branch and worktree.",
-            parameters: staffDiscardParameters,
-            promptSnippet: undefined,
-            constrainedSampling: { type: "json_schema", strict: "prefer" },
-            execute: (
-              id: string,
-              p: any,
-              signal: AbortSignal | undefined,
-              update: unknown,
-              ctx: ExtensionContext,
-            ) =>
-              staffTool.execute(
-                id,
-                { action: "discard", branch: p.branch },
-                signal,
-                update,
-                ctx,
-              ),
-            renderCall: (a: unknown, t: any, c: any) =>
-              renderCoordinationCall("staff", "discard", a, t, c),
-            renderResult: (r: any, o: any, t: any, c: any) =>
-              renderCoordinationResult("staff", "discard", r, o, t, c),
-          });
-        } finally {
-          try {
-            pi.setActiveTools(activeTools);
-          } catch (restoreError) {
-            try {
-              pi.setActiveTools(activeTools);
-            } catch (retryError) {
-              if (leadContext)
-                appendDurableError(
-                  pi,
-                  leadContext,
-                  "pi-herdsman_role_error",
-                  retryError,
-                );
-              try {
-                pi.setActiveTools(
-                  activeTools.filter((name) => !ownedTools.has(name)),
-                );
-              } catch (failClosedError) {
-                if (leadContext)
-                  appendDurableError(
-                    pi,
-                    leadContext,
-                    "pi-herdsman_role_error",
-                    failClosedError,
-                  );
-              }
-            }
-            throw restoreError;
-          }
-        }
-        supervisionToolRegistered = true;
-        registerSupervisionTool = undefined;
-      };
+      {
+        pi.registerTool({
+          ...staffTool,
+          name: "staff_list",
+          label: "staff_list",
+          description: "List direct-report supervision state.",
+          parameters: emptyParameters,
+          promptSnippet: undefined,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: (
+            id: string,
+            _p: unknown,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) => staffTool.execute(id, { action: "list" }, signal, update, ctx),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "list", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "list", r, o, t, c),
+        });
+        pi.registerTool({
+          ...staffTool,
+          name: "staff_inspect",
+          label: "staff inspect",
+          description:
+            "Read bounded live terminal/process evidence for a direct report.",
+          parameters: staffTargetParameters,
+          promptSnippet: undefined,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: (
+            id: string,
+            p: any,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) =>
+            staffTool.execute(
+              id,
+              { action: "inspect", session: p.session },
+              signal,
+              update,
+              ctx,
+            ),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "inspect", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "inspect", r, o, t, c),
+        });
+        pi.registerTool({
+          ...staffTool,
+          name: "staff_transcript",
+          label: "staff transcript",
+          description:
+            "Read bounded persisted Pi conversation/tool evidence for a direct report.",
+          parameters: staffTargetParameters,
+          promptSnippet: undefined,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: (
+            id: string,
+            p: any,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) =>
+            staffTool.execute(
+              id,
+              { action: "transcript", session: p.session },
+              signal,
+              update,
+              ctx,
+            ),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "transcript", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "transcript", r, o, t, c),
+        });
+        pi.registerTool({
+          ...staffTool,
+          name: "staff_message",
+          label: "staff message",
+          description: "Send a durable follow-up message to a direct report.",
+          parameters: staffMessageParameters,
+          promptSnippet: undefined,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: (
+            id: string,
+            p: any,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) =>
+            staffTool.execute(
+              id,
+              { action: "message", ...p },
+              signal,
+              update,
+              ctx,
+            ),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "message", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "message", r, o, t, c),
+        });
+        pi.registerTool({
+          ...staffTool,
+          name: "staff_reply",
+          label: "staff reply",
+          description: "Answer the exact pending ask from a direct report.",
+          parameters: staffReplyParameters,
+          promptSnippet: undefined,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: (
+            id: string,
+            p: any,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) =>
+            staffTool.execute(
+              id,
+              { action: "reply", ...p },
+              signal,
+              update,
+              ctx,
+            ),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "reply", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "reply", r, o, t, c),
+        });
+        pi.registerTool({
+          ...staffTool,
+          name: "staff_delegate",
+          label: "staff delegate",
+          description:
+            "Start new project work or resume existing work by Git branch. Reuses an unoccupied Herdr worktree when available.",
+          parameters: staffDelegateParameters,
+          promptSnippet: undefined,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: (
+            id: string,
+            p: any,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) =>
+            staffTool.execute(
+              id,
+              { action: "delegate", ...p },
+              signal,
+              update,
+              ctx,
+            ),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "delegate", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "delegate", r, o, t, c),
+        });
+        pi.registerTool({
+          ...staffTool,
+          name: "staff_close",
+          label: "staff close",
+          description:
+            "Stop an exact direct Lead and its owned execution tree while preserving project work, Pi session, branch, and worktree.",
+          parameters: staffTargetParameters,
+          promptSnippet: undefined,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: (
+            id: string,
+            p: any,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) =>
+            staffTool.execute(
+              id,
+              { action: "close", session: p.session },
+              signal,
+              update,
+              ctx,
+            ),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "close", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "close", r, o, t, c),
+        });
+        pi.registerTool({
+          ...staffTool,
+          name: "staff_discard",
+          label: "staff discard",
+          description:
+            "Abandon project work by branch, stopping its executor and removing the assignment while preserving Git branch and worktree.",
+          parameters: staffDiscardParameters,
+          promptSnippet: undefined,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: (
+            id: string,
+            p: any,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) =>
+            staffTool.execute(
+              id,
+              { action: "discard", branch: p.branch },
+              signal,
+              update,
+              ctx,
+            ),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "discard", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "discard", r, o, t, c),
+        });
+      }
       const agentsCommand = {
         description: "Manage Herdr agents",
         getArgumentCompletions: (argumentPrefix: string) => {
