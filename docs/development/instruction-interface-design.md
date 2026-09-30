@@ -48,6 +48,16 @@ Do not ask the model to infer, remember, reconstruct, or supply information the 
 
 Instructions should describe semantics the system cannot make sufficiently obvious or enforce directly.
 
+## Prefer positive steering
+
+Steer models toward desired behavior before constraining against undesired behavior.
+
+Phrase guidance primarily as desired decisions, priorities, defaults, and actions. Prefer guidance such as "Use existing context before requesting additional information" or "Prefer the smallest durable solution" over enumerating unwanted behaviors.
+
+Use negative constraints when they express a genuine boundary more clearly than affirmative guidance. Reserve absolute terms such as `never`, `must not`, and `forbidden` for true invariants, safety or security boundaries, destructive operations, or behavior that must categorically not occur.
+
+When a prohibited behavior can be made impossible structurally, enforce it through tools, schemas, capabilities, state, or validation instead of relying on prose alone.
+
 ## Treat the model-facing contract as one system
 
 The model experiences Herdsman as the combination of:
