@@ -131,6 +131,33 @@ independent failures.
 
 Use ordinary `agent_close` for normal targeted model-driven control.
 
+## Project Manager and Chief
+
+Every session starts as a Lead. A Lead in the primary workspace of a Herdr
+worktree group can use `/manager` to claim the exclusive Manager lease for
+its Herdsman project scope and enter the Manager profile. Leads in
+linked-worktree workspaces cannot enter Manager mode. If another live Manager
+holds the lease, activation fails and the
+caller remains an ordinary Lead. Manager activation also refuses while the
+session owns unresolved Agent work. A restored Manager uses the same profile,
+supervision UI, and context as explicit activation, without the Lead Agent
+roster or Lead-owned Agent recovery. `/manager leave` preserves project work
+and is refused only when a Lead is waiting for this Manager's answer or the
+Manager's own ask to Chief remains pending; otherwise it
+relinquishes the lease and restores the exact Lead tool baseline, including
+`agent`, and Lead instruction profile. Invoking `/manager` while already active
+opens the overview without changing the role or lease. See
+[Supervision](supervision.md) for the role and project boundaries.
+The Manager overview lists branch-based work, including paused work whose Lead
+is no longer running. It offers resume, close, and discard actions as applicable;
+discard removes the assignment but keeps the Git branch and worktree.
+
+An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
+While Chief, `/chief` opens the overview and `/chief leave` exits the mode.
+A Manager cannot activate Chief. Chief's staff roster contains active
+Managers, and may contain ordinary Leads in worktree groups without an active
+Manager; a Manager's roster contains Leads from its worktree group.
+
 ## See also
 
 - [`/chief` and chief mode](supervision.md)

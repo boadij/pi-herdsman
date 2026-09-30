@@ -17,11 +17,17 @@ import {
   acquireProcessLock,
   isProcessLockClaim,
   readLiveProcessLock,
+  readProcessLockStatus,
   type ProcessLockClaim,
 } from "./lock.ts";
 import { herdsmanDataRoot } from "./storage.ts";
 
-export type LeadRole = "lead" | "chief";
+// Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
+// Staff and supervisor cross one edge; only Lead/Manager sessions may be peers.
+export type SessionRole = "lead" | "manager" | "chief";
+export type CoordinatorRole = "lead" | "manager";
+export type PeerRole = CoordinatorRole;
+export type LeadRole = SessionRole;
 
 export type LeadRoleState = Readonly<{
   role: LeadRole;
@@ -47,7 +53,9 @@ export function sessionLeadRoleState(
     Object.keys(data).length !== 2 ||
     !Object.hasOwn(data, "role") ||
     !Object.hasOwn(data, "leadTools") ||
-    (data.role !== "lead" && data.role !== "chief") ||
+    (data.role !== "lead" &&
+      data.role !== "manager" &&
+      data.role !== "chief") ||
     !Array.isArray(data.leadTools) ||
     data.leadTools.some(
       (name: unknown) => typeof name !== "string" || name.length === 0,
@@ -63,6 +71,7 @@ export type ChiefDescriptor = {
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
+  piSessionFile?: string;
   paneId: string;
   tabId?: string;
   workspaceId: string;
@@ -81,6 +90,10 @@ export type SupervisionRuntime = {
   lock: string;
   descriptor: string;
   inbox: string;
+  coordinators: string;
+  managers: string;
+  assignments: string;
+  /** Old caller spelling until the integration lane switches to coordinators. */
   leads: string;
 };
 
@@ -90,12 +103,20 @@ export type ChiefLease = {
   release: () => void;
 };
 
-export type ChiefMessageKind =
-  | "chief_message"
-  | "lead_message"
-  | "lead_ask"
-  | "chief_reply"
-  | "peer_message";
+export const COORDINATION_MESSAGE_KINDS = [
+  "chief_message",
+  "lead_message",
+  "lead_ask",
+  "chief_reply",
+  "manager_message",
+  "manager_ask",
+  "manager_reply",
+  "project_assignment",
+  "report_result",
+  "peer_message",
+] as const;
+
+export type ChiefMessageKind = (typeof COORDINATION_MESSAGE_KINDS)[number];
 
 /** Shared durable transport record used by Chief and Lead peer traffic. */
 export type CoordinationMessageKind = ChiefMessageKind;
@@ -109,6 +130,7 @@ export type ChiefMessageRecord = {
   toSessionId: string;
   leadSessionId: string;
   askId?: string;
+  branch?: string;
   text: string;
   createdAt: number;
 };
@@ -147,13 +169,7 @@ const CHIEF_DESCRIPTOR_MAX_BYTES = 2048;
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const MESSAGE_KINDS = new Set<ChiefMessageKind>([
-  "chief_message",
-  "lead_message",
-  "lead_ask",
-  "chief_reply",
-  "peer_message",
-]);
+const MESSAGE_KINDS = new Set<ChiefMessageKind>(COORDINATION_MESSAGE_KINDS);
 
 function validSession(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 512;
@@ -179,7 +195,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "text",
     "createdAt",
   ];
-  const optional = ["askId"];
+  const optional = ["askId", "branch"];
   if (
     Object.keys(record).some(
       (key) => !keys.includes(key) && !optional.includes(key),
@@ -189,6 +205,15 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     (Object.hasOwn(record, "askId") && !UUID.test(String(record.askId)))
   )
     return false;
+  const projectMessage =
+    record.kind === "project_assignment" || record.kind === "report_result";
+  if (
+    projectMessage
+      ? !validNativeIdentity(record.branch)
+      : record.branch !== undefined
+  ) {
+    return false;
+  }
   return (
     record.version === 1 &&
     typeof record.id === "string" &&
@@ -204,7 +229,9 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     record.text.length > 0 &&
     Number.isInteger(record.createdAt) &&
     (record.createdAt as number) >= 0 &&
-    (record.kind === "lead_ask" || record.kind === "chief_reply"
+    (["lead_ask", "chief_reply", "manager_ask", "manager_reply"].includes(
+      record.kind as string,
+    )
       ? typeof record.askId === "string" && UUID.test(record.askId)
       : !Object.hasOwn(record, "askId"))
   );
@@ -401,7 +428,10 @@ export function writeChiefAskMessage(
   runtime = supervisionRuntime(),
 ): string {
   assertMessage(record);
-  if (record.kind !== "lead_ask" || !record.askId)
+  if (
+    (record.kind !== "lead_ask" && record.kind !== "manager_ask") ||
+    !record.askId
+  )
     throw new Error("Invalid Chief ask message record");
   return withChiefMessageLock(
     chiefMessagePath(runtime, record.toSessionId, record.id),
@@ -547,13 +577,10 @@ export function readChiefMessage(path: string): ChiefMessageRecord {
   }
 }
 
-export function listChiefMessagePaths(
+function allChiefMessagePaths(
   runtime: SupervisionRuntime,
   toSessionId: string,
-  limit = COORDINATION_INBOX_SCAN_LIMIT,
 ): string[] {
-  if (!Number.isInteger(limit) || limit < 0)
-    throw new Error("Invalid inbox limit");
   const directory = inboxFor(runtime, toSessionId);
   let entries: string[];
   try {
@@ -584,8 +611,20 @@ export function listChiefMessagePaths(
         a.record.id.localeCompare(b.record.id)
       );
     })
-    .slice(0, Math.min(limit, COORDINATION_INBOX_SCAN_LIMIT))
     .map(({ path }) => path);
+}
+
+export function listChiefMessagePaths(
+  runtime: SupervisionRuntime,
+  toSessionId: string,
+  limit = COORDINATION_INBOX_SCAN_LIMIT,
+): string[] {
+  if (!Number.isInteger(limit) || limit < 0)
+    throw new Error("Invalid inbox limit");
+  return allChiefMessagePaths(runtime, toSessionId).slice(
+    0,
+    Math.min(limit, COORDINATION_INBOX_SCAN_LIMIT),
+  );
 }
 
 export function removeChiefMessage(
@@ -741,7 +780,7 @@ export function chiefAskQueued(
     try {
       const record = readChiefMessage(path);
       return (
-        record.kind === "lead_ask" &&
+        (record.kind === "lead_ask" || record.kind === "manager_ask") &&
         record.askId === askId &&
         record.leadSessionId === leadSessionId &&
         record.fromSessionId === leadSessionId &&
@@ -753,14 +792,57 @@ export function chiefAskQueued(
   });
 }
 
+/** Return whether this exact supervisor reply is durably queued for its Lead. */
+export function coordinationReplyQueued(
+  runtime: SupervisionRuntime,
+  toSessionId: string,
+  leadSessionId: string,
+  askId: string,
+  supervisor: {
+    piSessionId: string;
+    leaseId: string;
+    role: "chief" | "manager";
+  },
+): boolean {
+  const expectedKind =
+    supervisor.role === "chief" ? "chief_reply" : "manager_reply";
+  return allChiefMessagePaths(runtime, toSessionId).some((path) => {
+    const id = basename(path, ".json");
+    if (chiefMessageQuarantined(runtime, toSessionId, id)) return false;
+    try {
+      const record = readChiefMessage(path);
+      return (
+        record.kind === expectedKind &&
+        record.toSessionId === toSessionId &&
+        record.leadSessionId === leadSessionId &&
+        record.askId === askId &&
+        record.fromSessionId === supervisor.piSessionId &&
+        record.leaseId === supervisor.leaseId
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
 function deliveredMessageContent(record: CoordinationMessageRecord): string {
   const prefix =
     record.kind === "chief_message" || record.kind === "chief_reply"
-      ? `From chief ${record.fromSessionId} to lead ${record.leadSessionId}: `
-      : record.kind === "peer_message"
-        ? `Peer message from ${record.fromSessionId}: `
-        : `From lead ${record.leadSessionId} to chief ${record.toSessionId}: `;
-  return Buffer.from(`${prefix}${record.text}`, "utf8")
+      ? `From chief ${record.fromSessionId}: `
+      : record.kind === "manager_message" ||
+          record.kind === "manager_ask" ||
+          record.kind === "manager_reply"
+        ? `From manager ${record.fromSessionId}: `
+        : record.kind === "lead_message" || record.kind === "lead_ask"
+          ? `From lead ${record.fromSessionId}: `
+          : `Peer message from ${record.fromSessionId}: `;
+  const content =
+    record.kind === "project_assignment"
+      ? `Project assignment for branch ${record.branch}:\n\n${record.text}`
+      : record.kind === "report_result"
+        ? `Project work ${record.branch} finished:\n\n${record.text}`
+        : `${prefix}${record.text}`;
+  return Buffer.from(content, "utf8")
     .subarray(0, COORDINATION_MESSAGE_MAX_BYTES)
     .toString("utf8");
 }
@@ -869,8 +951,10 @@ export async function drainCoordinationInbox(
             details: {
               id: record.id,
               leaseId: record.leaseId,
+              fromSessionId: record.fromSessionId,
               leadSessionId: record.leadSessionId,
               ...(record.askId ? { askId: record.askId } : {}),
+              ...(record.branch ? { branch: record.branch } : {}),
             },
           },
           { deliverAs: "followUp", triggerTurn: true },
@@ -945,6 +1029,9 @@ export const listCoordinationMessagePaths = listChiefMessagePaths;
 export const writeCoordinationMessage = writeChiefMessage;
 export const removeCoordinationMessage = removeChiefMessage;
 export const coordinationMessageBytes = chiefMessageBytes;
+export const writeCoordinationAskMessage = writeChiefAskMessage;
+export const coordinationAskMessageId = chiefAskMessageId;
+export const coordinationAskQueued = chiefAskQueued;
 
 function socketPath(): string {
   const value = process.env.HERDR_SOCKET_PATH;
@@ -955,13 +1042,21 @@ function socketPath(): string {
 export function supervisionRuntime(socket = socketPath()): SupervisionRuntime {
   if (!socket) throw new Error("HERDR_SOCKET_PATH is required");
   const runtimeHash = createHash("sha256").update(socket).digest("hex");
-  const root = join(herdsmanDataRoot(), "runtime", "supervision", runtimeHash);
+  const root = join(
+    herdsmanDataRoot(),
+    "runtime",
+    "supervision-v2",
+    runtimeHash,
+  );
   return {
     root,
     lock: join(root, "chief.lock"),
     descriptor: join(root, "chief.json"),
     inbox: join(root, "inbox"),
-    leads: join(root, "leads"),
+    coordinators: join(root, "coordinators"),
+    leads: join(root, "coordinators"),
+    managers: join(root, "managers"),
+    assignments: join(root, "assignments"),
   };
 }
 
@@ -969,8 +1064,9 @@ export type PeerRuntime = SupervisionRuntime & {
   peers: string;
 };
 
-export type PeerLeadRecord = Readonly<{
+export type PeerRecord = Readonly<{
   version: 1;
+  role?: PeerRole;
   piSessionId: string;
   paneId: string;
   tabId: string;
@@ -983,17 +1079,21 @@ export type PeerLeadRecord = Readonly<{
   claim: ProcessLockClaim;
   updatedAt: number;
 }>;
+export type PeerLeadRecord = PeerRecord;
 
 const PEER_LEAD_RECORD_MAX_BYTES = 4096;
 
 export function peerRuntime(_socket?: string): PeerRuntime {
-  const root = join(herdsmanDataRoot(), "runtime", "peers-v1");
+  const root = join(herdsmanDataRoot(), "runtime", "peers-v2");
   return {
     root,
     lock: join(root, "chief.lock"),
     descriptor: join(root, "chief.json"),
     inbox: join(root, "inbox"),
-    leads: join(root, "leads"),
+    coordinators: join(root, "coordinators"),
+    leads: join(root, "coordinators"),
+    managers: join(root, "managers"),
+    assignments: join(root, "assignments"),
     peers: join(root, "peers"),
   };
 }
@@ -1034,6 +1134,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     Object.keys(record).every((key) =>
       [
         "version",
+        "role",
         "piSessionId",
         "paneId",
         "tabId",
@@ -1053,6 +1154,9 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
       "updatedAt",
     ].every((key) => Object.hasOwn(record, key)) &&
     record.version === 1 &&
+    (record.role === undefined ||
+      record.role === "lead" ||
+      record.role === "manager") &&
     validSession(record.piSessionId) &&
     validNativeIdentity(record.paneId) &&
     validNativeIdentity(record.tabId) &&
@@ -1079,6 +1183,7 @@ export function samePeerLeadRecord(
 ): boolean {
   return (
     actual.version === expected.version &&
+    (actual.role ?? "lead") === (expected.role ?? "lead") &&
     actual.piSessionId === expected.piSessionId &&
     actual.paneId === expected.paneId &&
     actual.tabId === expected.tabId &&
@@ -1225,7 +1330,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     "workspaceId",
     "createdAt",
   ];
-  const optional = ["tabId"];
+  const optional = ["tabId", "piSessionFile"];
   return (
     Object.keys(record).every(
       (key) => keys.includes(key) || optional.includes(key),
@@ -1241,6 +1346,9 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     typeof record.piSessionId === "string" &&
     record.piSessionId.length > 0 &&
     record.piSessionId.length <= 512 &&
+    (record.piSessionFile === undefined ||
+      (typeof record.piSessionFile === "string" &&
+        record.piSessionFile.length > 0)) &&
     typeof record.paneId === "string" &&
     record.paneId.length > 0 &&
     record.paneId.length <= 512 &&
@@ -1286,7 +1394,10 @@ export function chiefLeaseIsHeld(runtime: SupervisionRuntime): boolean {
   }
 }
 
-function writeDescriptor(path: string, descriptor: ChiefDescriptor): void {
+function writeDescriptor(
+  path: string,
+  descriptor: ChiefDescriptor | ManagerDescriptor,
+): void {
   const temporary = join(
     dirname(path),
     `.${basename(path)}.${randomUUID()}.tmp`,
@@ -1322,6 +1433,7 @@ export function sameChiefDescriptor(
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
+    actual.piSessionFile === expected.piSessionFile &&
     actual.paneId === expected.paneId &&
     actual.tabId === expected.tabId &&
     actual.workspaceId === expected.workspaceId &&
@@ -1335,6 +1447,9 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
     typeof identity.piSessionId !== "string" ||
     !identity.piSessionId ||
     identity.piSessionId.length > 512 ||
+    (identity.piSessionFile !== undefined &&
+      (typeof identity.piSessionFile !== "string" ||
+        !identity.piSessionFile)) ||
     typeof identity.paneId !== "string" ||
     !identity.paneId ||
     identity.paneId.length > 512 ||
@@ -1364,6 +1479,9 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
+    ...(identity.piSessionFile !== undefined
+      ? { piSessionFile: identity.piSessionFile }
+      : {}),
     paneId: identity.paneId,
     ...(identity.tabId ? { tabId: identity.tabId } : {}),
     workspaceId: identity.workspaceId,
@@ -1401,16 +1519,484 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
   };
 }
 
-export type LeadCoordinationState = {
+export type ManagerDescriptor = {
   version: 1;
+  leaseId: string;
+  claim: ProcessLockClaim;
+  piSessionId: string;
+  piSessionFile?: string;
+  paneId: string;
+  tabId: string;
+  workspaceId: string;
+  repoKey: string;
+  createdAt: number;
+};
+export type ManagerIdentity = Pick<
+  ManagerDescriptor,
+  | "piSessionId"
+  | "piSessionFile"
+  | "paneId"
+  | "tabId"
+  | "workspaceId"
+  | "repoKey"
+> & { createdAt?: number };
+export type ManagerLease = {
+  descriptor: ManagerDescriptor;
+  runtime: SupervisionRuntime;
+  release: () => void;
+};
+export type ManagerDescriptorStatus = Readonly<{
+  descriptor: ManagerDescriptor;
+  live: boolean;
+}>;
+
+export function managerDescriptorPath(
+  runtime: SupervisionRuntime,
+  workspaceId: string,
+): string {
+  if (!validNativeIdentity(workspaceId))
+    throw new Error("Invalid Manager workspace ID");
+  return join(
+    runtime.managers,
+    `${createHash("sha256").update(workspaceId).digest("hex")}.json`,
+  );
+}
+
+function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const r = value as Record<string, unknown>;
+  const keys = [
+    "version",
+    "leaseId",
+    "claim",
+    "piSessionId",
+    "paneId",
+    "tabId",
+    "workspaceId",
+    "repoKey",
+    "createdAt",
+  ];
+  return (
+    Object.keys(r).every(
+      (key) => keys.includes(key) || key === "piSessionFile",
+    ) &&
+    keys.every((key) => Object.hasOwn(r, key)) &&
+    r.version === 1 &&
+    UUID.test(String(r.leaseId)) &&
+    isProcessLockClaim(r.claim) &&
+    validSession(r.piSessionId) &&
+    (r.piSessionFile === undefined ||
+      (typeof r.piSessionFile === "string" && r.piSessionFile.length > 0)) &&
+    validNativeIdentity(r.paneId) &&
+    validNativeIdentity(r.tabId) &&
+    validNativeIdentity(r.workspaceId) &&
+    validNativeIdentity(r.repoKey) &&
+    Number.isInteger(r.createdAt) &&
+    (r.createdAt as number) >= 0
+  );
+}
+
+export function sameManagerDescriptor(
+  actual: ManagerDescriptor,
+  expected: ManagerDescriptor,
+): boolean {
+  return (
+    actual.version === expected.version &&
+    actual.leaseId === expected.leaseId &&
+    actual.claim.pid === expected.claim.pid &&
+    actual.claim.id === expected.claim.id &&
+    actual.piSessionId === expected.piSessionId &&
+    actual.piSessionFile === expected.piSessionFile &&
+    actual.paneId === expected.paneId &&
+    actual.tabId === expected.tabId &&
+    actual.workspaceId === expected.workspaceId &&
+    actual.repoKey === expected.repoKey &&
+    actual.createdAt === expected.createdAt
+  );
+}
+
+export function readManagerDescriptorStatus(
+  runtime: SupervisionRuntime,
+  workspaceId: string,
+): ManagerDescriptorStatus | undefined {
+  const path = managerDescriptorPath(runtime, workspaceId);
+  const lockPath = `${path}.lock`;
+  let content: string;
+  try {
+    if (statSync(path).size > CHIEF_DESCRIPTOR_MAX_BYTES)
+      throw new Error("descriptor too large");
+    content = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        if (!statSync(lockPath, { throwIfNoEntry: false })) return undefined;
+      } catch (lockError) {
+        throw new Error("Unable to verify Manager descriptor", {
+          cause: lockError,
+        });
+      }
+    }
+    throw new Error("Unable to verify Manager descriptor", { cause: error });
+  }
+  let descriptor: unknown;
+  try {
+    descriptor = JSON.parse(content);
+  } catch (error) {
+    throw new Error("Unable to verify Manager descriptor", { cause: error });
+  }
+  if (
+    !validManagerDescriptor(descriptor) ||
+    descriptor.workspaceId !== workspaceId
+  )
+    throw new Error("Unable to verify Manager descriptor");
+  let status: ReturnType<typeof readProcessLockStatus>;
+  try {
+    status = readProcessLockStatus(lockPath, "Manager supervision lease");
+  } catch (error) {
+    throw new Error("Unable to verify Manager descriptor", { cause: error });
+  }
+  if (
+    status.claim.pid !== descriptor.claim.pid ||
+    status.claim.id !== descriptor.claim.id
+  )
+    throw new Error("Manager process-lock generation changed");
+  return { descriptor, live: status.live };
+}
+
+export function readManagerDescriptor(
+  runtime: SupervisionRuntime,
+  workspaceId: string,
+): ManagerDescriptor | undefined {
+  const status = readManagerDescriptorStatus(runtime, workspaceId);
+  if (!status) return undefined;
+  if (!status.live)
+    throw new Error("Unable to verify Manager supervision lease");
+  return status.descriptor;
+}
+
+export function listManagerDescriptors(
+  runtime = supervisionRuntime(),
+): ManagerDescriptor[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(runtime.managers);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  return entries
+    .filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry))
+    .sort()
+    .flatMap((entry) => {
+      try {
+        const path = join(runtime.managers, entry);
+        if (statSync(path).size > CHIEF_DESCRIPTOR_MAX_BYTES) return [];
+        const candidate: unknown = JSON.parse(readFileSync(path, "utf8"));
+        if (
+          !validManagerDescriptor(candidate) ||
+          basename(managerDescriptorPath(runtime, candidate.workspaceId)) !==
+            entry
+        )
+          return [];
+        const verified = readManagerDescriptor(runtime, candidate.workspaceId);
+        return verified ? [verified] : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
+export function claimManagerLease(
+  identity: ManagerIdentity,
+  runtime = supervisionRuntime(),
+): ManagerLease {
+  if (
+    !identity ||
+    !validSession(identity.piSessionId) ||
+    (identity.piSessionFile !== undefined &&
+      (typeof identity.piSessionFile !== "string" ||
+        !identity.piSessionFile)) ||
+    !validNativeIdentity(identity.paneId) ||
+    !validNativeIdentity(identity.tabId) ||
+    !validNativeIdentity(identity.workspaceId) ||
+    !validNativeIdentity(identity.repoKey) ||
+    (identity.createdAt !== undefined &&
+      (!Number.isInteger(identity.createdAt) || identity.createdAt < 0))
+  )
+    throw new Error("Invalid Manager identity");
+  mkdirSync(runtime.managers, { recursive: true, mode: 0o700 });
+  chmodSync(runtime.managers, 0o700);
+  const path = managerDescriptorPath(runtime, identity.workspaceId);
+  const lease = acquireProcessLock(`${path}.lock`, {
+    name: "Manager supervision lease",
+  });
+  const descriptor: ManagerDescriptor = {
+    version: 1,
+    leaseId: randomUUID(),
+    claim: lease.claim,
+    piSessionId: identity.piSessionId,
+    ...(identity.piSessionFile !== undefined
+      ? { piSessionFile: identity.piSessionFile }
+      : {}),
+    paneId: identity.paneId,
+    tabId: identity.tabId,
+    workspaceId: identity.workspaceId,
+    repoKey: identity.repoKey,
+    createdAt: identity.createdAt ?? Date.now(),
+  };
+  try {
+    writeDescriptor(path, descriptor);
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
+  let released = false;
+  return {
+    descriptor,
+    runtime,
+    release: () => {
+      if (released) return;
+      released = true;
+      try {
+        const current = readManagerDescriptor(runtime, identity.workspaceId);
+        if (current && sameManagerDescriptor(current, descriptor)) {
+          unlinkSync(path);
+          fsyncDirectory(runtime.managers);
+        }
+      } catch {
+        /* A replaced or malformed descriptor is not ours to remove. */
+      } finally {
+        lease.release();
+      }
+    },
+  };
+}
+
+export type ProjectAssignment = Readonly<{
+  version: 1;
+  id: string;
+  repoKey: string;
+  branch: string;
+  text: string;
+}>;
+export const PROJECT_ASSIGNMENT_MAX_BYTES = 16 * 1024;
+
+export function projectAssignmentPath(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+): string {
+  if (!validNativeIdentity(repoKey) || !validNativeIdentity(branch))
+    throw new Error("Invalid project assignment identity");
+  return join(
+    runtime.assignments,
+    createHash("sha256").update(repoKey).digest("hex"),
+    `${createHash("sha256").update(branch).digest("hex")}.json`,
+  );
+}
+
+function validProjectAssignment(value: unknown): value is ProjectAssignment {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const r = value as Record<string, unknown>;
+  const required = ["version", "id", "repoKey", "branch", "text"];
+  return (
+    required.every((key) => Object.hasOwn(r, key)) &&
+    Object.keys(r).length === required.length &&
+    r.version === 1 &&
+    UUID.test(String(r.id)) &&
+    validNativeIdentity(r.repoKey) &&
+    validNativeIdentity(r.branch) &&
+    typeof r.text === "string" &&
+    r.text.length > 0
+  );
+}
+
+export function writeProjectAssignment(
+  runtime: SupervisionRuntime,
+  assignment: ProjectAssignment,
+): void {
+  if (!validProjectAssignment(assignment))
+    throw new Error("Invalid project assignment");
+  const content = `${JSON.stringify(assignment)}\n`;
+  if (Buffer.byteLength(content, "utf8") > PROJECT_ASSIGNMENT_MAX_BYTES)
+    throw new Error("Project assignment is too large");
+  const path = projectAssignmentPath(
+    runtime,
+    assignment.repoKey,
+    assignment.branch,
+  );
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(runtime.root, 0o700);
+  chmodSync(runtime.assignments, 0o700);
+  chmodSync(directory, 0o700);
+  const temporary = join(directory, `.${assignment.id}.${randomUUID()}.tmp`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(temporary, "wx", 0o600);
+    writeFileSync(fd, content, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(temporary, path);
+    chmodSync(path, 0o600);
+    fsyncDirectory(directory);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    try {
+      unlinkSync(temporary);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
+export function readProjectAssignment(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+): ProjectAssignment | undefined {
+  const path = projectAssignmentPath(runtime, repoKey, branch);
+  return readProjectAssignmentFile(path, repoKey, branch);
+}
+
+function readProjectAssignmentFile(
+  path: string,
+  repoKey: string,
+  branch?: string,
+): ProjectAssignment | undefined {
+  let value: unknown;
+  try {
+    if (statSync(path).size > PROJECT_ASSIGNMENT_MAX_BYTES)
+      throw new Error("file is too large");
+    value = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    const reason =
+      error instanceof SyntaxError
+        ? "invalid JSON"
+        : error instanceof Error && error.message === "file is too large"
+          ? error.message
+          : `read failed${safeFilesystemCode(error)}`;
+    throw projectAssignmentReadError(path, reason);
+  }
+  if (!validProjectAssignment(value))
+    throw projectAssignmentReadError(path, "invalid assignment schema");
+  if (
+    value.repoKey !== repoKey ||
+    basename(dirname(path)) !==
+      createHash("sha256").update(repoKey).digest("hex") ||
+    (branch !== undefined && value.branch !== branch) ||
+    basename(path) !==
+      `${createHash("sha256").update(value.branch).digest("hex")}.json`
+  )
+    throw projectAssignmentReadError(path, "assignment identity mismatch");
+  return value;
+}
+
+function safeFilesystemCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code)
+    ? ` (${code})`
+    : "";
+}
+
+function projectAssignmentReadError(path: string, reason: string): Error {
+  return new Error(`Unable to read project assignment ${path}: ${reason}`);
+}
+
+export function listProjectAssignments(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+): ProjectAssignment[] {
+  const directory = dirname(projectAssignmentPath(runtime, repoKey, "lookup"));
+  let entries: string[];
+  try {
+    entries = readdirSync(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  return entries
+    .filter((entry) => /^[a-f0-9]{64}\.json$/.test(entry))
+    .map((entry) => {
+      const assignment = readProjectAssignmentFile(
+        join(directory, entry),
+        repoKey,
+      );
+      if (!assignment)
+        throw projectAssignmentReadError(
+          join(directory, entry),
+          "file disappeared while listing",
+        );
+      return assignment;
+    })
+    .sort((a, b) => a.branch.localeCompare(b.branch));
+}
+
+export function findProjectAssignmentBySession(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  sessionId: string,
+): ProjectAssignment[] {
+  return listProjectAssignments(runtime, repoKey).filter(
+    (assignment) => assignment.id === sessionId,
+  );
+}
+
+export function removeProjectAssignment(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+): void {
+  const path = projectAssignmentPath(runtime, repoKey, branch);
+  try {
+    unlinkSync(path);
+    fsyncDirectory(dirname(path));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+export type CoordinatorState = {
+  version: 1;
+  role?: CoordinatorRole;
   instanceId: string;
   piSessionId: string;
-  pendingAsk?: { askId: string; question: string; text: string };
+  pendingAsk?: CoordinatorAsk;
   updatedAt: number;
 };
+export type CoordinatorAsk = {
+  askId: string;
+  question: string;
+  text: string;
+  supervisorSessionId?: string;
+  supervisorLeaseId?: string;
+  supervisorRole?: "chief" | "manager";
+};
+export function askMatchesSupervisor(
+  ask: CoordinatorAsk,
+  supervisor: {
+    piSessionId: string;
+    leaseId: string;
+    role: "chief" | "manager";
+  },
+): boolean {
+  return ask.supervisorRole
+    ? ask.supervisorRole === supervisor.role &&
+        ask.supervisorSessionId === supervisor.piSessionId &&
+        ask.supervisorLeaseId === supervisor.leaseId
+    : supervisor.role === "chief" &&
+        (ask.supervisorSessionId === undefined ||
+          ask.supervisorSessionId === supervisor.piSessionId) &&
+        (ask.supervisorLeaseId === undefined ||
+          ask.supervisorLeaseId === supervisor.leaseId);
+}
+export type LeadCoordinationState = CoordinatorState;
 
 export type SupervisedLead = {
   lead: string;
+  branch?: string;
   /** Internal: path to a non-empty persisted session candidate. */
   piSessionFile?: string;
   instanceId?: string;
@@ -1427,10 +2013,130 @@ export type SupervisedLead = {
   availableActions: Array<"inspect" | "transcript" | "message" | "reply">;
   agents: Array<{ id: string; label: string; state: RuntimeState }>;
 };
-export type SupervisionSnapshot = {
-  leads: SupervisedLead[];
+/** Chief can act on these Managers only; nested Leads are observational. */
+export type SupervisedManager = {
+  session: string;
+  instanceId?: string;
+  displayName: string;
+  project: string;
+  workspaceId: string;
+  paneId: string;
+  tabId: string;
+  runtimeState: RuntimeState;
+  needsYou: boolean;
+  pendingAskId?: string;
+  pendingAskQuestion?: string;
+  agentCounts: { active: number; blocked: number; total: number };
+  leadCounts: { active: number; blocked: number; total: number };
+  leads: Array<{
+    session: string;
+    displayName: string;
+    runtimeState: RuntimeState;
+    needsYou: boolean;
+    agentCounts: { active: number; blocked: number; total: number };
+  }>;
+  availableActions: Array<"inspect" | "transcript" | "message" | "reply">;
+};
+/** A Chief snapshot has Managers as its only actionable reports. */
+export type ChiefManagerReportSnapshot = {
+  managers: SupervisedManager[];
   diagnostics?: string[];
 };
+export type SupervisionSnapshot = {
+  leads: SupervisedLead[];
+  project?: string;
+  work?: ProjectWorkSnapshot[];
+  openWorkspaces?: readonly OpenProjectWorkspace[];
+  diagnostics?: string[];
+};
+export type OpenProjectWorkspace = Readonly<{
+  workspaceId: string;
+  branch?: string;
+  path: string;
+  linked: boolean;
+}>;
+export type ProjectWorkStatus = "active" | "paused" | "finished" | "conflict";
+export type ProjectWorkSnapshot = Readonly<{
+  branch: string;
+  session: string;
+  status: ProjectWorkStatus;
+  runtimeState?: RuntimeState;
+  task?: string;
+  issue?: string;
+}>;
+/** Derive work from one caller-validated Lead inventory and one Herdr worktree list. */
+export function projectWorkSnapshot(options: {
+  assignments: readonly ProjectAssignment[];
+  worktrees: readonly Readonly<{
+    branch: string;
+    open_workspace_id?: string | null;
+  }>[];
+  leads: readonly Pick<
+    SupervisedLead,
+    "lead" | "workspaceId" | "runtimeState"
+  >[];
+  /** Completed assignment session IDs backed by canonical results. */
+  finished: ReadonlySet<string>;
+}): ProjectWorkSnapshot[] {
+  return options.assignments.map((assignment) => {
+    const worktrees = options.worktrees.filter(
+      (item) => item.branch === assignment.branch,
+    );
+    const exact = options.leads.filter((lead) => lead.lead === assignment.id);
+    const finished = options.finished.has(assignment.id);
+    let status: ProjectWorkStatus;
+    let runtimeState: RuntimeState | undefined;
+    let issue: string | undefined;
+    if (finished) status = "finished";
+    else if (worktrees.length > 1 || exact.length > 1) {
+      status = "conflict";
+      issue = "project runtime identity is ambiguous";
+    } else {
+      const workspaceId = worktrees[0]?.open_workspace_id ?? undefined;
+      const occupants = workspaceId
+        ? options.leads.filter((lead) => lead.workspaceId === workspaceId)
+        : [];
+      if (
+        exact.length === 1 &&
+        (!workspaceId || exact[0]!.workspaceId !== workspaceId)
+      ) {
+        status = "conflict";
+        issue = "assigned Lead is running outside its branch worktree";
+      } else if (occupants.some((lead) => lead.lead !== assignment.id)) {
+        status = "conflict";
+        issue = "another Lead is active in this worktree";
+      } else if (exact.length === 1) {
+        status = "active";
+        runtimeState = exact[0]!.runtimeState;
+      } else {
+        status = "paused";
+        if (worktrees.length === 0) issue = "worktree is unavailable";
+      }
+    }
+    const task = assignment.text
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/gu, " ")
+      .trim();
+    const characters = Array.from(task);
+    return {
+      branch: assignment.branch,
+      session: assignment.id,
+      status,
+      ...(runtimeState ? { runtimeState } : {}),
+      ...(task
+        ? {
+            task:
+              characters.length <= 160
+                ? task
+                : `${characters.slice(0, 159).join("")}…`,
+          }
+        : {}),
+      ...(issue ? { issue } : {}),
+    };
+  });
+}
+export type SupervisionPresentationSnapshot =
+  SupervisionSnapshot | ChiefManagerReportSnapshot;
 export type RuntimeState =
   | "idle"
   | "working"
@@ -1499,18 +2205,21 @@ export function leadCoordinationStatePath(
     createHash("sha256").update(piSessionId).digest("hex") + ".json",
   );
 }
-function validLeadState(value: unknown): value is LeadCoordinationState {
+function validLeadState(value: unknown): value is CoordinatorState {
   if (!value || typeof value !== "object") return false;
   const r = value as Record<string, unknown>;
   const keys = ["version", "instanceId", "piSessionId", "updatedAt"];
   if (
-    Object.keys(r).some((k) => !keys.includes(k) && k !== "pendingAsk") ||
+    Object.keys(r).some(
+      (k) => !keys.includes(k) && k !== "role" && k !== "pendingAsk",
+    ) ||
     keys.some((k) => !Object.hasOwn(r, k))
   )
     return false;
   const ask = r.pendingAsk;
   return (
     r.version === 1 &&
+    (r.role === undefined || r.role === "lead" || r.role === "manager") &&
     UUID.test(String(r.instanceId)) &&
     validSession(r.piSessionId) &&
     Number.isInteger(r.updatedAt) &&
@@ -1518,11 +2227,31 @@ function validLeadState(value: unknown): value is LeadCoordinationState {
     (ask === undefined ||
       (!!ask &&
         typeof ask === "object" &&
-        Object.keys(ask).length === 3 &&
+        Object.keys(ask).every((key) =>
+          [
+            "askId",
+            "question",
+            "text",
+            "supervisorSessionId",
+            "supervisorLeaseId",
+            "supervisorRole",
+          ].includes(key),
+        ) &&
         UUID.test((ask as any).askId) &&
         validLeadCoordinationQuestion((ask as any).question) &&
         typeof (ask as any).text === "string" &&
-        (ask as any).text.length > 0))
+        (ask as any).text.length > 0 &&
+        ((Object.keys(ask).length === 3 &&
+          !("supervisorRole" in ask) &&
+          !("supervisorSessionId" in ask) &&
+          !("supervisorLeaseId" in ask)) ||
+          ([5, 6].includes(Object.keys(ask).length) &&
+            validSession((ask as any).supervisorSessionId) &&
+            UUID.test((ask as any).supervisorLeaseId) &&
+            ((Object.keys(ask).length === 5 && !("supervisorRole" in ask)) ||
+              (Object.keys(ask).length === 6 &&
+                ((ask as any).supervisorRole === "chief" ||
+                  (ask as any).supervisorRole === "manager")))))))
   );
 }
 export function readLeadCoordinationState(
@@ -1596,6 +2325,21 @@ export function invalidateLeadCoordinationState(
   fsyncDirectory(dirname(path));
 }
 
+export const coordinatorStatePath = leadCoordinationStatePath;
+export const readCoordinatorState = readLeadCoordinationState;
+export const writeCoordinatorState = writeLeadCoordinationState;
+export const invalidateCoordinatorState = invalidateLeadCoordinationState;
+export const validCoordinatorQuestion = validLeadCoordinationQuestion;
+export const COORDINATOR_STATE_MAX_BYTES = LEAD_STATE_MAX_BYTES;
+export const peerRecordPath = peerLeadRecordPath;
+export const peerLockPath = peerLeadLockPath;
+export const readPeerRecord = readPeerLeadRecord;
+export const writePeerRecord = writePeerLeadRecord;
+export const listPeerRecords = listPeerLeadRecords;
+export const removePeerRecord = removePeerLeadRecord;
+export const samePeerRecord = samePeerLeadRecord;
+export const samePeerGeneration = samePeerLeadGeneration;
+
 export function normalizeHerdrLifecycleState(agent: any): RuntimeState {
   const state = agent?.agent_status;
   return state === "idle" ||
@@ -1611,8 +2355,18 @@ export function projectSupervision(options: {
   agents: LiveAgent[];
   managedAgents: ValidatedManagedAgentEvidence[];
   coordinationStates: LeadCoordinationState[];
+  answeredAskIds?: ReadonlySet<string>;
+  openWorkspaces?: readonly OpenProjectWorkspace[];
+  supervisor?: {
+    piSessionId: string;
+    leaseId: string;
+    role: "chief" | "manager";
+  };
   workspaceProvenance?: ReadonlyMap<string, WorkspaceProvenance>;
   chiefSessionId?: string;
+  excludedSessionIds?: ReadonlySet<string>;
+  /** Leads already reported to an active Manager must not also report to Chief. */
+  managerSupervisedLeadSessionIds?: ReadonlySet<string>;
   managedAgentSessionIds?: Set<string>;
 }): SupervisionSnapshot {
   const states = new Map<string, LeadCoordinationState>();
@@ -1651,9 +2405,12 @@ export function projectSupervision(options: {
     const state = states.get(agent.sessionId);
     if (
       !state ||
+      (state.role ?? "lead") !== "lead" ||
       duplicateAgents.has(agent.sessionId) ||
       duplicateStates.has(agent.sessionId) ||
       agent.sessionId === options.chiefSessionId ||
+      options.excludedSessionIds?.has(agent.sessionId) ||
+      options.managerSupervisedLeadSessionIds?.has(agent.sessionId) ||
       options.managedAgentSessionIds?.has(agent.sessionId) ||
       duplicatePhysical.has(
         `${agent.workspaceId}\0${agent.tabId}\0${agent.paneId}`,
@@ -1661,6 +2418,11 @@ export function projectSupervision(options: {
     )
       continue;
     const pending = state.pendingAsk;
+    const actionable =
+      pending &&
+      options.supervisor &&
+      askMatchesSupervisor(pending, options.supervisor) &&
+      !options.answeredAskIds?.has(pending.askId);
     const runtimeState = agent.runtimeState ?? "unknown";
     const provenance =
       options.workspaceProvenance?.get(agent.workspaceId) ??
@@ -1695,12 +2457,13 @@ export function projectSupervision(options: {
       lead: agent.sessionId,
       instanceId: state.instanceId,
       displayName: `${workspaceLabel || agent.workspaceId}/${name}`,
+      ...(provenance?.branch ? { branch: provenance.branch } : {}),
       workspaceId: agent.workspaceId,
       ...(workspaceLabel ? { workspaceLabel } : {}),
       tabId: agent.tabId,
       paneId: agent.paneId,
       runtimeState,
-      needsYou: !!pending,
+      needsYou: !!actionable,
       ...(pending ? { pendingAskId: pending.askId } : {}),
       ...(pending ? { pendingAskQuestion: pending.question } : {}),
       agentCounts: { active: 0, blocked: 0, total: 0 },
@@ -1751,14 +2514,19 @@ export function projectSupervision(options: {
   }
   for (const lead of leads) {
     lead.availableActions.push("message");
-    if (lead.pendingAskId) lead.availableActions.push("reply");
+    if (lead.needsYou) lead.availableActions.push("reply");
   }
   leads.sort(
     (a, b) =>
       a.displayName.localeCompare(b.displayName) ||
       a.lead.localeCompare(b.lead),
   );
-  return { leads };
+  return {
+    leads,
+    ...(options.openWorkspaces
+      ? { openWorkspaces: options.openWorkspaces }
+      : {}),
+  };
 }
 
 export function serializeSupervision(snapshot: SupervisionSnapshot) {

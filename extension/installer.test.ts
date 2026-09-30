@@ -14,16 +14,22 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-const packageLock = JSON.parse(readFileSync(resolve("package-lock.json"), "utf8"));
+const packageLock = JSON.parse(
+  readFileSync(resolve("package-lock.json"), "utf8"),
+);
 const installer = resolve("install.sh");
 
 test("released runtime metadata matches the locked Pi and has Herdr checksums", () => {
   const runtime = packageJson.piHerdsman?.runtime;
   assert.equal(
     runtime?.pi,
-    packageLock.packages["node_modules/@earendil-works/pi-coding-agent"]?.version,
+    packageLock.packages["node_modules/@earendil-works/pi-coding-agent"]
+      ?.version,
   );
-  assert.match(runtime?.herdr?.version ?? "", /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u);
+  assert.match(
+    runtime?.herdr?.version ?? "",
+    /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u,
+  );
   assert.deepEqual(Object.keys(runtime?.herdr?.sha256 ?? {}).sort(), [
     "linux-aarch64",
     "linux-x86_64",
@@ -230,7 +236,9 @@ test(
       });
       assert.equal(second.status, 0, second.stderr);
       assert.ok(
-        second.stdout.includes(`Pi ${packageJson.piHerdsman.runtime.pi} already installed`),
+        second.stdout.includes(
+          `Pi ${packageJson.piHerdsman.runtime.pi} already installed`,
+        ),
       );
       assert.ok(
         second.stdout.includes(
@@ -238,7 +246,9 @@ test(
         ),
       );
       assert.ok(
-        second.stdout.includes(`Pi Herdsman ${packageJson.version} already installed`),
+        second.stdout.includes(
+          `Pi Herdsman ${packageJson.version} already installed`,
+        ),
       );
 
       const secondLog = readFileSync(setup.log, "utf8");
@@ -264,7 +274,10 @@ test(
       });
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /downloaded Herdr checksum did not match/u);
-      assert.match(readFileSync(join(setup.bin, "herdr"), "utf8"), /FAKE_HERDR_VERSION/u);
+      assert.match(
+        readFileSync(join(setup.bin, "herdr"), "utf8"),
+        /FAKE_HERDR_VERSION/u,
+      );
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
     }

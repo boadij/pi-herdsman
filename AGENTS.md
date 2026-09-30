@@ -103,6 +103,7 @@ smoke harness documented in [Smoke testing](docs/development/smoke-testing.md):
 npm run smoke -- core
 npm run smoke -- continuation
 npm run smoke -- chief-tree
+npm run smoke -- manager-recovery
 ```
 
 Run only the scenarios relevant to the change. Live smoke is opt-in and must

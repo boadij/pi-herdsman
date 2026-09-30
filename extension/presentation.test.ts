@@ -14,6 +14,8 @@ import {
   formatElapsed,
   formatSupervisionContext,
   formatSupervisionNotification,
+  managerSupervisionItems,
+  supervisionPresentationReports,
   SUPERVISION_CONTEXT_MAX_BYTES,
   formatAgentDefinitions,
   formatSkills,
@@ -40,6 +42,7 @@ import {
   renderAgentLostMessage,
   renderCoordinationCall,
   renderCoordinationResult,
+  renderCoordinationMessage,
   renderAgentDefinitionsOverview,
   renderHerdRunEntry,
   renderStopSummary,
@@ -49,6 +52,7 @@ import {
   visibleWidth,
 } from "./presentation.ts";
 import { herdsmanDataRoot, herdsmanTempRoot, resultPath } from "./storage.ts";
+import { COORDINATION_MESSAGE_KINDS } from "./supervision.ts";
 
 initTheme("dark");
 
@@ -139,15 +143,13 @@ test("Supervision context formatting preserves state, safety, and bounded record
       "agent_counts: active=1 blocked=1 total=2",
       "ask_id: ask-123",
       "question: OAuth or service accounts?",
-      "implementer · working · id=agent-a",
-      "reviewer · blocked · id=agent-z",
       "diagnostics:",
     ])
       assert.match(
         formatted,
         new RegExp(value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),
       );
-    assert.ok(formatted.indexOf("implementer") < formatted.indexOf("reviewer"));
+    assert.doesNotMatch(formatted, /agent-a|agent-z/);
     assert.doesNotMatch(
       formatted,
       /recent_output|foreground_processes|\bpid\b/iu,
@@ -161,8 +163,11 @@ test("Supervision context formatting preserves state, safety, and bounded record
     const unavailable = formatSupervisionContext(undefined, {
       status: "unavailable",
     });
-    assert.match(unavailable, /Do not infer that there are zero leads/);
-    assert.doesNotMatch(unavailable, /leads: 0/);
+    assert.match(
+      unavailable,
+      /Current supervision state could not be established/,
+    );
+    assert.doesNotMatch(unavailable, /unclaimed_direct_leads: 0/);
   }
 
   {
@@ -264,39 +269,39 @@ test("Supervision ambient projections share status and empty-state semantics", (
     };
 
     const fresh = projections("fresh");
-    assert.match(fresh.ambient, /1 herd/);
-    assert.match(fresh.widget, /1 herd/);
+    assert.match(fresh.ambient, /1 direct lead/);
+    assert.match(fresh.widget, /1 direct lead/);
     assert.match(fresh.ambient, /chief/);
     assert.doesNotMatch(fresh.ambient, /Chief/);
     assert.match(fresh.notification, /Pi Herdsman/);
-    assert.match(fresh.notification, /1 herd/);
+    assert.match(fresh.notification, /1 direct lead/);
     assert.doesNotMatch(fresh.ambient, /stale|unavailable/);
     assert.doesNotMatch(fresh.notification, /stale|unavailable/);
 
     const stale = projections("stale");
     for (const output of Object.values(stale)) assert.match(output, /stale/);
-    assert.match(stale.ambient, /1 herd/);
-    assert.match(stale.notification, /1 herd/);
+    assert.match(stale.ambient, /1 direct lead/);
+    assert.match(stale.notification, /1 direct lead/);
 
     const unavailable = projections("unavailable");
     for (const output of Object.values(unavailable)) {
       assert.match(output, /unavailable/);
-      assert.doesNotMatch(output, /0 herds|1 herd/);
+      assert.doesNotMatch(output, /0 leads|1 lead/);
     }
   }
 
   {
-    assert.match(
-      renderSupervisionLeads([], 120, { status: "fresh" })[0]!,
-      /0 herds/,
+    assert.equal(
+      renderSupervisionLeads([], 120, { status: "fresh" })[0],
+      "● chief · no reports",
     );
-    assert.match(formatSupervisionNotification([], "fresh"), /0 herds/);
+    assert.match(formatSupervisionNotification([], "fresh"), /no reports/);
     assert.match(
       createSupervisionWidget(
         () => [],
         () => "fresh",
       ).render(120)[0]!,
-      /0 herds/,
+      /no reports/,
     );
   }
 });
@@ -304,11 +309,11 @@ test("Supervision ambient projections share status and empty-state semantics", (
 test("Chief ambient projection pluralizes counts and handles unavailable state", (t) => {
   {
     const cases = [
-      { leads: [], label: "0 herds" },
-      { leads: [lead()], label: "1 herd" },
+      { leads: [], label: "no reports" },
+      { leads: [lead()], label: "1 direct lead" },
       {
         leads: [lead(), lead({ lead: "session-b" })],
-        label: "2 herds",
+        label: "2 direct leads",
       },
     ];
     for (const { leads, label } of cases) {
@@ -370,8 +375,8 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       120,
     );
     const output = rows.join("\n");
-    assert.equal(rows[1], "├─ !◐ attention  1 agent · 1 active");
-    assert.equal(rows[2], "├─ ● working  1 agent · 1 active");
+    assert.equal(rows[1], "├─ !◐ attention · 1 agent");
+    assert.equal(rows[2], "├─ ● working · 1 agent");
     assert.equal(
       rows.some((line) => line === ""),
       false,
@@ -387,7 +392,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       ],
       () => "fresh",
     ).render(120);
-    assert.equal(widgetRows[1], "├─ ◉ widget-a  1 agent · 1 active");
+    assert.equal(widgetRows[1], "├─ ◉ widget-a · 1 agent");
     assert.equal(widgetRows[1]?.startsWith("├─ "), true);
     assert.equal(
       widgetRows.some((line) => line === ""),
@@ -413,7 +418,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       {},
       "selected",
     );
-    assert.equal(selectedRows[1], "└─ >!◐ selected  no agents");
+    assert.equal(selectedRows[1], "└─ >!◐ selected");
   }
 
   {
@@ -442,7 +447,15 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
       lead({
         lead: "ask",
         displayName: "ask",
+        needsYou: true,
         pendingAskId: "ask-1",
+        runtimeState: "blocked",
+      }),
+      lead({
+        lead: "orphan",
+        displayName: "orphan",
+        needsYou: false,
+        pendingAskId: "old-ask",
         runtimeState: "blocked",
       }),
     ]);
@@ -462,7 +475,14 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
     );
     assert.deepEqual(
       groups.get("BLOCKED")!.map((item) => item.lead),
-      ["blocked"],
+      ["blocked", "orphan"],
+    );
+    assert.equal(
+      renderSupervisionLeads(
+        [displays.find((item) => item.lead === "orphan")!],
+        120,
+      )[1]!.includes("!"),
+      false,
     );
     assert.equal(
       groups.get("NEEDS YOU")!.some((item) => item.lead === "blocked"),
@@ -534,13 +554,18 @@ test("Supervision display labels remain unique under suffix collisions", (t) => 
 test("Supervision rows cap ordinary leads, retain attention, and fit every width", (t) => {
   {
     const leads = [
-      lead({ lead: "ask", displayName: "attention", pendingAskId: "q" }),
+      lead({
+        lead: "ask",
+        displayName: "attention",
+        needsYou: true,
+        pendingAskId: "q",
+      }),
       ...Array.from({ length: 8 }, (_, index) =>
         lead({ lead: `lead-${index}`, displayName: `lead-${index}` }),
       ),
     ];
     const rows = renderSupervisionLeads(leads, 200);
-    assert.match(rows[0]!, /9 herds/);
+    assert.match(rows[0]!, /9 direct leads/);
     assert.ok(rows.some((line) => line.includes("attention")));
     assert.match(rows.at(-1)!, /2 more/);
     for (let width = 1; width <= 120; width++)
@@ -2019,7 +2044,7 @@ test("chief and staff coordination renderers share semantic status language", ()
         { args: { action: "ask" } },
       ),
     ),
-    "? waiting for Chief",
+    "? waiting for supervisor",
   );
   assert.equal(
     renderedText(
@@ -2029,7 +2054,7 @@ test("chief and staff coordination renderers share semantic status language", ()
         {
           details: {
             ok: true,
-            leads: [
+            reports: [
               { runtime_state: "working", needs_you: true },
               { runtime_state: "settling", needs_you: false },
               { runtime_state: "starting", needs_you: false },
@@ -2162,7 +2187,7 @@ test("chief and staff coordination renderers share semantic status language", ()
       {
         details: {
           ok: true,
-          leads: [
+          reports: [
             {
               session: "lead-opaque",
               display_name: "workspace/api",
@@ -4468,4 +4493,562 @@ test("Large model truncation remains bounded at ordinary and boundary inputs", (
     assert.ok(Buffer.byteLength(result.content) <= 50 * 1024);
     assert.ok(result.content.split("\n").length <= 2000);
   }
+});
+
+test("Manager supervision presentation is role-aware and classifies direct Leads", () => {
+  const snapshot = {
+    leads: [
+      lead({
+        lead: "direct-lead",
+        agentCounts: { active: 0, blocked: 0, total: 0 },
+        availableActions: ["inspect", "message"],
+      }),
+    ],
+  };
+  const reports = supervisionPresentationReports(snapshot);
+  assert.deepEqual(
+    reports.map(({ role }) => role),
+    ["lead"],
+  );
+  assert.equal(
+    renderSupervisionLeads(snapshot, 120, { role: "manager" })[0],
+    "● manager",
+  );
+  assert.equal(
+    renderSupervisionLeads(snapshot, 120, {
+      role: "manager",
+      status: "unavailable",
+    })[0],
+    "● manager · unavailable",
+  );
+  const context = formatSupervisionContext(snapshot, {
+    status: "fresh",
+    role: "manager",
+  });
+  assert.match(context, /Latest validated Manager supervision snapshot\./);
+  assert.match(context, /direct_leads: 1/);
+  assert.doesNotMatch(context, /chief|managers:|unclaimed_direct_leads/iu);
+});
+
+test("Manager context lists only open workspaces without exposing paths", () => {
+  const snapshot = {
+    project: "pi-herdsman",
+    leads: [],
+    openWorkspaces: [
+      {
+        workspaceId: "root",
+        branch: "feat/manager-supervision",
+        path: "/repo/private-primary",
+        linked: false,
+      },
+      {
+        workspaceId: "child",
+        branch: "fix/manager-release-boundaries",
+        path: "/repo/private-linked",
+        linked: true,
+      },
+      {
+        workspaceId: "branchless",
+        path: "/repo/private-branchless",
+        linked: false,
+      },
+      // Closed worktrees are absent from the derived openWorkspaces snapshot.
+    ],
+  };
+  const context = formatSupervisionContext(snapshot, {
+    status: "fresh",
+    role: "manager",
+  });
+
+  assert.ok(
+    context.includes(
+      [
+        "open_workspaces:",
+        "  feat/manager-supervision · workspace=root · primary",
+        "  fix/manager-release-boundaries · workspace=child · linked",
+        "  workspace=branchless · primary",
+      ].join("\n"),
+    ),
+  );
+  assert.doesNotMatch(
+    context,
+    /private-primary|private-linked|private-branchless|\/repo|closed-worktree|undefined/,
+  );
+  assert.ok(
+    Buffer.byteLength(context, "utf8") <= SUPERVISION_CONTEXT_MAX_BYTES,
+  );
+
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+  )
+    .render(120)
+    .join("\n");
+  assert.doesNotMatch(
+    widget,
+    /open_workspaces|manager-supervision|release-boundaries|private-/,
+  );
+});
+
+test("Chief tree shows project and branch without internal paths or zero counts", () => {
+  const snapshot = {
+    managers: [
+      {
+        session: "manager-session",
+        displayName: "pi-herdsman",
+        project: "pi-herdsman",
+        workspaceId: "workspace",
+        paneId: "pane",
+        tabId: "tab",
+        runtimeState: "idle" as const,
+        needsYou: false,
+        agentCounts: { active: 0, blocked: 0, total: 0 },
+        leadCounts: { active: 0, blocked: 0, total: 1 },
+        availableActions: [],
+        leads: [
+          {
+            session: "opaque",
+            branch: "feat/session-usage-stats",
+            displayName: "pi-herdsman/feat/session-usage-stats/lead-12345678",
+            runtimeState: "idle" as const,
+            needsYou: false,
+            agentCounts: { active: 0, blocked: 0, total: 0 },
+          },
+        ],
+      },
+    ],
+  };
+  const rows = renderSupervisionLeads(snapshot, 120);
+  assert.equal(rows[0], "● chief · 1 manager");
+  assert.equal(rows[1], "└─ ○ pi-herdsman · 1 lead");
+  assert.equal(rows[2], "   feat/session-usage-stats · idle");
+  assert.doesNotMatch(
+    rows.join("\n"),
+    /\.git|0 agents|0 leads|manager-session|lead-12345678/,
+  );
+  assert.equal(
+    renderSupervisionLeads(
+      { ...snapshot, leads: [lead(), lead({ lead: "other" })] },
+      120,
+    )[0],
+    "● chief · 1 manager · 2 direct leads",
+  );
+});
+
+test("Manager widget shares one bounded work/Lead tree and context includes project work", () => {
+  const work = (["active", "paused", "conflict", "finished"] as const).map(
+    (status, index) => ({
+      branch: `feat/${status}-${"long".repeat(20)}`,
+      session: `managed-${index}`,
+      status,
+      ...(status === "active" ? { runtimeState: "blocked" as const } : {}),
+    }),
+  );
+  const snapshot = {
+    project: "pi-herdsman",
+    work,
+    leads: [
+      lead({
+        lead: "manual",
+        branch: "feat/manual",
+        displayName: "opaque/manual",
+      }),
+      lead({
+        lead: "managed-0",
+        branch: work[0]!.branch,
+        needsYou: true,
+        runtimeState: "blocked",
+      }),
+    ],
+  };
+  const rows = renderSupervisionLeads(snapshot, 120, { role: "manager" });
+  assert.equal(rows[0], "● manager · pi-herdsman");
+  assert.match(rows[1]!, /!◐ feat\/active.* · active/);
+  assert.match(rows[2]!, /○ feat\/paused.* · paused/);
+  assert.match(rows[3]!, /! feat\/conflict.* · conflict/);
+  assert.match(rows[4]!, /✓ feat\/finished.* · finished/);
+  assert.match(
+    renderSupervisionLeads(snapshot, 40, { role: "manager" })[1]!,
+    / · active$/,
+  );
+  assert.equal(rows[5], "└─ ○ feat/manual · Lead");
+  assert.equal(rows.filter((row) => row.startsWith("└─")).length, 1);
+  assert.doesNotMatch(rows.join("\n"), /other Lead/i);
+  assert.doesNotMatch(
+    rows.join("\n"),
+    /opaque\/manual|managed-0|0 leads|\.git/,
+  );
+  const items = managerSupervisionItems(snapshot);
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["work", "work", "work", "work", "lead"],
+  );
+  assert.equal(items[0]!.kind === "work" && items[0]!.lead?.lead, "managed-0");
+  assert.deepEqual(
+    renderSupervisionLeads(snapshot, 120, {
+      role: "manager",
+      ordinaryCap: 2,
+    }).slice(1),
+    [
+      rows[1],
+      "├─ ○ feat/paused-" + "long".repeat(20) + " · paused",
+      "└─ … 3 more · /manager",
+    ],
+  );
+  const context = formatSupervisionContext(
+    { work, leads: [] },
+    { role: "manager", status: "fresh" },
+  );
+  assert.match(
+    context,
+    /project_work:\n  feat\/active-.* · active · runtime=blocked/,
+  );
+  assert.doesNotMatch(context, /session=|managed-\d/);
+  assert.ok(Buffer.byteLength(context) <= SUPERVISION_CONTEXT_MAX_BYTES);
+  for (let width = 1; width <= 120; width++)
+    assert.ok(
+      renderSupervisionLeads(snapshot, width, { role: "manager" }).every(
+        (row) => visibleWidth(row) <= width,
+      ),
+    );
+  assert.equal(
+    createSupervisionWidget(
+      () => ({ project: "pi-herdsman", work: [], leads: [] }),
+      () => "fresh",
+      "manager",
+    ).render(120)[0],
+    "● manager · pi-herdsman",
+  );
+});
+
+test("Manager work status outranks live Lead markers except when active", () => {
+  for (const [status, marker] of [
+    ["active", "●"],
+    ["paused", "○"],
+    ["conflict", "!"],
+    ["finished", "✓"],
+  ] as const) {
+    for (const needsYou of [false, true]) {
+      const snapshot = {
+        work: [{ branch: "feat/example", session: "assigned", status }],
+        leads: [
+          lead({
+            lead: "assigned",
+            runtimeState: "working",
+            needsYou,
+          }),
+        ],
+      };
+      assert.deepEqual(
+        renderSupervisionLeads(snapshot, 120, { role: "manager" }, "assigned"),
+        [
+          "● manager",
+          `└─ >${needsYou ? "!" : ""}${marker} feat/example · ${status}`,
+        ],
+      );
+    }
+  }
+});
+
+test("coordination messages render compact semantic headings and strip only known envelopes", () => {
+  const details = {
+    id: "transport-uuid",
+    leaseId: "lease-uuid",
+    fromSessionId: "sender-session-uuid",
+    leadSessionId: "assignment-session-uuid",
+    branch: "feat/bootstrap",
+  };
+  const envelopes = {
+    chief_message: "From chief sender-session-uuid: ",
+    lead_message: "From lead sender-session-uuid: ",
+    lead_ask: "From lead sender-session-uuid: ",
+    chief_reply: "From chief sender-session-uuid: ",
+    manager_message: "From manager sender-session-uuid: ",
+    manager_ask: "From manager sender-session-uuid: ",
+    manager_reply: "From manager sender-session-uuid: ",
+    project_assignment: "Project assignment for branch feat/bootstrap:\n\n",
+    report_result: "Project work feat/bootstrap finished:\n\n",
+    peer_message: "Peer message from sender-session-uuid: ",
+  };
+  const headings = {
+    chief_message: "Chief message",
+    lead_message: "Lead message",
+    lead_ask: "? Lead needs input",
+    chief_reply: "Chief reply",
+    manager_message: "Manager message",
+    manager_ask: "? Manager needs input",
+    manager_reply: "Manager reply",
+    project_assignment: "→ feat/bootstrap assigned",
+    report_result: "✓ feat/bootstrap finished",
+    peer_message: "Peer message",
+  };
+  for (const kind of COORDINATION_MESSAGE_KINDS) {
+    const rendered = renderCoordinationMessage(
+      kind,
+      {
+        content: `${envelopes[kind]}Manager can now be reached before chat. ${"more ".repeat(30)}`,
+        details,
+      },
+      { outputPad: 1 },
+      presentationTheme,
+    );
+    const text = renderedText(rendered);
+    assert.ok(text.includes(headings[kind]), kind);
+    assert.match(text, /Manager can now be reached before chat/);
+    assert.match(text, /…/);
+    assert.doesNotMatch(
+      text,
+      /uuid|pi-herdsman-|From |Peer message from|Project work|Project assignment for/,
+    );
+    for (let width = 1; width <= 80; width++)
+      assert.ok(
+        rendered.render(width).every((line) => visibleWidth(line) <= width),
+      );
+  }
+  for (const kind of COORDINATION_MESSAGE_KINDS) {
+    const text = renderedText(
+      renderCoordinationMessage(
+        kind,
+        {
+          content: `${envelopes[kind]}Manager can now be reached before chat.`,
+          details,
+        },
+        { expanded: true },
+        presentationTheme,
+      ),
+    );
+    assert.match(text, /Manager can now be reached before chat/);
+    assert.ok(
+      !text.includes(envelopes[kind]),
+      `${kind} sender/branch envelope`,
+    );
+  }
+  const prose =
+    "Peer message from someone-else: user prose must remain.\n\nSecond paragraph.";
+  assert.match(
+    renderedText(
+      renderCoordinationMessage(
+        "peer_message",
+        {
+          content: prose,
+          details,
+        },
+        {},
+        presentationTheme,
+      ),
+    ),
+    /Peer message from someone-else: user prose must remain/,
+  );
+  assert.match(
+    renderedText(
+      renderCoordinationMessage(
+        "peer_message",
+        {
+          content:
+            envelopes.peer_message + "Keep this without matching details.",
+        },
+        {},
+        presentationTheme,
+      ),
+    ),
+    /Peer message from sender-session-uuid:/,
+  );
+  for (const content of [
+    "From manager other-session: preserve user-authored text.",
+    "From lead sender-session-uuid: preserve the mismatched role.",
+  ])
+    assert.ok(
+      renderedText(
+        renderCoordinationMessage(
+          "manager_message",
+          { content, details },
+          {},
+          presentationTheme,
+        ),
+      ).includes(content),
+    );
+});
+
+test("expanded coordination messages show complete Markdown and useful provenance only", () => {
+  const body = `## Summary\n\nManager is **reachable**.\n\n- First worktree created\n\n${"Full result paragraph. ".repeat(20)}\n\nFinal evidence.`;
+  const details = {
+    id: "transport-uuid",
+    leaseId: "lease-uuid",
+    fromSessionId: "lead-pi-session",
+    leadSessionId: "internal-assignment-session",
+    branch: "feat/bootstrap",
+  };
+  const rendered = renderCoordinationMessage(
+    "report_result",
+    {
+      content: `Project work feat/bootstrap finished:\n\n${body}`,
+      details,
+    },
+    { expanded: true },
+    presentationTheme,
+  );
+  const text = renderedText(rendered);
+  assert.match(text, /✓ feat\/bootstrap finished/);
+  assert.match(text, /branch: feat\/bootstrap/);
+  assert.match(text, /session: lead-pi-session/);
+  assert.match(text, /Summary/);
+  assert.match(text, /Manager is reachable/);
+  assert.match(text, /First worktree created/);
+  assert.match(text, /Final evidence/);
+  assert.equal((text.match(/Full result paragraph\./g) ?? []).length, 20);
+  assert.doesNotMatch(
+    text,
+    /transport-uuid|lease-uuid|internal-assignment-session|Project work|## Summary|\*\*reachable\*\*/,
+  );
+  for (let width = 1; width <= 80; width++)
+    assert.ok(
+      rendered.render(width).every((line) => visibleWidth(line) <= width),
+    );
+  const ordinary = renderedText(
+    renderCoordinationMessage(
+      "lead_message",
+      {
+        content: "From lead lead-pi-session: Ordinary **progress**.",
+        details: {
+          fromSessionId: "lead-pi-session",
+          leadSessionId: "lead-pi-session",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(ordinary, /Lead message/);
+  assert.match(ordinary, /session: lead-pi-session/);
+  assert.match(ordinary, /Ordinary progress/);
+  assert.doesNotMatch(
+    ordinary,
+    /branch:|From lead lead-pi-session:|manager-session/,
+  );
+});
+
+test("coordination previews hide only result-source JSON and assignment UUIDs", () => {
+  const resultContent =
+    `Project work feat/bootstrap finished:\n\n` +
+    `Lead result source: {"branch":"feat/bootstrap","cwd":"/repo/wt"}\n\n` +
+    "Fixed Manager bootstrap and added regression coverage.";
+  const compactResult = renderedText(
+    renderCoordinationMessage(
+      "report_result",
+      { content: resultContent, details: { branch: "feat/bootstrap" } },
+      {},
+      presentationTheme,
+    ),
+  );
+  assert.match(compactResult, /Fixed Manager bootstrap/);
+  assert.doesNotMatch(compactResult, /Lead result source/);
+
+  const expandedResult = renderedText(
+    renderCoordinationMessage(
+      "report_result",
+      { content: resultContent, details: { branch: "feat/bootstrap" } },
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(expandedResult, /Lead result source/);
+  assert.match(expandedResult, /Fixed Manager bootstrap/);
+
+  const arbitraryContent = renderedText(
+    renderCoordinationMessage(
+      "report_result",
+      {
+        content:
+          "Project work feat/bootstrap finished:\n\n" +
+          "Lead result source: not JSON\n\n" +
+          "Keep this user-authored text.",
+        details: { branch: "feat/bootstrap" },
+      },
+      {},
+      presentationTheme,
+    ),
+  );
+  assert.match(arbitraryContent, /Lead result source: not JSON/);
+
+  for (const provenance of [
+    `{"branch":"other-branch","cwd":"/repo/wt"}`,
+    `{"branch":"feat/bootstrap","cwd":"/repo/wt","extra":true}`,
+  ]) {
+    const preview = renderedText(
+      renderCoordinationMessage(
+        "report_result",
+        {
+          content:
+            "Project work feat/bootstrap finished:\n\n" +
+            `Lead result source: ${provenance}\n\n` +
+            "Keep the provenance visible.",
+          details: { branch: "feat/bootstrap" },
+        },
+        {},
+        presentationTheme,
+      ),
+    );
+    assert.match(preview, /Lead result source/);
+    assert.ok(preview.includes(provenance));
+  }
+
+  const assignment = renderedText(
+    renderCoordinationMessage(
+      "project_assignment",
+      {
+        content:
+          "Project assignment for branch feat/bootstrap:\n\n" +
+          "Implement the bootstrap fix.",
+        details: {
+          fromSessionId: "manager-session-uuid",
+          leadSessionId: "lead-session-uuid",
+          branch: "feat/bootstrap",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(assignment, /branch: feat\/bootstrap/);
+  assert.match(assignment, /Implement the bootstrap fix/);
+  assert.doesNotMatch(
+    assignment,
+    /session:|manager-session-uuid|lead-session-uuid/,
+  );
+});
+
+test("Manager mixed tree has one final connector and independent Leads share the row cap", () => {
+  const snapshot = {
+    project: "pi-herdsman",
+    work: [
+      {
+        branch: "worktree/lead-management-smoke-ping",
+        session: "assigned",
+        status: "paused" as const,
+      },
+    ],
+    leads: [
+      lead({
+        lead: "independent",
+        branch: "test/manager-lifecycle-smoke",
+        runtimeState: "idle",
+        agentCounts: { active: 1, blocked: 0, total: 1 },
+      }),
+      lead({ lead: "assigned" }),
+    ],
+  };
+  assert.deepEqual(renderSupervisionLeads(snapshot, 120, { role: "manager" }), [
+    "● manager · pi-herdsman",
+    "├─ ○ worktree/lead-management-smoke-ping · paused",
+    "└─ ◉ test/manager-lifecycle-smoke · Lead",
+  ]);
+  assert.deepEqual(
+    renderSupervisionLeads(snapshot, 120, { role: "manager", ordinaryCap: 1 }),
+    [
+      "● manager · pi-herdsman",
+      "├─ ○ worktree/lead-management-smoke-ping · paused",
+      "└─ … 1 more · /manager",
+    ],
+  );
 });

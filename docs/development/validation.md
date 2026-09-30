@@ -136,6 +136,7 @@ npm run smoke
 npm run smoke -- core
 npm run smoke -- continuation
 npm run smoke -- chief-tree
+npm run smoke -- manager-recovery
 ```
 
 `npm run smoke` defaults to `core`. Run it from an active Herdr-managed Pi

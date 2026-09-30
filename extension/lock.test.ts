@@ -15,6 +15,7 @@ import {
   claimProcessLock,
   ProcessLockOccupiedError,
   readLiveProcessLock,
+  readProcessLockStatus,
 } from "./lock.ts";
 
 function temporaryPath(): string {
@@ -145,6 +146,10 @@ test("readLiveProcessLock rejects a dead PID", () => {
       join(path, `2147483647-${id}`),
       JSON.stringify({ pid: 2147483647, id }),
     );
+    deepEqual(readProcessLockStatus(path), {
+      claim: { pid: 2147483647, id },
+      live: false,
+    });
     throws(() => readLiveProcessLock(path), /Unable to verify/);
   } finally {
     rmSync(path, { recursive: true, force: true });
@@ -160,6 +165,7 @@ test("readLiveProcessLock rejects a malformed owner", () => {
       join(path, `${process.pid}-${id}`),
       JSON.stringify({ pid: process.pid, id, unexpected: true }),
     );
+    throws(() => readProcessLockStatus(path), /Unable to verify/);
     throws(() => readLiveProcessLock(path), /Unable to verify/);
   } finally {
     rmSync(path, { recursive: true, force: true });

@@ -7,20 +7,38 @@ agents plus controller-local transient starting assignments.
 
 It does not replace mailbox assignment/result authority.
 
-An active chief receives a separate leads-only widget. It shows the
-supervision projection, not managed agent rows. Its complete
-overview, peek, and focus behavior is documented in the
-[supervision reference](supervision.md). The two widgets are never combined.
+An active Chief receives a separate supervision widget for its current direct
+reports (Managers and ordinary Leads without an active project Manager). It
+shows both categories together when both exist, not managed Agent rows. An
+active Manager receives a work-centric branch projection rather than the
+ordinary Lead Agent widget. Chief's complete overview, peek, and focus behavior
+is documented in the [supervision reference](supervision.md). Supervision and
+Agent widgets are never combined.
 
-The ambient supervision rows use `├─` for non-final visible leads and `└─` for the
-final visible lead. Selection, attention, and lifecycle remain separate: `>`
+The Chief supervision rows use `├─` for non-final visible reports and `└─` for the
+final visible report. Selection, attention, and lifecycle remain separate: `>`
 means selected, `!` means `needs_you`, `●` means working, `◐` means blocked,
 `◌` means settling or starting, `○` means idle or done, `?` means unknown, and
 `×` means lost. An idle or done lead with active delegated descendants uses
 `◉`. Workspace labels are presentation text inside each lead row, not
 additional hierarchy nodes. The widget always retains
-attention leads, caps ordinary leads, and shows omitted leads in a final
-`└─ … N more · /chief` row.
+attention reports, caps ordinary reports, and shows omitted reports in a final
+`└─ … N more · /chief` or `└─ … N more · /manager` row, according to the active role.
+
+Chief's header shows only nonzero categories (`manager`, `direct lead`), or
+`no reports`. Manager's header shows the project name and lists managed
+branches as work, including paused and broken work without live Leads:
+
+```text
+● manager · pi-herdsman
+├─ ● feat/example · working
+└─ ○ fix/other · paused
+```
+
+Manager work markers are `●` working, `◉` blocked, `○` paused or idle, `…`
+starting, `✓` finished, and `!` broken. Unassigned live Leads are shown
+separately, not treated as managed work. Branches are display handles; exact
+session identity is revalidated for control actions.
 
 ## Installation
 

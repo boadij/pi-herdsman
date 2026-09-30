@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import {
+import fs, {
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer, type Socket } from "node:net";
 import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -19,6 +22,7 @@ import {
   listHerdrAgents,
   listAllHerdrAgents,
   herdrSessionSnapshot,
+  worktreeGroupScope,
   watchHerdrLifecycle,
   leadMetadataArgs,
   reportLeadMetadata,
@@ -31,7 +35,9 @@ import {
   closeHerdrPane,
   rollbackHerdrStart,
   startHerdrAgent,
+  startHerdrAgentInPane,
   matchesExpectedSession,
+  readPiSessionHeaderId,
   sameObservedSessionPath,
   sessionIdentity,
   STARTUP_TIMEOUT_MAX,
@@ -207,7 +213,16 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
       request = JSON.parse(buffer.slice(0, newline));
       socket.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
       if (connections === 1) {
-        socket.write(JSON.stringify({ event: "pane.closed" }) + "\n");
+        socket.write(
+          JSON.stringify({
+            id: request.id,
+            error: {
+              code: "events_lost",
+              message:
+                "event subscription fell behind retained history; resubscribe and resync with session.snapshot",
+            },
+          }) + "\n",
+        );
         socket.end();
       }
     });
@@ -2771,6 +2786,132 @@ test("placement validates a non-lead caller and selects the largest agent axis",
   }
 });
 
+test("unnamed pane-targeted stop settles only with exact ownership", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "workspace-1";
+  const session = {
+    source: "herdr:pi",
+    agent: "pi",
+    kind: "id",
+    value: "session-1",
+  };
+  const pane = {
+    pane_id: "pane-1",
+    workspace_id: "workspace-1",
+    tab_id: "tab-1",
+    cwd: "/tmp",
+    agent_session: session,
+  };
+  const running = {
+    pane_id: "pane-1",
+    shell_pid: 10,
+    foreground_process_group_id: 20,
+    foreground_processes: [
+      { pid: 10, argv0: "/bin/zsh" },
+      { pid: 20, argv0: "/usr/bin/pi" },
+    ],
+  };
+  const shell = {
+    ...running,
+    foreground_process_group_id: 10,
+    foreground_processes: [{ pid: 10, argv0: "/bin/zsh" }],
+  };
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  try {
+    for (const variant of [
+      "valid",
+      "pane",
+      "session",
+      "process",
+      "missing expected pane",
+    ]) {
+      const calls: string[][] = [];
+      let observations = 0;
+      let stopped = false;
+      const pi = {
+        exec: async (_command: string, args: string[]) => {
+          calls.push(args);
+          const key = args.slice(0, 2).join(" ");
+          if (key === "agent get")
+            return response({
+              agent: {
+                ...pane,
+                pane_id: variant === "pane" ? "pane-2" : "pane-1",
+                agent_session:
+                  variant === "session"
+                    ? { ...session, value: "session-2" }
+                    : session,
+              },
+            });
+          if (key === "pane get") return response({ pane });
+          if (key === "tab list")
+            return response({
+              tabs: [{ tab_id: "tab-1", workspace_id: "workspace-1" }],
+            });
+          if (key === "pane process-info")
+            return response({
+              process_info: stopped
+                ? shell
+                : variant === "process" && observations++ === 1
+                  ? { ...running, foreground_process_group_id: 99 }
+                  : running,
+            });
+          if (key === "agent send-keys") {
+            stopped = true;
+            return { code: 0, stdout: "", stderr: "" };
+          }
+          if (key === "agent list")
+            return response({ agents: stopped ? [] : [pane] });
+          throw new Error(`unexpected Herdr call: ${args.join(" ")}`);
+        },
+      } as any;
+      const stop = stopHerdrAgentPreservingPane(
+        pi,
+        { cwd: "/tmp" } as any,
+        "pane-1",
+        {
+          ...(variant === "missing expected pane" ? {} : { paneId: "pane-1" }),
+          tabId: "tab-1",
+          workspaceId: "workspace-1",
+          cwd: "/tmp",
+          session: { id: "session-1" },
+        },
+      );
+      if (variant === "valid") await stop;
+      else await assert.rejects(stop, /ownership is unproven/);
+      assert.deepEqual(
+        calls.filter((args) => args[0] === "agent" && args[1] === "send-keys"),
+        variant === "valid"
+          ? [["agent", "send-keys", "pane-1", "ctrl+c", "ctrl+d"]]
+          : [],
+        variant,
+      );
+      assert.equal(
+        calls.some((args) => args[0] === "pane" && args[1] === "close"),
+        false,
+      );
+      if (variant === "valid") {
+        assert.equal(
+          calls.filter((args) => args[1] === "get" && args[0] === "agent")
+            .length,
+          2,
+        );
+        assert.ok(
+          calls.some((args) => args[0] === "pane" && args[1] === "get"),
+        );
+      }
+    }
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
 test("preserving stop refuses a process takeover at the destructive boundary", async () => {
   const environment = globalThis.process.env;
   const previousWorkspace = environment.HERDR_WORKSPACE_ID;
@@ -2920,15 +3061,191 @@ test("preserving stop rejects malformed session identity observations", async ()
   );
 });
 
+test("Pi session header reads are bounded, handle short reads, and close descriptors", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-header-"));
+  const path = join(root, "not-the-header-id.jsonl");
+  const limit = 1024 * 1024;
+  const chunkSize = 4 * 1024;
+  const header = JSON.stringify({ type: "session", id: "header-😀" });
+  const fullBudgetHeader =
+    header + " ".repeat(limit - Buffer.byteLength(header));
+  const read = fs.readSync;
+  const close = fs.closeSync;
+  let bytesRead = 0;
+  let shortReads = false;
+  let readError: NodeJS.ErrnoException | undefined;
+  let probeError = false;
+  let probes = 0;
+  let newlinePosition = -1;
+  const closed: number[] = [];
+  t.mock.method(
+    fs,
+    "readSync",
+    (
+      fd: number,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number,
+    ) => {
+      assert.ok(length <= chunkSize);
+      if (position === limit) {
+        assert.ok(buffer.length <= chunkSize);
+        assert.equal(offset, 0);
+        assert.equal(length, 1);
+        probes++;
+      } else {
+        assert.equal(buffer.length, chunkSize);
+        assert.equal(offset, 0);
+        assert.ok(position + length <= limit);
+      }
+      if (newlinePosition !== -1 && position !== limit)
+        assert.ok(
+          position <= newlinePosition,
+          "no reads after the newline chunk",
+        );
+      if (readError && (!probeError || position === limit)) throw readError;
+      const bytes = read(
+        fd,
+        buffer,
+        offset,
+        shortReads ? Math.min(length, 1) : length,
+        position,
+      );
+      bytesRead += bytes;
+      return bytes;
+    },
+  );
+  t.mock.method(fs, "closeSync", (fd: number) => {
+    closed.push(fd);
+    close(fd);
+  });
+  syncBuiltinESMExports();
+  try {
+    for (const scenario of [
+      {
+        name: "large body",
+        content: `${header}\n${"x".repeat(2 * 1024 * 1024)}`,
+      },
+      {
+        name: "UTF-8 across full chunks",
+        content:
+          " ".repeat(chunkSize - Buffer.byteLength(header.split("😀")[0]) - 1) +
+          `${header}\nignored`,
+      },
+      {
+        name: "short reads through UTF-8 and newline",
+        content: `${header}\nignored`,
+        short: true,
+      },
+      { name: "short reads to EOF", content: header, short: true },
+      { name: "empty", content: "", empty: true },
+      {
+        name: "newline in final permitted byte",
+        content: `${fullBudgetHeader.slice(0, -1)}\nignored`,
+      },
+      {
+        name: "unterminated at limit",
+        content: fullBudgetHeader,
+      },
+      {
+        name: "newline beyond limit",
+        content: `${fullBudgetHeader}\n`,
+        error: /exceeds 1 MiB/,
+      },
+      {
+        name: "oversized unterminated",
+        content: `${fullBudgetHeader} `,
+        error: /exceeds 1 MiB/,
+      },
+      {
+        name: "EOF probe read error",
+        content: fullBudgetHeader,
+        ioError: "EIO",
+        probe: true,
+        error: /injected read failure/,
+      },
+      { name: "malformed", content: "not JSON\n", error: /JSON/ },
+      {
+        name: "read error",
+        content: header,
+        ioError: "EIO",
+        error: /injected read failure/,
+      },
+      {
+        name: "ENOENT during read is not a missing file",
+        content: header,
+        ioError: "ENOENT",
+        error: /injected read failure/,
+      },
+    ]) {
+      writeFileSync(path, scenario.content);
+      bytesRead = 0;
+      probes = 0;
+      newlinePosition = Buffer.from(scenario.content).indexOf(0x0a);
+      closed.length = 0;
+      shortReads = scenario.short ?? false;
+      probeError = scenario.probe ?? false;
+      readError = scenario.ioError
+        ? Object.assign(new Error("injected read failure"), {
+            code: scenario.ioError,
+          })
+        : undefined;
+      if (scenario.error)
+        assert.throws(
+          () => readPiSessionHeaderId(path),
+          scenario.error,
+          scenario.name,
+        );
+      else
+        assert.equal(
+          readPiSessionHeaderId(path),
+          scenario.empty ? undefined : "header-😀",
+          scenario.name,
+        );
+      assert.ok(bytesRead <= limit + 1, scenario.name);
+      assert.equal(
+        probes,
+        Buffer.byteLength(scenario.content.split("\n")[0]) >= limit ? 1 : 0,
+        scenario.name,
+      );
+      if (scenario.name === "large body") assert.equal(bytesRead, chunkSize);
+      if (scenario.name === "unterminated at limit")
+        assert.equal(bytesRead, limit);
+      if (
+        scenario.name === "newline beyond limit" ||
+        scenario.name === "oversized unterminated"
+      )
+        assert.equal(bytesRead, limit + 1);
+      if (scenario.name === "newline in final permitted byte")
+        assert.equal(bytesRead, limit);
+      if (scenario.short)
+        assert.equal(
+          bytesRead,
+          Buffer.byteLength(scenario.content.split("\n")[0]) +
+            (scenario.content.includes("\n") ? 1 : 0),
+        );
+      assert.equal(closed.length, 1, scenario.name);
+      assert.throws(() => fs.fstatSync(closed[0]), /EBADF/, scenario.name);
+    }
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("session matching keeps id and canonical path observations kind-aware", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-session-"));
   const path = join(root, "agent-session.jsonl");
   const alias = join(root, "alias-session.jsonl");
   const other = join(root, "other-session.jsonl");
   const missing = join(root, "missing-session.jsonl");
+  const loop = join(root, "loop-session.jsonl");
   writeFileSync(path, "{}");
   writeFileSync(other, "{}");
   symlinkSync(path, alias);
+  symlinkSync(loop, loop);
   try {
     assert.equal(
       matchesExpectedSession(
@@ -2940,28 +3257,32 @@ test("session matching keeps id and canonical path observations kind-aware", () 
         },
         { id: "different-id", path },
       ),
-      true,
+      false,
     );
     assert.equal(sameObservedSessionPath(alias, path), true);
     assert.equal(sameObservedSessionPath(missing, path), false);
     assert.equal(sameObservedSessionPath(missing, missing), true);
-    assert.throws(
-      () => sameObservedSessionPath(path, missing),
-      /could not canonicalize exact Pi session path/,
+    assert.equal(sameObservedSessionPath(path, missing), false);
+    assert.equal(
+      matchesExpectedSession(
+        {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "path",
+          value: path,
+        },
+        { path: missing },
+      ),
+      false,
     );
-    assert.throws(
-      () =>
-        matchesExpectedSession(
-          {
-            source: "herdr:pi",
-            agent: "pi",
-            kind: "path",
-            value: path,
-          },
-          { path: missing },
-        ),
-      /could not canonicalize exact Pi session path/,
-    );
+    for (const [observed, expected] of [
+      [path, loop],
+      [loop, path],
+    ])
+      assert.throws(
+        () => sameObservedSessionPath(observed, expected),
+        /could not canonicalize exact Pi session path.*ELOOP/,
+      );
     assert.equal(
       matchesExpectedSession(
         {
@@ -2974,17 +3295,98 @@ test("session matching keeps id and canonical path observations kind-aware", () 
       ),
       false,
     );
+    for (const [expected, matches] of [
+      [{ id: "different-id", path: missing }, true],
+      [{ id: "different-id" }, false],
+      [{ id: "different-id", path: join(root, "also-missing.jsonl") }, false],
+    ] as const)
+      assert.equal(
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+          expected,
+        ),
+        matches,
+      );
+    assert.equal(readPiSessionHeaderId(missing), undefined);
+    writeFileSync(missing, "");
+    assert.equal(readPiSessionHeaderId(missing), undefined);
+    for (const [expected, matches] of [
+      [{ id: "agent-session", path: missing }, true],
+      [{ id: "agent-session" }, false],
+      [{ id: "agent-session", path }, false],
+    ] as const)
+      assert.equal(
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+          expected,
+        ),
+        matches,
+      );
+    assert.deepEqual(readFileSync(missing), Buffer.alloc(0));
+    assert.equal(statSync(missing).size, 0);
+    const header = JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "agent-session",
+      timestamp: new Date().toISOString(),
+      cwd: root,
+    });
+    writeFileSync(missing, header);
+    assert.equal(readPiSessionHeaderId(missing), "agent-session");
+    for (const [expected, matches] of [
+      [{ id: "different-id", path: missing }, false],
+      [{ id: "agent-session", path: missing }, true],
+      [{ path: missing }, true],
+      [{ id: "agent-session" }, true],
+      [{ id: "different-id" }, false],
+    ] as const)
+      assert.equal(
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+          expected,
+        ),
+        matches,
+      );
+    assert.equal(readFileSync(missing, "utf8"), header);
+    for (const content of [
+      "{}",
+      "not JSON",
+      " ",
+      JSON.stringify({ type: "session", id: 123 }),
+      JSON.stringify({ type: "session", id: "" }),
+      JSON.stringify({ type: "message", id: "agent-session" }),
+      `not JSON\n${header}\n`,
+    ]) {
+      writeFileSync(missing, content);
+      assert.throws(() => readPiSessionHeaderId(missing));
+      for (const expected of [
+        { id: "agent-session", path: missing },
+        { id: "agent-session" },
+      ])
+        assert.equal(
+          matchesExpectedSession(
+            { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+            expected,
+          ),
+          false,
+        );
+      assert.equal(readFileSync(missing, "utf8"), content);
+    }
+    assert.throws(() => readPiSessionHeaderId(root), /EISDIR/);
     assert.equal(
       matchesExpectedSession(
-        {
-          source: "herdr:pi",
-          agent: "pi",
-          kind: "path",
-          value: missing,
-        },
-        { id: "different-id", path: missing },
+        { source: "herdr:pi", agent: "pi", kind: "path", value: root },
+        { id: "agent-session", path: root },
       ),
-      true,
+      false,
+    );
+    assert.throws(
+      () =>
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: loop },
+          { id: "agent-session", path: loop },
+        ),
+      /could not canonicalize exact Pi session path.*ELOOP/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -4189,4 +4591,321 @@ test("shell ownership uses captured identity without a shell allowlist", () => {
     }),
     false,
   );
+});
+
+test("worktree group scope derives project before linked worktrees exist", async () => {
+  const calls: string[][] = [];
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const result = {
+        source: {
+          repo_key: "repo-key",
+          repo_name: "project",
+          source_workspace_id: "root",
+        },
+        worktrees:
+          args.at(-1) === "linked"
+            ? [
+                { open_workspace_id: "root" },
+                { open_workspace_id: "linked" },
+                { open_workspace_id: "linked" },
+                { open_workspace_id: null },
+                { open_workspace_id: "" },
+              ]
+            : [],
+      };
+      return { code: 0, stdout: JSON.stringify({ id: 1, result }), stderr: "" };
+    },
+  } as any;
+  const ctx = { cwd: "/tmp" } as any;
+  const primary = await worktreeGroupScope(pi, ctx, "root");
+  assert.deepEqual(primary, {
+    repoKey: "repo-key",
+    repoName: "project",
+    primaryWorkspaceId: "root",
+    workspaceIds: ["root"],
+  });
+  assert.deepEqual(calls, [["worktree", "list", "--workspace", "root"]]);
+  const linked = await worktreeGroupScope(pi, ctx, "linked");
+  assert.deepEqual(linked, {
+    ...primary,
+    workspaceIds: ["root", "linked"],
+  });
+  assert.notEqual(linked.primaryWorkspaceId, "linked"); // /manager requires the primary workspace.
+  assert.deepEqual(calls, [
+    ["worktree", "list", "--workspace", "root"],
+    ["worktree", "list", "--workspace", "linked"],
+  ]);
+});
+
+test("worktree group scope fails closed on missing or inconsistent topology evidence", async () => {
+  const ctx = { cwd: "/tmp" } as any;
+  const scope = (source: any, worktrees: any) =>
+    worktreeGroupScope(
+      {
+        exec: async () => ({
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            id: 1,
+            result: { source, worktrees },
+          }),
+        }),
+      } as any,
+      ctx,
+      "linked",
+    );
+  const source = {
+    repo_key: "repo-key",
+    repo_name: "project",
+    source_workspace_id: "root",
+  };
+  for (const key of Object.keys(source)) {
+    for (const value of [undefined, "", 42]) {
+      await assert.rejects(
+        scope({ ...source, [key]: value }, []),
+        /Herdr project topology is unavailable/,
+      );
+    }
+  }
+  for (const worktrees of [undefined, null, {}]) {
+    await assert.rejects(
+      scope(source, worktrees),
+      /Herdr project topology is unavailable/,
+    );
+  }
+  await assert.rejects(
+    scope(undefined, []),
+    /Herdr project topology is unavailable/,
+  );
+  await assert.rejects(
+    scope(source, [{ open_workspace_id: "other" }]),
+    /Herdr project topology changed/,
+  );
+});
+
+test("worktree group scope propagates native Herdr errors", async () => {
+  for (const code of ["not_git_worktree", "workspace_not_found"]) {
+    await assert.rejects(
+      worktreeGroupScope(
+        {
+          exec: async () => ({
+            code: 1,
+            stdout: JSON.stringify({
+              error: { code, message: "Native topology failure" },
+            }),
+            stderr: "",
+          }),
+        } as any,
+        { cwd: "/tmp" } as any,
+        "root",
+      ),
+      (failure: unknown) => {
+        assert.ok(failure instanceof OperationError);
+        assert.equal(failure.detail.details?.herdrCode, code);
+        assert.equal(failure.detail.operation, "herdr worktree list");
+        assert.equal(failure.message, "Native topology failure");
+        return true;
+      },
+    );
+  }
+});
+
+test("existing-pane startup waits for shell readiness before starting Pi", async () => {
+  const environment = globalThis.process.env;
+  const previousWorkspace = environment.HERDR_WORKSPACE_ID;
+  environment.HERDR_WORKSPACE_ID = "primary-workspace";
+  const calls: string[][] = [];
+  let releaseMarker!: () => void;
+  let markerStarted!: () => void;
+  const markerPending = new Promise<void>(
+    (resolve) => (releaseMarker = resolve),
+  );
+  const markerSeen = new Promise<void>((resolve) => (markerStarted = resolve));
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const key = args.slice(0, 2).join(" ");
+      if (key === "workspace get")
+        return response({
+          workspace: {
+            worktree: { repo_key: "repo", is_linked_worktree: false },
+          },
+        });
+      if (key === "worktree list")
+        return response({
+          source: {
+            repo_key: "repo",
+            repo_name: "project",
+            source_workspace_id: "primary-workspace",
+          },
+          worktrees: [{ open_workspace_id: "existing-workspace" }],
+        });
+      if (key === "pane run") {
+        markerStarted();
+        return response({});
+      }
+      if (key === "pane wait-output") {
+        await markerPending;
+        return response({});
+      }
+      if (key === "pane process-info")
+        return response({
+          process_info: {
+            pane_id: "existing-pane",
+            shell_pid: 33,
+            foreground_process_group_id: 33,
+            foreground_processes: [{ pid: 33, argv0: "/bin/zsh" }],
+          },
+        });
+      if (key === "pane list")
+        return response({
+          panes: [
+            {
+              pane_id: "existing-pane",
+              workspace_id: "existing-workspace",
+              tab_id: "existing-tab",
+              terminal_id: "existing-terminal",
+              cwd: "/tmp/existing-agent",
+            },
+          ],
+        });
+      if (key === "pane get")
+        return response({
+          pane: {
+            pane_id: "existing-pane",
+            workspace_id: "existing-workspace",
+            tab_id: "existing-tab",
+            terminal_id: "existing-terminal",
+            cwd: "/tmp/existing-agent",
+          },
+        });
+      if (key === "agent start")
+        return response({ agent: { name: "existing-agent" } });
+      throw new Error("unexpected Herdr call: " + args.join(" "));
+    },
+  } as any;
+  try {
+    const starting = startHerdrAgentInPane(
+      pi,
+      { cwd: "/tmp/existing-agent" } as any,
+      {
+        label: "existing",
+        runId: "existing-run",
+        cwd: "/tmp/existing-agent",
+        primaryWorkspaceId: "primary-workspace",
+        workspaceId: "existing-workspace",
+        tabId: "existing-tab",
+        paneId: "existing-pane",
+      },
+    );
+    await markerSeen;
+    assert.equal(
+      calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+    releaseMarker();
+    await starting;
+    assert.equal(
+      calls.filter((args) => args[0] === "agent" && args[1] === "start").length,
+      1,
+    );
+  } finally {
+    if (previousWorkspace === undefined) delete environment.HERDR_WORKSPACE_ID;
+    else environment.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
+test("existing-pane startup requires group membership and an exact pane", async () => {
+  const previousWorkspace = process.env.HERDR_WORKSPACE_ID;
+  process.env.HERDR_WORKSPACE_ID = "primary-workspace";
+  let targetIsMember = true;
+  let exactPane = true;
+  const calls: string[][] = [];
+  const response = (value: unknown) => ({
+    code: 0,
+    stdout: JSON.stringify({ id: 1, result: value }),
+    stderr: "",
+  });
+  const pi = {
+    exec: async (_command: string, args: string[]) => {
+      calls.push(args);
+      const key = args.slice(0, 2).join(" ");
+      if (key === "workspace get")
+        return response({
+          workspace: {
+            worktree: { repo_key: "repo", is_linked_worktree: false },
+          },
+        });
+      if (key === "worktree list")
+        return response({
+          source: {
+            repo_key: "repo",
+            repo_name: "project",
+            source_workspace_id: "primary-workspace",
+          },
+          worktrees: targetIsMember
+            ? [{ open_workspace_id: "target-workspace" }]
+            : [],
+        });
+      if (key === "pane list")
+        return response({
+          panes: [
+            {
+              pane_id: exactPane ? "target-pane" : "replacement-pane",
+              workspace_id: "target-workspace",
+              tab_id: "target-tab",
+              cwd: "/tmp/target",
+            },
+          ],
+        });
+      throw new Error("unexpected Herdr call: " + args.join(" "));
+    },
+  } as any;
+  const options = {
+    label: "lead",
+    runId: "lead-run",
+    cwd: "/tmp/target",
+    primaryWorkspaceId: "primary-workspace",
+    workspaceId: "target-workspace",
+    tabId: "target-tab",
+    paneId: "target-pane",
+  };
+  try {
+    await assert.rejects(
+      startHerdrAgentInPane(pi, { cwd: "/tmp/target" } as any, {
+        ...options,
+        primaryWorkspaceId: "different-primary",
+      }),
+      /not in primary workspace/,
+    );
+    targetIsMember = false;
+    await assert.rejects(
+      startHerdrAgentInPane(pi, { cwd: "/tmp/target" } as any, options),
+      /not in primary workspace/,
+    );
+    assert.equal(
+      calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+    targetIsMember = true;
+    exactPane = false;
+    await assert.rejects(
+      startHerdrAgentInPane(pi, { cwd: "/tmp/target" } as any, options),
+      /topology changed/,
+    );
+    assert.equal(
+      calls.some((args) => args[0] === "agent" && args[1] === "start"),
+      false,
+    );
+  } finally {
+    if (previousWorkspace === undefined) delete process.env.HERDR_WORKSPACE_ID;
+    else process.env.HERDR_WORKSPACE_ID = previousWorkspace;
+  }
 });

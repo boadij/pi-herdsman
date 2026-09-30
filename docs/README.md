@@ -58,8 +58,9 @@ Continue with:
 - [Agent states](reference/agent-states.md)
 - [Errors](reference/errors.md)
 
-For chief supervision of independent leads, read [Supervision](concepts/supervision.md)
-and its [complete reference contract](reference/supervision.md).
+For structural project Manager and runtime Chief supervision, read
+[Supervision](concepts/supervision.md) and its
+[complete reference contract](reference/supervision.md).
 
 ### Develop Pi Herdsman
 

@@ -2,38 +2,33 @@
 
 [Documentation index](../README.md) · [Supervision reference](../reference/supervision.md)
 
-Pi Herdsman supervision lets one chief observe and communicate with independent
-lead sessions. Each lead owns one herd: itself and its complete agent tree.
-The chief supervises leads but never takes ownership of their agents.
+Pi Herdsman coordinates one direct-report edge at a time:
 
-## Authority and lead state
+```text
+Chief
+└─ Manager
+   ├─ Lead
+   │  └─ Agents...
+   └─ Lead
+      └─ Agents...
+```
 
-Herdr proves live process, pane, workspace, and native Pi session identity.
-Pi Herdsman's validated agent snapshots prove managed agent identity and
-ownership. A supervised lead must be one exact live Pi agent with a matching
-private lead-coordination record; it must not be the chief or a managed agent.
-Missing, stale, duplicate, or ambiguous evidence fails closed.
+Chief supervises active Managers on its Herdr runtime, and ordinary Leads when their Herdsman project scope has no active Manager; Manager supervises ordinary Leads in one Herdsman project scope. Each project scope corresponds to one Herdr worktree group: its primary workspace and linked-worktree workspaces. A Lead owns its complete managed-Agent tree. Delegation-enabled Agents may own their permitted direct Agents. Chief may observe bounded descendant Lead and Agent summaries but acts only on its direct reports; Manager may observe a Lead's Agent descendants but acts only on Leads. Neither supervisor owns descendants across an intermediate coordinator.
 
-Each lead has one private atomic record under the supervision runtime, keyed by
-the SHA-256 hash of its exact Pi session ID. The latest matching
-`pi-herdsman-lead-state` session entry supplies its persisted coordination
-state. A fresh `instanceId` on initialization protects against stale writers
-and publication races. The coordination record is bounded to 16 KiB, while
-individual transport message records retain the fixed 8 KiB ceiling. Its
-optional pending question is limited to 1,024 characters and 1,024 UTF-8 bytes.
+Manager coordinates one Herdr worktree group from its primary workspace.
+An ordinary Git primary workspace needs no existing linked-worktree membership
+to activate Manager; the first `staff_delegate` can create the first linked
+worktree. The Git branch is the semantic project-work handle and survives
+Manager turnover; a Lead is its current executor. Project assignment and result
+UUIDs remain internal. Herdr owns worktree placement and Pi owns session continuity.
+Multiple Leads may physically run in one workspace, but workspace membership
+does not establish assignment ownership.
 
-The record does not represent scheduling, capacity, permission, or message
-readiness. Herdr lifecycle observation for a lead is normalized to
-`idle|working|blocked|done|unknown`. A pending ask is separate attention state
-and gives the lead `needs_you` plus a correlated `reply` action. Descendant
-projection preserves validated lifecycle states, including `settling`,
-`starting`, and `lost`; its aggregate counts are `active`, `blocked`, and
-`total`, with `active` counting `working`, `settling`, and `starting`.
+## Project authority
 
-Metadata is presentation-only. It never grants lead eligibility, chief
-authority, or message authority.
+Herdr's worktree topology identifies the primary workspace and linked-worktree workspaces; branch names, cwd, labels, and display metadata do not confer authority. Every session starts as an ordinary Lead. A Lead in the primary workspace may enter Manager mode with `/manager`; Leads in linked-worktree workspaces cannot. Activation claims the single Manager lease for the project; another live Manager or unresolved owned Agent work prevents activation. `/manager leave` releases the lease and restores the Lead profile and exact tool baseline, including `agent`, without stopping or discarding project work. A live Lead awaiting this Manager's reply or the Manager's own pending ask to Chief can block leaving. Re-entering Manager shows the same work. Manager has `staff`, `supervisor`, and `peer` tools but no `agent`; Leads and their Agent trees implement delegated work.
 
-## Chief mode
+An eligible ordinary Lead can use `/chief` to enter the workspace-neutral, supervision-only Chief mode; a Manager cannot enter Chief mode. Chief has exactly `staff`. A Chief lease is unique per Herdr socket. A restored Chief whose lease is occupied is suspended without Herdsman authority tools.
 
 Chief is a mode of an ordinary lead session, not a separate agent identity.
 The persisted `pi-herdsman-role` entry contains exactly `role` and `leadTools`.
@@ -45,34 +40,28 @@ workspace-neutral and supervision-only. Its model exposes the five semantic
 restores the session's ordinary tool set. Chief supervises independent Leads,
 does not own their agents, and receives no owner controls.
 
-There is at most one active chief for an exact `HERDR_SOCKET_PATH`. The chief
-lease and descriptor identify the same process-lock generation. A resumed
-Chief session whose lease is occupied becomes suspended; an ordinary lead that
-loses an activation race remains an ordinary lead.
-
 ## Communication
 
-Chief and peer transport records are bounded, atomic inbox messages bound to
-exact sender, target lead session, and chief lease or Lead process-lock
-generation. Chief messages use Pi follow-up
-delivery and may remain queued while a lead is working. Records are ordered by
-`createdAt` and ID, survive same-session restart, and are retried after
-transient delivery failures. An individual quarantined record is excluded from
-delivery but does not block a new message to that lead.
+| Direction | Tool                  | Boundary                                                                                    |
+| --------- | --------------------- | ------------------------------------------------------------------------------------------- |
+| Down      | `staff`               | Chief → current Managers and Leads without active Managers; Manager → current project Leads |
+| Up        | `supervisor`          | Lead → active project Manager, otherwise Chief; Manager → Chief                             |
+| Sideways  | `peer`                | Live same-role Leads or Managers, user-global                                               |
+| Ownership | `agent` / `ask_owner` | Lead or delegation-enabled Agent → owned Agent; Agent → exact owner                         |
 
-`supervisor_message` sends reports, events, results, and `supervisor_ask` sends genuine decision questions from an ordinary Lead to the active Chief. The `staff_list`, `staff_inspect`, `staff_transcript`, `staff_message`, and `staff_reply` tools let the active Chief supervise Leads. The Lead-only `peer_list` and `peer_message` tools list ordinary live Leads and send durable messages to an exact full Pi session ID. Its list result is `{ self, peers[] }`: `self`
+`supervisor_message` sends reports, events, results, and `supervisor_ask` sends genuine decision questions from an ordinary Lead to its active supervisor. The `staff_list`, `staff_inspect`, `staff_transcript`, `staff_message`, and `staff_reply` tools let an active Chief or Manager supervise direct reports. The `peer_list` and `peer_message` tools list live same-role Leads or Managers and send durable messages to an exact full Pi session ID. The list result is `{ self, peers[] }`: `self`
 is excluded from `peers`, and each peer exposes only `session`, `name`, `cwd`,
 `repo`, `branch`, and `workspace_label`. The exact full `session` is the sole target handle; the other fields are presentation metadata. Incoming peer
 content is `Peer message from <sender>: <message>` because recipient
 verification is already performed.
 
-Peer presence and inboxes use the user-global `runtime/peers-v1` runtime,
-allowing ordinary Leads on different Herdr sockets to discover and message one
-another. Peer records are process-lock generation-bound and published only by
-ordinary Leads; Chief and suspended sessions are absent. The peer record and
+Peer presence and inboxes use the user-global `runtime/peers-v2` runtime,
+allowing same-role Leads or Managers on different Herdr sockets to discover and message one
+another. Peer records are process-lock generation-bound and published by
+healthy Leads or Managers; Chief and suspended sessions are absent. The peer record and
 its exact live process-lock claim provide reachability authority, not Herdr
 inventory or presentation metadata. Publication rechecks sender and target
-before the atomic write, and delivery revalidates the current ordinary-Lead
+before the atomic write, and delivery revalidates the current same-role
 receiver and target. Queued messages survive sender shutdown and remain queued
 while the receiver is Chief or lacks valid peer presence.
 Local Lead coordination health gates both the socket-scoped coordination record
@@ -92,7 +81,9 @@ supplied as evidence. Direct refs resolve on the caller's current Pi branch
 before entering the shared canonical attachment pipeline; durable coordination
 records remain text-only.
 
-## Supervision state
+Only explicit `staff_delegate` starts or resumes project work; roster and report reads never resume external mutations. Independent branches may run concurrently, each with at most one managed assignment and one exact Pi session. Start with `staff_delegate` supplying a task and optional branch; resume with branch only. A repeated request for already-running work returns its existing Lead. An existing unoccupied Herdr worktree can be reused; another live Lead in that worktree blocks overlapping managed execution. A missing worktree leaves the assignment paused: restore/open its checkout and retry, or use `staff_discard` and delegate again. Herdsman does not recreate established work from a historical base. Contradictory current evidence shows a conflict. Herdr controls workspace placement, including reopening closed workspaces. Manager `staff_list` and automatic context present branch-based work as `active`, `paused`, `finished`, or `conflict`, with the live Lead's runtime state separate, alongside eligible direct Leads.
+
+`staff_close(session)` stops the exact Lead and its owned Agent tree while preserving its assignment, Pi session, branch, and worktree. `staff_discard(branch)` stops execution and removes the assignment, but preserves the Git branch, worktree, and files. Neither action gives Manager individual Agent control. A possible current executor or a result appearing during discard preserves the assignment.
 
 The automatic `<supervision_state>` context is hidden, persistent, bounded, and
 state-only. Newly starting Chief work refreshes supervision. Changed rendered
@@ -115,5 +106,6 @@ Never target a lead by its display label. Staff tools revalidate identity, owner
 neither sends a message or changes Lead state. Use the fresh automatic snapshot
 for ordinary state and coordination. Do not call `staff_list`, `staff_inspect`, or `staff_transcript` merely to poll progress.
 
-See the [Supervision reference](../reference/supervision.md) for the complete
-current contract.
+Idle runtime state and `supervisor_message` are not task completion. An assigned Lead calls `supervisor_result` to save its durable outcome and queue a durable notification for the active Manager. If no Manager is active, the result remains saved for the next Manager to reconcile. Use `supervisor_message` only for nonterminal progress or coordination. After accepted result delivery the assignment is removed while its result artifact remains for later handoffs. Completed work cannot be discarded. Worktrees remain after completion. Herdsman does not prescribe backlog, review, or merge policy.
+
+The automatic bounded `<supervision_state>` is state-only, untrusted observation. A fresh snapshot suffices for general state questions; use `staff_list` when a refreshed roster is needed, `inspect` for live terminal/process evidence, and `transcript` for persisted conversation/tool evidence. Every action revalidates direct-report identity and current authority.

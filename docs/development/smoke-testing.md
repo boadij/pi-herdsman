@@ -35,6 +35,7 @@ npm run smoke
 npm run smoke -- core
 npm run smoke -- continuation
 npm run smoke -- chief-tree
+npm run smoke -- manager-recovery
 ```
 
 `npm run smoke` runs the default `core` scenario. The harness creates a
@@ -54,7 +55,12 @@ managed descendants do not load the probe.
 
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
-generations), and `chief-tree` (current Chief/session_tree behavior).
+generations), `chief-tree` (current Chief/session_tree behavior), and
+`manager-recovery` (real Manager delegation and direct Lead routing, graceful
+`staff_close` pause with branch-only same-session resume, Manager leave/re-entry,
+branch-only recovery after exact-session executor loss, no-duplicate-worktree
+identity, `supervisor_result` settlement, durable result retention, and
+successful Manager leave).
 `chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool
 snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
@@ -87,7 +93,7 @@ preflight. It must report a Herdr client version of `>=0.9.1`,
 The supported repository contract requires:
 
 - Node `>=22.19.0`
-- Pi `>=0.87.0 <0.88.0`
+- Pi `0.99.1`
 - herdr `>=0.9.1`
 
 Run focused tests and other intermediate checks before this smoke suite. Do
@@ -302,7 +308,16 @@ After every smoke:
 - disposable herdr resources are closed by exact ID;
 - no repository source file changed unless the smoke explicitly required it.
 
-## Chief supervision live matrix
+## Project Manager / Chief supervision live matrix
+
+`manager-recovery` is the canonical automated live Manager lifecycle check. It
+covers fresh delegation, direct Lead-to-Manager routing, graceful pause/resume,
+Manager turnover, executor-loss recovery, result settlement, durable result
+retention, and exact cleanup.
+
+The broader matrix below remains optional exploratory acceptance for supervision
+behavior not covered by the automated scenarios. A NOT RUN entry is not a claim
+of failure.
 
 The manual checks below are **NOT RUN**, not claims of failure or success.
 Automated live scenario results are separate and do not replace these checks.

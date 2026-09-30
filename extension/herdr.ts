@@ -1,14 +1,21 @@
 import {
   getAgentDir,
-  SessionManager,
   type ExecResult,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { OperationError } from "./errors.ts";
@@ -353,6 +360,63 @@ export async function runHerdr(
       },
     );
   return stdoutJson.result;
+}
+
+export type WorktreeGroupScope = Readonly<{
+  repoKey: string;
+  repoName: string;
+  primaryWorkspaceId: string;
+  workspaceIds: readonly string[];
+}>;
+
+export async function worktreeGroupScope(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  workspaceId: string,
+  signal?: AbortSignal,
+  timeout?: number,
+): Promise<WorktreeGroupScope> {
+  const listed = await runHerdr(
+    pi,
+    ctx,
+    ["worktree", "list", "--workspace", workspaceId],
+    { signal, timeout },
+  );
+  const source = listed?.source;
+  const worktrees = listed?.worktrees;
+  if (
+    typeof source?.repo_key !== "string" ||
+    !source.repo_key ||
+    typeof source?.repo_name !== "string" ||
+    !source.repo_name ||
+    typeof source?.source_workspace_id !== "string" ||
+    !source.source_workspace_id ||
+    !Array.isArray(worktrees)
+  ) {
+    throw new Error("Herdr project topology is unavailable");
+  }
+
+  const workspaceIds = [
+    ...new Set([
+      source.source_workspace_id,
+      ...worktrees.flatMap((worktree: HerdrRecord) =>
+        typeof worktree?.open_workspace_id === "string" &&
+        worktree.open_workspace_id
+          ? [worktree.open_workspace_id]
+          : [],
+      ),
+    ]),
+  ];
+  if (!workspaceIds.includes(workspaceId)) {
+    throw new Error("Herdr project topology changed");
+  }
+
+  return {
+    repoKey: source.repo_key,
+    repoName: source.repo_name,
+    primaryWorkspaceId: source.source_workspace_id,
+    workspaceIds,
+  };
 }
 
 function workspace(ctx: ExtensionContext): string {
@@ -708,6 +772,16 @@ export type StartHerdrOptions = {
   signal?: AbortSignal;
 };
 
+export type StartHerdrInPaneOptions = Omit<
+  StartHerdrOptions,
+  "placement" | "placementRevalidator" | "direction" | "env"
+> & {
+  primaryWorkspaceId: string;
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+};
+
 export type HerdrStartPlacement =
   | { kind: "tab"; label: string; tabId?: string }
   | { kind: "split"; paneId: string };
@@ -782,7 +856,7 @@ function isAbortError(value: unknown, signal?: AbortSignal): boolean {
   );
 }
 
-async function captureStartupDiagnostic(
+export async function captureStartupDiagnostic(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   paneId: string,
@@ -1315,6 +1389,218 @@ export async function startHerdrAgent(
   }
 }
 
+export async function startHerdrAgentInPane(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  options: StartHerdrInPaneOptions,
+): Promise<StartedHerdrAgent> {
+  const { totalTimeout, childTimeout } = startupTimeoutBudget(
+    options.timeoutMs,
+  );
+  const deadline = Date.now() + totalTimeout;
+  const release = await lockLifecycle(ctx, options.signal);
+  let attempt: StartedHerdrAgent | undefined;
+  let retryAttempted = false;
+  let stage = "topology";
+  try {
+    const currentWorkspaceId = workspace(ctx);
+    const scope = await worktreeGroupScope(
+      pi,
+      ctx,
+      currentWorkspaceId,
+      options.signal,
+      startupCallTimeout(deadline),
+    );
+    if (scope.primaryWorkspaceId !== options.primaryWorkspaceId)
+      error(
+        "start",
+        `workspace ${currentWorkspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
+      );
+    if (!scope.workspaceIds.includes(options.workspaceId))
+      error(
+        "start",
+        `workspace ${options.workspaceId} is not in primary workspace ${options.primaryWorkspaceId}'s worktree group`,
+      );
+
+    const cwd = canonicalCwd(options.cwd);
+    const panes =
+      (
+        await runHerdr(
+          pi,
+          ctx,
+          ["pane", "list", "--workspace", options.workspaceId],
+          { signal: options.signal, timeout: startupCallTimeout(deadline) },
+        )
+      ).panes ?? [];
+    const pane = panes.find((item: any) => item.pane_id === options.paneId);
+    if (
+      !pane ||
+      pane.workspace_id !== options.workspaceId ||
+      pane.tab_id !== options.tabId ||
+      !sameCwd(pane.cwd, cwd)
+    )
+      error("start", `pane ${options.paneId} topology changed before launch`);
+    if (typeof pane.terminal_id !== "string" || !pane.terminal_id)
+      error(
+        "start",
+        `pane ${options.paneId} did not include terminal identity`,
+      );
+
+    attempt = {
+      herdrAgent: alias(options.workspaceId, options.label, options.runId),
+      workspaceId: options.workspaceId,
+      tabId: options.tabId,
+      paneId: options.paneId,
+      terminalId: pane.terminal_id,
+      cwd,
+      createdTab: false,
+      launchMayHaveStarted: false,
+    };
+
+    stage = "pane_readiness";
+    try {
+      await waitForShellMarker(
+        pi,
+        ctx,
+        options.paneId,
+        deadline,
+        "start",
+        options.signal,
+      );
+      attempt.shellProcess = (await paneProcess(
+        pi,
+        ctx,
+        options.paneId,
+        options.signal,
+        deadline,
+        true,
+      ))!;
+    } catch (failure) {
+      if (failure instanceof OperationError)
+        throw withStartupDiagnostic(
+          failure,
+          await captureStartupDiagnostic(
+            pi,
+            ctx,
+            options.paneId,
+            deadline,
+            options.signal,
+          ),
+        );
+      throw failure;
+    }
+
+    stage = "ownership_capture";
+    const current = (
+      await runHerdr(pi, ctx, ["pane", "get", options.paneId], {
+        signal: options.signal,
+        timeout: startupCallTimeout(deadline),
+      })
+    ).pane;
+    if (!matchesAttemptPane(current, attempt))
+      error("start", `pane ${options.paneId} identity changed before launch`);
+
+    stage = "agent_start";
+    const retryDeadline = Math.min(
+      Date.now() + FRESH_PANE_BUSY_RETRY_TIMEOUT,
+      deadline - START_DIAGNOSTIC_TIMEOUT,
+    );
+    let started: any;
+    for (;;) {
+      const remaining = startupCallTimeout(deadline, childTimeout);
+      if (remaining < HERDR_START_TIMEOUT_MIN)
+        error("start", "startup deadline exhausted before agent start");
+      try {
+        started = await runHerdr(
+          pi,
+          ctx,
+          [
+            "agent",
+            "start",
+            attempt.herdrAgent,
+            "--kind",
+            "pi",
+            "--pane",
+            options.paneId,
+            "--timeout",
+            String(Math.min(remaining, childTimeout)),
+            "--",
+            ...(options.extensionPath
+              ? ["--extension", options.extensionPath]
+              : []),
+            "--extension",
+            HERDR_AGENT_STATE_EXTENSION,
+            ...(options.agentArgs ?? []),
+          ],
+          {
+            signal: options.signal,
+            timeout:
+              Math.min(remaining, childTimeout) + START_DIAGNOSTIC_TIMEOUT,
+          },
+        );
+        attempt.launchMayHaveStarted = true;
+        break;
+      } catch (failure) {
+        const busy =
+          failure instanceof OperationError &&
+          failure.detail.details?.herdrCode === "agent_pane_busy";
+        if (busy && Date.now() < retryDeadline) {
+          retryAttempted = true;
+          const observed = (
+            await runHerdr(pi, ctx, ["pane", "get", options.paneId], {
+              signal: options.signal,
+              timeout: startupCallTimeout(deadline),
+            })
+          ).pane;
+          if (!matchesAttemptPane(observed, attempt))
+            error(
+              "start",
+              `pane ${options.paneId} identity changed during startup retry`,
+            );
+          const remainingRetry = retryDeadline - Date.now();
+          if (remainingRetry > 0)
+            await sleep(Math.min(POLL_INTERVAL, remainingRetry), undefined, {
+              signal: options.signal,
+            });
+          if (Date.now() >= retryDeadline) throw failure;
+          continue;
+        }
+        if (!busy) attempt.launchMayHaveStarted = true;
+        if (isUnstructuredResultFailure(failure))
+          throw withStartupDiagnostic(
+            failure,
+            await captureStartupDiagnostic(
+              pi,
+              ctx,
+              options.paneId,
+              deadline,
+              options.signal,
+            ),
+          );
+        throw failure;
+      }
+    }
+
+    stage = "agent_result";
+    const agent = started.agent;
+    const session = sessionIdentity(agent.agent_session);
+    attempt.herdrAgent = agent.name ?? attempt.herdrAgent;
+    attempt.sessionReference = session
+      ? session.kind === "id"
+        ? { id: session.value }
+        : { path: session.value }
+      : undefined;
+    attempt.agent = agent;
+    return attempt;
+  } catch (cause) {
+    if (attempt)
+      throw new HerdrStartFailure(cause, stage, attempt, retryAttempted);
+    throw cause;
+  } finally {
+    release();
+  }
+}
+
 function validateEnvironment(
   assignments: readonly string[],
 ): readonly string[] {
@@ -1622,6 +1908,7 @@ export function sameObservedSessionPath(left: string, right: string): boolean {
   try {
     canonicalRight = realpathSync(right);
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw new Error(
       `could not canonicalize exact Pi session path ${right}: ${String(error)}`,
     );
@@ -1634,6 +1921,63 @@ export function sameObservedSessionPath(left: string, right: string): boolean {
       `could not canonicalize exact Pi session path ${left}: ${String(error)}`,
     );
   }
+}
+// Missing/empty prospective files are unresolved; invalid content and I/O errors
+// throw so ownership matching cannot mistake them for prospective files.
+// Match Pi's 4 KiB chunks and 1 MiB scan budget, stopping at the first newline.
+// An unterminated header at the limit is accepted only after a one-byte EOF probe.
+const PI_SESSION_HEADER_BYTE_LIMIT = 1024 * 1024;
+const PI_SESSION_HEADER_READ_CHUNK_SIZE = 4 * 1024;
+export function readPiSessionHeaderId(path: string): string | undefined {
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  let content: string;
+  try {
+    const buffer = Buffer.allocUnsafe(PI_SESSION_HEADER_READ_CHUNK_SIZE);
+    const decoder = new StringDecoder("utf8");
+    content = "";
+    let length = 0;
+    let newline = -1;
+    while (length < PI_SESSION_HEADER_BYTE_LIMIT) {
+      const bytes = readSync(
+        fd,
+        buffer,
+        0,
+        Math.min(buffer.length, PI_SESSION_HEADER_BYTE_LIMIT - length),
+        length,
+      );
+      if (bytes === 0) break;
+      newline = buffer.subarray(0, bytes).indexOf(0x0a);
+      content += decoder.write(
+        buffer.subarray(0, newline === -1 ? bytes : newline),
+      );
+      if (newline !== -1) break;
+      length += bytes;
+    }
+    if (
+      newline === -1 &&
+      length === PI_SESSION_HEADER_BYTE_LIMIT &&
+      readSync(fd, buffer, 0, 1, length) !== 0
+    )
+      throw new Error("Pi session header exceeds 1 MiB read limit");
+    if (newline === -1 && length === 0) return undefined;
+    content += decoder.end();
+  } finally {
+    closeSync(fd);
+  }
+  const header = JSON.parse(content);
+  if (
+    header?.type !== "session" ||
+    typeof header.id !== "string" ||
+    header.id.length === 0
+  )
+    throw new Error("Invalid Pi session header");
+  return header.id;
 }
 export function matchesExpectedSession(
   observed: unknown,
@@ -1648,14 +1992,29 @@ export function matchesExpectedSession(
       expected.id.length > 0 &&
       session.value === expected.id
     );
-  if (typeof expected.path === "string" && expected.path.length > 0)
-    return sameObservedSessionPath(session.value, expected.path);
+  const hasExpectedPath =
+    typeof expected.path === "string" && expected.path.length > 0;
+  if (hasExpectedPath) {
+    if (!sameObservedSessionPath(session.value, expected.path)) return false;
+    if (typeof expected.id !== "string" || expected.id.length === 0)
+      return true;
+  }
   if (typeof expected.id !== "string" || expected.id.length === 0) return false;
+  let path: string;
   try {
-    return (
-      SessionManager.open(realpathSync(session.value)).getSessionId() ===
-      expected.id
-    );
+    path = realpathSync(session.value);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return hasExpectedPath;
+    if (hasExpectedPath)
+      throw new Error(
+        `could not canonicalize exact Pi session path ${session.value}: ${String(error)}`,
+      );
+    return false;
+  }
+  try {
+    const id = readPiSessionHeaderId(path);
+    return id === undefined ? hasExpectedPath : id === expected.id;
   } catch {
     return false;
   }
@@ -1681,7 +2040,8 @@ async function proveExactRunningAgent(
   const agentSession = sessionIdentity(agent?.agent_session);
   if (
     !agent ||
-    agent.name !== herdrAgent ||
+    (agent.name !== herdrAgent &&
+      !(herdrAgent === expected.paneId && paneId === herdrAgent)) ||
     !paneId ||
     !workspaceId ||
     !cwd ||

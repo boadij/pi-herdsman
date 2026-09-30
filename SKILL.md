@@ -190,7 +190,7 @@ execution ownership to that agent until the assignment resolves; do not execute
 or assign overlapping work while it is delegated.
 Integrate direct agent results after resolution.
 Own only the assigned objective and your direct permitted agents. Agent-started
-agents are leaves. Keep tightly coupled work local; delegate bounded independent
+agents are leaves. As a Lead, keep tightly coupled work local; delegate bounded independent
 or unfamiliar work when useful. Reuse adequate supplied evidence rather than
 rediscovering it. Integrate direct agent results before completing. The lead
 retains architecture, approved scope, acceptance, and final-decision authority.
@@ -253,7 +253,7 @@ For product documentation, start at [docs/README.md](docs/README.md).
 
 ## Authority and decomposition
 
-Keep authority, acceptance, and final decisions with the lead; give each agent
+As a Lead, keep authority, acceptance, and final decisions with you; give each agent
 one bounded objective and the narrowest capable role. Delegate genuinely
 independent or context-heavy work. Prefer agents for broad file inspection,
 large logs or command output, and dataset analysis. Keep small, tightly coupled
@@ -453,7 +453,10 @@ does not block a new message to that lead.
 Every exact-identity-verified live lead exposes `staff_inspect` and `staff_message`,
 regardless of observed runtime state (`idle|working|blocked|done|unknown`). A
 non-empty persisted session candidate adds `staff_transcript` to
-`available_tools`; a pending ask adds `staff_reply`. `available_tools` is
+`available_tools`; a bound ask adds `staff_reply` only for its recorded supervisor
+session and lease. An ask without recorded supervisor identity also allows a
+current Chief to reply and cannot be identified as orphaned after replacement.
+`available_tools` is
 advisory readiness, not transcript authorization; the transcript action
 validates the current session header, version, and exact Pi session ID before
 returning evidence. Delivered content identifies direction and
@@ -471,31 +474,33 @@ descendants. Runtime lifecycle is observation only. Internally use the
 camelCase supervision model and serialize to snake_case only at the
 model-facing tool boundary.
 
-Only the chief lease uses the atomic complete-claim publication path through the
-exact lease API. Generic process locks retain their existing publication
-contract and are not interchangeable with the chief lease.
-
-Herdr metadata is best-effort, display-only evidence and never grants
-eligibility or authority. For a remote chief, a launch-time pane alias is only a
-locator. Authority requires one valid live Pi session with the descriptor's
-exact session ID, and alias lookup must resolve to that same session; duplicate
-or inconsistent evidence fails closed.
-
-The chief overview uses one native Pi custom component with overview and peek
-modes and a native `SelectList` capped at eight visible rows. Use Pi's `Key` and
-`matchesKey`, including Escape, Ctrl+C, arrows, Space, and Enter. Space switches
-modes. Enter focuses after fresh validation and closes. Escape and Ctrl+C close
-even with no leads. Use one ordered projection for rows and selection, request
-redraw after background refresh, and keep the ambient widget compact and width
-aware while the full view remains bounded.
-
 ## Product model
 
 Pi Herdsman uses one durable vocabulary:
 
-- a **herd** is one lead and the complete agent tree it owns;
-- a **lead** owns its agents and communicates upward through `chief`;
-- an **agent** handles one bounded assignment and may delegate only when its
+- a **project** is the Herdsman coordination scope corresponding to one Herdr
+  worktree group: its primary workspace and linked-worktree workspaces;
+- a **Manager** explicitly assumes dedicated project coordination from that
+  group's primary workspace, has no `agent` capability, and does not own Leads'
+  Agents; delegated implementation belongs to Leads and their Agent trees;
+- project work belongs to the project, not a Manager session. Its Git branch is
+  the work handle: a Manager starts work with `staff_delegate` using `task` and
+  optional `branch`, reusing an unoccupied Herdr worktree when available; use
+  `staff_delegate` with `branch` only to resume existing work. An already-running
+  Lead is not restarted, and a durable result is not restarted. If its checkout
+  is unavailable, restore/open it before resuming or discard the assignment
+  and delegate again; do not expect automatic recreation from its original base;
+- `staff_close` stops an exact Lead and its owned Agent tree while preserving
+  resumable work, its Pi session, branch, and worktree. `staff_discard` abandons
+  work by branch, stopping its executor and removing the assignment while
+  preserving the Git branch and worktree. Never infer ownership from worktree
+  membership or start an overlapping writer beside another Lead;
+- `/manager leave` preserves project work. A Lead can complete work without an
+  active Manager; its durable result is reconciled by the next Manager;
+- a **herd** is one Lead and the complete Agent tree it owns;
+- a **Lead** owns its Agents and reports upward to its active project Manager,
+  or Chief when no Manager is active;
+- an **Agent** handles one bounded assignment and may delegate only when its
   definition allows it;
 - the **chief** supervises leads through the five `staff_*` semantic tools and
   never owns their agents.

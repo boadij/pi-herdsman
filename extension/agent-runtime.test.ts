@@ -2923,6 +2923,7 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
     "agent_transcript",
     "supervisor_message",
     "supervisor_ask",
+    "supervisor_result",
     "peer_list",
     "peer_message",
   ]);

@@ -15,7 +15,7 @@ Pi Herdsman is a Pi extension for asynchronous subagents and multi-agent
 coding. Delegate coding tasks to managed background agents running in
 independent Pi sessions while the lead conversation stays interactive. Run
 coding agents in parallel, nest delegation, steer active agents, route
-questions and results back to their owning agent, and supervise multiple leads
+questions and results back to their owning agent, and supervise project leads
 through one coordinated hierarchy.
 
 Use it in an existing Pi/herdr setup or deploy the SSH-ready container as a
@@ -118,23 +118,55 @@ Open the human agent management surface at any time with:
 /agents
 ```
 
-To supervise independent leads across the current herdr runtime, use:
+Every session starts as an ordinary Lead. In the primary workspace of a Herdr
+worktree group, a Lead can explicitly enter Manager mode with `/manager`;
+Leads in linked-worktree workspaces remain Leads. A Manager is a dedicated
+coordinator for Leads across the Herdsman project scope for that worktree
+group. Actual delegated implementation belongs to Leads and their Agent trees;
+Manager can start independent branch-based work with Leads in linked-worktree
+workspaces, reusing an unoccupied existing worktree when available.
+Manager coordinates exactly one Herdr worktree group from its primary
+workspace. A branch may have a linked Git worktree and workspace, but multiple
+Leads can share that same workspace; one workspace does not imply one
+worktree. Direct-report messages are handled by Manager locally rather than
+echoed upward, and assigned Leads complete work with `supervisor_result`;
+`supervisor_message` is for progress or coordination, not completion.
+Manager's `staff_list` and automatic context show work by branch, including
+paused work without a running Lead. Project status is `active`, `paused`,
+`finished`, or `conflict`; a live Lead's runtime state is separate. Start with
+`staff_delegate(task, branch)`; resume with `staff_delegate(branch)`.
+`staff_close(session)` stops a Lead while
+preserving its work and Pi session; `staff_discard(branch)` abandons the
+assignment while retaining its Git branch and worktree. Leaving Manager mode
+also preserves project work; a later Manager can supervise it.
+If an existing assignment's checkout is unavailable, restore/open it to resume
+or discard the assignment and delegate again; it is not recreated automatically.
+Each delegated Lead inherits the Manager session's effective project-trust
+decision for that run: a trusted Manager launches Pi with `--approve`, and an
+untrusted Manager uses `--no-approve`. Pi's trust-protected project resources
+are available only in the trusted case; `--no-approve` skips those protected
+resources, without implying that all project-local files are skipped. This
+does not modify Pi's persistent trust store or elevate trust beyond the
+Manager's current decision.
+In an eligible Lead session, supervise Managers across the current Herdr
+runtime with:
 
 ```text
 /chief
 ```
 
-Chief supervision is separate from ownership:
+Supervision is separate from Agent ownership:
 
 ```text
-chief
-  ├─ herd A / lead A
-  │  └─ agents...
-  └─ herd B / lead B
-     └─ agents...
+Chief
+└─ Manager
+   ├─ Lead
+   │  └─ Agents...
+   └─ Lead
+      └─ Agents...
 ```
 
-Leave chief mode with:
+Leave Manager mode with `/manager leave`, or Chief mode with:
 
 ```text
 /chief leave
@@ -187,6 +219,14 @@ exact Pi session ID with `agent_continue`. A continued session reuses its saved
 logical label. Exact herdr identifiers are validation evidence behind live
 agent and lead identity.
 
+Manager and Chief use role-specific supervision status and context. A restored
+Manager resumes its Manager profile and supervision UI without loading the Lead
+Agent roster or recovering Lead-owned Agents. Manager leave preserves project
+work, but a live Lead waiting for this Manager's answer or the Manager's own
+pending ask to Chief can block leaving. See the
+[supervision reference](docs/reference/supervision.md) for branch-based work
+and result handling. Independent branches can run in parallel.
+
 Bundled definitions are portable defaults, not required workflow stages. Global
 definitions can override them or add new roles with your preferred models,
 tools, extensions, skills, and instructions.
@@ -194,7 +234,7 @@ tools, extensions, skills, and instructions.
 ## Requirements
 
 - [herdr](https://github.com/herdrdev/herdr) `>=0.9.1`
-- Pi `>=0.87.0 <0.88.0` (supported)
+- Pi `0.99.1` (tested runtime)
 - Node `>=22.19.0`
 
 Package CI validates the minimum supported Node 22.19.0 runtime. The container
@@ -236,7 +276,7 @@ Choose the path that matches what you are doing:
 - **Using Pi Herdsman:** [Getting started](docs/getting-started.md), then the
   [`/agents` commands](docs/reference/commands.md), [status widget](docs/reference/status-widget.md),
   and [agent definitions](docs/guides/agent-definitions.md).
-- **Supervising leads:** [Supervision](docs/concepts/supervision.md), then the
+- **Supervising projects:** [Supervision](docs/concepts/supervision.md), then the
   [supervision reference](docs/reference/supervision.md).
 - **Building agent coordination:** [Agent coordination API](docs/agent-api.md),
   then the [Agent tools](docs/reference/agent.md),
