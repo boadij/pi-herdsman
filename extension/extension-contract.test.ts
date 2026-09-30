@@ -276,8 +276,33 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   );
   assert.deepEqual(
     pi.tools.map((tool) => tool.name).sort(),
-    [...semanticNames].sort(),
+    [
+      ...semanticNames,
+      "staff_list",
+      "staff_inspect",
+      "staff_transcript",
+      "staff_message",
+      "staff_reply",
+      "staff_delegate",
+      "staff_close",
+      "staff_discard",
+    ].sort(),
   );
+  for (const name of [
+    "staff_list",
+    "staff_inspect",
+    "staff_transcript",
+    "staff_message",
+    "staff_reply",
+    "staff_delegate",
+    "staff_close",
+    "staff_discard",
+  ]) {
+    const tool = tools.get(name)!;
+    assert.equal(tool.defaultActive, false);
+    assert.equal(typeof tool.renderCall, "function");
+    assert.equal(typeof tool.renderResult, "function");
+  }
   pi.events.get("session_shutdown")?.[0]();
 
   const mailbox = setAgentEnvironment("contract-leaf-agent");
@@ -489,6 +514,29 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     allTools: REGISTERED_ROLE_TOOLS,
   });
   registerExtension!(lead.pi as never);
+  const historicalStaffMessage = lead.tools.find(
+    (tool) => tool.name === "staff_message",
+  )!;
+  assert.ok(historicalStaffMessage);
+  assert.equal(historicalStaffMessage.defaultActive, false);
+  assert.equal(typeof historicalStaffMessage.renderCall, "function");
+  assert.equal(typeof historicalStaffMessage.renderResult, "function");
+  const historicalArgs = {
+    session: "lead-historical-session",
+    message: "Please continue the prior assignment",
+  };
+  const historicalCall = historicalStaffMessage.renderCall(
+    historicalArgs,
+    {
+      fg: (_color: string, value: string) => value,
+      bold: (value: string) => value,
+    },
+    { args: historicalArgs, argsComplete: true },
+  );
+  assert.match(
+    historicalCall.render(160).join("\n"),
+    /^staff message  lead-his/,
+  );
   const leadContext = fakeContext() as any;
   await lead.events.get("session_start")![0](undefined, leadContext);
   assert.deepEqual(lead.commands.sort(), [
@@ -527,7 +575,21 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   assert.deepEqual(
     lead.tools.map((tool) => tool.name).sort(),
-    [...SEMANTIC_TOOL_CASES.map(([name]) => name)].sort(),
+    [
+      ...SEMANTIC_TOOL_CASES.map(([name]) => name),
+      "staff_list",
+      "staff_inspect",
+      "staff_transcript",
+      "staff_message",
+      "staff_reply",
+      "staff_delegate",
+      "staff_close",
+      "staff_discard",
+    ].sort(),
+  );
+  assert.equal(
+    lead.pi.getActiveTools().some((name) => name.startsWith("staff_")),
+    false,
   );
   for (const tool of lead.tools) {
     assertPortableToolSchema(tool);

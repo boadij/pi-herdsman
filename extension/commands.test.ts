@@ -25,6 +25,7 @@ import {
   projectAssignmentPath,
   listCoordinationMessagePaths,
   managerDescriptorPath,
+  removeChiefMessage,
   readChiefMessage,
   readManagerDescriptor,
   listPeerLeadRecords,
@@ -36,6 +37,7 @@ import {
   readLeadCoordinationState,
   sessionLeadRoleState,
   writeLeadCoordinationState,
+  writeChiefMessage,
   writeCoordinationMessage,
   writePeerLeadRecord,
 } from "./supervision.ts";
@@ -282,11 +284,47 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
   registerExtension!(second.pi as never);
   try {
     assert.equal(first.commands.includes("manager"), true);
+    const supervisionToolNames = [
+      "staff_list",
+      "staff_inspect",
+      "staff_transcript",
+      "staff_message",
+      "staff_reply",
+      "staff_delegate",
+      "staff_close",
+      "staff_discard",
+    ];
+    const staffMessage = first.tools.find(
+      (tool) => tool.name === "staff_message",
+    )!;
+    assert.ok(staffMessage);
+    assert.equal(staffMessage.defaultActive, false);
+    for (const name of supervisionToolNames) {
+      const tool = first.tools.find((candidate) => candidate.name === name);
+      assert.ok(tool, `${name} is registered during extension setup`);
+      assert.equal(typeof tool.renderCall, "function");
+      assert.equal(typeof tool.renderResult, "function");
+      assert.equal(tool.defaultActive, false);
+    }
+    const historicalArgs = {
+      session: "lead-historical-session",
+      message: "Please continue the prior assignment",
+    };
+    const historical = staffMessage.renderCall(
+      historicalArgs,
+      {
+        fg: (_color: string, value: string) => value,
+        bold: (value: string) => value,
+      },
+      { args: historicalArgs, argsComplete: true },
+    );
+    assert.match(historical.render(160).join("\n"), /^staff message  lead-his/);
     await first.events.get("session_start")![0](undefined, ctx1);
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
+    assert.equal(first.pi.getActiveTools().includes("staff_message"), false);
     assert.equal(
       first.pi.getAllTools().some((tool) => tool.name === "staff_delegate"),
-      false,
+      true,
     );
     const leadPrompt = await first.events.get("before_agent_start")![0](
       { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
@@ -298,6 +336,10 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     await first.commandOptions.get("manager").handler("", ctx1);
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...managerTools]);
+    assert.equal(
+      first.tools.find((tool) => tool.name === "staff_message"),
+      staffMessage,
+    );
     assert.equal(
       first.pi.getAllTools().some((tool) => tool.name === "staff_delegate"),
       true,
@@ -450,6 +492,11 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     assert.deepEqual(first.pi.getActiveTools(), activeManagerTools);
     await first.commandOptions.get("manager").handler("leave", ctx1);
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
+    assert.equal(first.pi.getActiveTools().includes("staff_message"), false);
+    assert.equal(
+      first.tools.find((tool) => tool.name === "staff_message"),
+      staffMessage,
+    );
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
       "lead",
@@ -567,6 +614,33 @@ test("Manager replacement can leave with an ask bound to its old lease", async (
       pendingAsk: { ...ask, supervisorLeaseId: replacement.leaseId },
       updatedAt: Date.now(),
     });
+    const actionable = await pi.tools
+      .find((tool) => tool.name === "staff_list")!
+      .execute("list", {}, undefined, undefined, ctx);
+    assert.equal(actionable.details.reports[0].needs_you, true);
+    const reply = {
+      version: 1 as const,
+      id: randomUUID(),
+      leaseId: replacement.leaseId,
+      kind: "manager_reply" as const,
+      fromSessionId: replacement.piSessionId,
+      toSessionId: leadSession,
+      leadSessionId: leadSession,
+      askId: ask.askId,
+      text: "Here is the decision.",
+      createdAt: Date.now(),
+    };
+    writeChiefMessage(reply, supervisionRuntime());
+    const answered = await pi.tools
+      .find((tool) => tool.name === "staff_list")!
+      .execute("list", {}, undefined, undefined, ctx);
+    assert.equal(answered.details.reports[0].pending_ask_id, ask.askId);
+    assert.equal(answered.details.reports[0].needs_you, false);
+    removeChiefMessage(supervisionRuntime(), leadSession, reply.id, reply);
+    const unansweredAgain = await pi.tools
+      .find((tool) => tool.name === "staff_list")!
+      .execute("list", {}, undefined, undefined, ctx);
+    assert.equal(unansweredAgain.details.reports[0].needs_you, true);
     await pi.commandOptions.get("manager").handler("leave", ctx);
     assert.ok(
       notices.some((message) => /Lead is waiting for a reply/.test(message)),
@@ -1119,15 +1193,17 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
   );
   const childWorkspace = `child-${randomUUID()}`;
   let childSession = `lead-${randomUUID()}`;
+  let primaryWorkspace = WORKSPACE;
   const childSessionPath = () => join(tmpdir(), `${childSession}.jsonl`);
   let created = false;
   let started = false;
+  let manager1Shutdown = false;
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
     code: 0,
   });
-  const managerAgent = {
+  let managerAgent: any = {
     agent_session: {
       source: "herdr:pi",
       agent: "pi",
@@ -1159,18 +1235,31 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
       return respond({
         source: {
-          source_workspace_id: WORKSPACE,
+          source_workspace_id: primaryWorkspace,
           repo_key: "repo-key",
           repo_name: "project",
         },
         worktrees: created
           ? [
               {
+                open_workspace_id: primaryWorkspace,
+                branch: "main",
+                path: "/tmp/manager-root",
+                is_linked_worktree: false,
+              },
+              {
                 open_workspace_id: childWorkspace,
                 branch: listProjectAssignments(
                   supervisionRuntime(),
-                  WORKSPACE,
+                  "repo-key",
                 )[0]?.branch,
+                path: "/tmp/manager-child",
+                is_linked_worktree: true,
+              },
+              {
+                branch: "closed-worktree",
+                path: "/tmp/manager-closed",
+                is_linked_worktree: true,
               },
             ]
           : [],
@@ -1179,7 +1268,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       const branchIndex = args.indexOf("--branch");
       const [assignment] = listProjectAssignments(
         supervisionRuntime(),
-        WORKSPACE,
+        "repo-key",
       );
       assert.ok(assignment);
       assert.equal(args[branchIndex + 1], assignment.branch);
@@ -1233,7 +1322,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       started = true;
       const [assignment] = listProjectAssignments(
         supervisionRuntime(),
-        WORKSPACE,
+        "repo-key",
       );
       assert.ok(assignment);
       const sessionIdIndex = args.indexOf("--session-id");
@@ -1302,7 +1391,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       }
       return respond({
         agents: [
-          managerAgent,
+          ...(managerAgent ? [managerAgent] : []),
           ...(started
             ? [
                 {
@@ -1353,14 +1442,50 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     assert.equal(outcome.details.ok, true);
     const assignment = listProjectAssignments(
       supervisionRuntime(),
-      WORKSPACE,
+      "repo-key",
     )[0];
     assert.ok(assignment);
+    const staffListTool = pi.tools.find((tool) => tool.name === "staff_list")!;
+    const staffList = await staffListTool.execute(
+      "list",
+      {},
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.deepEqual(staffList.details.open_workspaces, [
+      {
+        workspace: WORKSPACE,
+        branch: "main",
+        path: "/tmp/manager-root",
+        linked: false,
+      },
+      {
+        workspace: childWorkspace,
+        branch: assignment!.branch,
+        path: "/tmp/manager-child",
+        linked: true,
+      },
+    ]);
+    const contextProjection = await pi.events.get("before_agent_start")![0](
+      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+      ctx,
+    );
+    assert.match(
+      String(contextProjection?.message?.content),
+      new RegExp(
+        `open_workspaces:[\\s\\S]*main · workspace=${WORKSPACE} · primary[\\s\\S]*${assignment!.branch} · workspace=${childWorkspace} · linked`,
+      ),
+    );
     assert.equal(assignment?.id, childSession);
     assert.match(assignment!.branch, /^herdsman\/work-[0-9a-f]{8}$/);
     assert.equal(assignment!.branch.includes(assignment!.id), false);
     const assignmentBytes = readFileSync(
-      projectAssignmentPath(supervisionRuntime(), WORKSPACE, assignment.branch),
+      projectAssignmentPath(
+        supervisionRuntime(),
+        "repo-key",
+        assignment.branch,
+      ),
       "utf8",
     );
     assert.deepEqual(Object.keys(JSON.parse(assignmentBytes)).sort(), [
@@ -1418,9 +1543,14 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       undefined,
     );
     assert.equal(
-      listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+      listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
       childSession,
     );
+    await pi.events.get("session_shutdown")?.[0]();
+    manager1Shutdown = true;
+    managerAgent = undefined;
+    const replacementWorkspace = `primary-${randomUUID()}`;
+    primaryWorkspace = replacementWorkspace;
     process.env.HERDR_WORKSPACE_ID = childWorkspace;
     process.env.HERDR_PANE_ID = "child-pane";
     process.env.HERDR_TAB_ID = "child-tab";
@@ -1507,7 +1637,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         readFileSync(
           projectAssignmentPath(
             supervisionRuntime(),
-            WORKSPACE,
+            "repo-key",
             assignment.branch,
           ),
           "utf8",
@@ -1519,85 +1649,138 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       nativeSessions.delete(childSessionPath());
       realFs.rmSync(childSessionPath(), { force: true });
     }
-    process.env.HERDR_WORKSPACE_ID = WORKSPACE;
-    process.env.HERDR_PANE_ID = "root-pane";
-    process.env.HERDR_TAB_ID = "root-tab";
-    await pi.commandOptions.get("manager").handler("", ctx);
-    assert.notEqual(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
-      managerLeaseId,
-    );
-    assert.equal(
-      listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
-      childSession,
-    );
-    await assert.rejects(
-      pi.tools
-        .find((tool) => tool.name === "staff_discard")!
-        .execute(
-          "discard",
-          { branch: assignment!.branch },
-          undefined,
-          undefined,
-          ctx,
-        ),
-      /already has a durable result/,
-    );
-    await pi.events.get("before_agent_start")![0](
-      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-      ctx,
-    );
-    assert.ok(
-      listCoordinationMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
-        (path) => readChiefMessage(path).kind === "report_result",
-      ),
-    );
-    await t.waitFor(
-      () =>
-        assert.ok(
-          pi.sent.some(
-            (message: any) =>
-              message?.customType === "pi-herdsman-report_result",
+    const manager2Session = `manager-${randomUUID()}`;
+    managerAgent = {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: manager2Session,
+      },
+      workspace_id: replacementWorkspace,
+      pane_id: "root-pane-2",
+      tab_id: "root-tab-2",
+    };
+    process.env.HERDR_WORKSPACE_ID = replacementWorkspace;
+    process.env.HERDR_PANE_ID = "root-pane-2";
+    process.env.HERDR_TAB_ID = "root-tab-2";
+    const manager2 = fakeChiefPi({
+      activeTools: ["read"],
+      exec,
+      persistMessages: true,
+    });
+    registerExtension!(manager2.pi as never);
+    const manager2Ctx = fakeContext(manager2.entries) as any;
+    manager2Ctx.sessionManager.getSessionId = () => manager2Session;
+    try {
+      await manager2.events.get("session_start")![0](undefined, manager2Ctx);
+      await manager2.commandOptions.get("manager").handler("", manager2Ctx);
+      assert.notEqual(
+        readManagerDescriptor(supervisionRuntime(), replacementWorkspace)
+          ?.leaseId,
+        managerLeaseId,
+      );
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
+        childSession,
+      );
+      const manager2List = await manager2.tools
+        .find((tool) => tool.name === "staff_list")!
+        .execute("list", {}, undefined, undefined, manager2Ctx);
+      assert.equal(
+        manager2List.details.work.find(
+          (item: any) => item.branch === assignment!.branch,
+        )?.status,
+        "finished",
+      );
+      assert.deepEqual(manager2List.details.open_workspaces, [
+        {
+          workspace: replacementWorkspace,
+          branch: "main",
+          path: "/tmp/manager-root",
+          linked: false,
+        },
+        {
+          workspace: childWorkspace,
+          branch: assignment!.branch,
+          path: "/tmp/manager-child",
+          linked: true,
+        },
+      ]);
+      await assert.rejects(
+        manager2.tools
+          .find((tool) => tool.name === "staff_discard")!
+          .execute(
+            "discard",
+            { branch: assignment!.branch },
+            undefined,
+            undefined,
+            manager2Ctx,
           ),
-          "Manager did not receive the durable Lead result",
+        /already has a durable result/,
+      );
+      await manager2.events.get("before_agent_start")![0](
+        { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+        manager2Ctx,
+      );
+      assert.ok(
+        listCoordinationMessagePaths(
+          supervisionRuntime(),
+          manager2Session,
+        ).some((path) => readChiefMessage(path).kind === "report_result"),
+      );
+      await t.waitFor(
+        () =>
+          assert.ok(
+            manager2.sent.some(
+              (message: any) =>
+                message?.customType === "pi-herdsman-report_result",
+            ),
+            "Replacement Manager did not receive the durable Lead result",
+          ),
+        { timeout: 1800 },
+      );
+      const resultNotification = manager2.sent.find(
+        (message: any) => message?.customType === "pi-herdsman-report_result",
+      );
+      assert.ok(resultNotification);
+      assert.ok(
+        String(resultNotification.content).startsWith(
+          `Project work ${assignment!.branch} finished:`,
         ),
-      { timeout: 1800 },
-    );
-    const resultNotification = pi.sent.find(
-      (message: any) => message?.customType === "pi-herdsman-report_result",
-    );
-    assert.ok(resultNotification);
-    assert.ok(
-      String(resultNotification.content).startsWith(
-        `Project work ${assignment!.branch} finished:`,
-      ),
-    );
-    assert.equal(resultNotification.details.branch, assignment!.branch);
-    assert.doesNotMatch(
-      String(resultNotification.content),
-      /Result ref:|result:/,
-    );
-    assert.match(String(resultNotification.content), /Finished implementation/);
-    assert.equal(
-      String(resultNotification.content).includes(assignment!.id),
-      false,
-    );
-    assert.equal(
-      String(resultNotification.content).includes(childWorkspace),
-      false,
-    );
-    assert.ok(
-      pi.entries.some(
-        (entry: any) =>
-          entry?.customType === "pi-herdsman-report_result" &&
-          entry?.details?.branch === assignment!.branch,
-      ),
-      "Manager result notification was not durably persisted",
-    );
-    assert.deepEqual(
-      listProjectAssignments(supervisionRuntime(), WORKSPACE),
-      [],
-    );
+      );
+      assert.equal(resultNotification.details.branch, assignment!.branch);
+      assert.doesNotMatch(
+        String(resultNotification.content),
+        /Result ref:|result:/,
+      );
+      assert.match(
+        String(resultNotification.content),
+        /Finished implementation/,
+      );
+      assert.equal(
+        String(resultNotification.content).includes(assignment!.id),
+        false,
+      );
+      assert.equal(
+        String(resultNotification.content).includes(childWorkspace),
+        false,
+      );
+      assert.ok(
+        manager2.entries.some(
+          (entry: any) =>
+            entry?.customType === "pi-herdsman-report_result" &&
+            entry?.details?.branch === assignment!.branch,
+        ),
+        "Replacement Manager result notification was not durably persisted",
+      );
+      assert.deepEqual(
+        listProjectAssignments(supervisionRuntime(), "repo-key"),
+        [],
+      );
+    } finally {
+      await manager2.events.get("session_shutdown")?.[0]();
+    }
     assert.match(
       readFileSync(resultPath(assignment!.id), "utf8"),
       new RegExp(`"branch":"${assignment!.branch}"`),
@@ -1607,7 +1790,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       /Finished implementation/,
     );
   } finally {
-    await pi.events.get("session_shutdown")?.[0]();
+    if (!manager1Shutdown) await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
@@ -2343,55 +2526,6 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
     setLeadEnvironment();
-  }
-});
-
-test("partial supervision registration retries host restoration", async () => {
-  setLeadEnvironment();
-  process.env.HERDR_PANE_ID = "chief-pane";
-  process.env.HERDR_TAB_ID = "chief-tab";
-  process.env.HERDR_SOCKET_PATH = join(
-    tmpdir(),
-    `supervision-registration-rollback-${randomUUID()}.sock`,
-  );
-  const pi = fakeChiefPi({
-    activeTools: ["read", "bash"],
-    autoActivateRegisteredTools: true,
-  });
-  const context = fakeContext() as any;
-  context.mode = "rpc";
-  const notices: string[] = [];
-  context.ui.notify = (message: string) => notices.push(message);
-  try {
-    registerExtension!(pi.pi as never);
-    await pi.events.get("session_start")![0](undefined, context);
-    const baseline = pi.pi.getActiveTools();
-    const registerTool = pi.pi.registerTool.bind(pi.pi);
-    pi.pi.registerTool = (tool: any) => {
-      registerTool(tool);
-      if (tool.name === "staff_list")
-        throw new Error("tool registration failed");
-    };
-    const setActiveTools = pi.pi.setActiveTools;
-    let failRestore = true;
-    pi.pi.setActiveTools = (next: string[]) => {
-      if (failRestore && next.join("|") === baseline.join("|")) {
-        failRestore = false;
-        throw new Error("tool restoration failed");
-      }
-      setActiveTools(next);
-    };
-
-    await pi.commandOptions.get("chief").handler("", context);
-    assert.deepEqual(pi.pi.getActiveTools(), baseline);
-    assert.equal(pi.pi.getActiveTools().includes("staff_list"), false);
-    assert.ok(pi.tools.some((tool) => tool.name === "staff_list"));
-    assert.deepEqual(notices, ["tool restoration failed"]);
-  } finally {
-    await pi.events.get("session_shutdown")?.[0]?.();
-    delete process.env.HERDR_SOCKET_PATH;
-    delete process.env.HERDR_PANE_ID;
-    delete process.env.HERDR_TAB_ID;
   }
 });
 

@@ -576,13 +576,10 @@ export function readChiefMessage(path: string): ChiefMessageRecord {
   }
 }
 
-export function listChiefMessagePaths(
+function allChiefMessagePaths(
   runtime: SupervisionRuntime,
   toSessionId: string,
-  limit = COORDINATION_INBOX_SCAN_LIMIT,
 ): string[] {
-  if (!Number.isInteger(limit) || limit < 0)
-    throw new Error("Invalid inbox limit");
   const directory = inboxFor(runtime, toSessionId);
   let entries: string[];
   try {
@@ -613,8 +610,20 @@ export function listChiefMessagePaths(
         a.record.id.localeCompare(b.record.id)
       );
     })
-    .slice(0, Math.min(limit, COORDINATION_INBOX_SCAN_LIMIT))
     .map(({ path }) => path);
+}
+
+export function listChiefMessagePaths(
+  runtime: SupervisionRuntime,
+  toSessionId: string,
+  limit = COORDINATION_INBOX_SCAN_LIMIT,
+): string[] {
+  if (!Number.isInteger(limit) || limit < 0)
+    throw new Error("Invalid inbox limit");
+  return allChiefMessagePaths(runtime, toSessionId).slice(
+    0,
+    Math.min(limit, COORDINATION_INBOX_SCAN_LIMIT),
+  );
 }
 
 export function removeChiefMessage(
@@ -775,6 +784,39 @@ export function chiefAskQueued(
         record.leadSessionId === leadSessionId &&
         record.fromSessionId === leadSessionId &&
         (leaseId === undefined || record.leaseId === leaseId)
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Return whether this exact supervisor reply is durably queued for its Lead. */
+export function coordinationReplyQueued(
+  runtime: SupervisionRuntime,
+  toSessionId: string,
+  leadSessionId: string,
+  askId: string,
+  supervisor: {
+    piSessionId: string;
+    leaseId: string;
+    role: "chief" | "manager";
+  },
+): boolean {
+  const expectedKind =
+    supervisor.role === "chief" ? "chief_reply" : "manager_reply";
+  return allChiefMessagePaths(runtime, toSessionId).some((path) => {
+    const id = basename(path, ".json");
+    if (chiefMessageQuarantined(runtime, toSessionId, id)) return false;
+    try {
+      const record = readChiefMessage(path);
+      return (
+        record.kind === expectedKind &&
+        record.toSessionId === toSessionId &&
+        record.leadSessionId === leadSessionId &&
+        record.askId === askId &&
+        record.fromSessionId === supervisor.piSessionId &&
+        record.leaseId === supervisor.leaseId
       );
     } catch {
       return false;
@@ -1713,14 +1755,14 @@ export const PROJECT_ASSIGNMENT_MAX_BYTES = 16 * 1024;
 
 export function projectAssignmentPath(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
+  repoKey: string,
   branch: string,
 ): string {
-  if (!validNativeIdentity(primaryWorkspaceId) || !validNativeIdentity(branch))
+  if (!validNativeIdentity(repoKey) || !validNativeIdentity(branch))
     throw new Error("Invalid project assignment identity");
   return join(
     runtime.assignments,
-    createHash("sha256").update(primaryWorkspaceId).digest("hex"),
+    createHash("sha256").update(repoKey).digest("hex"),
     `${createHash("sha256").update(branch).digest("hex")}.json`,
   );
 }
@@ -1743,9 +1785,8 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
 
 export function writeProjectAssignment(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
   assignment: ProjectAssignment,
-): string {
+): void {
   if (!validProjectAssignment(assignment))
     throw new Error("Invalid project assignment");
   const content = `${JSON.stringify(assignment)}\n`;
@@ -1753,7 +1794,7 @@ export function writeProjectAssignment(
     throw new Error("Project assignment is too large");
   const path = projectAssignmentPath(
     runtime,
-    primaryWorkspaceId,
+    assignment.repoKey,
     assignment.branch,
   );
   const directory = dirname(path);
@@ -1772,7 +1813,6 @@ export function writeProjectAssignment(
     renameSync(temporary, path);
     chmodSync(path, 0o600);
     fsyncDirectory(directory);
-    return path;
   } finally {
     if (fd !== undefined) closeSync(fd);
     try {
@@ -1785,15 +1825,16 @@ export function writeProjectAssignment(
 
 export function readProjectAssignment(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
+  repoKey: string,
   branch: string,
 ): ProjectAssignment | undefined {
-  const path = projectAssignmentPath(runtime, primaryWorkspaceId, branch);
-  return readProjectAssignmentFile(path, branch);
+  const path = projectAssignmentPath(runtime, repoKey, branch);
+  return readProjectAssignmentFile(path, repoKey, branch);
 }
 
 function readProjectAssignmentFile(
   path: string,
+  repoKey: string,
   branch?: string,
 ): ProjectAssignment | undefined {
   let value: unknown;
@@ -1814,6 +1855,9 @@ function readProjectAssignmentFile(
   if (!validProjectAssignment(value))
     throw projectAssignmentReadError(path, "invalid assignment schema");
   if (
+    value.repoKey !== repoKey ||
+    basename(dirname(path)) !==
+      createHash("sha256").update(repoKey).digest("hex") ||
     (branch !== undefined && value.branch !== branch) ||
     basename(path) !==
       `${createHash("sha256").update(value.branch).digest("hex")}.json`
@@ -1835,11 +1879,9 @@ function projectAssignmentReadError(path: string, reason: string): Error {
 
 export function listProjectAssignments(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
+  repoKey: string,
 ): ProjectAssignment[] {
-  const directory = dirname(
-    projectAssignmentPath(runtime, primaryWorkspaceId, "lookup"),
-  );
+  const directory = dirname(projectAssignmentPath(runtime, repoKey, "lookup"));
   let entries: string[];
   try {
     entries = readdirSync(directory);
@@ -1850,7 +1892,10 @@ export function listProjectAssignments(
   return entries
     .filter((entry) => /^[a-f0-9]{64}\.json$/.test(entry))
     .map((entry) => {
-      const assignment = readProjectAssignmentFile(join(directory, entry));
+      const assignment = readProjectAssignmentFile(
+        join(directory, entry),
+        repoKey,
+      );
       if (!assignment)
         throw projectAssignmentReadError(
           join(directory, entry),
@@ -1863,25 +1908,20 @@ export function listProjectAssignments(
 
 export function findProjectAssignmentBySession(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
   repoKey: string,
   sessionId: string,
-): ProjectAssignment | undefined {
-  const matches = listProjectAssignments(runtime, primaryWorkspaceId).filter(
-    (assignment) =>
-      assignment.repoKey === repoKey && assignment.id === sessionId,
+): ProjectAssignment[] {
+  return listProjectAssignments(runtime, repoKey).filter(
+    (assignment) => assignment.id === sessionId,
   );
-  if (matches.length > 1)
-    throw new Error(`Multiple project assignments claim session ${sessionId}`);
-  return matches[0];
 }
 
 export function removeProjectAssignment(
   runtime: SupervisionRuntime,
-  primaryWorkspaceId: string,
+  repoKey: string,
   branch: string,
 ): void {
-  const path = projectAssignmentPath(runtime, primaryWorkspaceId, branch);
+  const path = projectAssignmentPath(runtime, repoKey, branch);
   try {
     unlinkSync(path);
     fsyncDirectory(dirname(path));
@@ -1978,8 +2018,15 @@ export type SupervisionSnapshot = {
   leads: SupervisedLead[];
   project?: string;
   work?: ProjectWorkSnapshot[];
+  openWorkspaces?: readonly OpenProjectWorkspace[];
   diagnostics?: string[];
 };
+export type OpenProjectWorkspace = Readonly<{
+  workspaceId: string;
+  branch?: string;
+  path: string;
+  linked: boolean;
+}>;
 export type ProjectWorkStatus = "active" | "paused" | "finished" | "conflict";
 export type ProjectWorkSnapshot = Readonly<{
   branch: string;
@@ -2280,6 +2327,8 @@ export function projectSupervision(options: {
   agents: LiveAgent[];
   managedAgents: ValidatedManagedAgentEvidence[];
   coordinationStates: LeadCoordinationState[];
+  answeredAskIds?: ReadonlySet<string>;
+  openWorkspaces?: readonly OpenProjectWorkspace[];
   supervisor?: {
     piSessionId: string;
     leaseId: string;
@@ -2344,7 +2393,8 @@ export function projectSupervision(options: {
     const actionable =
       pending &&
       options.supervisor &&
-      askMatchesSupervisor(pending, options.supervisor);
+      askMatchesSupervisor(pending, options.supervisor) &&
+      !options.answeredAskIds?.has(pending.askId);
     const runtimeState = agent.runtimeState ?? "unknown";
     const provenance =
       options.workspaceProvenance?.get(agent.workspaceId) ??
@@ -2443,7 +2493,12 @@ export function projectSupervision(options: {
       a.displayName.localeCompare(b.displayName) ||
       a.lead.localeCompare(b.lead),
   );
-  return { leads };
+  return {
+    leads,
+    ...(options.openWorkspaces
+      ? { openWorkspaces: options.openWorkspaces }
+      : {}),
+  };
 }
 
 export function serializeSupervision(snapshot: SupervisionSnapshot) {

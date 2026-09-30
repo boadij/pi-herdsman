@@ -973,6 +973,26 @@ export function formatSupervisionContext(
   if (
     role === "manager" &&
     snapshot &&
+    "openWorkspaces" in snapshot &&
+    snapshot.openWorkspaces?.length
+  ) {
+    sections.push("open_workspaces:");
+    sections.push(
+      ...snapshot.openWorkspaces.map((workspace) => {
+        const branch = workspace.branch
+          ? `${supervisionValue(workspace.branch)} · `
+          : "";
+        const relation = workspace.linked ? "linked" : "primary";
+        return (
+          `  ${branch}workspace=${supervisionValue(workspace.workspaceId)}` +
+          ` · ${relation}`
+        );
+      }),
+    );
+  }
+  if (
+    role === "manager" &&
+    snapshot &&
     "work" in snapshot &&
     snapshot.work?.length
   ) {

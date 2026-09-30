@@ -4530,6 +4530,67 @@ test("Manager supervision presentation is role-aware and classifies direct Leads
   assert.doesNotMatch(context, /chief|managers:|unclaimed_direct_leads/iu);
 });
 
+test("Manager context lists only open workspaces without exposing paths", () => {
+  const snapshot = {
+    project: "pi-herdsman",
+    leads: [],
+    openWorkspaces: [
+      {
+        workspaceId: "root",
+        branch: "feat/manager-supervision",
+        path: "/repo/private-primary",
+        linked: false,
+      },
+      {
+        workspaceId: "child",
+        branch: "fix/manager-release-boundaries",
+        path: "/repo/private-linked",
+        linked: true,
+      },
+      {
+        workspaceId: "branchless",
+        path: "/repo/private-branchless",
+        linked: false,
+      },
+      // Closed worktrees are absent from the derived openWorkspaces snapshot.
+    ],
+  };
+  const context = formatSupervisionContext(snapshot, {
+    status: "fresh",
+    role: "manager",
+  });
+
+  assert.ok(
+    context.includes(
+      [
+        "open_workspaces:",
+        "  feat/manager-supervision · workspace=root · primary",
+        "  fix/manager-release-boundaries · workspace=child · linked",
+        "  workspace=branchless · primary",
+      ].join("\n"),
+    ),
+  );
+  assert.doesNotMatch(
+    context,
+    /private-primary|private-linked|private-branchless|\/repo|closed-worktree|undefined/,
+  );
+  assert.ok(
+    Buffer.byteLength(context, "utf8") <= SUPERVISION_CONTEXT_MAX_BYTES,
+  );
+
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+  )
+    .render(120)
+    .join("\n");
+  assert.doesNotMatch(
+    widget,
+    /open_workspaces|manager-supervision|release-boundaries|private-/,
+  );
+});
+
 test("Chief tree shows project and branch without internal paths or zero counts", () => {
   const snapshot = {
     managers: [

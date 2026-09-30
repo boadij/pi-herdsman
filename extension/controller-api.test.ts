@@ -199,7 +199,7 @@ test("linked Lead routes to exact Manager, fails closed on incomplete authority,
     getSessionFile: () => `/tmp/${leadId}.jsonl`,
   };
   try {
-    writeProjectAssignment(runtime, WORKSPACE, {
+    writeProjectAssignment(runtime, {
       version: 1,
       id: leadId,
       repoKey: "repo-key",
@@ -451,7 +451,7 @@ for (const scenario of [
       branch: "smoke/delivery-placement",
       text: "deliver only in the assigned checkout",
     };
-    writeProjectAssignment(runtime, WORKSPACE, assignment);
+    writeProjectAssignment(runtime, assignment);
     writeChiefMessage(
       {
         version: 1,
@@ -741,7 +741,7 @@ test("Lead cannot persist a result after discard at the final preparation await"
       if (removeOnPreparation) {
         removeOnPreparation = false;
         queueMicrotask(() => {
-          removeProjectAssignment(runtime, WORKSPACE, branch);
+          removeProjectAssignment(runtime, "repo-key", branch);
           removedAtPreparation = true;
         });
       }
@@ -749,7 +749,7 @@ test("Lead cannot persist a result after discard at the final preparation await"
     },
   });
   try {
-    writeProjectAssignment(runtime, WORKSPACE, {
+    writeProjectAssignment(runtime, {
       version: 1,
       id: session,
       repoKey: "repo-key",
@@ -774,7 +774,7 @@ test("Lead cannot persist a result after discard at the final preparation await"
       /Project assignment changed before result could be saved/,
     );
     assert.equal(removedAtPreparation, true);
-    assert.deepEqual(listProjectAssignments(runtime, WORKSPACE), []);
+    assert.deepEqual(listProjectAssignments(runtime, "repo-key"), []);
     assert.equal(realFs.existsSync(resultPath(session)), false);
   } finally {
     resumeTopology();
@@ -847,7 +847,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
           repo_name: "project",
         },
         worktrees: topologyCreated
-          ? listProjectAssignments(supervisionRuntime(), WORKSPACE).map(
+          ? listProjectAssignments(supervisionRuntime(), "repo-key").map(
               (assignment) => ({
                 ...(openCalls || topologyCreated
                   ? { open_workspace_id: childWorkspace }
@@ -932,7 +932,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       started = true;
       const assignment = listProjectAssignments(
         supervisionRuntime(),
-        WORKSPACE,
+        "repo-key",
       )[0]!;
       childSession = assignment.id;
       writeLeadCoordinationState(supervisionRuntime(), {
@@ -1026,7 +1026,10 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       ),
       /transport closed/,
     );
-    const pending = listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]!;
+    const pending = listProjectAssignments(
+      supervisionRuntime(),
+      "repo-key",
+    )[0]!;
     assert.deepEqual(Object.keys(pending).sort(), [
       "branch",
       "id",
@@ -1059,7 +1062,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     assert.equal("pane_id" in staffList.details.work[0], false);
     assert.equal(createCalls, 1, "roster reads must not retry creation");
     assert.equal(
-      listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+      listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
       pending.id,
     );
     await assert.rejects(
@@ -1104,7 +1107,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       /transport closed/,
     );
     assert.equal(
-      listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+      listProjectAssignments(supervisionRuntime(), "repo-key").length,
       2,
     );
     delayReadiness = true;
@@ -1154,7 +1157,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     assert.equal(createCalls, 2);
     assert.equal(openCalls, 1);
     assert.equal(
-      listProjectAssignments(supervisionRuntime(), WORKSPACE).find(
+      listProjectAssignments(supervisionRuntime(), "repo-key").find(
         (item) => item.id === pending.id,
       )?.id,
       pending.id,
@@ -1162,7 +1165,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     await pi.commandOptions.get("manager").handler("leave", ctx);
     assert.equal(pi.pi.getActiveTools().includes("staff_delegate"), false);
     assert.equal(
-      listProjectAssignments(supervisionRuntime(), WORKSPACE).find(
+      listProjectAssignments(supervisionRuntime(), "repo-key").find(
         (item) => item.id === pending.id,
       )?.id,
       pending.id,
@@ -1208,7 +1211,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       JSON.stringify(result.content),
     );
     assert.ok(
-      listProjectAssignments(supervisionRuntime(), WORKSPACE).some(
+      listProjectAssignments(supervisionRuntime(), "repo-key").some(
         (assignment) => assignment.id === pending.id,
       ),
     );
@@ -1236,7 +1239,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
           ),
         );
         assert.ok(
-          !listProjectAssignments(supervisionRuntime(), WORKSPACE).some(
+          !listProjectAssignments(supervisionRuntime(), "repo-key").some(
             (assignment) => assignment.id === pending.id,
           ),
         );
@@ -1442,7 +1445,7 @@ async function runManagerStartupScenario(
                 ? [{ branch: "smoke/unassigned" }]
                 : mode === "active-discard" || mode === "discard-pane-missing"
                   ? [{ branch: createdBranch }]
-                  : listProjectAssignments(supervisionRuntime(), WORKSPACE)
+                  : listProjectAssignments(supervisionRuntime(), "repo-key")
               ).map((assignment) => ({
                 branch: assignment.branch,
                 path: childPath,
@@ -1669,7 +1672,7 @@ async function runManagerStartupScenario(
       );
       const starting = listProjectAssignments(
         supervisionRuntime(),
-        WORKSPACE,
+        "repo-key",
       )[0]!;
       childSession = starting.id;
       assert.equal(args[args.indexOf("--session-id") + 1], starting.id);
@@ -1707,7 +1710,7 @@ async function runManagerStartupScenario(
       }
       const currentAssignment = listProjectAssignments(
         supervisionRuntime(),
-        WORKSPACE,
+        "repo-key",
       )[0];
       if (!childSession && currentAssignment)
         childSession = currentAssignment.id;
@@ -1986,10 +1989,13 @@ async function runManagerStartupScenario(
   if (mode === "active-result-periodic")
     t!.mock.timers.enable({ apis: ["setInterval"] });
   try {
+    const activeBranch: any[] =
+      mode === "active-result-streaming" ? [] : pi.entries;
     const ctx = fakeContext(
       ["active-result", "active-result-streaming"].includes(mode)
         ? pi.entries
         : [],
+      activeBranch,
     ) as any;
     ctx.isIdle = () => recipientIdle;
     if (["occupied", "multiple"].includes(mode))
@@ -2034,7 +2040,7 @@ async function runManagerStartupScenario(
       childSession = staleId;
       created = mode !== "active-missing";
       if (created) createdBranch = "smoke/recover";
-      writeProjectAssignment(supervisionRuntime(), WORKSPACE, {
+      writeProjectAssignment(supervisionRuntime(), {
         version: 1,
         id: staleId,
         repoKey: "repo-key",
@@ -2078,7 +2084,7 @@ async function runManagerStartupScenario(
         "discard-result-final",
       ].includes(mode)
     )
-      writeProjectAssignment(supervisionRuntime(), WORKSPACE, {
+      writeProjectAssignment(supervisionRuntime(), {
         version: 1,
         id: staleId,
         repoKey: "repo-key",
@@ -2138,7 +2144,7 @@ async function runManagerStartupScenario(
         updatedAt: Date.now(),
       });
       assert.deepEqual(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE),
+        listProjectAssignments(supervisionRuntime(), "repo-key"),
         [],
       );
       const closed = await pi.tools
@@ -2156,7 +2162,7 @@ async function runManagerStartupScenario(
         false,
       );
       assert.deepEqual(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE),
+        listProjectAssignments(supervisionRuntime(), "repo-key"),
         [],
       );
       const paneList = JSON.parse(
@@ -2183,7 +2189,7 @@ async function runManagerStartupScenario(
           // Yield once so its promise chain drains before asserting its effects.
           await new Promise<void>((resolve) => setImmediate(resolve));
           assert.equal(
-            listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+            listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
             staleId,
           );
           assert.ok(
@@ -2243,14 +2249,14 @@ async function runManagerStartupScenario(
           if (mode === "close-failure") {
             await assert.rejects(control("staff_close", { session: staleId }));
             assert.equal(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
               staleId,
             );
           } else if (mode === "close-resume") {
             const closed = await control("staff_close", { session: staleId });
             assert.equal(closed.details.branch, "smoke/recover");
             assert.equal(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
               staleId,
             );
             assert.equal(started, false);
@@ -2264,7 +2270,7 @@ async function runManagerStartupScenario(
             const resumed = await execute();
             assert.equal(resumed.details.session, staleId);
             assert.equal(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
               staleId,
             );
           } else {
@@ -2273,7 +2279,7 @@ async function runManagerStartupScenario(
             });
             assert.equal(discarded.details.ok, true);
             assert.deepEqual(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE),
+              listProjectAssignments(supervisionRuntime(), "repo-key"),
               [],
             );
             assert.equal(created, true);
@@ -2298,8 +2304,8 @@ async function runManagerStartupScenario(
         } else if (mode === "active-missing") {
           await assert.rejects(execute(), /assignment was preserved/i);
           assert.deepEqual(
-            listProjectAssignments(supervisionRuntime(), WORKSPACE),
-            [listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]],
+            listProjectAssignments(supervisionRuntime(), "repo-key"),
+            [listProjectAssignments(supervisionRuntime(), "repo-key")[0]],
           );
         } else {
           if (mode === "active-result-streaming") recipientIdle = false;
@@ -2325,7 +2331,7 @@ async function runManagerStartupScenario(
             assert.equal(reportResultSends, 0);
             assert.equal(reportResults().length, 1);
             assert.equal(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
               staleId,
             );
 
@@ -2341,7 +2347,7 @@ async function runManagerStartupScenario(
             assert.equal(reportResultSends, 0);
             assert.equal(reportResults().length, 1);
             assert.equal(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
               staleId,
             );
 
@@ -2401,7 +2407,7 @@ async function runManagerStartupScenario(
             ];
             const hasExactReceipt = (record: any) =>
               record.toSessionId === ctx.sessionManager.getSessionId() &&
-              pi.entries.some(
+              activeBranch.some(
                 (entry: any) =>
                   entry?.customType === `pi-herdsman-${record.kind}` &&
                   entry?.details?.id === record.id &&
@@ -2412,7 +2418,7 @@ async function runManagerStartupScenario(
                   entry?.details?.branch === record.branch,
               );
             const assignmentExists = () =>
-              listProjectAssignments(supervisionRuntime(), WORKSPACE).some(
+              listProjectAssignments(supervisionRuntime(), "repo-key").some(
                 (assignment) => assignment.id === staleId,
               );
             const reportResultExists = (id: string) =>
@@ -2433,7 +2439,7 @@ async function runManagerStartupScenario(
             for (const [index, receiptCase] of receiptCases.entries()) {
               let record = queuedResult;
               if (index > 0) {
-                writeProjectAssignment(supervisionRuntime(), WORKSPACE, {
+                writeProjectAssignment(supervisionRuntime(), {
                   version: 1,
                   id: staleId,
                   repoKey: "repo-key",
@@ -2506,16 +2512,26 @@ async function runManagerStartupScenario(
                 deliverAs: "followUp",
                 triggerTurn: true,
               });
-              pi.entries.push({
+              const exactReceipt = {
                 type: "custom_message",
                 customType: sentResult.customType,
                 content: sentResult.content,
                 display: sentResult.display,
                 details: { ...sentResult.details },
-              });
+              };
+              pi.entries.push(exactReceipt);
 
-              const sendCount = reportResultSends;
               recipientIdle = true;
+              if (index === receiptCases.length - 1) {
+                await new Promise<void>((resolve) => setTimeout(resolve, 600));
+                assert.equal(reportResultExists(record.id), true);
+                assert.equal(assignmentExists(), true);
+                assert.equal(hasExactReceipt(record), false);
+              }
+              activeBranch.push(exactReceipt);
+              recipientIdle = true;
+              const sendCount = reportResultSends;
+              assert.equal(hasExactReceipt(record), true);
               await t!.waitFor(
                 () => {
                   assert.equal(reportResultExists(record.id), false);
@@ -2528,14 +2544,14 @@ async function runManagerStartupScenario(
 
             assert.equal(reportResults().length, 0);
             assert.deepEqual(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE),
+              listProjectAssignments(supervisionRuntime(), "repo-key"),
               [],
             );
 
             // A record targeted at another session is rejected independently
             // of receipt matching; it cannot settle the durable assignment.
             const wrongTarget = resultRecord(randomUUID());
-            writeProjectAssignment(supervisionRuntime(), WORKSPACE, {
+            writeProjectAssignment(supervisionRuntime(), {
               version: 1,
               id: staleId,
               repoKey: "repo-key",
@@ -2589,7 +2605,7 @@ async function runManagerStartupScenario(
                   ),
                 );
                 assert.deepEqual(
-                  listProjectAssignments(supervisionRuntime(), WORKSPACE),
+                  listProjectAssignments(supervisionRuntime(), "repo-key"),
                   [],
                 );
               },
@@ -2603,7 +2619,7 @@ async function runManagerStartupScenario(
             assert.equal(recovered.details.session, staleId);
             const persisted = listProjectAssignments(
               supervisionRuntime(),
-              WORKSPACE,
+              "repo-key",
             )[0];
             assert.equal(persisted?.id, staleId);
           }
@@ -2618,7 +2634,7 @@ async function runManagerStartupScenario(
           ["active-closed", "active-loss"].includes(mode) ? 1 : 0,
         );
         assert.equal(
-          listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+          listProjectAssignments(supervisionRuntime(), "repo-key").length,
           mode === "active-result" ? 0 : 1,
         );
         if (mode === "active-result-periodic") {
@@ -2659,7 +2675,7 @@ async function runManagerStartupScenario(
           );
           assert.equal(notifications[0].includes(resultRef(staleId)), false);
           assert.equal(
-            listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+            listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
             staleId,
           );
           assert.equal(
@@ -2778,7 +2794,7 @@ async function runManagerStartupScenario(
       );
       assert.equal(createCalls, 1);
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+        listProjectAssignments(supervisionRuntime(), "repo-key").length,
         1,
       );
       return;
@@ -2808,7 +2824,7 @@ async function runManagerStartupScenario(
       }
       const assignment = listProjectAssignments(
         supervisionRuntime(),
-        WORKSPACE,
+        "repo-key",
       )[0]!;
       assert.equal(assignment.id, childSession);
       assert.equal(createCalls, 1);
@@ -2820,7 +2836,7 @@ async function runManagerStartupScenario(
     if (mode === "preexisting" || mode === "preexisting-closed") {
       await execute();
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+        listProjectAssignments(supervisionRuntime(), "repo-key").length,
         1,
       );
       assert.equal(createCalls, 0);
@@ -2834,7 +2850,7 @@ async function runManagerStartupScenario(
         new RegExp(`already has live Lead session ${unrelatedSession}`),
       );
       assert.deepEqual(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE),
+        listProjectAssignments(supervisionRuntime(), "repo-key"),
         [],
       );
       assert.equal(startCalls, 0);
@@ -2843,7 +2859,7 @@ async function runManagerStartupScenario(
     if (mode === "multiple") {
       await assert.rejects(execute(), /multiple live Leads/);
       assert.deepEqual(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE),
+        listProjectAssignments(supervisionRuntime(), "repo-key"),
         [],
       );
       return;
@@ -2889,14 +2905,14 @@ async function runManagerStartupScenario(
               /completed while discard was in progress; assignment preserved/,
             );
             assert.equal(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
               staleId,
             );
           } else if (mode === "discard-pane-missing") {
             const discarded = await discard();
             assert.equal(discarded.details.ok, true);
             assert.deepEqual(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE),
+              listProjectAssignments(supervisionRuntime(), "repo-key"),
               [],
             );
           } else {
@@ -2907,7 +2923,7 @@ async function runManagerStartupScenario(
                 : /completed while discard was in progress; assignment preserved/,
             );
             assert.equal(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
               staleId,
             );
           }
@@ -2962,7 +2978,7 @@ async function runManagerStartupScenario(
         ),
       );
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+        listProjectAssignments(supervisionRuntime(), "repo-key").length,
         1,
       );
       assert.equal(createCalls, 0);
@@ -2974,7 +2990,7 @@ async function runManagerStartupScenario(
         /Exact live Lead was not found/,
       );
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+        listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
         staleId,
       );
       const discarded = await pi.tools
@@ -2988,7 +3004,7 @@ async function runManagerStartupScenario(
         );
       assert.equal(discarded.details.ok, true);
       assert.deepEqual(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE),
+        listProjectAssignments(supervisionRuntime(), "repo-key"),
         [],
       );
       assert.equal(
@@ -3009,11 +3025,11 @@ async function runManagerStartupScenario(
     if (mode === "invalid-topology") {
       await assert.rejects(execute(), /topology is not authoritative/);
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
+        listProjectAssignments(supervisionRuntime(), "repo-key").length,
         1,
       );
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+        listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
         staleId,
       );
       assert.equal(createCalls, 0);
@@ -3031,7 +3047,7 @@ async function runManagerStartupScenario(
       );
       const assignment = listProjectAssignments(
         supervisionRuntime(),
-        WORKSPACE,
+        "repo-key",
       )[0]!;
       assert.deepEqual(Object.keys(assignment).sort(), [
         "branch",
@@ -3141,7 +3157,7 @@ async function runManagerStartupScenario(
     }
     const assignment = listProjectAssignments(
       supervisionRuntime(),
-      WORKSPACE,
+      "repo-key",
     )[0]!;
     assert.deepEqual(Object.keys(assignment).sort(), [
       "branch",
@@ -3187,7 +3203,7 @@ async function runManagerStartupScenario(
       );
       assert.equal(createCalls, 2);
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE).filter(
+        listProjectAssignments(supervisionRuntime(), "repo-key").filter(
           (item) => item.id === childSession,
         ).length,
         1,
@@ -3217,7 +3233,7 @@ async function runManagerStartupScenario(
       assert.equal(closed.details.ok, true);
       assert.equal(started, false);
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+        listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
         childSession,
       );
     }
