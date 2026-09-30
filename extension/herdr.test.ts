@@ -209,7 +209,16 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
       request = JSON.parse(buffer.slice(0, newline));
       socket.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
       if (connections === 1) {
-        socket.write(JSON.stringify({ event: "pane.closed" }) + "\n");
+        socket.write(
+          JSON.stringify({
+            id: request.id,
+            error: {
+              code: "events_lost",
+              message:
+                "event subscription fell behind retained history; resubscribe and resync with session.snapshot",
+            },
+          }) + "\n",
+        );
         socket.end();
       }
     });
@@ -3054,9 +3063,11 @@ test("session matching keeps id and canonical path observations kind-aware", () 
   const alias = join(root, "alias-session.jsonl");
   const other = join(root, "other-session.jsonl");
   const missing = join(root, "missing-session.jsonl");
+  const loop = join(root, "loop-session.jsonl");
   writeFileSync(path, "{}");
   writeFileSync(other, "{}");
   symlinkSync(path, alias);
+  symlinkSync(loop, loop);
   try {
     assert.equal(
       matchesExpectedSession(
@@ -3073,23 +3084,27 @@ test("session matching keeps id and canonical path observations kind-aware", () 
     assert.equal(sameObservedSessionPath(alias, path), true);
     assert.equal(sameObservedSessionPath(missing, path), false);
     assert.equal(sameObservedSessionPath(missing, missing), true);
-    assert.throws(
-      () => sameObservedSessionPath(path, missing),
-      /could not canonicalize exact Pi session path/,
+    assert.equal(sameObservedSessionPath(path, missing), false);
+    assert.equal(
+      matchesExpectedSession(
+        {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "path",
+          value: path,
+        },
+        { path: missing },
+      ),
+      false,
     );
-    assert.throws(
-      () =>
-        matchesExpectedSession(
-          {
-            source: "herdr:pi",
-            agent: "pi",
-            kind: "path",
-            value: path,
-          },
-          { path: missing },
-        ),
-      /could not canonicalize exact Pi session path/,
-    );
+    for (const [observed, expected] of [
+      [path, loop],
+      [loop, path],
+    ])
+      assert.throws(
+        () => sameObservedSessionPath(observed, expected),
+        /could not canonicalize exact Pi session path.*ELOOP/,
+      );
     assert.equal(
       matchesExpectedSession(
         {

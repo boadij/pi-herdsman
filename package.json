@@ -48,14 +48,14 @@
   },
   "piHerdsman": {
     "runtime": {
-      "pi": "0.87.1",
+      "pi": "0.99.1",
       "herdr": {
-        "version": "0.9.1",
+        "version": "0.9.3",
         "sha256": {
-          "linux-x86_64": "2a02fed16beb651ef006e1d43f048f652ca4dc58ad053cd2d44450563d5c54b7",
-          "linux-aarch64": "f4ccf4de745f2cb9a39a983e9ba3703dad50ec2a58dea83026ceab721bbd8d9e",
-          "macos-x86_64": "053be0639935fe54ab5efbdb46651054e4f6a753a5b43153c88bd6912bce1e94",
-          "macos-aarch64": "5fc7a7e7adfaca56fa80aa89dcb025693357268dab8285b9ce2d08a2313c89de"
+          "linux-x86_64": "18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7",
+          "linux-aarch64": "4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0",
+          "macos-x86_64": "db62d548ff3e832b087a96b1894a08d26be3905f1830309cd556783f215d4054",
+          "macos-aarch64": "5173a3e0ae42d5d1ab7ebfa5d5e6329f7c3d23f8e1a3677c7ce3231da2884157"
         }
       }
     }
@@ -71,15 +71,15 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.87.0 <0.88.0",
-    "@earendil-works/pi-coding-agent": ">=0.87.0 <0.88.0",
-    "@earendil-works/pi-tui": ">=0.87.0 <0.88.0",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.87.0",
-    "@earendil-works/pi-coding-agent": "^0.87.0",
-    "@earendil-works/pi-tui": "^0.87.0",
+    "@earendil-works/pi-ai": "0.99.1",
+    "@earendil-works/pi-coding-agent": "0.99.1",
+    "@earendil-works/pi-tui": "0.99.1",
     "esbuild": "^0.28.2",
     "typebox": "^1.3.7"
   },
