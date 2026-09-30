@@ -1927,9 +1927,10 @@ export function sameObservedSessionPath(left: string, right: string): boolean {
 }
 // Missing/empty prospective files are unresolved; invalid content and I/O errors
 // throw so ownership matching cannot mistake them for prospective files.
-// Read at most 16 KiB, including the newline. Unterminated headers must be
-// shorter than this limit; transcript bodies never increase the read budget.
-const PI_SESSION_HEADER_BYTE_LIMIT = 16 * 1024;
+// Match Pi's 4 KiB chunks and 1 MiB scan budget, stopping at the first newline.
+// An unterminated header at the limit is accepted only after a one-byte EOF probe.
+const PI_SESSION_HEADER_BYTE_LIMIT = 1024 * 1024;
+const PI_SESSION_HEADER_READ_CHUNK_SIZE = 4 * 1024;
 export function readPiSessionHeaderId(path: string): string | undefined {
   let fd: number;
   try {
@@ -1948,7 +1949,7 @@ export function readPiSessionHeaderId(path: string): string | undefined {
         fd,
         buffer,
         length,
-        buffer.length - length,
+        Math.min(PI_SESSION_HEADER_READ_CHUNK_SIZE, buffer.length - length),
         length,
       );
       if (bytes === 0) break;
@@ -1959,8 +1960,12 @@ export function readPiSessionHeaderId(path: string): string | undefined {
       }
       length += bytes;
     }
-    if (newline === -1 && length === buffer.length)
-      throw new Error("Pi session header exceeds 16 KiB read limit");
+    if (
+      newline === -1 &&
+      length === buffer.length &&
+      readSync(fd, buffer, 0, 1, length) !== 0
+    )
+      throw new Error("Pi session header exceeds 1 MiB read limit");
     if (newline === -1 && length === 0) return undefined;
     content = buffer.toString("utf8", 0, newline === -1 ? length : newline);
   } finally {

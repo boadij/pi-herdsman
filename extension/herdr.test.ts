@@ -3064,7 +3064,8 @@ test("preserving stop rejects malformed session identity observations", async ()
 test("Pi session header reads are bounded, handle short reads, and close descriptors", (t) => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-header-"));
   const path = join(root, "not-the-header-id.jsonl");
-  const limit = 16 * 1024;
+  const limit = 1024 * 1024;
+  const chunkSize = 4 * 1024;
   const header = JSON.stringify({ type: "session", id: "header-😀" });
   const fullBudgetHeader =
     header + " ".repeat(limit - Buffer.byteLength(header));
@@ -3073,6 +3074,9 @@ test("Pi session header reads are bounded, handle short reads, and close descrip
   let bytesRead = 0;
   let shortReads = false;
   let readError: NodeJS.ErrnoException | undefined;
+  let probeError = false;
+  let probes = 0;
+  let newlinePosition = -1;
   const closed: number[] = [];
   t.mock.method(
     fs,
@@ -3084,9 +3088,21 @@ test("Pi session header reads are bounded, handle short reads, and close descrip
       length: number,
       position: number,
     ) => {
-      assert.equal(offset, position);
-      assert.ok(position + length <= limit);
-      if (readError) throw readError;
+      assert.ok(length <= chunkSize);
+      if (position === limit) {
+        assert.equal(offset, 0);
+        assert.equal(length, 1);
+        probes++;
+      } else {
+        assert.equal(offset, position);
+        assert.ok(position + length <= limit);
+      }
+      if (newlinePosition !== -1 && position !== limit)
+        assert.ok(
+          position <= newlinePosition,
+          "no reads after the newline chunk",
+        );
+      if (readError && (!probeError || position === limit)) throw readError;
       const bytes = read(
         fd,
         buffer,
@@ -3120,21 +3136,26 @@ test("Pi session header reads are bounded, handle short reads, and close descrip
         name: "newline in final permitted byte",
         content: `${fullBudgetHeader.slice(0, -1)}\nignored`,
       },
-      // Even valid JSON exactly filling the budget needs a newline within it.
       {
         name: "unterminated at limit",
         content: fullBudgetHeader,
-        error: /exceeds 16 KiB/,
       },
       {
         name: "newline beyond limit",
         content: `${fullBudgetHeader}\n`,
-        error: /exceeds 16 KiB/,
+        error: /exceeds 1 MiB/,
       },
       {
         name: "oversized unterminated",
         content: `${fullBudgetHeader} `,
-        error: /exceeds 16 KiB/,
+        error: /exceeds 1 MiB/,
+      },
+      {
+        name: "EOF probe read error",
+        content: fullBudgetHeader,
+        ioError: "EIO",
+        probe: true,
+        error: /injected read failure/,
       },
       { name: "malformed", content: "not JSON\n", error: /JSON/ },
       {
@@ -3152,8 +3173,11 @@ test("Pi session header reads are bounded, handle short reads, and close descrip
     ]) {
       writeFileSync(path, scenario.content);
       bytesRead = 0;
+      probes = 0;
+      newlinePosition = Buffer.from(scenario.content).indexOf(0x0a);
       closed.length = 0;
       shortReads = scenario.short ?? false;
+      probeError = scenario.probe ?? false;
       readError = scenario.ioError
         ? Object.assign(new Error("injected read failure"), {
             code: scenario.ioError,
@@ -3171,8 +3195,22 @@ test("Pi session header reads are bounded, handle short reads, and close descrip
           scenario.empty ? undefined : "header-😀",
           scenario.name,
         );
-      assert.ok(bytesRead <= limit, scenario.name);
-      if (scenario.name === "large body") assert.equal(bytesRead, limit);
+      assert.ok(bytesRead <= limit + 1, scenario.name);
+      assert.equal(
+        probes,
+        Buffer.byteLength(scenario.content.split("\n")[0]) >= limit ? 1 : 0,
+        scenario.name,
+      );
+      if (scenario.name === "large body") assert.equal(bytesRead, chunkSize);
+      if (scenario.name === "unterminated at limit")
+        assert.equal(bytesRead, limit);
+      if (
+        scenario.name === "newline beyond limit" ||
+        scenario.name === "oversized unterminated"
+      )
+        assert.equal(bytesRead, limit + 1);
+      if (scenario.name === "newline in final permitted byte")
+        assert.equal(bytesRead, limit);
       if (scenario.short)
         assert.equal(
           bytesRead,
