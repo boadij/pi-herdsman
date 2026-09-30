@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  mkdtempSync,
   readFileSync,
   rmSync,
   unlinkSync,
@@ -94,6 +95,205 @@ import support, {
 const { readConfig, updateConfig } = await import("./config.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
   pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
+test("session stats sums Pi usage entries and proven nested sessions once", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const dir = mkdtempSync(join(tmpdir(), "herdsman-usage-"));
+  const childPath = join(dir, "child.jsonl");
+  const nestedPath = join(dir, "nested.jsonl");
+  writeFileSync(childPath, "");
+  writeFileSync(nestedPath, "");
+  const childId = "22222222-2222-4222-8222-222222222222";
+  const nestedId = "33333333-3333-4333-8333-333333333333";
+  const usage = (
+    input: number,
+    output = 0,
+    cacheRead = 0,
+    cacheWrite = 0,
+    total = 0,
+  ) => ({
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: input + output + cacheRead + cacheWrite,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total },
+  });
+  const edge = (owner: string, id: string, path: string, label: string) => ({
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "agent_delegate",
+      details: {
+        ok: true,
+        owner_session_id: owner,
+        session_id: id,
+        session_path: path,
+        agent: label,
+        definition: "scout",
+      },
+    },
+  });
+  const identity = (id: string, label: string) => ({
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { sessionId: id, label, definition: "scout" },
+  });
+  nativeSessions.set(childPath, {
+    id: childId,
+    path: childPath,
+    entries: [
+      identity(childId, "child"),
+      {
+        type: "usage",
+        provider: "openai",
+        model: "child-model",
+        usage: usage(7),
+      },
+      edge(childId, nestedId, nestedPath, "nested"),
+    ],
+  });
+  nativeSessions.set(nestedPath, {
+    id: nestedId,
+    path: nestedPath,
+    entries: [
+      identity(nestedId, "nested"),
+      {
+        type: "usage",
+        provider: "openai",
+        model: "child-model",
+        usage: usage(9),
+      },
+    ],
+  });
+  const entries = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "requested",
+        responseModel: "actual",
+        usage: usage(10, 2, 20, 3, 0.1),
+      },
+    },
+    {
+      type: "message",
+      message: { role: "toolResult", usage: usage(4, 1, 0, 0, 0.02) },
+    },
+    {
+      type: "usage",
+      provider: "anthropic",
+      model: "warm",
+      usage: usage(1, 0, 5, 0, 0.01),
+    },
+    { type: "compaction", usage: usage(3, 1, 0, 0, 0.03) },
+    { type: "branch_summary", usage: usage(2, 1, 0, 0, 0.02) },
+    edge(LEAD_SESSION_ID, childId, childPath, "child"),
+    edge(LEAD_SESSION_ID, childId, childPath, "child"),
+    edge("other-owner", nestedId, nestedPath, "nested"),
+  ];
+  const context = fakeContext(entries) as any;
+  context.hasUI = true;
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  try {
+    await pi.commandOptions.get("agents").handler("stats", context);
+    assert.match(
+      notices[0]!,
+      /Current session[\s\S]*Input\s+48[\s\S]*Total\s+53[\s\S]*Cost\s+\$0\.180/,
+    );
+    assert.match(notices[0]!, /Managed agents · 2 sessions[\s\S]*Input\s+16/);
+    assert.match(
+      notices[0]!,
+      /Models\n  openai\/actual  35  \$0\.100\n  Tools\/summaries  12  \$0\.070\n  anthropic\/warm  6  \$0\.010\n  openai\/child-model  16  \$0\.000/,
+    );
+    assert.doesNotMatch(notices[0]!, /openai\/requested/);
+    assert.doesNotMatch(notices[0]!, /Coverage incomplete/);
+    nativeSessions.get(nestedPath)!.entries = [
+      identity(nestedId, "wrong"),
+      {
+        type: "usage",
+        provider: "openai",
+        model: "child-model",
+        usage: usage(9),
+      },
+    ];
+    await pi.commandOptions.get("herdsman").handler("stats", context);
+    assert.match(notices[1]!, /Managed agents · 1 session/);
+    assert.match(notices[1]!, /Coverage incomplete/);
+  } finally {
+    nativeSessions.delete(childPath);
+    nativeSessions.delete(nestedPath);
+    rmSync(dir, { recursive: true, force: true });
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("session stats marks malformed owned assignment receipts incomplete", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext([
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "agent_delegate",
+        details: {
+          ok: true,
+          owner_session_id: LEAD_SESSION_ID,
+          session_id: CHILD_SESSION_ID,
+          session_path: 42,
+          agent: "child",
+          definition: "scout",
+        },
+      },
+    },
+  ]) as any;
+  context.hasUI = true;
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  try {
+    await pi.commandOptions.get("agents").handler("stats", context);
+    assert.match(notices[0]!, /Managed agents · 0 sessions/);
+    assert.match(notices[0]!, /Coverage incomplete/);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("session stats marks malformed owned completed results incomplete", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext([
+    {
+      type: "custom_message",
+      customType: "pi-herdsman-agent-result",
+      details: {
+        ownerSessionId: LEAD_SESSION_ID,
+        piSessionId: CHILD_SESSION_ID,
+        agentLabel: "child",
+        agentDefinition: "scout",
+        runId: "run",
+        requestId: REQUEST_ID,
+        status: "completed",
+      },
+    },
+  ]) as any;
+  context.hasUI = true;
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  try {
+    await pi.commandOptions.get("agents").handler("stats", context);
+    assert.match(notices[0]!, /Managed agents · 0 sessions/);
+    assert.match(notices[0]!, /Coverage incomplete/);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
 const leadTools = [
   "agent_list",
   "agent_delegate",
@@ -3142,6 +3342,7 @@ test("lead agents command uses native completion and exact human grammar", async
   assert.equal(alias.handler, command.handler);
   assert.equal(alias.getArgumentCompletions, command.getArgumentCompletions);
   assert.deepEqual(command.getArgumentCompletions(""), [
+    { value: "stats", label: "stats" },
     { value: "definitions", label: "definitions" },
     { value: "placement", label: "placement" },
     { value: "stop", label: "stop" },
@@ -3168,7 +3369,7 @@ test("lead agents command uses native completion and exact human grammar", async
   await command.handler("agents extra", context);
   await command.handler("placement invalid", context);
   assert.deepEqual(notices, [
-    "Usage: /agents definitions | placement [tab|subtree|split] | stop",
+    "Usage: /agents stats | definitions | placement [tab|subtree|split] | stop",
     "Usage: /agents placement [tab|subtree|split]",
   ]);
 });
@@ -4249,7 +4450,15 @@ test("plain agents opens the native management menu", async () => {
   assert.equal(prompts[0]?.label, `Pi Herdsman · v${packageMetadata.version}`);
   assert.deepEqual(
     prompts[0]?.options.map((option) => option.replace(/\s+.*/u, "")),
-    ["Running", "Definitions", "Layout", "Context", "Message", "Stop"],
+    [
+      "Running",
+      "Session",
+      "Definitions",
+      "Layout",
+      "Context",
+      "Message",
+      "Stop",
+    ],
   );
   assert.equal(prompts[1]?.label, "Layout");
   assert.deepEqual(prompts[1]?.options, [
@@ -4282,6 +4491,7 @@ test("agents TUI selectors use stable values and current preselection", async ()
       );
       renders.push(component.render(200));
       if (customCalls++ === 0) {
+        component.handleInput("\u001b[B");
         component.handleInput("\u001b[B");
         component.handleInput("\u001b[B");
         component.handleInput("\r");
@@ -4628,7 +4838,7 @@ test("message limit edits stay in the submenu with the edited field selected", a
       renders.push(component.render(200));
       switch (customCalls++) {
         case 0:
-          for (let i = 0; i < 3; i++) component.handleInput("\u001b[B");
+          for (let i = 0; i < 4; i++) component.handleInput("\u001b[B");
           component.handleInput("\r");
           break;
         case 1:

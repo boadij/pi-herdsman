@@ -241,6 +241,7 @@ import {
   createStatusWidget,
   compactModelToken,
   formatStatusCounts,
+  formatSessionUsage,
   buildStatusRows,
   padVisible,
   renderRunningOptions,
@@ -1404,7 +1405,7 @@ type ResolvedAssignmentSession = {
 };
 type AssignmentSessionSelector =
   { kind: "id"; value: string } | { kind: "path"; value: string };
-type OwnedAssignmentResult = {
+type OwnedAssignmentSession = {
   id: string;
   path: string;
   definition: string;
@@ -1490,11 +1491,11 @@ function assignmentSessionSelector(
 function ownedAssignmentResult(
   entry: unknown,
   ownerSessionId: string,
-): OwnedAssignmentResult | undefined {
+  unavailable?: () => void,
+): OwnedAssignmentSession | undefined {
   const data = agentResultDetails(entry);
+  if (!data || data.ownerSessionId !== ownerSessionId) return undefined;
   if (
-    !data ||
-    data.ownerSessionId !== ownerSessionId ||
     typeof data.piSessionId !== "string" ||
     !validId(data.piSessionId) ||
     typeof data.piSessionFile !== "string" ||
@@ -1508,14 +1509,230 @@ function ownedAssignmentResult(
     typeof data.agentDefinition !== "string" ||
     !data.agentDefinition.trim() ||
     (data.status !== "completed" && data.status !== "failed")
-  )
+  ) {
+    unavailable?.();
     return undefined;
+  }
   return {
     id: data.piSessionId,
     path: data.piSessionFile,
     definition: data.agentDefinition,
     label: data.agentLabel,
   };
+}
+
+function ownedAssignmentToolResult(
+  entry: unknown,
+  ownerSessionId: string,
+  unavailable: () => void,
+): OwnedAssignmentSession | undefined {
+  if (
+    !entry ||
+    typeof entry !== "object" ||
+    !("type" in entry) ||
+    entry.type !== "message" ||
+    !("message" in entry)
+  )
+    return undefined;
+  const message = entry.message;
+  if (
+    !message ||
+    typeof message !== "object" ||
+    !("role" in message) ||
+    message.role !== "toolResult" ||
+    !("toolName" in message) ||
+    (message.toolName !== "agent_delegate" &&
+      message.toolName !== "agent_continue") ||
+    ("isError" in message && message.isError === true) ||
+    !("details" in message)
+  )
+    return undefined;
+  const details = message.details;
+  if (
+    !details ||
+    typeof details !== "object" ||
+    Array.isArray(details) ||
+    !("ok" in details) ||
+    details.ok !== true ||
+    !("owner_session_id" in details) ||
+    details.owner_session_id !== ownerSessionId
+  )
+    return undefined;
+  if (
+    !("session_id" in details) ||
+    typeof details.session_id !== "string" ||
+    !validId(details.session_id) ||
+    !("session_path" in details) ||
+    typeof details.session_path !== "string" ||
+    !details.session_path.trim() ||
+    !("agent" in details) ||
+    typeof details.agent !== "string" ||
+    !details.agent.trim() ||
+    !("definition" in details) ||
+    typeof details.definition !== "string" ||
+    !details.definition.trim()
+  ) {
+    unavailable();
+    return undefined;
+  }
+  return {
+    id: details.session_id,
+    path: details.session_path,
+    label: details.agent,
+    definition: details.definition,
+  };
+}
+
+function ownedAssignmentChildren(
+  entries: readonly unknown[],
+  ownerSessionId: string,
+  includeReceipts = false,
+  unavailable?: () => void,
+): OwnedAssignmentSession[] {
+  const children = new Map<string, OwnedAssignmentSession>();
+  for (const entry of entries) {
+    // Accepted assignment receipts suffice for read-only accounting;
+    // historical continuation requires completed-result provenance.
+    const child =
+      (includeReceipts
+        ? ownedAssignmentToolResult(entry, ownerSessionId, () =>
+            unavailable?.(),
+          )
+        : undefined) ??
+      ownedAssignmentResult(entry, ownerSessionId, unavailable);
+    if (!child) continue;
+    try {
+      const path = canonicalSessionPath(child.path);
+      children.set(`${child.id}\0${path}`, { ...child, path });
+    } catch {
+      unavailable?.();
+    }
+  }
+  return [...children.values()];
+}
+
+function openOwnedAssignmentSession(
+  child: OwnedAssignmentSession,
+): SessionManager | undefined {
+  const manager = SessionManager.open(child.path);
+  if (manager.getSessionId() !== child.id) return undefined;
+  let identity: AgentSessionIdentity;
+  try {
+    identity = readAgentIdentity(manager);
+  } catch {
+    return undefined;
+  }
+  return identity.definition === child.definition &&
+    identity.label === child.label
+    ? manager
+    : undefined;
+}
+
+type UsageTotals = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+};
+function emptyUsageTotals(): UsageTotals {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+}
+function addUsage(
+  totals: UsageTotals,
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cost: { total: number };
+  },
+): void {
+  totals.input += usage.input;
+  totals.output += usage.output;
+  totals.cacheRead += usage.cacheRead;
+  totals.cacheWrite += usage.cacheWrite;
+  totals.cost += usage.cost.total;
+}
+type UsageBreakdown = Map<string, UsageTotals>;
+function sessionUsageTotals(
+  entries: readonly SessionEntry[],
+  breakdown: UsageBreakdown,
+): UsageTotals {
+  const totals = emptyUsageTotals();
+  for (const entry of entries) {
+    let key: string | undefined;
+    let usage;
+    if (entry.type === "usage") {
+      key = `${entry.provider}/${entry.model}`;
+      usage = entry.usage;
+    } else if (
+      (entry.type === "compaction" || entry.type === "branch_summary") &&
+      entry.usage
+    ) {
+      key = "Tools/summaries";
+      usage = entry.usage;
+    } else if (entry.type === "message") {
+      if (entry.message.role === "assistant") {
+        key = `${entry.message.provider}/${entry.message.responseModel ?? entry.message.model}`;
+        usage = entry.message.usage;
+      } else if (entry.message.role === "toolResult" && entry.message.usage) {
+        key = "Tools/summaries";
+        usage = entry.message.usage;
+      }
+    }
+    if (!key || !usage) continue;
+    addUsage(totals, usage);
+    if (!breakdown.has(key)) breakdown.set(key, emptyUsageTotals());
+    addUsage(breakdown.get(key)!, usage);
+  }
+  return totals;
+}
+function collectSessionUsage(ctx: ExtensionContext) {
+  const rootId = ctx.sessionManager.getSessionId();
+  const entries = ctx.sessionManager.getEntries();
+  const breakdown: UsageBreakdown = new Map();
+  const current = sessionUsageTotals(entries, breakdown);
+  const agents = emptyUsageTotals();
+  const visited = new Set([rootId]);
+  let agentSessions = 0;
+  let complete = true;
+  const walk = (ownerId: string, entries: readonly SessionEntry[]): void => {
+    for (const child of ownedAssignmentChildren(entries, ownerId, true, () => {
+      complete = false;
+    })) {
+      if (visited.has(child.id)) continue;
+      let manager: SessionManager | undefined;
+      try {
+        manager = openOwnedAssignmentSession(child);
+      } catch {
+        complete = false;
+        continue;
+      }
+      if (!manager) {
+        complete = false;
+        continue;
+      }
+      let childEntries: SessionEntry[];
+      try {
+        childEntries = manager.getEntries();
+      } catch {
+        complete = false;
+        continue;
+      }
+      visited.add(child.id);
+      agentSessions++;
+      const usage = sessionUsageTotals(childEntries, breakdown);
+      agents.input += usage.input;
+      agents.output += usage.output;
+      agents.cacheRead += usage.cacheRead;
+      agents.cacheWrite += usage.cacheWrite;
+      agents.cost += usage.cost;
+      walk(child.id, childEntries);
+    }
+  };
+  walk(rootId, entries);
+  return { current, agents, agentSessions, complete, breakdown };
 }
 
 export function resolveAssignmentSession(
@@ -1525,43 +1742,20 @@ export function resolveAssignmentSession(
   const selector = assignmentSessionSelector(ctx, raw);
   const callerId = ctx.sessionManager.getSessionId();
   const visited = new Set<string>([callerId]);
-  const open = (child: OwnedAssignmentResult, path: string) => {
-    const manager = SessionManager.open(path);
-    if (manager.getSessionId() !== child.id) return undefined;
-    let identity: AgentSessionIdentity;
-    try {
-      identity = readAgentIdentity(manager);
-    } catch {
-      return undefined;
-    }
-    if (
-      identity.definition !== child.definition ||
-      identity.label !== child.label
-    )
-      return undefined;
-    return manager;
-  };
   const walk = (
     ownerId: string,
     entries: readonly unknown[],
   ): ResolvedAssignmentSession | undefined => {
-    const children = entries.flatMap((entry) => {
-      const child = ownedAssignmentResult(entry, ownerId);
-      if (!child) return [];
-      try {
-        return [{ child, path: canonicalSessionPath(child.path) }];
-      } catch {
-        return [];
-      }
-    });
-    for (const { child, path } of children) {
+    const children = ownedAssignmentChildren(entries, ownerId);
+    for (const child of children) {
+      const path = child.path;
       if (
         selector.kind === "id"
           ? child.id !== selector.value
           : path !== selector.value
       )
         continue;
-      const manager = open(child, path);
+      const manager = openOwnedAssignmentSession(child);
       if (!manager) continue;
       const header = manager.getHeader();
       if (typeof header?.cwd !== "string" || !header.cwd.trim())
@@ -1585,11 +1779,11 @@ export function resolveAssignmentSession(
         cwd: manager.getCwd(),
       };
     }
-    for (const { child, path } of children) {
+    for (const child of children) {
       if (visited.has(child.id)) continue;
       let manager;
       try {
-        manager = open(child, path);
+        manager = openOwnedAssignmentSession(child);
       } catch {
         continue;
       }
@@ -6150,8 +6344,10 @@ async function actionUnsafe(
         action: p.action,
         agent: label,
         definition: agentDefinition,
+        owner_session_id: runtime.ownerSessionId,
         pane_id: runtime.paneId,
         session_id: runtime.piSessionId,
+        session_path: runtime.piSessionFile,
         request_id: runtime.activeRequestId,
       };
     } catch (caught) {
@@ -12093,6 +12289,7 @@ export default function (pi: ExtensionAPI): void {
           `Pi Herdsman · v${HERDSMAN_VERSION}`,
           [
             { value: "running", label: `Running        ${running}` },
+            { value: "stats", label: "Session stats" },
             {
               value: "definitions",
               label: `Definitions    ${definitions.length}`,
@@ -12115,6 +12312,7 @@ export default function (pi: ExtensionAPI): void {
         if (!selected) return;
         selectedSection = selected;
         if (selected === "running") await openRunningAgentsMenu(ctx);
+        else if (selected === "stats") showSessionStats(ctx);
         else if (selected === "definitions") await openDefinitionsMenu(ctx);
         else if (selected === "layout") await openPlacementMenu(ctx);
         else if (selected === "context-retirement") {
@@ -12125,6 +12323,18 @@ export default function (pi: ExtensionAPI): void {
           await openMessageLimitsMenu(ctx);
         else if (selected === "stop-all") await confirmAndStopAll(ctx);
       }
+    };
+    const showSessionStats = (ctx: ExtensionCommandContext): void => {
+      const stats = collectSessionUsage(ctx);
+      ctx.ui.notify(
+        formatSessionUsage(
+          stats.current,
+          stats.agents,
+          stats.agentSessions,
+          stats.complete,
+          stats.breakdown,
+        ),
+      );
     };
     if (controllerScope.kind === "lead") {
       if (process.env.HERDR_PANE_ID)
@@ -13283,7 +13493,7 @@ export default function (pi: ExtensionAPI): void {
       const agentsCommand = {
         description: "Manage Herdr agents",
         getArgumentCompletions: (argumentPrefix: string) => {
-          const commands = ["definitions", "placement", "stop"];
+          const commands = ["stats", "definitions", "placement", "stop"];
           const trimmed = argumentPrefix.trimStart();
           if (!trimmed || !trimmed.includes(" "))
             return commands
@@ -13299,11 +13509,13 @@ export default function (pi: ExtensionAPI): void {
         handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
           if (!ctx.hasUI) return;
           const usage =
-            "Usage: /agents definitions | placement [tab|subtree|split] | stop";
+            "Usage: /agents stats | definitions | placement [tab|subtree|split] | stop";
           const placementUsage = "Usage: /agents placement [tab|subtree|split]";
           const args = rawArgs.trim() ? rawArgs.trim().split(/\s+/u) : [];
           try {
             if (!args.length) return void (await openAgentsMenu(ctx));
+            if (args[0] === "stats" && args.length === 1)
+              return void showSessionStats(ctx);
             if (args[0] === "definitions" && args.length === 1)
               return void (await openDefinitionsMenu(ctx));
             if (args[0] === "placement") {

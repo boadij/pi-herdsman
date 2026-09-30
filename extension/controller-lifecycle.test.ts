@@ -3343,6 +3343,11 @@ test("session continuation starts a new agent generation with current prompt con
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(launched[0].contents.length, 3);
     assert.equal(result.details.session_id, session.id);
+    assert.equal(result.details.owner_session_id, LEAD_SESSION_ID);
+    assert.equal(result.details.session_path, "/tmp/registered-agent.jsonl");
+    assert.ok(
+      !JSON.stringify(result.content).includes("/tmp/registered-agent.jsonl"),
+    );
     assert.equal((result.details as any).reusable, undefined);
     assert.equal((result.details as any).keepAlive, undefined);
     const state = readAgentState(startup.mailbox)!;

@@ -88,6 +88,77 @@ export interface CompletionMessageDetails {
   error?: { code: string; message: string };
 }
 
+export type UsageDisplayTotals = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+};
+
+export function formatSessionUsage(
+  current: UsageDisplayTotals,
+  agents: UsageDisplayTotals,
+  agentSessions: number,
+  complete: boolean,
+  breakdown: Map<string, UsageDisplayTotals> = new Map(),
+): string {
+  const row = (label: string, value: string) =>
+    `  ${label.padEnd(12)} ${value}`;
+  const section = (title: string, usage: UsageDisplayTotals) => {
+    const input = usage.input + usage.cacheRead + usage.cacheWrite;
+    const uncached = usage.input + usage.cacheWrite;
+    return [
+      title,
+      row("Input", input.toLocaleString("en-US")),
+      row(
+        "  Cached",
+        `${usage.cacheRead.toLocaleString("en-US")}  (${(input > 0 ? (usage.cacheRead / input) * 100 : 0).toFixed(1)}%)`,
+      ),
+      row(
+        "  Uncached",
+        `${uncached.toLocaleString("en-US")}${usage.cacheWrite > 0 ? `  (${usage.cacheWrite.toLocaleString("en-US")} written to cache)` : ""}`,
+      ),
+      row("Output", usage.output.toLocaleString("en-US")),
+      row("Total", (input + usage.output).toLocaleString("en-US")),
+      row("Cost", `$${usage.cost.toFixed(3)}`),
+    ].join("\n");
+  };
+  const total = {
+    input: current.input + agents.input,
+    output: current.output + agents.output,
+    cacheRead: current.cacheRead + agents.cacheRead,
+    cacheWrite: current.cacheWrite + agents.cacheWrite,
+    cost: current.cost + agents.cost,
+  };
+  return [
+    "Session usage",
+    section("Current session", current),
+    section(
+      `Managed agents · ${agentSessions} ${agentSessions === 1 ? "session" : "sessions"}`,
+      agents,
+    ),
+    section("Total", total),
+    [
+      "Models",
+      ...[...breakdown]
+        .filter(
+          ([, usage]) =>
+            usage.cost > 0 ||
+            usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0,
+        )
+        .sort((a, b) => b[1].cost - a[1].cost)
+        .map(
+          ([key, usage]) =>
+            `  ${key}  ${(usage.input + usage.output + usage.cacheRead + usage.cacheWrite).toLocaleString("en-US")}  $${usage.cost.toFixed(3)}`,
+        ),
+    ].join("\n"),
+    ...(!complete
+      ? ["Coverage incomplete: some owned session usage is unavailable."]
+      : []),
+  ].join("\n\n");
+}
+
 export function collapseDisplayText(
   value: string | undefined,
   maxCharacters = 80,

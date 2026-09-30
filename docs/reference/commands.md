@@ -18,6 +18,7 @@ diagnostic that includes the running Pi Herdsman package version.
 
 ```text
 /agents
+/agents stats
 /agents definitions
 /agents placement [tab|subtree|split]
 /agents stop
@@ -25,12 +26,28 @@ diagnostic that includes the running Pi Herdsman package version.
 
 The plain command opens a native Pi selection menu titled with the running
 Pi Herdsman package version for both `/agents` and `/herdsman`, with `Running`,
-`Definitions`, `Layout`, `Context retirement  on|off`, `Message limits`, and
+`Session stats`, `Definitions`, `Layout`, `Context retirement  on|off`, `Message limits`, and
 `Stop all…` destinations. The
 Message limits view edits the user-wide inline attachment and mailbox payload
 limits. It is available only to a lead Pi session with UI. Current
 values and presets show a rough token equivalent using four UTF-8 bytes per
 token. The enforced limits are bytes, not tokens.
+
+## `/agents stats`
+
+Shows accumulated provider-reported token usage and cost for the current Pi
+session plus transitively owned managed-Agent Pi sessions whose exact persisted
+identity can be verified. Usage follows Pi's session accounting across the whole
+session history, including assistant responses, model-attributed usage entries,
+tool-result model usage, compaction, and branch summaries.
+Input includes cached and uncached tokens, with cache writes shown within
+uncached input. The combined Models section attributes assistant responses to
+their response model, usage entries to their recorded model, and tool and
+summary usage to `Tools/summaries`, sorted by cost.
+
+Repeated continuations of the same Pi session are counted once. Peer Leads,
+supervised Leads, and unrelated Pi sessions are excluded. Unavailable or
+identity-mismatched owned sessions are skipped and the totals marked incomplete.
 
 ## `/agents definitions`
 

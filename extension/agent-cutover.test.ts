@@ -63,7 +63,7 @@ test("multiplexed coordination tool aliases are absent", async () => {
   const command = pi.commandOptions.get("agents");
   await command.handler("agents", context);
   assert.deepEqual(notices, [
-    "Usage: /agents definitions | placement [tab|subtree|split] | stop",
+    "Usage: /agents stats | definitions | placement [tab|subtree|split] | stop",
   ]);
   pi.events.get("session_shutdown")?.[0]();
 });

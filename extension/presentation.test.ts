@@ -12,6 +12,7 @@ import {
   displayHomePath,
   displaySkillName,
   formatElapsed,
+  formatSessionUsage,
   formatSupervisionContext,
   formatSupervisionNotification,
   managerSupervisionItems,
@@ -55,6 +56,40 @@ import { herdsmanDataRoot, herdsmanTempRoot, resultPath } from "./storage.ts";
 import { COORDINATION_MESSAGE_KINDS } from "./supervision.ts";
 
 initTheme("dark");
+
+test("session usage presents Pi input breakdown and cost-ordered models", () => {
+  const text = formatSessionUsage(
+    { input: 100, output: 20, cacheRead: 300, cacheWrite: 50, cost: 1 },
+    { input: 200, output: 40, cacheRead: 500, cacheWrite: 100, cost: 2 },
+    3,
+    true,
+    new Map([
+      [
+        "provider/cheap",
+        { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.2 },
+      ],
+      [
+        "provider/expensive",
+        { input: 20, output: 3, cacheRead: 0, cacheWrite: 0, cost: 1.2 },
+      ],
+    ]),
+  );
+  assert.match(
+    text,
+    /Current session\n  Input\s+450\n    Cached\s+300  \(66\.7%\)\n    Uncached\s+150  \(50 written to cache\)\n  Output\s+20\n  Total\s+470/,
+  );
+  assert.match(
+    text,
+    /Managed agents · 3 sessions[\s\S]*Cached\s+500  \(62\.5%\)/,
+  );
+  assert.match(text, /\nTotal\n  Input\s+1,250[\s\S]*\$3\.000/);
+  assert.match(
+    text,
+    /Models\n  provider\/expensive  23  \$1\.200\n  provider\/cheap  12  \$0\.200/,
+  );
+  assert.doesNotMatch(text, /Cache write|Cache read|Prompt/);
+  assert.doesNotMatch(text, /Coverage incomplete/);
+});
 
 const nativeDisplay = (value: string) => value.split(sep).join("/");
 const escapedRegExp = (value: string) =>
