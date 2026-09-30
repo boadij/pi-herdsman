@@ -4688,6 +4688,28 @@ test("owned continuation requires a matching persisted child edge", () => {
   try {
     realFs.writeFileSync(path, "{}", "utf8");
     assert.equal(resolveAssignmentSession(context(proof), id).id, id);
+    assert.throws(
+      () =>
+        resolveAssignmentSession(
+          context({
+            type: "message",
+            message: {
+              role: "toolResult",
+              toolName: "agent_delegate",
+              details: {
+                ok: true,
+                owner_session_id: LEAD_SESSION_ID,
+                session_id: id,
+                session_path: path,
+                agent: "agent",
+                definition: "agent",
+              },
+            },
+          }),
+          id,
+        ),
+      /ownership tree/,
+    );
     for (const details of [
       { ownerSessionId: randomUUID() },
       { piSessionId: randomUUID() },
