@@ -31,6 +31,7 @@ import {
   readManagerDescriptor,
   readManagerDescriptorStatus,
   listManagerDescriptors,
+  sameChiefDescriptor,
   sameManagerDescriptor,
   writeProjectAssignment,
   readProjectAssignment,
@@ -1943,11 +1944,19 @@ test("Chief lease reclaims a stale claim and publishes a matching new pair", () 
       join(runtime.lock, `2147483647-${staleId}`),
       JSON.stringify({ pid: 2147483647, id: staleId }),
     );
-    const lease = claimChiefLease(chiefIdentity());
+    const lease = claimChiefLease({
+      ...chiefIdentity(),
+      piSessionFile: "/tmp/chief-session.jsonl",
+    });
     assert.equal(chiefLeaseIsHeld(runtime), true);
-    assert.deepEqual(
-      readChiefDescriptor(runtime.descriptor).claim,
-      lease.descriptor.claim,
+    assert.deepEqual(readChiefDescriptor(runtime.descriptor), lease.descriptor);
+    assert.equal(lease.descriptor.piSessionFile, "/tmp/chief-session.jsonl");
+    assert.equal(
+      sameChiefDescriptor(lease.descriptor, {
+        ...lease.descriptor,
+        piSessionFile: "/tmp/other-session.jsonl",
+      }),
+      false,
     );
     lease.release();
   } finally {
@@ -2056,6 +2065,7 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
   const runtime = supervisionRuntime(socket());
   const identity = {
     piSessionId: id(),
+    piSessionFile: "/tmp/manager-session.jsonl",
     paneId: "pane",
     tabId: "tab",
     workspaceId: "root",
@@ -2077,6 +2087,7 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
       new Set(["root", "other"]),
     );
     assert.deepEqual(readManagerDescriptor(runtime, "root"), first.descriptor);
+    assert.equal(first.descriptor.piSessionFile, identity.piSessionFile);
     const path = join(
       runtime.managers,
       `${createHash("sha256").update("root").digest("hex")}.json`,
@@ -2104,6 +2115,13 @@ test("Manager leases are exclusive per root and fail closed on stale descriptor 
       sameManagerDescriptor(first.descriptor, {
         ...first.descriptor,
         leaseId: id(),
+      }),
+      false,
+    );
+    assert.equal(
+      sameManagerDescriptor(first.descriptor, {
+        ...first.descriptor,
+        piSessionFile: "/tmp/other-session.jsonl",
       }),
       false,
     );

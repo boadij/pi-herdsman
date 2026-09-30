@@ -290,12 +290,16 @@ for (const reachable of [true, false]) {
       `manager-bootstrap-${randomUUID()}.sock`,
     );
     const runtime = supervisionRuntime();
+    const managerSessionFile = join(
+      tmpdir(),
+      `pi-herdsman-manager-${randomUUID()}.jsonl`,
+    );
     const managerAgent = {
       agent_session: {
         source: "herdr:pi",
         agent: "pi",
-        kind: "id",
-        value: LEAD_SESSION_ID,
+        kind: reachable ? "path" : "id",
+        value: reachable ? managerSessionFile : LEAD_SESSION_ID,
       },
       pane_id: "root-pane",
       tab_id: "root-tab",
@@ -329,15 +333,22 @@ for (const reachable of [true, false]) {
     const pi = fakeChiefPi({ activeTools: ["read"], exec });
     registerExtension!(pi.pi as never);
     const ctx = fakeContext(pi.entries) as any;
+    if (reachable)
+      ctx.sessionManager = {
+        ...ctx.sessionManager,
+        getSessionFile: () => managerSessionFile,
+      };
     const notices: string[] = [];
     ctx.ui.notify = (message: string) => notices.push(message);
     try {
       await pi.events.get("session_start")![0](undefined, ctx);
       // No before_agent_start or conversation turn precedes Manager activation.
+      if (reachable) assert.equal(realFs.existsSync(managerSessionFile), false);
       await pi.commandOptions.get("manager").handler("", ctx);
       const state = readLeadCoordinationState(runtime, LEAD_SESSION_ID)!;
       if (reachable) {
         assert.ok(notices.includes("Manager mode active."));
+        assert.equal(realFs.existsSync(managerSessionFile), false);
         assert.equal(state.role, "manager");
         assert.ok(realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)));
         const leadId = randomUUID();

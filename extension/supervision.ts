@@ -71,6 +71,7 @@ export type ChiefDescriptor = {
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
+  piSessionFile?: string;
   paneId: string;
   tabId?: string;
   workspaceId: string;
@@ -1329,7 +1330,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     "workspaceId",
     "createdAt",
   ];
-  const optional = ["tabId"];
+  const optional = ["tabId", "piSessionFile"];
   return (
     Object.keys(record).every(
       (key) => keys.includes(key) || optional.includes(key),
@@ -1345,6 +1346,9 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     typeof record.piSessionId === "string" &&
     record.piSessionId.length > 0 &&
     record.piSessionId.length <= 512 &&
+    (record.piSessionFile === undefined ||
+      (typeof record.piSessionFile === "string" &&
+        record.piSessionFile.length > 0)) &&
     typeof record.paneId === "string" &&
     record.paneId.length > 0 &&
     record.paneId.length <= 512 &&
@@ -1429,6 +1433,7 @@ export function sameChiefDescriptor(
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
+    actual.piSessionFile === expected.piSessionFile &&
     actual.paneId === expected.paneId &&
     actual.tabId === expected.tabId &&
     actual.workspaceId === expected.workspaceId &&
@@ -1442,6 +1447,9 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
     typeof identity.piSessionId !== "string" ||
     !identity.piSessionId ||
     identity.piSessionId.length > 512 ||
+    (identity.piSessionFile !== undefined &&
+      (typeof identity.piSessionFile !== "string" ||
+        !identity.piSessionFile)) ||
     typeof identity.paneId !== "string" ||
     !identity.paneId ||
     identity.paneId.length > 512 ||
@@ -1471,6 +1479,9 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
+    ...(identity.piSessionFile !== undefined
+      ? { piSessionFile: identity.piSessionFile }
+      : {}),
     paneId: identity.paneId,
     ...(identity.tabId ? { tabId: identity.tabId } : {}),
     workspaceId: identity.workspaceId,
@@ -1513,6 +1524,7 @@ export type ManagerDescriptor = {
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
+  piSessionFile?: string;
   paneId: string;
   tabId: string;
   workspaceId: string;
@@ -1521,7 +1533,12 @@ export type ManagerDescriptor = {
 };
 export type ManagerIdentity = Pick<
   ManagerDescriptor,
-  "piSessionId" | "paneId" | "tabId" | "workspaceId" | "repoKey"
+  | "piSessionId"
+  | "piSessionFile"
+  | "paneId"
+  | "tabId"
+  | "workspaceId"
+  | "repoKey"
 > & { createdAt?: number };
 export type ManagerLease = {
   descriptor: ManagerDescriptor;
@@ -1560,12 +1577,16 @@ function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
     "createdAt",
   ];
   return (
-    Object.keys(r).length === keys.length &&
+    Object.keys(r).every(
+      (key) => keys.includes(key) || key === "piSessionFile",
+    ) &&
     keys.every((key) => Object.hasOwn(r, key)) &&
     r.version === 1 &&
     UUID.test(String(r.leaseId)) &&
     isProcessLockClaim(r.claim) &&
     validSession(r.piSessionId) &&
+    (r.piSessionFile === undefined ||
+      (typeof r.piSessionFile === "string" && r.piSessionFile.length > 0)) &&
     validNativeIdentity(r.paneId) &&
     validNativeIdentity(r.tabId) &&
     validNativeIdentity(r.workspaceId) &&
@@ -1585,6 +1606,7 @@ export function sameManagerDescriptor(
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
+    actual.piSessionFile === expected.piSessionFile &&
     actual.paneId === expected.paneId &&
     actual.tabId === expected.tabId &&
     actual.workspaceId === expected.workspaceId &&
@@ -1691,6 +1713,9 @@ export function claimManagerLease(
   if (
     !identity ||
     !validSession(identity.piSessionId) ||
+    (identity.piSessionFile !== undefined &&
+      (typeof identity.piSessionFile !== "string" ||
+        !identity.piSessionFile)) ||
     !validNativeIdentity(identity.paneId) ||
     !validNativeIdentity(identity.tabId) ||
     !validNativeIdentity(identity.workspaceId) ||
@@ -1710,6 +1735,9 @@ export function claimManagerLease(
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
+    ...(identity.piSessionFile !== undefined
+      ? { piSessionFile: identity.piSessionFile }
+      : {}),
     paneId: identity.paneId,
     tabId: identity.tabId,
     workspaceId: identity.workspaceId,

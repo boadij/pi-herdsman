@@ -502,6 +502,7 @@ export function hasManagerResultReceipt(contents, branch, sessionId) {
 }
 
 export function managerResultDelivery(contents, branch, sessionId) {
+  if (typeof sessionId !== "string" || sessionId.length === 0) return null;
   const entries = sessionEntries(contents);
   const receipts = entries.filter(
     (entry) =>
@@ -513,6 +514,7 @@ export function managerResultDelivery(contents, branch, sessionId) {
   );
   if (receipts.length !== 1) return null;
   const receipt = receipts[0];
+  if (typeof receipt.id !== "string" || receipt.id.length === 0) return null;
   const content = messageText(receipt.content);
   assert.ok(
     content.startsWith(`Project work ${branch} finished:\n\n`),
@@ -528,41 +530,143 @@ export function managerResultDelivery(contents, branch, sessionId) {
   );
   assert.doesNotMatch(content, /result:[0-9a-f-]{36}/i);
   const index = entries.indexOf(receipt);
-  const followUp = entries
+  const byId = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  const descendedFromReceipt = (entry) => {
+    const visited = new Set();
+    let parent = entry.parentId;
+    while (parent && !visited.has(parent)) {
+      if (parent === receipt.id) return true;
+      visited.add(parent);
+      const ancestor = byId.get(parent);
+      if (
+        ancestor?.type === "message" &&
+        (ancestor.message?.role === "user" ||
+          (ancestor.message?.role === "assistant" &&
+            ancestor.message.stopReason === "stop"))
+      )
+        return false;
+      parent = ancestor?.parentId;
+    }
+    return false;
+  };
+  const answer = entries
     .slice(index + 1)
     .find(
       (entry) =>
         entry.type === "message" &&
-        entry.message?.role === "user" &&
-        entry.parentId === receipt.id,
+        entry.message?.role === "assistant" &&
+        entry.message.stopReason === "stop" &&
+        messageText(entry.message.content).trim() ===
+          "PI_HERDSMAN_MANAGER_RECOVERY_OK" &&
+        descendedFromReceipt(entry),
     );
-  const byId = new Map(
-    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
-  );
-  const descendedFromFollowUp = (entry) => {
-    const visited = new Set();
-    let parent = entry.parentId;
-    while (parent && !visited.has(parent)) {
-      if (parent === followUp?.id) return true;
-      visited.add(parent);
-      parent = byId.get(parent)?.parentId;
-    }
-    return false;
-  };
-  const answer =
-    followUp &&
-    entries
-      .slice(index + 1)
-      .find(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message?.role === "assistant" &&
-          entry.message.stopReason === "stop" &&
-          messageText(entry.message.content).trim() ===
-            "PI_HERDSMAN_MANAGER_RECOVERY_OK" &&
-          descendedFromFollowUp(entry),
-      );
   return answer ? { receipt, answer } : null;
+}
+
+function diagnosticIdentifier(value) {
+  return typeof value === "string" ? value.slice(0, 200) : null;
+}
+
+export function managerResultDeliveryEvidence(contents, branch, sessionId) {
+  const entries = sessionEntries(contents);
+  const receipts = entries.flatMap((receipt, index) => {
+    if (
+      receipt.type !== "custom_message" ||
+      receipt.customType !== "pi-herdsman-report_result" ||
+      receipt.details?.branch !== branch ||
+      receipt.details?.fromSessionId !== sessionId ||
+      receipt.details?.leadSessionId !== sessionId
+    )
+      return [];
+    const laterUsers = entries
+      .slice(index + 1)
+      .filter(
+        (entry) => entry.type === "message" && entry.message?.role === "user",
+      );
+    const followUp = laterUsers.find((entry) => entry.parentId === receipt.id);
+    const content = messageText(receipt.content);
+    return [
+      {
+        id: diagnosticIdentifier(receipt.id),
+        parentId: diagnosticIdentifier(receipt.parentId),
+        contentMatches:
+          content.startsWith(`Project work ${branch} finished:\n\n`) &&
+          content.includes("MANAGER_RECOVERY_DONE"),
+        followUpExists: !!followUp,
+        followUp: followUp
+          ? {
+              id: diagnosticIdentifier(followUp.id),
+              parentId: diagnosticIdentifier(followUp.parentId),
+            }
+          : null,
+        laterUsers: laterUsers.slice(0, 5).map((entry) => ({
+          id: diagnosticIdentifier(entry.id),
+          parentId: diagnosticIdentifier(entry.parentId),
+        })),
+      },
+    ];
+  });
+  return {
+    receiptExists: receipts.length > 0,
+    contentMatches: receipts.some((receipt) => receipt.contentMatches),
+    followUpExists: receipts.some((receipt) => receipt.followUpExists),
+    receipts: receipts.slice(-5),
+  };
+}
+
+export async function waitForAssignmentSettlement(
+  assignmentPath,
+  waitFor,
+  deliveryEvidence,
+) {
+  try {
+    await waitFor(
+      "assignment-settlement",
+      async () => {
+        try {
+          await lstat(assignmentPath);
+          return false;
+        } catch (error) {
+          if (error.code === "ENOENT") return true;
+          throw error;
+        }
+      },
+      15_000,
+    );
+  } catch (error) {
+    const assignment = {};
+    try {
+      const details = await lstat(assignmentPath);
+      assignment.exists = true;
+      assignment.size = details.size;
+      assignment.regularFile = details.isFile() && !details.isSymbolicLink();
+      if (assignment.regularFile && details.size <= 16 * 1024) {
+        const record = JSON.parse(await readFile(assignmentPath, "utf8"));
+        for (const key of ["id", "repoKey", "branch", "status"])
+          if (typeof record[key] === "string")
+            assignment[key] = record[key].slice(0, 200);
+      }
+    } catch (diagnosticError) {
+      if (diagnosticError.code === "ENOENT") assignment.exists = false;
+      else assignment.readError = diagnosticError.code ?? diagnosticError.name;
+    }
+    const delivery = {
+      supervisorResultAccepted:
+        deliveryEvidence?.supervisorResultAccepted === true,
+    };
+    for (const key of ["receipt", "ack"]) {
+      delivery[key] = {};
+      for (const field of ["id", "parentId"]) {
+        const value = deliveryEvidence?.[key]?.[field];
+        delivery[key][field] = diagnosticIdentifier(value);
+      }
+    }
+    error.message += `; assignment settlement evidence: ${JSON.stringify({ assignment, delivery })}`;
+    throw error;
+  }
+  await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
 }
 
 export function assertManagerResultSettlement({
@@ -630,7 +734,11 @@ export function assertManagerFreshPrimary(
   topology,
 ) {
   assert.equal(workspace?.workspace_id, workspaceId);
-  assert.ok(topology?.source?.repo_key);
+  const repoKey = topology?.source?.repo_key;
+  assert.ok(
+    typeof repoKey === "string" && repoKey.length > 0,
+    "worktree source repo key must be a non-empty string",
+  );
   assert.ok(topology?.source?.repo_name);
   assert.equal(topology?.source?.source_workspace_id, workspaceId);
   const sourceCheckoutPath = topology?.source?.source_checkout_path;
@@ -653,6 +761,7 @@ export function assertManagerFreshPrimary(
     ),
     "bootstrap unexpectedly contains a linked workspace",
   );
+  return repoKey;
 }
 
 export async function deleteBranchIfPresent(
@@ -750,13 +859,14 @@ export function verifiedLeadSession(childSession, expectedSession) {
 
 export function managerReadyAnswer(contents, leadSessionId) {
   const entries = sessionEntries(contents);
-  const rootSessionId = entries.find((entry) => entry.type === "session")?.id;
   const receipt = entries.findIndex(
     (entry) =>
+      typeof leadSessionId === "string" &&
+      leadSessionId.length > 0 &&
       entry.type === "custom_message" &&
       entry.customType === "pi-herdsman-lead_message" &&
-      entry.content ===
-        `From lead ${leadSessionId} to chief ${rootSessionId}: MANAGER_RECOVERY_READY`,
+      entry.details?.fromSessionId === leadSessionId &&
+      entry.content === `From lead ${leadSessionId}: MANAGER_RECOVERY_READY`,
   );
   const readyMarkers = entries.flatMap((entry, index) =>
     entry.type === "message" &&
@@ -799,14 +909,16 @@ export function managerReadyAnswer(contents, leadSessionId) {
 
 export function managerReadyEntryEvidence(contents, leadSessionId) {
   const entries = sessionEntries(contents);
-  const rootId = entries.find((entry) => entry.type === "session")?.id;
-  const receiptText = `From lead ${leadSessionId} to chief ${rootId}: MANAGER_RECOVERY_READY`;
+  const receiptText = `From lead ${leadSessionId}: MANAGER_RECOVERY_READY`;
   const receipts = [];
   const markers = [];
   entries.forEach((entry, index) => {
     if (
+      typeof leadSessionId === "string" &&
+      leadSessionId.length > 0 &&
       entry.type === "custom_message" &&
       entry.customType === "pi-herdsman-lead_message" &&
+      entry.details?.fromSessionId === leadSessionId &&
       entry.content === receiptText
     )
       receipts.push(index);
@@ -2100,7 +2212,7 @@ async function runManagerRecoverySmoke(ctx) {
       ctx.rootWorkspaceId,
     ]),
   );
-  assertManagerFreshPrimary(
+  const repoKey = assertManagerFreshPrimary(
     ctx.rootWorkspaceId,
     primaryPath,
     rootWorkspace,
@@ -2184,8 +2296,23 @@ async function runManagerRecoverySmoke(ctx) {
         );
       }
     }
+    if (label === "completion") {
+      try {
+        const session = await rootSnapshot();
+        ctx.managerRecovery.resultDeliveryEvidence =
+          managerResultDeliveryEvidence(
+            session?.contents ?? "",
+            branch,
+            ctx.managerRecovery.sessionId,
+          );
+      } catch (error) {
+        ctx.managerRecovery.resultDeliveryEvidence = {
+          error: String(error).slice(0, 200),
+        };
+      }
+    }
     throw new Error(
-      `manager-recovery-${label}: timed out${label === "ready" ? `; last READY evidence: ${JSON.stringify(ctx.managerRecovery.readyEvidence ?? null)}` : ""}`,
+      `manager-recovery-${label}: timed out${label === "ready" ? `; last READY evidence: ${JSON.stringify(ctx.managerRecovery.readyEvidence ?? null)}` : ""}${label === "completion" ? `; result delivery evidence: ${JSON.stringify(ctx.managerRecovery.resultDeliveryEvidence)}` : ""}`,
     );
   };
 
@@ -2196,13 +2323,19 @@ async function runManagerRecoverySmoke(ctx) {
       (await agents()).find(
         (agent) =>
           agent.pane_id === ctx.rootPaneId &&
-          agent.agent_session?.kind === "id",
+          (agent.agent_session?.kind === "id" ||
+            agent.agent_session?.kind === "path") &&
+          typeof agent.agent_session.value === "string" &&
+          agent.agent_session.value.length > 0,
       ),
     30_000,
   );
-  assert.ok(freshRoot.agent_session.value);
+  const persistedFreshRoot = () =>
+    freshRoot.agent_session.kind === "id"
+      ? exactIsolatedSession(ctx, freshRoot.agent_session.value)
+      : isolatedSessionDetails(ctx, freshRoot);
   assert.equal(
-    await exactIsolatedSession(ctx, freshRoot.agent_session.value),
+    await persistedFreshRoot(),
     undefined,
     "Manager bootstrap must precede Pi transcript persistence",
   );
@@ -2219,7 +2352,7 @@ async function runManagerRecoverySmoke(ctx) {
     "15000",
   ]);
   assert.equal(
-    await exactIsolatedSession(ctx, freshRoot.agent_session.value),
+    await persistedFreshRoot(),
     undefined,
     "/manager must not manufacture a conversation",
   );
@@ -2390,7 +2523,7 @@ async function runManagerRecoverySmoke(ctx) {
   const assignmentPath = join(
     runtime,
     "assignments",
-    hash(ctx.rootWorkspaceId),
+    hash(repoKey),
     `${hash(branch)}.json`,
   );
   const managerPath = join(
@@ -2411,6 +2544,7 @@ async function runManagerRecoverySmoke(ctx) {
   const record = JSON.parse(initialAssignmentBytes);
   assert.equal(record.id, first.session);
   assert.equal(record.branch, branch);
+  assert.equal(record.repoKey, repoKey);
   assert.deepEqual(
     Object.keys(record).sort(),
     ["branch", "id", "repoKey", "text", "version"].sort(),
@@ -2774,9 +2908,6 @@ async function runManagerRecoverySmoke(ctx) {
     },
     15_000,
   );
-  await promptRoot(
-    `Check for the durable result for branch ${branch}. Do not output PI_HERDSMAN_MANAGER_RECOVERY_OK until that result is delivered.`,
-  );
   markStage("completion-marker");
   const completed = await waitFor("completion", async () => {
     const session = await rootSnapshot();
@@ -2797,7 +2928,22 @@ async function runManagerRecoverySmoke(ctx) {
   });
   ctx.managerRecovery.resultDelivered = branch;
   markStage("settled-assignment-validation");
-  await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
+  const delivery = managerResultDelivery(
+    completed.contents,
+    branch,
+    first.session,
+  );
+  await waitForAssignmentSettlement(assignmentPath, waitFor, {
+    receipt: {
+      id: delivery.receipt.id,
+      parentId: delivery.receipt.parentId ?? null,
+    },
+    ack: { id: delivery.answer.id, parentId: delivery.answer.parentId ?? null },
+    supervisorResultAccepted: supervisorResultAccepted(
+      leadResult.contents,
+      branch,
+    ),
+  });
   markStage("manager-leave-command-submission");
   await submitManagerLeave(ctx, ctx.rootPaneId);
   markStage("manager-leave-output-wait");

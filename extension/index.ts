@@ -7652,9 +7652,14 @@ export default function (pi: ExtensionAPI): void {
     descriptor: ChiefDescriptor,
   ): Promise<any | undefined> => {
     const inventory = (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents;
+    const expected = expectedSession(
+      descriptor.piSessionId,
+      descriptor.piSessionFile,
+    );
     const matches = inventory.filter(
       (agent: any) =>
-        isPiAgent(agent) && herdrSessionId(agent) === descriptor.piSessionId,
+        isPiAgent(agent) &&
+        matchesExpectedSession(agent.agent_session, expected),
     );
     if (
       matches.length !== 1 ||
@@ -7676,7 +7681,10 @@ export default function (pi: ExtensionAPI): void {
         { signal: ctx.signal },
       );
       const alias = result?.agent;
-      if (!isPiAgent(alias) || herdrSessionId(alias) !== descriptor.piSessionId)
+      if (
+        !isPiAgent(alias) ||
+        !matchesExpectedSession(alias.agent_session, expected)
+      )
         return undefined;
     } catch {
       // A failed alias lookup is not identity proof.
@@ -8694,6 +8702,7 @@ export default function (pi: ExtensionAPI): void {
     try {
       managerLease = claimManagerLease({
         piSessionId: ctx.sessionManager.getSessionId(),
+        piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
         tabId,
         workspaceId,
@@ -8734,6 +8743,7 @@ export default function (pi: ExtensionAPI): void {
     try {
       lease = claimManagerLease({
         piSessionId: ctx.sessionManager.getSessionId(),
+        piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
         tabId,
         workspaceId,
@@ -8900,6 +8910,7 @@ export default function (pi: ExtensionAPI): void {
     try {
       lease = claimChiefLease({
         piSessionId: sessionId,
+        piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
         tabId,
         workspaceId,

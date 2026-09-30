@@ -38,8 +38,10 @@ import {
   staffDelegateResults,
   staffCloseResults,
   assertManagerResultSettlement,
+  waitForAssignmentSettlement,
   hasManagerResultReceipt,
   managerResultDelivery,
+  managerResultDeliveryEvidence,
   supervisorResultAccepted,
   prepareManagerRepository,
   assertManagerFreshPrimary,
@@ -48,6 +50,7 @@ import {
   leadReadyCompleted,
   verifiedLeadSession,
   managerReadyAnswer,
+  managerReadyEntryEvidence,
   exactIsolatedSession,
   isolatedSessionDetails,
   preparePi,
@@ -856,13 +859,7 @@ test("Manager result delivery is branch-keyed, semantic, and followed by its tri
     },
     {
       type: "message",
-      id: "follow-up",
       parentId: "inbox-message",
-      message: { role: "user", content: "result" },
-    },
-    {
-      type: "message",
-      parentId: "follow-up",
       message: {
         role: "assistant",
         stopReason: "stop",
@@ -874,7 +871,7 @@ test("Manager result delivery is branch-keyed, semantic, and followed by its tri
     .join("\n");
   assert.deepEqual(managerResultDelivery(contents, branch, sessionId), {
     receipt: contents.split("\n").map(JSON.parse)[0],
-    answer: contents.split("\n").map(JSON.parse)[2],
+    answer: contents.split("\n").map(JSON.parse)[1],
   });
   assert.equal(managerResultDelivery(contents, "other", sessionId), null);
   assert.equal(hasManagerResultReceipt(contents, branch, sessionId), true);
@@ -907,6 +904,324 @@ test("Manager result delivery is branch-keyed, semantic, and followed by its tri
       }),
     /undelivered result must preserve/,
   );
+});
+
+test("Manager completion requires a stopped ACK in the receipt-triggered turn", () => {
+  const branch = "feature/bootstrap";
+  const sessionId = "lead-session";
+  const receipt = {
+    type: "custom_message",
+    id: "receipt",
+    customType: "pi-herdsman-report_result",
+    details: { branch, fromSessionId: sessionId, leadSessionId: sessionId },
+    content: `Project work ${branch} finished:\n\nMANAGER_RECOVERY_DONE`,
+  };
+  const answer = {
+    type: "message",
+    id: "answer",
+    parentId: "receipt",
+    message: {
+      role: "assistant",
+      stopReason: "stop",
+      content: "PI_HERDSMAN_MANAGER_RECOVERY_OK",
+    },
+  };
+  const delivery = (entries, expected = sessionId) =>
+    managerResultDelivery(
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      branch,
+      expected,
+    );
+  assert.equal(delivery([receipt, answer])?.answer.id, "answer");
+  for (const entries of [
+    [answer, receipt],
+    [receipt, { ...answer, parentId: "other-branch" }],
+    [
+      receipt,
+      { ...answer, message: { ...answer.message, stopReason: "toolUse" } },
+    ],
+    [
+      receipt,
+      { ...answer, message: { ...answer.message, content: "Acknowledged." } },
+    ],
+    [receipt, { ...receipt, id: "duplicate" }, answer],
+    ...[
+      { customType: "other" },
+      { details: { ...receipt.details, branch: "other" } },
+      { details: { ...receipt.details, fromSessionId: "other" } },
+      { details: { ...receipt.details, leadSessionId: "other" } },
+    ].map((changed) => [{ ...receipt, ...changed }, answer]),
+  ])
+    assert.equal(delivery(entries), null);
+  assert.equal(delivery([receipt, answer], "wrong-session"), null);
+  const toolResult = {
+    type: "message",
+    id: "tool-result",
+    parentId: "receipt",
+    message: { role: "toolResult" },
+  };
+  assert.equal(
+    delivery([receipt, toolResult, { ...answer, parentId: "tool-result" }])
+      ?.answer.id,
+    "answer",
+  );
+  for (const message of [
+    { role: "user" },
+    { role: "assistant", stopReason: "stop" },
+  ])
+    assert.equal(
+      delivery([
+        receipt,
+        { ...toolResult, message },
+        { ...answer, parentId: "tool-result" },
+      ]),
+      null,
+    );
+});
+
+test("Manager result timeout evidence separates identity, content, and direct followUp", () => {
+  const receipt = {
+    type: "custom_message",
+    id: "receipt",
+    parentId: "previous-turn",
+    customType: "pi-herdsman-report_result",
+    details: {
+      branch: "feature/test",
+      fromSessionId: "lead",
+      leadSessionId: "lead",
+    },
+    content: "Project work feature/test finished:\n\nMANAGER_RECOVERY_DONE",
+  };
+  const followUp = {
+    type: "message",
+    id: "follow-up",
+    parentId: "receipt",
+    message: { role: "user", content: "private user prose" },
+  };
+  const evidence = (entries) =>
+    managerResultDeliveryEvidence(
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "feature/test",
+      "lead",
+    );
+  const matched = evidence([receipt, followUp]);
+  assert.deepEqual(matched, {
+    receiptExists: true,
+    contentMatches: true,
+    followUpExists: true,
+    receipts: [
+      {
+        id: "receipt",
+        parentId: "previous-turn",
+        contentMatches: true,
+        followUpExists: true,
+        followUp: { id: "follow-up", parentId: "receipt" },
+        laterUsers: [{ id: "follow-up", parentId: "receipt" }],
+      },
+    ],
+  });
+  assert.equal(
+    evidence([{ ...receipt, content: "wrong content" }, followUp])
+      .contentMatches,
+    false,
+  );
+  assert.equal(
+    evidence([{ ...receipt, content: "wrong content" }, followUp])
+      .followUpExists,
+    true,
+  );
+  const wrongParent = evidence([receipt, { ...followUp, parentId: "other" }]);
+  assert.equal(wrongParent.contentMatches, true);
+  assert.equal(wrongParent.followUpExists, false);
+  assert.deepEqual(wrongParent.receipts[0].laterUsers, [
+    { id: "follow-up", parentId: "other" },
+  ]);
+  for (const changed of [
+    { type: "message" },
+    { customType: "other" },
+    { details: { ...receipt.details, branch: "other" } },
+    { details: { ...receipt.details, fromSessionId: "other" } },
+    { details: { ...receipt.details, leadSessionId: "other" } },
+  ])
+    assert.deepEqual(evidence([{ ...receipt, ...changed }, followUp]), {
+      receiptExists: false,
+      contentMatches: false,
+      followUpExists: false,
+      receipts: [],
+    });
+  assert.equal(evidence([receipt]).followUpExists, false);
+  assert.doesNotMatch(
+    JSON.stringify(matched),
+    /private user prose|MANAGER_RECOVERY_DONE/,
+  );
+  const longId = "\u0000".repeat(100_000);
+  for (const value of [
+    longId,
+    { content: "private user prose", id: longId },
+    [longId],
+    42,
+    null,
+    undefined,
+  ]) {
+    const expected = typeof value === "string" ? value.slice(0, 200) : null;
+    const bounded = evidence([
+      ...Array.from({ length: 6 }, () => ({
+        ...receipt,
+        id: longId,
+        parentId: value,
+      })),
+      ...Array.from({ length: 6 }, () => ({
+        ...followUp,
+        id: value,
+        parentId: longId,
+      })),
+    ]);
+    assert.equal(bounded.receipts.length, 5);
+    for (const entry of bounded.receipts) {
+      assert.equal(entry.id, longId.slice(0, 200));
+      assert.equal(entry.parentId, expected);
+      assert.equal(entry.followUpExists, true);
+      assert.deepEqual(entry.followUp, {
+        id: expected,
+        parentId: longId.slice(0, 200),
+      });
+      assert.deepEqual(
+        entry.laterUsers,
+        Array.from({ length: 5 }, () => entry.followUp),
+      );
+    }
+    const malformedReceipt = evidence([
+      { ...receipt, id: value },
+      { ...followUp, parentId: value },
+    ]);
+    assert.equal(malformedReceipt.receipts[0].id, expected);
+    assert.equal(malformedReceipt.receipts[0].laterUsers[0].parentId, expected);
+    for (const result of [bounded, malformedReceipt]) {
+      const serialized = JSON.stringify(result);
+      assert.ok(
+        serialized.length < 90_000,
+        "completion evidence must remain bounded even with JSON escaping",
+      );
+      assert.doesNotMatch(
+        serialized,
+        /private user prose|MANAGER_RECOVERY_DONE/,
+      );
+    }
+  }
+});
+
+test("Manager assignment settlement waits for exact path removal and reports persistent identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-herdsman-settlement-"));
+  const path = join(root, "assignment.json");
+  const record = {
+    id: "lead",
+    repoKey: "repo",
+    branch: "feature/test",
+    text: "private task",
+  };
+  const delivery = {
+    receipt: { id: "receipt", parentId: null },
+    ack: { id: "ack", parentId: "receipt" },
+    supervisorResultAccepted: true,
+  };
+  try {
+    await writeFile(path, JSON.stringify(record));
+    await waitForAssignmentSettlement(
+      path,
+      async (label, absent, timeout) => {
+        assert.equal(label, "assignment-settlement");
+        assert.equal(timeout, 15_000);
+        assert.equal(await absent(), false);
+        await rm(path);
+        assert.equal(await absent(), true);
+      },
+      delivery,
+    );
+    await writeFile(path, JSON.stringify(record));
+    await assert.rejects(
+      waitForAssignmentSettlement(
+        path,
+        async (_label, absent) => {
+          assert.equal(await absent(), false);
+          throw new Error("assignment-settlement timed out");
+        },
+        delivery,
+      ),
+      (error) => {
+        assert.match(error.message, /assignment-settlement timed out/);
+        const evidence = JSON.parse(
+          error.message.split("; assignment settlement evidence: ")[1],
+        );
+        assert.deepEqual(evidence.assignment, {
+          exists: true,
+          size: Buffer.byteLength(JSON.stringify(record)),
+          regularFile: true,
+          id: "lead",
+          repoKey: "repo",
+          branch: "feature/test",
+        });
+        assert.deepEqual(evidence.delivery, delivery);
+        assert.doesNotMatch(error.message, /private task/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Manager assignment settlement timeout bounds long and malformed delivery identifiers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-herdsman-settlement-"));
+  const path = join(root, "assignment.json");
+  const privateProse = "private transcript prose";
+  const longId = "\u0000".repeat(100_000);
+  try {
+    await writeFile(path, JSON.stringify({ id: "lead", text: privateProse }));
+    for (const value of [
+      longId,
+      { text: privateProse, id: longId },
+      [longId],
+      42,
+      null,
+      undefined,
+    ]) {
+      const entry = { id: value, parentId: value, content: privateProse };
+      await assert.rejects(
+        waitForAssignmentSettlement(
+          path,
+          async () => {
+            throw new Error("assignment-settlement timed out");
+          },
+          {
+            receipt: entry,
+            ack: entry,
+            supervisorResultAccepted: true,
+            content: privateProse,
+          },
+        ),
+        (error) => {
+          const serialized = error.message.split(
+            "; assignment settlement evidence: ",
+          )[1];
+          assert.ok(
+            serialized.length < 6_000,
+            "timeout diagnostic must remain bounded even with JSON escaping",
+          );
+          const expected =
+            typeof value === "string" ? value.slice(0, 200) : null;
+          assert.deepEqual(JSON.parse(serialized).delivery, {
+            receipt: { id: expected, parentId: expected },
+            ack: { id: expected, parentId: expected },
+            supervisorResultAccepted: true,
+          });
+          assert.doesNotMatch(error.message, /private transcript prose/);
+          return true;
+        },
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("Manager-away supervisor_result persists before notification reconciliation", () => {
@@ -993,6 +1308,31 @@ test("Manager smoke creates a fresh Git primary without pre-opening a worktree",
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Manager smoke assignment namespace comes only from the topology repo key", () => {
+  const topology = {
+    source: {
+      repo_key: "canonical-repo",
+      repo_name: "project",
+      source_workspace_id: "w1",
+      source_checkout_path: "/tmp/project",
+    },
+    worktrees: [],
+  };
+  const validate = (value) =>
+    assertManagerFreshPrimary(
+      "w1",
+      "/tmp/project",
+      { workspace_id: "w1" },
+      value,
+    );
+  assert.equal(validate(topology), "canonical-repo");
+  for (const repo_key of [undefined, "", null, 1])
+    assert.throws(
+      () => validate({ ...topology, source: { ...topology.source, repo_key } }),
+      /repo key must be a non-empty string/,
+    );
 });
 
 test("smoke branch cleanup treats only a proven absent local branch as already clean", async () => {
@@ -1132,7 +1472,8 @@ test("Manager READY answer follows delivered message even on a separate followUp
       type: "custom_message",
       id: "receipt",
       customType: "pi-herdsman-lead_message",
-      content: `From lead ${lead} to chief chief-id: MANAGER_RECOVERY_READY`,
+      details: { fromSessionId: lead },
+      content: `From lead ${lead}: MANAGER_RECOVERY_READY`,
     },
     {
       type: "message",
@@ -1210,6 +1551,70 @@ test("Manager READY answer follows delivered message even on a separate followUp
     managerReadyAnswer(contents(prematureFinish), lead).prematureFinish,
     true,
   );
+});
+
+test("Manager READY timeout diagnostics recognize only exact current Lead receipts", () => {
+  const receipt = {
+    type: "custom_message",
+    customType: "pi-herdsman-lead_message",
+    details: { fromSessionId: "lead-id" },
+    content: "From lead lead-id: MANAGER_RECOVERY_READY",
+  };
+  for (const [entry, expected] of [
+    [receipt, true],
+    [{ ...receipt, details: { fromSessionId: "wrong-lead" } }, false],
+    [{ ...receipt, details: undefined }, false],
+    [
+      { ...receipt, content: "From lead wrong-lead: MANAGER_RECOVERY_READY" },
+      false,
+    ],
+    [
+      {
+        ...receipt,
+        content: "From lead lead-id to chief chief-id: MANAGER_RECOVERY_READY",
+      },
+      false,
+    ],
+    [{ ...receipt, customType: "pi-herdsman-lead_ask" }, false],
+  ])
+    assert.equal(
+      managerReadyEntryEvidence(JSON.stringify(entry), "lead-id").some(
+        (evidence) => evidence.receipt,
+      ),
+      expected,
+    );
+});
+
+test("Manager READY receipts require a non-empty expected Lead ID", () => {
+  for (const leadSessionId of [undefined, "", null, 0, false]) {
+    const contents = [
+      {
+        type: "custom_message",
+        customType: "pi-herdsman-lead_message",
+        details: { fromSessionId: leadSessionId },
+        content: `From lead ${leadSessionId}: MANAGER_RECOVERY_READY`,
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: "PI_HERDSMAN_MANAGER_RECOVERY_READY",
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+    const answer = managerReadyAnswer(contents, leadSessionId);
+    assert.equal(answer.receipt, false);
+    assert.equal(answer.answer, null);
+    assert.equal(
+      managerReadyEntryEvidence(contents, leadSessionId).some(
+        (evidence) => evidence.receipt,
+      ),
+      false,
+    );
+  }
 });
 
 test("ID-only Lead identity resolves only exact bounded isolated session", async () => {
