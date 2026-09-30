@@ -1753,14 +1753,12 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
       context,
     );
     assertToolResult(malformed);
-    const malformedLead = (malformed.details?.reports as any[])[0];
-    assert.equal(malformedLead.session, leadId);
-    assert.equal("lead" in malformedLead, false);
-    assert.deepEqual(malformedLead?.available_actions, [
-      "inspect",
-      "transcript",
-      "message",
-    ]);
+    assert.equal(
+      (malformed.details?.reports as any[]).some(
+        (report) => report.session === leadId,
+      ),
+      false,
+    );
     await assert.rejects(
       tool.execute(
         "transcript",
@@ -1769,8 +1767,48 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
         undefined,
         context,
       ),
-      /Persisted Pi session is missing a matching current session header/,
+      /Lead target was not found or is no longer eligible/,
     );
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const sessionManager = SessionManager as any;
+    const originalFindById = Object.getOwnPropertyDescriptor(
+      sessionManager,
+      "findById",
+    );
+    const originalSession = leadAgent.agent_session;
+    sessionManager.findById = (cwd: string, id: string) =>
+      cwd === leadAgent.cwd && id === leadId ? leadPath : undefined;
+    leadAgent.agent_session = { ...originalSession, kind: "id", value: leadId };
+    try {
+      const mismatched = await listTool.execute(
+        "list",
+        {},
+        undefined,
+        undefined,
+        context,
+      );
+      assertToolResult(mismatched);
+      const mismatchedLead = (mismatched.details?.reports as any[]).find(
+        (report) => report.session === leadId,
+      );
+      assert.ok(mismatchedLead);
+      assert.ok(mismatchedLead.available_actions.includes("transcript"));
+      await assert.rejects(
+        tool.execute(
+          "transcript",
+          { session: leadId },
+          undefined,
+          undefined,
+          context,
+        ),
+        /Persisted Pi session is missing a matching current session header/,
+      );
+    } finally {
+      leadAgent.agent_session = originalSession;
+      if (originalFindById)
+        Object.defineProperty(sessionManager, "findById", originalFindById);
+      else delete sessionManager.findById;
+    }
     writeFileSync(
       leadPath,
       transcriptEntries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",

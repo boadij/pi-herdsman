@@ -1348,7 +1348,11 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
   const label = "agent";
   const sessionPath = join(testTmpRoot, "registered-agent.jsonl");
   realFs.rmSync(sessionPath, { force: true });
-  realFs.writeFileSync(sessionPath, "{}", "utf8");
+  realFs.writeFileSync(
+    sessionPath,
+    JSON.stringify({ type: "session", id: DEFAULT_PI_SESSION_ID }),
+    "utf8",
+  );
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,

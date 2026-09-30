@@ -1128,6 +1128,12 @@ async function runManagerStartupScenario(
     | "conflict"
     | "managed-agent"
     | "unmaterialized-path"
+    | "identity-timeout"
+    | "identity-zero-byte-timeout"
+    | "identity-unproven"
+    | "identity-mismatch"
+    | "identity-cleanup-mismatch"
+    | "identity-ambiguity"
     | "mismatched-session"
     | "recovery"
     | "preexisting"
@@ -1156,8 +1162,8 @@ async function runManagerStartupScenario(
   missingPaneCode = "pane_not_found",
 ): Promise<void> {
   setLeadEnvironment();
-  if (mode === "unmaterialized-path")
-    support.sessionOpenError = new Error("session header is incomplete");
+  const prospective =
+    mode === "unmaterialized-path" || mode.startsWith("identity-");
   process.env.HERDR_PANE_ID = "root-pane";
   process.env.HERDR_TAB_ID = "root-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -1178,6 +1184,20 @@ async function runManagerStartupScenario(
     mode === "active-live" ||
     ["close-resume", "active-discard", "close-failure"].includes(mode);
   let startupObservations = 0;
+  let identityObservations = 0;
+  let cleanupOwnershipObservations = 0;
+  let emptySessionStat: ReturnType<typeof realFs.statSync> | undefined;
+  let identityPolled: () => void = () => {};
+  const identityPoll = new Promise<void>((resolve) => {
+    identityPolled = resolve;
+  });
+  const originalNow = Date.now;
+  const childIdentity = () => ({
+    source: "herdr:pi",
+    agent: "pi",
+    kind: prospective ? "path" : "id",
+    value: prospective ? childSessionPath : childSession,
+  });
   let createCalls = 0;
   let openCalls = 0;
   let startCalls = 0;
@@ -1331,24 +1351,24 @@ async function runManagerStartupScenario(
     if (command === "herdr" && args[0] === "pane" && args[1] === "get")
       return respond({
         pane: {
-          pane_id: "child-pane",
+          pane_id:
+            mode === "identity-unproven" && identityObservations
+              ? "replacement-pane"
+              : "child-pane",
           workspace_id: childWorkspace,
           tab_id: "child-tab",
           terminal_id: "child-terminal",
           cwd: childPath,
-          ...([
+          ...(([
             "close-resume",
             "active-discard",
             "close-failure",
             "unassigned-close",
-          ].includes(mode) && started
+          ].includes(mode) ||
+            prospective) &&
+          started
             ? {
-                agent_session: {
-                  source: "herdr:pi",
-                  agent: "pi",
-                  kind: "id",
-                  value: childSession,
-                },
+                agent_session: childIdentity(),
               }
             : {}),
         },
@@ -1399,12 +1419,13 @@ async function runManagerStartupScenario(
           shell_pid: 33,
           foreground_process_group_id:
             started &&
-            [
+            ([
               "close-resume",
               "active-discard",
               "close-failure",
               "unassigned-close",
-            ].includes(mode)
+            ].includes(mode) ||
+              prospective)
               ? 44
               : 33,
           foreground_processes: [
@@ -1530,8 +1551,6 @@ async function runManagerStartupScenario(
       if (!childSession && currentAssignment)
         childSession = currentAssignment.id;
       if (started) startupObservations++;
-      if (mode === "unmaterialized-path" && started)
-        realFs.writeFileSync(childSessionPath, "{");
       if (
         started &&
         startupObservations === 3 &&
@@ -1605,7 +1624,7 @@ async function runManagerStartupScenario(
                       mode === "delayed-herdr-session" &&
                       startupObservations === 2
                         ? undefined
-                        : mode === "unmaterialized-path"
+                        : prospective
                           ? {
                               source: "herdr:pi",
                               agent: "pi",
@@ -1631,7 +1650,51 @@ async function runManagerStartupScenario(
         },
       });
     }
-    if (command === "herdr" && isAgentList(args))
+    if (command === "herdr" && isAgentList(args)) {
+      const delivered =
+        childSession &&
+        listChiefMessagePaths(supervisionRuntime(), childSession).some(
+          (path) => readChiefMessage(path).kind === "project_assignment",
+        );
+      if (prospective && delivered && started) {
+        identityObservations++;
+        if (mode === "unmaterialized-path" && identityObservations === 2)
+          identityPolled();
+        if (
+          mode === "identity-zero-byte-timeout" &&
+          identityObservations === 1
+        ) {
+          assert.equal(realFs.existsSync(childSessionPath), false);
+          realFs.writeFileSync(childSessionPath, "");
+          emptySessionStat = realFs.statSync(childSessionPath);
+        }
+        if (
+          [
+            "identity-timeout",
+            "identity-zero-byte-timeout",
+            "identity-unproven",
+            "identity-mismatch",
+            "identity-cleanup-mismatch",
+          ].includes(mode)
+        )
+          Date.now = () => originalNow() + 60_000;
+        if (mode === "identity-mismatch" || mode === "identity-ambiguity") {
+          realFs.writeFileSync(
+            childSessionPath,
+            JSON.stringify({
+              type: "session",
+              id:
+                mode === "identity-mismatch" ? unrelatedSession : childSession,
+            }),
+          );
+          nativeSessions.set(childSession, {
+            id: mode === "identity-mismatch" ? unrelatedSession : childSession,
+            path: childSessionPath,
+            cwd: childPath,
+            entries: [],
+          });
+        }
+      }
       return respond({
         agents: [
           managerAgent,
@@ -1666,6 +1729,7 @@ async function runManagerStartupScenario(
               ]
             : []),
           ...(mode === "active-live" ||
+          (started && startupObservations >= 3) ||
           ([
             "close-resume",
             "active-discard",
@@ -1673,24 +1737,41 @@ async function runManagerStartupScenario(
             "unassigned-close",
           ].includes(mode) &&
             started)
-            ? [
-                {
-                  agent_session: {
-                    source: "herdr:pi",
-                    agent: "pi",
-                    kind: "id",
-                    value: childSession,
-                  },
+            ? Array.from(
+                { length: mode === "identity-ambiguity" && delivered ? 2 : 1 },
+                () => ({
+                  agent_session: childIdentity(),
                   workspace_id: childWorkspace,
                   pane_id: "child-pane",
                   tab_id: "child-tab",
                   cwd: childPath,
-                },
-              ]
+                }),
+              )
             : []),
         ],
       });
-    if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+    }
+    if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+      if (
+        mode === "identity-cleanup-mismatch" &&
+        identityObservations &&
+        ++cleanupOwnershipObservations === 1
+      ) {
+        assert.equal(realFs.existsSync(childSessionPath), false);
+        realFs.writeFileSync(
+          childSessionPath,
+          JSON.stringify({
+            type: "session",
+            id: unrelatedSession,
+          }),
+        );
+        nativeSessions.set(childSession, {
+          id: unrelatedSession,
+          path: childSessionPath,
+          cwd: childPath,
+          entries: [],
+        });
+      }
       return respond({
         agent:
           args[2] === "lead" || args[2] === "child-pane"
@@ -1699,15 +1780,11 @@ async function runManagerStartupScenario(
                 pane_id: "child-pane",
                 tab_id: "child-tab",
                 cwd: childPath,
-                agent_session: {
-                  source: "herdr:pi",
-                  agent: "pi",
-                  kind: "id",
-                  value: childSession,
-                },
+                agent_session: childIdentity(),
               }
             : managerAgent,
       });
+    }
     return respond({});
   };
   const pi = fakeChiefPi({ activeTools: ["read"], exec });
@@ -2419,6 +2496,64 @@ async function runManagerStartupScenario(
       assert.equal(startCalls, 0);
       return;
     }
+    if (mode.startsWith("identity-")) {
+      await assert.rejects(
+        execute(),
+        mode === "identity-ambiguity"
+          ? /identity became ambiguous/
+          : /identity did not materialize; assignment preserved/,
+      );
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        WORKSPACE,
+      )[0]!;
+      assert.deepEqual(Object.keys(assignment).sort(), [
+        "branch",
+        "id",
+        "repoKey",
+        "text",
+        "version",
+      ]);
+      assert.equal(
+        listChiefMessagePaths(supervisionRuntime(), childSession).length,
+        1,
+      );
+      if (mode === "identity-cleanup-mismatch") {
+        assert.equal(cleanupOwnershipObservations, 1);
+        assert.equal(realFs.existsSync(childSessionPath), true);
+        assert.equal(nativeSessions.get(childSession)?.id, unrelatedSession);
+        assert.equal(assignment.id, childSession);
+        assert.equal(created, true);
+        assert.equal(createCalls, 1);
+        assert.equal(startCalls, 1);
+      }
+      if (mode === "identity-zero-byte-timeout") {
+        assert.deepEqual(
+          realFs.readFileSync(childSessionPath),
+          Buffer.alloc(0),
+        );
+        const stat = realFs.statSync(childSessionPath);
+        assert.equal(stat.size, 0);
+        assert.equal(stat.mtimeMs, emptySessionStat!.mtimeMs);
+        assert.equal(stat.ino, emptySessionStat!.ino);
+        assert.equal(assignment.id, childSession);
+      }
+      const stopped =
+        mode === "identity-timeout" || mode === "identity-zero-byte-timeout";
+      assert.equal(started, !stopped);
+      assert.equal(
+        pi.calls.some(
+          (args) =>
+            args[0] === "worktree" && ["delete", "remove"].includes(args[1]),
+        ),
+        false,
+      );
+      assert.equal(
+        pi.calls.some((args) => args[0] === "agent" && args[1] === "send-keys"),
+        stopped,
+      );
+      return;
+    }
     if (
       mode === "conflict" ||
       mode === "managed-agent" ||
@@ -2431,7 +2566,40 @@ async function runManagerStartupScenario(
           : /conflicting role or identity/,
       );
     else {
-      const result = await execute();
+      const delegation = execute();
+      if (mode === "unmaterialized-path") {
+        let settled = false;
+        void delegation.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
+        await Promise.race([
+          identityPoll,
+          delegation.then(() => {
+            throw new Error("Delegation returned before identity materialized");
+          }),
+        ]);
+        assert.equal(settled, false);
+        assert.equal(realFs.existsSync(childSessionPath), false);
+        realFs.writeFileSync(
+          childSessionPath,
+          JSON.stringify({
+            type: "session",
+            id: childSession,
+          }),
+        );
+        nativeSessions.set(childSession, {
+          id: childSession,
+          path: childSessionPath,
+          cwd: childPath,
+          entries: [],
+        });
+      }
+      const result = await delegation;
       assert.equal(result.details.ok, true);
       assert.equal(result.details.session, childSession);
     }
@@ -2505,8 +2673,19 @@ async function runManagerStartupScenario(
     if (mode === "unmaterialized-path") {
       assert.equal(realFs.existsSync(childSessionPath), true);
       assert.equal(assignment.id, childSession);
+      const closed = await pi.tools
+        .find((tool) => tool.name === "staff_close")!
+        .execute("close", { session: childSession }, undefined, undefined, ctx);
+      assert.equal(closed.details.ok, true);
+      assert.equal(started, false);
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+        childSession,
+      );
     }
   } finally {
+    Date.now = originalNow;
+    nativeSessions.delete(childSession);
     realFs.rmSync(childSessionPath, { force: true });
     support.sessionOpenError = undefined;
     await pi.events.get("session_shutdown")?.[0]();
@@ -2531,8 +2710,18 @@ test("Manager startup rejects conflicting role promptly", () =>
   runManagerStartupScenario("conflict"));
 test("Manager startup rejects managed Agent identity without Lead state", () =>
   runManagerStartupScenario("managed-agent"));
-test("Manager accepts Lead state while Herdr reports a not-yet-created session path", () =>
+test("Manager waits for prospective Lead identity to materialize before success and immediate close", () =>
   runManagerStartupScenario("unmaterialized-path"));
+for (const mode of [
+  "identity-timeout",
+  "identity-zero-byte-timeout",
+  "identity-unproven",
+  "identity-mismatch",
+  "identity-cleanup-mismatch",
+  "identity-ambiguity",
+] as const)
+  test(`Manager preserves assignment and fails closed on ${mode}`, () =>
+    runManagerStartupScenario(mode));
 test("Manager rejects a resolvable Herdr session ID that differs from its assignment", () =>
   runManagerStartupScenario("mismatched-session"));
 test("Manager recovery waits on existing exact Pi without restarting it", () =>

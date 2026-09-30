@@ -128,6 +128,7 @@ import {
   worktreeGroupScope,
   paneProcess,
   sessionIdentity,
+  readPiSessionHeaderId,
   matchesExpectedSession,
   startHerdrAgent,
   startHerdrAgentInPane,
@@ -1760,8 +1761,7 @@ function herdrSessionId(agent: any): string | undefined {
   if (!session) return undefined;
   if (session.kind === "id") return session.value;
   try {
-    const id = SessionManager.open(realpathSync(session.value)).getSessionId();
-    return id || undefined;
+    return readPiSessionHeaderId(session.value);
   } catch {
     return undefined;
   }
@@ -10277,6 +10277,7 @@ export default function (pi: ExtensionAPI): void {
           throw new Error("Herdr did not return exact worktree identities");
         await assertUnoccupied(workspaceId!);
         let lead: any;
+        let startedLead = false;
         const verifyLeadCandidate = (candidate: any): boolean => {
           const reported = sessionIdentity(candidate?.agent_session);
           if (!reported) return false;
@@ -10350,6 +10351,7 @@ export default function (pi: ExtensionAPI): void {
               ],
               signal,
             });
+            startedLead = true;
           }
         }
         const deadline = Date.now() + 30_000;
@@ -10457,6 +10459,52 @@ export default function (pi: ExtensionAPI): void {
           text: projectAssignmentInstruction(assignment),
           createdAt: Date.now(),
         });
+        let rediscovered: any;
+        while (Date.now() < deadline) {
+          const exact = (await liveLead(ctx, assignment.id)).filter(
+            (candidate: any) =>
+              candidate.workspace_id === workspaceId &&
+              candidate.pane_id === paneId &&
+              candidate.tab_id === tabId,
+          );
+          if (exact.length > 1)
+            throw new Error("Lead identity became ambiguous during delegation");
+          if (exact.length === 1) {
+            rediscovered = exact[0];
+            break;
+          }
+          await delay(100, undefined, { signal });
+        }
+        if (!rediscovered) {
+          const observed = sessionIdentity(lead.agent_session);
+          const resolvedSessionId = herdrSessionId(lead);
+          if (
+            startedLead &&
+            observed?.kind === "path" &&
+            (!resolvedSessionId || resolvedSessionId === assignment.id)
+          ) {
+            try {
+              await stopHerdrAgentPreservingPane(
+                pi,
+                ctx,
+                paneId!,
+                {
+                  paneId,
+                  tabId,
+                  workspaceId,
+                  cwd,
+                  session: expectedSession(assignment.id, observed.value),
+                },
+                signal,
+              );
+            } catch (error) {
+              appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+            }
+          }
+          throw new Error(
+            "Lead started but its exact Pi session identity did not materialize; assignment preserved",
+          );
+        }
         return {
           content: [
             {

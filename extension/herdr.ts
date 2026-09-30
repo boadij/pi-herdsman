@@ -1,12 +1,11 @@
 import {
   getAgentDir,
-  SessionManager,
   type ExecResult,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -1919,6 +1918,26 @@ export function sameObservedSessionPath(left: string, right: string): boolean {
     );
   }
 }
+// Missing/empty prospective files are unresolved; invalid content and I/O errors
+// throw so ownership matching cannot mistake them for prospective files.
+export function readPiSessionHeaderId(path: string): string | undefined {
+  let content: string;
+  try {
+    content = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (content.length === 0) return undefined;
+  const header = JSON.parse(content.split("\n", 1)[0]);
+  if (
+    header?.type !== "session" ||
+    typeof header.id !== "string" ||
+    header.id.length === 0
+  )
+    throw new Error("Invalid Pi session header");
+  return header.id;
+}
 export function matchesExpectedSession(
   observed: unknown,
   expected: ExpectedSession | undefined,
@@ -1932,14 +1951,29 @@ export function matchesExpectedSession(
       expected.id.length > 0 &&
       session.value === expected.id
     );
-  if (typeof expected.path === "string" && expected.path.length > 0)
-    return sameObservedSessionPath(session.value, expected.path);
+  const hasExpectedPath =
+    typeof expected.path === "string" && expected.path.length > 0;
+  if (hasExpectedPath) {
+    if (!sameObservedSessionPath(session.value, expected.path)) return false;
+    if (typeof expected.id !== "string" || expected.id.length === 0)
+      return true;
+  }
   if (typeof expected.id !== "string" || expected.id.length === 0) return false;
+  let path: string;
   try {
-    return (
-      SessionManager.open(realpathSync(session.value)).getSessionId() ===
-      expected.id
-    );
+    path = realpathSync(session.value);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return hasExpectedPath;
+    if (hasExpectedPath)
+      throw new Error(
+        `could not canonicalize exact Pi session path ${session.value}: ${String(error)}`,
+      );
+    return false;
+  }
+  try {
+    const id = readPiSessionHeaderId(path);
+    return id === undefined ? hasExpectedPath : id === expected.id;
   } catch {
     return false;
   }

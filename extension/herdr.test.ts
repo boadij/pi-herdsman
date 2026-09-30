@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import {
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -34,6 +36,7 @@ import {
   startHerdrAgent,
   startHerdrAgentInPane,
   matchesExpectedSession,
+  readPiSessionHeaderId,
   sameObservedSessionPath,
   sessionIdentity,
   STARTUP_TIMEOUT_MAX,
@@ -3079,7 +3082,7 @@ test("session matching keeps id and canonical path observations kind-aware", () 
         },
         { id: "different-id", path },
       ),
-      true,
+      false,
     );
     assert.equal(sameObservedSessionPath(alias, path), true);
     assert.equal(sameObservedSessionPath(missing, path), false);
@@ -3117,17 +3120,98 @@ test("session matching keeps id and canonical path observations kind-aware", () 
       ),
       false,
     );
+    for (const [expected, matches] of [
+      [{ id: "different-id", path: missing }, true],
+      [{ id: "different-id" }, false],
+      [{ id: "different-id", path: join(root, "also-missing.jsonl") }, false],
+    ] as const)
+      assert.equal(
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+          expected,
+        ),
+        matches,
+      );
+    assert.equal(readPiSessionHeaderId(missing), undefined);
+    writeFileSync(missing, "");
+    assert.equal(readPiSessionHeaderId(missing), undefined);
+    for (const [expected, matches] of [
+      [{ id: "agent-session", path: missing }, true],
+      [{ id: "agent-session" }, false],
+      [{ id: "agent-session", path }, false],
+    ] as const)
+      assert.equal(
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+          expected,
+        ),
+        matches,
+      );
+    assert.deepEqual(readFileSync(missing), Buffer.alloc(0));
+    assert.equal(statSync(missing).size, 0);
+    const header = JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "agent-session",
+      timestamp: new Date().toISOString(),
+      cwd: root,
+    });
+    writeFileSync(missing, header);
+    assert.equal(readPiSessionHeaderId(missing), "agent-session");
+    for (const [expected, matches] of [
+      [{ id: "different-id", path: missing }, false],
+      [{ id: "agent-session", path: missing }, true],
+      [{ path: missing }, true],
+      [{ id: "agent-session" }, true],
+      [{ id: "different-id" }, false],
+    ] as const)
+      assert.equal(
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+          expected,
+        ),
+        matches,
+      );
+    assert.equal(readFileSync(missing, "utf8"), header);
+    for (const content of [
+      "{}",
+      "not JSON",
+      " ",
+      JSON.stringify({ type: "session", id: 123 }),
+      JSON.stringify({ type: "session", id: "" }),
+      JSON.stringify({ type: "message", id: "agent-session" }),
+      `not JSON\n${header}\n`,
+    ]) {
+      writeFileSync(missing, content);
+      assert.throws(() => readPiSessionHeaderId(missing));
+      for (const expected of [
+        { id: "agent-session", path: missing },
+        { id: "agent-session" },
+      ])
+        assert.equal(
+          matchesExpectedSession(
+            { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+            expected,
+          ),
+          false,
+        );
+      assert.equal(readFileSync(missing, "utf8"), content);
+    }
+    assert.throws(() => readPiSessionHeaderId(root), /EISDIR/);
     assert.equal(
       matchesExpectedSession(
-        {
-          source: "herdr:pi",
-          agent: "pi",
-          kind: "path",
-          value: missing,
-        },
-        { id: "different-id", path: missing },
+        { source: "herdr:pi", agent: "pi", kind: "path", value: root },
+        { id: "agent-session", path: root },
       ),
-      true,
+      false,
+    );
+    assert.throws(
+      () =>
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: loop },
+          { id: "agent-session", path: loop },
+        ),
+      /could not canonicalize exact Pi session path.*ELOOP/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
