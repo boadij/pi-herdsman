@@ -42,6 +42,7 @@ import {
   renderAgentLostMessage,
   renderCoordinationCall,
   renderCoordinationResult,
+  renderCoordinationMessage,
   renderAgentDefinitionsOverview,
   renderHerdRunEntry,
   renderStopSummary,
@@ -51,6 +52,7 @@ import {
   visibleWidth,
 } from "./presentation.ts";
 import { herdsmanDataRoot, herdsmanTempRoot, resultPath } from "./storage.ts";
+import { COORDINATION_MESSAGE_KINDS } from "./supervision.ts";
 
 initTheme("dark");
 
@@ -4639,8 +4641,9 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
   );
   assert.match(
     context,
-    /project_work:\n  feat\/active-.* · active · runtime=blocked · session=managed-0/,
+    /project_work:\n  feat\/active-.* · active · runtime=blocked/,
   );
+  assert.doesNotMatch(context, /session=|managed-\d/);
   assert.ok(Buffer.byteLength(context) <= SUPERVISION_CONTEXT_MAX_BYTES);
   for (let width = 1; width <= 120; width++)
     assert.ok(
@@ -4685,6 +4688,156 @@ test("Manager work status outranks live Lead markers except when active", () => 
       );
     }
   }
+});
+
+test("coordination messages render compact semantic headings and strip only known envelopes", () => {
+  const details = {
+    id: "transport-uuid",
+    leaseId: "lease-uuid",
+    fromSessionId: "sender-session-uuid",
+    leadSessionId: "assignment-session-uuid",
+    branch: "feat/bootstrap",
+  };
+  const envelopes = {
+    chief_message:
+      "From chief sender-session-uuid to lead assignment-session-uuid: ",
+    lead_message:
+      "From lead assignment-session-uuid to chief recipient-session-uuid: ",
+    lead_ask:
+      "From lead assignment-session-uuid to chief recipient-session-uuid: ",
+    chief_reply:
+      "From chief sender-session-uuid to lead assignment-session-uuid: ",
+    manager_message:
+      "From manager sender-session-uuid to lead assignment-session-uuid: ",
+    manager_ask:
+      "From manager sender-session-uuid to chief recipient-session-uuid: ",
+    manager_reply:
+      "From manager sender-session-uuid to lead assignment-session-uuid: ",
+    project_assignment: "Project assignment for branch feat/bootstrap:\n\n",
+    report_result: "Project work feat/bootstrap finished:\n\n",
+    peer_message: "Peer message from sender-session-uuid: ",
+  };
+  const headings = {
+    chief_message: "Chief message",
+    lead_message: "Lead message",
+    lead_ask: "? Lead needs input",
+    chief_reply: "Chief reply",
+    manager_message: "Manager message",
+    manager_ask: "? Manager needs input",
+    manager_reply: "Manager reply",
+    project_assignment: "→ feat/bootstrap assigned",
+    report_result: "✓ feat/bootstrap finished",
+    peer_message: "Peer message",
+  };
+  for (const kind of COORDINATION_MESSAGE_KINDS) {
+    const rendered = renderCoordinationMessage(
+      kind,
+      {
+        content: `${envelopes[kind]}Manager can now be reached before chat. ${"more ".repeat(30)}`,
+        details,
+      },
+      { outputPad: 1 },
+      presentationTheme,
+    );
+    const text = renderedText(rendered);
+    assert.ok(text.includes(headings[kind]), kind);
+    assert.match(text, /Manager can now be reached before chat/);
+    assert.match(text, /…/);
+    assert.doesNotMatch(
+      text,
+      /uuid|pi-herdsman-|From |Peer message from|Project work|Project assignment for/,
+    );
+    for (let width = 1; width <= 80; width++)
+      assert.ok(
+        rendered.render(width).every((line) => visibleWidth(line) <= width),
+      );
+  }
+  const prose =
+    "Peer message from someone-else: user prose must remain.\n\nSecond paragraph.";
+  assert.match(
+    renderedText(
+      renderCoordinationMessage(
+        "peer_message",
+        {
+          content: prose,
+          details,
+        },
+        {},
+        presentationTheme,
+      ),
+    ),
+    /Peer message from someone-else: user prose must remain/,
+  );
+  assert.match(
+    renderedText(
+      renderCoordinationMessage(
+        "peer_message",
+        {
+          content:
+            envelopes.peer_message + "Keep this without matching details.",
+        },
+        {},
+        presentationTheme,
+      ),
+    ),
+    /Peer message from sender-session-uuid:/,
+  );
+});
+
+test("expanded coordination messages show complete Markdown and useful provenance only", () => {
+  const body = `## Summary\n\nManager is **reachable**.\n\n- First worktree created\n\n${"Full result paragraph. ".repeat(20)}\n\nFinal evidence.`;
+  const details = {
+    id: "transport-uuid",
+    leaseId: "lease-uuid",
+    fromSessionId: "lead-pi-session",
+    leadSessionId: "internal-assignment-session",
+    branch: "feat/bootstrap",
+  };
+  const rendered = renderCoordinationMessage(
+    "report_result",
+    {
+      content: `Project work feat/bootstrap finished:\n\n${body}`,
+      details,
+    },
+    { expanded: true },
+    presentationTheme,
+  );
+  const text = renderedText(rendered);
+  assert.match(text, /✓ feat\/bootstrap finished/);
+  assert.match(text, /branch: feat\/bootstrap/);
+  assert.match(text, /session: lead-pi-session/);
+  assert.match(text, /Summary/);
+  assert.match(text, /Manager is reachable/);
+  assert.match(text, /First worktree created/);
+  assert.match(text, /Final evidence/);
+  assert.equal((text.match(/Full result paragraph\./g) ?? []).length, 20);
+  assert.doesNotMatch(
+    text,
+    /transport-uuid|lease-uuid|internal-assignment-session|Project work|## Summary|\*\*reachable\*\*/,
+  );
+  for (let width = 1; width <= 80; width++)
+    assert.ok(
+      rendered.render(width).every((line) => visibleWidth(line) <= width),
+    );
+  const ordinary = renderedText(
+    renderCoordinationMessage(
+      "lead_message",
+      {
+        content:
+          "From lead lead-pi-session to chief manager-session: Ordinary **progress**.",
+        details: {
+          fromSessionId: "lead-pi-session",
+          leadSessionId: "lead-pi-session",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(ordinary, /Lead message/);
+  assert.match(ordinary, /session: lead-pi-session/);
+  assert.match(ordinary, /Ordinary progress/);
+  assert.doesNotMatch(ordinary, /branch:|From lead|manager-session/);
 });
 
 test("Manager mixed tree has one final connector and independent Leads share the row cap", () => {

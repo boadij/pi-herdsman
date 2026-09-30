@@ -25,6 +25,7 @@ import {
   writeChiefMessage,
   removeProjectAssignment,
   writeLeadCoordinationState,
+  readLeadCoordinationState,
   drainCoordinationInbox,
 } from "./supervision.ts";
 import support, {
@@ -279,6 +280,119 @@ test("linked Lead routes to exact Manager, fails closed on incomplete authority,
   }
 });
 
+for (const reachable of [true, false]) {
+  test(`fresh Manager activation ${reachable ? "is immediately reachable without chat" : "rolls back unproven remote identity"}`, async () => {
+    setLeadEnvironment();
+    process.env.HERDR_PANE_ID = "root-pane";
+    process.env.HERDR_TAB_ID = "root-tab";
+    process.env.HERDR_SOCKET_PATH = join(
+      tmpdir(),
+      `manager-bootstrap-${randomUUID()}.sock`,
+    );
+    const runtime = supervisionRuntime();
+    const managerAgent = {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: LEAD_SESSION_ID,
+      },
+      pane_id: "root-pane",
+      tab_id: "root-tab",
+      workspace_id: WORKSPACE,
+    };
+    const exec = async (_command: string, args: string[]) => {
+      let result: unknown = {};
+      if (args[0] === "worktree" && args[1] === "list")
+        result = {
+          source: {
+            repo_key: "repo-key",
+            repo_name: "project",
+            source_workspace_id: WORKSPACE,
+          },
+          worktrees: [],
+        };
+      else if (isAgentList(args))
+        result = { agents: reachable ? [managerAgent] : [] };
+      else if (args[0] === "agent" && args[1] === "get")
+        result = { agent: reachable ? managerAgent : undefined };
+      else if (isApiSnapshot(args))
+        result = {
+          snapshot: { agents: reachable ? [managerAgent] : [], panes: [] },
+        };
+      return {
+        stdout: JSON.stringify({ id: AGENT_ID, result }),
+        stderr: "",
+        code: 0,
+      };
+    };
+    const pi = fakeChiefPi({ activeTools: ["read"], exec });
+    registerExtension!(pi.pi as never);
+    const ctx = fakeContext(pi.entries) as any;
+    const notices: string[] = [];
+    ctx.ui.notify = (message: string) => notices.push(message);
+    try {
+      await pi.events.get("session_start")![0](undefined, ctx);
+      // No before_agent_start or conversation turn precedes Manager activation.
+      await pi.commandOptions.get("manager").handler("", ctx);
+      const state = readLeadCoordinationState(runtime, LEAD_SESSION_ID)!;
+      if (reachable) {
+        assert.ok(notices.includes("Manager mode active."));
+        assert.equal(state.role, "manager");
+        assert.ok(realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)));
+        const leadId = randomUUID();
+        process.env.HERDR_PANE_ID = "lead-pane";
+        process.env.HERDR_TAB_ID = "lead-tab";
+        const lead = fakeChiefPi({ exec });
+        registerExtension!(lead.pi as never);
+        const leadCtx = fakeContext() as any;
+        leadCtx.sessionManager = {
+          ...leadCtx.sessionManager,
+          getSessionId: () => leadId,
+        };
+        try {
+          await lead.events.get("session_start")![0](undefined, leadCtx);
+          const result = await lead.tools
+            .find((tool) => tool.name === "supervisor_message")!
+            .execute(
+              "message",
+              { message: "reachable before chat" },
+              undefined,
+              undefined,
+              leadCtx,
+            );
+          assert.equal(result.details.chiefSessionId, LEAD_SESSION_ID);
+          assert.ok(
+            listChiefMessagePaths(runtime, LEAD_SESSION_ID).some(
+              (path) => readChiefMessage(path).text === "reachable before chat",
+            ),
+          );
+        } finally {
+          await lead.events.get("session_shutdown")?.[0]();
+          process.env.HERDR_PANE_ID = "root-pane";
+          process.env.HERDR_TAB_ID = "root-tab";
+        }
+      } else {
+        assert.ok(
+          notices.some((message) =>
+            message.includes("Manager could not be verified in Herdr"),
+          ),
+        );
+        assert.equal(state.role, "lead");
+        assert.equal(
+          realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)),
+          false,
+        );
+        assert.equal(pi.pi.getActiveTools().includes("staff_delegate"), false);
+      }
+    } finally {
+      await pi.events.get("session_shutdown")?.[0]();
+      delete process.env.HERDR_SOCKET_PATH;
+      setLeadEnvironment();
+    }
+  });
+}
+
 for (const scenario of [
   {
     name: "accepts its branch worktree Lead",
@@ -347,7 +461,8 @@ for (const scenario of [
         fromSessionId: managerId,
         toSessionId: sessionId,
         leadSessionId: sessionId,
-        text: `Project assignment ${sessionId}: ${assignment.text}\n\nWhen this work is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`,
+        branch: assignment.branch,
+        text: `${assignment.text}\n\nWhen this work is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`,
         createdAt: Date.now(),
       },
       runtime,
@@ -439,8 +554,12 @@ for (const scenario of [
         delivered.length,
         scenario.moved || scenario.mismatchedPath ? 0 : 1,
       );
-      if (!scenario.moved && !scenario.mismatchedPath)
+      if (!scenario.moved && !scenario.mismatchedPath) {
         assert.equal(delivered[0].details.id, sessionId);
+        assert.equal(delivered[0].details.branch, assignment.branch);
+        assert.ok(delivered[0].content.includes(assignment.branch));
+        assert.equal(delivered[0].content.includes(sessionId), false);
+      }
       if (scenario.prospectivePath) {
         assert.equal(realFs.existsSync(sessionPath), false);
         const diagnosticEvents = diagnosticOutput
@@ -893,7 +1012,10 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     await assert.rejects(
       staff.execute(
         "delegate",
-        { task: "persist through transport loss" },
+        {
+          branch: "smoke/bootstrap-recovery",
+          task: "persist through transport loss",
+        },
         undefined,
         undefined,
         ctx,
@@ -927,6 +1049,8 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     assert.equal(staffList.details.ok, true);
     assert.equal(staffList.details.work[0].branch, pending.branch);
     assert.equal(staffList.details.work[0].status, "paused");
+    assert.equal("session" in staffList.details.work[0], false);
+    assert.equal("result" in staffList.details.work[0], false);
     assert.equal("workspace_id" in staffList.details.work[0], false);
     assert.equal("pane_id" in staffList.details.work[0], false);
     assert.equal(createCalls, 1, "roster reads must not retry creation");
@@ -1072,6 +1196,13 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       leadContext,
     );
     assert.equal(result.details.queued, false);
+    assert.equal(result.details.branch, pending.branch);
+    assert.equal("result" in result.details, false);
+    assert.equal(
+      JSON.stringify(result.content).includes(childSession),
+      false,
+      JSON.stringify(result.content),
+    );
     assert.ok(
       listProjectAssignments(supervisionRuntime(), WORKSPACE).some(
         (assignment) => assignment.id === pending.id,
@@ -1108,6 +1239,13 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       },
       { timeout: 3000 },
     );
+    const notifications = pi.sent.filter(
+      (message: any) => message.customType === "pi-herdsman-report_result",
+    );
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].details.branch, pending.branch);
+    assert.ok(notifications[0].content.includes(pending.branch));
+    assert.equal(notifications[0].content.includes(childSession), false);
     assert.match(
       readFileSync(resultPath(childSession), "utf8"),
       /finished without a Manager/,
@@ -2121,6 +2259,11 @@ async function runManagerStartupScenario(
           assert.equal(recovered.details.branch, "smoke/recover");
           if (mode === "active-result") {
             assert.equal(recovered.details.status, "finished");
+            assert.equal("result" in recovered.details, false);
+            assert.equal(
+              JSON.stringify(recovered.content).includes(staleId),
+              false,
+            );
             assert.equal(
               readFileSync(resultPath(staleId), "utf8"),
               "completed",
@@ -2698,6 +2841,8 @@ async function runManagerStartupScenario(
             message.kind === "project_assignment" &&
             message.id === childSession &&
             message.leadSessionId === childSession &&
+            message.branch === assignment.branch &&
+            !message.text.includes(childSession) &&
             message.text.includes("deliver the fresh assignment"),
         ),
       );

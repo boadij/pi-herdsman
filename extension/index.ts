@@ -206,6 +206,7 @@ import {
   samePeerLeadGeneration,
   writePeerLeadRecord,
   drainCoordinationInbox,
+  COORDINATION_MESSAGE_KINDS,
 } from "./supervision.ts";
 import {
   fail,
@@ -232,6 +233,7 @@ import {
   renderAgentStaleMessage,
   renderAgentLostMessage,
   renderAgentAttentionMessage,
+  renderCoordinationMessage,
   renderCoordinationCall,
   renderCoordinationResult,
   truncateModelText,
@@ -324,9 +326,9 @@ Actual implementation belongs to Leads and their Agent trees. Never control
 Agents. Messages and results from direct-report Leads terminate here; use
 supervisor_message or supervisor_ask only for your own escalation to Chief.`;
 function projectAssignmentInstruction(
-  assignment: Pick<ProjectAssignment, "id" | "text">,
+  assignment: Pick<ProjectAssignment, "text">,
 ): string {
-  return `Project assignment ${assignment.id}: ${assignment.text}\n\nWhen this work is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`;
+  return `${assignment.text}\n\nWhen this work is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`;
 }
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const STALE_AFTER_MS = 10 * 60_000;
@@ -1312,9 +1314,8 @@ function formatPersistedTranscript(entries: readonly ProjectedSessionEntry[]): {
   return { text: blocks.join("\n\n"), truncated };
 }
 
-function projectResultNotification(id: string, content: string): string {
-  const bounded = truncateTail(content, { maxBytes: 5 * 1024 }).content;
-  return `Result ref: ${resultRef(id)}\n\n${bounded}`;
+function projectResultMessage(content: string): string {
+  return truncateTail(content, { maxBytes: 5 * 1024 }).content;
 }
 
 function readCanonicalProjectResult(id: string): string | undefined {
@@ -1326,12 +1327,6 @@ function readCanonicalProjectResult(id: string): string | undefined {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-}
-
-function projectResultId(text: string): string {
-  return text.startsWith("result:")
-    ? text.slice(7)
-    : (/^Result ref: result:([0-9a-f-]{36})\n\n/.exec(text)?.[1] ?? "");
 }
 
 function readPersistedTranscript(target: PersistedTranscriptTarget): {
@@ -6581,6 +6576,13 @@ export default function (pi: ExtensionAPI): void {
   pi.registerEntryRenderer(HERD_RUN_ENTRY, (entry, _options, theme) =>
     renderHerdRunEntry(entry, theme),
   );
+  for (const kind of COORDINATION_MESSAGE_KINDS) {
+    pi.registerMessageRenderer(
+      `pi-herdsman-${kind}`,
+      (message, options, theme) =>
+        renderCoordinationMessage(kind, message, options, theme),
+    );
+  }
   pi.registerMessageRenderer(
     "pi-herdsman-stop-summary",
     (message, _options, theme) => renderStopSummary(message, theme),
@@ -7551,9 +7553,8 @@ export default function (pi: ExtensionAPI): void {
       scope = await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
     } catch (error) {
       if (
-        String(error).includes(
-          "Workspace is not part of a Herdr Git worktree group",
-        )
+        error instanceof OperationError &&
+        error.detail.details?.herdrCode === "not_git_worktree"
       )
         return undefined;
       throw error;
@@ -7889,11 +7890,10 @@ export default function (pi: ExtensionAPI): void {
             ctx.signal,
           );
         } catch (error) {
-          if (
-            !String(error).includes(
-              "Workspace is not part of a Herdr Git worktree group",
-            )
-          )
+          if (!(
+            error instanceof OperationError &&
+            error.detail.details?.herdrCode === "not_git_worktree"
+          ))
             throw error;
         }
         if (managerClaimsScope(scope)) return false;
@@ -7971,19 +7971,20 @@ export default function (pi: ExtensionAPI): void {
       )
         return false;
       if (record.kind === "report_result") {
-        const id = projectResultId(record.text);
-        const assignment = listProjectAssignments(
+        const assignment = readProjectAssignment(
           supervisionRuntime(),
           manager.workspaceId,
-        ).find((item) => item.id === id);
+          record.branch!,
+        );
         if (
           !assignment ||
           assignment.repoKey !== manager.repoKey ||
-          assignment.id !== record.fromSessionId
+          assignment.id !== record.fromSessionId ||
+          assignment.id !== record.leadSessionId
         )
           return false;
         try {
-          return statSync(canonicalResultPath(id)).isFile();
+          return statSync(canonicalResultPath(assignment.id)).isFile();
         } catch {
           return false;
         }
@@ -8050,6 +8051,7 @@ export default function (pi: ExtensionAPI): void {
       ).filter(
         (assignment) =>
           assignment.id === sessionId &&
+          record.branch === assignment.branch &&
           assignment.repoKey === scope.repoKey &&
           assignment.text &&
           record.text === projectAssignmentInstruction(assignment),
@@ -8446,20 +8448,19 @@ export default function (pi: ExtensionAPI): void {
               managerLease.descriptor.leaseId
             )
               throw new Error("Manager lease changed during result delivery");
-            const assignmentId = projectResultId(record.text);
-            if (!assignmentId)
-              throw new Error(
-                "Manager result notification has no assignment ref",
-              );
-            const assignment = findProjectAssignmentBySession(
+            const assignment = readProjectAssignment(
               supervisionRuntime(),
               managerLease.descriptor.workspaceId,
-              managerLease.descriptor.repoKey,
-              assignmentId,
+              record.branch!,
             );
-            if (!assignment)
+            if (
+              !assignment ||
+              assignment.repoKey !== managerLease.descriptor.repoKey ||
+              assignment.id !== record.fromSessionId ||
+              assignment.id !== record.leadSessionId
+            )
               throw new Error(
-                "Manager result notification no longer has a matching project assignment",
+                "Manager result notification no longer matches project work",
               );
             removeProjectAssignment(
               supervisionRuntime(),
@@ -8651,9 +8652,8 @@ export default function (pi: ExtensionAPI): void {
       scope = await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
     } catch (error) {
       if (
-        String(error).includes(
-          "Workspace is not part of a Herdr Git worktree group",
-        )
+        error instanceof OperationError &&
+        error.detail.details?.herdrCode === "not_git_worktree"
       ) {
         persistRole("lead");
         return;
@@ -8728,6 +8728,8 @@ export default function (pi: ExtensionAPI): void {
       persistRole("manager");
       if (!persistCoordinatorState())
         throw new Error("Manager coordination state could not be persisted");
+      if (!(await remoteChiefAgent(ctx, lease.descriptor)))
+        throw new Error("Manager could not be verified in Herdr");
       registerSupervisionTool?.();
       reconcileRoleTools();
       clearNormalUI?.();
@@ -8746,6 +8748,7 @@ export default function (pi: ExtensionAPI): void {
       try {
         persistRole("lead");
       } catch {}
+      persistLeadCoordination();
       reconcileRoleTools();
       clearSupervisionUI?.();
       startNormalUI?.(ctx);
@@ -9254,11 +9257,10 @@ export default function (pi: ExtensionAPI): void {
                 ctx.signal,
               );
             } catch (error) {
-              if (
-                !String(error).includes(
-                  "Workspace is not part of a Herdr Git worktree group",
-                )
-              )
+              if (!(
+                error instanceof OperationError &&
+                error.detail.details?.herdrCode === "not_git_worktree"
+              ))
                 throw error;
             }
             if (managerClaimsScope(scope)) continue;
@@ -9341,10 +9343,10 @@ export default function (pi: ExtensionAPI): void {
                 const record = readChiefMessage(path);
                 return (
                   record.kind === "report_result" &&
-                  (record.text === resultRef(assignment.id) ||
-                    record.text.startsWith(
-                      `Result ref: ${resultRef(assignment.id)}\n\n`,
-                    )) &&
+                  record.branch === assignment.branch &&
+                  record.fromSessionId === assignment.id &&
+                  record.leadSessionId === assignment.id &&
+                  record.toSessionId === chief.piSessionId &&
                   record.leaseId === chief.leaseId
                 );
               } catch {
@@ -9363,7 +9365,8 @@ export default function (pi: ExtensionAPI): void {
                 fromSessionId: assignment.id,
                 toSessionId: chief.piSessionId,
                 leadSessionId: assignment.id,
-                text: projectResultNotification(assignment.id, result),
+                branch: assignment.branch,
+                text: projectResultMessage(result),
                 createdAt: Date.now(),
               });
           }
@@ -9415,17 +9418,17 @@ export default function (pi: ExtensionAPI): void {
           supervisionRuntime(),
           group.primaryWorkspaceId,
         ).filter((item) => item.repoKey === group.repoKey);
-        const results = new Map<string, string>();
+        const finished = new Set<string>();
         for (const item of assignments)
           if (readCanonicalProjectResult(item.id) !== undefined)
-            results.set(item.id, resultRef(item.id));
+            finished.add(item.id);
         return {
           project: group.repoName,
           work: projectWorkSnapshot({
             assignments,
             worktrees: topology.worktrees,
             leads,
-            results,
+            finished,
           }),
           leads,
         };
@@ -9861,7 +9864,7 @@ export default function (pi: ExtensionAPI): void {
             throw new Error(`Project assignment was not found on ${branch}`);
           if (readCanonicalProjectResult(assignment.id) !== undefined)
             throw new Error(
-              `Work on ${branch} already has durable result ${resultRef(assignment.id)}; settle it instead of discarding it.`,
+              `Work on ${branch} already has a durable result; settle it instead of discarding it.`,
             );
           const topology = await runHerdr(
             pi,
@@ -9985,7 +9988,8 @@ export default function (pi: ExtensionAPI): void {
       const workspaceId = managerLease?.descriptor.workspaceId;
       if (!workspaceId) throw new Error("Manager lease is no longer active");
       const freshId = randomUUID();
-      const branch = params.branch ?? `herdsman/${freshId}`;
+      const branch =
+        params.branch ?? `herdsman/work-${randomUUID().slice(0, 8)}`;
       return withProjectDelegationLock(`${workspaceId}\0${branch}`, () =>
         delegateProjectLeadLocked({ ...params, branch }, ctx, signal, freshId),
       );
@@ -10035,7 +10039,10 @@ export default function (pi: ExtensionAPI): void {
           `No existing work was found on ${params.branch}; starting new work requires task.`,
         );
       const id = unresolved?.id ?? freshId!;
-      const branch = unresolved?.branch ?? params.branch ?? `herdsman/${id}`;
+      const branch =
+        unresolved?.branch ??
+        params.branch ??
+        `herdsman/work-${randomUUID().slice(0, 8)}`;
       if (unresolved) {
         const durableResult = readCanonicalProjectResult(unresolved.id);
         if (durableResult !== undefined) {
@@ -10044,7 +10051,7 @@ export default function (pi: ExtensionAPI): void {
             content: [
               {
                 type: "text" as const,
-                text: `Work on ${branch} is already finished; ${resultRef(id)} is awaiting settlement.`,
+                text: `Work on ${branch} is already finished and awaiting settlement.`,
               },
             ],
             details: {
@@ -10053,7 +10060,6 @@ export default function (pi: ExtensionAPI): void {
               branch,
               session: id,
               status: "finished",
-              result: resultRef(id),
             },
           };
         }
@@ -10102,6 +10108,7 @@ export default function (pi: ExtensionAPI): void {
           fromSessionId: manager.piSessionId,
           toSessionId: id,
           leadSessionId: id,
+          branch: unresolved!.branch,
           text: projectAssignmentInstruction(unresolved!),
           createdAt: Date.now(),
         });
@@ -10176,7 +10183,8 @@ export default function (pi: ExtensionAPI): void {
             fromSessionId: manager.piSessionId,
             toSessionId: "x".repeat(512),
             leadSessionId: "x".repeat(512),
-            text: projectAssignmentInstruction({ id, text: candidate }),
+            branch,
+            text: projectAssignmentInstruction({ text: candidate }),
             createdAt,
           }),
         );
@@ -10459,6 +10467,7 @@ export default function (pi: ExtensionAPI): void {
           fromSessionId: manager.piSessionId,
           toSessionId: leadSessionId,
           leadSessionId,
+          branch: assignment.branch,
           text: projectAssignmentInstruction(assignment),
           createdAt: Date.now(),
         });
@@ -10951,7 +10960,10 @@ export default function (pi: ExtensionAPI): void {
                 if (!action || !isCurrentOverview()) return;
                 if (action === "focus") return focusSelected(entry.session);
                 if (action === "view")
-                  ctx.ui.notify(entry.result ?? "Result unavailable");
+                  ctx.ui.notify(
+                    readCanonicalProjectResult(entry.session) ??
+                      "Result unavailable",
+                  );
                 else if (action === "discard") {
                   if (
                     !(await ctx.ui.confirm(
@@ -12408,16 +12420,13 @@ export default function (pi: ExtensionAPI): void {
                 "Project assignment changed before result could be saved",
               );
             const provenance = {
-              assignment: assignment.id,
+              branch: assignment.branch,
               cwd: ctx.cwd,
-              piSessionId: ctx.sessionManager.getSessionId(),
-              workspaceId: live[0].workspace_id,
-              ...(assignment.branch ? { branch: assignment.branch } : {}),
             };
             const body = `Lead result source: ${JSON.stringify(provenance)}\n\n${prepared.text}`;
             const persisted = truncateModelText(body, {
               keep: "head",
-              sessionId: provenance.piSessionId,
+              sessionId: ctx.sessionManager.getSessionId(),
               key: assignment.id,
               requestId: assignment.id,
               persist: "completion",
@@ -12446,10 +12455,8 @@ export default function (pi: ExtensionAPI): void {
                   fromSessionId: assignment.id,
                   toSessionId: manager.piSessionId,
                   leadSessionId: assignment.id,
-                  text: projectResultNotification(
-                    assignment.id,
-                    persisted.content,
-                  ),
+                  branch: assignment.branch,
+                  text: projectResultMessage(persisted.content),
                   createdAt: Date.now(),
                 });
                 queued = true;
@@ -12462,15 +12469,14 @@ export default function (pi: ExtensionAPI): void {
                 {
                   type: "text",
                   text: queued
-                    ? `Result ${resultRef(assignment.id)} saved and queued for Manager.`
-                    : `Result ${resultRef(assignment.id)} saved; the next Manager will reconcile it.`,
+                    ? `Result for ${assignment.branch} saved and queued for Manager.`
+                    : `Result for ${assignment.branch} saved; the next Manager will reconcile it.`,
                 },
               ],
               details: {
                 ok: true,
                 action: "result",
                 branch: assignment.branch,
-                result: resultRef(assignment.id),
                 queued,
               },
             };
@@ -12691,12 +12697,10 @@ export default function (pi: ExtensionAPI): void {
                       (item) => ({
                         branch: item.branch,
                         status: item.status,
-                        session: item.session,
                         ...(item.runtimeState
                           ? { runtime_state: item.runtimeState }
                           : {}),
                         ...(item.task ? { task: item.task } : {}),
-                        ...(item.result ? { result: item.result } : {}),
                         ...(item.issue ? { issue: item.issue } : {}),
                       }),
                     ),

@@ -10,6 +10,7 @@ import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import {
+  COORDINATION_MESSAGE_KINDS,
   claimChiefLease,
   claimManagerLease,
   listCoordinationMessagePaths,
@@ -559,7 +560,8 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "pi-herdsman-agent-result",
       "pi-herdsman-agent-stale",
       "pi-herdsman-stop-summary",
-    ],
+      ...COORDINATION_MESSAGE_KINDS.map((kind) => `pi-herdsman-${kind}`),
+    ].sort(),
   );
   assert.equal(lead.commands.includes("subagents"), false);
   assert.equal(lead.events.has("before_agent_start"), true);
@@ -2440,11 +2442,16 @@ test("Chief preflight gate defers idle inbox delivery until agent_start", async 
           stderr: "",
           code: 0,
         };
-      if (args[0] === "workspace" && args[1] === "get")
+      if (args[0] === "worktree" && args[1] === "list")
         return {
-          stdout: JSON.stringify({ id: AGENT_ID, result: { workspace: {} } }),
+          stdout: JSON.stringify({
+            error: {
+              code: "not_git_worktree",
+              message: "Workspace is not a Git worktree",
+            },
+          }),
           stderr: "",
-          code: 0,
+          code: 1,
         };
       return { stdout: "{}", stderr: "", code: 0 };
     },
@@ -2814,11 +2821,16 @@ test("registered lead and replacement chief exchange messages and asks", async (
   let failChiefAliasLookup = false;
   let replacement: ReturnType<typeof fakePi> | undefined;
   const exec = (_command: string, args: string[]) => {
-    if (args[0] === "workspace" && args[1] === "get")
+    if (args[0] === "worktree" && args[1] === "list")
       return {
-        stdout: JSON.stringify({ id: AGENT_ID, result: { workspace: {} } }),
+        stdout: JSON.stringify({
+          error: {
+            code: "not_git_worktree",
+            message: "Workspace is not a Git worktree",
+          },
+        }),
         stderr: "",
-        code: 0,
+        code: 1,
       };
     if (isAgentList(args))
       return {

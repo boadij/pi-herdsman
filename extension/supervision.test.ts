@@ -19,6 +19,7 @@ import {
   chiefMessageBytes,
   COORDINATION_INBOX_SCAN_LIMIT,
   COORDINATION_MESSAGE_MAX_BYTES,
+  COORDINATION_MESSAGE_KINDS,
   chiefMessageQuarantined,
   chiefAskQueued,
   chiefAskMessageId,
@@ -263,6 +264,42 @@ test("chief message admission accepts exactly 8 KiB and rejects the next byte", 
     () => writeChiefMessage(over, runtime),
     /Chief message record is too large/,
   );
+});
+
+test("coordination records require branch only for project message kinds", () => {
+  const runtime = supervisionRuntime(socket());
+  for (const kind of COORDINATION_MESSAGE_KINDS) {
+    const projectMessage =
+      kind === "project_assignment" || kind === "report_result";
+    const record = message({
+      kind,
+      ...(["lead_ask", "chief_reply", "manager_ask", "manager_reply"].includes(
+        kind,
+      )
+        ? { askId: id() }
+        : {}),
+      ...(projectMessage ? { branch: "feat/bootstrap" } : {}),
+    });
+    const path = writeCoordinationMessage(record, runtime);
+    assert.deepEqual(readCoordinationMessage(path), record, kind);
+    for (const branch of projectMessage
+      ? [undefined, "", " ", "x".repeat(513), 1, null]
+      : ["feat/bootstrap", "", null]) {
+      assert.throws(
+        () => writeCoordinationMessage({ ...record, branch } as never, runtime),
+        /Invalid Chief message record/,
+        `${kind}: ${String(branch)}`,
+      );
+    }
+    assert.throws(
+      () =>
+        writeCoordinationMessage(
+          { ...record, unknown: true } as never,
+          runtime,
+        ),
+      /Invalid Chief message record/,
+    );
+  }
 });
 
 test("peer lead presence requires a live generation and excludes corruption", () => {
@@ -2075,7 +2112,7 @@ test("project work derives status from current worktrees, Leads and canonical re
       input: {
         worktrees: [],
         leads: [],
-        results: new Map([[assignment.id, `result:${assignment.id}`]]),
+        finished: new Set([assignment.id]),
       },
       status: "finished",
     },
@@ -2113,10 +2150,12 @@ test("project work derives status from current worktrees, Leads and canonical re
       assignments: [assignment],
       worktrees: scenario.input.worktrees,
       leads: scenario.input.leads,
-      results: "results" in scenario.input ? scenario.input.results : new Map(),
+      finished:
+        "finished" in scenario.input ? scenario.input.finished : new Set(),
     });
     assert.equal(snapshot[0]!.status, scenario.status, scenario.name);
     assert.equal(snapshot[0]!.task, "implement work", scenario.name);
+    assert.equal(Object.hasOwn(snapshot[0]!, "result"), false, scenario.name);
     assert.equal(
       snapshot[0]!.runtimeState,
       "runtimeState" in scenario ? scenario.runtimeState : undefined,
@@ -2137,13 +2176,13 @@ test("Manager asks and project results use the one durable inbox", async () => {
     askId: id(),
   });
   writeChiefAskMessage(ask, runtime);
-  const resultId = id();
   const result = message({
     kind: "report_result",
     fromSessionId: "lead",
     toSessionId: "manager",
     leadSessionId: "lead",
-    text: `Result ref: result:${resultId}\n\nI'm live`,
+    branch: "feat/bootstrap",
+    text: "I'm live",
   });
   writeChiefMessage(result, runtime);
   const received: string[] = [];
@@ -2158,22 +2197,21 @@ test("Manager asks and project results use the one durable inbox", async () => {
     });
   assert.deepEqual(received, [
     "From manager manager to chief chief: hello",
-    `Result from lead lead to manager manager: ${result.text}`,
+    `Project work ${result.branch} finished:\n\n${result.text}`,
   ]);
-  assert.match(received[1]!, new RegExp(`result:${resultId}`));
-  assert.match(received[1]!, /Result from lead lead to manager manager:/);
-  assert.match(received[1]!, /I'm live/);
+  assert.doesNotMatch(received[1]!, /result:|Result from lead/);
 });
 
 test("project assignment uses durable project transport, not Manager message framing", async () => {
   const runtime = supervisionRuntime(socket());
   const session = id();
-  const instruction = `Project assignment ${session}: implement work`;
+  const instruction = "implement work";
   const record = message({
     kind: "project_assignment",
     fromSessionId: "former-manager",
     toSessionId: session,
     leadSessionId: session,
+    branch: "feat/bootstrap",
     text: instruction,
   });
   writeChiefMessage(record, runtime);
@@ -2194,6 +2232,14 @@ test("project assignment uses durable project transport, not Manager message fra
   assert.equal(delivered[0].customType, "pi-herdsman-project_assignment");
   assert.equal(
     delivered[0].content,
-    `Project assignment for lead ${session}: ${instruction}`,
+    `Project assignment for branch ${record.branch}:\n\n${instruction}`,
   );
+  assert.doesNotMatch(delivered[0].content, new RegExp(session));
+  assert.deepEqual(delivered[0].details, {
+    id: record.id,
+    leaseId: record.leaseId,
+    fromSessionId: record.fromSessionId,
+    leadSessionId: session,
+    branch: record.branch,
+  });
 });

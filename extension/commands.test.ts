@@ -40,7 +40,7 @@ import {
   writePeerLeadRecord,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
-import { resultPath, resultRef } from "./storage.ts";
+import { resultPath } from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
   DEFAULT_PI_SESSION_ID,
@@ -129,6 +129,33 @@ const chiefTools = [
   "staff_message",
   "staff_reply",
 ];
+function managerAgentIdentity() {
+  return {
+    pane_id: process.env.HERDR_PANE_ID,
+    tab_id: process.env.HERDR_TAB_ID,
+    workspace_id: WORKSPACE,
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: LEAD_SESSION_ID,
+    },
+  };
+}
+
+function nonGitWorkspaceResponse() {
+  return {
+    stdout: JSON.stringify({
+      id: AGENT_ID,
+      error: {
+        code: "not_git_worktree",
+        message: "Workspace is not a Git worktree",
+      },
+    }),
+    stderr: "",
+    code: 1,
+  };
+}
 function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
   let fixture: ReturnType<typeof fakePi>;
   const initialTools = Array.isArray(options.activeTools)
@@ -138,6 +165,13 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
     ...options,
     exec: async (command: string, args: string[], extra: any) => {
       const provided = await options.exec?.(command, args, extra);
+      if (
+        command === "herdr" &&
+        args[0] === "worktree" &&
+        args[1] === "list" &&
+        (!provided || provided.stdout === "{}")
+      )
+        return nonGitWorkspaceResponse();
       if (
         provided &&
         !(
@@ -228,7 +262,9 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         worktrees: [],
       });
     if (command === "herdr" && isAgentList(args))
-      return respond({ agents: [] });
+      return respond({ agents: [managerAgentIdentity()] });
+    if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+      return respond({ agent: managerAgentIdentity() });
     if (command === "herdr" && isApiSnapshot(args))
       return respond({ snapshot: { agents: [], panes: [] } });
     return respond({});
@@ -483,10 +519,15 @@ test("Manager replacement can leave with an ask bound to its old lease", async (
               worktrees: [],
             })
           : isAgentList(args)
-            ? respond({ agents: [lead] })
-            : isApiSnapshot(args)
-              ? respond({ snapshot: { agents: [lead], panes: [lead] } })
-              : respond({}),
+            ? respond({ agents: [managerAgentIdentity(), lead] })
+            : args[0] === "agent" && args[1] === "get"
+              ? respond({
+                  agent:
+                    args[2] === lead.pane_id ? lead : managerAgentIdentity(),
+                })
+              : isApiSnapshot(args)
+                ? respond({ snapshot: { agents: [lead], panes: [lead] } })
+                : respond({}),
   });
   const ctx = fakeContext() as any;
   const notices: string[] = [];
@@ -606,9 +647,14 @@ test("Manager leave retains a Chief-bound ask until its Chief claim is dead", as
               worktrees: [],
             })
           : isAgentList(args)
-            ? respond({ agents: [chiefAgent] })
+            ? respond({ agents: [managerAgentIdentity(), chiefAgent] })
             : args[0] === "agent" && args[1] === "get"
-              ? respond({ agent: chiefAgent })
+              ? respond({
+                  agent:
+                    args[2] === chiefAgent.pane_id
+                      ? chiefAgent
+                      : managerAgentIdentity(),
+                })
               : isApiSnapshot(args)
                 ? respond({
                     snapshot: { agents: [chiefAgent], panes: [chiefAgent] },
@@ -760,10 +806,12 @@ test("Manager leave retains its lease and role when persistence fails", async ()
               worktrees: [],
             })
           : isAgentList(args)
-            ? respond({ agents: [] })
-            : isApiSnapshot(args)
-              ? respond({ snapshot: { agents: [], panes: [] } })
-              : respond({}),
+            ? respond({ agents: [managerAgentIdentity()] })
+            : args[0] === "agent" && args[1] === "get"
+              ? respond({ agent: managerAgentIdentity() })
+              : isApiSnapshot(args)
+                ? respond({ snapshot: { agents: [], panes: [] } })
+                : respond({}),
   });
   const ctx = fakeContext() as any;
   const notices: string[] = [];
@@ -875,10 +923,12 @@ test("Manager leave suspends authority when lease release fails", async () => {
               worktrees: [],
             })
           : isAgentList(args)
-            ? respond({ agents: [] })
-            : isApiSnapshot(args)
-              ? respond({ snapshot: { agents: [], panes: [] } })
-              : respond({}),
+            ? respond({ agents: [managerAgentIdentity()] })
+            : args[0] === "agent" && args[1] === "get"
+              ? respond({ agent: managerAgentIdentity() })
+              : isApiSnapshot(args)
+                ? respond({ snapshot: { agents: [], panes: [] } })
+                : respond({}),
   });
   const ctx = fakeContext() as any;
   const notices: string[] = [];
@@ -1132,7 +1182,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         WORKSPACE,
       );
       assert.ok(assignment);
-      assert.equal(args[branchIndex + 1], `herdsman/${assignment.id}`);
+      assert.equal(args[branchIndex + 1], assignment.branch);
       assert.equal(assignment.branch, args[branchIndex + 1]);
       created = true;
       return respond({
@@ -1303,7 +1353,8 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     )[0];
     assert.ok(assignment);
     assert.equal(assignment?.id, childSession);
-    assert.equal(assignment?.branch, `herdsman/${assignment?.id}`);
+    assert.match(assignment!.branch, /^herdsman\/work-[0-9a-f]{8}$/);
+    assert.equal(assignment!.branch.includes(assignment!.id), false);
     const assignmentBytes = readFileSync(
       projectAssignmentPath(supervisionRuntime(), WORKSPACE, assignment.branch),
       "utf8",
@@ -1432,11 +1483,12 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         undefined,
         leadCtx,
       );
-      assert.equal(result.details.result, resultRef(assignment!.id));
+      assert.equal(result.details.branch, assignment!.branch);
+      assert.equal("result" in result.details, false);
       assert.equal(result.details.queued, false);
       assert.match(
         readFileSync(resultPath(assignment!.id), "utf8"),
-        /Lead result source:.*assignment/,
+        /Lead result source:.*branch/,
       );
       assert.equal(
         readFileSync(
@@ -1476,7 +1528,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
           undefined,
           ctx,
         ),
-      /already has durable result/,
+      /already has a durable result/,
     );
     await pi.events.get("before_agent_start")![0](
       { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
@@ -1502,15 +1554,15 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       (message: any) => message?.customType === "pi-herdsman-report_result",
     );
     assert.ok(resultNotification);
-    assert.match(
-      String(resultNotification.content),
-      new RegExp(
-        `Result from lead ${childSession} to manager ${LEAD_SESSION_ID}:`,
+    assert.ok(
+      String(resultNotification.content).startsWith(
+        `Project work ${assignment!.branch} finished:`,
       ),
     );
-    assert.match(
+    assert.equal(resultNotification.details.branch, assignment!.branch);
+    assert.doesNotMatch(
       String(resultNotification.content),
-      new RegExp(`Result ref: ${resultRef(assignment!.id)}`),
+      /Result ref:|result:/,
     );
     assert.match(String(resultNotification.content), /Finished implementation/);
     assert.deepEqual(
@@ -1519,7 +1571,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     );
     assert.match(
       readFileSync(resultPath(assignment!.id), "utf8"),
-      new RegExp(`"branch":"herdsman/${assignment!.id}"`),
+      new RegExp(`"branch":"${assignment!.branch}"`),
     );
     assert.match(
       readFileSync(resultPath(assignment!.id), "utf8"),
@@ -2941,6 +2993,8 @@ test("Chief activation replaces the lead widget and overview selection is intera
     autoActivateRegisteredTools: true,
     entries,
     exec: (_command, args) => {
+      if (args[0] === "worktree" && args[1] === "list")
+        return nonGitWorkspaceResponse();
       if (isApiSnapshot(args))
         return {
           stdout: JSON.stringify({

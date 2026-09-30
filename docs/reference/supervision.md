@@ -15,6 +15,11 @@ Supervision normally follows Chief → Manager → Lead; without an active Manag
 
 Every session starts as an ordinary Lead. Herdr worktree topology identifies the primary workspace and linked-worktree workspaces by workspace IDs and repo key. A Lead in the primary workspace may enter Manager mode with `/manager`; Leads in linked-worktree workspaces cannot. Activation claims the exclusive Manager lease for that worktree group. If another live Manager holds the lease, activation fails and the caller remains an ordinary Lead. Activation also fails while the session owns unresolved managed-Agent work. `/manager leave` preserves project work and restores Lead instructions and the exact Lead tool baseline, including `agent`. A Lead waiting for this Manager's answer, or the Manager's own pending ask to Chief, can still block leaving. Re-entering Manager mode shows the same project work. Manager has no `agent` tools and cannot own Agents or implement work through them. It receives bounded automatic project-work and direct-Lead state. Delegated implementation belongs to Leads and their Agent trees; Manager authority requires the current lease and exact identity, not Herdr display metadata.
 
+Manager is available in an ordinary Git repository's primary Herdr workspace;
+existing linked-worktree membership is not required. The Git branch is the
+semantic project-work handle. Project assignment and result UUIDs remain
+internal, separate from the exact Pi session IDs used for direct Lead actions.
+
 An eligible ordinary Lead may activate `/chief`; a Manager cannot. Chief is a separate workspace-neutral session mode with one active lease per Herdr socket. The persisted `pi-herdsman-role` entry records `role: "lead"|"manager"|"chief"`; `leadTools` retains the exact ordinary Lead loadout needed when leaving either special role. Chief does not receive project context or Agent control. `/chief leave` restores ordinary Lead tools. An occupied lease on Chief resume suspends Chief authority. Chief and Manager activation fail while owned managed-Agent work cannot safely be excluded.
 
 Coordinator state is private, atomic, bounded, and tied to the exact Pi session and initialization generation. It identifies `role: "lead"|"manager"` and may contain one pending supervisor ask. The runtime is socket-scoped under `runtime/supervision-v2/`; project Manager descriptors, assignments, coordinators, and transport inboxes live there. Missing, stale, duplicate, malformed, or ambiguous live/coordination evidence fails closed. Metadata such as `pi_herdsman_role=manager` is display-only. Runtime state (`idle|working|blocked|done|unknown`) is observation, not completion or authorization. Agent counts use `active`, `blocked`, and `total`; active includes working, starting, and settling descendants.
@@ -169,13 +174,14 @@ conversation/tool evidence materially matters.
 
 `staff_list` returns a fresh supervision projection and fresh `available_tools`.
 For Manager, `work` lists branch, derived `status` (`active`, `paused`,
-`finished`, or `conflict`), exact Lead session, and a bounded task summary.
+`finished`, or `conflict`), and a bounded task summary.
 Only active work includes a separate `runtime_state` from its live Lead;
 paused work remains listed without a running Lead. An unavailable worktree
 is paused with an explanatory `issue`, not a conflict. Work does not expose
-workspace or pane IDs; use `staff_inspect` for current runtime evidence.
+assignment session IDs, result references, workspace or pane IDs; use
+`staff_inspect` for current runtime evidence.
 `reports` includes eligible direct Leads, whether assigned to work or not.
-A branch is the work handle; the session is for Lead actions.
+A branch is the work handle; a session in `reports` is for Lead actions.
 
 ### `staff_inspect`
 
@@ -249,7 +255,8 @@ Herdsman generates one. Supply only `branch` to resume existing work:
 ```
 
 If a branch already has work, a new task, base, or files cannot replace it.
-If it has no work, a task is required. An existing unoccupied Herdr worktree
+If it has no work, a task is required. The first delegation can create the first
+linked worktree; no existing linked worktree is required. An existing unoccupied Herdr worktree
 is reused, whether open or closed; `base` applies only when creating a new
 worktree. A different live Lead occupying that worktree prevents a second
 managed writer. Workspace membership does not make a Lead the assignment
@@ -266,9 +273,10 @@ ambiguous evidence fails closed.
 
 The Lead reports terminal completion with `supervisor_result`; use
 `supervisor_message` only for nonterminal progress or coordination. A durable
-result prevents a restart. Completion remains saved even if no Manager is
-active; the next Manager reconciles the result, then removes the assignment
-after accepted delivery. The canonical result remains available for later
+result prevents a restart. `supervisor_result` queues a durable notification for
+the active Manager. If no Manager is active, completion remains saved for the
+next Manager to reconcile. The assignment is removed only after accepted
+result delivery. The canonical result remains available for later
 handoffs. A direct-report Lead's messages and results are handled by Manager,
 not echoed through its own `supervisor` escalation to Chief.
 

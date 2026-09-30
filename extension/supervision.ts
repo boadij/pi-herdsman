@@ -102,17 +102,20 @@ export type ChiefLease = {
   release: () => void;
 };
 
-export type ChiefMessageKind =
-  | "chief_message"
-  | "lead_message"
-  | "lead_ask"
-  | "chief_reply"
-  | "manager_message"
-  | "manager_ask"
-  | "manager_reply"
-  | "project_assignment"
-  | "report_result"
-  | "peer_message";
+export const COORDINATION_MESSAGE_KINDS = [
+  "chief_message",
+  "lead_message",
+  "lead_ask",
+  "chief_reply",
+  "manager_message",
+  "manager_ask",
+  "manager_reply",
+  "project_assignment",
+  "report_result",
+  "peer_message",
+] as const;
+
+export type ChiefMessageKind = (typeof COORDINATION_MESSAGE_KINDS)[number];
 
 /** Shared durable transport record used by Chief and Lead peer traffic. */
 export type CoordinationMessageKind = ChiefMessageKind;
@@ -126,6 +129,7 @@ export type ChiefMessageRecord = {
   toSessionId: string;
   leadSessionId: string;
   askId?: string;
+  branch?: string;
   text: string;
   createdAt: number;
 };
@@ -164,18 +168,7 @@ const CHIEF_DESCRIPTOR_MAX_BYTES = 2048;
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const MESSAGE_KINDS = new Set<ChiefMessageKind>([
-  "chief_message",
-  "lead_message",
-  "lead_ask",
-  "chief_reply",
-  "manager_message",
-  "manager_ask",
-  "manager_reply",
-  "project_assignment",
-  "report_result",
-  "peer_message",
-]);
+const MESSAGE_KINDS = new Set<ChiefMessageKind>(COORDINATION_MESSAGE_KINDS);
 
 function validSession(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 512;
@@ -201,7 +194,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "text",
     "createdAt",
   ];
-  const optional = ["askId"];
+  const optional = ["askId", "branch"];
   if (
     Object.keys(record).some(
       (key) => !keys.includes(key) && !optional.includes(key),
@@ -211,6 +204,15 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     (Object.hasOwn(record, "askId") && !UUID.test(String(record.askId)))
   )
     return false;
+  const projectMessage =
+    record.kind === "project_assignment" || record.kind === "report_result";
+  if (
+    projectMessage
+      ? !validNativeIdentity(record.branch)
+      : record.branch !== undefined
+  ) {
+    return false;
+  }
   return (
     record.version === 1 &&
     typeof record.id === "string" &&
@@ -784,18 +786,20 @@ function deliveredMessageContent(record: CoordinationMessageRecord): string {
   const prefix =
     record.kind === "chief_message" || record.kind === "chief_reply"
       ? `From chief ${record.fromSessionId} to lead ${record.leadSessionId}: `
-      : record.kind === "project_assignment"
-        ? `Project assignment for lead ${record.leadSessionId}: `
-        : record.kind === "manager_message" || record.kind === "manager_reply"
-          ? `From manager ${record.fromSessionId} to lead ${record.leadSessionId}: `
-          : record.kind === "manager_ask"
-            ? `From manager ${record.fromSessionId} to chief ${record.toSessionId}: `
-            : record.kind === "report_result"
-              ? `Result from lead ${record.leadSessionId} to manager ${record.toSessionId}: `
-              : record.kind === "lead_message" || record.kind === "lead_ask"
-                ? `From lead ${record.leadSessionId} to chief ${record.toSessionId}: `
-                : `Peer message from ${record.fromSessionId}: `;
-  return Buffer.from(`${prefix}${record.text}`, "utf8")
+      : record.kind === "manager_message" || record.kind === "manager_reply"
+        ? `From manager ${record.fromSessionId} to lead ${record.leadSessionId}: `
+        : record.kind === "manager_ask"
+          ? `From manager ${record.fromSessionId} to chief ${record.toSessionId}: `
+          : record.kind === "lead_message" || record.kind === "lead_ask"
+            ? `From lead ${record.leadSessionId} to chief ${record.toSessionId}: `
+            : `Peer message from ${record.fromSessionId}: `;
+  const content =
+    record.kind === "project_assignment"
+      ? `Project assignment for branch ${record.branch}:\n\n${record.text}`
+      : record.kind === "report_result"
+        ? `Project work ${record.branch} finished:\n\n${record.text}`
+        : `${prefix}${record.text}`;
+  return Buffer.from(content, "utf8")
     .subarray(0, COORDINATION_MESSAGE_MAX_BYTES)
     .toString("utf8");
 }
@@ -904,8 +908,10 @@ export async function drainCoordinationInbox(
             details: {
               id: record.id,
               leaseId: record.leaseId,
+              fromSessionId: record.fromSessionId,
               leadSessionId: record.leadSessionId,
               ...(record.askId ? { askId: record.askId } : {}),
+              ...(record.branch ? { branch: record.branch } : {}),
             },
           },
           { deliverAs: "followUp", triggerTurn: true },
@@ -1981,7 +1987,6 @@ export type ProjectWorkSnapshot = Readonly<{
   status: ProjectWorkStatus;
   runtimeState?: RuntimeState;
   task?: string;
-  result?: string;
   issue?: string;
 }>;
 /** Derive work from one caller-validated Lead inventory and one Herdr worktree list. */
@@ -1995,19 +2000,19 @@ export function projectWorkSnapshot(options: {
     SupervisedLead,
     "lead" | "workspaceId" | "runtimeState"
   >[];
-  /** Canonical result refs keyed by assignment session ID. */
-  results: ReadonlyMap<string, string>;
+  /** Completed assignment session IDs backed by canonical results. */
+  finished: ReadonlySet<string>;
 }): ProjectWorkSnapshot[] {
   return options.assignments.map((assignment) => {
     const worktrees = options.worktrees.filter(
       (item) => item.branch === assignment.branch,
     );
     const exact = options.leads.filter((lead) => lead.lead === assignment.id);
-    const result = options.results.get(assignment.id);
+    const finished = options.finished.has(assignment.id);
     let status: ProjectWorkStatus;
     let runtimeState: RuntimeState | undefined;
     let issue: string | undefined;
-    if (result !== undefined) status = "finished";
+    if (finished) status = "finished";
     else if (worktrees.length > 1 || exact.length > 1) {
       status = "conflict";
       issue = "project runtime identity is ambiguous";
@@ -2051,7 +2056,6 @@ export function projectWorkSnapshot(options: {
                 : `${characters.slice(0, 159).join("")}…`,
           }
         : {}),
-      ...(result !== undefined ? { result } : {}),
       ...(issue ? { issue } : {}),
     };
   });

@@ -31,6 +31,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type {
+  CoordinationMessageKind,
   ProjectWorkSnapshot,
   SupervisionSnapshot,
   SupervisionPresentationSnapshot,
@@ -981,7 +982,6 @@ export function formatSupervisionContext(
         (work) =>
           `  ${supervisionValue(work.branch)} · ${supervisionValue(work.status)}` +
           `${work.runtimeState ? ` · runtime=${supervisionValue(work.runtimeState)}` : ""}` +
-          ` · session=${supervisionValue(work.session)}` +
           `${work.issue ? ` · ${supervisionValue(work.issue)}` : ""}`,
       ),
     );
@@ -2804,6 +2804,104 @@ function renderMessageBox(
   );
   box.addChild(content);
   return box;
+}
+
+export function renderCoordinationMessage(
+  kind: CoordinationMessageKind,
+  message: {
+    content?: string;
+    details?: {
+      fromSessionId?: string;
+      leadSessionId?: string;
+      askId?: string;
+      branch?: string;
+    };
+  },
+  options: { expanded?: boolean; outputPad?: number },
+  theme: any,
+): TuiBox {
+  const d = message.details;
+  const branch = d?.branch ?? "project work";
+  let heading: string;
+  let prefix: string | undefined;
+  let routed = false;
+  switch (kind) {
+    case "lead_message":
+    case "lead_ask":
+      heading =
+        kind === "lead_ask"
+          ? statusLine(theme, "warning", "?", "Lead needs input")
+          : "Lead message";
+      if (d?.leadSessionId) {
+        prefix = `From lead ${d.leadSessionId} to chief `;
+        routed = true;
+      }
+      break;
+    case "chief_message":
+    case "chief_reply":
+      heading = kind === "chief_reply" ? "Chief reply" : "Chief message";
+      if (d?.fromSessionId && d?.leadSessionId)
+        prefix = `From chief ${d.fromSessionId} to lead ${d.leadSessionId}: `;
+      break;
+    case "manager_message":
+    case "manager_reply":
+      heading = kind === "manager_reply" ? "Manager reply" : "Manager message";
+      if (d?.fromSessionId && d?.leadSessionId)
+        prefix = `From manager ${d.fromSessionId} to lead ${d.leadSessionId}: `;
+      break;
+    case "manager_ask":
+      heading = statusLine(theme, "warning", "?", "Manager needs input");
+      if (d?.fromSessionId) {
+        prefix = `From manager ${d.fromSessionId} to chief `;
+        routed = true;
+      }
+      break;
+    case "peer_message":
+      heading = "Peer message";
+      if (d?.fromSessionId) prefix = `Peer message from ${d.fromSessionId}: `;
+      break;
+    case "project_assignment":
+      heading = statusLine(theme, "accent", "→", `${branch} assigned`);
+      if (d?.branch) prefix = `Project assignment for branch ${d.branch}:\n\n`;
+      break;
+    case "report_result":
+      heading = statusLine(theme, "success", "✓", `${branch} finished`);
+      if (d?.branch) prefix = `Project work ${d.branch} finished:\n\n`;
+      break;
+  }
+  let body = message.content ?? "";
+  if (prefix && body.startsWith(prefix)) {
+    const rest = body.slice(prefix.length);
+    // Chief-bound envelopes omit the recipient from renderer details.
+    const recipient = routed ? /^[^\s:]+: /u.exec(rest)?.[0] : "";
+    if (recipient !== undefined) body = rest.slice(recipient.length);
+  }
+  const content = new Container();
+  content.addChild(new WidthSafeText(heading, 0, 0));
+  if (options.expanded) {
+    const session = d?.fromSessionId ?? d?.leadSessionId;
+    const metadata = [
+      ...(d?.branch ? [`branch: ${d.branch}`] : []),
+      ...(session ? [`session: ${session}`] : []),
+    ];
+    if (metadata.length) {
+      content.addChild(new Spacer(1));
+      content.addChild(new WidthSafeText(metadata.join("\n"), 0, 0));
+    }
+    if (body) {
+      content.addChild(new Spacer(1));
+      content.addChild(new Markdown(body, 0, 0, getMarkdownTheme()));
+    }
+  } else {
+    const preview = collapseDisplayText(body);
+    if (preview)
+      content.addChild(
+        new Markdown(preview, 2, 0, getMarkdownTheme(), {
+          color: (text) => humanText(theme, "muted", text),
+        }),
+      );
+  }
+  return renderMessageBox(content, theme, options.outputPad ?? 0);
 }
 
 export function renderCompletionMessage(
