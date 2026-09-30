@@ -2529,6 +2529,81 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
   }
 });
 
+test("competing Lead focuses Chief with an absent prospective session path", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `chief-focus-${randomUUID()}.sock`,
+  );
+  const descriptor = {
+    piSessionId: randomUUID(),
+    piSessionFile: join(tmpdir(), `prospective-chief-${randomUUID()}.jsonl`),
+    paneId: "chief-pane",
+    tabId: "chief-tab",
+    workspaceId: WORKSPACE,
+  };
+  const chiefAgent = {
+    pane_id: descriptor.paneId,
+    tab_id: descriptor.tabId,
+    workspace_id: descriptor.workspaceId,
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "path",
+      value: descriptor.piSessionFile,
+    },
+  };
+  const lease = claimChiefLease(descriptor);
+  const pi = fakeChiefPi({
+    exec: (command, args) => {
+      if (command === "herdr" && isAgentList(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [chiefAgent] },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agent: chiefAgent },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.ui.select = async (title: string, choices: string[]) => {
+    assert.equal(title, "chief");
+    assert.deepEqual(choices, ["Focus chief", "Cancel"]);
+    return "Focus chief";
+  };
+  registerExtension!(pi.pi as never);
+  try {
+    assert.equal(realFs.existsSync(descriptor.piSessionFile), false);
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("chief").handler("", context);
+    assert.deepEqual(
+      pi.calls.filter((args) => args[0] === "agent" && args[1] === "focus"),
+      [["agent", "focus", descriptor.paneId]],
+    );
+    assert.equal(realFs.existsSync(descriptor.piSessionFile), false);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    lease.release();
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
+
 test("Chief shutdown releases its lease when ordinary tool restoration fails", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";

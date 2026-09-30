@@ -10851,11 +10851,7 @@ export default function (pi: ExtensionAPI): void {
       const descriptor = readChiefDescriptor(supervisionRuntime().descriptor);
       const candidate = await remoteChiefAgent(ctx, descriptor);
       const current = readChiefDescriptor(supervisionRuntime().descriptor);
-      if (
-        !isPiAgent(candidate) ||
-        herdrSessionId(candidate) !== descriptor.piSessionId ||
-        !sameChiefDescriptor(current, descriptor)
-      )
+      if (!candidate || !sameChiefDescriptor(current, descriptor))
         throw new Error("Chief changed; reopen the command.");
       await runHerdr(pi, ctx, ["agent", "focus", candidate.pane_id], {
         signal: ctx.signal,

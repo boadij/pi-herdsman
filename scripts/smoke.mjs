@@ -565,110 +565,6 @@ export function managerResultDelivery(contents, branch, sessionId) {
   return answer ? { receipt, answer } : null;
 }
 
-function diagnosticIdentifier(value) {
-  return typeof value === "string" ? value.slice(0, 200) : null;
-}
-
-export function managerResultDeliveryEvidence(contents, branch, sessionId) {
-  const entries = sessionEntries(contents);
-  const receipts = entries.flatMap((receipt, index) => {
-    if (
-      receipt.type !== "custom_message" ||
-      receipt.customType !== "pi-herdsman-report_result" ||
-      receipt.details?.branch !== branch ||
-      receipt.details?.fromSessionId !== sessionId ||
-      receipt.details?.leadSessionId !== sessionId
-    )
-      return [];
-    const laterUsers = entries
-      .slice(index + 1)
-      .filter(
-        (entry) => entry.type === "message" && entry.message?.role === "user",
-      );
-    const followUp = laterUsers.find((entry) => entry.parentId === receipt.id);
-    const content = messageText(receipt.content);
-    return [
-      {
-        id: diagnosticIdentifier(receipt.id),
-        parentId: diagnosticIdentifier(receipt.parentId),
-        contentMatches:
-          content.startsWith(`Project work ${branch} finished:\n\n`) &&
-          content.includes("MANAGER_RECOVERY_DONE"),
-        followUpExists: !!followUp,
-        followUp: followUp
-          ? {
-              id: diagnosticIdentifier(followUp.id),
-              parentId: diagnosticIdentifier(followUp.parentId),
-            }
-          : null,
-        laterUsers: laterUsers.slice(0, 5).map((entry) => ({
-          id: diagnosticIdentifier(entry.id),
-          parentId: diagnosticIdentifier(entry.parentId),
-        })),
-      },
-    ];
-  });
-  return {
-    receiptExists: receipts.length > 0,
-    contentMatches: receipts.some((receipt) => receipt.contentMatches),
-    followUpExists: receipts.some((receipt) => receipt.followUpExists),
-    receipts: receipts.slice(-5),
-  };
-}
-
-export async function waitForAssignmentSettlement(
-  assignmentPath,
-  waitFor,
-  deliveryEvidence,
-) {
-  try {
-    await waitFor(
-      "assignment-settlement",
-      async () => {
-        try {
-          await lstat(assignmentPath);
-          return false;
-        } catch (error) {
-          if (error.code === "ENOENT") return true;
-          throw error;
-        }
-      },
-      15_000,
-    );
-  } catch (error) {
-    const assignment = {};
-    try {
-      const details = await lstat(assignmentPath);
-      assignment.exists = true;
-      assignment.size = details.size;
-      assignment.regularFile = details.isFile() && !details.isSymbolicLink();
-      if (assignment.regularFile && details.size <= 16 * 1024) {
-        const record = JSON.parse(await readFile(assignmentPath, "utf8"));
-        for (const key of ["id", "repoKey", "branch", "status"])
-          if (typeof record[key] === "string")
-            assignment[key] = record[key].slice(0, 200);
-      }
-    } catch (diagnosticError) {
-      if (diagnosticError.code === "ENOENT") assignment.exists = false;
-      else assignment.readError = diagnosticError.code ?? diagnosticError.name;
-    }
-    const delivery = {
-      supervisorResultAccepted:
-        deliveryEvidence?.supervisorResultAccepted === true,
-    };
-    for (const key of ["receipt", "ack"]) {
-      delivery[key] = {};
-      for (const field of ["id", "parentId"]) {
-        const value = deliveryEvidence?.[key]?.[field];
-        delivery[key][field] = diagnosticIdentifier(value);
-      }
-    }
-    error.message += `; assignment settlement evidence: ${JSON.stringify({ assignment, delivery })}`;
-    throw error;
-  }
-  await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
-}
-
 export function assertManagerResultSettlement({
   resultPersisted,
   delivered,
@@ -2296,23 +2192,8 @@ async function runManagerRecoverySmoke(ctx) {
         );
       }
     }
-    if (label === "completion") {
-      try {
-        const session = await rootSnapshot();
-        ctx.managerRecovery.resultDeliveryEvidence =
-          managerResultDeliveryEvidence(
-            session?.contents ?? "",
-            branch,
-            ctx.managerRecovery.sessionId,
-          );
-      } catch (error) {
-        ctx.managerRecovery.resultDeliveryEvidence = {
-          error: String(error).slice(0, 200),
-        };
-      }
-    }
     throw new Error(
-      `manager-recovery-${label}: timed out${label === "ready" ? `; last READY evidence: ${JSON.stringify(ctx.managerRecovery.readyEvidence ?? null)}` : ""}${label === "completion" ? `; result delivery evidence: ${JSON.stringify(ctx.managerRecovery.resultDeliveryEvidence)}` : ""}`,
+      `manager-recovery-${label}: timed out${label === "ready" ? `; last READY evidence: ${JSON.stringify(ctx.managerRecovery.readyEvidence ?? null)}` : ""}`,
     );
   };
 
@@ -2928,22 +2809,20 @@ async function runManagerRecoverySmoke(ctx) {
   });
   ctx.managerRecovery.resultDelivered = branch;
   markStage("settled-assignment-validation");
-  const delivery = managerResultDelivery(
-    completed.contents,
-    branch,
-    first.session,
-  );
-  await waitForAssignmentSettlement(assignmentPath, waitFor, {
-    receipt: {
-      id: delivery.receipt.id,
-      parentId: delivery.receipt.parentId ?? null,
+  await waitFor(
+    "assignment-settlement",
+    async () => {
+      try {
+        await lstat(assignmentPath);
+        return false;
+      } catch (error) {
+        if (error.code === "ENOENT") return true;
+        throw error;
+      }
     },
-    ack: { id: delivery.answer.id, parentId: delivery.answer.parentId ?? null },
-    supervisorResultAccepted: supervisorResultAccepted(
-      leadResult.contents,
-      branch,
-    ),
-  });
+    15_000,
+  );
+  await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
   markStage("manager-leave-command-submission");
   await submitManagerLeave(ctx, ctx.rootPaneId);
   markStage("manager-leave-output-wait");
