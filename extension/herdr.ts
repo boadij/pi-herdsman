@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { OperationError } from "./errors.ts";
@@ -1941,33 +1942,35 @@ export function readPiSessionHeaderId(path: string): string | undefined {
   }
   let content: string;
   try {
-    const buffer = Buffer.alloc(PI_SESSION_HEADER_BYTE_LIMIT);
+    const buffer = Buffer.allocUnsafe(PI_SESSION_HEADER_READ_CHUNK_SIZE);
+    const decoder = new StringDecoder("utf8");
+    content = "";
     let length = 0;
     let newline = -1;
-    while (length < buffer.length) {
+    while (length < PI_SESSION_HEADER_BYTE_LIMIT) {
       const bytes = readSync(
         fd,
         buffer,
-        length,
-        Math.min(PI_SESSION_HEADER_READ_CHUNK_SIZE, buffer.length - length),
+        0,
+        Math.min(buffer.length, PI_SESSION_HEADER_BYTE_LIMIT - length),
         length,
       );
       if (bytes === 0) break;
-      newline = buffer.subarray(length, length + bytes).indexOf(0x0a);
-      if (newline !== -1) {
-        newline += length;
-        break;
-      }
+      newline = buffer.subarray(0, bytes).indexOf(0x0a);
+      content += decoder.write(
+        buffer.subarray(0, newline === -1 ? bytes : newline),
+      );
+      if (newline !== -1) break;
       length += bytes;
     }
     if (
       newline === -1 &&
-      length === buffer.length &&
+      length === PI_SESSION_HEADER_BYTE_LIMIT &&
       readSync(fd, buffer, 0, 1, length) !== 0
     )
       throw new Error("Pi session header exceeds 1 MiB read limit");
     if (newline === -1 && length === 0) return undefined;
-    content = buffer.toString("utf8", 0, newline === -1 ? length : newline);
+    content += decoder.end();
   } finally {
     closeSync(fd);
   }

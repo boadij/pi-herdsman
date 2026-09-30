@@ -3090,11 +3090,13 @@ test("Pi session header reads are bounded, handle short reads, and close descrip
     ) => {
       assert.ok(length <= chunkSize);
       if (position === limit) {
+        assert.ok(buffer.length <= chunkSize);
         assert.equal(offset, 0);
         assert.equal(length, 1);
         probes++;
       } else {
-        assert.equal(offset, position);
+        assert.equal(buffer.length, chunkSize);
+        assert.equal(offset, 0);
         assert.ok(position + length <= limit);
       }
       if (newlinePosition !== -1 && position !== limit)
@@ -3124,6 +3126,12 @@ test("Pi session header reads are bounded, handle short reads, and close descrip
       {
         name: "large body",
         content: `${header}\n${"x".repeat(2 * 1024 * 1024)}`,
+      },
+      {
+        name: "UTF-8 across full chunks",
+        content:
+          " ".repeat(chunkSize - Buffer.byteLength(header.split("😀")[0]) - 1) +
+          `${header}\nignored`,
       },
       {
         name: "short reads through UTF-8 and newline",
