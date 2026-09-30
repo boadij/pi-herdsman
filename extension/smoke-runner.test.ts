@@ -1064,22 +1064,18 @@ test("Manager smoke creates a fresh Git primary without pre-opening a worktree",
 });
 
 test("Manager smoke assignment namespace comes only from the topology repo key", () => {
+  const checkout = resolve(tmpdir(), "project");
   const topology = {
     source: {
       repo_key: "canonical-repo",
       repo_name: "project",
       source_workspace_id: "w1",
-      source_checkout_path: "/tmp/project",
+      source_checkout_path: checkout,
     },
     worktrees: [],
   };
   const validate = (value) =>
-    assertManagerFreshPrimary(
-      "w1",
-      "/tmp/project",
-      { workspace_id: "w1" },
-      value,
-    );
+    assertManagerFreshPrimary("w1", checkout, { workspace_id: "w1" }, value);
   assert.equal(validate(topology), "canonical-repo");
   for (const repo_key of [undefined, "", null, 1])
     assert.throws(
