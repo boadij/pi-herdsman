@@ -255,8 +255,7 @@ different agent generation.
 
 ## See also
 
-- [Pi Herdsman](supervision.md) for lead supervision that does not alter agent
-  assignment ownership.
+- [Coordination](coordination.md) for supervision and ownership boundaries.
 - [Agents and identity](agents.md)
 - [Agent states](../reference/agent-states.md)
 - [Recovery](../guides/recovery.md)

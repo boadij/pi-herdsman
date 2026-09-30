@@ -1,6 +1,6 @@
 # Peer reference
 
-[Documentation index](../README.md) · [Supervision concept](../concepts/supervision.md)
+[Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
 `peer` is horizontal coordination between live sessions of the **same coordinator role**: Lead ↔ Lead or Manager ↔ Manager. Discovery and transport are user-global, including across Herdr sockets; they are not project-filtered. Managed Agents and Chief have no peer presence. A healthy coordinator publishes a private generation-bound record in `runtime/peers-v2/peers/`; dead, stale, malformed, or replaced process-lock claims are ignored. Unhealthy coordination withdraws presence while retaining queued messages.
 

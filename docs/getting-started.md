@@ -1,58 +1,52 @@
 # Getting started
 
-[Documentation index](README.md) · [Agent coordination API](agent-api.md) · [Pi Herdsman](concepts/supervision.md)
+[Documentation index](README.md) · [Coordination API](coordination-api.md)
 
-This is the shortest human-facing path from installation to useful Pi Herdsman
-orchestration. You do not need to type structured `agent` requests for this
-path.
+This is the shortest path from installation to useful asynchronous delegation.
+You do not need to call structured coordination tools yourself.
 
 ## 1. Install
 
 You need:
 
-- [herdr](https://github.com/herdrdev/herdr) `>=0.9.1`;
-- Pi `0.99.1` (tested runtime);
-- Node `>=22.19.0`.
+- [herdr](https://github.com/herdrdev/herdr) `>=0.9.1`
+- Pi `0.99.1` (tested runtime)
+- Node `>=22.19.0`
 
-On Linux or macOS, install the current released, tested stack:
+On Linux or macOS, install the released, tested stack:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
 ```
 
-If you already manage Pi and herdr yourself, install only Pi Herdsman and the
-herdr Pi integration:
+If you already manage Pi and herdr yourself:
 
 ```sh
 pi install npm:pi-herdsman
 herdr integration install pi
 ```
 
-For an SSH-ready Docker deployment instead, see the
-[container deployment guide](guides/container-deployment.md).
+For an SSH-ready Docker deployment, see
+[Container deployment](guides/container-deployment.md).
 
-## 2. Start Herdr and Pi
+## 2. Start herdr and Pi
 
-Start Herdr in your project:
+Start herdr in your project:
 
 ```sh
 herdr
 ```
 
-Then run Pi in the Herdr pane:
+Then start Pi inside the herdr pane:
 
 ```sh
 pi
 ```
 
-Pi reads the package manifest and loads the extension plus the optional `agents`
-skill. A lead Pi session started outside Herdr cannot safely manage Herdr agents.
+Pi loads the package extension and optional `agents` skill. A Lead started
+outside herdr cannot safely manage herdr-backed Agents.
 
-The extension distinguishes a lead Pi session, valid managed agents, and
-unmanaged or invalid environments. Only supported managed environments receive
-Pi Herdsman controls and status UI.
-
-## 3. Delegate work without leaving the conversation
+## 3. Delegate without leaving the conversation
 
 Ask Pi normally:
 
@@ -60,131 +54,80 @@ Ask Pi normally:
 Use scout to inspect this repository.
 ```
 
-Pi Herdsman starts the work asynchronously. Once the assignment is accepted, the
-lead Pi session remains the session you interact with instead of waiting for the
-agent to finish.
+The Agent starts asynchronously. Once the assignment is accepted, the Lead
+conversation remains available while the Agent works.
 
-While agents work, you can continue discussing or planning with the
-lead Pi session, delegate other independent work, inspect active work, or focus a
-managed agent pane.
+You can keep discussing the problem, delegate other genuinely independent work,
+or end the turn. Do not poll for completion. Results and Agent questions return
+to the exact owner when they need attention.
 
-You do not need to poll for completion. Results and agent questions are
-delivered back to the owning controller when they need attention.
-The exact semantics are owned by [Lifecycle](concepts/lifecycle.md).
+The exact assignment behavior is documented in
+[Lifecycle](concepts/lifecycle.md).
 
-Pi Herdsman is opinionated about coordination, not workflow. Use the agent roles,
-tools, extensions, and process that fit your project; the lead agent handles the
-structured coordination API internally.
+## 4. Open the Agent menu
 
-## 4. Open the agents menu
-
-In the lead Pi TUI, run:
+Run:
 
 ```text
 /agents
 ```
 
-The native menu contains:
+The native menu provides the live Agent inventory, session usage, Agent definitions,
+layout, message limits, context-retirement configuration, and emergency cleanup.
 
-```text
-Running
-Definitions
-Layout
-Stop all…
-```
+Use `Running` to focus a verified live Agent. Use `Session stats` to inspect
+Pi-native token usage and cost for the current Pi session plus transitively
+owned managed-Agent sessions. Use `Definitions` to inspect or override the
+effective bundled, project, and global roster. Use `Layout` to choose placement
+for future Lead-direct Agents.
 
-`Running` is the complete authoritative live-agent inventory and focuses the
-selected pane directly. `Definitions` manages the effective bundled, project,
-and global agent definitions. Trusted projects contribute definitions from
-`.pi/agents/`; effective precedence is bundled < project < global. `Layout`
-controls whether newly started agents use tabs or splits. `Stop all…` is
-destructive emergency control.
+See [Commands](reference/commands.md) for the exact human-facing behavior.
 
-See [`/agents` commands](reference/commands.md) for exact behavior.
+## 5. Customize when needed
 
-## 5. Configure definitions and layout
+Pi Herdsman is opinionated about coordination, not your development workflow.
+Definitions control models, thinking, tools, skills, extensions, instructions,
+and permitted delegation.
 
-Open `Definitions` to inspect the effective bundled, project, and global roster
-and edit the selected definition's model, thinking level, or enabled state.
-The `[project]` marker identifies project participation and `*` identifies a
-global override. Definition Details shows the effective metadata and can
-expand the resolved definition instructions with Pi's native `Ctrl+O`
-behavior. These edits always write global overrides, never project files.
-
-Use `Layout` to choose the current placement for newly started lead-direct
-agents: `subtree` is the default and gives each lead-direct agent one tab;
-`tab` uses one lead-owned agents tab; `split` stays in the caller's tab. Nested
-delegation always splits inside the owner's current tab. Placement changes
-affect future starts only.
-
-For complete configuration ownership, see:
+Continue with:
 
 - [Agent definitions](guides/agent-definitions.md)
-- [Customizing bundled agents](guides/customizing-agents.md)
+- [Customizing bundled Agents](guides/customizing-agents.md)
 - [Agent-definition schema](reference/agent-definition-schema.md)
 - [Configuration](reference/configuration.md)
 
-## 6. Watch and focus work
+## 6. Observe active work
 
-The status widget shows active managed work and transient `starting` activity.
-Agents exist for one assignment only. After a terminal result is delivered,
-Pi Herdsman cleans up the agent; the exact Pi session remains available for
-continuation. The `Running` menu shows the complete authoritative inventory of
-live or unresolved lifecycle work.
+The status widget shows current managed work and transient startup activity.
+Presentation is not control authority: operations still revalidate exact
+identity and lifecycle state.
 
-Managed agent panes show their validated breadcrumb identity. A compact summary
-of their current Pi active tools can appear as bracketed metadata on that breadcrumb.
+Completed Agent generations are cleaned up after result delivery. Their Pi
+sessions remain available for explicit continuation through the model-facing
+API.
 
-See [Status widget](reference/status-widget.md) for exact state, refresh, and
-rendering behavior.
+See [Status widget](reference/status-widget.md) and
+[Agents and identity](concepts/agents.md).
 
-To continue a completed assignment with its existing conversational context,
-use the exact `session_id` returned with its result in a new `agent_continue` call.
-This starts a new agent generation with the saved session and current effective
-definition configuration.
+## 7. Scale to project orchestration
 
-## 7. Recover only when needed
+When one Lead and its Agent tree are no longer the right coordination boundary,
+an eligible Lead in the primary workspace can enter Manager mode:
 
-Normal coordination and targeted cleanup belong to the agent API. Use
-`Stop all…` only when you deliberately want lead-level emergency cleanup of the
-proven owned agent tree.
+```text
+/manager
+```
 
-For failure diagnosis and conservative cleanup, see [Recovery](guides/recovery.md).
+Manager coordinates durable branch-based work across Leads. It does not own
+their Agents or implement through an Agent tree of its own. No prior chat turn
+or existing linked worktree is required in an ordinary Git primary workspace.
 
-## 8. Supervise project Leads and Managers
-
-Every session starts as a Lead. In the primary workspace of a Herdr worktree
-group, use `/manager` to explicitly claim the exclusive Manager lease for its
-Herdsman project scope; activation is refused while the session owns unresolved
-Agent work. Restored Manager sessions retain the Manager profile, supervision
-UI, and context without loading Lead Agent rosters or recovering Lead-owned
-Agents. `/manager leave` preserves project work; a live Lead waiting for this
-Manager's reply or the Manager's own pending ask to Chief can block leaving. Leads in
-linked-worktree workspaces cannot enter Manager mode. Manager is a dedicated
-project coordinator with a distinct coordination profile and only
-`staff`, `supervisor`, and `peer` among Herdsman tools. It does not own Agents
-or implement work through them; delegated implementation belongs to Leads and
-their Agent trees. Worktree Leads are the execution boundary for project work
-delegated by Manager. See the
-[supervision reference](reference/supervision.md) for project eligibility,
-direct-report tools, durable assignments, and results. Start work with
-`staff_delegate` using a task and optional branch; resume by branch alone.
-`staff_close` pauses a Lead without deleting its work, while `staff_discard`
-abandons an assignment but keeps its branch and worktree. Re-enter Manager
-mode to see work left behind; a Lead can finish while no Manager is active.
-
-In an eligible Lead session, use `/chief` to supervise Managers across the
-current Herdr runtime. When a Herdsman project scope has no active Manager,
-Chief may supervise its ordinary Leads directly; when a Manager is active,
-Leads in that worktree group report to the Manager, not Chief. Chief can
-observe bounded descendant Lead summaries but cannot act on those Leads. A Manager cannot
-activate Chief mode. From Chief, `/chief` opens the overview; `/chief leave`
-returns to ordinary Lead mode.
+Continue with [Project orchestration](guides/project-orchestration.md). For the
+role and authority model, read [Coordination](concepts/coordination.md).
 
 ## Next steps
 
-- Keep delegating naturally through the lead Pi session.
-- Use [`/agents` commands](reference/commands.md) when you need human control.
-- Configure [agent definitions](guides/agent-definitions.md).
-- Read [Agent coordination API](agent-api.md) only when you need the model and
-  agent-facing contracts.
+- Keep delegating naturally through the Lead conversation.
+- Use [Project orchestration](guides/project-orchestration.md) for independent branch-based work.
+- Use [Coordination API](coordination-api.md) when you need exact model-facing interfaces.
+- Use [Recovery](guides/recovery.md) only when normal coordination cannot converge safely.
