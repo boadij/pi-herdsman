@@ -17,6 +17,9 @@ import {
   managerRecoveryResumeOnlyPrompt,
   managerRecoveryResumePrompt,
   continuationResultsForPrompt,
+  continuationSessionEvidence,
+  correlatedContinuationTask,
+  managerChildSessionEvidence,
   initialPromptForScenario,
   inspectPaneProcesses,
   isolatedEnv,
@@ -29,6 +32,9 @@ import {
   submitManagerLeave,
   parseSmokeArgs,
   formatSmokeFailure,
+  managerDiagnosticLines,
+  captureManagerLeadDiagnostics,
+  savedSessionHeaderEvidence,
   staffDelegateResults,
   staffCloseResults,
   hasManagerResultRef,
@@ -62,6 +68,265 @@ test("missing managed session file is not ready yet", async () => {
       ),
       undefined,
     );
+  } finally {
+    await rm(piSessions, { recursive: true, force: true });
+  }
+});
+
+test("saved-session evidence separates header identity from continuation task instruction", () => {
+  const followup = "Continue this exact saved session.";
+  const contents = [
+    { type: "session", id: "actual-session" },
+    {
+      type: "message",
+      message: { role: "user", content: followup },
+    },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+
+  assert.deepEqual(savedSessionHeaderEvidence(contents, "expected-session"), {
+    expectedSessionId: "expected-session",
+    actualSessionId: "actual-session",
+    sessionHeaderFound: true,
+    sessionIdMatches: false,
+  });
+  assert.deepEqual(
+    continuationSessionEvidence(contents, "expected-session", followup),
+    {
+      sessionHeaderFound: true,
+      sessionIdMatches: false,
+      continuationTaskFound: true,
+      taskInstructionFound: true,
+    },
+  );
+  assert.equal(
+    continuationSessionEvidence(
+      contents,
+      "actual-session",
+      "missing instruction",
+    ).taskInstructionFound,
+    false,
+  );
+});
+
+test("continuation task evidence accepts the paraphrased task only in child user text", () => {
+  const task =
+    "Recall the exact package name from your previous assignment; do not reread package.json. Return PI_HERDSMAN_CONTINUATION_SECOND.";
+  const rootPrompt =
+    "Without rereading package.json, return the remembered package name.";
+  for (const [role, content, expected] of [
+    [
+      "user",
+      `Assignment:\n${task.toLowerCase().replaceAll(" ", "\n")}\nEnd assignment.`,
+      true,
+    ],
+    ["user", rootPrompt, false],
+    ["assistant", task, false],
+  ] as const) {
+    const contents = [
+      { type: "session", id: "saved-session" },
+      {
+        type: "message",
+        message: {
+          role,
+          content,
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+    const evidence = continuationSessionEvidence(
+      contents,
+      "saved-session",
+      task,
+    );
+    assert.equal(evidence.sessionIdMatches, true);
+    assert.equal(evidence.taskInstructionFound, expected);
+    assert.equal(
+      continuationSessionEvidence(contents, "saved-session", null)
+        .taskInstructionFound,
+      false,
+    );
+  }
+});
+
+test("continuation task parser correlates tool call, successful session result and response ancestry", () => {
+  const task = "Recall the exact package name; return SECOND.";
+  const prompt = "Without rereading package.json...";
+  const entries = [
+    {
+      type: "message",
+      id: "prompt",
+      message: { role: "user", content: prompt },
+    },
+    {
+      type: "message",
+      id: "call",
+      parentId: "prompt",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "other-call",
+            name: "agent_continue",
+            arguments: { task: "wrong task" },
+          },
+          {
+            type: "toolCall",
+            id: "continue-call",
+            name: "agent_continue",
+            arguments: { session: "/saved/child.jsonl", task },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "tool-result",
+      parentId: "call",
+      message: {
+        role: "toolResult",
+        toolName: "agent_continue",
+        toolCallId: "continue-call",
+        details: { ok: true, action: "continue", session_id: "child" },
+      },
+    },
+    {
+      type: "message",
+      id: "response",
+      parentId: "tool-result",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "package SECOND",
+      },
+    },
+  ];
+  const encode = (value: unknown[]) =>
+    value.map((entry) => JSON.stringify(entry)).join("\n");
+  assert.equal(
+    correlatedContinuationTask(encode(entries), "response", "child", prompt),
+    task,
+  );
+  assert.equal(
+    correlatedContinuationTask(
+      encode(entries),
+      "response",
+      "wrong-child",
+      prompt,
+    ),
+    null,
+  );
+  assert.equal(
+    correlatedContinuationTask(
+      encode(entries),
+      "missing-response",
+      "child",
+      prompt,
+    ),
+    null,
+  );
+  assert.equal(
+    correlatedContinuationTask(
+      encode(entries),
+      "response",
+      "child",
+      "another prompt",
+    ),
+    null,
+  );
+  for (const mutation of [
+    (copy: any[]) => {
+      copy[2].message.toolCallId = "missing-call";
+    },
+    (copy: any[]) => {
+      copy[2].message.isError = true;
+    },
+    (copy: any[]) => {
+      copy[2].message.details.ok = false;
+    },
+    (copy: any[]) => {
+      copy[3].parentId = "prompt";
+    },
+    (copy: any[]) => {
+      copy.splice(3, 0, {
+        type: "message",
+        id: "new-prompt",
+        parentId: "tool-result",
+        message: { role: "user", content: prompt },
+      });
+      copy[4].parentId = "new-prompt";
+    },
+    (copy: any[]) => {
+      delete copy[1].message.content[1].arguments.task;
+    },
+    (copy: any[]) => {
+      copy[1].message.content[1].arguments.task = " ";
+    },
+    (copy: any[]) => {
+      copy[1].message.content[1].arguments.task = "x".repeat(16 * 1024 + 1);
+    },
+  ]) {
+    const copy = structuredClone(entries);
+    mutation(copy);
+    assert.equal(
+      correlatedContinuationTask(encode(copy), "response", "child", prompt),
+      null,
+    );
+  }
+  const child = encode([
+    { type: "session", id: "wrong-child" },
+    { type: "message", message: { role: "user", content: task } },
+  ]);
+  const evidence = continuationSessionEvidence(child, "child", task);
+  assert.equal(evidence.sessionIdMatches, false);
+  assert.equal(evidence.taskInstructionFound, true);
+  assert.doesNotMatch(JSON.stringify(evidence), /wrong-child|Recall/);
+  assert.equal(
+    continuationSessionEvidence(child, "child", null).continuationTaskFound,
+    false,
+  );
+});
+
+test("manager readiness evidence includes a workspace child's mismatched session header", async () => {
+  const piSessions = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-"));
+  const path = join(piSessions, "lead.jsonl");
+  try {
+    await writeFile(
+      path,
+      `${JSON.stringify({ type: "session", id: "actual-session" })}\n${JSON.stringify({ secret: "not diagnostic" })}\n`,
+    );
+    const evidence = await managerChildSessionEvidence(
+      { paths: { piSessions } },
+      [
+        {
+          workspace_id: "assigned-workspace",
+          agent_session: { kind: "path", value: path },
+        },
+      ],
+      "assigned-workspace",
+      "expected-session",
+    );
+
+    assert.deepEqual(evidence, {
+      workspaceId: "assigned-workspace",
+      expectedSessionId: "expected-session",
+      candidates: [
+        {
+          identityKind: "path",
+          reportedSessionId: null,
+          path,
+          exists: true,
+          expectedSessionId: "expected-session",
+          actualSessionId: "actual-session",
+          sessionHeaderFound: true,
+          sessionIdMatches: false,
+        },
+      ],
+      expectedSessionFile: null,
+    });
   } finally {
     await rm(piSessions, { recursive: true, force: true });
   }
@@ -130,7 +395,12 @@ test("nested Herdr hashes the API socket while checking both socket limits", () 
 });
 
 test("smoke CLI parses scenarios and one-off model overrides", async () => {
-  assert.deepEqual(parseSmokeArgs([]), { scenario: "core", model: undefined });
+  assert.deepEqual(parseSmokeArgs([]), {
+    scenario: "core",
+    model: undefined,
+    managerReadyTimeoutMs: undefined,
+    managerRecoveryDiagnostics: false,
+  });
   for (const scenario of [
     "core",
     "continuation",
@@ -143,6 +413,8 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     {
       scenario: "chief-tree",
       model: "provider/model:high",
+      managerReadyTimeoutMs: undefined,
+      managerRecoveryDiagnostics: false,
     },
   );
   assert.deepEqual(
@@ -150,12 +422,218 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     {
       scenario: "continuation",
       model: "provider/model:xhigh",
+      managerReadyTimeoutMs: undefined,
+      managerRecoveryDiagnostics: false,
     },
   );
   assert.throws(() => parseSmokeArgs(["core", "extra"]));
   assert.throws(() => parseSmokeArgs(["--unknown"]));
   assert.throws(() => parseSmokeArgs(["wat"]), /unknown smoke scenario/);
   await assert.rejects(runScenario({}, "wat"), /unknown smoke scenario/);
+});
+
+test("manager-recovery timeout is bounded and scoped to its ready handshake", () => {
+  assert.deepEqual(
+    parseSmokeArgs([
+      "manager-recovery",
+      "--manager-ready-timeout-ms",
+      "45000",
+      "--manager-recovery-diagnostics",
+    ]),
+    {
+      scenario: "manager-recovery",
+      model: undefined,
+      managerReadyTimeoutMs: 45_000,
+      managerRecoveryDiagnostics: true,
+    },
+  );
+  for (const timeout of ["0", "-1", "1.5", "600001", "many"])
+    assert.throws(
+      () =>
+        parseSmokeArgs([
+          "manager-recovery",
+          `--manager-ready-timeout-ms=${timeout}`,
+        ]),
+      /positive integer no greater than 600000/,
+    );
+  assert.throws(
+    () => parseSmokeArgs(["core", "--manager-ready-timeout-ms", "45000"]),
+    /only valid for manager-recovery/,
+  );
+  assert.throws(
+    () => parseSmokeArgs(["core", "--manager-recovery-diagnostics"]),
+    /only valid for manager-recovery/,
+  );
+});
+
+test("manager diagnostics retain bounded pane evidence", () => {
+  const prefix = "[pi-herdsman-manager-diagnostic] ";
+  const events = [
+    { event: "session_start_reached" },
+    { event: "initial_inbox_drain_start" },
+    {
+      event: "project_assignment_authorization",
+      outcome: "rejected",
+      reason: "live_lead_mismatch",
+    },
+    {
+      event: "project_assignment_send",
+      outcome: "resolved",
+      triggerTurn: true,
+    },
+    {
+      event: "project_assignment_authorization",
+      outcome: "authorized",
+      reason: "matched",
+    },
+    {
+      event: "project_assignment_send",
+      outcome: "rejected",
+      triggerTurn: false,
+      payload: "secret",
+    },
+  ];
+  const lines = managerDiagnosticLines(
+    [
+      "unrelated pane content containing a secret",
+      ...events.map((event) => `${prefix}${JSON.stringify(event)}`),
+    ].join("\n"),
+  );
+  assert.equal(lines.length, 4);
+  assert.ok(lines.every((line) => line.startsWith(prefix)));
+  assert.doesNotMatch(lines.join("\n"), /secret/);
+  assert.ok(lines.every((line) => line.length <= 512));
+  assert.deepEqual(
+    lines,
+    events.slice(0, 4).map((event) => `${prefix}${JSON.stringify(event)}`),
+  );
+});
+
+test("manager drain checkpoints are allowlisted, deduplicated and bounded without private fields", () => {
+  const prefix = "[pi-herdsman-manager-diagnostic] ";
+  const events = [
+    { event: "session_start_reached" },
+    { event: "initial_inbox_drain_start" },
+    ...["scope", "topology", "live_lead"].flatMap((stage) => [
+      { event: `project_assignment_${stage}_start` },
+      { event: `project_assignment_${stage}_complete` },
+    ]),
+    {
+      event: "project_assignment_authorization",
+      outcome: "authorized",
+      reason: "matched",
+    },
+    {
+      event: "project_assignment_send",
+      outcome: "resolved",
+      triggerTurn: true,
+    },
+    { event: "inbox_preflight", reason: "pass" },
+    { event: "inbox_preflight_recheck", reason: "pass" },
+    { event: "inbox_peer_presence", reason: "missing" },
+    { event: "inbox_candidates", count: 1000 },
+    { event: "inbox_drain_complete", count: 1, sessionStable: true },
+    { event: "inbox_catch", category: "drain" },
+  ];
+  const encode = (event: object) => `${prefix}${JSON.stringify(event)}`;
+  const lines = managerDiagnosticLines(
+    [
+      `${prefix}{malformed`,
+      ...[
+        { event: "unknown", payload: "secret" },
+        { event: "inbox_preflight", reason: "secret" },
+        { event: "inbox_peer_presence", reason: "stale" },
+        { event: "inbox_candidates", count: -1 },
+        { event: "inbox_candidates", count: 1001 },
+        { event: "inbox_candidates", count: 0.5 },
+        { event: "inbox_candidates", count: "1" },
+        { event: "inbox_drain_complete", count: 0, sessionStable: "secret" },
+        { event: "inbox_catch", category: "secret" },
+      ].map(encode),
+      ...events.map((event) =>
+        encode({
+          ...event,
+          sessionId: "secret",
+          path: "secret",
+          payload: "secret",
+        }),
+      ),
+      ...Array.from({ length: 40 }, () =>
+        encode({ event: "inbox_candidates", count: 0 }),
+      ),
+    ].join("\n"),
+  );
+  assert.deepEqual(lines, events.map(encode));
+  assert.equal(lines.length, 16);
+  assert.doesNotMatch(lines.join("\n"), /secret|sessionId|payload|path/);
+  assert.ok(lines.every((line) => line.length <= 512));
+  assert.deepEqual(managerDiagnosticLines(undefined), []);
+
+  for (const event of [
+    { event: "inbox_preflight", reason: "held" },
+    { event: "inbox_preflight_recheck", reason: "stale" },
+    { event: "inbox_preflight_recheck", reason: "held" },
+    { event: "inbox_peer_presence", reason: "pass" },
+    { event: "inbox_candidates", count: 0 },
+    { event: "inbox_drain_complete", count: 0, sessionStable: false },
+    ...[
+      "cleanup",
+      "authorization",
+      "send",
+      "reconcile",
+      "candidate_scan",
+      "transaction",
+    ].map((category) => ({ event: "inbox_catch", category })),
+  ])
+    assert.deepEqual(managerDiagnosticLines(encode(event)), [encode(event)]);
+});
+
+test("successful manager recovery projects opt-in Lead diagnostics without changing acceptance", async () => {
+  const prefix = "[pi-herdsman-manager-diagnostic] ";
+  const ctx = {
+    managerRecoveryDiagnostics: true,
+    managerRecovery: {
+      stage: "lead-ready-handshake",
+      sessionId: "lead-session",
+    },
+  };
+  await captureManagerLeadDiagnostics(
+    ctx,
+    "lead-pane",
+    async (context, paneId, source) => {
+      assert.equal(context, ctx);
+      assert.equal(paneId, "lead-pane");
+      assert.equal(source, "recent-unwrapped");
+      return [
+        "private pane text",
+        `${prefix}{"event":"session_start_reached","payload":"private"}`,
+        `${prefix}{"event":"session_start_reached"}`,
+        `${prefix}{"event":"inbox_preflight","reason":"pass"}`,
+        `${prefix}{"event":"unknown","payload":"private"}`,
+      ].join("\n");
+    },
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.managerRecovery)), {
+    stage: "lead-ready-handshake",
+    sessionId: "lead-session",
+    leadDiagnostics: [
+      `${prefix}{"event":"session_start_reached"}`,
+      `${prefix}{"event":"inbox_preflight","reason":"pass"}`,
+    ],
+  });
+
+  await captureManagerLeadDiagnostics(ctx, "lead-pane", async () => {
+    throw new Error("pane unavailable");
+  });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(ctx.managerRecovery)).leadDiagnostics,
+    [],
+  );
+  const disabled = { managerRecoveryDiagnostics: false, managerRecovery: {} };
+  await captureManagerLeadDiagnostics(disabled, "lead-pane", async () => {
+    assert.fail("diagnostics must remain opt-in");
+  });
+  assert.deepEqual(disabled.managerRecovery, {});
 });
 
 test("smoke failure report separates stage from error details", () => {

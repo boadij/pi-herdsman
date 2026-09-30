@@ -487,7 +487,9 @@ Pi Herdsman uses one durable vocabulary:
   the work handle: a Manager starts work with `staff_delegate` using `task` and
   optional `branch`, reusing an unoccupied Herdr worktree when available; use
   `staff_delegate` with `branch` only to resume existing work. An already-running
-  Lead is not restarted, and a durable result is not restarted;
+  Lead is not restarted, and a durable result is not restarted. If its checkout
+  is unavailable, restore/open it before resuming or discard the assignment
+  and delegate again; do not expect automatic recreation from its original base;
 - `staff_close` stops an exact Lead and its owned Agent tree while preserving
   resumable work, its Pi session, branch, and worktree. `staff_discard` abandons
   work by branch, stopping its executor and removing the assignment while

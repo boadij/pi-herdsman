@@ -11,7 +11,7 @@ path.
 You need:
 
 - [herdr](https://github.com/herdrdev/herdr) `>=0.9.1`;
-- Pi `>=0.87.0 <0.88.0` (supported);
+- Pi `0.99.1` (tested runtime);
 - Node `>=22.19.0`.
 
 On Linux or macOS, install the current released, tested stack:

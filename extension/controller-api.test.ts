@@ -22,7 +22,10 @@ import {
   claimManagerLease,
   managerDescriptorPath,
   writeProjectAssignment,
+  writeChiefMessage,
+  removeProjectAssignment,
   writeLeadCoordinationState,
+  drainCoordinationInbox,
 } from "./supervision.ts";
 import support, {
   CHILD_SESSION_ID,
@@ -195,20 +198,12 @@ test("linked Lead routes to exact Manager, fails closed on incomplete authority,
     getSessionFile: () => `/tmp/${leadId}.jsonl`,
   };
   try {
-    writeProjectAssignment(runtime, {
+    writeProjectAssignment(runtime, WORKSPACE, {
       version: 1,
       id: leadId,
-      primaryWorkspaceId: WORKSPACE,
       repoKey: "repo-key",
-      base: "HEAD",
       branch: "smoke/routing",
       text: "routing assignment",
-      phase: "active",
-      workspaceId: "linked-workspace",
-      paneId: "lead-pane",
-      tabId: "lead-tab",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
     });
     writeLeadCoordinationState(runtime, {
       version: 1,
@@ -284,6 +279,392 @@ test("linked Lead routes to exact Manager, fails closed on incomplete authority,
   }
 });
 
+for (const scenario of [
+  {
+    name: "accepts its branch worktree Lead",
+    moved: false,
+    mismatchedPath: false,
+    prospectivePath: false,
+  },
+  {
+    name: "accepts its prospective session path before the file exists",
+    moved: false,
+    mismatchedPath: false,
+    prospectivePath: true,
+  },
+  {
+    name: "denies an exact Lead moved to a sibling worktree",
+    moved: true,
+    mismatchedPath: false,
+    prospectivePath: false,
+  },
+  {
+    name: "denies a mismatched prospective session path",
+    moved: false,
+    mismatchedPath: true,
+    prospectivePath: false,
+  },
+])
+  test(`project assignment delivery ${scenario.name}`, async (t) => {
+    setLeadEnvironment();
+    process.env.HERDR_SOCKET_PATH = join(
+      tmpdir(),
+      `assignment-placement-${randomUUID()}.sock`,
+    );
+    process.env.HERDR_WORKSPACE_ID = "branch-workspace";
+    process.env.HERDR_PANE_ID = "lead-pane";
+    process.env.HERDR_TAB_ID = "lead-tab";
+    const sessionId = randomUUID();
+    const managerId = randomUUID();
+    const sessionPath = join(tmpdir(), `${sessionId}.jsonl`);
+    if (scenario.mismatchedPath) writeFileSync(sessionPath, "");
+    if (scenario.prospectivePath)
+      assert.equal(realFs.existsSync(sessionPath), false);
+    const previousDiagnostics = process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
+    const previousConsoleError = console.error;
+    const diagnosticOutput: string[] = [];
+    if (scenario.prospectivePath) {
+      process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = "1";
+      console.error = (...values: unknown[]) => {
+        diagnosticOutput.push(values.join(" "));
+      };
+    } else delete process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
+    const runtime = supervisionRuntime();
+    const assignment = {
+      version: 1 as const,
+      id: sessionId,
+      repoKey: "repo-key",
+      branch: "smoke/delivery-placement",
+      text: "deliver only in the assigned checkout",
+    };
+    writeProjectAssignment(runtime, WORKSPACE, assignment);
+    writeChiefMessage(
+      {
+        version: 1,
+        id: sessionId,
+        leaseId: randomUUID(),
+        kind: "project_assignment",
+        fromSessionId: managerId,
+        toSessionId: sessionId,
+        leadSessionId: sessionId,
+        text: `Project assignment ${sessionId}: ${assignment.text}\n\nWhen this work is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`,
+        createdAt: Date.now(),
+      },
+      runtime,
+    );
+    const agent = {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind:
+          scenario.mismatchedPath || scenario.prospectivePath ? "path" : "id",
+        value: scenario.mismatchedPath
+          ? join(tmpdir(), `${sessionId}-other.jsonl`)
+          : scenario.prospectivePath
+            ? sessionPath
+            : sessionId,
+      },
+      workspace_id: scenario.moved ? "sibling-workspace" : "branch-workspace",
+      pane_id: "lead-pane",
+      tab_id: "lead-tab",
+    };
+    const manager = {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "path",
+        value: join(tmpdir(), `${managerId}.jsonl`),
+      },
+      workspace_id: WORKSPACE,
+      pane_id: "manager-pane",
+      tab_id: "manager-tab",
+    };
+    const inventory = [manager, agent];
+    const pi = fakeChiefPi({
+      exec: (_command, args) => {
+        let result: unknown = {};
+        if (isApiSnapshot(args))
+          result = { snapshot: { agents: inventory, panes: [] } };
+        else if (isAgentList(args)) result = { agents: inventory };
+        else if (args[0] === "agent" && args[1] === "get") result = { agent };
+        else if (args[0] === "workspace" && args[1] === "get")
+          result = {
+            workspace: {
+              worktree: { repo_key: "repo-key", is_linked_worktree: true },
+            },
+          };
+        else if (args[0] === "worktree" && args[1] === "list") {
+          result = {
+            source: {
+              repo_key: "repo-key",
+              repo_name: "project",
+              source_workspace_id: WORKSPACE,
+            },
+            worktrees: [
+              {
+                branch: assignment.branch,
+                open_workspace_id: "branch-workspace",
+              },
+              {
+                branch: "smoke/sibling",
+                open_workspace_id: "sibling-workspace",
+              },
+            ],
+          };
+        }
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result }),
+          stderr: "",
+          code: 0,
+        };
+      },
+    });
+    registerExtension!(pi.pi as never);
+    const ctx = fakeContext() as any;
+    ctx.sessionManager = {
+      ...ctx.sessionManager,
+      getSessionId: () => sessionId,
+      getSessionFile: () => sessionPath,
+    };
+    try {
+      await pi.events.get("session_start")![0](undefined, ctx);
+      await t.waitFor(() =>
+        assert.equal(listChiefMessagePaths(runtime, sessionId).length, 0),
+      );
+      const delivered = pi.sent.filter(
+        (message: any) =>
+          message.customType === "pi-herdsman-project_assignment",
+      );
+      assert.equal(
+        delivered.length,
+        scenario.moved || scenario.mismatchedPath ? 0 : 1,
+      );
+      if (!scenario.moved && !scenario.mismatchedPath)
+        assert.equal(delivered[0].details.id, sessionId);
+      if (scenario.prospectivePath) {
+        assert.equal(realFs.existsSync(sessionPath), false);
+        const diagnosticEvents = diagnosticOutput
+          .filter((line) =>
+            line.startsWith("[pi-herdsman-manager-diagnostic] "),
+          )
+          .map((line) =>
+            JSON.parse(line.slice("[pi-herdsman-manager-diagnostic] ".length)),
+          );
+        assert.deepEqual(
+          diagnosticEvents.map(({ event }) => event),
+          [
+            "session_start_reached",
+            "initial_inbox_drain_start",
+            "inbox_preflight",
+            "inbox_preflight_recheck",
+            "inbox_candidates",
+            "project_assignment_scope_start",
+            "project_assignment_scope_complete",
+            "project_assignment_topology_start",
+            "project_assignment_topology_complete",
+            "project_assignment_live_lead_start",
+            "project_assignment_live_lead_complete",
+            "project_assignment_authorization",
+            "project_assignment_send",
+            "inbox_peer_presence",
+            "inbox_drain_complete",
+          ],
+        );
+        const authorization = diagnosticEvents.find(
+          ({ event }) => event === "project_assignment_authorization",
+        );
+        const send = diagnosticEvents.find(
+          ({ event }) => event === "project_assignment_send",
+        );
+        assert.equal(authorization.outcome, "authorized");
+        assert.equal(authorization.reason, "matched");
+        assert.equal(send.outcome, "resolved");
+        assert.equal(send.triggerTurn, true);
+        assert.doesNotMatch(
+          diagnosticOutput
+            .filter((line) =>
+              line.startsWith("[pi-herdsman-manager-diagnostic] "),
+            )
+            .join("\n"),
+          new RegExp(`${sessionId}|${assignment.text}`),
+        );
+        writeFileSync(
+          sessionPath,
+          `${JSON.stringify({
+            type: "session",
+            version: 3,
+            id: sessionId,
+            timestamp: new Date().toISOString(),
+            cwd: "/tmp",
+          })}\n`,
+        );
+        assert.equal(realFs.existsSync(sessionPath), true);
+      }
+      const report = () =>
+        pi.tools
+          .find((tool) => tool.name === "supervisor_result")!
+          .execute(
+            "result",
+            { result: "completed in assigned checkout" },
+            undefined,
+            undefined,
+            ctx,
+          );
+      if (scenario.moved) {
+        await assert.rejects(
+          report(),
+          /not running in its project branch worktree/,
+        );
+        assert.equal(realFs.existsSync(resultPath(sessionId)), false);
+      } else if (!scenario.mismatchedPath && !scenario.prospectivePath) {
+        await report();
+        assert.match(
+          readFileSync(resultPath(sessionId), "utf8"),
+          /completed in assigned checkout/,
+        );
+      }
+    } finally {
+      if (scenario.mismatchedPath) realFs.rmSync(sessionPath, { force: true });
+      if (scenario.prospectivePath) {
+        realFs.rmSync(sessionPath, { force: true });
+        console.error = previousConsoleError;
+        if (previousDiagnostics === undefined)
+          delete process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
+        else process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = previousDiagnostics;
+      } else if (previousDiagnostics !== undefined)
+        process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = previousDiagnostics;
+      await pi.events.get("session_shutdown")?.[0]();
+      delete process.env.HERDR_SOCKET_PATH;
+      setLeadEnvironment();
+    }
+  });
+
+test("Lead cannot persist a result after discard at the final preparation await", async (t) => {
+  setLeadEnvironment();
+  const workspace = `linked-${randomUUID()}`;
+  const session = randomUUID();
+  const branch = "smoke/result-discard-race";
+  process.env.HERDR_WORKSPACE_ID = workspace;
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `result-discard-${randomUUID()}.sock`,
+  );
+  const runtime = supervisionRuntime();
+  let reporting = false;
+  let topologyPaused = false;
+  let removeOnPreparation = false;
+  let removedAtPreparation = false;
+  let resumeTopology: () => void = () => {};
+  const topologyGate = new Promise<void>((resolve) => {
+    resumeTopology = resolve;
+  });
+  const exec = async (_command: string, args: string[]) => {
+    let result: unknown = {};
+    if (args[0] === "workspace" && args[1] === "get")
+      result = {
+        workspace: {
+          worktree: {
+            repo_key: "repo-key",
+            is_linked_worktree: args[2] === workspace,
+          },
+        },
+      };
+    else if (args[0] === "worktree" && args[1] === "list") {
+      if (reporting && args[args.indexOf("--workspace") + 1] === WORKSPACE) {
+        topologyPaused = true;
+        await topologyGate;
+        removeOnPreparation = true;
+      }
+      result = {
+        source: {
+          repo_key: "repo-key",
+          repo_name: "project",
+          source_workspace_id: WORKSPACE,
+        },
+        worktrees: [{ branch, open_workspace_id: workspace }],
+      };
+    } else if (isApiSnapshot(args))
+      result = { snapshot: { agents: [], panes: [] } };
+    else if (isAgentList(args))
+      result = {
+        agents: [
+          {
+            agent_session: {
+              source: "herdr:pi",
+              agent: "pi",
+              kind: "id",
+              value: session,
+            },
+            workspace_id: workspace,
+            pane_id: "lead-pane",
+            tab_id: "lead-tab",
+          },
+        ],
+      };
+    return {
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    };
+  };
+  const pi = fakeChiefPi({ activeTools: ["read"], exec });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext() as any;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => session,
+    getSessionFile: () => `/tmp/${session}.jsonl`,
+  };
+  Object.defineProperty(ctx, "cwd", {
+    get: () => {
+      if (removeOnPreparation) {
+        removeOnPreparation = false;
+        queueMicrotask(() => {
+          removeProjectAssignment(runtime, WORKSPACE, branch);
+          removedAtPreparation = true;
+        });
+      }
+      return "/tmp";
+    },
+  });
+  try {
+    writeProjectAssignment(runtime, WORKSPACE, {
+      version: 1,
+      id: session,
+      repoKey: "repo-key",
+      branch,
+      text: "finish the project",
+    });
+    await pi.events.get("session_start")![0](undefined, ctx);
+    reporting = true;
+    const report = pi.tools
+      .find((tool) => tool.name === "supervisor_result")!
+      .execute("result", { result: "late result" }, undefined, undefined, ctx);
+    try {
+      await t.waitFor(() => assert.equal(topologyPaused, true), {
+        timeout: 3000,
+      });
+      assert.equal(realFs.existsSync(resultPath(session)), false);
+    } finally {
+      resumeTopology();
+    }
+    await assert.rejects(
+      report,
+      /Project assignment changed before result could be saved/,
+    );
+    assert.equal(removedAtPreparation, true);
+    assert.deepEqual(listProjectAssignments(runtime, WORKSPACE), []);
+    assert.equal(realFs.existsSync(resultPath(session)), false);
+  } finally {
+    resumeTopology();
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
 test("Manager retry correlates an ambiguous worktree create by persisted branch", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
@@ -349,7 +730,9 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
         worktrees: topologyCreated
           ? listProjectAssignments(supervisionRuntime(), WORKSPACE).map(
               (assignment) => ({
-                ...(openCalls ? { open_workspace_id: childWorkspace } : {}),
+                ...(openCalls || topologyCreated
+                  ? { open_workspace_id: childWorkspace }
+                  : {}),
                 branch: assignment.branch,
                 path: "/tmp/manager-child",
               }),
@@ -431,7 +814,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       const assignment = listProjectAssignments(
         supervisionRuntime(),
         WORKSPACE,
-      ).find((item) => item.phase === "starting")!;
+      )[0]!;
       childSession = assignment.id;
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
@@ -440,7 +823,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
         piSessionId: childSession,
         updatedAt: Date.now(),
       });
-      assert.equal(assignment.phase, "starting");
+      assert.equal(assignment.branch.length > 0, true);
       return respond({
         agent: {
           name: "lead",
@@ -475,7 +858,26 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
         },
       });
     if (command === "herdr" && isAgentList(args))
-      return respond({ agents: [managerAgent] });
+      return respond({
+        agents: [
+          managerAgent,
+          ...(started
+            ? [
+                {
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "id",
+                    value: childSession,
+                  },
+                  workspace_id: childWorkspace,
+                  pane_id: "child-pane",
+                  tab_id: "child-tab",
+                },
+              ]
+            : []),
+        ],
+      });
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
       return respond({ agent: managerAgent });
     return respond({});
@@ -499,14 +901,19 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       /transport closed/,
     );
     const pending = listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]!;
-    assert.equal(pending.phase, "creating");
-    assert.equal(pending.base, "HEAD");
+    assert.deepEqual(Object.keys(pending).sort(), [
+      "branch",
+      "id",
+      "repoKey",
+      "text",
+      "version",
+    ]);
     assert.equal(createCalls, 1);
     assert.ok(
       pi.calls.some(
         (args) =>
           args.includes("--base") &&
-          args[args.indexOf("--base") + 1] === pending.base,
+          args[args.indexOf("--base") + 1] === "HEAD",
       ),
       "creation must use the base persisted before the Herdr mutation",
     );
@@ -519,8 +926,14 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     );
     assert.equal(staffList.details.ok, true);
     assert.equal(staffList.details.work[0].branch, pending.branch);
+    assert.equal(staffList.details.work[0].status, "paused");
+    assert.equal("workspace_id" in staffList.details.work[0], false);
+    assert.equal("pane_id" in staffList.details.work[0], false);
     assert.equal(createCalls, 1, "roster reads must not retry creation");
-    assert.equal(pending.phase, "creating");
+    assert.equal(
+      listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+      pending.id,
+    );
     await assert.rejects(
       staff.execute(
         "delegate",
@@ -534,15 +947,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       ),
       /Work already exists/,
     );
-    for (const phase of ["starting", "active"] as const) {
-      writeProjectAssignment(supervisionRuntime(), {
-        ...pending,
-        phase,
-        workspaceId: childWorkspace,
-        paneId: "child-pane",
-        tabId: "child-tab",
-        updatedAt: Math.max(Date.now(), pending.createdAt),
-      });
+    {
       await assert.rejects(
         staff.execute(
           "delegate",
@@ -557,7 +962,6 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
         /Work already exists/,
       );
     }
-    writeProjectAssignment(supervisionRuntime(), pending);
     await assert.rejects(
       staff.execute(
         "delegate",
@@ -624,21 +1028,22 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     assert.equal(
       listProjectAssignments(supervisionRuntime(), WORKSPACE).find(
         (item) => item.id === pending.id,
-      )?.phase,
-      "active",
+      )?.id,
+      pending.id,
     );
     await pi.commandOptions.get("manager").handler("leave", ctx);
     assert.equal(pi.pi.getActiveTools().includes("staff_delegate"), false);
     assert.equal(
       listProjectAssignments(supervisionRuntime(), WORKSPACE).find(
         (item) => item.id === pending.id,
-      )?.phase,
-      "active",
+      )?.id,
+      pending.id,
       "Manager leave must retain assignment ownership until completion",
     );
 
     setLeadEnvironment();
     process.env.HERDR_PANE_ID = "child-pane";
+    process.env.HERDR_WORKSPACE_ID = childWorkspace;
     process.env.HERDR_SOCKET_PATH = socketPath;
     writeLeadCoordinationState(supervisionRuntime(), {
       version: 1,
@@ -680,6 +1085,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
 
     process.env.HERDR_PANE_ID = "root-pane";
     process.env.HERDR_TAB_ID = "root-tab";
+    process.env.HERDR_WORKSPACE_ID = WORKSPACE;
     await pi.commandOptions.get("manager").handler("", ctx);
     await pi.events.get("before_agent_start")![0](
       { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
@@ -722,6 +1128,14 @@ async function runManagerStartupScenario(
     | "conflict"
     | "managed-agent"
     | "unmaterialized-path"
+    | "identity-manager-lost-timeout"
+    | "identity-manager-lost-success"
+    | "identity-timeout"
+    | "identity-zero-byte-timeout"
+    | "identity-unproven"
+    | "identity-mismatch"
+    | "identity-cleanup-mismatch"
+    | "identity-ambiguity"
     | "mismatched-session"
     | "recovery"
     | "preexisting"
@@ -729,6 +1143,10 @@ async function runManagerStartupScenario(
     | "occupied"
     | "multiple"
     | "stale-placement"
+    | "discard-pane-missing"
+    | "discard-pi"
+    | "discard-result"
+    | "discard-result-final"
     | "invalid-topology"
     | "concurrent"
     | "active-loss"
@@ -743,10 +1161,11 @@ async function runManagerStartupScenario(
     | "unassigned-close",
   projectTrusted = false,
   t?: TestContext,
+  missingPaneCode = "pane_not_found",
 ): Promise<void> {
   setLeadEnvironment();
-  if (mode === "unmaterialized-path")
-    support.sessionOpenError = new Error("session header is incomplete");
+  const prospective =
+    mode === "unmaterialized-path" || mode.startsWith("identity-");
   process.env.HERDR_PANE_ID = "root-pane";
   process.env.HERDR_TAB_ID = "root-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -767,13 +1186,40 @@ async function runManagerStartupScenario(
     mode === "active-live" ||
     ["close-resume", "active-discard", "close-failure"].includes(mode);
   let startupObservations = 0;
+  let identityObservations = 0;
+  let cleanupOwnershipObservations = 0;
+  let emptySessionStat: ReturnType<typeof realFs.statSync> | undefined;
+  let identityPolled: () => void = () => {};
+  const identityPoll = new Promise<void>((resolve) => {
+    identityPolled = resolve;
+  });
+  const originalNow = Date.now;
+  const childIdentity = () => ({
+    source: "herdr:pi",
+    agent: "pi",
+    kind: prospective ? "path" : "id",
+    value: prospective ? childSessionPath : childSession,
+  });
   let createCalls = 0;
   let openCalls = 0;
   let startCalls = 0;
   let worktreeListCalls = 0;
   let invalidTopologyCall = Number.POSITIVE_INFINITY;
-  const respond = (result: unknown) => ({
-    stdout: JSON.stringify({ id: AGENT_ID, result }),
+  let inspectedDiscardPane = false;
+  let finalSnapshotPaused = false;
+  let duplicateWorktree = false;
+  let resumeFinalSnapshot: () => void = () => {};
+  const finalSnapshotGate = new Promise<void>((resolve) => {
+    resumeFinalSnapshot = resolve;
+  });
+  const respond = (result: any) => ({
+    stdout: JSON.stringify({
+      id: AGENT_ID,
+      result:
+        duplicateWorktree && Array.isArray(result?.worktrees)
+          ? { ...result, worktrees: [...result.worktrees, result.worktrees[0]] }
+          : result,
+    }),
     stderr: "",
     code: 0,
   });
@@ -836,7 +1282,7 @@ async function runManagerStartupScenario(
           : created
             ? (mode === "unassigned-close"
                 ? [{ branch: "smoke/unassigned" }]
-                : mode === "active-discard"
+                : mode === "active-discard" || mode === "discard-pane-missing"
                   ? [{ branch: createdBranch }]
                   : listProjectAssignments(supervisionRuntime(), WORKSPACE)
               ).map((assignment) => ({
@@ -887,7 +1333,11 @@ async function runManagerStartupScenario(
         },
       });
     }
-    if (command === "herdr" && args[0] === "pane" && args[1] === "list")
+    if (command === "herdr" && args[0] === "pane" && args[1] === "list") {
+      if (mode === "discard-result" && args.includes("--workspace")) {
+        mkdirSync(dirname(resultPath(childSession)), { recursive: true });
+        writeFileSync(resultPath(childSession), "completed during discard");
+      }
       return respond({
         panes: [
           {
@@ -899,27 +1349,28 @@ async function runManagerStartupScenario(
           },
         ],
       });
+    }
     if (command === "herdr" && args[0] === "pane" && args[1] === "get")
       return respond({
         pane: {
-          pane_id: "child-pane",
+          pane_id:
+            mode === "identity-unproven" && identityObservations
+              ? "replacement-pane"
+              : "child-pane",
           workspace_id: childWorkspace,
           tab_id: "child-tab",
           terminal_id: "child-terminal",
           cwd: childPath,
-          ...([
+          ...(([
             "close-resume",
             "active-discard",
             "close-failure",
             "unassigned-close",
-          ].includes(mode) && started
+          ].includes(mode) ||
+            prospective) &&
+          started
             ? {
-                agent_session: {
-                  source: "herdr:pi",
-                  agent: "pi",
-                  kind: "id",
-                  value: childSession,
-                },
+                agent_session: childIdentity(),
               }
             : {}),
         },
@@ -928,19 +1379,55 @@ async function runManagerStartupScenario(
       return respond({
         tabs: [{ tab_id: "child-tab", workspace_id: childWorkspace }],
       });
-    if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
+    if (
+      command === "herdr" &&
+      args[0] === "pane" &&
+      args[1] === "process-info"
+    ) {
+      if (
+        [
+          "discard-pane-missing",
+          "discard-pi",
+          "discard-result",
+          "discard-result-final",
+        ].includes(mode) &&
+        args[3] === "child-pane"
+      ) {
+        inspectedDiscardPane = true;
+        if (mode === "discard-pane-missing")
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              error: { code: missingPaneCode, message: "pane not found" },
+            }),
+            stderr: "",
+            code: 1,
+          };
+        if (mode === "discard-pi")
+          return respond({
+            process_info: {
+              foreground_processes: [
+                {
+                  argv0: "/usr/bin/pi",
+                  cmdline: "pi --session-id awaiting-bootstrap",
+                },
+              ],
+            },
+          });
+      }
       return respond({
         process_info: {
           pane_id: "child-pane",
           shell_pid: 33,
           foreground_process_group_id:
             started &&
-            [
+            ([
               "close-resume",
               "active-discard",
               "close-failure",
               "unassigned-close",
-            ].includes(mode)
+            ].includes(mode) ||
+              prospective)
               ? 44
               : 33,
           foreground_processes: [
@@ -954,6 +1441,7 @@ async function runManagerStartupScenario(
           ],
         },
       });
+    }
     if (command === "herdr" && args[0] === "pane" && args[1] === "read") {
       assert.deepEqual(args, [
         "pane",
@@ -1033,9 +1521,13 @@ async function runManagerStartupScenario(
         ),
         ["--session-id", starting.id, approvalFlag],
       );
-      assert.equal(starting.workspaceId, childWorkspace);
-      assert.equal(starting.tabId, "child-tab");
-      assert.equal(starting.paneId, "child-pane");
+      assert.deepEqual(Object.keys(starting).sort(), [
+        "branch",
+        "id",
+        "repoKey",
+        "text",
+        "version",
+      ]);
       started = true;
       return respond({
         agent: {
@@ -1050,6 +1542,10 @@ async function runManagerStartupScenario(
       });
     }
     if (command === "herdr" && isApiSnapshot(args)) {
+      if (mode === "discard-result-final" && inspectedDiscardPane) {
+        finalSnapshotPaused = true;
+        await finalSnapshotGate;
+      }
       const currentAssignment = listProjectAssignments(
         supervisionRuntime(),
         WORKSPACE,
@@ -1057,8 +1553,6 @@ async function runManagerStartupScenario(
       if (!childSession && currentAssignment)
         childSession = currentAssignment.id;
       if (started) startupObservations++;
-      if (mode === "unmaterialized-path" && started)
-        realFs.writeFileSync(childSessionPath, "{");
       if (
         started &&
         startupObservations === 3 &&
@@ -1132,7 +1626,7 @@ async function runManagerStartupScenario(
                       mode === "delayed-herdr-session" &&
                       startupObservations === 2
                         ? undefined
-                        : mode === "unmaterialized-path"
+                        : prospective
                           ? {
                               source: "herdr:pi",
                               agent: "pi",
@@ -1158,7 +1652,69 @@ async function runManagerStartupScenario(
         },
       });
     }
-    if (command === "herdr" && isAgentList(args))
+    if (command === "herdr" && isAgentList(args)) {
+      const delivered =
+        childSession &&
+        listChiefMessagePaths(supervisionRuntime(), childSession).some(
+          (path) => readChiefMessage(path).kind === "project_assignment",
+        );
+      if (prospective && delivered && started) {
+        identityObservations++;
+        if (
+          mode.startsWith("identity-manager-lost-") &&
+          identityObservations === 1
+        ) {
+          assert.equal(realFs.existsSync(childSessionPath), false);
+          const descriptorPath = managerDescriptorPath(
+            supervisionRuntime(),
+            WORKSPACE,
+          );
+          realFs.unlinkSync(descriptorPath);
+          realFs.rmSync(`${descriptorPath}.lock`, { recursive: true });
+        }
+        if (mode === "unmaterialized-path" && identityObservations === 2)
+          identityPolled();
+        if (
+          mode === "identity-zero-byte-timeout" &&
+          identityObservations === 1
+        ) {
+          assert.equal(realFs.existsSync(childSessionPath), false);
+          realFs.writeFileSync(childSessionPath, "");
+          emptySessionStat = realFs.statSync(childSessionPath);
+        }
+        if (
+          [
+            "identity-timeout",
+            "identity-zero-byte-timeout",
+            "identity-unproven",
+            "identity-mismatch",
+            "identity-cleanup-mismatch",
+            "identity-manager-lost-timeout",
+          ].includes(mode)
+        )
+          Date.now = () => originalNow() + 60_000;
+        if (
+          mode === "identity-mismatch" ||
+          mode === "identity-ambiguity" ||
+          (mode === "identity-manager-lost-success" &&
+            identityObservations === 2)
+        ) {
+          realFs.writeFileSync(
+            childSessionPath,
+            JSON.stringify({
+              type: "session",
+              id:
+                mode === "identity-mismatch" ? unrelatedSession : childSession,
+            }),
+          );
+          nativeSessions.set(childSession, {
+            id: mode === "identity-mismatch" ? unrelatedSession : childSession,
+            path: childSessionPath,
+            cwd: childPath,
+            entries: [],
+          });
+        }
+      }
       return respond({
         agents: [
           managerAgent,
@@ -1193,6 +1749,7 @@ async function runManagerStartupScenario(
               ]
             : []),
           ...(mode === "active-live" ||
+          (started && startupObservations >= 3) ||
           ([
             "close-resume",
             "active-discard",
@@ -1200,24 +1757,41 @@ async function runManagerStartupScenario(
             "unassigned-close",
           ].includes(mode) &&
             started)
-            ? [
-                {
-                  agent_session: {
-                    source: "herdr:pi",
-                    agent: "pi",
-                    kind: "id",
-                    value: childSession,
-                  },
+            ? Array.from(
+                { length: mode === "identity-ambiguity" && delivered ? 2 : 1 },
+                () => ({
+                  agent_session: childIdentity(),
                   workspace_id: childWorkspace,
                   pane_id: "child-pane",
                   tab_id: "child-tab",
                   cwd: childPath,
-                },
-              ]
+                }),
+              )
             : []),
         ],
       });
-    if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+    }
+    if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+      if (
+        mode === "identity-cleanup-mismatch" &&
+        identityObservations &&
+        ++cleanupOwnershipObservations === 1
+      ) {
+        assert.equal(realFs.existsSync(childSessionPath), false);
+        realFs.writeFileSync(
+          childSessionPath,
+          JSON.stringify({
+            type: "session",
+            id: unrelatedSession,
+          }),
+        );
+        nativeSessions.set(childSession, {
+          id: unrelatedSession,
+          path: childSessionPath,
+          cwd: childPath,
+          entries: [],
+        });
+      }
       return respond({
         agent:
           args[2] === "lead" || args[2] === "child-pane"
@@ -1226,15 +1800,11 @@ async function runManagerStartupScenario(
                 pane_id: "child-pane",
                 tab_id: "child-tab",
                 cwd: childPath,
-                agent_session: {
-                  source: "herdr:pi",
-                  agent: "pi",
-                  kind: "id",
-                  value: childSession,
-                },
+                agent_session: childIdentity(),
               }
             : managerAgent,
       });
+    }
     return respond({});
   };
   const pi = fakeChiefPi({ activeTools: ["read"], exec });
@@ -1284,21 +1854,12 @@ async function runManagerStartupScenario(
       childSession = staleId;
       created = mode !== "active-missing";
       if (created) createdBranch = "smoke/recover";
-      writeProjectAssignment(supervisionRuntime(), {
+      writeProjectAssignment(supervisionRuntime(), WORKSPACE, {
         version: 1,
         id: staleId,
-        primaryWorkspaceId: WORKSPACE,
         repoKey: "repo-key",
         branch: "smoke/recover",
-        base: "HEAD",
         text: "recover exact Lead",
-        phase: "active",
-        workspaceId:
-          mode === "active-closed" ? "closed-workspace" : childWorkspace,
-        paneId: mode === "active-closed" ? "closed-pane" : "child-pane",
-        tabId: mode === "active-closed" ? "closed-tab" : "child-tab",
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
       });
       if (mode === "active-result" || mode === "active-result-periodic") {
         mkdirSync(dirname(resultPath(staleId)), { recursive: true });
@@ -1321,22 +1882,35 @@ async function runManagerStartupScenario(
           updatedAt: Date.now(),
         });
     }
-    if (mode === "stale-placement" || mode === "invalid-topology")
-      writeProjectAssignment(supervisionRuntime(), {
+    if (
+      [
+        "stale-placement",
+        "invalid-topology",
+        "discard-pane-missing",
+        "discard-pi",
+        "discard-result",
+        "discard-result-final",
+      ].includes(mode)
+    )
+      writeProjectAssignment(supervisionRuntime(), WORKSPACE, {
         version: 1,
         id: staleId,
-        primaryWorkspaceId: WORKSPACE,
         repoKey: "repo-key",
         branch: "smoke/vanished",
-        base: "HEAD",
         text: "recover vanished placement",
-        phase: "starting",
-        workspaceId: childWorkspace,
-        paneId: "old-pane",
-        tabId: "old-tab",
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
       });
+    if (
+      [
+        "discard-pane-missing",
+        "discard-pi",
+        "discard-result",
+        "discard-result-final",
+      ].includes(mode)
+    ) {
+      childSession = staleId;
+      created = true;
+      createdBranch = "smoke/vanished";
+    }
     const execute = () => (
       (invalidTopologyCall = worktreeListCalls + 4),
       staff.execute(
@@ -1423,8 +1997,8 @@ async function runManagerStartupScenario(
           // Yield once so its promise chain drains before asserting its effects.
           await new Promise<void>((resolve) => setImmediate(resolve));
           assert.equal(
-            listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
-            "active",
+            listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+            staleId,
           );
           assert.ok(
             listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
@@ -1435,6 +2009,44 @@ async function runManagerStartupScenario(
           const running = await execute();
           assert.equal(running.details.already_running, true);
           assert.equal(running.details.session, staleId);
+          const messages = () =>
+            listChiefMessagePaths(supervisionRuntime(), staleId)
+              .map((path) => readChiefMessage(path))
+              .filter((message) => message.kind === "project_assignment");
+          assert.deepEqual(
+            messages().map((message) => message.id),
+            [staleId],
+          );
+          const delivered: any[] = [];
+          const entries: any[] = [];
+          const drain = () =>
+            drainCoordinationInbox({
+              runtime: supervisionRuntime(),
+              sessionId: staleId,
+              isAuthorized: (record) =>
+                record.kind === "project_assignment" && record.id === staleId,
+              isDelivered: (id) =>
+                entries.some(
+                  (entry) =>
+                    entry?.customType?.startsWith?.("pi-herdsman-") &&
+                    entry?.details?.id === id,
+                ),
+              sendMessage: (message) => delivered.push(message),
+            });
+          assert.equal(await drain(), 1);
+          assert.equal(
+            delivered[0].customType,
+            "pi-herdsman-project_assignment",
+          );
+          assert.equal(delivered[0].details.id, staleId);
+          entries.push(delivered[0]);
+          await execute();
+          assert.deepEqual(
+            messages().map((message) => message.id),
+            [staleId],
+          );
+          assert.equal(await drain(), 0);
+          assert.equal(delivered.length, 1);
         } else if (
           ["close-resume", "active-discard", "close-failure"].includes(mode)
         ) {
@@ -1466,9 +2078,8 @@ async function runManagerStartupScenario(
             const resumed = await execute();
             assert.equal(resumed.details.session, staleId);
             assert.equal(
-              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]
-                ?.workspaceId,
-              childWorkspace,
+              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              staleId,
             );
           } else {
             const discarded = await control("staff_discard", {
@@ -1509,7 +2120,7 @@ async function runManagerStartupScenario(
           assert.equal(recovered.details.session, staleId);
           assert.equal(recovered.details.branch, "smoke/recover");
           if (mode === "active-result") {
-            assert.equal(recovered.details.state, "finished");
+            assert.equal(recovered.details.status, "finished");
             assert.equal(
               readFileSync(resultPath(staleId), "utf8"),
               "completed",
@@ -1544,10 +2155,7 @@ async function runManagerStartupScenario(
               supervisionRuntime(),
               WORKSPACE,
             )[0];
-            assert.equal(persisted?.phase, "active");
-            assert.equal(persisted?.workspaceId, childWorkspace);
-            assert.equal(persisted?.paneId, "child-pane");
-            assert.equal(persisted?.tabId, "child-tab");
+            assert.equal(persisted?.id, staleId);
           }
         }
         assert.equal(createCalls, 0);
@@ -1563,6 +2171,87 @@ async function runManagerStartupScenario(
           listProjectAssignments(supervisionRuntime(), WORKSPACE).length,
           mode === "active-result" ? 0 : 1,
         );
+        if (mode === "active-missing" || mode === "active-live") {
+          const { SelectList } = await import("@earendil-works/pi-tui");
+          let renderedList: any;
+          t!.mock.method(SelectList.prototype, "render", function (this: any) {
+            renderedList = this;
+            return this.items.map((item: any) =>
+              [item.label, item.description].filter(Boolean).join(" · "),
+            );
+          });
+          const components: any[] = [];
+          ctx.hasUI = true;
+          ctx.ui.custom = async (factory: any) => {
+            components.push(
+              factory(
+                { requestRender: () => undefined },
+                {
+                  fg: (_color: string, text: string) => text,
+                  bold: (text: string) => text,
+                },
+                {},
+                () => undefined,
+              ),
+            );
+          };
+          await pi.events.get("before_agent_start")![0](
+            { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+            ctx,
+          );
+          await pi.commandOptions.get("manager").handler("", ctx);
+          const overview = components[0];
+          const initial = overview.render(120).join("\n");
+          if (mode === "active-missing") {
+            assert.match(
+              initial,
+              /smoke\/recover · paused · worktree is unavailable/,
+            );
+            for (const available of [true, false]) {
+              created = available;
+              await pi.events.get("before_agent_start")![0](
+                {
+                  systemPrompt: "base",
+                  systemPromptOptions: { contextFiles: [] },
+                },
+                ctx,
+              );
+              const lines = overview.render(120).join("\n");
+              assert.match(lines, /smoke\/recover · paused/);
+              assert.equal(
+                lines.includes("worktree is unavailable"),
+                !available,
+              );
+              const currentList = renderedList;
+              overview.render(120);
+              assert.equal(
+                renderedList,
+                currentList,
+                "unchanged descriptions reuse the list",
+              );
+            }
+          } else {
+            assert.match(initial, /smoke\/recover · active · unknown/);
+            duplicateWorktree = true;
+            await pi.events.get("before_agent_start")![0](
+              {
+                systemPrompt: "base",
+                systemPromptOptions: { contextFiles: [] },
+              },
+              ctx,
+            );
+            assert.match(
+              overview.render(120).join("\n"),
+              /conflict · project runtime identity is ambiguous/,
+            );
+            overview.handleInput("\r");
+            await t!.waitFor(() => assert.equal(components.length, 2));
+            const actions = components[1].render(120).join("\n");
+            assert.match(actions, /Focus Lead/);
+            assert.match(actions, /Close Lead/);
+            assert.match(actions, /Discard work/);
+          }
+        }
       } finally {
         if (mode === "active-result" || mode === "active-result-periodic")
           realFs.rmSync(resultPath(staleId), { force: true });
@@ -1617,7 +2306,7 @@ async function runManagerStartupScenario(
         supervisionRuntime(),
         WORKSPACE,
       )[0]!;
-      assert.equal(assignment.phase, "starting");
+      assert.equal(assignment.id, childSession);
       assert.equal(createCalls, 1);
       assert.equal(startCalls, 1);
       assert.equal(started, true);
@@ -1655,11 +2344,117 @@ async function runManagerStartupScenario(
       );
       return;
     }
-    if (mode === "stale-placement") {
+    if (
+      [
+        "stale-placement",
+        "discard-pane-missing",
+        "discard-pi",
+        "discard-result",
+        "discard-result-final",
+      ].includes(mode)
+    ) {
+      if (mode !== "stale-placement") {
+        const discard = () =>
+          pi.tools
+            .find((tool) => tool.name === "staff_discard")!
+            .execute(
+              "discard",
+              { branch: "smoke/vanished" },
+              undefined,
+              undefined,
+              ctx,
+            );
+        try {
+          if (mode === "discard-result-final") {
+            const pendingDiscard = discard();
+            try {
+              await t!.waitFor(() => assert.equal(finalSnapshotPaused, true), {
+                timeout: 3000,
+              });
+              assert.equal(realFs.existsSync(resultPath(staleId)), false);
+              mkdirSync(dirname(resultPath(staleId)), { recursive: true });
+              writeFileSync(
+                resultPath(staleId),
+                "completed during final inventory",
+              );
+            } finally {
+              resumeFinalSnapshot();
+            }
+            await assert.rejects(
+              pendingDiscard,
+              /completed while discard was in progress; assignment preserved/,
+            );
+            assert.equal(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              staleId,
+            );
+          } else if (mode === "discard-pane-missing") {
+            const discarded = await discard();
+            assert.equal(discarded.details.ok, true);
+            assert.deepEqual(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE),
+              [],
+            );
+          } else {
+            await assert.rejects(
+              discard(),
+              mode === "discard-pi"
+                ? /A possible Pi executor remains; assignment preserved/
+                : /completed while discard was in progress; assignment preserved/,
+            );
+            assert.equal(
+              listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+              staleId,
+            );
+          }
+          assert.equal(inspectedDiscardPane, true);
+          assert.ok(
+            pi.calls.some(
+              (args) =>
+                args[0] === "pane" &&
+                args[1] === "list" &&
+                args[2] === "--workspace" &&
+                args[3] === childWorkspace,
+            ),
+          );
+          if (mode === "discard-result")
+            assert.equal(
+              readFileSync(resultPath(staleId), "utf8"),
+              "completed during discard",
+            );
+          assert.equal(created, true);
+          assert.equal(createdBranch, "smoke/vanished");
+          assert.equal(createCalls, 0);
+          assert.equal(startCalls, 0);
+          assert.equal(
+            pi.calls.some(
+              (args) =>
+                args[0] === "worktree" &&
+                ["delete", "remove"].includes(args[1]),
+            ),
+            false,
+          );
+          if (mode === "discard-pane-missing") {
+            const topology = JSON.parse(
+              (await exec("herdr", ["worktree", "list"])).stdout,
+            ).result;
+            assert.ok(
+              topology.worktrees.some(
+                (item: any) =>
+                  item.branch === "smoke/vanished" && item.path === childPath,
+              ),
+            );
+          }
+          return;
+        } finally {
+          if (mode === "discard-result" || mode === "discard-result-final")
+            realFs.rmSync(resultPath(staleId), { force: true });
+        }
+      }
       await assert.rejects(
         execute(),
         new RegExp(
-          `Work on smoke/vanished cannot be resumed[\\s\\S]*assignment was preserved`,
+          `Work on smoke/vanished is paused[\\s\\S]*assignment was preserved`,
         ),
       );
       assert.equal(
@@ -1692,6 +2487,19 @@ async function runManagerStartupScenario(
         listProjectAssignments(supervisionRuntime(), WORKSPACE),
         [],
       );
+      assert.equal(
+        pi.calls.some(
+          (args) => args[0] === "pane" && args[1] === "process-info",
+        ),
+        false,
+      );
+      assert.equal(
+        pi.calls.some(
+          (args) =>
+            args[0] === "worktree" && ["delete", "remove"].includes(args[1]),
+        ),
+        false,
+      );
       return;
     }
     if (mode === "invalid-topology") {
@@ -1708,6 +2516,76 @@ async function runManagerStartupScenario(
       assert.equal(startCalls, 0);
       return;
     }
+    if (mode.startsWith("identity-")) {
+      await assert.rejects(
+        execute(),
+        mode.startsWith("identity-manager-lost-")
+          ? /Manager changed during delegation/
+          : mode === "identity-ambiguity"
+            ? /identity became ambiguous/
+            : /identity did not materialize; assignment preserved/,
+      );
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        WORKSPACE,
+      )[0]!;
+      assert.deepEqual(Object.keys(assignment).sort(), [
+        "branch",
+        "id",
+        "repoKey",
+        "text",
+        "version",
+      ]);
+      if (mode.startsWith("identity-manager-lost-")) {
+        assert.equal(assignment.id, childSession);
+        assert.equal(created, true);
+        assert.equal(
+          realFs.existsSync(childSessionPath),
+          mode === "identity-manager-lost-success",
+        );
+        if (mode === "identity-manager-lost-success")
+          assert.equal(nativeSessions.get(childSession)?.id, childSession);
+      }
+      assert.equal(
+        listChiefMessagePaths(supervisionRuntime(), childSession).length,
+        1,
+      );
+      if (mode === "identity-cleanup-mismatch") {
+        assert.equal(cleanupOwnershipObservations, 1);
+        assert.equal(realFs.existsSync(childSessionPath), true);
+        assert.equal(nativeSessions.get(childSession)?.id, unrelatedSession);
+        assert.equal(assignment.id, childSession);
+        assert.equal(created, true);
+        assert.equal(createCalls, 1);
+        assert.equal(startCalls, 1);
+      }
+      if (mode === "identity-zero-byte-timeout") {
+        assert.deepEqual(
+          realFs.readFileSync(childSessionPath),
+          Buffer.alloc(0),
+        );
+        const stat = realFs.statSync(childSessionPath);
+        assert.equal(stat.size, 0);
+        assert.equal(stat.mtimeMs, emptySessionStat!.mtimeMs);
+        assert.equal(stat.ino, emptySessionStat!.ino);
+        assert.equal(assignment.id, childSession);
+      }
+      const stopped =
+        mode === "identity-timeout" || mode === "identity-zero-byte-timeout";
+      assert.equal(started, !stopped);
+      assert.equal(
+        pi.calls.some(
+          (args) =>
+            args[0] === "worktree" && ["delete", "remove"].includes(args[1]),
+        ),
+        false,
+      );
+      assert.equal(
+        pi.calls.some((args) => args[0] === "agent" && args[1] === "send-keys"),
+        stopped,
+      );
+      return;
+    }
     if (
       mode === "conflict" ||
       mode === "managed-agent" ||
@@ -1720,7 +2598,40 @@ async function runManagerStartupScenario(
           : /conflicting role or identity/,
       );
     else {
-      const result = await execute();
+      const delegation = execute();
+      if (mode === "unmaterialized-path") {
+        let settled = false;
+        void delegation.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
+        await Promise.race([
+          identityPoll,
+          delegation.then(() => {
+            throw new Error("Delegation returned before identity materialized");
+          }),
+        ]);
+        assert.equal(settled, false);
+        assert.equal(realFs.existsSync(childSessionPath), false);
+        realFs.writeFileSync(
+          childSessionPath,
+          JSON.stringify({
+            type: "session",
+            id: childSession,
+          }),
+        );
+        nativeSessions.set(childSession, {
+          id: childSession,
+          path: childSessionPath,
+          cwd: childPath,
+          entries: [],
+        });
+      }
+      const result = await delegation;
       assert.equal(result.details.ok, true);
       assert.equal(result.details.session, childSession);
     }
@@ -1728,17 +2639,13 @@ async function runManagerStartupScenario(
       supervisionRuntime(),
       WORKSPACE,
     )[0]!;
-    assert.equal(
-      assignment.phase,
-      ["conflict", "managed-agent", "mismatched-session"].includes(mode)
-        ? "starting"
-        : "active",
-    );
-    if (!["conflict", "managed-agent", "mismatched-session"].includes(mode)) {
-      assert.equal(assignment.workspaceId, childWorkspace);
-      assert.equal(assignment.tabId, "child-tab");
-      assert.equal(assignment.paneId, "child-pane");
-    }
+    assert.deepEqual(Object.keys(assignment).sort(), [
+      "branch",
+      "id",
+      "repoKey",
+      "text",
+      "version",
+    ]);
     assert.equal(createCalls, 1);
     assert.equal(startCalls, mode === "recovery" ? 0 : 1);
     assert.equal(openCalls, 0);
@@ -1748,7 +2655,6 @@ async function runManagerStartupScenario(
     );
     assert.equal(started, true);
     if (mode === "success") {
-      assert.equal(assignment.paneId, "child-pane");
       await assert.rejects(
         staff.execute(
           "delegate",
@@ -1778,7 +2684,7 @@ async function runManagerStartupScenario(
       assert.equal(createCalls, 2);
       assert.equal(
         listProjectAssignments(supervisionRuntime(), WORKSPACE).filter(
-          (item) => item.phase === "active",
+          (item) => item.id === childSession,
         ).length,
         1,
       );
@@ -1790,6 +2696,7 @@ async function runManagerStartupScenario(
         messages.some(
           (message) =>
             message.kind === "project_assignment" &&
+            message.id === childSession &&
             message.leadSessionId === childSession &&
             message.text.includes("deliver the fresh assignment"),
         ),
@@ -1798,8 +2705,19 @@ async function runManagerStartupScenario(
     if (mode === "unmaterialized-path") {
       assert.equal(realFs.existsSync(childSessionPath), true);
       assert.equal(assignment.id, childSession);
+      const closed = await pi.tools
+        .find((tool) => tool.name === "staff_close")!
+        .execute("close", { session: childSession }, undefined, undefined, ctx);
+      assert.equal(closed.details.ok, true);
+      assert.equal(started, false);
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.id,
+        childSession,
+      );
     }
   } finally {
+    Date.now = originalNow;
+    nativeSessions.delete(childSession);
     realFs.rmSync(childSessionPath, { force: true });
     support.sessionOpenError = undefined;
     await pi.events.get("session_shutdown")?.[0]();
@@ -1824,8 +2742,24 @@ test("Manager startup rejects conflicting role promptly", () =>
   runManagerStartupScenario("conflict"));
 test("Manager startup rejects managed Agent identity without Lead state", () =>
   runManagerStartupScenario("managed-agent"));
-test("Manager accepts Lead state while Herdr reports a not-yet-created session path", () =>
+test("Manager waits for prospective Lead identity to materialize before success and immediate close", () =>
   runManagerStartupScenario("unmaterialized-path"));
+for (const mode of [
+  "identity-manager-lost-timeout",
+  "identity-manager-lost-success",
+] as const)
+  test(`Manager rechecks authority after assignment publication on ${mode}`, () =>
+    runManagerStartupScenario(mode));
+for (const mode of [
+  "identity-timeout",
+  "identity-zero-byte-timeout",
+  "identity-unproven",
+  "identity-mismatch",
+  "identity-cleanup-mismatch",
+  "identity-ambiguity",
+] as const)
+  test(`Manager preserves assignment and fails closed on ${mode}`, () =>
+    runManagerStartupScenario(mode));
 test("Manager rejects a resolvable Herdr session ID that differs from its assignment", () =>
   runManagerStartupScenario("mismatched-session"));
 test("Manager recovery waits on existing exact Pi without restarting it", () =>
@@ -1858,6 +2792,15 @@ test("Manager refuses ambiguous multiple Leads in a worktree", () =>
   runManagerStartupScenario("multiple"));
 test("Manager retains explicitly resumed work with vanished placement", () =>
   runManagerStartupScenario("stale-placement"));
+for (const code of ["not_found", "pane_not_found"])
+  test(`Manager discards when a freshly listed branch pane disappears (${code})`, () =>
+    runManagerStartupScenario("discard-pane-missing", false, undefined, code));
+test("Manager preserves an assignment when a current branch pane may run Pi", () =>
+  runManagerStartupScenario("discard-pi"));
+test("Manager preserves an assignment when a result arrives during discard", () =>
+  runManagerStartupScenario("discard-result"));
+test("Manager preserves an assignment when a result arrives in final live inventory", (t) =>
+  runManagerStartupScenario("discard-result-final", false, t));
 test("Manager serializes simultaneous same-branch delegation", () =>
   runManagerStartupScenario("concurrent"));
 test("Manager retains placement when recovery topology is not authoritative", () =>

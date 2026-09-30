@@ -22,6 +22,7 @@ import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import {
   claimChiefLease,
   listProjectAssignments,
+  projectAssignmentPath,
   listCoordinationMessagePaths,
   managerDescriptorPath,
   readChiefMessage,
@@ -1068,6 +1069,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
   );
   const childWorkspace = `child-${randomUUID()}`;
   let childSession = `lead-${randomUUID()}`;
+  const childSessionPath = () => join(tmpdir(), `${childSession}.jsonl`);
   let created = false;
   let started = false;
   const respond = (result: unknown) => ({
@@ -1125,10 +1127,10 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
       const branchIndex = args.indexOf("--branch");
-      const assignment = listProjectAssignments(
+      const [assignment] = listProjectAssignments(
         supervisionRuntime(),
         WORKSPACE,
-      ).find((item) => item.phase === "creating");
+      );
       assert.ok(assignment);
       assert.equal(args[branchIndex + 1], `herdsman/${assignment.id}`);
       assert.equal(assignment.branch, args[branchIndex + 1]);
@@ -1179,10 +1181,10 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       return respond({});
     if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
       started = true;
-      const assignment = listProjectAssignments(
+      const [assignment] = listProjectAssignments(
         supervisionRuntime(),
         WORKSPACE,
-      ).find((item) => item.phase === "starting");
+      );
       assert.ok(assignment);
       const sessionIdIndex = args.indexOf("--session-id");
       assert.notEqual(sessionIdIndex, -1);
@@ -1201,8 +1203,8 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
           agent_session: {
             source: "herdr:pi",
             agent: "pi",
-            kind: "id",
-            value: childSession,
+            kind: "path",
+            value: childSessionPath(),
           },
         },
       });
@@ -1217,8 +1219,8 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
                   agent_session: {
                     source: "herdr:pi",
                     agent: "pi",
-                    kind: "id",
-                    value: childSession,
+                    kind: "path",
+                    value: childSessionPath(),
                   },
                   workspace_id: childWorkspace,
                   pane_id: "child-pane",
@@ -1228,8 +1230,47 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
             : [],
         },
       });
-    if (command === "herdr" && isAgentList(args))
-      return respond({ agents: [managerAgent] });
+    if (command === "herdr" && isAgentList(args)) {
+      if (
+        started &&
+        !realFs.existsSync(childSessionPath()) &&
+        listCoordinationMessagePaths(supervisionRuntime(), childSession).length
+      ) {
+        realFs.writeFileSync(
+          childSessionPath(),
+          JSON.stringify({
+            type: "session",
+            id: childSession,
+          }),
+        );
+        nativeSessions.set(childSessionPath(), {
+          id: childSession,
+          path: childSessionPath(),
+          cwd: "/tmp/manager-child",
+          entries: [],
+        });
+      }
+      return respond({
+        agents: [
+          managerAgent,
+          ...(started
+            ? [
+                {
+                  agent_session: {
+                    source: "herdr:pi",
+                    agent: "pi",
+                    kind: "path",
+                    value: childSessionPath(),
+                  },
+                  workspace_id: childWorkspace,
+                  pane_id: "child-pane",
+                  tab_id: "child-tab",
+                },
+              ]
+            : []),
+        ],
+      });
+    }
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
       return respond({ agent: managerAgent });
     return respond({});
@@ -1260,12 +1301,32 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       supervisionRuntime(),
       WORKSPACE,
     )[0];
-    assert.equal(assignment?.phase, "active");
+    assert.ok(assignment);
     assert.equal(assignment?.id, childSession);
     assert.equal(assignment?.branch, `herdsman/${assignment?.id}`);
-    assert.equal(assignment?.workspaceId, childWorkspace);
-    assert.equal(assignment?.paneId, "child-pane");
-    assert.equal(assignment?.tabId, "child-tab");
+    const assignmentBytes = readFileSync(
+      projectAssignmentPath(supervisionRuntime(), WORKSPACE, assignment.branch),
+      "utf8",
+    );
+    assert.deepEqual(Object.keys(JSON.parse(assignmentBytes)).sort(), [
+      "branch",
+      "id",
+      "repoKey",
+      "text",
+      "version",
+    ]);
+    assert.equal(outcome.details.workspace_id, childWorkspace);
+    assert.ok(
+      pi.calls.some(
+        (args) =>
+          args[0] === "agent" &&
+          args[1] === "start" &&
+          args.includes("--pane") &&
+          args.includes("child-pane") &&
+          args.includes("--session-id") &&
+          args.includes(childSession),
+      ),
+    );
     const paths = listCoordinationMessagePaths(
       supervisionRuntime(),
       childSession,
@@ -1312,7 +1373,9 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     registerExtension!(lead.pi as never);
     const leadCtx = fakeContext() as any;
     leadCtx.sessionManager.getSessionId = () => childSession;
+    leadCtx.sessionManager.getSessionFile = childSessionPath;
     try {
+      assert.equal(realFs.existsSync(childSessionPath()), true);
       await lead.events.get("session_start")![0](undefined, leadCtx);
       await t.waitFor(() =>
         assert.ok(
@@ -1323,6 +1386,38 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
           "Project assignment was not deliverable after Manager departure",
         ),
       );
+      assert.equal(realFs.existsSync(childSessionPath()), true);
+      lead.pi.sendUserMessage("Begin the assigned work.");
+      const firstUserMessage = {
+        type: "message",
+        id: "first-user-message",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Begin the assigned work." }],
+        },
+      };
+      realFs.writeFileSync(
+        childSessionPath(),
+        [
+          JSON.stringify({
+            type: "session",
+            version: 3,
+            id: childSession,
+            timestamp: new Date().toISOString(),
+            cwd: "/tmp/manager-child",
+          }),
+          JSON.stringify(firstUserMessage),
+        ].join("\n") + "\n",
+      );
+      nativeSessions.set(childSessionPath(), {
+        id: childSession,
+        path: childSessionPath(),
+        cwd: "/tmp/manager-child",
+        entries: [firstUserMessage],
+      });
+      assert.equal(realFs.existsSync(childSessionPath()), true);
       const supervisor = lead.tools.find(
         (tool) => tool.name === "supervisor_result",
       )!;
@@ -1344,11 +1439,20 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         /Lead result source:.*assignment/,
       );
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), WORKSPACE)[0]?.phase,
-        "active",
+        readFileSync(
+          projectAssignmentPath(
+            supervisionRuntime(),
+            WORKSPACE,
+            assignment.branch,
+          ),
+          "utf8",
+        ),
+        assignmentBytes,
       );
     } finally {
       await lead.events.get("session_shutdown")![0]();
+      nativeSessions.delete(childSessionPath());
+      realFs.rmSync(childSessionPath(), { force: true });
     }
     process.env.HERDR_WORKSPACE_ID = WORKSPACE;
     process.env.HERDR_PANE_ID = "root-pane";
@@ -5985,7 +6089,14 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
     ...recoveryIdentity(label),
     piSessionFile: join(tmpdir(), `pi-herdsman-${label}-${randomUUID()}.jsonl`),
   };
-  realFs.writeFileSync(identity.piSessionFile, "{}", "utf8");
+  realFs.writeFileSync(
+    identity.piSessionFile,
+    JSON.stringify({
+      type: "session",
+      id: identity.piSessionId,
+    }),
+    "utf8",
+  );
   t.after(() => realFs.rmSync(identity.piSessionFile, { force: true }));
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
@@ -6308,7 +6419,14 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
     tmpdir(),
     `pi-herdsman-${label}-${randomUUID()}.jsonl`,
   );
-  realFs.writeFileSync(sessionPath, "{}", "utf8");
+  realFs.writeFileSync(
+    sessionPath,
+    JSON.stringify({
+      type: "session",
+      id: DEFAULT_PI_SESSION_ID,
+    }),
+    "utf8",
+  );
   const mailbox = agentMailboxPath(WORKSPACE, label);
   const agentsDir = PI_AGENTS_DIR;
   const definitionPath = `${agentsDir}/agent.md`;

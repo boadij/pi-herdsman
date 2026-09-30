@@ -14,6 +14,7 @@ import {
   formatElapsed,
   formatSupervisionContext,
   formatSupervisionNotification,
+  managerSupervisionItems,
   supervisionPresentationReports,
   SUPERVISION_CONTEXT_MAX_BYTES,
   formatAgentDefinitions,
@@ -4572,22 +4573,15 @@ test("Chief tree shows project and branch without internal paths or zero counts"
   );
 });
 
-test("Manager widget prioritizes branch work and truncates all states to width", () => {
-  const work = (
-    [
-      "working",
-      "paused",
-      "broken",
-      "finished",
-      "blocked",
-      "idle",
-      "starting",
-    ] as const
-  ).map((state, index) => ({
-    branch: `feat/${state}-${"long".repeat(20)}`,
-    session: `managed-${index}`,
-    state,
-  }));
+test("Manager widget shares one bounded work/Lead tree and context includes project work", () => {
+  const work = (["active", "paused", "conflict", "finished"] as const).map(
+    (status, index) => ({
+      branch: `feat/${status}-${"long".repeat(20)}`,
+      session: `managed-${index}`,
+      status,
+      ...(status === "active" ? { runtimeState: "blocked" as const } : {}),
+    }),
+  );
   const snapshot = {
     project: "pi-herdsman",
     work,
@@ -4597,24 +4591,57 @@ test("Manager widget prioritizes branch work and truncates all states to width",
         branch: "feat/manual",
         displayName: "opaque/manual",
       }),
-      lead({ lead: "managed-0", branch: work[0]!.branch }),
+      lead({
+        lead: "managed-0",
+        branch: work[0]!.branch,
+        needsYou: true,
+        runtimeState: "blocked",
+      }),
     ],
   };
   const rows = renderSupervisionLeads(snapshot, 120, { role: "manager" });
   assert.equal(rows[0], "● manager · pi-herdsman");
-  assert.match(rows[1]!, /● feat\/working.* · working/);
+  assert.match(rows[1]!, /!◐ feat\/active.* · active/);
   assert.match(rows[2]!, /○ feat\/paused.* · paused/);
-  assert.match(rows[3]!, /! feat\/broken.* · broken/);
+  assert.match(rows[3]!, /! feat\/conflict.* · conflict/);
   assert.match(rows[4]!, /✓ feat\/finished.* · finished/);
   assert.match(
     renderSupervisionLeads(snapshot, 40, { role: "manager" })[1]!,
-    / · working$/,
+    / · active$/,
   );
-  assert.match(rows.join("\n"), /other Lead · feat\/manual/);
+  assert.equal(rows[5], "└─ ○ feat/manual · Lead");
+  assert.equal(rows.filter((row) => row.startsWith("└─")).length, 1);
+  assert.doesNotMatch(rows.join("\n"), /other Lead/i);
   assert.doesNotMatch(
     rows.join("\n"),
     /opaque\/manual|managed-0|0 leads|\.git/,
   );
+  const items = managerSupervisionItems(snapshot);
+  assert.deepEqual(
+    items.map((item) => item.kind),
+    ["work", "work", "work", "work", "lead"],
+  );
+  assert.equal(items[0]!.kind === "work" && items[0]!.lead?.lead, "managed-0");
+  assert.deepEqual(
+    renderSupervisionLeads(snapshot, 120, {
+      role: "manager",
+      ordinaryCap: 2,
+    }).slice(1),
+    [
+      rows[1],
+      "├─ ○ feat/paused-" + "long".repeat(20) + " · paused",
+      "└─ … 3 more · /manager",
+    ],
+  );
+  const context = formatSupervisionContext(
+    { work, leads: [] },
+    { role: "manager", status: "fresh" },
+  );
+  assert.match(
+    context,
+    /project_work:\n  feat\/active-.* · active · runtime=blocked · session=managed-0/,
+  );
+  assert.ok(Buffer.byteLength(context) <= SUPERVISION_CONTEXT_MAX_BYTES);
   for (let width = 1; width <= 120; width++)
     assert.ok(
       renderSupervisionLeads(snapshot, width, { role: "manager" }).every(
@@ -4628,5 +4655,69 @@ test("Manager widget prioritizes branch work and truncates all states to width",
       "manager",
     ).render(120)[0],
     "● manager · pi-herdsman",
+  );
+});
+
+test("Manager work status outranks live Lead markers except when active", () => {
+  for (const [status, marker] of [
+    ["active", "●"],
+    ["paused", "○"],
+    ["conflict", "!"],
+    ["finished", "✓"],
+  ] as const) {
+    for (const needsYou of [false, true]) {
+      const snapshot = {
+        work: [{ branch: "feat/example", session: "assigned", status }],
+        leads: [
+          lead({
+            lead: "assigned",
+            runtimeState: "working",
+            needsYou,
+          }),
+        ],
+      };
+      assert.deepEqual(
+        renderSupervisionLeads(snapshot, 120, { role: "manager" }, "assigned"),
+        [
+          "● manager",
+          `└─ >${needsYou ? "!" : ""}${marker} feat/example · ${status}`,
+        ],
+      );
+    }
+  }
+});
+
+test("Manager mixed tree has one final connector and independent Leads share the row cap", () => {
+  const snapshot = {
+    project: "pi-herdsman",
+    work: [
+      {
+        branch: "worktree/lead-management-smoke-ping",
+        session: "assigned",
+        status: "paused" as const,
+      },
+    ],
+    leads: [
+      lead({
+        lead: "independent",
+        branch: "test/manager-lifecycle-smoke",
+        runtimeState: "idle",
+        agentCounts: { active: 1, blocked: 0, total: 1 },
+      }),
+      lead({ lead: "assigned" }),
+    ],
+  };
+  assert.deepEqual(renderSupervisionLeads(snapshot, 120, { role: "manager" }), [
+    "● manager · pi-herdsman",
+    "├─ ○ worktree/lead-management-smoke-ping · paused",
+    "└─ ◉ test/manager-lifecycle-smoke · Lead",
+  ]);
+  assert.deepEqual(
+    renderSupervisionLeads(snapshot, 120, { role: "manager", ordinaryCap: 1 }),
+    [
+      "● manager · pi-herdsman",
+      "├─ ○ worktree/lead-management-smoke-ping · paused",
+      "└─ … 1 more · /manager",
+    ],
   );
 });

@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { acquireProcessLock } from "./lock.ts";
 import { test } from "node:test";
@@ -36,6 +36,7 @@ import {
   removeProjectAssignment,
   projectAssignmentPath,
   projectWorkSnapshot,
+  findProjectAssignmentBySession,
   PROJECT_ASSIGNMENT_MAX_BYTES,
   coordinationMessageBytes,
   coordinationMessagePath,
@@ -1875,17 +1876,24 @@ test("project assignments are strict, private, bounded, and removable", () => {
   const assignment = {
     version: 1 as const,
     id: id(),
-    primaryWorkspaceId: "root",
     repoKey: "repo",
-    base: "HEAD",
     branch: "herdsman/test",
     text: "task",
-    phase: "creating" as const,
-    createdAt: 1,
-    updatedAt: 1,
   };
-  const path = writeProjectAssignment(runtime, assignment);
-  assert.equal(path, projectAssignmentPath(runtime, "root", assignment.id));
+  const path = writeProjectAssignment(runtime, "root", assignment);
+  assert.equal(path, projectAssignmentPath(runtime, "root", assignment.branch));
+  assert.equal(
+    path,
+    join(
+      runtime.assignments,
+      createHash("sha256").update("root").digest("hex"),
+      `${createHash("sha256").update(assignment.branch).digest("hex")}.json`,
+    ),
+  );
+  assert.deepEqual(
+    Object.keys(JSON.parse(readFileSync(path, "utf8"))).sort(),
+    ["version", "id", "repoKey", "branch", "text"].sort(),
+  );
   assertPosixMode(path, 0o600);
   assertPosixMode(
     join(
@@ -1896,56 +1904,52 @@ test("project assignments are strict, private, bounded, and removable", () => {
   );
   assert.deepEqual(listProjectAssignments(runtime, "root"), [assignment]);
   assert.deepEqual(
-    readProjectAssignment(runtime, "root", assignment.id),
+    readProjectAssignment(runtime, "root", assignment.branch),
     assignment,
   );
-  const placement = { workspaceId: "child", tabId: "tab", paneId: "pane" };
+  assert.equal(
+    findProjectAssignmentBySession(runtime, "root", "repo", assignment.id)
+      ?.branch,
+    assignment.branch,
+  );
+  assert.equal(
+    findProjectAssignmentBySession(runtime, "root", "elsewhere", assignment.id),
+    undefined,
+  );
   for (const invalid of [
     { branch: undefined },
-    { workspaceId: "child" },
-    { leadSessionId: assignment.id },
-    { phase: "starting" },
-    { phase: "starting", workspaceId: "child" },
-    { phase: "active" },
-    { phase: "settling" },
-    { phase: "settling", ...placement },
+    ...[
+      "phase",
+      "workspaceId",
+      "paneId",
+      "tabId",
+      "updatedAt",
+      "base",
+      "primaryWorkspaceId",
+    ].map((key) => ({ [key]: "old" })),
   ])
     assert.throws(
       () =>
-        writeProjectAssignment(runtime, { ...assignment, ...invalid } as never),
+        writeProjectAssignment(runtime, "root", {
+          ...assignment,
+          ...invalid,
+        } as never),
       /Invalid project assignment/,
     );
-  for (const phase of ["starting", "active"] as const) {
-    const valid = {
-      ...assignment,
-      phase,
-      ...placement,
-    };
-    writeProjectAssignment(runtime, valid);
-    assert.deepEqual(
-      readProjectAssignment(runtime, "root", assignment.id),
-      valid,
-    );
-  }
-  writeProjectAssignment(runtime, assignment);
   assert.throws(() =>
-    writeProjectAssignment(runtime, { ...assignment, extra: true } as never),
-  );
-  assert.throws(() =>
-    writeProjectAssignment(runtime, {
+    writeProjectAssignment(runtime, "root", {
       ...assignment,
-      primaryWorkspaceId: undefined,
-      rootWorkspaceId: "root",
+      extra: true,
     } as never),
   );
   assert.throws(() =>
-    writeProjectAssignment(runtime, {
+    writeProjectAssignment(runtime, "root", {
       ...assignment,
       text: "é".repeat(PROJECT_ASSIGNMENT_MAX_BYTES),
     }),
   );
   assert.deepEqual(
-    readProjectAssignment(runtime, "root", assignment.id),
+    readProjectAssignment(runtime, "root", assignment.branch),
     assignment,
   );
   writeFileSync(
@@ -1960,136 +1964,111 @@ test("project assignments are strict, private, bounded, and removable", () => {
       return true;
     },
   );
+  writeFileSync(path, JSON.stringify({ ...assignment, phase: "active" }));
+  assert.throws(
+    () => readProjectAssignment(runtime, "root", assignment.branch),
+    /invalid assignment schema/,
+  );
   writeFileSync(path, '{"text":"private task details"');
   assert.throws(
-    () => readProjectAssignment(runtime, "root", assignment.id),
+    () => readProjectAssignment(runtime, "root", assignment.branch),
     (error) => {
       assert.ok(error.message.includes(`${path}: invalid JSON`));
       assert.doesNotMatch(error.message, /private task details/);
       return true;
     },
   );
-  const { base: _base, ...preBaseAssignment } = assignment;
   writeFileSync(
     path,
-    JSON.stringify({ ...preBaseAssignment, text: "private task details" }),
+    JSON.stringify({
+      ...assignment,
+      branch: "other",
+      text: "private task details",
+    }),
   );
   assert.throws(
-    () => readProjectAssignment(runtime, "root", assignment.id),
+    () => readProjectAssignment(runtime, "root", assignment.branch),
     (error) => {
-      assert.ok(error.message.includes(`${path}: invalid assignment schema`));
+      assert.ok(
+        error.message.includes(`${path}: assignment identity mismatch`),
+      );
       assert.doesNotMatch(error.message, /private task details/);
       return true;
     },
   );
   writeFileSync(path, "x".repeat(PROJECT_ASSIGNMENT_MAX_BYTES + 1));
   assert.throws(
-    () => readProjectAssignment(runtime, "root", assignment.id),
+    () => readProjectAssignment(runtime, "root", assignment.branch),
     (error) => {
       assert.ok(error.message.includes(`${path}: file is too large`));
       return true;
     },
   );
-  removeProjectAssignment(runtime, "root", assignment.id);
+  writeProjectAssignment(runtime, "root", assignment);
+  const second = { ...assignment, branch: "herdsman/second" };
+  writeProjectAssignment(runtime, "root", second);
+  assert.throws(
+    () =>
+      findProjectAssignmentBySession(runtime, "root", "repo", assignment.id),
+    /Multiple project assignments claim session/,
+  );
+  assert.deepEqual(listProjectAssignments(runtime, "root"), [
+    second,
+    assignment,
+  ]);
+  writeFileSync(join(dirname(path), `${assignment.id}.json`), "draft");
+  assert.deepEqual(listProjectAssignments(runtime, "root"), [
+    second,
+    assignment,
+  ]);
+  writeFileSync(
+    projectAssignmentPath(runtime, "root", "wrong"),
+    JSON.stringify(assignment),
+  );
+  assert.throws(
+    () => listProjectAssignments(runtime, "root"),
+    /assignment identity mismatch/,
+  );
+  removeProjectAssignment(runtime, "root", "wrong");
+  removeProjectAssignment(runtime, "root", second.branch);
+  removeProjectAssignment(runtime, "root", assignment.branch);
   assert.equal(
-    readProjectAssignment(runtime, "root", assignment.id),
+    readProjectAssignment(runtime, "root", assignment.branch),
     undefined,
   );
 });
 
-test("project work derives completion, liveness and broken topology without persisting state", () => {
+test("project work derives status from current worktrees, Leads and canonical result", () => {
   const assignment = {
     version: 1 as const,
     id: id(),
-    primaryWorkspaceId: "root",
     repoKey: "repo",
-    base: "HEAD",
     branch: "feat/work",
     text: "  implement\nwork  ",
-    phase: "active" as const,
-    workspaceId: "child",
-    paneId: "pane",
-    tabId: "tab",
-    createdAt: 1,
-    updatedAt: 1,
-  };
-  const worktrees = [{ branch: assignment.branch, open_workspace_id: "child" }];
-  const lead = {
-    lead: assignment.id,
-    workspaceId: "child",
-    paneId: "pane",
-    runtimeState: "blocked" as const,
-  };
-  const project = (
-    changes: Partial<Parameters<typeof projectWorkSnapshot>[0]> = {},
-  ) =>
-    projectWorkSnapshot({
-      assignments: [assignment],
-      worktrees,
-      leads: [lead],
-      results: new Map(),
-      ...changes,
-    })[0]!;
-  assert.deepEqual(project(), {
-    branch: "feat/work",
-    session: assignment.id,
-    state: "blocked",
-    task: "implement work",
-    workspaceId: "child",
-    paneId: "pane",
-  });
-  assert.equal(project({ leads: [] }).state, "paused");
-  assert.equal(project({ worktrees: [], leads: [] }).state, "broken");
-  assert.equal(
-    project({ leads: [{ ...lead, lead: "other" }] }).issue,
-    "another Lead is active in this worktree",
-  );
-  assert.deepEqual(
-    project({
-      worktrees: [],
-      results: new Map([[assignment.id, `result:${assignment.id}`]]),
-    }).state,
-    "finished",
-  );
-  assert.equal(
-    project({ assignments: [{ ...assignment, phase: "creating" }] }).state,
-    "starting",
-  );
-});
-
-test("project work decision table marks ambiguous topology broken and derives paused or finished", () => {
-  const assignment = {
-    version: 1 as const,
-    id: id(),
-    primaryWorkspaceId: "root",
-    repoKey: "repo",
-    base: "HEAD",
-    branch: "feat/work",
-    text: "implement work",
-    phase: "active" as const,
-    workspaceId: "child",
-    paneId: "pane",
-    tabId: "tab",
-    createdAt: 1,
-    updatedAt: 1,
   };
   const worktree = { branch: assignment.branch, open_workspace_id: "child" };
   const lead = {
     lead: assignment.id,
     workspaceId: "child",
-    paneId: "pane",
     runtimeState: "working" as const,
   };
   const cases = [
     {
       name: "exact live Lead",
       input: { worktrees: [worktree], leads: [lead] },
-      state: "working",
+      status: "active",
+      runtimeState: "working",
     },
     {
       name: "paused with its worktree retained",
       input: { worktrees: [worktree], leads: [] },
-      state: "paused",
+      status: "paused",
+    },
+    {
+      name: "paused without worktree",
+      input: { worktrees: [], leads: [] },
+      status: "paused",
+      issue: "worktree is unavailable",
     },
     {
       name: "finished from canonical result",
@@ -2098,61 +2077,51 @@ test("project work decision table marks ambiguous topology broken and derives pa
         leads: [],
         results: new Map([[assignment.id, `result:${assignment.id}`]]),
       },
-      state: "finished",
+      status: "finished",
     },
     {
       name: "duplicate worktree topology",
       input: { worktrees: [worktree, worktree], leads: [] },
-      state: "broken",
-      issue: "multiple records claim this branch",
-    },
-    {
-      name: "duplicate assignment reservation",
-      input: {
-        worktrees: [worktree],
-        leads: [],
-        assignments: [assignment, { ...assignment, id: id() }],
-      },
-      state: "broken",
-      issue: "multiple records claim this branch",
+      status: "conflict",
+      issue: "project runtime identity is ambiguous",
     },
     {
       name: "duplicate exact Lead inventory",
       input: { worktrees: [worktree], leads: [lead, lead] },
-      state: "broken",
-      issue: "Lead placement is inconsistent",
+      status: "conflict",
+      issue: "project runtime identity is ambiguous",
     },
     {
-      name: "starting placement changed",
-      assignment: { ...assignment, phase: "starting" as const },
-      input: {
-        worktrees: [{ ...worktree, open_workspace_id: "replacement" }],
-        leads: [],
-      },
-      state: "broken",
-      issue: "worktree placement changed while starting",
-    },
-    {
-      name: "exact Lead placement conflicts with assignment",
+      name: "assigned Lead in wrong workspace",
       input: {
         worktrees: [worktree],
-        leads: [{ ...lead, paneId: "other-pane" }],
+        leads: [{ ...lead, workspaceId: "other" }],
       },
-      state: "broken",
-      issue: "Lead placement is inconsistent",
+      status: "conflict",
+      issue: "assigned Lead is running outside its branch worktree",
+    },
+    {
+      name: "different Lead in worktree",
+      input: { worktrees: [worktree], leads: [{ ...lead, lead: "other" }] },
+      status: "conflict",
+      issue: "another Lead is active in this worktree",
     },
   ] as const;
 
   for (const scenario of cases) {
     const snapshot = projectWorkSnapshot({
-      assignments: scenario.input.assignments ?? [
-        scenario.assignment ?? assignment,
-      ],
+      assignments: [assignment],
       worktrees: scenario.input.worktrees,
       leads: scenario.input.leads,
-      results: scenario.input.results ?? new Map(),
+      results: "results" in scenario.input ? scenario.input.results : new Map(),
     });
-    assert.equal(snapshot[0]!.state, scenario.state, scenario.name);
+    assert.equal(snapshot[0]!.status, scenario.status, scenario.name);
+    assert.equal(snapshot[0]!.task, "implement work", scenario.name);
+    assert.equal(
+      snapshot[0]!.runtimeState,
+      "runtimeState" in scenario ? scenario.runtimeState : undefined,
+      scenario.name,
+    );
     if ("issue" in scenario)
       assert.equal(snapshot[0]!.issue, scenario.issue, scenario.name);
   }

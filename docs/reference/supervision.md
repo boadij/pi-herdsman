@@ -168,11 +168,14 @@ conversation/tool evidence materially matters.
 ```
 
 `staff_list` returns a fresh supervision projection and fresh `available_tools`.
-For Manager, `work` lists branch, derived state, exact Lead session, and a
-bounded task summary; it includes paused or broken work even when no Lead is
-running. Its states are `starting`, `working`, `blocked`, `idle`, `paused`,
-`finished`, and `broken`. `reports` includes eligible direct Leads, including
-unassigned Leads. A branch is the work handle; the session is for Lead actions.
+For Manager, `work` lists branch, derived `status` (`active`, `paused`,
+`finished`, or `conflict`), exact Lead session, and a bounded task summary.
+Only active work includes a separate `runtime_state` from its live Lead;
+paused work remains listed without a running Lead. An unavailable worktree
+is paused with an explanatory `issue`, not a conflict. Work does not expose
+workspace or pane IDs; use `staff_inspect` for current runtime evidence.
+`reports` includes eligible direct Leads, whether assigned to work or not.
+A branch is the work handle; the session is for Lead actions.
 
 ### `staff_inspect`
 
@@ -255,9 +258,11 @@ Leads inherit the Manager's effective project-trust decision for that run:
 trusted passes `--approve`, untrusted passes `--no-approve`. This does not
 change Pi's persistent trust store. Pi resumes the same project session when
 work is paused; a repeated request for already-running work returns that Lead
-without launching another. A missing worktree leaves work marked `broken`
-instead of deleting it. A closed workspace is reopened without a second
-checkout; contradictory or ambiguous evidence fails closed.
+without launching another. An existing assignment with no matching worktree
+remains paused: restore/open its checkout and retry, or discard the assignment
+and delegate again. Herdsman does not recreate it from a historical base.
+A closed workspace is reopened without a second checkout; contradictory or
+ambiguous evidence fails closed.
 
 The Lead reports terminal completion with `supervisor_result`; use
 `supervisor_message` only for nonterminal progress or coordination. A durable
@@ -288,7 +293,9 @@ cleanup does not silently discard work.
 Abandon managed work by branch: stop its execution tree and remove the
 assignment only after proving execution has stopped. The Git branch, worktree,
 and files remain. Durable completed results cannot be discarded; settle them
-instead. If exact execution cannot be proved absent, the assignment remains.
+instead. Current worktree panes are checked for a possible Pi executor; if
+execution cannot be proved absent or a result appears during discard, the
+assignment remains.
 
 ### `staff_reply`
 

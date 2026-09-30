@@ -32,6 +32,9 @@ const SMOKE_MODEL_KEY = "pi-herdsman.smoke-model";
 const MAX_SOCKET_PATH_BYTES = 100;
 const MAX_SESSION_BYTES = 8 * 1024 * 1024;
 const MAX_CHIEF_TREE_RESULT_BYTES = 16 * 1024;
+const DEFAULT_MANAGER_READY_TIMEOUT_MS = 6 * 60_000;
+const MAX_MANAGER_READY_TIMEOUT_MS = 10 * 60_000;
+const MANAGER_DIAGNOSTIC_PREFIX = "[pi-herdsman-manager-diagnostic] ";
 const HERDR_ROUTING_KEYS = [
   "HERDR_SOCKET_PATH",
   "HERDR_CLIENT_SOCKET_PATH",
@@ -53,9 +56,167 @@ export function parseSmokeArgs(args) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { model: { type: "string" } },
+    options: {
+      model: { type: "string" },
+      "manager-ready-timeout-ms": { type: "string" },
+      "manager-recovery-diagnostics": { type: "boolean" },
+    },
   });
-  return { scenario: parseScenario(positionals), model: values.model };
+  const scenario = parseScenario(positionals);
+  const timeout = values["manager-ready-timeout-ms"];
+  const managerReadyTimeoutMs =
+    timeout === undefined ? undefined : Number(timeout);
+  if (
+    timeout !== undefined &&
+    (scenario !== "manager-recovery" ||
+      !/^\d+$/.test(timeout) ||
+      !Number.isSafeInteger(managerReadyTimeoutMs) ||
+      managerReadyTimeoutMs < 1 ||
+      managerReadyTimeoutMs > MAX_MANAGER_READY_TIMEOUT_MS)
+  )
+    throw new Error(
+      `--manager-ready-timeout-ms must be a positive integer no greater than ${MAX_MANAGER_READY_TIMEOUT_MS}, and is only valid for manager-recovery`,
+    );
+  const managerRecoveryDiagnostics =
+    values["manager-recovery-diagnostics"] ?? false;
+  if (managerRecoveryDiagnostics && scenario !== "manager-recovery")
+    throw new Error(
+      "--manager-recovery-diagnostics is only valid for manager-recovery",
+    );
+  return {
+    scenario,
+    model: values.model,
+    managerReadyTimeoutMs,
+    managerRecoveryDiagnostics,
+  };
+}
+
+export function managerDiagnosticLines(contents) {
+  if (typeof contents !== "string") return [];
+  const safeLines = [];
+  const seen = new Set();
+  for (const line of contents.split(/\r?\n/)) {
+    const prefixIndex = line.indexOf(MANAGER_DIAGNOSTIC_PREFIX);
+    if (prefixIndex < 0) continue;
+    let diagnostic;
+    try {
+      diagnostic = JSON.parse(
+        line.slice(prefixIndex + MANAGER_DIAGNOSTIC_PREFIX.length),
+      );
+    } catch {
+      continue;
+    }
+    let safe;
+    if (
+      [
+        "session_start_reached",
+        "initial_inbox_drain_start",
+        "project_assignment_scope_start",
+        "project_assignment_scope_complete",
+        "project_assignment_topology_start",
+        "project_assignment_topology_complete",
+        "project_assignment_live_lead_start",
+        "project_assignment_live_lead_complete",
+      ].includes(diagnostic?.event)
+    )
+      safe = { event: diagnostic.event };
+    else if (
+      [
+        "inbox_preflight",
+        "inbox_preflight_recheck",
+        "inbox_peer_presence",
+      ].includes(diagnostic?.event) &&
+      (diagnostic.event === "inbox_peer_presence"
+        ? ["pass", "missing"]
+        : diagnostic.event === "inbox_preflight_recheck"
+          ? ["pass", "held", "stale"]
+          : ["pass", "held"]
+      ).includes(diagnostic.reason)
+    )
+      safe = { event: diagnostic.event, reason: diagnostic.reason };
+    else if (
+      ["inbox_candidates", "inbox_drain_complete"].includes(
+        diagnostic?.event,
+      ) &&
+      Number.isInteger(diagnostic.count) &&
+      diagnostic.count >= 0 &&
+      diagnostic.count <= 1000 &&
+      (diagnostic.event !== "inbox_drain_complete" ||
+        typeof diagnostic.sessionStable === "boolean")
+    )
+      safe = {
+        event: diagnostic.event,
+        count: diagnostic.count,
+        ...(diagnostic.event === "inbox_drain_complete"
+          ? { sessionStable: diagnostic.sessionStable }
+          : {}),
+      };
+    else if (
+      diagnostic?.event === "inbox_catch" &&
+      [
+        "cleanup",
+        "authorization",
+        "send",
+        "drain",
+        "reconcile",
+        "candidate_scan",
+        "transaction",
+      ].includes(diagnostic.category)
+    )
+      safe = { event: diagnostic.event, category: diagnostic.category };
+    else if (
+      diagnostic?.event === "project_assignment_authorization" &&
+      ["authorized", "rejected", "error"].includes(diagnostic.outcome) &&
+      [
+        "matched",
+        "target_or_workspace_mismatch",
+        "lease_mismatch",
+        "workspace_scope_mismatch",
+        "assignment_evidence_mismatch",
+        "worktree_topology_mismatch",
+        "branch_placement_mismatch",
+        "live_lead_mismatch",
+        "workspace_placement_mismatch",
+        "authorization_exception",
+      ].includes(diagnostic.reason)
+    )
+      safe = {
+        event: diagnostic.event,
+        outcome: diagnostic.outcome,
+        reason: diagnostic.reason,
+      };
+    else if (
+      diagnostic?.event === "project_assignment_send" &&
+      ["resolved", "rejected"].includes(diagnostic.outcome) &&
+      typeof diagnostic.triggerTurn === "boolean"
+    )
+      safe = {
+        event: diagnostic.event,
+        outcome: diagnostic.outcome,
+        triggerTurn: diagnostic.triggerTurn,
+      };
+    if (safe && !seen.has(safe.event) && seen.size < 16) {
+      seen.add(safe.event);
+      safeLines.push(
+        `${MANAGER_DIAGNOSTIC_PREFIX}${JSON.stringify(safe)}`.slice(0, 512),
+      );
+    }
+  }
+  return safeLines;
+}
+
+export async function captureManagerLeadDiagnostics(
+  ctx,
+  paneId,
+  readPane = nestedPaneText,
+) {
+  if (!ctx.managerRecoveryDiagnostics) return;
+  ctx.managerRecovery.leadDiagnostics = [];
+  try {
+    ctx.managerRecovery.leadDiagnostics = managerDiagnosticLines(
+      await readPane(ctx, paneId, "recent-unwrapped"),
+    );
+  } catch {}
 }
 
 export function formatSmokeFailure(error, stage) {
@@ -623,6 +784,205 @@ function sessionEntries(contents) {
     });
 }
 
+export function savedSessionHeaderEvidence(contents, expectedSessionId) {
+  const header = sessionEntries(contents).find(
+    (entry) => entry.type === "session",
+  );
+  return {
+    expectedSessionId,
+    actualSessionId: typeof header?.id === "string" ? header.id : null,
+    sessionHeaderFound: !!header,
+    sessionIdMatches: header?.id === expectedSessionId,
+  };
+}
+
+export function continuationSessionEvidence(contents, expectedSessionId, task) {
+  const normalize = (text) => text.replace(/\s+/g, " ").trim().toLowerCase();
+  const taskFound = typeof task === "string" && normalize(task).length > 0;
+  const header = savedSessionHeaderEvidence(contents, expectedSessionId);
+  return {
+    sessionHeaderFound: header.sessionHeaderFound,
+    sessionIdMatches: header.sessionIdMatches,
+    continuationTaskFound: taskFound,
+    taskInstructionFound:
+      taskFound &&
+      sessionEntries(contents).some(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "user" &&
+          normalize(messageText(entry.message.content)).includes(
+            normalize(task),
+          ),
+      ),
+  };
+}
+
+export function correlatedContinuationTask(
+  contents,
+  resultId,
+  expectedSessionId,
+  prompt,
+) {
+  const entries = sessionEntries(contents);
+  const byId = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  const ancestors = [];
+  const visited = new Set();
+  let entry = byId.get(resultId);
+  let promptFound = false;
+  while (entry && !visited.has(entry.id)) {
+    visited.add(entry.id);
+    if (
+      entry.type === "message" &&
+      entry.message?.role === "user" &&
+      messageText(entry.message.content) === prompt
+    ) {
+      promptFound = true;
+      break;
+    }
+    ancestors.unshift(entry);
+    entry = byId.get(entry.parentId);
+  }
+  if (!promptFound) return null;
+  for (let index = ancestors.length - 1; index >= 0; index--) {
+    const message = ancestors[index].message;
+    if (
+      ancestors[index].type !== "message" ||
+      message?.role !== "toolResult" ||
+      message.toolName !== "agent_continue" ||
+      message.isError ||
+      message.details?.ok !== true ||
+      message.details.action !== "continue" ||
+      message.details.session_id !== expectedSessionId
+    )
+      continue;
+    for (const candidate of ancestors.slice(0, index).reverse()) {
+      if (
+        candidate.type !== "message" ||
+        candidate.message?.role !== "assistant" ||
+        !Array.isArray(candidate.message.content)
+      )
+        continue;
+      const call = candidate.message.content.find(
+        (block) =>
+          block?.type === "toolCall" &&
+          block.name === "agent_continue" &&
+          typeof block.id === "string" &&
+          block.id === message.toolCallId,
+      );
+      if (!call) continue;
+      const task = call.arguments?.task;
+      // Keep the exact task in memory only; reject oversized tasks rather than truncate them.
+      return typeof task === "string" &&
+        task.trim() &&
+        Buffer.byteLength(task) <= 16 * 1024
+        ? task
+        : null;
+    }
+  }
+  return null;
+}
+
+async function sessionPathEvidence(ctx, path, expectedSessionId) {
+  const absolutePath = resolve(path);
+  const isolatedSessions = resolve(ctx.paths.piSessions);
+  const relativePath = relative(isolatedSessions, absolutePath);
+  const evidence = {
+    path: absolutePath,
+    exists: null,
+    ...savedSessionHeaderEvidence("", expectedSessionId),
+  };
+  if (
+    !relativePath ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath)
+  )
+    return { ...evidence, error: "outside isolated session directory" };
+
+  let details;
+  try {
+    details = await lstat(absolutePath);
+  } catch (error) {
+    if (error.code === "ENOENT") return { ...evidence, exists: false };
+    return { ...evidence, error: String(error.message).slice(0, 200) };
+  }
+  evidence.exists = true;
+  if (
+    !details.isFile() ||
+    details.isSymbolicLink() ||
+    details.size > MAX_SESSION_BYTES
+  )
+    return { ...evidence, error: "not a bounded regular session file" };
+  try {
+    return {
+      ...evidence,
+      ...savedSessionHeaderEvidence(
+        await readFile(absolutePath, "utf8"),
+        expectedSessionId,
+      ),
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") return { ...evidence, exists: false };
+    return { ...evidence, error: String(error.message).slice(0, 200) };
+  }
+}
+
+export async function managerChildSessionEvidence(
+  ctx,
+  agents,
+  workspaceId,
+  expectedSessionId,
+) {
+  const candidates = [];
+  for (const agent of agents
+    .filter((item) => item.workspace_id === workspaceId)
+    .slice(0, 10)) {
+    const identity = agent.agent_session;
+    const candidate = {
+      identityKind: identity?.kind ?? null,
+      reportedSessionId:
+        identity?.kind === "id" && typeof identity.value === "string"
+          ? identity.value
+          : null,
+    };
+    if (identity?.kind === "path" && typeof identity.value === "string")
+      Object.assign(
+        candidate,
+        await sessionPathEvidence(ctx, identity.value, expectedSessionId),
+      );
+    else if (identity?.kind === "id" && typeof identity.value === "string") {
+      try {
+        const session = await exactIsolatedSession(ctx, identity.value);
+        if (session)
+          Object.assign(candidate, {
+            path: session.path,
+            exists: true,
+            ...savedSessionHeaderEvidence(session.contents, expectedSessionId),
+          });
+      } catch (error) {
+        candidate.error = String(error.message).slice(0, 200);
+      }
+    }
+    candidates.push(candidate);
+  }
+
+  let expectedSessionFile = null;
+  try {
+    const session = await exactIsolatedSession(ctx, expectedSessionId);
+    if (session)
+      expectedSessionFile = {
+        path: session.path,
+        exists: true,
+        ...savedSessionHeaderEvidence(session.contents, expectedSessionId),
+      };
+  } catch (error) {
+    expectedSessionFile = { error: String(error.message).slice(0, 200) };
+  }
+  return { workspaceId, expectedSessionId, candidates, expectedSessionFile };
+}
+
 function messageText(content) {
   if (typeof content === "string") return content;
   return Array.isArray(content)
@@ -855,7 +1215,12 @@ async function prepareHerdr(paths) {
   await access(paths.herdrStateExtension);
 }
 
-async function startNestedHerdr(paths, owned, primaryCheckoutPath) {
+async function startNestedHerdr(
+  paths,
+  owned,
+  primaryCheckoutPath,
+  managerRecoveryDiagnostics,
+) {
   const id = randomUUID().slice(0, 12);
   const sessionName = `pi-herdsman-smoke-${id}`;
   owned.sessionName = sessionName;
@@ -881,6 +1246,9 @@ async function startNestedHerdr(paths, owned, primaryCheckoutPath) {
       `PI_CODING_AGENT_DIR=${paths.piAgent}`,
       "--env",
       `PI_CODING_AGENT_SESSION_DIR=${paths.piSessions}`,
+      ...(managerRecoveryDiagnostics
+        ? ["--env", "PI_HERDSMAN_MANAGER_DIAGNOSTICS=1"]
+        : []),
     ],
     { env: process.env },
   );
@@ -1550,18 +1918,24 @@ async function runContinuationSmoke(ctx) {
           `continuation-follow-up: expected exactly one final result, observed ${matchingResults.length}`,
         );
       const contents = await readFile(firstSession.path, "utf8");
-      const entries = sessionEntries(contents);
-      const header = entries.find((entry) => entry.type === "session");
-      const continued = entries.some(
-        (entry) =>
-          entry.type === "message" &&
-          messageText(entry.message?.content).includes(
-            "Without rereading package.json",
-          ),
+      const evidence = continuationSessionEvidence(
+        contents,
+        firstSession.id,
+        correlatedContinuationTask(
+          session.contents,
+          result.id,
+          firstSession.id,
+          followup,
+        ),
       );
-      if (header?.id !== firstSession.id || !continued)
+      ctx.continuationSessionEvidence = evidence;
+      if (
+        !evidence.sessionIdMatches ||
+        !evidence.continuationTaskFound ||
+        !evidence.taskInstructionFound
+      )
         throw new Error(
-          "continuation-session-identity: persisted ID or remembered-context follow-up was not preserved",
+          `continuation-session-identity: persisted ID or remembered-context follow-up was not preserved; evidence: ${JSON.stringify(evidence)}`,
         );
       await waitForDescendantsToExit(ctx);
       const finalSession = await rootSessionSnapshot(ctx);
@@ -1592,7 +1966,10 @@ async function runContinuationSmoke(ctx) {
 async function runManagerRecoverySmoke(ctx) {
   const deadline = Date.now() + 6 * 60_000;
   const branch = `herdsman/smoke-manager-recovery-${randomUUID()}`;
-  ctx.managerRecovery = { branch };
+  ctx.managerRecovery = {
+    branch,
+    leadReadyTimeoutMs: ctx.managerReadyTimeoutMs,
+  };
   const markStage = (stage) => {
     ctx.managerRecovery.stage = stage;
   };
@@ -1683,9 +2060,47 @@ async function runManagerRecoverySmoke(ctx) {
       try {
         const session = await rootSnapshot();
         const results = session ? staffDelegateResults(session.contents) : [];
-        ctx.managerRecovery.readyEvidence.entries = session
+        const evidence = ctx.managerRecovery.readyEvidence;
+        evidence.entries = session
           ? managerReadyEntryEvidence(session.contents, results[0]?.session)
           : [];
+        if (
+          results.length === 1 &&
+          typeof results[0].session === "string" &&
+          typeof results[0].workspace_id === "string"
+        ) {
+          let listedAgents = [];
+          try {
+            listedAgents = await agents();
+            evidence.childSession = await managerChildSessionEvidence(
+              ctx,
+              listedAgents,
+              results[0].workspace_id,
+              results[0].session,
+            );
+            if (ctx.managerRecoveryDiagnostics) {
+              const lead = listedAgents.find(
+                (agent) =>
+                  agent.workspace_id === results[0].workspace_id &&
+                  typeof agent.pane_id === "string" &&
+                  agent.pane_id !== ctx.rootPaneId,
+              );
+              if (lead) {
+                try {
+                  evidence.leadDiagnostics = managerDiagnosticLines(
+                    await nestedPaneText(ctx, lead.pane_id, "recent-unwrapped"),
+                  );
+                } catch {
+                  evidence.leadDiagnostics = [];
+                }
+              } else evidence.leadDiagnostics = [];
+            }
+          } catch (error) {
+            evidence.childSession = {
+              error: String(error.message).slice(0, 200),
+            };
+          }
+        }
       } catch (error) {
         ctx.managerRecovery.readyEvidence.entriesError = String(error).slice(
           0,
@@ -1723,91 +2138,96 @@ async function runManagerRecoverySmoke(ctx) {
   markStage("fresh-delegation");
   await promptRoot(prompt);
   markStage("lead-ready-handshake");
-  const ready = await waitFor("ready", async () => {
-    const session = await rootSnapshot();
-    const results = session ? staffDelegateResults(session.contents) : [];
-    let child;
-    if (
-      results.length === 1 &&
-      typeof results[0].session === "string" &&
-      results[0].session.length > 0
-    )
-      for (const agent of await agents())
-        if (
-          agent.workspace_id === results[0].workspace_id &&
-          (await agentSessionId(ctx, agent)) === results[0].session
-        ) {
-          child = agent;
-          break;
-        }
-    const childSession =
-      child &&
-      (child.agent_session?.kind === "id"
-        ? await exactIsolatedSession(ctx, results[0].session)
-        : await isolatedSessionDetails(ctx, child));
-    const childVerified = verifiedLeadSession(
-      childSession,
-      results[0]?.session,
-    );
-    const leadCompleted =
-      childVerified &&
-      leadReadyCompleted(childSession.contents, "MANAGER_RECOVERY_READY");
-    const { receipt, answer, prematureReady, prematureFinish } =
-      session && results.length === 1
-        ? managerReadyAnswer(session.contents, results[0].session)
-        : {
-            receipt: false,
-            answer: null,
-            prematureReady: false,
-            prematureFinish: false,
-          };
-    ctx.managerRecovery.readyEvidence = {
-      delegationCount: results.length,
-      childFound: !!child,
-      childIdentity: child?.agent_session?.kind ?? null,
-      childSessionVerified: !!childVerified,
-      leadReadyResult: !!(
+  const ready = await waitFor(
+    "ready",
+    async () => {
+      const session = await rootSnapshot();
+      const results = session ? staffDelegateResults(session.contents) : [];
+      let child;
+      if (
+        results.length === 1 &&
+        typeof results[0].session === "string" &&
+        results[0].session.length > 0
+      )
+        for (const agent of await agents())
+          if (
+            agent.workspace_id === results[0].workspace_id &&
+            (await agentSessionId(ctx, agent)) === results[0].session
+          ) {
+            child = agent;
+            break;
+          }
+      const childSession =
+        child &&
+        (child.agent_session?.kind === "id"
+          ? await exactIsolatedSession(ctx, results[0].session)
+          : await isolatedSessionDetails(ctx, child));
+      const childVerified = verifiedLeadSession(
+        childSession,
+        results[0]?.session,
+      );
+      const leadCompleted =
         childVerified &&
-        hasSuccessfulSupervisorMessage(
-          childSession.contents,
-          "MANAGER_RECOVERY_READY",
-        )
-      ),
-      leadCompleted: !!leadCompleted,
-      receipt,
-      managerAnswer: !!answer,
-      prematureReady,
-      prematureFinish,
-      rootRecent: session
-        ? summarizeSession(session.contents).recentMessages.slice(-6)
-        : [],
-      leadRecent: childSession
-        ? summarizeSession(childSession.contents).recentMessages.slice(-6)
-        : [],
-      rootCustom: session
-        ? sessionEntries(session.contents)
-            .filter(
-              (entry) =>
-                entry.type === "custom_message" &&
-                entry.customType === "pi-herdsman-lead_message",
-            )
-            .slice(-3)
-            .map((entry) => ({
-              type: entry.customType,
-              content: String(entry.content).slice(0, 200),
-            }))
-        : [],
-    };
-    return results.length === 1 &&
-      leadCompleted &&
-      receipt &&
-      answer &&
-      !prematureReady &&
-      !prematureFinish
-      ? { results, answer }
-      : null;
-  });
+        leadReadyCompleted(childSession.contents, "MANAGER_RECOVERY_READY");
+      const { receipt, answer, prematureReady, prematureFinish } =
+        session && results.length === 1
+          ? managerReadyAnswer(session.contents, results[0].session)
+          : {
+              receipt: false,
+              answer: null,
+              prematureReady: false,
+              prematureFinish: false,
+            };
+      ctx.managerRecovery.readyEvidence = {
+        delegationCount: results.length,
+        childFound: !!child,
+        childIdentity: child?.agent_session?.kind ?? null,
+        childSessionVerified: !!childVerified,
+        leadReadyResult: !!(
+          childVerified &&
+          hasSuccessfulSupervisorMessage(
+            childSession.contents,
+            "MANAGER_RECOVERY_READY",
+          )
+        ),
+        leadCompleted: !!leadCompleted,
+        receipt,
+        managerAnswer: !!answer,
+        prematureReady,
+        prematureFinish,
+        rootRecent: session
+          ? summarizeSession(session.contents).recentMessages.slice(-6)
+          : [],
+        leadRecent: childSession
+          ? summarizeSession(childSession.contents).recentMessages.slice(-6)
+          : [],
+        rootCustom: session
+          ? sessionEntries(session.contents)
+              .filter(
+                (entry) =>
+                  entry.type === "custom_message" &&
+                  entry.customType === "pi-herdsman-lead_message",
+              )
+              .slice(-3)
+              .map((entry) => ({
+                type: entry.customType,
+                content: String(entry.content).slice(0, 200),
+              }))
+          : [],
+      };
+      return results.length === 1 &&
+        leadCompleted &&
+        receipt &&
+        answer &&
+        !prematureReady &&
+        !prematureFinish
+        ? { results, answer, child }
+        : null;
+    },
+    ctx.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
+  );
   const first = ready.results[0];
+  await captureManagerLeadDiagnostics(ctx, ready.child.pane_id);
   markStage("initial-assignment-validation");
   assert.equal(first.ok, true);
   assert.equal(first.action, "delegate");
@@ -1881,28 +2301,36 @@ async function runManagerRecoverySmoke(ctx) {
     runtime,
     "assignments",
     hash(ctx.rootWorkspaceId),
-    `${first.session}.json`,
+    `${hash(branch)}.json`,
   );
   const managerPath = join(
     runtime,
     "managers",
     `${hash(ctx.rootWorkspaceId)}.json`,
   );
-  const assignmentRecord = async () => {
+  const assignmentBytes = async () => {
     const details = await lstat(assignmentPath);
     assert.ok(details.isFile() && !details.isSymbolicLink());
     assert.ok(details.size <= 16 * 1024);
-    const record = JSON.parse(await readFile(assignmentPath, "utf8"));
-    assert.equal(record.id, first.session);
-    assert.equal(record.branch, branch);
-    assert.equal(record.workspaceId, workspaceId);
-    assert.equal(record.phase, "active");
-    return record;
+    return readFile(assignmentPath, "utf8");
   };
   const managerLease = async () =>
     JSON.parse(await readFile(managerPath, "utf8")).leaseId;
   markStage("initial-assignment-validation");
-  await assignmentRecord();
+  const initialAssignmentBytes = await assignmentBytes();
+  const record = JSON.parse(initialAssignmentBytes);
+  assert.equal(record.id, first.session);
+  assert.equal(record.branch, branch);
+  assert.deepEqual(
+    Object.keys(record).sort(),
+    ["branch", "id", "repoKey", "text", "version"].sort(),
+  );
+  const assertUnchangedAssignment = async () =>
+    assert.equal(
+      await assignmentBytes(),
+      initialAssignmentBytes,
+      "runtime recovery must not mutate durable project intent",
+    );
   const closePrompt = managerRecoveryClosePrompt(first.session);
   markStage("graceful-close");
   await promptRoot(closePrompt);
@@ -1933,7 +2361,7 @@ async function runManagerRecoverySmoke(ctx) {
     30_000,
   );
   markStage("graceful-close-validation");
-  await assignmentRecord();
+  await assertUnchangedAssignment();
   assert.ok(
     await paneExists(paneId),
     "staff_close removed the preserved assignment pane",
@@ -1967,7 +2395,7 @@ async function runManagerRecoverySmoke(ctx) {
   assert.equal(resumed.session, first.session);
   assert.equal(resumed.branch, first.branch);
   assert.equal(resumed.workspace_id, workspaceId);
-  await assignmentRecord();
+  await assertUnchangedAssignment();
   const resumedWorktrees = await matchingWorktrees();
   assert.equal(resumedWorktrees.length, 1);
   assert.equal(
@@ -2028,7 +2456,7 @@ async function runManagerRecoverySmoke(ctx) {
     },
     15_000,
   );
-  await assignmentRecord();
+  await assertUnchangedAssignment();
   assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
   let retainedLead = false;
   for (const agent of await agents())
@@ -2054,7 +2482,7 @@ async function runManagerRecoverySmoke(ctx) {
     },
     15_000,
   );
-  await assignmentRecord();
+  await assertUnchangedAssignment();
   assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
 
   const beforeKillAgents = [];
@@ -2168,6 +2596,7 @@ async function runManagerRecoverySmoke(ctx) {
   assert.notEqual(recoveredPid, initialPid);
   assert.notEqual(recoveredPid, resumedPid);
   ctx.managerRecovery.recoveredPid = recoveredPid;
+  await assertUnchangedAssignment();
 
   const finalMarker = "PI_HERDSMAN_MANAGER_RECOVERY_OK";
   markStage("completion-marker");
@@ -2438,6 +2867,7 @@ async function collectDiagnostics(ctx, owned) {
   const env = nestedControlEnv(process.env, ctx.paths, ctx.sessionName);
   diagnostics.chiefTreeProbe = ctx.chiefTreeProbeDiagnostics ?? null;
   diagnostics.managerRecovery = ctx.managerRecovery ?? null;
+  diagnostics.continuationSession = ctx.continuationSessionEvidence ?? null;
   diagnostics.agents = await tryHerdr(["agent", "list"], { env });
   diagnostics.panes = await tryHerdr(["pane", "list"], { env });
   diagnostics.observedCoreProcesses = ctx.coreProcessEvidence ?? [];
@@ -2657,6 +3087,9 @@ async function main() {
     sessionName: undefined,
     paths,
     model,
+    managerReadyTimeoutMs:
+      args.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
+    managerRecoveryDiagnostics: args.managerRecoveryDiagnostics,
     expectedPackage: `${pkg.name}@${pkg.version}`,
     owned,
   };
@@ -2691,7 +3124,12 @@ async function main() {
         chiefTreeProbeSource(ctx.chiefTreeResultFile),
         { flag: "wx" },
       );
-    await startNestedHerdr(paths, owned, ctx.rootCwd);
+    await startNestedHerdr(
+      paths,
+      owned,
+      ctx.rootCwd,
+      ctx.managerRecoveryDiagnostics,
+    );
     ctx.sessionName = owned.sessionName;
     await waitForNestedHerdr(ctx);
     ctx.rootPaneId = await startCandidate(ctx);

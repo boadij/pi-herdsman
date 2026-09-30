@@ -1,14 +1,21 @@
 import {
   getAgentDir,
-  SessionManager,
   type ExecResult,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { OperationError } from "./errors.ts";
@@ -1905,6 +1912,7 @@ export function sameObservedSessionPath(left: string, right: string): boolean {
   try {
     canonicalRight = realpathSync(right);
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw new Error(
       `could not canonicalize exact Pi session path ${right}: ${String(error)}`,
     );
@@ -1917,6 +1925,63 @@ export function sameObservedSessionPath(left: string, right: string): boolean {
       `could not canonicalize exact Pi session path ${left}: ${String(error)}`,
     );
   }
+}
+// Missing/empty prospective files are unresolved; invalid content and I/O errors
+// throw so ownership matching cannot mistake them for prospective files.
+// Match Pi's 4 KiB chunks and 1 MiB scan budget, stopping at the first newline.
+// An unterminated header at the limit is accepted only after a one-byte EOF probe.
+const PI_SESSION_HEADER_BYTE_LIMIT = 1024 * 1024;
+const PI_SESSION_HEADER_READ_CHUNK_SIZE = 4 * 1024;
+export function readPiSessionHeaderId(path: string): string | undefined {
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  let content: string;
+  try {
+    const buffer = Buffer.allocUnsafe(PI_SESSION_HEADER_READ_CHUNK_SIZE);
+    const decoder = new StringDecoder("utf8");
+    content = "";
+    let length = 0;
+    let newline = -1;
+    while (length < PI_SESSION_HEADER_BYTE_LIMIT) {
+      const bytes = readSync(
+        fd,
+        buffer,
+        0,
+        Math.min(buffer.length, PI_SESSION_HEADER_BYTE_LIMIT - length),
+        length,
+      );
+      if (bytes === 0) break;
+      newline = buffer.subarray(0, bytes).indexOf(0x0a);
+      content += decoder.write(
+        buffer.subarray(0, newline === -1 ? bytes : newline),
+      );
+      if (newline !== -1) break;
+      length += bytes;
+    }
+    if (
+      newline === -1 &&
+      length === PI_SESSION_HEADER_BYTE_LIMIT &&
+      readSync(fd, buffer, 0, 1, length) !== 0
+    )
+      throw new Error("Pi session header exceeds 1 MiB read limit");
+    if (newline === -1 && length === 0) return undefined;
+    content += decoder.end();
+  } finally {
+    closeSync(fd);
+  }
+  const header = JSON.parse(content);
+  if (
+    header?.type !== "session" ||
+    typeof header.id !== "string" ||
+    header.id.length === 0
+  )
+    throw new Error("Invalid Pi session header");
+  return header.id;
 }
 export function matchesExpectedSession(
   observed: unknown,
@@ -1931,14 +1996,29 @@ export function matchesExpectedSession(
       expected.id.length > 0 &&
       session.value === expected.id
     );
-  if (typeof expected.path === "string" && expected.path.length > 0)
-    return sameObservedSessionPath(session.value, expected.path);
+  const hasExpectedPath =
+    typeof expected.path === "string" && expected.path.length > 0;
+  if (hasExpectedPath) {
+    if (!sameObservedSessionPath(session.value, expected.path)) return false;
+    if (typeof expected.id !== "string" || expected.id.length === 0)
+      return true;
+  }
   if (typeof expected.id !== "string" || expected.id.length === 0) return false;
+  let path: string;
   try {
-    return (
-      SessionManager.open(realpathSync(session.value)).getSessionId() ===
-      expected.id
-    );
+    path = realpathSync(session.value);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return hasExpectedPath;
+    if (hasExpectedPath)
+      throw new Error(
+        `could not canonicalize exact Pi session path ${session.value}: ${String(error)}`,
+      );
+    return false;
+  }
+  try {
+    const id = readPiSessionHeaderId(path);
+    return id === undefined ? hasExpectedPath : id === expected.id;
   } catch {
     return false;
   }

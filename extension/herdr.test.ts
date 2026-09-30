@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import {
+import fs, {
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer, type Socket } from "node:net";
 import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -34,6 +37,7 @@ import {
   startHerdrAgent,
   startHerdrAgentInPane,
   matchesExpectedSession,
+  readPiSessionHeaderId,
   sameObservedSessionPath,
   sessionIdentity,
   STARTUP_TIMEOUT_MAX,
@@ -209,7 +213,16 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
       request = JSON.parse(buffer.slice(0, newline));
       socket.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
       if (connections === 1) {
-        socket.write(JSON.stringify({ event: "pane.closed" }) + "\n");
+        socket.write(
+          JSON.stringify({
+            id: request.id,
+            error: {
+              code: "events_lost",
+              message:
+                "event subscription fell behind retained history; resubscribe and resync with session.snapshot",
+            },
+          }) + "\n",
+        );
         socket.end();
       }
     });
@@ -3048,15 +3061,191 @@ test("preserving stop rejects malformed session identity observations", async ()
   );
 });
 
+test("Pi session header reads are bounded, handle short reads, and close descriptors", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-header-"));
+  const path = join(root, "not-the-header-id.jsonl");
+  const limit = 1024 * 1024;
+  const chunkSize = 4 * 1024;
+  const header = JSON.stringify({ type: "session", id: "header-😀" });
+  const fullBudgetHeader =
+    header + " ".repeat(limit - Buffer.byteLength(header));
+  const read = fs.readSync;
+  const close = fs.closeSync;
+  let bytesRead = 0;
+  let shortReads = false;
+  let readError: NodeJS.ErrnoException | undefined;
+  let probeError = false;
+  let probes = 0;
+  let newlinePosition = -1;
+  const closed: number[] = [];
+  t.mock.method(
+    fs,
+    "readSync",
+    (
+      fd: number,
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number,
+    ) => {
+      assert.ok(length <= chunkSize);
+      if (position === limit) {
+        assert.ok(buffer.length <= chunkSize);
+        assert.equal(offset, 0);
+        assert.equal(length, 1);
+        probes++;
+      } else {
+        assert.equal(buffer.length, chunkSize);
+        assert.equal(offset, 0);
+        assert.ok(position + length <= limit);
+      }
+      if (newlinePosition !== -1 && position !== limit)
+        assert.ok(
+          position <= newlinePosition,
+          "no reads after the newline chunk",
+        );
+      if (readError && (!probeError || position === limit)) throw readError;
+      const bytes = read(
+        fd,
+        buffer,
+        offset,
+        shortReads ? Math.min(length, 1) : length,
+        position,
+      );
+      bytesRead += bytes;
+      return bytes;
+    },
+  );
+  t.mock.method(fs, "closeSync", (fd: number) => {
+    closed.push(fd);
+    close(fd);
+  });
+  syncBuiltinESMExports();
+  try {
+    for (const scenario of [
+      {
+        name: "large body",
+        content: `${header}\n${"x".repeat(2 * 1024 * 1024)}`,
+      },
+      {
+        name: "UTF-8 across full chunks",
+        content:
+          " ".repeat(chunkSize - Buffer.byteLength(header.split("😀")[0]) - 1) +
+          `${header}\nignored`,
+      },
+      {
+        name: "short reads through UTF-8 and newline",
+        content: `${header}\nignored`,
+        short: true,
+      },
+      { name: "short reads to EOF", content: header, short: true },
+      { name: "empty", content: "", empty: true },
+      {
+        name: "newline in final permitted byte",
+        content: `${fullBudgetHeader.slice(0, -1)}\nignored`,
+      },
+      {
+        name: "unterminated at limit",
+        content: fullBudgetHeader,
+      },
+      {
+        name: "newline beyond limit",
+        content: `${fullBudgetHeader}\n`,
+        error: /exceeds 1 MiB/,
+      },
+      {
+        name: "oversized unterminated",
+        content: `${fullBudgetHeader} `,
+        error: /exceeds 1 MiB/,
+      },
+      {
+        name: "EOF probe read error",
+        content: fullBudgetHeader,
+        ioError: "EIO",
+        probe: true,
+        error: /injected read failure/,
+      },
+      { name: "malformed", content: "not JSON\n", error: /JSON/ },
+      {
+        name: "read error",
+        content: header,
+        ioError: "EIO",
+        error: /injected read failure/,
+      },
+      {
+        name: "ENOENT during read is not a missing file",
+        content: header,
+        ioError: "ENOENT",
+        error: /injected read failure/,
+      },
+    ]) {
+      writeFileSync(path, scenario.content);
+      bytesRead = 0;
+      probes = 0;
+      newlinePosition = Buffer.from(scenario.content).indexOf(0x0a);
+      closed.length = 0;
+      shortReads = scenario.short ?? false;
+      probeError = scenario.probe ?? false;
+      readError = scenario.ioError
+        ? Object.assign(new Error("injected read failure"), {
+            code: scenario.ioError,
+          })
+        : undefined;
+      if (scenario.error)
+        assert.throws(
+          () => readPiSessionHeaderId(path),
+          scenario.error,
+          scenario.name,
+        );
+      else
+        assert.equal(
+          readPiSessionHeaderId(path),
+          scenario.empty ? undefined : "header-😀",
+          scenario.name,
+        );
+      assert.ok(bytesRead <= limit + 1, scenario.name);
+      assert.equal(
+        probes,
+        Buffer.byteLength(scenario.content.split("\n")[0]) >= limit ? 1 : 0,
+        scenario.name,
+      );
+      if (scenario.name === "large body") assert.equal(bytesRead, chunkSize);
+      if (scenario.name === "unterminated at limit")
+        assert.equal(bytesRead, limit);
+      if (
+        scenario.name === "newline beyond limit" ||
+        scenario.name === "oversized unterminated"
+      )
+        assert.equal(bytesRead, limit + 1);
+      if (scenario.name === "newline in final permitted byte")
+        assert.equal(bytesRead, limit);
+      if (scenario.short)
+        assert.equal(
+          bytesRead,
+          Buffer.byteLength(scenario.content.split("\n")[0]) +
+            (scenario.content.includes("\n") ? 1 : 0),
+        );
+      assert.equal(closed.length, 1, scenario.name);
+      assert.throws(() => fs.fstatSync(closed[0]), /EBADF/, scenario.name);
+    }
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("session matching keeps id and canonical path observations kind-aware", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-session-"));
   const path = join(root, "agent-session.jsonl");
   const alias = join(root, "alias-session.jsonl");
   const other = join(root, "other-session.jsonl");
   const missing = join(root, "missing-session.jsonl");
+  const loop = join(root, "loop-session.jsonl");
   writeFileSync(path, "{}");
   writeFileSync(other, "{}");
   symlinkSync(path, alias);
+  symlinkSync(loop, loop);
   try {
     assert.equal(
       matchesExpectedSession(
@@ -3068,28 +3257,32 @@ test("session matching keeps id and canonical path observations kind-aware", () 
         },
         { id: "different-id", path },
       ),
-      true,
+      false,
     );
     assert.equal(sameObservedSessionPath(alias, path), true);
     assert.equal(sameObservedSessionPath(missing, path), false);
     assert.equal(sameObservedSessionPath(missing, missing), true);
-    assert.throws(
-      () => sameObservedSessionPath(path, missing),
-      /could not canonicalize exact Pi session path/,
+    assert.equal(sameObservedSessionPath(path, missing), false);
+    assert.equal(
+      matchesExpectedSession(
+        {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "path",
+          value: path,
+        },
+        { path: missing },
+      ),
+      false,
     );
-    assert.throws(
-      () =>
-        matchesExpectedSession(
-          {
-            source: "herdr:pi",
-            agent: "pi",
-            kind: "path",
-            value: path,
-          },
-          { path: missing },
-        ),
-      /could not canonicalize exact Pi session path/,
-    );
+    for (const [observed, expected] of [
+      [path, loop],
+      [loop, path],
+    ])
+      assert.throws(
+        () => sameObservedSessionPath(observed, expected),
+        /could not canonicalize exact Pi session path.*ELOOP/,
+      );
     assert.equal(
       matchesExpectedSession(
         {
@@ -3102,17 +3295,98 @@ test("session matching keeps id and canonical path observations kind-aware", () 
       ),
       false,
     );
+    for (const [expected, matches] of [
+      [{ id: "different-id", path: missing }, true],
+      [{ id: "different-id" }, false],
+      [{ id: "different-id", path: join(root, "also-missing.jsonl") }, false],
+    ] as const)
+      assert.equal(
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+          expected,
+        ),
+        matches,
+      );
+    assert.equal(readPiSessionHeaderId(missing), undefined);
+    writeFileSync(missing, "");
+    assert.equal(readPiSessionHeaderId(missing), undefined);
+    for (const [expected, matches] of [
+      [{ id: "agent-session", path: missing }, true],
+      [{ id: "agent-session" }, false],
+      [{ id: "agent-session", path }, false],
+    ] as const)
+      assert.equal(
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+          expected,
+        ),
+        matches,
+      );
+    assert.deepEqual(readFileSync(missing), Buffer.alloc(0));
+    assert.equal(statSync(missing).size, 0);
+    const header = JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "agent-session",
+      timestamp: new Date().toISOString(),
+      cwd: root,
+    });
+    writeFileSync(missing, header);
+    assert.equal(readPiSessionHeaderId(missing), "agent-session");
+    for (const [expected, matches] of [
+      [{ id: "different-id", path: missing }, false],
+      [{ id: "agent-session", path: missing }, true],
+      [{ path: missing }, true],
+      [{ id: "agent-session" }, true],
+      [{ id: "different-id" }, false],
+    ] as const)
+      assert.equal(
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+          expected,
+        ),
+        matches,
+      );
+    assert.equal(readFileSync(missing, "utf8"), header);
+    for (const content of [
+      "{}",
+      "not JSON",
+      " ",
+      JSON.stringify({ type: "session", id: 123 }),
+      JSON.stringify({ type: "session", id: "" }),
+      JSON.stringify({ type: "message", id: "agent-session" }),
+      `not JSON\n${header}\n`,
+    ]) {
+      writeFileSync(missing, content);
+      assert.throws(() => readPiSessionHeaderId(missing));
+      for (const expected of [
+        { id: "agent-session", path: missing },
+        { id: "agent-session" },
+      ])
+        assert.equal(
+          matchesExpectedSession(
+            { source: "herdr:pi", agent: "pi", kind: "path", value: missing },
+            expected,
+          ),
+          false,
+        );
+      assert.equal(readFileSync(missing, "utf8"), content);
+    }
+    assert.throws(() => readPiSessionHeaderId(root), /EISDIR/);
     assert.equal(
       matchesExpectedSession(
-        {
-          source: "herdr:pi",
-          agent: "pi",
-          kind: "path",
-          value: missing,
-        },
-        { id: "different-id", path: missing },
+        { source: "herdr:pi", agent: "pi", kind: "path", value: root },
+        { id: "agent-session", path: root },
       ),
-      true,
+      false,
+    );
+    assert.throws(
+      () =>
+        matchesExpectedSession(
+          { source: "herdr:pi", agent: "pi", kind: "path", value: loop },
+          { id: "agent-session", path: loop },
+        ),
+      /could not canonicalize exact Pi session path.*ELOOP/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
