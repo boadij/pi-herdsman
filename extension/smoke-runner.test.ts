@@ -7,6 +7,8 @@ import {
   assistantResultForSession,
   chiefTreeFooter,
   chiefTreeSelectedRow,
+  chiefTreeBranchTransition,
+  countChiefTreeEvents,
   candidateArgs,
   chiefTreeProbeSource,
   distinctPaneCount,
@@ -34,7 +36,8 @@ import {
   nestedPaneInput,
   nestedPaneText,
   submitPaneCommand,
-  submitManagerLeave,
+  waitForEvidence,
+  parseHerdrOutput,
   parseSmokeArgs,
   formatSmokeFailure,
   managerDiagnosticLines,
@@ -506,13 +509,16 @@ test("manager diagnostics retain bounded pane evidence", () => {
       ...events.map((event) => `${prefix}${JSON.stringify(event)}`),
     ].join("\n"),
   );
-  assert.equal(lines.length, 4);
+  assert.equal(lines.length, 6);
   assert.ok(lines.every((line) => line.startsWith(prefix)));
   assert.doesNotMatch(lines.join("\n"), /secret/);
   assert.ok(lines.every((line) => line.length <= 512));
   assert.deepEqual(
     lines,
-    events.slice(0, 4).map((event) => `${prefix}${JSON.stringify(event)}`),
+    events.map(
+      (event) =>
+        `${prefix}${JSON.stringify(event.event === "project_assignment_send" && event.outcome === "rejected" ? { event: event.event, outcome: event.outcome, triggerTurn: event.triggerTurn } : event)}`,
+    ),
   );
 });
 
@@ -543,6 +549,18 @@ test("manager drain checkpoints are allowlisted, deduplicated and bounded withou
     { event: "inbox_catch", category: "drain" },
   ];
   const encode = (event: object) => `${prefix}${JSON.stringify(event)}`;
+  assert.deepEqual(
+    managerDiagnosticLines(
+      [
+        encode({ event: "inbox_preflight", reason: "held" }),
+        encode({ event: "inbox_preflight", reason: "pass" }),
+      ].join("\n"),
+    ),
+    [
+      encode({ event: "inbox_preflight", reason: "held" }),
+      encode({ event: "inbox_preflight", reason: "pass" }),
+    ],
+  );
   const lines = managerDiagnosticLines(
     [
       `${prefix}{malformed`,
@@ -570,7 +588,10 @@ test("manager drain checkpoints are allowlisted, deduplicated and bounded withou
       ),
     ].join("\n"),
   );
-  assert.deepEqual(lines, events.map(encode));
+  assert.deepEqual(
+    lines,
+    [...events.slice(1), { event: "inbox_candidates", count: 0 }].map(encode),
+  );
   assert.equal(lines.length, 16);
   assert.doesNotMatch(lines.join("\n"), /secret|sessionId|payload|path/);
   assert.ok(lines.every((line) => line.length <= 512));
@@ -651,6 +672,151 @@ test("smoke failure report separates stage from error details", () => {
     ),
     "stage: manager-leave-output-wait\nerror: TypeError: leave wait timed out",
   );
+  const stalled = Object.assign(new Error("control: no meaningful progress"), {
+    code: "SMOKE_STALLED",
+    smoke: {
+      stage: "control",
+      elapsedMs: 20,
+      inactiveMs: 15,
+      lastProgress: { count: 1 },
+      lastEvidence: { pane: "p1" },
+    },
+  });
+  assert.match(
+    formatSmokeFailure(stalled, "fallback"),
+    /kind: STALLED[\s\S]*last evidence: \{"pane":"p1"\}/,
+  );
+  const timeout = Object.assign(new Error("hard deadline"), {
+    code: "SMOKE_TIMEOUT",
+    smoke: { stage: "deadline", elapsedMs: 40, inactiveMs: 40 },
+  });
+  assert.match(formatSmokeFailure(timeout), /kind: TIMEOUT/);
+});
+
+test("evidence wait returns completion and distinguishes stalls from deadlines", async () => {
+  const ctx = {};
+  let calls = 0;
+  assert.equal(
+    await waitForEvidence(
+      ctx,
+      "quick",
+      async () => ({
+        done: ++calls === 2,
+        value: "ok",
+        progress: { count: calls },
+      }),
+      { timeoutMs: 1000, stallMs: 500, pollMs: 1 },
+    ),
+    "ok",
+  );
+  await assert.rejects(
+    waitForEvidence(
+      ctx,
+      "stuck",
+      async () => ({
+        done: false,
+        progress: { count: 1 },
+        evidence: { pane: "p1" },
+      }),
+      { timeoutMs: 1000, stallMs: 15, pollMs: 2 },
+    ),
+    (error) =>
+      error.code === "SMOKE_STALLED" &&
+      error.smoke.stage === "stuck" &&
+      error.smoke.lastEvidence.pane === "p1",
+  );
+  await assert.rejects(
+    waitForEvidence(
+      ctx,
+      "deadline",
+      async () => ({ done: false, progress: { count: 1 } }),
+      { timeoutMs: 12, stallMs: 1000, pollMs: 2 },
+    ),
+    (error) => error.code === "SMOKE_TIMEOUT",
+  );
+  const invariant = new Error("invalid identity");
+  await assert.rejects(
+    waitForEvidence(
+      ctx,
+      "invalid",
+      async () => {
+        throw invariant;
+      },
+      { timeoutMs: 1000, stallMs: 500 },
+    ),
+    (error) => error === invariant,
+  );
+  await assert.rejects(
+    waitForEvidence(
+      ctx,
+      "late-observation",
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { done: true, value: "late" };
+      },
+      { timeoutMs: 5, stallMs: 100 },
+    ),
+    (error) => error.code === "SMOKE_TIMEOUT",
+  );
+});
+
+test("evidence progress changes reset inactivity, identical evidence and read errors do not", async () => {
+  let count = 0;
+  const value = await waitForEvidence(
+    {},
+    "progress",
+    async () => {
+      count++;
+      await new Promise((resolve) => setTimeout(resolve, 8));
+      return {
+        done: count >= 8,
+        value: "done",
+        progress: { step: count >= 4 ? 2 : 1 },
+      };
+    },
+    { timeoutMs: 300, stallMs: 50, pollMs: 3 },
+  );
+  assert.equal(value, "done");
+  await assert.rejects(
+    waitForEvidence(
+      {},
+      "identical",
+      async () => ({ done: false, progress: { same: true } }),
+      { timeoutMs: 100, stallMs: 20, pollMs: 3 },
+    ),
+    (error) => error.code === "SMOKE_STALLED",
+  );
+  await assert.rejects(
+    waitForEvidence(
+      {},
+      "observation-error",
+      async () => ({ done: false, observationError: "temporary read failure" }),
+      { timeoutMs: 100, stallMs: 20, pollMs: 3 },
+    ),
+    (error) =>
+      error.code === "SMOKE_STALLED" &&
+      error.smoke.lastObservationError === "temporary read failure",
+  );
+});
+
+test("Herdr API output requires the current JSON envelope", () => {
+  assert.deepEqual(
+    parseHerdrOutput('{"id":"1","result":{"panes":[]}}', ["pane", "list"]),
+    { panes: [] },
+  );
+  assert.deepEqual(
+    parseHerdrOutput('{"client":{},"server":{}}', ["status", "--json"]),
+    { client: {}, server: {} },
+  );
+  for (const stdout of [
+    'noise {"id":"1","result":{}}',
+    '{"result":{}}',
+    '{"id":"1"}',
+    "no json",
+  ])
+    assert.throws(() => parseHerdrOutput(stdout, ["pane", "list"]), {
+      code: "SMOKE_PROTOCOL",
+    });
 });
 
 test("smoke model override wins without reading Git config", async () => {
@@ -1683,7 +1849,7 @@ test("nested pane text reads bounded Herdr stdout without JSON parsing", async (
   assert.equal(text, screen);
 });
 
-test("pane commands submit literal text with one explicit Enter", async () => {
+test("pane commands use one atomic pane run", async () => {
   const ctx = {
     paths: {
       herdrConfig: "/tmp/smoke/herdr.toml",
@@ -1695,45 +1861,15 @@ test("pane commands submit literal text with one explicit Enter", async () => {
     sessionName: "pi-herdsman-smoke-test",
   };
   const calls = [];
-  await submitPaneCommand(ctx, "w1:p2", "/chief", async (file, args) => {
-    calls.push([file, args]);
-    return { stdout: "", stderr: "", pid: 123 };
-  });
+  for (const command of ["/manager leave", "/chief"])
+    await submitPaneCommand(ctx, "w1:p2", command, async (file, args) => {
+      calls.push(args);
+      return { stdout: "", stderr: "", pid: 123 };
+    });
   assert.deepEqual(calls, [
-    ["herdr", ["pane", "send-text", "w1:p2", "/chief"]],
-    ["herdr", ["pane", "send-keys", "w1:p2", "enter"]],
+    ["pane", "run", "w1:p2", "/manager leave"],
+    ["pane", "run", "w1:p2", "/chief"],
   ]);
-});
-
-test("Manager leave submits text and Enter as one ordered pane operation", async () => {
-  const ctx = {
-    paths: {
-      herdrConfig: "/tmp/smoke/herdr.toml",
-      xdgConfig: "/tmp/smoke/xdg-config",
-      xdgState: "/tmp/smoke/xdg-state",
-      piAgent: "/tmp/smoke/pi-agent",
-      piSessions: "/tmp/smoke/pi-sessions",
-    },
-    sessionName: "pi-herdsman-smoke-test",
-  };
-  const calls = [];
-  await submitManagerLeave(ctx, "w1:p2", async (file, args, options) => {
-    calls.push([file, args]);
-    assert.equal(options.env.HERDR_SESSION, ctx.sessionName);
-    return { stdout: "", stderr: "", pid: 123 };
-  });
-  assert.deepEqual(calls, [
-    ["herdr", ["pane", "run", "w1:p2", "/manager leave"]],
-  ]);
-  let attempts = 0;
-  await assert.rejects(
-    submitManagerLeave(ctx, "w1:p2", async () => {
-      attempts++;
-      throw new Error("submission uncertain");
-    }),
-    /submission uncertain/,
-  );
-  assert.equal(attempts, 1);
 });
 
 test("Chief tree probe is opt-in, last in root extension order, and validates three tool snapshots", () => {
@@ -1784,10 +1920,87 @@ test("Chief tree probe is opt-in, last in root extension order, and validates th
   assert.deepEqual(snapshots.get("lead"), ["agent", "chief"]);
   assert.notDeepEqual(snapshots.get("chief"), snapshots.get("lead"));
   assert.deepEqual(snapshots.get("tree"), snapshots.get("chief"));
-  assert.throws(() =>
+  assert.deepEqual(
     parseToolSnapshots(
       '{"label":"lead","tools":[]}\n{"label":"lead","tools":[]}',
+    ).get("lead"),
+    [],
+  );
+});
+
+test("Chief tree snapshots accept identical duplicate events but reject conflicts", () => {
+  assert.deepEqual(
+    [
+      ...parseToolSnapshots(
+        '{"label":"tree","tools":["a"]}\n{"label":"tree","tools":["a"]}',
+      ).get("tree"),
+    ],
+    ["a"],
+  );
+  assert.throws(
+    () =>
+      parseToolSnapshots(
+        '{"label":"tree","tools":["a"]}\n{"label":"tree","tools":["b"]}',
+      ),
+    /conflicting tree/,
+  );
+});
+
+test("Chief tree branch wait ignores a delayed pre-selection tree event", () => {
+  const snapshots = new Map([
+    ["lead", []],
+    ["chief", []],
+    ["tree", []],
+  ]);
+  const selectionStartedAt = 200;
+  // The event occurred before selection but its append arrives afterward.
+  const delayedPreSelectionEvent = '{"label":"tree","at":200,"tools":[]}';
+  const delayedCount = countChiefTreeEvents(
+    delayedPreSelectionEvent,
+    selectionStartedAt,
+  );
+  assert.equal(delayedCount, 0);
+  assert.deepEqual(
+    chiefTreeBranchTransition(
+      "branch opening",
+      snapshots,
+      selectionStartedAt,
+      delayedCount,
     ),
+    {
+      done: false,
+      value: undefined,
+      progress: { treeEvents: 0, treeSnapshot: false },
+    },
+  );
+  assert.deepEqual(
+    chiefTreeBranchTransition(
+      "Summarize branch?",
+      snapshots,
+      selectionStartedAt,
+      delayedCount,
+    ),
+    {
+      done: true,
+      value: { state: "summary-dialog", selectionStartedAt, treeEvents: 0 },
+      progress: { state: "summary-dialog" },
+    },
+  );
+  const afterSelection = `${delayedPreSelectionEvent}\n{"label":"tree","at":201,"tools":[]}`;
+  const freshCount = countChiefTreeEvents(afterSelection, selectionStartedAt);
+  assert.equal(freshCount, 1);
+  assert.deepEqual(
+    chiefTreeBranchTransition(
+      "branch opened",
+      snapshots,
+      selectionStartedAt,
+      freshCount,
+    ),
+    {
+      done: true,
+      value: { state: "tree-loaded", treeEvents: 1 },
+      progress: { treeEvents: 1, treeSnapshot: true },
+    },
   );
 });
 
@@ -1886,14 +2099,12 @@ test("core counts distinct non-root pane/PID processes with both extension paths
     2,
   );
   const panes = listedPanes({
-    result: {
-      panes: [
-        { pane_id: "root", definition: "lead" },
-        { pane_id: "child-pane" },
-        { pane_id: "grandchild-pane" },
-        { pane_id: "unrelated-pane" },
-      ],
-    },
+    panes: [
+      { pane_id: "root", definition: "lead" },
+      { pane_id: "child-pane" },
+      { pane_id: "grandchild-pane" },
+      { pane_id: "unrelated-pane" },
+    ],
   });
   const response = {
     "child-pane": {
@@ -1982,5 +2193,22 @@ test("process evidence requires both exact extension paths and excludes root pan
       ["missing-extension", false, null],
       ["missing-pane", false, "pane disappeared"],
     ],
+  );
+});
+
+test("process-info protocol violations escape pane inspection immediately", async () => {
+  await assert.rejects(
+    inspectPaneProcesses(
+      ["child"],
+      "root",
+      async () =>
+        parseHerdrOutput('{"result":{"process_info":{}}}', [
+          "pane",
+          "process-info",
+        ]),
+      "/candidate/dist/index.js",
+      "/isolated/herdr-agent-state.ts",
+    ),
+    { code: "SMOKE_PROTOCOL" },
   );
 });
