@@ -64,6 +64,15 @@ snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
 replace the broader manual Chief supervision checks below.
 
+Each scenario is one acceptance invocation. Smoke reports immediate failures,
+inactivity stalls, and hard timeouts separately. Provider-backed stages allow
+longer silence because Pi persists ordinary messages at `message_end`; local
+control transitions use a shorter inactivity budget. Read-only observations
+may tolerate brief transient failures, but smoke never retries a mutation whose
+delivery is ambiguous. Failure diagnostics and cleanup are bounded. A failed
+scenario is never automatically rerun and converted into a pass: success means
+one successful invocation.
+
 The harness must run inside Herdr and requires a configured smoke model or an
 explicit `--model` override. The smoke model is independent of the invoking Pi
 session's active model and reasoning level. Live smoke uses real provider
