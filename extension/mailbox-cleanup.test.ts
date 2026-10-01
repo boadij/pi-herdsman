@@ -34,7 +34,7 @@ const {
 test("state removal completes cleanup when directory pruning fails", () => {
   const path = agentMailboxPath("cleanup-test", `agent-${process.pid}`);
   writeAgentState(path, {
-    version: 4,
+    version: 5,
     runId: "11111111-1111-4111-8111-111111111111",
     ownerSessionId: "22222222-2222-4222-8222-222222222222",
     workspaceId: "cleanup-test",

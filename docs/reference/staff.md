@@ -80,7 +80,8 @@ are excluded; the internal session-file path is not returned.
 Queues one bounded follow-up to the exact direct report without waiting for
 completion. `files` accepts ordinary paths, reusable direct Agent refs, and
 canonical result refs already supplied as evidence. Attachments are prepared
-at submission; the coordination record contains text.
+at submission; the coordination record carries the prepared text and any
+hidden semantic-result bindings needed for the recipient to forward them.
 
 ## `staff_delegate`
 

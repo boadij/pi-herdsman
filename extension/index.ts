@@ -43,6 +43,9 @@ import {
   herdsmanTempRoot,
   resultPath as canonicalResultPath,
   resultRef,
+  parseSemanticResultRef,
+  isResultBinding,
+  type ResultBinding,
 } from "./storage.ts";
 import { Type } from "typebox";
 import {
@@ -97,6 +100,8 @@ import {
   agentControlState,
   isSpawnPlacement,
   type SpawnPlacement,
+  type MessageFileInput,
+  type PreparedMessageInput,
 } from "./core.ts";
 import {
   AGENT_COORDINATION_TOOLS,
@@ -259,13 +264,14 @@ import {
 import type { SupervisionContextStatus } from "./presentation.ts";
 
 const HERDSMAN_VERSION = packageMetadata.version;
-const RESERVED_PREFIX = "__PI_HERDSMAN_AGENT_V4__:";
+const RESERVED_PREFIX = "__PI_HERDSMAN_AGENT_V5__:";
 const LEAD_INSTANCE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Keep model-facing lead handles aligned with Pi's SessionManager grammar.
 const PI_SESSION_ID_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$";
 const HERDSMAN_EXTENSION_PATH = fileURLToPath(import.meta.url);
 const AGENT_DEFINITIONS_ENTRY = "pi-herdsman-agent-definitions";
+const RESULT_REF_ENTRY = "pi-herdsman-result-ref";
 const HERD_RUN_ENTRY = "pi-herdsman-herd-run";
 const AGENT_CONTEXT_RETIRED_ENTRY = "pi-herdsman-agent-context-retired";
 const CONTEXT_RETIREMENT_INSTRUCTION =
@@ -1077,14 +1083,17 @@ async function messageLimits(
     mailbox: { bytes: config.mailboxPayloadLimitBytes },
   };
 }
-async function prepareCoordinationText(
+async function prepareCoordinationInput(
   ctx: ExtensionContext,
   text: string,
-  files: readonly string[],
+  files: readonly MessageFileInput[],
   operation: string,
   heading: "Message" | "Reply" | "Question",
-  recordForText: (text: string) => ChiefMessageRecord | number,
-): Promise<string> {
+  recordForInput: (
+    text: string,
+    resultBindings: readonly ResultBinding[],
+  ) => ChiefMessageRecord | number,
+): Promise<PreparedMessageInput> {
   const limits = await messageLimits(ctx);
   return prepareMessageInput(text, files, ctx.cwd, operation, heading, {
     inlineLimitBytes: limits.inline.bytes,
@@ -1092,11 +1101,11 @@ async function prepareCoordinationText(
       limits.mailbox.bytes,
       COORDINATION_MESSAGE_MAX_BYTES,
     ),
-    serializedBytes: (candidate) => {
-      const record = recordForText(candidate);
+    serializedBytes: (candidate, resultBindings) => {
+      const record = recordForInput(candidate, resultBindings);
       return typeof record === "number" ? record : chiefMessageBytes(record);
     },
-  }).text;
+  });
 }
 async function contextAgentDefinitions(ctx: ExtensionContext) {
   const projectTrusted = ctx.isProjectTrusted();
@@ -2584,7 +2593,7 @@ function envManagedAgent(ctx: ExtensionContext): ManagedAgentState | undefined {
   const e = process.env;
   if (managedAgentEnvironmentError()) return undefined;
   return {
-    version: 4,
+    version: 5,
     runId: e.PI_HERDSMAN_RUN_ID,
     ownerSessionId: e.PI_HERDSMAN_OWNER_SESSION_ID,
     workspaceId: e.PI_HERDSMAN_WORKSPACE_ID,
@@ -2630,7 +2639,7 @@ function sameManagedAgentDurableState(
 }
 function runtimeIdentityState(runtime: Runtime): ManagedAgentState {
   return {
-    version: 4,
+    version: 5,
     runId: runtime.runId,
     ownerSessionId: runtime.ownerSessionId,
     workspaceId: runtime.workspaceId,
@@ -2653,13 +2662,14 @@ async function submit(
   createdAt = Date.now(),
   requestId = randomUUID(),
   operation = kind === "task" ? "delegate" : kind,
+  resultBindings: readonly ResultBinding[] = [],
 ): Promise<string> {
   if (!text.trim())
     fail("invalid_request", "Message must not be empty", operation);
   if (kind === "reply" && !askId)
     fail("invalid_request", "Reply request is missing its ask ID", operation);
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: runtime.runId,
     requestId,
     ownerSessionId: runtime.ownerSessionId,
@@ -2669,6 +2679,7 @@ async function submit(
     kind,
     ...(kind === "reply" ? { askId } : {}),
     text,
+    ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
     createdAt,
   };
   const limits = await messageLimits(ctx);
@@ -2750,11 +2761,13 @@ async function submit(
       const category: ErrorCategory =
         ack.code === "busy" || ack.code === "idle"
           ? "agent_busy"
-          : ack.code === "invalid"
-            ? "invalid_request"
-            : ack.code === "identity"
-              ? "target_not_found"
-              : "internal_failure";
+          : ack.code === "ambiguous"
+            ? "target_ambiguous"
+            : ack.code === "invalid"
+              ? "invalid_request"
+              : ack.code === "identity"
+                ? "target_not_found"
+                : "internal_failure";
       fail(category, ack.message ?? "Agent rejected request", operation);
     }
     if (kind === "task") {
@@ -3451,11 +3464,19 @@ function nextAgentResultIndex(
 
   for (const entry of entries) {
     const details = agentResultDetails(entry);
-    if (details?.agentLabel !== agentLabel) continue;
+    if (details?.agentLabel === agentLabel) {
+      const index = details.resultIndex;
+      if (
+        typeof index === "number" &&
+        Number.isSafeInteger(index) &&
+        index > max
+      )
+        max = index;
+    }
 
-    const index = details.resultIndex;
-    if (typeof index === "number" && Number.isSafeInteger(index) && index > max)
-      max = index;
+    const imported = importedResultBinding(entry);
+    const semantic = imported && parseSemanticResultRef(imported.ref);
+    if (semantic?.agent === agentLabel) max = Math.max(max, semantic.index);
   }
 
   return max + 1;
@@ -3500,57 +3521,104 @@ function canonicalResultRef(
 
   return expected;
 }
+function importedResultBinding(entry: unknown): ResultBinding | undefined {
+  if (!entry || typeof entry !== "object") return undefined;
+  const record = entry as {
+    type?: unknown;
+    customType?: unknown;
+    data?: unknown;
+  };
+  return record.type === "custom" &&
+    record.customType === RESULT_REF_ENTRY &&
+    isResultBinding(record.data)
+    ? record.data
+    : undefined;
+}
+function canonicalRefsForSemanticResult(
+  entries: readonly unknown[],
+  ref: string,
+  operation: string,
+): Set<string> {
+  const semantic = parseSemanticResultRef(ref);
+  if (!semantic)
+    fail(
+      "invalid_request",
+      `Invalid result ref: ${ref}. Copy the exact result ref shown by the agent completion.`,
+      operation,
+    );
+  const refs = new Set<string>();
+  for (const entry of entries) {
+    const details = agentResultDetails(entry);
+    if (
+      details?.agentLabel === semantic.agent &&
+      details.resultIndex === semantic.index
+    )
+      refs.add(canonicalResultRef(details, operation));
+    const imported = importedResultBinding(entry);
+    if (imported?.ref === ref) refs.add(imported.canonicalRef);
+  }
+  return refs;
+}
+function importResultBindings(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  bindings: readonly ResultBinding[] | undefined,
+  operation: string,
+): void {
+  if (!bindings?.length) return;
+  const branch = ctx.sessionManager.getBranch();
+  const pending = new Map<string, string>();
+  for (const binding of bindings) {
+    if (!isResultBinding(binding))
+      fail("internal_failure", "Invalid result binding", operation);
+    const incoming = pending.get(binding.ref);
+    if (incoming !== undefined && incoming !== binding.canonicalRef)
+      fail(
+        "target_ambiguous",
+        `Result ref ${binding.ref} has conflicting imported bindings`,
+        operation,
+      );
+    const existing = canonicalRefsForSemanticResult(
+      branch,
+      binding.ref,
+      operation,
+    );
+    if (
+      existing.size > 1 ||
+      (existing.size === 1 && !existing.has(binding.canonicalRef))
+    )
+      fail(
+        "target_ambiguous",
+        `Result ref ${binding.ref} conflicts with the current branch`,
+        operation,
+      );
+    if (!existing.size) pending.set(binding.ref, binding.canonicalRef);
+  }
+  for (const [ref, canonicalRef] of pending)
+    pi.appendEntry(RESULT_REF_ENTRY, { ref, canonicalRef });
+}
 function resolveMessageFiles(
   ctx: ExtensionContext,
   files: readonly string[] | undefined,
   operation: string,
-): string[] {
+): MessageFileInput[] {
   if (!files?.length) return [];
-  if (!files.some((file) => file.startsWith("result:") && file.includes("#")))
-    return [...files];
-
   const branch = ctx.sessionManager.getBranch();
   return files.map((file) => {
     if (!file.startsWith("result:") || !file.includes("#")) return file;
-
-    const value = file.slice("result:".length);
-    const separator = value.lastIndexOf("#");
-    const agent = value.slice(0, separator);
-    const rawIndex = value.slice(separator + 1);
-    const index = Number(rawIndex);
-
-    if (
-      !validAgentLabel(agent) ||
-      !Number.isSafeInteger(index) ||
-      index < 1 ||
-      String(index) !== rawIndex
-    )
+    if (!parseSemanticResultRef(file))
       fail(
         "invalid_request",
         `Invalid result ref: ${file}. Copy the exact result ref shown by the agent completion.`,
         operation,
       );
-
-    const matches = branch
-      .map(agentResultDetails)
-      .filter(
-        (details): details is Record<string, unknown> =>
-          !!details &&
-          details.agentLabel === agent &&
-          details.resultIndex === index,
-      );
-
-    if (!matches.length)
+    const refs = canonicalRefsForSemanticResult(branch, file, operation);
+    if (!refs.size)
       fail(
         "target_not_found",
         `Result ref ${file} is not available on the current branch`,
         operation,
       );
-
-    const refs = new Set(
-      matches.map((details) => canonicalResultRef(details, operation)),
-    );
-
     if (refs.size !== 1)
       fail(
         "target_ambiguous",
@@ -3558,7 +3626,7 @@ function resolveMessageFiles(
         operation,
       );
 
-    return refs.values().next().value!;
+    return { ref: file, canonicalRef: refs.values().next().value! };
   });
 }
 async function deliverResultUnsafe(
@@ -4176,6 +4244,7 @@ function deliverAskUnsafe(
   validateIdentity(runtime, state);
   const entries = ctx.sessionManager.getBranch();
   if (hasDeliveredAsk(entries, ask)) return true;
+  importResultBindings(pi, ctx, ask.resultBindings, "ask_owner");
   // Delivery completion is observed from the session branch; synchronous
   // Message failures are retryable, and ask.json remains the durable anchor.
   pi.sendMessage(
@@ -5524,9 +5593,10 @@ function requestRecordBytesFor(
   askId: string | undefined,
   createdAt: number,
   requestId: string,
+  resultBindings: readonly ResultBinding[],
 ): number {
   return mailboxRecordBytes({
-    version: 4,
+    version: 5,
     runId: runtime.runId,
     requestId,
     ownerSessionId: runtime.ownerSessionId,
@@ -5536,6 +5606,7 @@ function requestRecordBytesFor(
     kind,
     ...(kind === "reply" ? { askId } : {}),
     text,
+    ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
     createdAt,
   });
 }
@@ -5550,10 +5621,11 @@ function prospectiveAssignmentFits(
   createdAt: number,
   requestId: string,
   mailboxLimitBytes: number,
+  resultBindings: readonly ResultBinding[],
 ): boolean {
   return (
     mailboxRecordBytes({
-      version: 4,
+      version: 5,
       runId,
       requestId,
       ownerSessionId,
@@ -5562,6 +5634,7 @@ function prospectiveAssignmentFits(
       paneId,
       kind: "task",
       text,
+      ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
       createdAt,
     }) <= mailboxLimitBytes
   );
@@ -5572,9 +5645,10 @@ function askRecordBytesFor(
   askId: string,
   text: string,
   createdAt: number,
+  resultBindings: readonly ResultBinding[],
 ): number {
   return mailboxRecordBytes({
-    version: 4,
+    version: 5,
     askId,
     requestId: state.activeRequestId!,
     runId: state.runId,
@@ -5584,6 +5658,7 @@ function askRecordBytesFor(
     paneId: state.paneId,
     piSessionId: state.piSessionId,
     question: text,
+    ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
     createdAt,
   });
 }
@@ -5960,7 +6035,7 @@ async function actionUnsafe(
         "Task",
         {
           inlineLimitBytes: limits.inline.bytes,
-          fits: (text) =>
+          fits: (text, resultBindings) =>
             prospectiveAssignmentFits(
               assignment!.runId,
               assignment!.ownerSessionId,
@@ -5971,6 +6046,7 @@ async function actionUnsafe(
               assignment!.createdAt,
               assignment!.requestId,
               limits.mailbox.bytes,
+              resultBindings,
             ),
         },
       );
@@ -6306,7 +6382,7 @@ async function actionUnsafe(
         {
           inlineLimitBytes: limits.inline.bytes,
           mailboxLimitBytes: limits.mailbox.bytes,
-          serializedBytes: (text) =>
+          serializedBytes: (text, resultBindings) =>
             requestRecordBytesFor(
               runtime,
               "task",
@@ -6314,6 +6390,7 @@ async function actionUnsafe(
               undefined,
               assignment!.createdAt,
               assignment!.requestId,
+              resultBindings,
             ),
         },
       );
@@ -6334,6 +6411,7 @@ async function actionUnsafe(
         assignment!.createdAt,
         assignment!.requestId,
         p.action,
+        assignmentInput!.resultBindings,
       );
       pendingStart.requestId = requestId;
       accepted = true;
@@ -6589,7 +6667,7 @@ async function actionUnsafe(
       {
         inlineLimitBytes: limits.inline.bytes,
         mailboxLimitBytes: limits.mailbox.bytes,
-        serializedBytes: (text) =>
+        serializedBytes: (text, resultBindings) =>
           requestRecordBytesFor(
             runtime,
             "reply",
@@ -6597,6 +6675,7 @@ async function actionUnsafe(
             askId,
             replyCreatedAt,
             replyRequestId,
+            resultBindings,
           ),
       },
     );
@@ -6611,6 +6690,7 @@ async function actionUnsafe(
       replyCreatedAt,
       replyRequestId,
       "reply",
+      replyInput.resultBindings,
     );
     return {
       ok: true,
@@ -6635,7 +6715,7 @@ async function actionUnsafe(
     {
       inlineLimitBytes: limits.inline.bytes,
       mailboxLimitBytes: limits.mailbox.bytes,
-      serializedBytes: (text) =>
+      serializedBytes: (text, resultBindings) =>
         requestRecordBytesFor(
           runtime,
           controlAction,
@@ -6643,6 +6723,7 @@ async function actionUnsafe(
           undefined,
           requestCreatedAt,
           controlRequestId,
+          resultBindings,
         ),
     },
   );
@@ -6657,6 +6738,7 @@ async function actionUnsafe(
     requestCreatedAt,
     controlRequestId,
     controlAction,
+    messageInput.resultBindings,
   );
   return {
     ok: true,
@@ -7710,7 +7792,7 @@ export default function (pi: ExtensionAPI): void {
     ctx: ExtensionContext,
     assignment: ProjectAssignment,
     message: string,
-    files: readonly string[] = [],
+    files: readonly MessageFileInput[] = [],
     operation = "supervisor_message",
   ): Promise<ProjectMessage | undefined> => {
     const sessionId = ctx.sessionManager.getSessionId();
@@ -7723,30 +7805,36 @@ export default function (pi: ExtensionAPI): void {
     if (!current || current.id !== sessionId) return undefined;
     const id = randomUUID();
     const createdAt = Date.now();
-    const text = await prepareCoordinationText(
+    const prepared = await prepareCoordinationInput(
       ctx,
       message,
       files,
       operation,
       "Message",
-      (candidate) =>
+      (candidate, resultBindings) =>
         projectMessageBytes({
-          version: 1,
+          version: 2,
           id,
           repoKey: assignment.repoKey,
           branch: assignment.branch,
           fromSessionId: sessionId,
           text: candidate,
+          ...(resultBindings.length
+            ? { resultBindings: [...resultBindings] }
+            : {}),
           createdAt,
         }),
     );
     const record: ProjectMessage = {
-      version: 1,
+      version: 2,
       id,
       repoKey: assignment.repoKey,
       branch: assignment.branch,
       fromSessionId: sessionId,
-      text,
+      text: prepared.text,
+      ...(prepared.resultBindings.length
+        ? { resultBindings: prepared.resultBindings }
+        : {}),
       createdAt,
     };
     return withProjectAssignmentLock(
@@ -7879,6 +7967,7 @@ export default function (pi: ExtensionAPI): void {
           stillAssigned.id !== assignment.id
         )
           return 0;
+        importResultBindings(pi, ctx, record.resultBindings, "project_message");
         await pi.sendMessage(
           {
             customType: "pi-herdsman-project_message",
@@ -8046,6 +8135,7 @@ export default function (pi: ExtensionAPI): void {
     expectedTarget: PeerLeadRecord,
     recordId = randomUUID(),
     createdAt = Date.now(),
+    resultBindings: readonly ResultBinding[] = [],
   ): Promise<ChiefMessageRecord> => {
     if (
       controllerScope?.kind !== "lead" ||
@@ -8091,7 +8181,7 @@ export default function (pi: ExtensionAPI): void {
     // message lock are independent process locks, so replacement can race
     // after this reread and before durable publication.
     const record: ChiefMessageRecord = {
-      version: 1,
+      version: 2,
       id: recordId,
       leaseId: sender.claim.id,
       kind: "peer_message",
@@ -8099,6 +8189,7 @@ export default function (pi: ExtensionAPI): void {
       toSessionId: target.piSessionId,
       leadSessionId: sender.piSessionId,
       text,
+      ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
       createdAt,
     };
     writeCoordinationMessage(record, peerRuntime());
@@ -8189,14 +8280,24 @@ export default function (pi: ExtensionAPI): void {
       const matches = listProjectAssignments(
         supervisionRuntime(),
         scope.repoKey,
-      ).filter(
-        (assignment) =>
+      ).filter((assignment) => {
+        const expected = assignment.resultBindings ?? [];
+        const actual = record.resultBindings ?? [];
+
+        return (
           assignment.id === sessionId &&
           record.branch === assignment.branch &&
           assignment.repoKey === scope.repoKey &&
           assignment.text &&
-          record.text === projectAssignmentInstruction(assignment),
-      );
+          record.text === projectAssignmentInstruction(assignment) &&
+          actual.length === expected.length &&
+          actual.every(
+            (binding, index) =>
+              binding.ref === expected[index]?.ref &&
+              binding.canonicalRef === expected[index]?.canonicalRef,
+          )
+        );
+      });
       const assignment = matches.length === 1 ? matches[0] : undefined;
       if (!assignment)
         return projectAssignmentAuthorized(
@@ -8368,6 +8469,7 @@ export default function (pi: ExtensionAPI): void {
     createdAt = Date.now(),
     runtimeOverride?: ReturnType<typeof supervisionRuntime>,
     expectedSupervisor?: { piSessionId: string; leaseId: string },
+    resultBindings: readonly ResultBinding[] = [],
   ): ChiefMessageRecord => {
     assertCurrentLeadCoordination(ctx);
     if (
@@ -8389,7 +8491,7 @@ export default function (pi: ExtensionAPI): void {
     if (chief.piSessionId === leadSessionId)
       throw new Error("Supervisor target is invalid");
     const record: ChiefMessageRecord = {
-      version: 1,
+      version: 2,
       id: recordId ?? randomUUID(),
       leaseId: chief.leaseId,
       kind,
@@ -8397,6 +8499,7 @@ export default function (pi: ExtensionAPI): void {
       toSessionId: chief.piSessionId,
       leadSessionId,
       text,
+      ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
       createdAt,
     };
     // Revalidate the descriptor and its live pane immediately before the
@@ -8555,7 +8658,11 @@ export default function (pi: ExtensionAPI): void {
             throw error;
           }
         },
-        sendMessage: async (message: unknown, options: any) => {
+        sendMessage: async (
+          message: unknown,
+          options: any,
+          record: ChiefMessageRecord,
+        ) => {
           const projectAssignment =
             (message as any)?.customType === "pi-herdsman-project_assignment";
           try {
@@ -8563,6 +8670,7 @@ export default function (pi: ExtensionAPI): void {
               throw new Error(
                 "Coordination delivery deferred while recipient is active",
               );
+            importResultBindings(pi, ctx, record.resultBindings, record.kind);
             const result = await pi.sendMessage(message, options);
             if (projectAssignment)
               managerDiagnostic("project_assignment_send", {
@@ -9946,7 +10054,7 @@ export default function (pi: ExtensionAPI): void {
         if (!fresh || !sameManagerDescriptor(fresh, manager))
           throw new Error("Manager changed during delegation");
         writeChiefMessage({
-          version: 1,
+          version: 2,
           id,
           leaseId: manager.leaseId,
           kind: "project_assignment",
@@ -9955,6 +10063,9 @@ export default function (pi: ExtensionAPI): void {
           leadSessionId: id,
           branch: unresolved!.branch,
           text: projectAssignmentInstruction(unresolved!),
+          ...(unresolved!.resultBindings?.length
+            ? { resultBindings: unresolved!.resultBindings }
+            : {}),
           createdAt: Date.now(),
         });
         return {
@@ -10014,14 +10125,14 @@ export default function (pi: ExtensionAPI): void {
       if (unresolved) assignment = unresolved;
       else {
         const createdAt = Date.now();
-        const text = await prepareCoordinationText(
+        const prepared = await prepareCoordinationInput(
           ctx,
           params.task,
           resolveMessageFiles(ctx, params.files, "staff_delegate"),
           "staff_delegate",
           "Message",
-          (candidate) => ({
-            version: 1,
+          (candidate, resultBindings) => ({
+            version: 2,
             id,
             leaseId: manager.leaseId,
             kind: "project_assignment",
@@ -10030,6 +10141,9 @@ export default function (pi: ExtensionAPI): void {
             leadSessionId: "x".repeat(512),
             branch,
             text: projectAssignmentInstruction({ text: candidate }),
+            ...(resultBindings.length
+              ? { resultBindings: [...resultBindings] }
+              : {}),
             createdAt,
           }),
         );
@@ -10040,11 +10154,14 @@ export default function (pi: ExtensionAPI): void {
         )
           throw new Error("Manager changed before delegation");
         assignment = {
-          version: 1,
+          version: 2,
           id,
           repoKey: manager.repoKey,
           branch,
-          text,
+          text: prepared.text,
+          ...(prepared.resultBindings.length
+            ? { resultBindings: prepared.resultBindings }
+            : {}),
         };
         writeProjectAssignment(runtime, assignment);
       }
@@ -10311,7 +10428,7 @@ export default function (pi: ExtensionAPI): void {
         };
         await assertManagerCurrent();
         writeChiefMessage({
-          version: 1,
+          version: 2,
           id: assignment.id,
           leaseId: manager.leaseId,
           kind: "project_assignment",
@@ -10320,6 +10437,9 @@ export default function (pi: ExtensionAPI): void {
           leadSessionId,
           branch: assignment.branch,
           text: projectAssignmentInstruction(assignment),
+          ...(assignment.resultBindings?.length
+            ? { resultBindings: assignment.resultBindings }
+            : {}),
           createdAt: Date.now(),
         });
         let rediscovered: any;
@@ -12047,14 +12167,14 @@ export default function (pi: ExtensionAPI): void {
             if (!chief) throw new Error("No active supervisor is available");
             const recordId = randomUUID();
             const createdAt = Date.now();
-            const text = await prepareCoordinationText(
+            const prepared = await prepareCoordinationInput(
               ctx,
               params.message,
               resolveMessageFiles(ctx, params.files, "supervisor_message"),
               "supervisor_message",
               "Message",
-              (candidate) => ({
-                version: 1,
+              (candidate, resultBindings) => ({
+                version: 2,
                 id: recordId,
                 leaseId: chief.leaseId,
                 kind:
@@ -12065,15 +12185,21 @@ export default function (pi: ExtensionAPI): void {
                 toSessionId: chief.piSessionId,
                 leadSessionId: ctx.sessionManager.getSessionId(),
                 text: candidate,
+                ...(resultBindings.length
+                  ? { resultBindings: [...resultBindings] }
+                  : {}),
                 createdAt,
               }),
             );
             record = await queueChiefRecord(
               activeRole() === "manager" ? "manager_message" : "lead_message",
-              text,
+              prepared.text,
               ctx,
               recordId,
               createdAt,
+              undefined,
+              undefined,
+              prepared.resultBindings,
             );
           } catch (error) {
             try {
@@ -12213,14 +12339,14 @@ export default function (pi: ExtensionAPI): void {
             );
           const recordId = randomUUID();
           const createdAt = Date.now();
-          const text = await prepareCoordinationText(
+          const prepared = await prepareCoordinationInput(
             ctx,
             params.message,
             resolveMessageFiles(ctx, params.files, "peer.message"),
             "peer.message",
             "Message",
-            (candidate) => ({
-              version: 1,
+            (candidate, resultBindings) => ({
+              version: 2,
               id: recordId,
               leaseId: sender.claim.id,
               kind: "peer_message",
@@ -12228,17 +12354,21 @@ export default function (pi: ExtensionAPI): void {
               toSessionId: target.piSessionId,
               leadSessionId: sender.piSessionId,
               text: candidate,
+              ...(resultBindings.length
+                ? { resultBindings: [...resultBindings] }
+                : {}),
               createdAt,
             }),
           );
           const record = await queuePeerRecord(
-            text,
+            prepared.text,
             target.piSessionId,
             ctx,
             sender,
             target,
             recordId,
             createdAt,
+            prepared.resultBindings,
           );
           return {
             content: [
@@ -12525,14 +12655,14 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Chief lease is no longer active");
           const recordId = randomUUID();
           const createdAt = Date.now();
-          const text = await prepareCoordinationText(
+          const prepared = await prepareCoordinationInput(
             ctx,
             params.message,
             resolveMessageFiles(ctx, params.files, `staff.${params.action}`),
             `staff.${params.action}`,
             "Message",
-            (candidate) => ({
-              version: 1,
+            (candidate, resultBindings) => ({
+              version: 2,
               id: recordId,
               leaseId: finalChief.leaseId,
               kind:
@@ -12541,6 +12671,9 @@ export default function (pi: ExtensionAPI): void {
               toSessionId: reportSession(lead),
               leadSessionId: reportSession(lead),
               text: candidate,
+              ...(resultBindings.length
+                ? { resultBindings: [...resultBindings] }
+                : {}),
               createdAt,
             }),
           );
@@ -12564,7 +12697,7 @@ export default function (pi: ExtensionAPI): void {
               "Lead or Chief changed before the message was queued",
             );
           const record: ChiefMessageRecord = {
-            version: 1,
+            version: 2,
             id: recordId,
             leaseId: finalChief.leaseId,
             kind:
@@ -12572,7 +12705,10 @@ export default function (pi: ExtensionAPI): void {
             fromSessionId: finalChief.piSessionId,
             toSessionId: reportSession(lead),
             leadSessionId: reportSession(lead),
-            text,
+            text: prepared.text,
+            ...(prepared.resultBindings.length
+              ? { resultBindings: prepared.resultBindings }
+              : {}),
             createdAt,
           };
           const runtime = supervisionRuntime();
@@ -14869,8 +15005,27 @@ export default function (pi: ExtensionAPI): void {
       const askId = randomUUID();
       const askCreatedAt = Date.now();
       const limits = await messageLimits(ctx);
+      const prepared = prepareMessageInput(
+        params.question,
+        resolveMessageFiles(ctx, params.files, "ask_owner"),
+        state.cwd,
+        "ask_owner",
+        "Question",
+        {
+          inlineLimitBytes: limits.inline.bytes,
+          mailboxLimitBytes: limits.mailbox.bytes,
+          serializedBytes: (text, resultBindings) =>
+            askRecordBytesFor(
+              state!,
+              askId,
+              text,
+              askCreatedAt,
+              resultBindings,
+            ),
+        },
+      );
       const ask: AskRecord = {
-        version: 4,
+        version: 5,
         askId,
         requestId: state.activeRequestId,
         runId: state.runId,
@@ -14879,19 +15034,10 @@ export default function (pi: ExtensionAPI): void {
         agentLabel: state.agentLabel,
         paneId: state.paneId,
         piSessionId: state.piSessionId,
-        question: prepareMessageInput(
-          params.question,
-          resolveMessageFiles(ctx, params.files, "ask_owner"),
-          state.cwd,
-          "ask_owner",
-          "Question",
-          {
-            inlineLimitBytes: limits.inline.bytes,
-            mailboxLimitBytes: limits.mailbox.bytes,
-            serializedBytes: (text) =>
-              askRecordBytesFor(state!, askId, text, askCreatedAt),
-          },
-        ).text,
+        question: prepared.text,
+        ...(prepared.resultBindings.length
+          ? { resultBindings: prepared.resultBindings }
+          : {}),
         createdAt: askCreatedAt,
       };
       const askBytes = mailboxRecordBytes(ask);
@@ -15243,6 +15389,21 @@ export default function (pi: ExtensionAPI): void {
         );
         return { action: "handled" };
       }
+      try {
+        importResultBindings(pi, ctx, request.resultBindings, "reply");
+      } catch (error) {
+        const ambiguous =
+          error instanceof OperationError &&
+          error.detail.category === "target_ambiguous";
+        acknowledgeAndDiscard(
+          id,
+          false,
+          ctx,
+          ambiguous ? "ambiguous" : "delivery",
+          error instanceof Error ? error.message : String(error),
+        );
+        return { action: "handled" };
+      }
       const candidate: ManagedAgentState = {
         ...state,
         pendingAskId: undefined,
@@ -15371,6 +15532,21 @@ export default function (pi: ExtensionAPI): void {
         ctx,
         "idle",
         "Agent is not accepting steering",
+      );
+      return { action: "handled" };
+    }
+    try {
+      importResultBindings(pi, ctx, request.resultBindings, request.kind);
+    } catch (error) {
+      const ambiguous =
+        error instanceof OperationError &&
+        error.detail.category === "target_ambiguous";
+      acknowledgeAndDiscard(
+        id,
+        false,
+        ctx,
+        ambiguous ? "ambiguous" : "delivery",
+        error instanceof Error ? error.message : String(error),
       );
       return { action: "handled" };
     }
@@ -15566,7 +15742,7 @@ export default function (pi: ExtensionAPI): void {
     )
       return;
     const result: ResultRecord = {
-      version: 4,
+      version: 5,
       runId: state.runId,
       requestId: state.activeRequestId,
       ownerSessionId: state.ownerSessionId,

@@ -29,9 +29,9 @@ paths, exact reusable direct-agent refs such as `result:researcher#1`, and
 canonical `result:<request-id>` refs already supplied as evidence are accepted.
 Complete strict UTF-8 text may be embedded, while other files are canonical
 local references and are not copied or snapshotted. A direct-result ref is
-resolved against the calling managed agent's current Pi branch before ordinary
-attachment preparation. Relative paths use the agent's working directory. This
-does not weaken the sole-final-tool-call rule.
+resolved against the calling managed agent's current Pi branch and remains
+reusable by the owner through a hidden binding. Relative paths use the agent's
+working directory. This does not weaken the sole-final-tool-call rule.
 
 ## Turn rule
 

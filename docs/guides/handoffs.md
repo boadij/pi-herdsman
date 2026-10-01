@@ -67,10 +67,10 @@ A reference-only file uses a self-closing tag:
 
 For an ordinary file, `name` is the canonical absolute path and `bytes` is the
 observed file size. For a result reference, an embedded file uses the exact
-`result:<request-id>` as `name`:
+supplied reference as `name`:
 
 ```xml
-<file name="result:550e8400-e29b-41d4-a716-446655440000" bytes="123">
+<file name="result:researcher#1" bytes="123">
 contents
 </file>
 ```
@@ -79,21 +79,21 @@ A result that is supplied by reference keeps both identities in its
 self-closing envelope:
 
 ```xml
-<file name="result:550e8400-e29b-41d4-a716-446655440000" path="/absolute/canonical/path" bytes="123" />
+<file name="result:researcher#1" path="/absolute/canonical/path" bytes="123" />
 ```
 
 A body means the complete submission-time UTF-8 snapshot was embedded. For an
 ordinary file, a self-closing tag carries its canonical path and observed byte
-size; for a result reference, it carries the logical result name, the physical
-path attribute, and observed byte size. File content remains raw text. This
+size; for a result reference, it carries the supplied logical result name, the
+physical path attribute, and observed byte size. File content remains raw text. This
 markup frames evidence for the model and is not a security boundary.
 
 `files` is supported by `agent_delegate`, `agent_continue`, `agent_steer`,
 `agent_interrupt`, `agent_reply`, and `ask_owner`. For
 controller actions, relative paths resolve from the calling controller's cwd;
 for `ask_owner`, they resolve from the managed agent's cwd. Accepted ordinary
-filesystem paths retain canonical absolute-path names; `result:<request-id>`
-inputs retain the logical result reference as the model-facing name.
+filesystem paths retain canonical absolute-path names; semantic and canonical
+result refs retain the exact supplied reference as the model-facing name.
 
 Supplied paths must resolve to readable regular files. Missing, broken,
 unreadable, and non-regular paths reject the whole operation. Canonical
@@ -126,9 +126,8 @@ filesystem/tool access to inspect them. `files` supplies evidence and does not
 grant runtime capabilities.
 
 Files are read through their canonical `realpath` target. Ordinary file inputs
-are rendered with that canonical path; result references retain the
-`result:<request-id>` name so recipients can pass the same reference through
-`files` again.
+are rendered with that canonical path; result references retain the exact
+supplied name so recipients can pass the same reference through `files` again.
 
 ## Canonical deduplication
 
@@ -243,9 +242,10 @@ resolves only against matching completion entries on the caller's current Pi
 branch. The index is scoped to the logical agent label: the first reusable
 completion from `global-peer-fix` is index 1, a continued generation is index
 2, and both remain independently attachable. Indexes are not reused after
-historical branch rewinds. Each semantic ref is converted internally to its
-canonical `result:<request-id>` reference before entering the ordinary file
-pipeline.
+historical branch rewinds. Semantic result refs retain their model-facing
+identity during attachment preparation. Herdsman resolves the durable artifact
+through a hidden canonical binding and carries that binding across Pi session
+boundaries so the receiving session can forward the same semantic ref later.
 
 Pass an exact canonical reference through `files` when it was supplied as file
 evidence, especially for a transitive handoff:
@@ -260,9 +260,9 @@ evidence, especially for a transitive handoff:
 
 `files` accepts ordinary readable regular local file paths, reusable direct
 refs in the form `result:<agent>#<index>`, and canonical
-`result:<request-id>` references. Semantic refs resolve against the caller's
-current Pi branch before becoming canonical references. A canonical result
-reference resolves internally to the normal private result file under Pi
+`result:<request-id>` references already supplied as evidence. Semantic refs
+resolve against the caller's current Pi branch to a hidden canonical binding.
+A canonical result reference resolves internally to the normal private result file under Pi
 Herdsman's durable data directory; it is still validated, canonicalized, and
 deduplicated like any other file. Preserve the exact reference already supplied
 as evidence. Do not guess or reconstruct the underlying path.
@@ -282,7 +282,7 @@ Agent result source: {"agent":"researcher","definition":"scout","cwd":"/project"
 ```
 
 This context is part of the durable result artifact, so it survives semantic-ref
-resolution and transitive canonical-ref forwarding through `files`. For a
+resolution and transitive forwarding through `files`. For a
 reference-only result, the provenance is available with the body when the
 referenced artifact is read; it is not separately embedded. The context is
 informational model evidence, not authorization: an exact session ID or path

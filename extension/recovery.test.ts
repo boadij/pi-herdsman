@@ -123,7 +123,7 @@ test("combined status reports a completed agent as pending, not active", async (
     text: string,
   ) =>
     writeResult(mailbox, {
-      version: 4,
+      version: 5,
       runId: state.runId,
       requestId,
       ownerSessionId: state.ownerSessionId,
@@ -243,7 +243,7 @@ test("conflicting same-request entries do not suppress an exact combined result"
   resetAgentMailbox(childMailbox);
   writeAgentState(childMailbox, child);
   writeResult(childMailbox, {
-    version: 4,
+    version: 5,
     runId: child.runId,
     requestId: REQUEST_ID,
     ownerSessionId: child.ownerSessionId,
@@ -368,7 +368,7 @@ test("reload result recovery rejects wrong owners and replacement identities", a
   const identity = recoveryIdentity(label);
   const mailbox = agentMailboxPath(WORKSPACE, label);
   const resultFor = (state: ManagedAgentState): ResultRecord => ({
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
@@ -696,7 +696,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
       }
       started = true;
       writeAgentState(mailbox, {
-        version: 4,
+        version: 5,
         runId,
         ownerSessionId,
         workspaceId: WORKSPACE,
@@ -1168,7 +1168,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
           code: 1,
         };
       writeAgentState(mailbox, {
-        version: 4,
+        version: 5,
         runId,
         ownerSessionId,
         workspaceId: WORKSPACE,
@@ -1280,7 +1280,7 @@ test("recovery requires the official session and retries one failed delivery", a
   assert.equal(scoutPresentation.resultRef, `result:${REQUEST_ID}`);
   assert.equal(readFileSync(resultPath(REQUEST_ID), "utf8"), scoutText);
   const result: ResultRecord = {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: REQUEST_ID,
     ownerSessionId: LEAD_SESSION_ID,
@@ -1420,7 +1420,7 @@ test("in-place branch history does not reuse a result index", async () => {
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, state);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
@@ -1509,7 +1509,7 @@ test("completed and failed one-shot agents converge after durable delivery", asy
     resetAgentMailbox(mailbox);
     writeAgentState(mailbox, child);
     writeResult(mailbox, {
-      version: 4,
+      version: 5,
       runId: child.runId,
       requestId: child.completedRequestId!,
       ownerSessionId: child.ownerSessionId,
@@ -1595,7 +1595,7 @@ test("one-shot close failure retains the result for exact cleanup retry", async 
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, child);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: child.runId,
     requestId: REQUEST_ID,
     ownerSessionId: child.ownerSessionId,
@@ -1686,7 +1686,7 @@ test("delivered-result cascade retries descendant mailbox cleanup failure", asyn
   writeAgentState(parentMailbox, parent);
   writeAgentState(childMailbox, child);
   writeResult(parentMailbox, {
-    version: 4,
+    version: 5,
     runId: parent.runId,
     requestId: REQUEST_ID,
     ownerSessionId: parent.ownerSessionId,
@@ -1781,7 +1781,7 @@ test("recovery redelivers an unpersisted child result and then cleans it safely"
   writeAgentState(childMailbox, child);
   writeAgentState(siblingMailbox, sibling);
   const result: ResultRecord = {
-    version: 4,
+    version: 5,
     runId: child.runId,
     requestId: REQUEST_ID,
     ownerSessionId: child.ownerSessionId,
@@ -1909,7 +1909,7 @@ test("settlement redelivers an unpersisted child result in the same session", as
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, child);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: child.runId,
     requestId: REQUEST_ID,
     ownerSessionId: child.ownerSessionId,
@@ -2002,7 +2002,7 @@ test("recovered no-live result removal retry never cleans up a replacement", asy
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, state);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
@@ -2127,7 +2127,7 @@ test("controller reply submits the normal request and preserves the assignment",
   };
   writeAgentState(mailbox, waiting);
   writeAsk(mailbox, {
-    version: 4,
+    version: 5,
     askId: waiting.pendingAskId!,
     requestId: REQUEST_ID,
     runId: waiting.runId,
@@ -2148,7 +2148,7 @@ test("controller reply submits the normal request and preserves the assignment",
       "working",
       identity.piSessionId,
       (requestMailbox, marker) => {
-        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V5__:".length);
         submitted = readRequest(requestMailbox, requestId);
         const current = readAgentState(requestMailbox)!;
         writeAgentState(requestMailbox, {
@@ -2278,7 +2278,7 @@ test("controller cleanup barrier blocks newer work until stale acknowledgement c
   writeAgentState(mailbox, staleState);
   const stalePath = join(mailbox, `request-${staleRequestId}.json`);
   writeRequest(mailbox, {
-    version: 4,
+    version: 5,
     runId: staleState.runId,
     requestId: staleRequestId,
     ownerSessionId: staleState.ownerSessionId,
@@ -2296,7 +2296,7 @@ test("controller cleanup barrier blocks newer work until stale acknowledgement c
       "working",
       identity.piSessionId,
       (requestMailbox, marker) => {
-        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V5__:".length);
         submitted = readRequest(requestMailbox, requestId);
         const current = readAgentState(requestMailbox)!;
         writeAgentState(requestMailbox, {
@@ -2945,7 +2945,7 @@ test("result cleanup retains durable delivery across agent identity changes", as
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, initial);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: initial.runId,
     requestId: REQUEST_ID,
     ownerSessionId: initial.ownerSessionId,
@@ -3006,7 +3006,7 @@ test("delivered result remains while agent state is active", async () => {
   const activeState = managedState(label, REQUEST_ID);
   writeAgentState(mailbox, activeState);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: REQUEST_ID,
     ownerSessionId: LEAD_SESSION_ID,
@@ -3070,7 +3070,7 @@ test("result delivery identifies retired sessions and honors the disabled settin
     resetAgentMailbox(mailbox);
     writeAgentState(mailbox, child);
     writeResult(mailbox, {
-      version: 4,
+      version: 5,
       runId: child.runId,
       requestId: REQUEST_ID,
       ownerSessionId: child.ownerSessionId,
@@ -3179,7 +3179,7 @@ test("accepted result delivery survives session identity failure in status guida
   };
   writeAgentState(mailbox, resultState);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: REQUEST_ID,
     ownerSessionId: LEAD_SESSION_ID,
@@ -3249,7 +3249,7 @@ test("result is removed after agent state reaches completed", async (t) => {
   const activeState = managedState(label, REQUEST_ID);
   writeAgentState(mailbox, activeState);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: REQUEST_ID,
     ownerSessionId: LEAD_SESSION_ID,
@@ -3357,7 +3357,7 @@ test("live result cleanup keeps a later request owned by the mailbox", async (t)
     resetAgentMailbox(mailbox);
     writeAgentState(mailbox, state);
     writeResult(mailbox, {
-      version: 4,
+      version: 5,
       runId: state.runId,
       requestId: REQUEST_ID,
       ownerSessionId: state.ownerSessionId,
@@ -3385,7 +3385,7 @@ test("live result cleanup keeps a later request owned by the mailbox", async (t)
         ) {
           secondRequestWritten = true;
           writeRequest(mailbox, {
-            version: 4,
+            version: 5,
             runId: state.runId,
             requestId: secondRequestId,
             ownerSessionId: state.ownerSessionId,
@@ -3398,7 +3398,7 @@ test("live result cleanup keeps a later request owned by the mailbox", async (t)
           });
           if (durableSecondResult)
             writeResult(mailbox, {
-              version: 4,
+              version: 5,
               runId: state.runId,
               requestId: secondRequestId,
               ownerSessionId: state.ownerSessionId,
@@ -3457,7 +3457,7 @@ test("lost result cleanup keeps a later request owned by the mailbox", async (t)
     resetAgentMailbox(mailbox);
     writeAgentState(mailbox, state);
     writeResult(mailbox, {
-      version: 4,
+      version: 5,
       runId: state.runId,
       requestId: REQUEST_ID,
       ownerSessionId: state.ownerSessionId,
@@ -3484,7 +3484,7 @@ test("lost result cleanup keeps a later request owned by the mailbox", async (t)
         ) {
           secondRequestWritten = true;
           writeRequest(mailbox, {
-            version: 4,
+            version: 5,
             runId: state.runId,
             requestId: secondRequestId,
             ownerSessionId: state.ownerSessionId,
@@ -3497,7 +3497,7 @@ test("lost result cleanup keeps a later request owned by the mailbox", async (t)
           });
           if (durableSecondResult)
             writeResult(mailbox, {
-              version: 4,
+              version: 5,
               runId: state.runId,
               requestId: secondRequestId,
               ownerSessionId: state.ownerSessionId,
@@ -3579,7 +3579,7 @@ test("parent cascade keeps a later parent request during result cleanup", async 
   writeAgentState(parentMailbox, parent);
   writeAgentState(childMailbox, child);
   writeResult(parentMailbox, {
-    version: 4,
+    version: 5,
     runId: parent.runId,
     requestId: REQUEST_ID,
     ownerSessionId: parent.ownerSessionId,
@@ -3602,7 +3602,7 @@ test("parent cascade keeps a later parent request during result cleanup", async 
       });
       if ((message as any).customType === "pi-herdsman-agent-result")
         writeRequest(parentMailbox, {
-          version: 4,
+          version: 5,
           runId: parent.runId,
           requestId: secondRequestId,
           ownerSessionId: parent.ownerSessionId,
@@ -3666,7 +3666,7 @@ test("completed lost parent cleanup resolves descendants before its mailbox", as
     writeAgentState(parentMailbox, parent);
     writeAgentState(childMailbox, child);
     writeResult(parentMailbox, {
-      version: 4,
+      version: 5,
       runId: parent.runId,
       requestId: REQUEST_ID,
       ownerSessionId: parent.ownerSessionId,
@@ -3724,7 +3724,7 @@ test("automatic close invokes the exact lifecycle only after live identity proof
   };
   writeAgentState(mailbox, resultState);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: REQUEST_ID,
     ownerSessionId: LEAD_SESSION_ID,
@@ -3962,7 +3962,7 @@ test("managed child automatic cleanup respects the parent delegation lock", asyn
   writeAgentState(parentMailbox, parent);
   writeAgentState(childMailbox, child);
   writeResult(childMailbox, {
-    version: 4,
+    version: 5,
     runId: child.runId,
     requestId: REQUEST_ID,
     ownerSessionId: child.ownerSessionId,
@@ -4948,7 +4948,7 @@ test("delivered owner asks repeat without duplicating first delivery", async (t)
   const mailbox = agentMailboxPath(WORKSPACE, label);
   writeAgentState(mailbox, state);
   const ask = {
-    version: 4 as const,
+    version: 5 as const,
     askId: state.pendingAskId!,
     requestId: REQUEST_ID,
     runId: state.runId,
@@ -5020,7 +5020,7 @@ test("old unacknowledged requests get attention without being resubmitted", asyn
   const state = managedState(label, REQUEST_ID, identity);
   const mailbox = agentMailboxPath(WORKSPACE, label);
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
@@ -5328,7 +5328,7 @@ test("lost parent health attention omits close when a descendant has an unread d
   writeAgentState(parentMailbox, parent);
   writeAgentState(childMailbox, child);
   writeResult(childMailbox, {
-    version: 4,
+    version: 5,
     runId: child.runId,
     requestId: REQUEST_ID,
     ownerSessionId: child.ownerSessionId,
@@ -5377,7 +5377,7 @@ test("live agents with an unread durable result do not advertise close", async (
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, state);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
@@ -5436,7 +5436,7 @@ test("lead list hides close when a descendant has an unread durable result", asy
   writeAgentState(parentMailbox, parent);
   writeAgentState(childMailbox, child);
   writeResult(childMailbox, {
-    version: 4,
+    version: 5,
     runId: child.runId,
     requestId: REQUEST_ID,
     ownerSessionId: child.ownerSessionId,
@@ -5481,7 +5481,7 @@ test("lost agents with an unread durable result cannot be closed", async () => {
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, state);
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
@@ -5553,7 +5553,7 @@ test("cascade preflight keeps descendants when a lost parent has a pending resul
   });
   writeAgentState(childMailbox, child);
   writeResult(parentMailbox, {
-    version: 4,
+    version: 5,
     runId: parent.runId,
     requestId: REQUEST_ID,
     ownerSessionId: parent.ownerSessionId,
@@ -5610,7 +5610,7 @@ test("lost close fails closed when a result appears during its final proof", asy
       if (command === "herdr" && isApiSnapshot(args) && ++snapshots === 5) {
         writeAgentState(mailbox, racedState);
         writeResult(mailbox, {
-          version: 4,
+          version: 5,
           runId: state.runId,
           requestId: REQUEST_ID,
           ownerSessionId: state.ownerSessionId,

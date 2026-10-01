@@ -1115,7 +1115,7 @@ test("cascade close keeps the parent when descendant mailbox cleanup is unresolv
   writeAgentState(parentMailbox, parent);
   writeAgentState(childMailbox, child);
   writeRequest(childMailbox, {
-    version: 4,
+    version: 5,
     runId: child.runId,
     requestId: REQUEST_ID,
     ownerSessionId: child.ownerSessionId,
@@ -1309,7 +1309,7 @@ test("fixture mailbox consumer retries a failed acknowledgement callback", async
   const state = managedState("fixture-retry-agent");
   writeAgentState(mailbox, state);
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId: randomUUID(),
     ownerSessionId: state.ownerSessionId,
@@ -1750,7 +1750,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
   const runtime = supervisionRuntime(socket);
   const branch = `handoff-${randomUUID()}`;
   writeProjectAssignment(runtime, {
-    version: 1,
+    version: 2,
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
@@ -1900,7 +1900,7 @@ test("automatic project handoff cannot recreate messages under assignment resolu
   const runtime = supervisionRuntime(socket);
   const branch = `handoff-race-${randomUUID()}`;
   writeProjectAssignment(runtime, {
-    version: 1,
+    version: 2,
     id: LEAD_SESSION_ID,
     repoKey: "repo-key",
     branch,
@@ -2054,7 +2054,7 @@ test("recovery cleanup finishes an idle restored herd without settlement", async
   resetAgentMailbox(startup.mailbox);
   writeAgentState(startup.mailbox, state);
   writeResult(startup.mailbox, {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId,
     ownerSessionId: state.ownerSessionId,
@@ -2382,7 +2382,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       "working",
       parent.piSessionId,
       (requestMailbox, marker) => {
-        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V5__:".length);
         leadReply = readRequest(requestMailbox, requestId);
         const current = readAgentState(requestMailbox)!;
         writeAgentState(requestMailbox, {
@@ -3636,7 +3636,7 @@ test("session continuation starts a new agent generation with current prompt con
     assert.equal((result.details as any).reusable, undefined);
     assert.equal((result.details as any).keepAlive, undefined);
     const state = readAgentState(startup.mailbox)!;
-    assert.equal(state.version, 4);
+    assert.equal(state.version, 5);
     assert.equal(state.piSessionId, session.id);
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[0]!, /current saved-session prompt/);
@@ -4175,7 +4175,7 @@ test("revalidates automatic-label collision sizing before startup", async () => 
   realFs.rmSync(replacementMailbox, { recursive: true, force: true });
   writeAgentState(occupiedMailbox, occupiedState);
   writeRequest(occupiedMailbox, {
-    version: 4,
+    version: 5,
     runId: occupiedState.runId,
     requestId: REQUEST_ID,
     ownerSessionId: occupiedState.ownerSessionId,

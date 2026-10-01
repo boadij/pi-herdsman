@@ -23,7 +23,7 @@ test("recoverable Herdsman state lives under Pi agent data", () => {
   );
   assert.equal(
     dirname(agentMailboxPath("workspace", "agent")),
-    join(root, "runtime", "mailboxes-v4"),
+    join(root, "runtime", "mailboxes-v5"),
   );
   assert.equal(
     dirname(supervisionRuntime("socket with spaces").root),

@@ -111,8 +111,8 @@ final formatting and read-only verification sequence in
 ## Current mailbox contract
 
 For a current managed run, inspect the persisted state, request, ask, and
-result records and verify they use protocol version `4` and contain no lifetime
-field. Control prompts use the `__PI_HERDSMAN_AGENT_V4__:` marker prefix.
+result records and verify they use protocol version `5` and contain no lifetime
+field. Control prompts use the `__PI_HERDSMAN_AGENT_V5__:` marker prefix.
 
 ## One-shot definition and session continuation
 

@@ -12,6 +12,7 @@ import type {
   ManagedAgentState,
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
+import { resultPath, resultRef } from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
   REQUEST_ID,
@@ -44,6 +45,8 @@ import support, {
   setAgentEnvironment,
   watchedResultPaths,
   agentMailboxPath,
+  DEFAULT_PI_SESSION_ID,
+  startupExecutor,
   writeAsk,
   writeMetadataTask,
   writeRequest,
@@ -88,7 +91,7 @@ test("managed requests pump through Pi semantic input", async (t) => {
     await agent.events.get("session_start")![0](undefined, context);
     const state = readAgentState(mailbox)!;
     const request: RequestRecord = {
-      version: 4,
+      version: 5,
       runId: state.runId,
       requestId: randomUUID(),
       ownerSessionId: state.ownerSessionId,
@@ -97,11 +100,26 @@ test("managed requests pump through Pi semantic input", async (t) => {
       paneId: state.paneId,
       kind: "task",
       text: "pump this task",
+      resultBindings: [
+        {
+          ref: "result:researcher#1",
+          canonicalRef: "result:850e8400-e29b-41d4-a716-446655440000",
+        },
+      ],
       createdAt: Date.now(),
     };
     writeRequest(mailbox, request);
     t.mock.timers.tick(250);
     assert.deepEqual(transformed, { action: "transform", text: request.text });
+    assert.ok(
+      agent.entries.some(
+        (entry: any) =>
+          entry.type === "custom" &&
+          entry.customType === "pi-herdsman-result-ref" &&
+          entry.data?.ref === "result:researcher#1" &&
+          entry.data?.canonicalRef === request.resultBindings![0].canonicalRef,
+      ),
+    );
     assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
     assert.equal(
       readAgentState(mailbox)?.lastAck?.requestId,
@@ -178,6 +196,92 @@ test("managed requests pump through Pi semantic input", async (t) => {
   }
 });
 
+test("imported semantic result refs remain usable in the next handoff", async () => {
+  const mailbox = setAgentEnvironment("forwarding-child");
+  const requestId = randomUUID();
+  const canonicalRef = resultRef(requestId);
+  const artifact = resultPath(requestId);
+  realFs.mkdirSync(resolve(artifact, ".."), { recursive: true });
+  realFs.writeFileSync(artifact, "persisted review evidence", "utf8");
+  const semanticRef = "result:researcher#1";
+  let grandchildTask = "";
+  let grandchildRequest: RequestRecord | undefined;
+  const startup = startupExecutor(
+    "agent",
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    (text, request) => {
+      grandchildTask = text;
+      grandchildRequest = request;
+    },
+  );
+  const agent = fakePi({ exec: startup.exec });
+  let forwardingChild: ReturnType<typeof fakePi> | undefined;
+  registerExtension!(agent.pi as never);
+  const context = fakeAgentContext(agent.entries);
+  try {
+    await agent.events.get("session_start")![0](undefined, context);
+    const state = readAgentState(mailbox)!;
+    const request: RequestRecord = {
+      version: 5,
+      runId: state.runId,
+      requestId: randomUUID(),
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      agentLabel: state.agentLabel,
+      paneId: state.paneId,
+      kind: "task",
+      text: "Review the attached evidence.",
+      resultBindings: [{ ref: semanticRef, canonicalRef }],
+      createdAt: Date.now(),
+    };
+    writeRequest(mailbox, request);
+
+    assert.deepEqual(
+      agent.events.get("input")![0](
+        { text: controlMarker(request.requestId) },
+        context,
+      ),
+      { action: "transform", text: request.text },
+    );
+    assert.ok(
+      agent.entries.some(
+        (entry: any) =>
+          entry.type === "custom" &&
+          entry.customType === "pi-herdsman-result-ref" &&
+          entry.data?.ref === semanticRef &&
+          entry.data?.canonicalRef === canonicalRef,
+      ),
+      "accepted request must persist the imported binding on the child branch",
+    );
+
+    agent.events.get("session_shutdown")?.[0]();
+    setLeadEnvironment();
+    forwardingChild = fakePi({ exec: startup.exec });
+    registerExtension!(forwardingChild.pi as never);
+    const result = await agentTool(forwardingChild, "delegate").execute(
+      "forward-result",
+      { definition: "agent", task: "Continue review.", files: [semanticRef] },
+      undefined,
+      undefined,
+      fakeContext(agent.entries),
+    );
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.match(grandchildTask, /<file name="result:researcher#1"/);
+    assert.match(grandchildTask, /persisted review evidence/);
+    assert.deepEqual(grandchildRequest?.resultBindings, [
+      { ref: semanticRef, canonicalRef },
+    ]);
+  } finally {
+    agent.events.get("session_shutdown")?.[0]();
+    forwardingChild?.events.get("session_shutdown")?.[0]();
+    startup.stopMailboxConsumer();
+    resetAgentMailbox(mailbox);
+    resetAgentMailbox(startup.mailbox);
+    realFs.rmSync(artifact, { force: true });
+  }
+});
+
 test("managed interrupt continues the same assignment after abort settlement", async () => {
   const mailbox = setAgentEnvironment("interrupt-agent");
   const assignmentRequestId = REQUEST_ID;
@@ -207,7 +311,7 @@ test("managed interrupt continues the same assignment after abort settlement", a
   try {
     agent.events.get("session_start")![0](undefined, context);
     const interrupt: RequestRecord = {
-      version: 4,
+      version: 5,
       runId: initial.runId,
       requestId: randomUUID(),
       ownerSessionId: initial.ownerSessionId,
@@ -335,7 +439,7 @@ test("managed session start immediately recovers a durable request", async (t) =
   const persisted = managedState("pump-recovery-agent");
   writeAgentState(mailbox, persisted);
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: persisted.runId,
     requestId: randomUUID(),
     ownerSessionId: persisted.ownerSessionId,
@@ -440,7 +544,7 @@ test("managed input handles duplicate markers before and after cleanup idempoten
     await agent.events.get("session_start")![0](undefined, context);
     const state = readAgentState(mailbox)!;
     const request: RequestRecord = {
-      version: 4,
+      version: 5,
       runId: state.runId,
       requestId: randomUUID(),
       ownerSessionId: state.ownerSessionId,
@@ -493,7 +597,7 @@ test("managed pump retransmits an unacknowledged marker", async (t) => {
     await agent.events.get("session_start")![0](undefined, context);
     const state = readAgentState(mailbox)!;
     const request: RequestRecord = {
-      version: 4,
+      version: 5,
       runId: state.runId,
       requestId: randomUUID(),
       ownerSessionId: state.ownerSessionId,
@@ -537,7 +641,7 @@ test("managed pump retries a request after acknowledgement persistence fails", a
     await agent.events.get("session_start")![0](undefined, context);
     const state = readAgentState(mailbox)!;
     const request: RequestRecord = {
-      version: 4,
+      version: 5,
       runId: state.runId,
       requestId: randomUUID(),
       ownerSessionId: state.ownerSessionId,
@@ -612,7 +716,7 @@ test("registered agent writes state, handles input, and settles one result", asy
   );
 
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started!.runId,
     requestId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     ownerSessionId: started!.ownerSessionId,
@@ -671,7 +775,7 @@ test("result persistence waits for the assignment lock", async (t) => {
   await agent.events.get("session_start")![0](undefined, context);
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started.runId,
     requestId: REQUEST_ID,
     ownerSessionId: started.ownerSessionId,
@@ -714,7 +818,7 @@ test("assignment-lock contention does not consume result write attempts", async 
   await agent.events.get("session_start")![0](undefined, context);
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started.runId,
     requestId: REQUEST_ID,
     ownerSessionId: started.ownerSessionId,
@@ -783,7 +887,7 @@ test("result persistence does not recreate a removed mailbox", async () => {
   await agent.events.get("session_start")![0](undefined, context);
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started.runId,
     requestId: REQUEST_ID,
     ownerSessionId: started.ownerSessionId,
@@ -819,7 +923,7 @@ test("managed task acceptance retains its request during assignment contention",
   await agent.events.get("session_start")![0](undefined, context);
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started.runId,
     requestId: REQUEST_ID,
     ownerSessionId: started.ownerSessionId,
@@ -863,7 +967,7 @@ test("agent bounds result persistence failure and exposes owner recovery evidenc
   await agent.events.get("session_start")![0](undefined, context);
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started.runId,
     requestId: REQUEST_ID,
     ownerSessionId: started.ownerSessionId,
@@ -988,7 +1092,7 @@ test("agent rejects task replay while result persistence recovery is present", (
   const before = readAgentState(mailbox)!;
   const requestId = "99999999-9999-4999-8999-999999999999";
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: before.runId,
     requestId,
     ownerSessionId: before.ownerSessionId,
@@ -1047,7 +1151,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   context = fakeAgentContext([], branch);
   await agent.events.get("session_start")![0](undefined, context);
   const assignment: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     ownerSessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -1150,7 +1254,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   assert.equal(readResult(mailbox, assignment.requestId), undefined);
 
   const reply: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
     ownerSessionId: assignment.ownerSessionId,
@@ -1202,7 +1306,7 @@ test("message limits do not consult project trust", async () => {
   ];
   const context = fakeAgentContext([], branch);
   const assignment: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: REQUEST_ID,
     ownerSessionId: LEAD_SESSION_ID,
@@ -1304,7 +1408,7 @@ test("ask_owner eligibility permits no children or only ask-blocked children", a
       writeAgentState(childMailbox, child);
       if (childCase.kind === "ask-blocked")
         writeAsk(childMailbox, {
-          version: 4,
+          version: 5,
           askId,
           requestId: childRequestId,
           runId: child.runId,
@@ -1318,7 +1422,7 @@ test("ask_owner eligibility permits no children or only ask-blocked children", a
         });
       if (childCase.kind === "pending-result")
         writeResult(childMailbox, {
-          version: 4,
+          version: 5,
           runId: child.runId,
           requestId: childRequestId,
           ownerSessionId: child.ownerSessionId,
@@ -1410,7 +1514,7 @@ test("idle parent steers through its current input turn while agent work is pend
   try {
     await agent.events.get("session_start")![0](undefined, context);
     const idleSteer: RequestRecord = {
-      version: 4,
+      version: 5,
       runId: parent.runId,
       requestId: randomUUID(),
       ownerSessionId: parent.ownerSessionId,
@@ -1500,9 +1604,9 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
   const secondRequestId = randomUUID();
   const childTwo = {
     ...managedState(
-      "child-two",
+      "researcher",
       secondRequestId,
-      recoveryIdentity("child-two"),
+      recoveryIdentity("researcher"),
     ),
     ownerSessionId: parent.piSessionId,
     piSessionId: "11111111-1111-4111-8111-111111111111",
@@ -1554,6 +1658,14 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
   const entries = [
     {
       type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: {
+        ref: "result:researcher#1",
+        canonicalRef: "result:850e8400-e29b-41d4-a716-446655440000",
+      },
+    },
+    {
+      type: "custom",
       customType: "pi-herdsman-agent-definition",
       data: {
         sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
@@ -1584,7 +1696,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       updatedAt: Date.now(),
     });
     writeResult(childTwoMailbox, {
-      version: 4,
+      version: 5,
       runId: childTwo.runId,
       requestId: secondRequestId,
       ownerSessionId: childTwo.ownerSessionId,
@@ -1598,7 +1710,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
 
     const parentRequestId = randomUUID();
     writeRequest(parentMailbox, {
-      version: 4,
+      version: 5,
       runId: parent.runId,
       requestId: parentRequestId,
       ownerSessionId: parent.ownerSessionId,
@@ -1640,7 +1752,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
         updatedAt: Date.now(),
       });
       writeResult(mailbox, {
-        version: 4,
+        version: 5,
         runId: child.runId,
         requestId,
         ownerSessionId: child.ownerSessionId,
@@ -1726,6 +1838,11 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sent.length, 2);
+    assert.match(
+      sentContent(1),
+      /Result ref: result:researcher#2/,
+      "an imported semantic result index must be reserved before local allocation",
+    );
     assert.equal(
       (pi.sentMessageCalls[1].message as any).details.activeDirectChildCount,
       1,
@@ -1778,7 +1895,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       updatedAt: Date.now(),
     });
     writeResult(childThreeMailbox, {
-      version: 4,
+      version: 5,
       runId: childThree.runId,
       requestId: thirdRequestId,
       ownerSessionId: childThree.ownerSessionId,
@@ -1879,7 +1996,7 @@ test("startup and completion metadata omit unavailable model and thinking values
 
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started.runId,
     requestId: "cccccccc-cccc-4ccc-8ccc-cccccccccccd",
     ownerSessionId: started.ownerSessionId,
@@ -1952,7 +2069,7 @@ test("startup and completion metadata preserve available model and thinking valu
 
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started.runId,
     requestId: "cccccccc-cccc-4ccc-8ccc-ccccccccccce",
     ownerSessionId: started.ownerSessionId,
@@ -2138,7 +2255,7 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
   );
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started.runId,
     requestId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     ownerSessionId: started.ownerSessionId,
@@ -2436,7 +2553,7 @@ test("active state plus matching durable result repairs to completed", async () 
   const mailbox = setAgentEnvironment();
   writeAgentState(mailbox, managedState("registered-agent", REQUEST_ID));
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: REQUEST_ID,
     ownerSessionId: LEAD_SESSION_ID,
@@ -2591,7 +2708,7 @@ test("mismatched result never repairs agent state", async () => {
   const mailbox = setAgentEnvironment();
   writeAgentState(mailbox, managedState("registered-agent", REQUEST_ID));
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: REQUEST_ID,
     ownerSessionId: LEAD_SESSION_ID,
@@ -2834,7 +2951,7 @@ test("task state-write failure retains the request for an exact retry", async ()
   await agent.events.get("session_start")![0](undefined, context);
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started.runId,
     requestId: REQUEST_ID,
     ownerSessionId: started.ownerSessionId,
@@ -2871,7 +2988,7 @@ test("acknowledgement state-write failure retains an identity-rejected request",
   await agent.events.get("session_start")![0](undefined, context);
   const started = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: started.runId,
     requestId: REQUEST_ID,
     ownerSessionId: started.ownerSessionId,
@@ -3060,7 +3177,7 @@ test("retired active sessions suppress threshold compaction until completion", a
   await agent.events.get("session_start")![0](undefined, context);
   const state = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
@@ -3137,7 +3254,7 @@ test("context retirement bypasses compaction behavior when disabled", async () =
     await agent.events.get("session_start")![0](undefined, context);
     const state = readAgentState(mailbox)!;
     const request: RequestRecord = {
-      version: 4,
+      version: 5,
       runId: state.runId,
       requestId: REQUEST_ID,
       ownerSessionId: state.ownerSessionId,
@@ -3187,7 +3304,7 @@ test("overflow retires without cancellation and inactive sessions stay untouched
     await agent.events.get("session_start")![0](undefined, context);
     const state = readAgentState(mailbox)!;
     const request: RequestRecord = {
-      version: 4,
+      version: 5,
       runId: state.runId,
       requestId: REQUEST_ID,
       ownerSessionId: state.ownerSessionId,
@@ -3353,7 +3470,7 @@ test("owner ask delivery is branch-local and recovers on tree navigation", async
   };
   writeAgentState(mailbox, waiting);
   const ask: AskRecord = {
-    version: 4,
+    version: 5,
     askId: waiting.pendingAskId!,
     requestId,
     runId: waiting.runId,
@@ -3417,7 +3534,7 @@ test("owner ask resolved while busy is not delivered after settlement", async ()
   };
   writeAgentState(mailbox, waiting);
   writeAsk(mailbox, {
-    version: 4,
+    version: 5,
     askId: waiting.pendingAskId!,
     requestId,
     runId: waiting.runId,
@@ -3470,7 +3587,7 @@ test("owner ask waits while busy and delivers once after settlement", async () =
   };
   writeAgentState(mailbox, waiting);
   writeAsk(mailbox, {
-    version: 4,
+    version: 5,
     askId: waiting.pendingAskId!,
     requestId,
     runId: waiting.runId,

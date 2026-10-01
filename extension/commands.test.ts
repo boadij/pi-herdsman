@@ -2061,7 +2061,7 @@ test("queued peer traffic stays durable through Chief mode and drains after leav
     await receiver.events.get("session_start")![0](undefined, receiverContext);
     assert.ok(readPeerLeadRecord(runtime, receiverId));
     const record = {
-      version: 1 as const,
+      version: 2 as const,
       id: randomUUID(),
       leaseId: senderRecord.claim.id,
       kind: "peer_message" as const,
@@ -5427,7 +5427,7 @@ test("lead agents stop reports cleanup failures and preserves accurate discarded
   writeAgentState(mailboxes[0]!, failed);
   writeAgentState(mailboxes[1]!, pending);
   writeResult(mailboxes[1]!, {
-    version: 4,
+    version: 5,
     runId: pending.runId,
     requestId: pending.completedRequestId,
     ownerSessionId: pending.ownerSessionId,
@@ -6484,7 +6484,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
         live = true;
         writeAgentState(mailbox, {
-          version: 4,
+          version: 5,
           runId: startedRunId,
           ownerSessionId: startedOwnerSessionId,
           workspaceId: WORKSPACE,
