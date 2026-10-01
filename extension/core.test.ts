@@ -54,6 +54,7 @@ mock.module("node:fs", {
       }
       return realFs.fstatSync(...args);
     },
+    fsyncSync: realFs.fsyncSync,
     mkdirSync: realFs.mkdirSync,
     openSync: (...args: any[]) => {
       openCallCount++;
@@ -128,6 +129,7 @@ mock.module("node:fs", {
     },
     unlinkSync: realFs.unlinkSync,
     writeSync: realFs.writeSync,
+    writeFileSync: realFs.writeFileSync,
     watch: realFs.watch,
   },
 });
