@@ -19,18 +19,26 @@ Available to ordinary Leads and Managers.
 
 ```json
 {
-  "message": "The branch is ready for review.",
+  "message": "The Agent is blocked pending an API contract decision.",
   "files": ["result:reviewer#1"]
 }
 ```
 
-Use it for material progress, decisions, warnings, and review handoffs. For a
-Lead with a project assignment, the message is retained with that assignment
-and can be delivered to a current Manager even if no Manager is active when it
-is sent. A replacement Manager receives retained project messages; the same
-Manager session does not receive a message again once it appears in its Pi
-history. These messages are nonterminal: the project remains open until a
-Manager resolves the assignment.
+Use it when a supervisor must decide or act, or when a blocker, warning, scope
+change, risk, or explicit evidence needs attention. After a project herd run
+settles, Herdsman asynchronously attempts to publish a nonterminal handoff to
+the Manager; failed publication is logged and not retried. Successful
+publication uses the retained project-message path. For a Lead with a project
+assignment, messages are retained with that assignment and can be delivered to
+a current Manager even if no Manager is active when sent. A replacement
+Manager receives retained project messages; the same Manager session does not
+receive a message again once it appears in its Pi history. Messages are
+nonterminal: the project remains open until a Manager resolves the assignment.
+
+An ordinary Lead without a verified supervisor should continue independently
+until a supervisor is available. An assigned project Lead remains Manager-owned
+and may message the Manager role while no Manager is active; the message is
+retained with the project assignment.
 
 For ordinary Lead or Manager-to-Chief communication, the message follows the
 current direct-supervisor route. Messages are bounded. `files` accepts ordinary
