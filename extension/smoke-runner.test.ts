@@ -5,12 +5,14 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import {
   assistantResultForSession,
+  bestEffortProcessDiagnostics,
   chiefTreeFooter,
   chiefTreeSelectedRow,
   chiefTreeBranchTransition,
   countChiefTreeEvents,
   candidateArgs,
   chiefTreeProbeSource,
+  candidateStartObservationError,
   distinctPaneCount,
   parseToolSnapshots,
   chiefTreeBranchPlan,
@@ -40,6 +42,7 @@ import {
   parseHerdrOutput,
   parseSmokeArgs,
   formatSmokeFailure,
+  herdrErrorCode,
   managerDiagnosticLines,
   captureManagerLeadDiagnostics,
   savedSessionHeaderEvidence,
@@ -760,38 +763,48 @@ test("evidence wait returns completion and distinguishes stalls from deadlines",
   );
 });
 
-test("evidence progress changes reset inactivity, identical evidence and read errors do not", async () => {
+test("evidence progress changes reset inactivity, identical evidence and read errors do not", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 0 });
   let count = 0;
+  const times = [0, 15, 20, 35];
   const value = await waitForEvidence(
     {},
     "progress",
     async () => {
       count++;
-      await new Promise((resolve) => setTimeout(resolve, 8));
+      t.mock.timers.setTime(times[count - 1]);
       return {
-        done: count >= 8,
+        done: count === 4,
         value: "done",
-        progress: { step: count >= 4 ? 2 : 1 },
+        progress: { step: count < 3 ? 1 : 2 },
       };
     },
-    { timeoutMs: 300, stallMs: 50, pollMs: 3 },
+    { timeoutMs: 100, stallMs: 20, pollMs: 1 },
   );
   assert.equal(value, "done");
+  let identicalCall = 0;
   await assert.rejects(
     waitForEvidence(
       {},
       "identical",
-      async () => ({ done: false, progress: { same: true } }),
-      { timeoutMs: 100, stallMs: 20, pollMs: 3 },
+      async () => {
+        t.mock.timers.setTime([35, 45, 55][identicalCall++]);
+        return { done: false, progress: { same: true } };
+      },
+      { timeoutMs: 100, stallMs: 20, pollMs: 1 },
     ),
     (error) => error.code === "SMOKE_STALLED",
   );
+  let errorCall = 0;
   await assert.rejects(
     waitForEvidence(
       {},
       "observation-error",
-      async () => ({ done: false, observationError: "temporary read failure" }),
-      { timeoutMs: 100, stallMs: 20, pollMs: 3 },
+      async () => {
+        t.mock.timers.setTime([55, 65, 75][errorCall++]);
+        return { done: false, observationError: "temporary read failure" };
+      },
+      { timeoutMs: 100, stallMs: 20, pollMs: 1 },
     ),
     (error) =>
       error.code === "SMOKE_STALLED" &&
@@ -817,6 +830,30 @@ test("Herdr API output requires the current JSON envelope", () => {
     assert.throws(() => parseHerdrOutput(stdout, ["pane", "list"]), {
       code: "SMOKE_PROTOCOL",
     });
+});
+
+test("candidate start treats only a structured missing-pane error as impossible", () => {
+  assert.equal(
+    herdrErrorCode({ stderr: '{"error":{"code":"pane_not_found"}}' }),
+    "pane_not_found",
+  );
+  assert.equal(herdrErrorCode({ stderr: "not json" }), undefined);
+  assert.deepEqual(
+    candidateStartObservationError({ ok: false, error: "timed out" }, "pane-1"),
+    { done: false, observationError: "timed out" },
+  );
+  assert.throws(
+    () =>
+      candidateStartObservationError(
+        {
+          ok: false,
+          error: "pane absent",
+          herdrCode: "pane_not_found",
+        },
+        "pane-1",
+      ),
+    /candidate pane pane-1 disappeared/,
+  );
 });
 
 test("smoke model override wins without reading Git config", async () => {
@@ -1910,6 +1947,8 @@ test("Chief tree probe is opt-in, last in root extension order, and validates th
   assert.match(source, /getActiveTools/);
   assert.match(source, /session_tree/);
   assert.match(source, /smoke-tools/);
+  assert.match(source, /appendFileSync/);
+  assert.doesNotMatch(source, /Date\.now|appendFile\(/);
   const snapshots = parseToolSnapshots(
     [
       '{"label":"lead","tools":["chief","agent"]}',
@@ -1946,25 +1985,21 @@ test("Chief tree snapshots accept identical duplicate events but reject conflict
   );
 });
 
-test("Chief tree branch wait ignores a delayed pre-selection tree event", () => {
+test("Chief tree branch wait requires an event added after the baseline", () => {
   const snapshots = new Map([
     ["lead", []],
     ["chief", []],
     ["tree", []],
   ]);
-  const selectionStartedAt = 200;
-  // The event occurred before selection but its append arrives afterward.
-  const delayedPreSelectionEvent = '{"label":"tree","at":200,"tools":[]}';
-  const delayedCount = countChiefTreeEvents(
-    delayedPreSelectionEvent,
-    selectionStartedAt,
-  );
+  const baselineContents = '{"label":"tree","tools":[]}';
+  const treeEventsBefore = countChiefTreeEvents(baselineContents);
+  const delayedCount = countChiefTreeEvents(baselineContents, treeEventsBefore);
   assert.equal(delayedCount, 0);
   assert.deepEqual(
     chiefTreeBranchTransition(
       "branch opening",
       snapshots,
-      selectionStartedAt,
+      treeEventsBefore,
       delayedCount,
     ),
     {
@@ -1977,23 +2012,23 @@ test("Chief tree branch wait ignores a delayed pre-selection tree event", () => 
     chiefTreeBranchTransition(
       "Summarize branch?",
       snapshots,
-      selectionStartedAt,
+      treeEventsBefore,
       delayedCount,
     ),
     {
       done: true,
-      value: { state: "summary-dialog", selectionStartedAt, treeEvents: 0 },
+      value: { state: "summary-dialog", treeEventsBefore, treeEvents: 0 },
       progress: { state: "summary-dialog" },
     },
   );
-  const afterSelection = `${delayedPreSelectionEvent}\n{"label":"tree","at":201,"tools":[]}`;
-  const freshCount = countChiefTreeEvents(afterSelection, selectionStartedAt);
+  const afterSelection = `${baselineContents}\n{"label":"tree","tools":[]}`;
+  const freshCount = countChiefTreeEvents(afterSelection, treeEventsBefore);
   assert.equal(freshCount, 1);
   assert.deepEqual(
     chiefTreeBranchTransition(
       "branch opened",
       snapshots,
-      selectionStartedAt,
+      treeEventsBefore,
       freshCount,
     ),
     {
@@ -2210,5 +2245,22 @@ test("process-info protocol violations escape pane inspection immediately", asyn
       "/isolated/herdr-agent-state.ts",
     ),
     { code: "SMOKE_PROTOCOL" },
+  );
+});
+
+test("best-effort process diagnostics retain protocol failures as evidence", async () => {
+  assert.deepEqual(
+    await bestEffortProcessDiagnostics(
+      ["child"],
+      "root",
+      async () =>
+        parseHerdrOutput('{"result":{"process_info":{}}}', [
+          "pane",
+          "process-info",
+        ]),
+      "/candidate/dist/index.js",
+      "/isolated/herdr-agent-state.ts",
+    ),
+    { error: "herdr pane process-info returned no result envelope" },
   );
 });

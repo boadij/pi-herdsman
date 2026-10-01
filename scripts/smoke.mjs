@@ -439,19 +439,19 @@ export function chiefTreeProbeSource(resultPath) {
     typeof resultPath === "string" && isAbsolute(resultPath),
     "Chief tree result path must be absolute",
   );
-  return `import { appendFile } from "node:fs/promises";
+  return `import { appendFileSync } from "node:fs";
 const resultPath = ${JSON.stringify(resultPath)};
 export default function (pi) {
-  async function record(label) {
-    await appendFile(resultPath, JSON.stringify({ label, at: Date.now(), tools: [...pi.getActiveTools()].sort() }) + "\\n");
+  function record(label) {
+    appendFileSync(resultPath, JSON.stringify({ label, tools: [...pi.getActiveTools()].sort() }) + "\\n");
   }
   pi.registerCommand("smoke-tools", {
     description: "Record active tools for isolated smoke",
     handler: async (args) => {
-      if (args === "lead" || args === "chief") await record(args);
+      if (args === "lead" || args === "chief") record(args);
     },
   });
-  pi.on("session_tree", async () => { await record("tree"); });
+  pi.on("session_tree", () => record("tree"));
 }`;
 }
 
@@ -583,26 +583,25 @@ export function chiefTreeSelectedRow(output, marker) {
   return rows.length === 1 && /^[ \t│├└─⊟⊞]*›\s/.test(rows[0]);
 }
 
-export function countChiefTreeEvents(contents, since) {
-  return contents
-    .trim()
-    .split("\n")
-    .filter((line) => {
-      const event = JSON.parse(line);
-      return event.label === "tree" && event.at > since;
-    }).length;
+export function countChiefTreeEvents(contents, baseline = 0) {
+  return (
+    contents
+      .split("\n")
+      .filter(Boolean)
+      .filter((line) => JSON.parse(line).label === "tree").length - baseline
+  );
 }
 
 export function chiefTreeBranchTransition(
   text,
   snapshots,
-  selectionStartedAt,
+  treeEventsBefore,
   treeEvents,
 ) {
   if (text.includes("Summarize branch?"))
     return {
       done: true,
-      value: { state: "summary-dialog", selectionStartedAt, treeEvents },
+      value: { state: "summary-dialog", treeEventsBefore, treeEvents },
       progress: { state: "summary-dialog" },
     };
   const treeLoaded = (snapshots?.has("tree") ?? false) && treeEvents > 0;
@@ -1331,8 +1330,30 @@ async function tryHerdr(args, options = {}) {
     return { ok: true, value: await herdr(args, options) };
   } catch (error) {
     if (error?.code === "SMOKE_PROTOCOL") throw error;
-    return { ok: false, error: error?.message ?? String(error) };
+    return {
+      ok: false,
+      error: error?.message ?? String(error),
+      herdrCode: herdrErrorCode(error),
+    };
   }
+}
+
+export function herdrErrorCode(error) {
+  try {
+    const value = JSON.parse(String(error?.stderr ?? "").trim());
+    return typeof value?.error?.code === "string"
+      ? value.error.code
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function candidateStartObservationError(observed, paneId) {
+  if (observed.ok) return undefined;
+  if (observed.herdrCode === "pane_not_found")
+    throw new Error(`candidate pane ${paneId} disappeared`);
+  return { done: false, observationError: observed.error };
 }
 
 async function preflight() {
@@ -1632,8 +1653,8 @@ async function startCandidate(ctx) {
         "--pane",
         paneId,
       ]);
-      if (!observed.ok)
-        return { done: false, observationError: observed.error };
+      const observationError = candidateStartObservationError(observed, paneId);
+      if (observationError) return observationError;
       const matches = candidateProcess(
         observed.value,
         ctx.candidateExtension,
@@ -1885,6 +1906,14 @@ export async function inspectPaneProcesses(
       verified.set(`${record.paneId}\0${record.pid}`, record);
   }
   return { records, verified: [...verified.values()] };
+}
+
+export async function bestEffortProcessDiagnostics(...args) {
+  try {
+    return (await inspectPaneProcesses(...args)).records.slice(0, 40);
+  } catch (error) {
+    return { error: String(error?.message ?? error).slice(0, 500) };
+  }
 }
 
 async function inspectCandidateProcesses(ctx) {
@@ -3484,7 +3513,7 @@ async function runChiefTreeSmoke(ctx) {
     throw new Error(
       `chief-tree-selection: startup answer was not selected after checking ${footer.total} tree rows; Enter was not sent`,
     );
-  const selectionStartedAt = Date.now();
+  const treeEventsBefore = countChiefTreeEvents(await readSnapshotContents());
   await nestedPaneInput(ctx, ["pane", "send-keys", ctx.rootPaneId, "enter"]);
   const transition = await waitForEvidence(
     ctx,
@@ -3509,19 +3538,19 @@ async function runChiefTreeSmoke(ctx) {
       if (snapshots)
         treeEvents = countChiefTreeEvents(
           await readSnapshotContents(),
-          selectionStartedAt,
+          treeEventsBefore,
         );
       return {
         ...chiefTreeBranchTransition(
           text,
           snapshots,
-          selectionStartedAt,
+          treeEventsBefore,
           treeEvents,
         ),
         evidence: {
           footer: chiefTreeFooter(text),
           treeEvents,
-          selectionStartedAt,
+          treeEventsBefore,
         },
       };
     },
@@ -3543,7 +3572,7 @@ async function runChiefTreeSmoke(ctx) {
         }
         const treeEvents = countChiefTreeEvents(
           await readSnapshotContents(),
-          transition.selectionStartedAt,
+          treeEventsBefore,
         );
         const done =
           snapshots.has("tree") && treeEvents > transition.treeEvents;
@@ -3687,7 +3716,7 @@ async function collectDiagnostics(ctx, owned, failure) {
   const paneIds = diagnostics.panes.ok
     ? listedPanes(diagnostics.panes.value)
     : [];
-  const processDiagnostics = await inspectPaneProcesses(
+  diagnostics.processes = await bestEffortProcessDiagnostics(
     paneIds,
     ctx.rootPaneId,
     async (paneId) => {
@@ -3701,7 +3730,6 @@ async function collectDiagnostics(ctx, owned, failure) {
     ctx.candidateExtension,
     ctx.herdrStateExtension,
   );
-  diagnostics.processes = processDiagnostics.records.slice(0, 40);
   try {
     const session =
       rootSession.status === "fulfilled" ? rootSession.value : null;
@@ -4017,7 +4045,15 @@ async function main() {
     console.error(
       `smoke ${scenario}: FAIL\n${formatSmokeFailure(error, ctx.stage)}`,
     );
-    await collectDiagnostics(ctx, owned, error);
+    try {
+      await collectDiagnostics(ctx, owned, error);
+    } catch (diagnosticError) {
+      console.error(
+        `diagnostics: collection failed: ${
+          diagnosticError?.message ?? diagnosticError
+        }`,
+      );
+    }
   } finally {
     const cleanupError = await cleanup(paths, owned, ctx);
     if (cleanupError) {
