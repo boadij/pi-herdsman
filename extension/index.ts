@@ -1086,7 +1086,7 @@ async function messageLimits(
 async function prepareCoordinationInput(
   ctx: ExtensionContext,
   text: string,
-  files: readonly string[],
+  files: readonly MessageFileInput[],
   operation: string,
   heading: "Message" | "Reply" | "Question",
   recordForInput: (
@@ -3464,11 +3464,19 @@ function nextAgentResultIndex(
 
   for (const entry of entries) {
     const details = agentResultDetails(entry);
-    if (details?.agentLabel !== agentLabel) continue;
+    if (details?.agentLabel === agentLabel) {
+      const index = details.resultIndex;
+      if (
+        typeof index === "number" &&
+        Number.isSafeInteger(index) &&
+        index > max
+      )
+        max = index;
+    }
 
-    const index = details.resultIndex;
-    if (typeof index === "number" && Number.isSafeInteger(index) && index > max)
-      max = index;
+    const imported = importedResultBinding(entry);
+    const semantic = imported && parseSemanticResultRef(imported.ref);
+    if (semantic?.agent === agentLabel) max = Math.max(max, semantic.index);
   }
 
   return max + 1;
@@ -7784,7 +7792,7 @@ export default function (pi: ExtensionAPI): void {
     ctx: ExtensionContext,
     assignment: ProjectAssignment,
     message: string,
-    files: readonly string[] = [],
+    files: readonly MessageFileInput[] = [],
     operation = "supervisor_message",
   ): Promise<ProjectMessage | undefined> => {
     const sessionId = ctx.sessionManager.getSessionId();

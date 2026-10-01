@@ -1604,9 +1604,9 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
   const secondRequestId = randomUUID();
   const childTwo = {
     ...managedState(
-      "child-two",
+      "researcher",
       secondRequestId,
-      recoveryIdentity("child-two"),
+      recoveryIdentity("researcher"),
     ),
     ownerSessionId: parent.piSessionId,
     piSessionId: "11111111-1111-4111-8111-111111111111",
@@ -1656,6 +1656,14 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
   writeAgentState(childThreeMailbox, childThree);
   writeAgentState(foreignChildMailbox, foreignChild);
   const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: {
+        ref: "result:researcher#1",
+        canonicalRef: "result:850e8400-e29b-41d4-a716-446655440000",
+      },
+    },
     {
       type: "custom",
       customType: "pi-herdsman-agent-definition",
@@ -1830,6 +1838,11 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sent.length, 2);
+    assert.match(
+      sentContent(1),
+      /Result ref: result:researcher#2/,
+      "an imported semantic result index must be reserved before local allocation",
+    );
     assert.equal(
       (pi.sentMessageCalls[1].message as any).details.activeDirectChildCount,
       1,
