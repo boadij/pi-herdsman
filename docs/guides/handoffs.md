@@ -237,15 +237,15 @@ through `files` using the exact refs shown by the completions:
 }
 ```
 
-`result:<agent>#<index>` is a branch-local reusable direct-result ref. It
-resolves only against matching completion entries on the caller's current Pi
-branch. The index is scoped to the logical agent label: the first reusable
-completion from `global-peer-fix` is index 1, a continued generation is index
-2, and both remain independently attachable. Indexes are not reused after
-historical branch rewinds. Semantic result refs retain their model-facing
-identity during attachment preparation. Herdsman resolves the durable artifact
-through a hidden canonical binding and carries that binding across Pi session
-boundaries so the receiving session can forward the same semantic ref later.
+`result:<agent>#<index>` is a globally unique reusable direct-result ref within
+the Herdsman durable data root. It resolves in another session only when
+explicitly handed through `files`; resolution is against matching completion
+entries or imported bindings on the caller's current Pi branch. Indexes are
+allocated globally and are never reused, while availability remains
+branch-local. Semantic result refs retain their model-facing identity during
+attachment preparation. Herdsman resolves the durable artifact through a
+hidden canonical binding and carries that binding across Pi session boundaries
+so the receiving session can forward the same semantic ref later.
 
 Pass an exact canonical reference through `files` when it was supplied as file
 evidence, especially for a transitive handoff:

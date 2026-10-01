@@ -12,7 +12,7 @@ import type {
   ManagedAgentState,
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
-import { resultPath, resultRef } from "./storage.ts";
+import { herdsmanDataRoot, resultPath, resultRef } from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
   REQUEST_ID,
@@ -1838,10 +1838,15 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sent.length, 2);
+    const secondResultIndex = (pi.sentMessageCalls[1].message as any).details
+      .resultIndex;
+    assert.ok(
+      secondResultIndex >= 2,
+      "an imported semantic result index must remain a floor for local allocation",
+    );
     assert.match(
       sentContent(1),
-      /Result ref: result:researcher#2/,
-      "an imported semantic result index must be reserved before local allocation",
+      new RegExp(`Result ref: result:researcher#${secondResultIndex}`),
     );
     assert.equal(
       (pi.sentMessageCalls[1].message as any).details.activeDirectChildCount,
@@ -1970,6 +1975,96 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       foreignChildMailbox,
     ])
       resetAgentMailbox(mailbox);
+  }
+});
+
+test("independent producer branches publish globally unique semantic refs", async () => {
+  const label = `globalref-${randomUUID().slice(0, 8)}`;
+  const reservationDirectory = join(
+    herdsmanDataRoot(),
+    "result-ref-reservations",
+    label,
+  );
+  const published: { ref: string; index: number }[] = [];
+
+  try {
+    for (let producer = 0; producer < 2; producer++) {
+      setLeadEnvironment();
+      process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
+      const parent = {
+        ...managedState(`parent-${producer}`),
+        piSessionId: randomUUID(),
+      };
+      const requestId = randomUUID();
+      const child = {
+        ...managedState(
+          label,
+          requestId,
+          recoveryIdentity(`${label}-${producer}`),
+        ),
+        ownerSessionId: parent.piSessionId,
+        piSessionId: randomUUID(),
+      };
+      const mailbox = agentMailboxPath(WORKSPACE, label);
+      resetAgentMailbox(mailbox);
+      writeAgentState(mailbox, child);
+
+      // Each producer starts from a distinct, empty Pi branch.
+      const entries: unknown[] = [];
+      const pi = fakePi({
+        entries,
+        exec: agentControllerExecutor(parent, [child]),
+      });
+      registerExtension!(pi.pi as never);
+      const context = fakeContext(entries);
+      context.sessionManager = {
+        ...context.sessionManager,
+        getSessionId: () => parent.piSessionId,
+      };
+      for (const handler of pi.events.get("session_start") ?? [])
+        await handler(undefined, context);
+
+      writeAgentState(mailbox, {
+        ...child,
+        activeRequestId: undefined,
+        completedRequestId: requestId,
+        updatedAt: Date.now(),
+      });
+      writeResult(mailbox, {
+        version: 5,
+        runId: child.runId,
+        requestId,
+        ownerSessionId: child.ownerSessionId,
+        workspaceId: child.workspaceId,
+        agentLabel: label,
+        paneId: child.paneId,
+        status: "completed",
+        text: `result from producer ${producer}`,
+        completedAt: Date.now(),
+      });
+      watchedResultPaths.get(`${mailbox}/result-${requestId}.json`)?.({}, {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const message = pi.sentMessageCalls.find(
+        ({ message }) =>
+          (message as any).customType === "pi-herdsman-agent-result",
+      )?.message as any;
+      assert.ok(message, `producer ${producer} should publish its result`);
+      const match = new RegExp(
+        `Result ref: (result:${label}#([1-9][0-9]*))`,
+      ).exec(message.content);
+      assert.ok(match, `producer ${producer} should publish a semantic ref`);
+      published.push({ ref: match[1], index: Number(match[2]) });
+      assert.equal(message.details.requestId, requestId);
+      for (const handler of pi.events.get("session_shutdown") ?? [])
+        handler(undefined, context);
+    }
+
+    assert.notEqual(published[0].ref, published[1].ref);
+    assert.notEqual(published[0].index, published[1].index);
+  } finally {
+    realFs.rmSync(reservationDirectory, { recursive: true, force: true });
   }
 });
 

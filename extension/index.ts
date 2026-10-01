@@ -44,6 +44,7 @@ import {
   resultPath as canonicalResultPath,
   resultRef,
   parseSemanticResultRef,
+  reserveSemanticResultRef,
   isResultBinding,
   type ResultBinding,
 } from "./storage.ts";
@@ -686,6 +687,10 @@ const resultDeliveryRetries = new Map<string, ReturnType<typeof setTimeout>>();
 const resultCleanupRetries = new Map<string, ReturnType<typeof setTimeout>>();
 // In-process replay suppression only; durable owner-session entries remain authoritative.
 const resultDeliveryEvidence = new Set<string>();
+const resultDeliverySemanticRefs = new Map<
+  string,
+  Readonly<{ ref: string; index: number }>
+>();
 let requestStatusRefresh: (() => void) | undefined;
 let requestHerdRunFinishCheck: ((ctx: ExtensionContext) => void) | undefined;
 let controllerSessionActive = true;
@@ -3456,7 +3461,7 @@ function agentResultDetails(
     ? (details as Record<string, unknown>)
     : undefined;
 }
-function nextAgentResultIndex(
+function nextBranchResultIndex(
   entries: readonly unknown[],
   agentLabel: string,
 ): number {
@@ -3693,13 +3698,17 @@ async function deliverResultUnsafe(
           : {}),
       },
     );
-    const resultIndex = completion.resultRef
-      ? nextAgentResultIndex(entries, result.agentLabel)
+    let semanticResult = completion.resultRef
+      ? resultDeliverySemanticRefs.get(evidenceKey)
       : undefined;
-    const reusableResultRef =
-      resultIndex === undefined
-        ? undefined
-        : `result:${result.agentLabel}#${resultIndex}`;
+    if (completion.resultRef && !semanticResult) {
+      semanticResult = reserveSemanticResultRef(
+        result.agentLabel,
+        nextBranchResultIndex(entries, result.agentLabel),
+      );
+      resultDeliverySemanticRefs.set(evidenceKey, semanticResult);
+    }
+    const reusableResultRef = semanticResult?.ref;
     if (completion.persistenceError) {
       appendDurableError(
         pi,
@@ -3767,10 +3776,10 @@ async function deliverResultUnsafe(
           ...(elapsedMs !== undefined ? { elapsedMs } : {}),
           contextUsage: result.contextUsage,
           truncated: completion.truncated,
-          ...(completion.resultRef
+          ...(semanticResult && completion.resultRef
             ? {
                 resultRef: completion.resultRef,
-                resultIndex,
+                resultIndex: semanticResult.index,
               }
             : {}),
           ...(completion.fullOutputPath
@@ -4002,9 +4011,9 @@ async function finalizeDeliveredResult(
   );
   if (!cleaned) return false;
 
-  resultDeliveryEvidence.delete(
-    resultDeliveryEvidenceKey(runtime, result.requestId),
-  );
+  const evidenceKey = resultDeliveryEvidenceKey(runtime, result.requestId);
+  resultDeliveryEvidence.delete(evidenceKey);
+  resultDeliverySemanticRefs.delete(evidenceKey);
   requestStatusRefresh?.();
   return true;
 }
@@ -4404,7 +4413,7 @@ function invalidateCachedRuntime(label: string): void {
   for (const requestId of requestIds) stopResultWatcher(runtime, requestId);
   stopAskWatcher(runtime);
   cancelAskDeliveryRetries(runtime);
-  clearResultDeliveryEvidence(runtime);
+  clearResultDeliveryState(runtime);
   runtime.startedAt = undefined;
   runtimes.delete(label);
 }
@@ -4805,7 +4814,7 @@ async function closeManagedAgent(
       stopResultWatcher(runtime);
       stopAskWatcher(runtime);
       cancelAskDeliveryRetries(runtime);
-      clearResultDeliveryEvidence(runtime);
+      clearResultDeliveryState(runtime);
       runtime.startedAt = undefined;
       runtimes.delete(runtime.label);
     }
@@ -5129,12 +5138,13 @@ function resultDeliveryEvidenceKey(
 ): string {
   return deliveryIdentityKey(resultDeliveryExpectation(identity, requestId));
 }
-function clearResultDeliveryEvidence(runtime: Runtime): void {
+function clearResultDeliveryState(runtime: Runtime): void {
   for (const requestId of [runtime.activeRequestId, runtime.completedRequestId])
-    if (requestId)
-      resultDeliveryEvidence.delete(
-        resultDeliveryEvidenceKey(runtime, requestId),
-      );
+    if (requestId) {
+      const key = resultDeliveryEvidenceKey(runtime, requestId);
+      resultDeliveryEvidence.delete(key);
+      resultDeliverySemanticRefs.delete(key);
+    }
 }
 function delegationStatusMessage({
   activeDirectChildCount,
@@ -6481,6 +6491,8 @@ async function actionUnsafe(
         ...(embeddedIds?.paneId ? { paneId: embeddedIds.paneId } : {}),
         ...(embeddedIds?.tabId ? { tabId: embeddedIds.tabId } : {}),
       };
+      const failedRuntime = runtimes.get(label);
+      if (failedRuntime) clearResultDeliveryState(failedRuntime);
       runtimes.delete(label);
       try {
         if (started) {
@@ -14258,6 +14270,7 @@ export default function (pi: ExtensionAPI): void {
       resultCleanupRetries.clear();
       resultDeliveryInFlight.clear();
       resultDeliveryEvidence.clear();
+      resultDeliverySemanticRefs.clear();
       askDeliveryInFlight.clear();
       runtimes.clear();
     });
