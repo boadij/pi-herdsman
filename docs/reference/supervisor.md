@@ -24,16 +24,17 @@ Available to ordinary Leads and Managers.
 }
 ```
 
-Use it when a supervisor must decide or act, or when a blocker, warning, scope
-change, risk, or explicit evidence needs attention. After a project herd run
-settles, Herdsman asynchronously attempts to publish a nonterminal handoff to
-the Manager; failed publication is logged and not retried. Successful
-publication uses the retained project-message path. For a Lead with a project
-assignment, messages are retained with that assignment and can be delivered to
-a current Manager even if no Manager is active when sent. A replacement
+Use it when material coordination needs a supervisor decision or attention,
+such as a blocker, warning, scope change, risk, or important evidence. When a
+project herd run settles, Herdsman handles the normal Manager handoff
+automatically; the Lead summarizes the outcome, validation, and important
+unresolved points in its normal response. For a Lead with a project
+assignment, messages are retained with that assignment and can be delivered
+to a current Manager even if no Manager is active when sent. A replacement
 Manager receives retained project messages; the same Manager session does not
-receive a message again once it appears in its Pi history. Messages are
-nonterminal: the project remains open until a Manager resolves the assignment.
+receive a message again once it appears in its Pi history. Both handoffs and
+messages are nonterminal; the project remains open until a Manager resolves
+the assignment.
 
 An ordinary Lead without a verified supervisor should continue independently
 until a supervisor is available. An assigned project Lead remains Manager-owned

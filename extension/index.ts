@@ -162,6 +162,7 @@ import {
   writeCoordinationMessage,
   chiefMessageBytes,
   COORDINATION_MESSAGE_MAX_BYTES,
+  projectAssignmentPath,
   projectMessageBytes,
   writeProjectMessage,
   listProjectMessages,
@@ -309,7 +310,7 @@ const LEAD_COORDINATION_TOOLS = [
 const CHIEF_TOOLS = STAFF_TOOLS;
 const LEAD_ROLE_CHARTER = `## Lead role
 Own the assigned objective and any Agents you delegate to. Use
-supervisor_message when an available direct supervisor must decide or act, and
+supervisor_message when your direct supervisor must decide or act, and
 peer_list/peer_message for peer coordination. Keep work inside your assigned
 scope.`;
 const MANAGER_ROLE_CHARTER = `## Manager role
@@ -321,9 +322,10 @@ Use staff_message for decisions and review feedback. Use staff_stop to stop a
 Lead while preserving its assignment, staff_complete when the project work is
 fulfilled, and staff_discard when it is abandoned.
 
-Herdsman attempts asynchronous publication of settled project herd runs as
-nonterminal handoffs, without retry on failure. Review received handoffs,
-request corrections with staff_message when needed, and use
+When a delegated herd run settles, Leads summarize its outcome, validation, and
+important unresolved points in their normal response. Herdsman handles the
+normal Manager handoff automatically. Review received handoffs, request
+corrections with staff_message when needed, and use
 staff_complete only when the project work is fulfilled.
 
 Actual implementation belongs to project Leads and their Agent trees. Your role
@@ -333,7 +335,7 @@ supervisor_message.`;
 function projectAssignmentInstruction(
   assignment: Pick<ProjectAssignment, "text">,
 ): string {
-  return `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nWhen a delegated herd run settles, summarize its outcome, validation, and\nimportant unresolved points in your normal response. Herdsman attempts asynchronous\npublication of that handoff to the Manager, without retry on failure.\n\nUse supervisor_message when the Manager must decide or act before normal\nsettlement, or when material scope, assumptions, risks, or evidence need\nattention. Routine status and acknowledgements stay local. The project remains open\nuntil the Manager completes or discards it.`;
+  return `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nWhen a delegated herd run settles, summarize its outcome, validation, and\nimportant unresolved points in your normal response. Herdsman handles the\nnormal Manager handoff automatically.\n\nUse supervisor_message when the Manager must decide or act before normal\nsettlement, or when material scope, assumptions, risks, or evidence need\nattention. Routine status and acknowledgements stay local. The project remains open\nuntil the Manager completes or discards it.`;
 }
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const SUPERVISOR_STATE_TYPE = "pi-herdsman-supervisor-state";
@@ -7693,31 +7695,11 @@ export default function (pi: ExtensionAPI): void {
     repoKey: string,
     branch: string,
     operation: () => Promise<T> | T,
-    waitForContention = false,
   ): Promise<T> => {
-    const lockPath = join(
-      supervisionRuntime().assignments,
-      createHash("sha256").update(repoKey).digest("hex"),
-      `${createHash("sha256").update(branch).digest("hex")}.json.lock`,
+    const lease = acquireProcessLock(
+      `${projectAssignmentPath(supervisionRuntime(), repoKey, branch)}.lock`,
+      { name: "project assignment lock" },
     );
-    const deadline = Date.now() + 10_000;
-    let lease: ReturnType<typeof acquireProcessLock>;
-    while (true) {
-      try {
-        lease = acquireProcessLock(lockPath, {
-          name: "project assignment publication lock",
-        });
-        break;
-      } catch (error) {
-        if (
-          !waitForContention ||
-          !(error instanceof ProcessLockOccupiedError) ||
-          Date.now() >= deadline
-        )
-          throw error;
-        await delay(50);
-      }
-    }
     try {
       return await operation();
     } finally {
@@ -7780,7 +7762,6 @@ export default function (pi: ExtensionAPI): void {
         writeProjectMessage(record, runtime);
         return record;
       },
-      true,
     );
   };
   const currentManager = async (
@@ -7837,7 +7818,7 @@ export default function (pi: ExtensionAPI): void {
           if (await currentManager(ctx, scope))
             return `<supervisor_state>\nsupervisor: manager\navailability: available\nproject_messages: retained across Manager turnover\n</supervisor_state>`;
         } catch {
-          // An assigned Lead remains Manager-owned while Manager liveness is uncertain.
+          return `<supervisor_state>\nsupervisor: manager\navailability: unknown\nproject_messages: retained for the Manager role\n</supervisor_state>`;
         }
         return `<supervisor_state>\nsupervisor: manager\navailability: unavailable\nproject_messages: retained for the Manager role\n</supervisor_state>`;
       }

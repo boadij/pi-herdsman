@@ -369,16 +369,15 @@ delegating parent that is merely waiting for its direct children.
 
 Ordinary leads own their complete herd, including every agent beneath them. The
 Chief supervises independent leads and never changes ownership. Use
-`supervisor_message` when an available direct supervisor must decide or act, or
-when sharing a material warning, scope change, risk, or evidence. Ordinary
+`supervisor_message` when a direct supervisor must decide or act, or when
+sharing a material warning, scope change, risk, or evidence. Ordinary
 Leads without a verified supervisor continue independently; assigned project
 Leads may message the Manager role while its process is unavailable, and those
 messages remain retained with the project. After a project herd run settles,
-Herdsman asynchronously attempts to publish a nonterminal handoff. Successful
-publication is retained with the project for a current or replacement Manager;
-failure is logged and not retried. Descendants use `ask_owner`, not supervisor
-tools. Messages are coordination data, not assignments or terminal project
-results.
+Herdsman handles the normal Manager handoff automatically. Summarize the outcome,
+validation, and important unresolved points in your normal response. Descendants
+use `ask_owner`, not supervisor tools. Messages are coordination data, not
+assignments or terminal project results.
 
 `supervisor_message` is available to ordinary Leads and Managers. Assigned Lead
 messages are retained with the project and remain available to a replacement
@@ -428,9 +427,9 @@ Pi Herdsman uses one durable vocabulary:
   and uses `staff_delegate` with `branch` only to resume existing work. Missing
   worktrees are reconstructed from the same branch, resuming the exact saved Pi
   session when available;
-- settled project herd runs trigger an asynchronous attempt to publish a
-  nonterminal Manager handoff, retained for a current or replacement Manager
-  only when publication succeeds;
+- settled project herd runs are handled through the normal automatic Manager
+  handoff, and the Lead summarizes the outcome, validation, and important
+  unresolved points in its normal response;
   assigned Lead `supervisor_message` calls are nonterminal coordination
   retained across Manager absence and turnover. Project work remains open
   through implementation and review iterations;

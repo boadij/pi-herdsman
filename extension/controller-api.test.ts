@@ -392,6 +392,45 @@ test("project Lead observes Manager availability across turnover without exposin
     assert.doesNotMatch(available.content, new RegExp(managerId));
     assert.equal(recordObservation(await observe()), undefined);
 
+    writeLeadCoordinationState(runtime, {
+      version: 1,
+      role: undefined,
+      instanceId: randomUUID(),
+      piSessionId: managerId,
+      updatedAt: Date.now(),
+    });
+    const unknown = recordObservation(await observe());
+    assert.match(unknown.content, /supervisor: manager/);
+    assert.match(unknown.content, /availability: unknown/);
+    assert.match(
+      unknown.content,
+      /project_messages: retained for the Manager role/,
+    );
+    const savedWhileUnknown = await pi.tools
+      .find((tool) => tool.name === "supervisor_message")!
+      .execute(
+        "message",
+        { message: "RETAINED_WITH_UNVERIFIED_MANAGER" },
+        undefined,
+        undefined,
+        ctx,
+      );
+    assert.match(
+      JSON.stringify(savedWhileUnknown),
+      /Project message saved for Manager/,
+    );
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", assignment.branch)[0]?.text,
+      "RETAINED_WITH_UNVERIFIED_MANAGER",
+    );
+    writeLeadCoordinationState(runtime, {
+      version: 1,
+      role: "manager",
+      instanceId: randomUUID(),
+      piSessionId: managerId,
+      updatedAt: Date.now(),
+    });
+
     manager.release();
     agents.splice(1, 1);
     const unavailable = recordObservation(await observe());
@@ -412,7 +451,7 @@ test("project Lead observes Manager availability across turnover without exposin
       );
     assert.match(JSON.stringify(saved), /Project message saved for Manager/);
     assert.equal(
-      listProjectMessages(runtime, "repo-key", assignment.branch)[0]?.text,
+      listProjectMessages(runtime, "repo-key", assignment.branch)[1]?.text,
       "RETAINED_WITHOUT_MANAGER",
     );
 
@@ -1140,8 +1179,7 @@ for (const scenario of [
         toSessionId: sessionId,
         leadSessionId: sessionId,
         branch: assignment.branch,
-        text: `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nWhen a delegated herd run settles, summarize its outcome, validation, and\nimportant unresolved points in your normal response. Herdsman forwards that\nhandoff to the Manager automatically.\n\nUse supervisor_message when the Manager must decide or act before normal\nsettlement, or when material scope, assumptions, risks, or evidence need\nattention. Routine status and acknowledgements stay local. The project remains open\nuntil the Manager completes or discards it.`,
-        text: `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nWhen a delegated herd run settles, summarize its outcome, validation, and\nimportant unresolved points in your normal response. Herdsman attempts asynchronous\npublication of that handoff to the Manager, without retry on failure.\n\nUse supervisor_message when the Manager must decide or act before normal\nsettlement, or when material scope, assumptions, risks, or evidence need\nattention. Routine status and acknowledgements stay local. The project remains open\nuntil the Manager completes or discards it.`,
+        text: `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nWhen a delegated herd run settles, summarize its outcome, validation, and\nimportant unresolved points in your normal response. Herdsman handles the\nnormal Manager handoff automatically.\n\nUse supervisor_message when the Manager must decide or act before normal\nsettlement, or when material scope, assumptions, risks, or evidence need\nattention. Routine status and acknowledgements stay local. The project remains open\nuntil the Manager completes or discards it.`,
         createdAt: Date.now(),
       },
       runtime,

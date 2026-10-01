@@ -1388,7 +1388,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     );
     assert.match(
       delivery.text,
-      /Herdsman attempts asynchronous\s+publication of that handoff to the Manager, without retry on failure\./,
+      /Herdsman handles the\s+normal Manager handoff automatically\./,
     );
     assert.ok(
       pi.calls.some(

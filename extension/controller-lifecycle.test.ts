@@ -15,6 +15,7 @@ import { claimProcessLock } from "./lock.ts";
 import {
   listProjectAssignments,
   listProjectMessages,
+  projectAssignmentPath,
   removeProjectAssignment,
   removeProjectMessages,
   supervisionRuntime,
@@ -1956,12 +1957,6 @@ test("automatic project handoff cannot recreate messages under assignment resolu
     for (const handler of pi.events.get(name) ?? [])
       await handler(undefined, context);
   };
-  const repoDirectory = join(
-    runtime.assignments,
-    createHash("sha256").update("repo-key").digest("hex"),
-  );
-  const branchHash = createHash("sha256").update(branch).digest("hex");
-
   registerExtension!(pi.pi as never);
   try {
     await emit("session_start");
@@ -1980,12 +1975,11 @@ test("automatic project handoff cannot recreate messages under assignment resolu
     resetAgentMailbox(startup.mailbox);
 
     const releaseResolutionLock = claimProcessLock(
-      join(repoDirectory, `${branchHash}.json.lock`),
+      `${projectAssignmentPath(runtime, "repo-key", branch)}.lock`,
       { name: "test project assignment resolution" },
     );
     try {
-      const settlement = emit("agent_settled");
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      await emit("agent_settled");
       assert.equal(
         pi.entries.filter(
           (entry: any) =>
@@ -1996,142 +1990,25 @@ test("automatic project handoff cannot recreate messages under assignment resolu
         "the herd must finish before attempting advisory publication",
       );
       assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 0);
+      // Contention is fail-fast: settling cannot leave a publication retry
+      // waiting to recreate messages after assignment resolution.
       removeProjectAssignment(runtime, "repo-key", branch);
       removeProjectMessages(runtime, "repo-key", branch);
       releaseResolutionLock();
-      await settlement;
-      await new Promise((resolve) => setTimeout(resolve, 150));
     } finally {
       releaseResolutionLock();
     }
     assert.equal(listProjectAssignments(runtime, "repo-key").length, 0);
     assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 0);
     assert.equal(
-      realFs.existsSync(join(repoDirectory, `${branchHash}.messages`)),
+      realFs.existsSync(
+        projectAssignmentPath(runtime, "repo-key", branch).replace(
+          /\.json$/,
+          ".messages",
+        ),
+      ),
       false,
       "publication must not recreate a message directory after resolution",
-    );
-  } finally {
-    pi.events.get("session_shutdown")?.[0]();
-    resetAgentMailbox(startup.mailbox);
-    removeProjectAssignment(runtime, "repo-key", branch);
-    removeProjectMessages(runtime, "repo-key", branch);
-    delete process.env.HERDR_SOCKET_PATH;
-  }
-});
-
-test("automatic project handoff retries after resolution lock releases with assignment open", async (t) => {
-  setLeadEnvironment();
-  const socket = join(tmpdir(), `project-handoff-retry-${randomUUID()}.sock`);
-  process.env.HERDR_SOCKET_PATH = socket;
-  const runtime = supervisionRuntime(socket);
-  const branch = `handoff-retry-${randomUUID()}`;
-  writeProjectAssignment(runtime, {
-    version: 1,
-    id: LEAD_SESSION_ID,
-    repoKey: "repo-key",
-    branch,
-    text: "Implement the assigned project",
-  });
-  const label = `handoff-retry-${randomUUID().slice(0, 8)}`;
-  const startup = startupExecutor(
-    label,
-    () => DEFAULT_PI_SESSION_ID,
-    undefined,
-    undefined,
-    false,
-    undefined,
-    "/tmp",
-    AGENT_ID,
-    false,
-    true,
-  );
-  const pi = fakePi({
-    exec: async (command: string, args: string[]) => {
-      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: {
-              source: {
-                repo_key: "repo-key",
-                repo_name: "project",
-                source_workspace_id: WORKSPACE,
-              },
-              worktrees: [],
-            },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      return startup.exec(command, args);
-    },
-  });
-  const context = fakeContext(pi.entries);
-  context.hasUI = true;
-  let widget: any;
-  context.ui.setWidget = (_key, content) => {
-    if (typeof content === "function")
-      widget = content(
-        { requestRender: () => {} } as any,
-        {
-          fg: (_color: string, text: string) => text,
-          bold: (text: string) => text,
-        } as any,
-      );
-  };
-  const emit = async (name: string) => {
-    for (const handler of pi.events.get(name) ?? [])
-      await handler(undefined, context);
-  };
-  const repoDirectory = join(
-    runtime.assignments,
-    createHash("sha256").update("repo-key").digest("hex"),
-  );
-  const branchHash = createHash("sha256").update(branch).digest("hex");
-
-  registerExtension!(pi.pi as never);
-  try {
-    await emit("session_start");
-    await emit("agent_start");
-    const delegated = await registeredAgentTool(pi, "delegate").execute(
-      "project-handoff-retry",
-      { definition: "agent", label, task: "finish the project work" },
-      undefined,
-      undefined,
-      context,
-    );
-    assert.equal(delegated.details.ok, true, JSON.stringify(delegated.details));
-    await t.waitFor(() =>
-      assert.match(widget.render(120).join("\n"), /working/),
-    );
-    resetAgentMailbox(startup.mailbox);
-
-    const releaseResolutionLock = claimProcessLock(
-      join(repoDirectory, `${branchHash}.json.lock`),
-      { name: "test project assignment resolution" },
-    );
-    try {
-      const settlement = emit("agent_settled");
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 0);
-      releaseResolutionLock();
-      await settlement;
-    } finally {
-      releaseResolutionLock();
-    }
-
-    await t.waitFor(() =>
-      assert.equal(
-        listProjectMessages(runtime, "repo-key", branch).length,
-        1,
-        "handoff publication must retry after contention while its assignment remains open",
-      ),
-    );
-    assert.equal(listProjectAssignments(runtime, "repo-key").length, 1);
-    assert.equal(
-      listProjectMessages(runtime, "repo-key", branch)[0].fromSessionId,
-      LEAD_SESSION_ID,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
