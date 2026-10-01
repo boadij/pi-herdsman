@@ -8280,14 +8280,24 @@ export default function (pi: ExtensionAPI): void {
       const matches = listProjectAssignments(
         supervisionRuntime(),
         scope.repoKey,
-      ).filter(
-        (assignment) =>
+      ).filter((assignment) => {
+        const expected = assignment.resultBindings ?? [];
+        const actual = record.resultBindings ?? [];
+
+        return (
           assignment.id === sessionId &&
           record.branch === assignment.branch &&
           assignment.repoKey === scope.repoKey &&
           assignment.text &&
-          record.text === projectAssignmentInstruction(assignment),
-      );
+          record.text === projectAssignmentInstruction(assignment) &&
+          actual.length === expected.length &&
+          actual.every(
+            (binding, index) =>
+              binding.ref === expected[index]?.ref &&
+              binding.canonicalRef === expected[index]?.canonicalRef,
+          )
+        );
+      });
       const assignment = matches.length === 1 ? matches[0] : undefined;
       if (!assignment)
         return projectAssignmentAuthorized(

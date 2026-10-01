@@ -1135,6 +1135,13 @@ for (const scenario of [
     mismatchedPath: true,
     prospectivePath: false,
   },
+  {
+    name: "denies a mismatched project-assignment result binding",
+    moved: false,
+    mismatchedPath: false,
+    prospectivePath: false,
+    mismatchedBinding: true,
+  },
 ])
   test(`project assignment delivery ${scenario.name}`, async (t) => {
     setLeadEnvironment();
@@ -1161,12 +1168,23 @@ for (const scenario of [
       };
     } else delete process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
     const runtime = supervisionRuntime();
+    const expectedBinding = {
+      ref: "result:researcher#1",
+      canonicalRef: resultRef(randomUUID()),
+    };
+    const tamperedBinding = {
+      ref: expectedBinding.ref,
+      canonicalRef: resultRef(randomUUID()),
+    };
     const assignment = {
       version: 2 as const,
       id: sessionId,
       repoKey: "repo-key",
       branch: "smoke/delivery-placement",
       text: "deliver only in the assigned checkout",
+      ...(scenario.mismatchedBinding
+        ? { resultBindings: [expectedBinding] }
+        : {}),
     };
     writeProjectAssignment(runtime, assignment);
     writeChiefMessage(
@@ -1180,6 +1198,9 @@ for (const scenario of [
         leadSessionId: sessionId,
         branch: assignment.branch,
         text: `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nWhen a delegated herd run settles, summarize its outcome, validation, and\nimportant unresolved points in your normal response. Herdsman handles the\nnormal Manager handoff automatically.\n\nUse supervisor_message when the Manager must decide or act before normal\nsettlement, or when material scope, assumptions, risks, or evidence need\nattention. Routine status and acknowledgements stay local. The project remains open\nuntil the Manager completes or discards it.`,
+        ...(scenario.mismatchedBinding
+          ? { resultBindings: [tamperedBinding] }
+          : {}),
         createdAt: Date.now(),
       },
       runtime,
@@ -1212,7 +1233,9 @@ for (const scenario of [
       tab_id: "manager-tab",
     };
     const inventory = [manager, agent];
+    const entries: unknown[] = [];
     const pi = fakeChiefPi({
+      entries,
       exec: (_command, args) => {
         let result: unknown = {};
         if (isApiSnapshot(args))
@@ -1269,9 +1292,24 @@ for (const scenario of [
       );
       assert.equal(
         delivered.length,
-        scenario.moved || scenario.mismatchedPath ? 0 : 1,
+        scenario.moved || scenario.mismatchedPath || scenario.mismatchedBinding
+          ? 0
+          : 1,
       );
-      if (!scenario.moved && !scenario.mismatchedPath) {
+      if (scenario.mismatchedBinding)
+        assert.equal(
+          entries.some(
+            (entry: any) =>
+              entry.customType === "pi-herdsman-result-ref" &&
+              entry.data?.canonicalRef === tamperedBinding.canonicalRef,
+          ),
+          false,
+        );
+      if (
+        !scenario.moved &&
+        !scenario.mismatchedPath &&
+        !scenario.mismatchedBinding
+      ) {
         assert.equal(delivered[0].details.id, sessionId);
         assert.equal(delivered[0].details.branch, assignment.branch);
         assert.ok(delivered[0].content.includes(assignment.branch));
