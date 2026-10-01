@@ -912,7 +912,7 @@ export function managedState(
   identity: FixtureIdentity = defaultFixtureIdentity,
 ): ManagedAgentState {
   return {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     ownerSessionId: LEAD_SESSION_ID,
     workspaceId: WORKSPACE,
@@ -993,7 +993,7 @@ export function requestRecordBytes(
 ): number {
   return Buffer.byteLength(
     JSON.stringify({
-      version: 4,
+      version: 5,
       runId: AGENT_ID,
       requestId: REQUEST_ID,
       ownerSessionId: LEAD_SESSION_ID,
@@ -1594,7 +1594,7 @@ export function delegatedLifecycleExecutor(
         const paneId = args[args.indexOf("--pane") + 1];
         const tabForPane = tabByPane.get(paneId) ?? "delegated-tab";
         const state: ManagedAgentState = {
-          version: 4,
+          version: 5,
           runId,
           ownerSessionId,
           workspaceId,
@@ -2292,7 +2292,7 @@ export function createStagedAssignmentFixture(
         updatedAt: Date.now(),
       });
       writeResult(startup.mailbox, {
-        version: 4,
+        version: 5,
         runId: state.runId,
         requestId,
         ownerSessionId: state.ownerSessionId,
@@ -2322,7 +2322,7 @@ export function writeMetadataTask(
 ): RequestRecord {
   const state = readAgentState(mailbox)!;
   const request: RequestRecord = {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId,
     ownerSessionId: state.ownerSessionId,
@@ -2771,7 +2771,7 @@ export function startupExecutor(
         },
       };
       writeAgentState(mailbox, {
-        version: 4,
+        version: 5,
         runId,
         ownerSessionId,
         workspaceId: WORKSPACE,

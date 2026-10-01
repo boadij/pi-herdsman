@@ -44,8 +44,9 @@ retained with the project assignment.
 For ordinary Lead or Manager-to-Chief communication, the message follows the
 current direct-supervisor route. Messages are bounded. `files` accepts ordinary
 paths, reusable direct Agent refs, and canonical result refs already supplied
-as evidence; attachments are prepared at submission and the durable message is
-text-only.
+as evidence; attachments are prepared at submission and the durable message
+carries prepared text plus any hidden semantic-result bindings needed for the
+recipient to forward them.
 
 ## Delivery
 

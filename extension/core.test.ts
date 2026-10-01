@@ -144,7 +144,13 @@ const {
   spawnPlacementMenuOptions,
   spawnPlacementFromMenuSelection,
 } = await import("./core.ts");
-const { resultPath, resultRef } = await import("./storage.ts");
+const {
+  isCanonicalResultRef,
+  isResultBinding,
+  parseSemanticResultRef,
+  resultPath,
+  resultRef,
+} = await import("./storage.ts");
 
 test("exposes placement modes and menu options", () => {
   assert.deepEqual(
@@ -436,6 +442,64 @@ test("resolves result references through shared message file preparation", () =>
   }
 });
 
+test("preserves semantic result bindings while resolving and deduplicating files", () => {
+  const requestId = "850e8400-e29b-41d4-a716-446655440000";
+  const path = resultPath(requestId);
+  const binding = {
+    ref: "result:researcher#1",
+    canonicalRef: resultRef(requestId),
+  };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, "semantic evidence");
+  try {
+    const prepared = prepareMessageInput(
+      "Inspect the result",
+      [binding, resultRef(requestId)],
+      mkdtempSync(join(tmpdir(), "pi-herdsman-semantic-result-")),
+      "assign",
+      "Task",
+      {
+        serializedBytes: (_text, bindings) => {
+          assert.deepEqual(bindings, [binding]);
+          return 0;
+        },
+      },
+    );
+    assert.match(prepared.text, /<file name="result:researcher#1"/);
+    assert.doesNotMatch(prepared.text, new RegExp(resultRef(requestId)));
+    assert.deepEqual(prepared.canonicalPaths, [realpathSync(path)]);
+    assert.deepEqual(prepared.resultBindings, [binding]);
+  } finally {
+    rmSync(path, { force: true });
+  }
+});
+
+test("validates semantic refs and result bindings", () => {
+  assert.deepEqual(parseSemanticResultRef("result:researcher_1#12"), {
+    agent: "researcher_1",
+    index: 12,
+  });
+  for (const invalid of [
+    "result:Researcher#1",
+    "result:researcher#01",
+    "result:researcher#0",
+    "result:researcher#9007199254740992",
+  ])
+    assert.equal(parseSemanticResultRef(invalid), undefined);
+
+  const binding = {
+    ref: "result:researcher#1",
+    canonicalRef: resultRef("950e8400-e29b-41d4-a716-446655440000"),
+  };
+  assert.equal(isCanonicalResultRef(binding.canonicalRef), true);
+  assert.equal(isResultBinding(binding), true);
+  assert.equal(isResultBinding({ ...binding, extra: true }), false);
+  assert.equal(
+    isResultBinding({ ...binding, ref: "result:researcher#01" }),
+    false,
+  );
+});
+
 test("missing result ref returns the actionable result-ref error", () => {
   const requestId = "650e8400-e29b-41d4-a716-446655440000";
   const input = resultRef(requestId);
@@ -714,6 +778,7 @@ test("message preparation keeps no-file messages unchanged", () => {
   assert.deepEqual(prepareMessageInput("hello", [], "/tmp", "steer", "Steer"), {
     text: "hello",
     canonicalPaths: [],
+    resultBindings: [],
   });
 });
 

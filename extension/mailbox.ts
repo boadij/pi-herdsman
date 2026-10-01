@@ -15,10 +15,14 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
-import { herdsmanDataRoot } from "./storage.ts";
+import {
+  herdsmanDataRoot,
+  isResultBinding,
+  type ResultBinding,
+} from "./storage.ts";
 
 export interface ManagedAgentState {
-  version: 4;
+  version: 5;
   runId: string;
   ownerSessionId: string;
   workspaceId: string;
@@ -36,7 +40,7 @@ export interface ManagedAgentState {
   lastAck?: {
     requestId: string;
     accepted: boolean;
-    code?: "busy" | "idle" | "invalid" | "identity" | "delivery";
+    code?: "busy" | "idle" | "invalid" | "identity" | "delivery" | "ambiguous";
     message?: string;
     acknowledgedAt: number;
   };
@@ -59,7 +63,7 @@ export interface ResultPersistenceError {
   nextAction: string;
 }
 export interface RequestRecord {
-  version: 4;
+  version: 5;
   runId: string;
   requestId: string;
   ownerSessionId: string;
@@ -69,10 +73,11 @@ export interface RequestRecord {
   kind: "task" | "steer" | "interrupt" | "reply";
   askId?: string;
   text: string;
+  resultBindings?: ResultBinding[];
   createdAt: number;
 }
 export interface AskRecord {
-  version: 4;
+  version: 5;
   askId: string;
   requestId: string;
   runId: string;
@@ -82,10 +87,11 @@ export interface AskRecord {
   paneId: string;
   piSessionId: string;
   question: string;
+  resultBindings?: ResultBinding[];
   createdAt: number;
 }
 export interface ResultRecord {
-  version: 4;
+  version: 5;
   runId: string;
   requestId: string;
   ownerSessionId: string;
@@ -108,7 +114,7 @@ export interface ResultRecord {
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const PREFIX = "__PI_HERDSMAN_AGENT_V4__:";
+const PREFIX = "__PI_HERDSMAN_AGENT_V5__:";
 /** Fixed protocol safety ceiling; configuration only limits new submissions. */
 export const MAILBOX_PROTOCOL_LIMIT_BYTES = 1024 * 1024;
 export function mailboxRecordBytes(record: RequestRecord | AskRecord): number {
@@ -123,7 +129,7 @@ const LIMITS = {
   ask: MAILBOX_PROTOCOL_LIMIT_BYTES,
   result: 4 * 1024 * 1024,
 };
-const root = join(herdsmanDataRoot(), "runtime", "mailboxes-v4");
+const root = join(herdsmanDataRoot(), "runtime", "mailboxes-v5");
 
 export function agentMailboxPath(
   workspaceId: string,
@@ -230,7 +236,7 @@ function validate(
   if (
     !value ||
     typeof value !== "object" ||
-    (value as { version?: unknown }).version !== 4
+    (value as { version?: unknown }).version !== 5
   )
     throw new Error("Invalid mailbox protocol version or record");
   const text = JSON.stringify(value);
@@ -270,6 +276,7 @@ function validate(
             "kind",
             "askId",
             "text",
+            "resultBindings",
             "createdAt",
           ]
         : kind === "ask"
@@ -284,6 +291,7 @@ function validate(
               "paneId",
               "piSessionId",
               "question",
+              "resultBindings",
               "createdAt",
             ]
           : [
@@ -456,7 +464,14 @@ function validate(
         ack.acknowledgedAt < 0
       )
         throw new Error("Invalid acknowledgement");
-      const codes = ["busy", "idle", "invalid", "identity", "delivery"];
+      const codes = [
+        "busy",
+        "idle",
+        "invalid",
+        "identity",
+        "delivery",
+        "ambiguous",
+      ];
       if (ack.accepted && ack.code !== undefined)
         throw new Error("Accepted acknowledgement cannot have an error code");
       if (!ack.accepted && !codes.includes(ack.code as string))
@@ -483,10 +498,22 @@ function validate(
       throw new Error("Invalid reply ask ID");
     if (typeof v.text !== "string" || !v.text.trim())
       throw new Error("Invalid request text");
+    if (
+      v.resultBindings !== undefined &&
+      (!Array.isArray(v.resultBindings) ||
+        !v.resultBindings.every(isResultBinding))
+    )
+      throw new Error("Invalid request result bindings");
     finite("createdAt");
   } else if (kind === "ask") {
     if (typeof v.question !== "string" || !v.question.trim())
       throw new Error("Invalid ask question");
+    if (
+      v.resultBindings !== undefined &&
+      (!Array.isArray(v.resultBindings) ||
+        !v.resultBindings.every(isResultBinding))
+    )
+      throw new Error("Invalid ask result bindings");
     finite("createdAt");
   } else {
     if (v.status !== "completed" && v.status !== "failed")

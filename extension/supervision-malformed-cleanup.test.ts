@@ -265,7 +265,7 @@ test(
   () => {
     const runtime = supervisionRuntime(socket());
     const record = {
-      version: 1 as const,
+      version: 2 as const,
       id: randomUUID(),
       leaseId: randomUUID(),
       kind: "lead_message" as const,
@@ -352,7 +352,7 @@ test(
     const id = randomUUID();
     const path = writeChiefMessage(
       {
-        version: 1,
+        version: 2,
         id,
         leaseId: randomUUID(),
         kind: "chief_message",

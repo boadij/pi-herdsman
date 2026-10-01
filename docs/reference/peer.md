@@ -79,8 +79,10 @@ list has no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
 
 `peer_message` accepts ordinary files, reusable direct-agent refs such as
 `result:researcher#1`, and canonical `result:<request-id>` refs already supplied
-as evidence. A semantic ref is resolved on the sender's current branch to its
-canonical result reference before the existing attachment preparation runs.
-Files and resolved refs therefore share the same submission-time UTF-8
+as evidence. A semantic ref resolves on the sender's current branch and keeps
+its model-facing name during attachment preparation. Its hidden canonical
+binding travels with the durable peer message so the recipient can forward the
+same semantic ref. Files and refs share the same submission-time UTF-8
 embedding, reference fallback, and configured byte limits. The durable peer
-record remains text-only and bounded by the 8 KiB coordination transport limit.
+record carries the prepared text and any hidden bindings and is bounded by the
+8 KiB coordination transport limit.

@@ -21,7 +21,11 @@ import {
   readProcessLockStatus,
   type ProcessLockClaim,
 } from "./lock.ts";
-import { herdsmanDataRoot } from "./storage.ts";
+import {
+  herdsmanDataRoot,
+  isResultBinding,
+  type ResultBinding,
+} from "./storage.ts";
 
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
 // Staff and supervisor cross one edge; only Lead/Manager sessions may be peers.
@@ -118,7 +122,7 @@ export type ChiefMessageKind = (typeof COORDINATION_MESSAGE_KINDS)[number];
 export type CoordinationMessageKind = ChiefMessageKind;
 
 export type ChiefMessageRecord = {
-  version: 1;
+  version: 2;
   id: string;
   leaseId: string;
   kind: ChiefMessageKind;
@@ -127,6 +131,7 @@ export type ChiefMessageRecord = {
   leadSessionId: string;
   branch?: string;
   text: string;
+  resultBindings?: ResultBinding[];
   createdAt: number;
 };
 
@@ -144,6 +149,7 @@ export type ChiefInboxDrainOptions = {
       deliverAs: "followUp";
       triggerTurn: true;
     },
+    record: ChiefMessageRecord,
   ) => void | Promise<void>;
   accepted?: (record: ChiefMessageRecord) => void | Promise<void>;
   rejected?: (record: ChiefMessageRecord) => void | Promise<void>;
@@ -190,7 +196,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "text",
     "createdAt",
   ];
-  const optional = ["branch"];
+  const optional = ["branch", "resultBindings"];
   if (
     Object.keys(record).some(
       (key) => !keys.includes(key) && !optional.includes(key),
@@ -208,7 +214,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     return false;
   }
   return (
-    record.version === 1 &&
+    record.version === 2 &&
     typeof record.id === "string" &&
     UUID.test(record.id) &&
     typeof record.leaseId === "string" &&
@@ -220,6 +226,9 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     validSession(record.leadSessionId) &&
     typeof record.text === "string" &&
     record.text.length > 0 &&
+    (record.resultBindings === undefined ||
+      (Array.isArray(record.resultBindings) &&
+        record.resultBindings.every(isResultBinding))) &&
     Number.isInteger(record.createdAt) &&
     (record.createdAt as number) >= 0
   );
@@ -823,6 +832,7 @@ export async function drainCoordinationInbox(
             },
           },
           { deliverAs: "followUp", triggerTurn: true },
+          record,
         );
         await options.transaction?.revalidate(token, "after-send");
       } catch {
@@ -1635,11 +1645,12 @@ export function claimManagerLease(
 }
 
 export type ProjectAssignment = Readonly<{
-  version: 1;
+  version: 2;
   id: string;
   repoKey: string;
   branch: string;
   text: string;
+  resultBindings?: ResultBinding[];
 }>;
 export const PROJECT_ASSIGNMENT_MAX_BYTES = 16 * 1024;
 
@@ -1661,15 +1672,22 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const r = value as Record<string, unknown>;
   const required = ["version", "id", "repoKey", "branch", "text"];
+  const optional = ["resultBindings"];
   return (
     required.every((key) => Object.hasOwn(r, key)) &&
-    Object.keys(r).length === required.length &&
-    r.version === 1 &&
+    Object.keys(r).every(
+      (key) => required.includes(key) || optional.includes(key),
+    ) &&
+    Object.keys(r).length >= required.length &&
+    r.version === 2 &&
     UUID.test(String(r.id)) &&
     validNativeIdentity(r.repoKey) &&
     validNativeIdentity(r.branch) &&
     typeof r.text === "string" &&
-    r.text.length > 0
+    r.text.length > 0 &&
+    (r.resultBindings === undefined ||
+      (Array.isArray(r.resultBindings) &&
+        r.resultBindings.every(isResultBinding)))
   );
 }
 
@@ -1821,12 +1839,13 @@ export function removeProjectAssignment(
 }
 
 export type ProjectMessage = Readonly<{
-  version: 1;
+  version: 2;
   id: string;
   repoKey: string;
   branch: string;
   fromSessionId: string;
   text: string;
+  resultBindings?: ResultBinding[];
   createdAt: number;
 }>;
 
@@ -1843,7 +1862,19 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const r = value as Record<string, unknown>;
   return (
-    Object.keys(r).length === 7 &&
+    Object.keys(r).every((key) =>
+      [
+        "version",
+        "id",
+        "repoKey",
+        "branch",
+        "fromSessionId",
+        "text",
+        "createdAt",
+        "resultBindings",
+      ].includes(key),
+    ) &&
+    Object.keys(r).length >= 7 &&
     [
       "version",
       "id",
@@ -1853,13 +1884,16 @@ function validProjectMessage(value: unknown): value is ProjectMessage {
       "text",
       "createdAt",
     ].every((key) => Object.hasOwn(r, key)) &&
-    r.version === 1 &&
+    r.version === 2 &&
     UUID.test(String(r.id)) &&
     validNativeIdentity(r.repoKey) &&
     validNativeIdentity(r.branch) &&
     validSession(r.fromSessionId) &&
     typeof r.text === "string" &&
     r.text.length > 0 &&
+    (r.resultBindings === undefined ||
+      (Array.isArray(r.resultBindings) &&
+        r.resultBindings.every(isResultBinding))) &&
     Number.isInteger(r.createdAt) &&
     (r.createdAt as number) >= 0 &&
     Buffer.byteLength(`${JSON.stringify(r)}\n`, "utf8") <=

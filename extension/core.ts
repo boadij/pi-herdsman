@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { resolve } from "node:path";
 import { TextDecoder } from "node:util";
+import type { ResultBinding } from "./storage.ts";
 import { resolveResultRef } from "./storage.ts";
 
 export type TextFileSnapshot = {
@@ -34,7 +35,10 @@ type RegularFile = {
   bytes: number;
   dev: number;
   ino: number;
+  binding?: ResultBinding;
 };
+
+export type MessageFileInput = string | ResultBinding;
 
 function failUnknownResultRef(input: string, operation: string): never {
   fail(
@@ -45,20 +49,22 @@ function failUnknownResultRef(input: string, operation: string): never {
 }
 
 function resolveRegularFiles(
-  inputs: readonly string[],
+  inputs: readonly MessageFileInput[],
   cwd: string,
   operation: string,
   skipCanonicalPaths: Iterable<string> = [],
 ): RegularFile[] {
   const skipped = new Set(skipCanonicalPaths);
   const seen = new Set<string>();
-  return inputs.flatMap((input) => {
+  return inputs.flatMap((value) => {
+    const input = typeof value === "string" ? value : value.ref;
+    const target = typeof value === "string" ? value : value.canonicalRef;
     let path: string;
     let resolvedResultPath: string | undefined;
     let canonicalPath: string;
     try {
-      resolvedResultPath = resolveResultRef(input);
-      path = resolvedResultPath ?? resolve(cwd, input);
+      resolvedResultPath = resolveResultRef(target);
+      path = resolvedResultPath ?? resolve(cwd, target);
       canonicalPath = realpathSync(path);
       if (skipped.has(canonicalPath) || seen.has(canonicalPath)) return [];
       const beforeOpen = statSync(canonicalPath);
@@ -81,6 +87,7 @@ function resolveRegularFiles(
             bytes: opened.size,
             dev: opened.dev,
             ino: opened.ino,
+            ...(typeof value === "string" ? {} : { binding: value }),
           },
         ];
       } finally {
@@ -164,13 +171,17 @@ export function snapshotTextFiles(
 export type PreparedMessageInput = {
   text: string;
   canonicalPaths: string[];
+  resultBindings: ResultBinding[];
 };
 
 export type MessagePreparationOptions = {
-  fits?: (text: string) => boolean;
+  fits?: (text: string, resultBindings: readonly ResultBinding[]) => boolean;
   inlineLimitBytes?: number;
   mailboxLimitBytes?: number;
-  serializedBytes?: (text: string) => number;
+  serializedBytes?: (
+    text: string,
+    resultBindings: readonly ResultBinding[],
+  ) => number;
 };
 
 function escapeMessageFileName(path: string): string {
@@ -196,7 +207,7 @@ function renderMessageFile(file: RegularFile, content?: string): string {
 
 export function prepareMessageInput(
   text: string,
-  files: readonly string[],
+  files: readonly MessageFileInput[],
   cwd: string,
   operation: string,
   heading: "Task" | "Steer" | "Reply" | "Question" | "Message",
@@ -207,38 +218,39 @@ export function prepareMessageInput(
   if (!files.length) {
     const fits =
       options.fits ??
-      (options.serializedBytes
-        ? (value: string) =>
-            options.serializedBytes!(value) <=
-            (options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES)
-        : (value: string) =>
-            Buffer.byteLength(value, "utf8") <=
-            (options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES));
-    if (!fits(text))
+      ((value: string, bindings: readonly ResultBinding[]) =>
+        (options.serializedBytes
+          ? options.serializedBytes(value, bindings)
+          : Buffer.byteLength(value, "utf8")) <=
+        (options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES));
+    if (!fits(text, []))
       fail(
         "invalid_request",
         options.serializedBytes
-          ? `Mailbox payload is ${options.serializedBytes(text)} bytes; configured limit is ${options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES} bytes`
+          ? `Mailbox payload is ${options.serializedBytes(text, [])} bytes; configured limit is ${options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES} bytes`
           : "Request exceeds the mailbox size limit",
         operation,
       );
-    return { text, canonicalPaths: [] };
+    return { text, canonicalPaths: [], resultBindings: [] };
   }
   const regular = resolveRegularFiles(files, cwd, operation);
+  const resultBindings = regular.flatMap((file) =>
+    file.binding ? [file.binding] : [],
+  );
   const sections = regular.map((file) => renderMessageFile(file));
   const rendered = () => [...sections, `${heading}:\n${text}`].join("\n\n");
   const fits =
     options.fits ??
-    ((value: string) =>
+    ((value: string, bindings: readonly ResultBinding[]) =>
       (options.serializedBytes
-        ? options.serializedBytes(value)
+        ? options.serializedBytes(value, bindings)
         : Buffer.byteLength(value, "utf8")) <=
       (options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES));
-  if (!fits(rendered()))
+  if (!fits(rendered(), resultBindings))
     fail(
       "invalid_request",
       options.serializedBytes
-        ? `Mailbox payload is ${options.serializedBytes(rendered())} bytes; configured limit is ${options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES} bytes`
+        ? `Mailbox payload is ${options.serializedBytes(rendered(), resultBindings)} bytes; configured limit is ${options.mailboxLimitBytes ?? MAILBOX_PROTOCOL_LIMIT_BYTES} bytes`
         : "Request exceeds the mailbox size limit",
       operation,
     );
@@ -253,7 +265,9 @@ export function prepareMessageInput(
     let resolvedResultPath: string | undefined;
     let bytes: Buffer;
     try {
-      resolvedResultPath = resolveResultRef(file.input);
+      resolvedResultPath = resolveResultRef(
+        file.binding?.canonicalRef ?? file.input,
+      );
       // O_NONBLOCK prevents a path replaced by a FIFO from blocking this
       // preparation step. The descriptor is also the one that gets read.
       fd = openSync(
@@ -279,6 +293,7 @@ export function prepareMessageInput(
               )
               .concat(`${heading}:\n${text}`)
               .join("\n\n"),
+            resultBindings,
           ))
       )
         continue;
@@ -321,11 +336,12 @@ export function prepareMessageInput(
       continue;
     }
     sections[index] = renderMessageFile(file, content);
-    if (!fits(rendered())) sections[index] = prior;
+    if (!fits(rendered(), resultBindings)) sections[index] = prior;
   }
   return {
     text: rendered(),
     canonicalPaths: regular.map((file) => file.canonicalPath),
+    resultBindings,
   };
 }
 export function displayIdentity(

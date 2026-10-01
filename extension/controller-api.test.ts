@@ -202,7 +202,7 @@ test("assigned Lead saves supervisor messages durably with or without a Manager"
   };
   try {
     writeProjectAssignment(runtime, {
-      version: 1,
+      version: 2,
       id: leadId,
       repoKey: "repo-key",
       branch: "smoke/routing",
@@ -284,7 +284,7 @@ test("project Lead observes Manager availability across turnover without exposin
   const leadId = randomUUID();
   const managerId = randomUUID();
   const assignment = {
-    version: 1 as const,
+    version: 2 as const,
     id: leadId,
     repoKey: "repo-key",
     branch: "smoke/supervisor-state",
@@ -855,7 +855,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
     const descriptor = readChiefDescriptor(supervisionRuntime().descriptor);
     writeChiefMessage(
       {
-        version: 1,
+        version: 2,
         id: randomUUID(),
         leaseId: descriptor.leaseId,
         kind: "lead_message",
@@ -994,7 +994,7 @@ for (const reachable of [true, false]) {
         const leadId = randomUUID();
         const branch = "smoke/manager-replay";
         const record = {
-          version: 1 as const,
+          version: 2 as const,
           id: randomUUID(),
           repoKey: "repo-key",
           branch,
@@ -1003,7 +1003,7 @@ for (const reachable of [true, false]) {
           createdAt: Date.now(),
         };
         writeProjectAssignment(runtime, {
-          version: 1,
+          version: 2,
           id: leadId,
           repoKey: "repo-key",
           branch,
@@ -1162,7 +1162,7 @@ for (const scenario of [
     } else delete process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
     const runtime = supervisionRuntime();
     const assignment = {
-      version: 1 as const,
+      version: 2 as const,
       id: sessionId,
       repoKey: "repo-key",
       branch: "smoke/delivery-placement",
@@ -1171,7 +1171,7 @@ for (const scenario of [
     writeProjectAssignment(runtime, assignment);
     writeChiefMessage(
       {
-        version: 1,
+        version: 2,
         id: sessionId,
         leaseId: randomUUID(),
         kind: "project_assignment",
@@ -2544,7 +2544,7 @@ async function runManagerStartupScenario(
       created = !["active-missing", "active-missing-no-session"].includes(mode);
       if (created) createdBranch = "smoke/recover";
       writeProjectAssignment(supervisionRuntime(), {
-        version: 1,
+        version: 2,
         id: staleId,
         repoKey: "repo-key",
         branch: "smoke/recover",
@@ -2583,7 +2583,7 @@ async function runManagerStartupScenario(
       if (["active-discard", "active-complete"].includes(mode))
         writeProjectMessage(
           {
-            version: 1,
+            version: 2,
             id: randomUUID(),
             repoKey: "repo-key",
             branch: "smoke/recover",
@@ -2598,7 +2598,7 @@ async function runManagerStartupScenario(
       ["invalid-topology", "discard-pane-missing", "discard-pi"].includes(mode)
     )
       writeProjectAssignment(supervisionRuntime(), {
-        version: 1,
+        version: 2,
         id: staleId,
         repoKey: "repo-key",
         branch: "smoke/vanished",
@@ -3446,12 +3446,14 @@ test("semantic result refs attach persisted output and preserve canonical file r
   ];
   const label = "agent";
   let assignedText = "";
+  let submittedRequest: RequestRecord | undefined;
   const startup = startupExecutor(
     label,
     () => DEFAULT_PI_SESSION_ID,
     undefined,
-    (text) => {
+    (text, request) => {
       assignedText = text;
+      submittedRequest = request;
     },
   );
   const pi = fakePi({ entries, exec: startup.exec });
@@ -3469,17 +3471,21 @@ test("semantic result refs attach persisted output and preserve canonical file r
       fakeContext(entries),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.match(assignedText, new RegExp(`<file name="${canonical}"`));
+    assert.match(assignedText, /<file name="result:implementation#1"/);
+    assert.doesNotMatch(assignedText, /<file name="result:[0-9a-f-]{36}"/);
     assert.match(
       assignedText,
       /Agent result source: \{"agent":"implementation","definition":"agent","cwd":"\/repo","piSessionId":"producer-session"\}/,
     );
     assert.match(assignedText, /persisted implementation review/);
     assert.equal(
-      assignedText.match(new RegExp(`<file name="${canonical}"`, "g"))?.length,
+      assignedText.match(/<file name="result:implementation#1"/g)?.length,
       1,
       "semantic and canonical refs supplied through files should deduplicate in the existing pipeline",
     );
+    assert.deepEqual(submittedRequest?.resultBindings, [
+      { ref: "result:implementation#1", canonicalRef: canonical },
+    ]);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     startup.stopMailboxConsumer();
@@ -3569,6 +3575,14 @@ test("conflicting duplicate result mappings fail closed", async () => {
         requestId: secondRequestId,
         resultRef: resultRef(secondRequestId),
         status: "completed",
+      },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-result-ref",
+      data: {
+        ref: "result:implementation#1",
+        canonicalRef: resultRef(secondRequestId),
       },
     },
   ];
@@ -5728,7 +5742,7 @@ test("registered delegate protects a live mailbox owned by another owner", async
   };
   writeAgentState(mailbox, state);
   writeRequest(mailbox, {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
@@ -5740,7 +5754,7 @@ test("registered delegate protects a live mailbox owned by another owner", async
     createdAt: Date.now(),
   });
   writeResult(mailbox, {
-    version: 4,
+    version: 5,
     runId: state.runId,
     requestId: REQUEST_ID,
     ownerSessionId: state.ownerSessionId,
@@ -5797,7 +5811,7 @@ test("fresh assignments do not reset an unacknowledged stale mailbox", async () 
   const automaticRequestId = randomUUID();
   writeAgentState(automaticMailbox, automaticState);
   writeRequest(automaticMailbox, {
-    version: 4,
+    version: 5,
     runId: automaticState.runId,
     requestId: automaticRequestId,
     ownerSessionId: automaticState.ownerSessionId,
@@ -5837,7 +5851,7 @@ test("request-only mailbox remnants reserve their labels", async () => {
   const explicitMailbox = agentMailboxPath(WORKSPACE, explicitLabel);
   const explicitRequestId = randomUUID();
   writeRequest(explicitMailbox, {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: explicitRequestId,
     ownerSessionId: LEAD_SESSION_ID,
@@ -5855,7 +5869,7 @@ test("request-only mailbox remnants reserve their labels", async () => {
   const automaticMailbox = agentMailboxPath(WORKSPACE, automaticLabel);
   const automaticRequestId = randomUUID();
   writeRequest(automaticMailbox, {
-    version: 4,
+    version: 5,
     runId: AGENT_ID,
     requestId: automaticRequestId,
     ownerSessionId: LEAD_SESSION_ID,
@@ -5942,7 +5956,7 @@ test("registered lead exposes only explicit live controls", async () => {
       "working",
       identity.piSessionId,
       (requestMailbox, marker) => {
-        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V5__:".length);
         steerSubmitted = readRequest(requestMailbox, requestId);
         const current = readAgentState(requestMailbox)!;
         writeAgentState(requestMailbox, {
@@ -6033,7 +6047,7 @@ test("registered lead exposes only explicit live controls", async () => {
       "working",
       identity.piSessionId,
       (requestMailbox, marker) => {
-        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+        const requestId = marker.slice("__PI_HERDSMAN_AGENT_V5__:".length);
         interruptSubmitted = readRequest(requestMailbox, requestId);
         const current = readAgentState(requestMailbox)!;
         writeAgentState(requestMailbox, {
@@ -6093,7 +6107,7 @@ test("successful controls persist their definition before runtime teardown", asy
     if (action === "reply") {
       writeAgentState(mailbox, { ...state, pendingAskId: askId });
       writeAsk(mailbox, {
-        version: 4,
+        version: 5,
         askId,
         requestId,
         runId: state.runId,
@@ -6117,7 +6131,7 @@ test("successful controls persist their definition before runtime teardown", asy
     };
     const acknowledgeAndTearDown = (requestMailbox: string, marker: string) => {
       const observedRequestId = marker.slice(
-        "__PI_HERDSMAN_AGENT_V4__:".length,
+        "__PI_HERDSMAN_AGENT_V5__:".length,
       );
       const current = readAgentState(requestMailbox)!;
       writeAgentState(requestMailbox, {
@@ -6399,7 +6413,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
 
     const handoffRequestId = randomUUID();
     writeRequest(parentMailbox, {
-      version: 4,
+      version: 5,
       runId: parent.runId,
       requestId: handoffRequestId,
       ownerSessionId: parent.ownerSessionId,
@@ -6440,7 +6454,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       completedRequestId: child.activeRequestId,
     });
     writeResult(childMailbox, {
-      version: 4,
+      version: 5,
       runId: child.runId,
       requestId: child.activeRequestId!,
       ownerSessionId: child.ownerSessionId,
@@ -6470,7 +6484,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
 
     const ownerAskId = randomUUID();
     writeAsk(parentMailbox, {
-      version: 4,
+      version: 5,
       askId: ownerAskId,
       requestId: REQUEST_ID,
       runId: parent.runId,
@@ -6507,7 +6521,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       completedRequestId: REQUEST_ID,
     });
     writeResult(parentMailbox, {
-      version: 4,
+      version: 5,
       runId: parent.runId,
       requestId: REQUEST_ID,
       ownerSessionId: parent.ownerSessionId,
@@ -6558,7 +6572,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       completedRequestId: REQUEST_ID,
     });
     writeResult(parentMailbox, {
-      version: 4,
+      version: 5,
       runId: parent.runId,
       requestId: REQUEST_ID,
       ownerSessionId: parent.ownerSessionId,
@@ -6711,7 +6725,7 @@ test("acknowledgement state-write failures retain requests for durable retry", (
 
     const started = readAgentState(mailbox)!;
     const request: RequestRecord = {
-      version: 4,
+      version: 5,
       runId: started.runId,
       requestId: randomUUID(),
       ownerSessionId: started.ownerSessionId,
@@ -6800,7 +6814,7 @@ test("assignment status normalization fails closed safely", async () => {
       state.completedRequestId = REQUEST_ID;
       writeAgentState(mailbox, state);
       writeResult(mailbox, {
-        version: 4,
+        version: 5,
         runId: AGENT_ID,
         requestId: REQUEST_ID,
         ownerSessionId: LEAD_SESSION_ID,
@@ -6818,7 +6832,7 @@ test("assignment status normalization fails closed safely", async () => {
         scenario.status,
         identity.piSessionId,
         (requestMailbox, marker) => {
-          const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+          const requestId = marker.slice("__PI_HERDSMAN_AGENT_V5__:".length);
           const current = readAgentState(requestMailbox)!;
           writeAgentState(requestMailbox, {
             ...current,
@@ -6863,7 +6877,7 @@ test("assignment status normalization fails closed safely", async () => {
         "idle",
         identity.piSessionId,
         (requestMailbox, marker) => {
-          const requestId = marker.slice("__PI_HERDSMAN_AGENT_V4__:".length);
+          const requestId = marker.slice("__PI_HERDSMAN_AGENT_V5__:".length);
           const current = readAgentState(requestMailbox)!;
           writeAgentState(requestMailbox, {
             ...current,
@@ -6882,7 +6896,7 @@ test("assignment status normalization fails closed safely", async () => {
     try {
       const handoffRequestId = randomUUID();
       writeRequest(mailbox, {
-        version: 4,
+        version: 5,
         runId: state.runId,
         requestId: handoffRequestId,
         ownerSessionId: state.ownerSessionId,
@@ -6934,7 +6948,7 @@ test("assignment status normalization fails closed safely", async () => {
         completedRequestId: requestA,
       });
       writeResult(mailbox, {
-        version: 4,
+        version: 5,
         runId: state.runId,
         requestId: requestA,
         ownerSessionId: state.ownerSessionId,

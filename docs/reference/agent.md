@@ -269,8 +269,10 @@ calling Pi session's current branch before ordinary file preparation; see
 Ordinary paths are resolved from the controller cwd, checked as readable regular
 files, canonicalized with `realpath`, and embedded only when the exact message
 limit permits. Otherwise they remain canonical references. Semantic direct refs
-are resolved on the current branch, while canonical `result:<request-id>` refs
-remain logical result references. `files` is a `string[]` for all three forms.
+resolve against the current branch and remain reusable in the receiving branch
+through a hidden binding; canonical `result:<request-id>` refs remain logical
+result references when explicitly supplied as evidence. `files` remains a
+`string[]` for all three forms.
 
 `files` is explicit per-message evidence. A fresh delegated session does not
 implicitly receive the caller's conversation or caller-side attachments.
@@ -281,9 +283,9 @@ Pi shell execution. Direct calls from a managed agent to the Pi built-in
 `bash` or `powershell` tool receive a default 600-second timeout when the call
 omits `timeout`; an explicit timeout is kept unchanged. Current message limits
 are governed by the Herdsman config file and its defaults, plus the fixed
-mailbox protocol ceiling. Managed mailbox records use protocol V4 in the
-`mailboxes-v4` namespace, and control requests use the marker prefix
-`__PI_HERDSMAN_AGENT_V4__:`.
+mailbox protocol ceiling. Managed mailbox records use protocol V5 in the
+`mailboxes-v5` namespace, and control requests use the marker prefix
+`__PI_HERDSMAN_AGENT_V5__:`.
 
 Do not attach or mention agent instruction files such as `AGENTS.md`, `CLAUDE.md`,
 `GEMINI.md`, or equivalents merely because they exist. Rely on normal project or

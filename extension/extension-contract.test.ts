@@ -863,7 +863,13 @@ test("peer list and message use global peer presence, not caller inventory", asy
     assert.equal(messagePaths.length, 1);
     const message = readChiefMessage(messagePaths[0]);
     assert.ok(message.text.includes("global peer"));
-    assert.ok(message.text.includes(resultReference));
+    assert.ok(message.text.includes('name="result:implementation#1"'));
+    assert.deepEqual(message.resultBindings, [
+      {
+        ref: "result:implementation#1",
+        canonicalRef: resultReference,
+      },
+    ]);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     sender.lease.release();
@@ -3134,7 +3140,7 @@ test("agent input accepts only the v3 Herdr control marker", async () => {
     await agent.events.get("session_start")![0](undefined, context);
     const started = readAgentState(mailbox)!;
     const request: RequestRecord = {
-      version: 4,
+      version: 5,
       runId: started.runId,
       requestId: REQUEST_ID,
       ownerSessionId: started.ownerSessionId,
@@ -3164,7 +3170,7 @@ test("agent input accepts only the v3 Herdr control marker", async () => {
       { action: "continue" },
     );
     assert.deepEqual(
-      input({ text: "__PI_HERDSMAN_AGENT_V4__:malformed" }, context),
+      input({ text: "__PI_HERDSMAN_AGENT_V5__:malformed" }, context),
       { action: "handled" },
     );
   } finally {
@@ -3181,7 +3187,7 @@ test("delivered owner asks retain the question in visible message details", asyn
   const mailbox = agentMailboxPath(WORKSPACE, label);
   resetAgentMailbox(mailbox);
   const ask: AskRecord = {
-    version: 4,
+    version: 5,
     askId: "99999999-9999-4999-8999-999999999999",
     requestId: REQUEST_ID,
     runId: managedState(label, REQUEST_ID, identity).runId,

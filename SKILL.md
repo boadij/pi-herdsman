@@ -466,8 +466,8 @@ projection removes it from an existing `tools` list. Ordinary `tools` and
 omitted, Pi's configured/default selection is preserved without emitting
 `--tools`; an explicit allowlist is augmented with the role-required tools.
 
-The managed mailbox accepts only protocol V4 agent records in the
-`mailboxes-v4` runtime namespace. Identity and protocol validation fail closed.
+The managed mailbox accepts only protocol V5 agent records in the
+`mailboxes-v5` runtime namespace. Identity and protocol validation fail closed.
 
 The coordination directory is `.pi-herdsman/`. Use it for bounded artifacts and
 handoffs, and pass canonical file references rather than duplicating large

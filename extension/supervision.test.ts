@@ -92,7 +92,7 @@ const state = (
 const message = (
   extra: Partial<ChiefMessageRecord> = {},
 ): ChiefMessageRecord => ({
-  version: 1,
+  version: 2,
   id: id(),
   leaseId: id(),
   kind: "lead_message",
@@ -390,6 +390,19 @@ test("peer message records use strict validation and the shared UTF-8 bound", ()
   );
   assert.throws(
     () => writeCoordinationMessage({ ...record, askId: id() }, runtime),
+    /Invalid Chief message record/,
+  );
+  assert.throws(
+    () =>
+      writeCoordinationMessage(
+        {
+          ...record,
+          resultBindings: [
+            { ref: "result:implementation#01", canonicalRef: `result:${id()}` },
+          ],
+        },
+        runtime,
+      ),
     /Invalid Chief message record/,
   );
 
@@ -1853,7 +1866,7 @@ test("Manager descriptor status distinguishes live, incomplete, and absent autho
 test("project assignments are scoped by repository and branch, strict, and removable", () => {
   const runtime = supervisionRuntime(socket());
   const assignment = {
-    version: 1 as const,
+    version: 2 as const,
     id: id(),
     repoKey: "repo-A",
     branch: "herdsman/test",
@@ -1900,6 +1913,11 @@ test("project assignments are scoped by repository and branch, strict, and remov
   );
   for (const invalid of [
     { branch: undefined },
+    {
+      resultBindings: [
+        { ref: "result:implementation#01", canonicalRef: `result:${id()}` },
+      ],
+    },
     ...["phase", "paneId", "tabId", "updatedAt", "base"].map((key) => ({
       [key]: "old",
     })),
@@ -2055,7 +2073,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
 
 test("project work derives active, paused, or conflict from runtime placement", () => {
   const assignment = {
-    version: 1 as const,
+    version: 2 as const,
     id: id(),
     repoKey: "repo",
     branch: "feat/work",
@@ -2138,14 +2156,14 @@ test("project work derives active, paused, or conflict from runtime placement", 
 test("project messages are durable, assignment-scoped, bounded, and removable", () => {
   const runtime = supervisionRuntime(socket());
   const assignment = {
-    version: 1 as const,
+    version: 2 as const,
     id: id(),
     repoKey: "repo",
     branch: "feat/bootstrap",
     text: "task",
   };
   const record: ProjectMessage = {
-    version: 1,
+    version: 2,
     id: id(),
     repoKey: assignment.repoKey,
     branch: assignment.branch,
@@ -2182,6 +2200,19 @@ test("project messages are durable, assignment-scoped, bounded, and removable", 
   );
   assert.throws(
     () => writeProjectMessage({ ...record, fromSessionId: "" }, runtime),
+    /Invalid project message/,
+  );
+  assert.throws(
+    () =>
+      writeProjectMessage(
+        {
+          ...record,
+          resultBindings: [
+            { ref: "result:implementation#01", canonicalRef: `result:${id()}` },
+          ],
+        },
+        runtime,
+      ),
     /Invalid project message/,
   );
   removeProjectMessages(runtime, assignment.repoKey, assignment.branch);
