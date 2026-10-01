@@ -44,6 +44,7 @@ import {
   resultPath as canonicalResultPath,
   resultRef,
   parseSemanticResultRef,
+  reserveSemanticResultRef,
   isResultBinding,
   type ResultBinding,
 } from "./storage.ts";
@@ -3456,7 +3457,7 @@ function agentResultDetails(
     ? (details as Record<string, unknown>)
     : undefined;
 }
-function nextAgentResultIndex(
+function nextBranchResultIndex(
   entries: readonly unknown[],
   agentLabel: string,
 ): number {
@@ -3693,13 +3694,13 @@ async function deliverResultUnsafe(
           : {}),
       },
     );
-    const resultIndex = completion.resultRef
-      ? nextAgentResultIndex(entries, result.agentLabel)
+    const semanticResult = completion.resultRef
+      ? reserveSemanticResultRef(
+          result.agentLabel,
+          nextBranchResultIndex(entries, result.agentLabel),
+        )
       : undefined;
-    const reusableResultRef =
-      resultIndex === undefined
-        ? undefined
-        : `result:${result.agentLabel}#${resultIndex}`;
+    const reusableResultRef = semanticResult?.ref;
     if (completion.persistenceError) {
       appendDurableError(
         pi,
@@ -3767,10 +3768,10 @@ async function deliverResultUnsafe(
           ...(elapsedMs !== undefined ? { elapsedMs } : {}),
           contextUsage: result.contextUsage,
           truncated: completion.truncated,
-          ...(completion.resultRef
+          ...(semanticResult && completion.resultRef
             ? {
                 resultRef: completion.resultRef,
-                resultIndex,
+                resultIndex: semanticResult.index,
               }
             : {}),
           ...(completion.fullOutputPath

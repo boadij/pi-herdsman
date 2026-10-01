@@ -1,5 +1,14 @@
 import { tmpdir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  chmodSync,
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 const RESULT_PREFIX = "result:";
@@ -68,6 +77,59 @@ export function resultPath(requestId: string): string {
 export function resultRef(requestId: string): string {
   validateResultId(requestId);
   return `${RESULT_PREFIX}${requestId}`;
+}
+
+export function reserveSemanticResultRef(
+  agentLabel: string,
+  minimumIndex = 1,
+): Readonly<{ ref: string; index: number }> {
+  if (!parseSemanticResultRef(`result:${agentLabel}#${minimumIndex}`))
+    throw new Error("Invalid semantic result identity");
+
+  const directory = join(
+    herdsmanDataRoot(),
+    "result-ref-reservations",
+    agentLabel,
+  );
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+
+  let index = minimumIndex;
+  // ponytail: immutable reservation scan; replace with a counter only if
+  // allocation volume makes this measurably expensive.
+  for (const name of readdirSync(directory)) {
+    if (!/^[1-9][0-9]*$/.test(name)) continue;
+    const reserved = Number(name);
+    if (Number.isSafeInteger(reserved)) index = Math.max(index, reserved + 1);
+  }
+
+  for (;;) {
+    if (!Number.isSafeInteger(index))
+      throw new Error("Semantic result index exhausted");
+    try {
+      writeFileSync(join(directory, String(index)), "reserved\n", {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+        flush: true,
+      });
+      if (process.platform !== "win32") {
+        const fd = openSync(directory, "r");
+        try {
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+      }
+      return { index, ref: `result:${agentLabel}#${index}` };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        index++;
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 export function resolveResultRef(input: string): string | undefined {

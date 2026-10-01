@@ -1380,7 +1380,8 @@ test("recovery requires the official session and retries one failed delivery", a
       `^Agent result · agent=${label} · definition=agent · session=${identity.piSessionId} · status=completed`,
     ),
   );
-  assert.match(delivered, new RegExp(`Result ref: result:${label}#2`));
+  // Each rejected publication permanently consumes its semantic reservation.
+  assert.match(delivered, new RegExp(`Result ref: result:${label}#7`));
   assert.doesNotMatch(delivered, /Agent result source:/);
   assert.equal(
     readFileSync(resultPath(REQUEST_ID), "utf8"),
@@ -1396,7 +1397,7 @@ test("recovery requires the official session and retries one failed delivery", a
   );
   assert.equal(deliveredDetails.agentLabel, label);
   assert.equal(deliveredDetails.agentDefinition, "agent");
-  assert.equal(deliveredDetails.resultIndex, 2);
+  assert.equal(deliveredDetails.resultIndex, 7);
   assert.equal(deliveredDetails.resultRef, `result:${REQUEST_ID}`);
   assert.equal(readResult(mailbox, REQUEST_ID), undefined);
   assert.deepEqual(lifecycle.closeOrder, [label]);

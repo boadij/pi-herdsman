@@ -24,6 +24,12 @@ The semantic handle is therefore part of the model-facing UX, not merely present
 
 A result's semantic identity must remain stable across handoffs.
 
+New semantic result references are unique within one Herdsman durable data
+root and are never reused. Pi branch state determines whether a session may
+resolve a semantic reference; it does not provide global identity allocation.
+Allocation scope is the Herdsman data root, while availability remains scoped
+to the current Pi branch and its explicitly imported evidence.
+
 If a parent attaches `result:compatvalidation#1`, the receiving Agent must see that same reference associated with the attached evidence and must be able to forward that same reference later.
 
 Internally, Herdsman may resolve the semantic reference to a canonical UUID-backed artifact, but that translation must not leak into model context or replace the semantic identity.
@@ -44,7 +50,7 @@ Result provenance such as Agent label, definition, cwd, and Pi session identity 
 
 When a semantic result crosses a session boundary, Herdsman must preserve enough hidden binding information for the receiving session to resolve and subsequently forward the same semantic reference without exposing the canonical UUID.
 
-Conflicting semantic mappings must fail closed rather than silently choosing, renaming, or shadowing one result.
+Conflicting semantic mappings must fail closed rather than silently choosing, renaming, or shadowing one result. A conflict between newly created refs indicates malformed, tampered, or historical state rather than normal convergence of independent worktrees.
 
 ## Consequences
 

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -11,6 +13,7 @@ import {
   resolveResultRef,
   resultPath,
   resultRef,
+  reserveSemanticResultRef,
 } from "./storage.ts";
 
 test("recoverable Herdsman state lives under Pi agent data", () => {
@@ -47,4 +50,19 @@ test("result references use canonical request UUIDs", () => {
     assert.throws(() => resolveResultRef(input));
   }
   assert.equal(resolveResultRef("ordinary.txt"), undefined);
+});
+
+test("semantic result refs are uniquely reserved across independent allocations", () => {
+  const label = `globalref-${randomUUID().slice(0, 8)}`;
+  const directory = join(herdsmanDataRoot(), "result-ref-reservations", label);
+  try {
+    const first = reserveSemanticResultRef(label, 1);
+    const second = reserveSemanticResultRef(label, 1);
+    assert.deepEqual(first, { ref: `result:${label}#1`, index: 1 });
+    assert.deepEqual(second, { ref: `result:${label}#2`, index: 2 });
+    assert.equal(reserveSemanticResultRef(label, 17).index, 17);
+    assert.equal(reserveSemanticResultRef(label, 2).index, 18);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
