@@ -241,7 +241,10 @@ docker run -d \
   -v "$home:/home/herdsman" \
   -v "$ssh_state:/var/lib/herdsman/ssh" \
   "$image" >/dev/null
-sleep 2
+for _ in $(seq 1 30); do
+  [ "$(docker inspect -f '{{.State.Status}}' "$name")" = exited ] && break
+  sleep 1
+done
 test "$(docker inspect -f '{{.State.Status}}' "$name")" = exited
 test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" -ne 0
 target_after="$(docker run --rm --entrypoint /bin/sh -v "$home:/home/herdsman" "$image" -c 'stat -c "%u:%a" /home/herdsman/root-owned-target; cat /home/herdsman/root-owned-target' | tr '\n' ':')"
