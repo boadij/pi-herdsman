@@ -20,27 +20,29 @@ unresolved Agent work. Only one live Manager can hold authority for a project
 scope at a time. No prior chat turn or existing linked worktree is required in
 an ordinary Git primary workspace.
 
-The Manager overview shows branch-based project work and live direct Leads. Project status is `active`, `paused`, `finished`, or `conflict`; a live Lead's runtime state is separate.
+Manager's work projection reports `active`, `paused`, or `conflict`. A live
+Lead's runtime state is separate from project status.
 
-## Start project work
+## Start and resume project work
 
-Ask Manager for one bounded objective:
+Ask Manager for a bounded objective:
 
 ```text
 Implement the API change on branch feat/api-change.
 ```
 
 Manager delegates the work to a Lead. The Git branch is the durable semantic
-work handle; the Lead is the current executor. Internal assignment and result
-UUIDs are not project-work handles.
+work handle; the Lead is the current executor. Internal assignment IDs are not
+project-work handles. A branch is optional when starting new work. If omitted,
+Pi Herdsman can generate one. The first delegation can create the first linked
+worktree, and an unoccupied existing worktree for the branch is reused.
 
-A branch is optional when starting new work. If no branch is supplied, Pi
-Herdsman can generate one. The first delegation can create the first linked
-worktree. If an unoccupied worktree for the branch already exists, Herdsman
-reuses it instead of creating another checkout.
+Resume an existing assignment by branch only. If its worktree is missing,
+Herdsman recreates it from the existing branch and resumes the exact persisted
+Pi session when available. The saved session cwd is used when history exists;
+if the branch itself is unavailable, recreation fails closed.
 
-The exact model-facing operation is
-[`staff_delegate`](../reference/staff.md#staff_delegate).
+See [`staff_delegate`](../reference/staff.md#staff_delegate).
 
 ## Run independent work in parallel
 
@@ -54,53 +56,41 @@ Manager
 
 Keep overlapping writers out of the same worktree. Workspace membership does
 not imply ownership, and Manager must not start another writer beside a Lead
-that already occupies the relevant worktree.
-
-Parallelism is optional. Use separate Leads when the work is genuinely
+that already occupies the relevant worktree. Use separate Leads when work is
 independent enough to justify separate branch and execution boundaries.
 
-## Coordinate without polling
+## Coordinate and review
 
-Lead progress, questions, and results return through the direct supervision
-edge. Manager can message or reply to a Lead without taking over its work.
+Leads use `supervisor_message` for material decisions, warnings, and review
+handoffs. For an assigned project Lead, messages are retained with the
+assignment, including when no Manager is active, and are available to a
+replacement Manager. Messages are nonterminal: a Lead can report ready for
+review, receive feedback through `staff_message`, and make further revisions
+while the assignment remains open.
 
-Do not repeatedly inspect or list reports just to check whether they finished.
-Use the current supervision state, and inspect live terminal or persisted
-transcript evidence only when that evidence materially matters.
-
-Assigned Leads use `supervisor_result` for terminal completion.
-`supervisor_message` is for nonterminal progress or coordination.
+Use the current supervision state rather than repeatedly listing or inspecting
+reports to poll for progress. Inspect live terminal or persisted transcript
+evidence only when it materially matters.
 
 ## Pause and resume
 
-Closing a managed Lead pauses execution but preserves:
+`staff_stop` stops a Lead and its owned Agent execution tree while preserving
+the assignment, Pi session, Git branch, and worktree. Resume the same work with
+`staff_delegate` using its branch. `staff_stop` does not resolve project work.
 
-- the project assignment
-- the Pi session
-- the Git branch
-- the Herdr worktree
-
-Resume the same work by branch. Herdsman resumes the saved project session
-instead of creating a second assignment.
-
-If the assignment's checkout is unavailable, the work remains `paused`. Restore
-or reopen that checkout and retry, or discard the assignment and delegate again.
-Herdsman does not recreate established work from a historical base.
-
-See [`staff_close`](../reference/staff.md#staff_close) and
+See [`staff_stop`](../reference/staff.md#staff_stop) and
 [`staff_delegate`](../reference/staff.md#staff_delegate).
 
-## Abandon an assignment
+## Complete or abandon
 
-Discard project work only when the assignment itself should be abandoned.
+The assignment is the durable indicator that project work remains open. After
+review and any requested corrections, Manager resolves fulfilled work with
+`staff_complete`. Use `staff_discard` when abandoning it. Both stop the exact
+execution tree and remove the assignment only after current topology proves
+execution has stopped. The Git branch and worktree are preserved.
 
-Discard removes the Herdsman assignment only after current topology proves
-execution has stopped. The Git branch, worktree, and files remain. A possible
-current Pi executor or a result that appears during discard preserves the
-assignment. Completed durable results cannot be discarded as if they never
-happened.
-
-See [`staff_discard`](../reference/staff.md#staff_discard).
+See [`staff_complete`](../reference/staff.md#staff_complete-and-staff_discard)
+and [`staff_discard`](../reference/staff.md#staff_complete-and-staff_discard).
 
 ## Leave and return
 
@@ -110,27 +100,16 @@ Run:
 /manager leave
 ```
 
-Leaving Manager mode preserves project work. A live Lead can continue and even
-finish while no Manager is active. A later Manager sees the same repository and
-branch-based work and reconciles durable completion. Replacing the primary
-workspace does not re-key the assignment; Herdsman derives the current Herdr
-topology again.
-
-Leaving can be blocked when doing so would strand an active direct-supervisor
-question, such as a Lead waiting for this Manager's reply or the Manager's own
-pending ask to Chief.
-
-This is why project work belongs to the branch rather than to one Manager
-session.
+Leaving Manager mode preserves project assignments. Current Herdr topology is
+derived again when work is observed or resumed. A later Manager can continue
+the same repository and branch-based work.
 
 ## Use Chief only for the next supervision layer
 
-Chief is separate from project orchestration. It supervises Managers across the
-current Herdr runtime and can directly supervise ordinary Leads only when their
-project scope has no active Manager.
-
-A Manager does not become Chief and does not forward its direct Leads into a
-parallel Chief control path.
+Chief is separate from project orchestration. It supervises Managers across
+the current Herdr runtime and can directly supervise ordinary Leads only when
+their project scope has no active Manager. A Manager does not become Chief and
+does not forward its direct Leads into a parallel Chief control path.
 
 See [Coordination](../concepts/coordination.md) and
 [Commands](../reference/commands.md).

@@ -542,14 +542,10 @@ export type SupervisedLeadSnapshot = Readonly<{
     branch?: string;
     display_name: string;
     runtime_state: LifecyclePresentationState;
-    needs_you: boolean;
     agent_counts: Readonly<{ active: number; blocked: number; total: number }>;
   }>[];
   workspaceLabel?: string;
   runtimeState: LifecyclePresentationState;
-  needsYou?: boolean;
-  pendingAskId?: string;
-  pendingAskQuestion?: string;
   availableActions?: readonly string[];
   agentCounts?: Readonly<{
     active?: number;
@@ -568,9 +564,6 @@ function managerPresentationSnapshot(
     project: manager.project,
     workspaceId: manager.workspaceId,
     runtimeState: manager.runtimeState,
-    needsYou: manager.needsYou,
-    pendingAskId: manager.pendingAskId,
-    pendingAskQuestion: manager.pendingAskQuestion,
     agentCounts: manager.agentCounts,
     leadCounts: manager.leadCounts,
     availableActions: manager.availableActions,
@@ -579,7 +572,6 @@ function managerPresentationSnapshot(
       branch: "branch" in lead ? lead.branch : undefined,
       display_name: lead.displayName,
       runtime_state: lead.runtimeState,
-      needs_you: lead.needsYou,
       agent_counts: lead.agentCounts,
     })),
   };
@@ -616,10 +608,9 @@ export type SupervisedLeadDisplay = SupervisedLeadSnapshot &
   }>;
 
 export type SupervisedLeadGroup =
-  "NEEDS YOU" | "WORKING" | "BLOCKED" | "IDLE/DONE" | "UNKNOWN";
+  "WORKING" | "BLOCKED" | "IDLE/DONE" | "UNKNOWN";
 
 const SUPERVISION_GROUPS: readonly SupervisedLeadGroup[] = [
-  "NEEDS YOU",
   "WORKING",
   "BLOCKED",
   "IDLE/DONE",
@@ -629,7 +620,6 @@ const SUPERVISION_GROUPS: readonly SupervisedLeadGroup[] = [
 export function classifySupervisedLead(
   lead: SupervisedLeadSnapshot,
 ): SupervisedLeadGroup {
-  if (lead.needsYou === true) return "NEEDS YOU";
   if (lead.runtimeState === "working") return "WORKING";
   if (lead.runtimeState === "blocked") return "BLOCKED";
   if (lead.runtimeState === "unknown") return "UNKNOWN";
@@ -842,12 +832,9 @@ export function renderSupervisionLeads(
     return [safeLine(`● ${role} · unavailable`, width)];
   const displays = orderedSupervisionLeads(presentationReports(reports));
   const groups = groupOrderedSupervisedLeads(displays);
-  const attention = groups.get("NEEDS YOU")!;
-  const ordinary = SUPERVISION_GROUPS.slice(1).flatMap((group) =>
-    groups.get(group)!,
-  );
+  const ordinary = SUPERVISION_GROUPS.flatMap((group) => groups.get(group)!);
   const cap = options.ordinaryCap ?? 6;
-  const shown = [...attention, ...ordinary.slice(0, Math.max(0, cap))];
+  const shown = ordinary.slice(0, Math.max(0, cap));
   const hidden = ordinary.length - Math.min(ordinary.length, Math.max(0, cap));
   const managers = displays.filter((report) => report.role !== "lead").length;
   const leads = displays.length - managers;
@@ -874,7 +861,6 @@ export function renderSupervisionLeads(
     const workMarkers = {
       active: "●",
       paused: "○",
-      finished: "✓",
       conflict: "!",
     };
     return [
@@ -882,18 +868,17 @@ export function renderSupervisionLeads(
       ...visible.map((item, index) => {
         const branch = index === visible.length - 1 && !remaining ? "└─" : "├─";
         const lead = item.lead;
-        const attention = lead?.needsYou ? "!" : "";
         const navigation = lead && lead.lead === selectedLead ? ">" : "";
         if (item.kind === "lead")
           return safeLine(
-            `${branch} ${navigation}${attention}${supervisionLeadMarker(item.lead)} ${item.lead.branch ?? item.lead.displayName} · Lead`,
+            `${branch} ${navigation}${supervisionLeadMarker(item.lead)} ${item.lead.branch ?? item.lead.displayName} · Lead`,
             width,
           );
         const marker =
           item.work.status === "active" && lead
-            ? supervisionLeadMarker(lead)
+            ? `${lead.runtimeState === "blocked" ? "!" : ""}${supervisionLeadMarker(lead)}`
             : workMarkers[item.work.status];
-        const prefix = `${branch} ${navigation}${attention}${marker} `;
+        const prefix = `${branch} ${navigation}${marker} `;
         const suffix = ` · ${item.work.status}`;
         return safeLine(
           `${prefix}${safeLine(item.work.branch, width - visibleWidth(prefix) - visibleWidth(suffix))}${suffix}`,
@@ -909,11 +894,9 @@ export function renderSupervisionLeads(
     safeLine(header, width),
     ...shown.flatMap((lead, index) => {
       const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
-      const needsYou = lead.needsYou === true;
       const marker = supervisionLeadMarker(lead);
       const navigation = lead.lead === selectedLead ? ">" : "";
-      const attention = needsYou ? "!" : "";
-      const indicators = `${navigation}${attention}`;
+      const indicators = navigation;
       const counts = lead.leadCounts;
       const row = safeLine(
         `${branch} ${indicators}${marker} ${lead.displayName}${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`,
@@ -925,7 +908,7 @@ export function renderSupervisionLeads(
           .slice(0, 3)
           .map((child) =>
             safeLine(
-              `   ${child.branch ?? child.display_name} · ${child.runtime_state}${child.needs_you ? " · needs you" : ""}${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`,
+              `   ${child.branch ?? child.display_name} · ${child.runtime_state}${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`,
               width,
             ),
           ),
@@ -1090,13 +1073,6 @@ export function formatSupervisionContext(
     );
     lines.push(`  workspace_id: ${supervisionValue(lead.workspaceId)}`);
     lines.push(`  runtime: ${supervisionValue(lead.runtimeState)}`);
-    lines.push(`  needs_you: ${supervisionValue(lead.needsYou)}`);
-    if (lead.pendingAskId) {
-      lines.push(`  ask_id: ${supervisionValue(lead.pendingAskId)}`);
-      lines.push(
-        `  question: ${supervisionValue(lead.pendingAskQuestion ?? "")}`,
-      );
-    }
     lines.push(
       `  available_tools: ${lead.availableActions
         .map((action) => supervisionValue(`staff_${action}`))
@@ -1204,8 +1180,6 @@ export function renderSupervisionPeek(
   add(lead.displayName);
   add(`State: ${lifecycleLabel(lead.runtimeState)}`);
   add(`agents: ${leadAgentCounts(lead)}`);
-  if (lead.pendingAskQuestion)
-    add(`Pending question: ${lead.pendingAskQuestion}`);
   if (evidence.recentOutput && add("Recent output")) {
     let start = 0;
     while (start <= evidence.recentOutput.length && lines.length < limit) {
@@ -2038,7 +2012,7 @@ function inspectEvidence(
 }
 
 type CoordinationBody = {
-  label: "task" | "message" | "question" | "result";
+  label: "task" | "message";
   text: string;
 };
 
@@ -2047,13 +2021,7 @@ function coordinationBody(
   args: Record<string, unknown>,
 ): CoordinationBody | undefined {
   const label =
-    action === "delegate" || action === "continue"
-      ? "task"
-      : action === "result"
-        ? "result"
-        : action === "ask"
-          ? "question"
-          : "message";
+    action === "delegate" || action === "continue" ? "task" : "message";
   const text = args[label];
   return typeof text === "string" && text.trim() ? { label, text } : undefined;
 }
@@ -2086,7 +2054,6 @@ function renderExpandedCoordinationCall(
     } else if (args.agent) fields.push(["agent", args.agent]);
   } else if (tool === "staff" || tool === "peer") {
     if (args.session) fields.push(["session", args.session]);
-    if (args.askId) fields.push(["ask", args.askId]);
     if (action === "delegate") {
       if (args.branch) fields.push(["branch", args.branch]);
       if (args.base) fields.push(["base", args.base]);
@@ -2368,16 +2335,12 @@ function expandedResultLines(
         : action === "delegate" || action === "continue"
           ? `${display} started`
           : tool === "supervisor"
-            ? action === "ask"
-              ? "waiting for supervisor"
-              : action === "result"
-                ? "result sent to Manager"
-                : "sent to supervisor"
+            ? "sent to supervisor"
             : action === "steer"
               ? "steering queued"
               : action === "interrupt"
                 ? "interrupt accepted"
-                : action === "reply"
+                : tool === "agent" && action === "reply"
                   ? `reply sent to ${display}`
                   : action === "close"
                     ? `${display} closed`
@@ -2394,12 +2357,13 @@ function expandedResultLines(
     ],
     ["request", details.request_id],
     ["assignment request", details.assignment_request_id],
-    ["ask", details.ask_id ?? details.askId ?? args.askId],
     ["pane", details.pane_id],
     ["record", details.id],
     ["workspace", details.workspace_id],
     ["captured", details.captured_at],
   ];
+  if (tool === "agent" && action === "reply")
+    fields.push(["ask", details.ask_id ?? details.askId ?? args.askId]);
   const identity =
     details.identity && typeof details.identity === "object"
       ? (details.identity as Record<string, unknown>)
@@ -2474,15 +2438,6 @@ function expandedResultLines(
         return [
           `${display}  ${state}${totalAgents ? ` · ${totalAgents} agent${totalAgents === 1 ? "" : "s"}` : ""}`,
           `  session: ${value(lead.session)}`,
-          ...(typeof lead.needs_you === "boolean"
-            ? [`  needs you: ${lead.needs_you ? "yes" : "no"}`]
-            : []),
-          ...(value(lead.pending_ask_id)
-            ? [`  ask: ${value(lead.pending_ask_id)}`]
-            : []),
-          ...(value(lead.pending_ask_question)
-            ? [`  question: ${value(lead.pending_ask_question)}`]
-            : []),
           ...(lead.agent_counts && typeof lead.agent_counts === "object"
             ? [
                 `  agent counts: ${Object.entries(counts)
@@ -2656,18 +2611,8 @@ export function renderCoordinationResult(
     );
   }
   if (tool === "supervisor") {
-    const waiting = action === "ask";
     return new WidthSafeText(
-      statusLine(
-        theme,
-        waiting ? "warning" : "success",
-        waiting ? "?" : "✓",
-        waiting
-          ? "waiting for supervisor"
-          : action === "result"
-            ? `reported ${value(details.result) || "result to Manager"}`
-            : "sent to supervisor",
-      ),
+      statusLine(theme, "success", "✓", "sent to supervisor"),
       0,
       0,
     );
@@ -2692,9 +2637,6 @@ export function renderCoordinationResult(
         lead?.runtime_state === "settling" ||
         lead?.runtime_state === "starting",
     ).length;
-    const needs = reports.filter(
-      (lead: any) => lead?.needs_you === true,
-    ).length;
     const role = value(
       (details.self as Record<string, unknown> | undefined)?.role,
     );
@@ -2705,7 +2647,6 @@ export function renderCoordinationResult(
         [
           `staff ${reports.length} ${role === "chief" ? "managers" : "leads"}`,
           active ? `${active} active` : "",
-          needs ? `${needs} needs you` : "",
         ]
           .filter(Boolean)
           .join(" · "),
@@ -2728,12 +2669,7 @@ export function renderCoordinationResult(
       0,
     );
   return new WidthSafeText(
-    statusLine(
-      theme,
-      "success",
-      "✓",
-      `${action === "reply" ? "replied" : "sent"} to ${display}`,
-    ),
+    statusLine(theme, "success", "✓", `sent to ${display}`),
     0,
     0,
   );
@@ -2904,7 +2840,6 @@ export function renderCoordinationMessage(
     details?: {
       fromSessionId?: string;
       leadSessionId?: string;
-      askId?: string;
       branch?: string;
     };
   },
@@ -2917,27 +2852,15 @@ export function renderCoordinationMessage(
   let prefix: string | undefined;
   switch (kind) {
     case "lead_message":
-    case "lead_ask":
-      heading =
-        kind === "lead_ask"
-          ? statusLine(theme, "warning", "?", "Lead needs input")
-          : "Lead message";
+      heading = "Lead message";
       if (d?.fromSessionId) prefix = `From lead ${d.fromSessionId}: `;
       break;
     case "chief_message":
-    case "chief_reply":
-      heading = kind === "chief_reply" ? "Chief reply" : "Chief message";
+      heading = "Chief message";
       if (d?.fromSessionId) prefix = `From chief ${d.fromSessionId}: `;
       break;
     case "manager_message":
-    case "manager_ask":
-    case "manager_reply":
-      heading =
-        kind === "manager_ask"
-          ? statusLine(theme, "warning", "?", "Manager needs input")
-          : kind === "manager_reply"
-            ? "Manager reply"
-            : "Manager message";
+      heading = "Manager message";
       if (d?.fromSessionId) prefix = `From manager ${d.fromSessionId}: `;
       break;
     case "peer_message":
@@ -2947,10 +2870,6 @@ export function renderCoordinationMessage(
     case "project_assignment":
       heading = statusLine(theme, "accent", "→", `${branch} assigned`);
       if (d?.branch) prefix = `Project assignment for branch ${d.branch}:\n\n`;
-      break;
-    case "report_result":
-      heading = statusLine(theme, "success", "✓", `${branch} finished`);
-      if (d?.branch) prefix = `Project work ${d.branch} finished:\n\n`;
       break;
   }
   let body = message.content ?? "";
@@ -2976,32 +2895,6 @@ export function renderCoordinationMessage(
     }
   } else {
     let previewBody = body;
-    const provenancePrefix = "Lead result source: ";
-    if (kind === "report_result" && previewBody.startsWith(provenancePrefix)) {
-      const separator = previewBody.indexOf("\n\n");
-      if (separator !== -1) {
-        try {
-          const provenance: unknown = JSON.parse(
-            previewBody.slice(provenancePrefix.length, separator),
-          );
-          if (
-            provenance !== null &&
-            typeof provenance === "object" &&
-            Object.keys(provenance).length === 2 &&
-            Object.hasOwn(provenance, "branch") &&
-            Object.hasOwn(provenance, "cwd") &&
-            "branch" in provenance &&
-            typeof provenance.branch === "string" &&
-            "cwd" in provenance &&
-            typeof provenance.cwd === "string" &&
-            provenance.branch === d?.branch
-          )
-            previewBody = previewBody.slice(separator + 2);
-        } catch {
-          // Keep content that does not have the deterministic JSON header.
-        }
-      }
-    }
     const preview = collapseDisplayText(previewBody);
     if (preview)
       content.addChild(

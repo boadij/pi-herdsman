@@ -78,8 +78,8 @@ Manager-delegated project work is durable and keyed by repository plus semantic
 Git branch.
 
 Within one repository, the branch is the public work handle. A Lead is the
-current executor. Project assignment and result UUIDs stay internal; exact Pi
-session IDs are used only when acting on a live Lead.
+current executor. The assignment's exact Pi session ID is an internal executor
+identity; exact session IDs are used only when acting on a live Lead.
 
 Because durable work is not keyed by a Manager or primary workspace identity, a
 replacement Manager or replacement primary workspace for the same repository
@@ -92,13 +92,15 @@ project work
     └─ branch feat/b → current Lead → Agent tree
 ```
 
-This distinction is what allows work to survive Manager turnover. Leaving
-Manager mode does not delete project work. A Lead can finish while no Manager is
-active, and a later Manager can reconcile the durable result.
+The assignment is the durable indicator that project work remains open. It
+survives Manager turnover and runtime loss; current Herdr placement is derived
+again when the work is observed or resumed. Assigned Lead messages are retained
+with the project and remain available to a replacement Manager. They are
+coordination and review handoffs, not terminal results.
 
-Closing a managed Lead pauses execution while preserving the assignment, Pi
-session, branch, and worktree. Discarding abandons the assignment while
-preserving the Git branch and worktree.
+`staff_stop` pauses execution while preserving the assignment, Pi session,
+branch, and worktree. Only Manager `staff_complete` or `staff_discard` removes
+the assignment. Both preserve the Git branch and worktree.
 
 For the task-oriented workflow, see
 [Project orchestration](../guides/project-orchestration.md). Exact operations
@@ -108,12 +110,12 @@ live in [Staff tools](../reference/staff.md).
 
 Coordination crosses one authority edge at a time:
 
-| Direction | Interface | Boundary |
-| --- | --- | --- |
-| Down | `staff_*` | Chief -> direct Manager/Lead, Manager -> direct Lead |
-| Up | `supervisor_*` | Lead -> Manager or Chief, Manager -> Chief |
-| Sideways | `peer_*` | Lead <-> Lead or Manager <-> Manager |
-| Ownership | `agent_*`, `ask_owner` | owner <-> directly owned Agent |
+| Direction | Interface              | Boundary                                             |
+| --------- | ---------------------- | ---------------------------------------------------- |
+| Down      | `staff_*`              | Chief -> direct Manager/Lead, Manager -> direct Lead |
+| Up        | `supervisor_*`         | Lead -> Manager or Chief, Manager -> Chief           |
+| Sideways  | `peer_*`               | Lead <-> Lead or Manager <-> Manager                 |
+| Ownership | `agent_*`, `ask_owner` | owner <-> directly owned Agent                       |
 
 A supervisor may observe bounded descendant state without gaining descendant
 control. Questions and messages are not implicitly forwarded through
@@ -135,12 +137,12 @@ and coverage rules.
 
 ## System responsibilities
 
-| System | Responsibility |
-| --- | --- |
-| **Pi** | Session history, turns, model interaction, and conversation continuity |
+| System          | Responsibility                                                                       |
+| --------------- | ------------------------------------------------------------------------------------ |
+| **Pi**          | Session history, turns, model interaction, and conversation continuity               |
 | **Pi Herdsman** | Assignment ownership, coordination, project-work semantics, and authority validation |
-| **herdr** | Processes, panes, tabs, workspaces, placement, and Git worktree topology |
-| **Git** | Branches, commits, and repository state |
+| **herdr**       | Processes, panes, tabs, workspaces, placement, and Git worktree topology             |
+| **Git**         | Branches, commits, and repository state                                              |
 
 Physical layout and display metadata are evidence or presentation, not
 coordination authority. Control requires current validated identity and fails

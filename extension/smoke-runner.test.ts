@@ -13,9 +13,14 @@ import {
   parseToolSnapshots,
   chiefTreeBranchPlan,
   managerRecoveryFreshPrompt,
-  managerRecoveryClosePrompt,
+  managerRecoveryLeadContextPrompt,
+  managerRecoveryPostRecoveryPrompt,
+  managerRecoveryStopPrompt,
   managerRecoveryResumeOnlyPrompt,
+  managerRecoveryDelegateDiagnostics,
   managerRecoveryResumePrompt,
+  managerRecoveryReviewPrompt,
+  managerRecoveryCompletePrompt,
   continuationResultsForPrompt,
   continuationSessionEvidence,
   correlatedContinuationTask,
@@ -36,11 +41,10 @@ import {
   captureManagerLeadDiagnostics,
   savedSessionHeaderEvidence,
   staffDelegateResults,
-  staffCloseResults,
-  assertManagerResultSettlement,
-  hasManagerResultReceipt,
-  managerResultDelivery,
-  supervisorResultAccepted,
+  staffActionResults,
+  projectMessageEntries,
+  retainedProjectMessageRecord,
+  managerCleanupTarget,
   prepareManagerRepository,
   assertManagerFreshPrimary,
   deleteBranchIfPresent,
@@ -733,6 +737,7 @@ test("manager-recovery starts without a chat prompt", () => {
 
 test("manager-recovery starts work by task and branch, then resumes by branch only", () => {
   const branch = "herdsman/smoke-manager-recovery-exact";
+  const marker = "MANAGER_RECOVERY_CONTEXT_test";
   const prompt = managerRecoveryFreshPrompt(branch);
   assert.match(prompt, /staff_delegate exactly once to start new project work/);
   assert.match(prompt, /`task` argument/);
@@ -747,6 +752,8 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
     /after staff_delegate returns, end this turn immediately/,
   );
   assert.match(prompt, /Wait until the exact MANAGER_RECOVERY_READY message/);
+  assert.doesNotMatch(prompt, new RegExp(marker));
+  assert.doesNotMatch(prompt, /context marker|remember the exact/i);
   assert.match(prompt, /Only after that delivered message, reply exactly/);
   assert.doesNotMatch(prompt, /MANAGER_RECOVERY_FINISH/);
   const resume = managerRecoveryResumePrompt(branch);
@@ -755,38 +762,142 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
     /staff_delegate using only:\n\{"branch":"herdsman\/smoke-manager-recovery-exact"\}/,
   );
   assert.match(resume, /PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED/);
-  assert.doesNotMatch(resume, /staff_message|session-exact/);
+  assert.doesNotMatch(resume, /supervisor_result|supervisor_ask/);
   assert.doesNotMatch(resume, /"assignment"|"task"|"base"|"files"/);
 });
 
-test("manager-recovery pauses and resumes by exact durable handles", () => {
-  const session = "01a0ed33-3720-75bd-908c-44c05c6a2fd9";
+test("manager-recovery stops by Lead session, reviews, and completes by branch", () => {
   const branch = "herdsman/smoke-manager-recovery-exact";
-  const close = managerRecoveryClosePrompt(session);
-  assert.match(close, /staff_close exactly once/);
+  const session = "lead-session-exact";
+  const marker = "MANAGER_RECOVERY_CONTEXT_test";
+  const close = managerRecoveryStopPrompt(session);
+  assert.match(close, /staff_stop exactly once/);
   assert.ok(close.includes(JSON.stringify({ session })));
   assert.match(close, /PI_HERDSMAN_MANAGER_RECOVERY_PAUSED/);
+  const review = managerRecoveryReviewPrompt(branch);
+  assert.match(review, /staff_message/);
+  assert.doesNotMatch(review, new RegExp(marker));
+  assert.match(
+    managerRecoveryCompletePrompt(branch),
+    /staff_complete exactly once/,
+  );
   const resume = managerRecoveryResumeOnlyPrompt(branch);
   assert.match(resume, /staff_delegate exactly once/);
   assert.ok(resume.includes(JSON.stringify({ branch })));
+  assert.match(resume, /exact full branch string/);
+  assert.match(resume, /Copy that branch string verbatim/);
+  assert.match(resume, /do not shorten, summarize, normalize/);
   assert.match(resume, /PI_HERDSMAN_MANAGER_RECOVERY_RESUMED/);
 });
 
-test("smoke parses successful staff_close results only", () => {
+test("manager-recovery seeds continuity only in the Lead conversation, then recalls without revealing it", () => {
+  const branch = "herdsman/smoke-manager-recovery-exact";
+  const marker = "MANAGER_RECOVERY_CONTEXT_test";
+  const leadPrompt = managerRecoveryLeadContextPrompt(marker);
+  const managerPrompts = [
+    managerRecoveryFreshPrompt(branch),
+    managerRecoveryResumePrompt(branch),
+    managerRecoveryReviewPrompt(branch),
+    managerRecoveryStopPrompt("lead-session-exact"),
+    managerRecoveryResumeOnlyPrompt(branch),
+    managerRecoveryCompletePrompt(branch),
+  ];
+
+  assert.match(leadPrompt, new RegExp(marker));
+  for (const prompt of managerPrompts)
+    assert.doesNotMatch(prompt, new RegExp(marker));
+
+  const recallPrompt = managerRecoveryPostRecoveryPrompt();
+  assert.doesNotMatch(recallPrompt, new RegExp(marker));
+  assert.match(recallPrompt, /recall the exact context marker/i);
+  assert.match(
+    recallPrompt,
+    /call supervisor_message with exactly that marker/i,
+  );
+});
+
+test("manager-recovery diagnostics capture the resume delegate argument and result", () => {
+  const branch = "herdsman/smoke-manager-recovery-exact";
+  const prompt = managerRecoveryResumeOnlyPrompt(branch);
+  const entries = [
+    {
+      type: "message",
+      id: "prompt",
+      message: { role: "user", content: prompt },
+    },
+    {
+      type: "message",
+      id: "call",
+      parentId: "prompt",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "delegate-call",
+            name: "staff_delegate",
+            arguments: { branch: "herdsman/smoke-manager-recovery-exac" },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "result",
+      parentId: "call",
+      message: {
+        role: "toolResult",
+        toolName: "staff_delegate",
+        toolCallId: "delegate-call",
+        isError: true,
+        content: [{ type: "text", text: "No existing work was found." }],
+      },
+    },
+  ];
+  const contents = entries.map((entry) => JSON.stringify(entry)).join("\n");
+  assert.deepEqual(managerRecoveryDelegateDiagnostics(contents, prompt), [
+    {
+      branch: "herdsman/smoke-manager-recovery-exac",
+      arguments: { branch: "herdsman/smoke-manager-recovery-exac" },
+      result: {
+        isError: true,
+        details: null,
+        content: "No existing work was found.",
+      },
+    },
+  ]);
+  assert.deepEqual(
+    managerRecoveryDelegateDiagnostics(contents, "different prompt"),
+    [],
+  );
+});
+
+test("manager-recovery post-recovery prompt recalls the marker from prior context", () => {
+  const marker = "MANAGER_RECOVERY_CONTEXT_test";
+  const prompt = managerRecoveryPostRecoveryPrompt();
+  assert.doesNotMatch(prompt, new RegExp(marker));
+  assert.match(prompt, /recall the exact context marker/i);
+  assert.match(prompt, /instructed to remember before recovery/i);
+  assert.match(prompt, /prior conversation context/i);
+});
+
+test("smoke parses successful staff_stop results only", () => {
   const result = {
     ok: true,
-    action: "close",
+    action: "stop",
     session: "lead-session",
     branch: "feat/example",
   };
   const contents = [
     {
-      toolName: "staff_close",
-      content: [{ type: "text", text: "Lead closed; project work preserved." }],
+      toolName: "staff_stop",
+      content: [
+        { type: "text", text: "Lead stopped; project work preserved." },
+      ],
       details: result,
     },
     { toolName: "staff_delegate", content: JSON.stringify(result) },
-    { toolName: "staff_close", isError: true, content: JSON.stringify(result) },
+    { toolName: "staff_stop", isError: true, content: JSON.stringify(result) },
   ]
     .map((message) =>
       JSON.stringify({
@@ -795,7 +906,9 @@ test("smoke parses successful staff_close results only", () => {
       }),
     )
     .join("\n");
-  assert.deepEqual(staffCloseResults(contents), [result]);
+  assert.deepEqual(staffActionResults(contents, "staff_stop", "stop"), [
+    result,
+  ]);
 });
 
 test("staff delegate results retain only valid successful delegation payloads in order", () => {
@@ -844,167 +957,105 @@ test("staff delegate results retain only valid successful delegation payloads in
   ]);
 });
 
-test("Manager result delivery is branch-keyed, semantic, and followed by its triggered turn", () => {
+test("Manager history recognizes retained project messages by exact identity", () => {
   const branch = "feature/bootstrap";
   const sessionId = "lead-session";
-  const contents = [
-    {
-      type: "custom_message",
-      id: "inbox-message",
-      customType: "pi-herdsman-report_result",
-      details: { branch, fromSessionId: sessionId, leadSessionId: sessionId },
-      content: `Project work ${branch} finished:\n\nMANAGER_RECOVERY_DONE`,
-    },
-    {
-      type: "message",
-      parentId: "inbox-message",
-      message: {
-        role: "assistant",
-        stopReason: "stop",
-        content: "PI_HERDSMAN_MANAGER_RECOVERY_OK",
-      },
-    },
-  ]
-    .map((entry) => JSON.stringify(entry))
-    .join("\n");
-  assert.deepEqual(managerResultDelivery(contents, branch, sessionId), {
-    receipt: contents.split("\n").map(JSON.parse)[0],
-    answer: contents.split("\n").map(JSON.parse)[1],
-  });
-  assert.equal(managerResultDelivery(contents, "other", sessionId), null);
-  assert.equal(hasManagerResultReceipt(contents, branch, sessionId), true);
-  assert.doesNotMatch(contents, /result:[0-9a-f-]{36}/i);
-  assertManagerResultSettlement({
-    resultPersisted: true,
-    delivered: false,
-    assignmentExists: true,
-  });
-  assertManagerResultSettlement({
-    resultPersisted: true,
-    delivered: true,
-    assignmentExists: false,
-  });
-  assert.throws(
-    () =>
-      assertManagerResultSettlement({
-        resultPersisted: false,
-        delivered: false,
-        assignmentExists: true,
-      }),
-    /persisted first/,
-  );
-  assert.throws(
-    () =>
-      assertManagerResultSettlement({
-        resultPersisted: true,
-        delivered: false,
-        assignmentExists: false,
-      }),
-    /undelivered result must preserve/,
-  );
-});
-
-test("Manager completion requires a stopped ACK in the receipt-triggered turn", () => {
-  const branch = "feature/bootstrap";
-  const sessionId = "lead-session";
-  const receipt = {
+  const record = {
     type: "custom_message",
-    id: "receipt",
-    customType: "pi-herdsman-report_result",
-    details: { branch, fromSessionId: sessionId, leadSessionId: sessionId },
-    content: `Project work ${branch} finished:\n\nMANAGER_RECOVERY_DONE`,
-  };
-  const answer = {
-    type: "message",
-    id: "answer",
-    parentId: "receipt",
-    message: {
-      role: "assistant",
-      stopReason: "stop",
-      content: "PI_HERDSMAN_MANAGER_RECOVERY_OK",
-    },
-  };
-  const delivery = (entries, expected = sessionId) =>
-    managerResultDelivery(
-      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+    id: "manager-message",
+    customType: "pi-herdsman-project_message",
+    details: {
+      id: "record-id",
+      repoKey: "repo",
       branch,
-      expected,
-    );
-  assert.equal(delivery([receipt, answer])?.answer.id, "answer");
-  for (const entries of [
-    [answer, receipt],
-    [receipt, { ...answer, parentId: "other-branch" }],
-    [
-      receipt,
-      { ...answer, message: { ...answer.message, stopReason: "toolUse" } },
-    ],
-    [
-      receipt,
-      { ...answer, message: { ...answer.message, content: "Acknowledged." } },
-    ],
-    [receipt, { ...receipt, id: "duplicate" }, answer],
-    ...[
-      { customType: "other" },
-      { details: { ...receipt.details, branch: "other" } },
-      { details: { ...receipt.details, fromSessionId: "other" } },
-      { details: { ...receipt.details, leadSessionId: "other" } },
-    ].map((changed) => [{ ...receipt, ...changed }, answer]),
-  ])
-    assert.equal(delivery(entries), null);
-  assert.equal(delivery([receipt, answer], "wrong-session"), null);
-  const toolResult = {
-    type: "message",
-    id: "tool-result",
-    parentId: "receipt",
-    message: { role: "toolResult" },
+      fromSessionId: sessionId,
+    },
+    content: "review handoff",
   };
-  assert.equal(
-    delivery([receipt, toolResult, { ...answer, parentId: "tool-result" }])
-      ?.answer.id,
-    "answer",
+  const contents = JSON.stringify(record);
+  assert.deepEqual(projectMessageEntries(contents, branch, sessionId), [
+    record,
+  ]);
+  assert.deepEqual(projectMessageEntries(contents, "other", sessionId), []);
+  assert.deepEqual(
+    projectMessageEntries(contents, branch, "other-session"),
+    [],
   );
-  for (const message of [
-    { role: "user" },
-    { role: "assistant", stopReason: "stop" },
-  ])
-    assert.equal(
-      delivery([
-        receipt,
-        { ...toolResult, message },
-        { ...answer, parentId: "tool-result" },
-      ]),
-      null,
-    );
 });
 
-test("Manager-away supervisor_result persists before notification reconciliation", () => {
-  const entries = [
-    {
-      type: "message",
-      message: {
-        role: "toolResult",
-        toolName: "supervisor_result",
-        details: {
-          ok: true,
-          action: "result",
-          branch: "feature/bootstrap",
-          queued: false,
-        },
-      },
-    },
-  ];
-  const contents = entries.map((entry) => JSON.stringify(entry)).join("\n");
-  assert.equal(supervisorResultAccepted(contents, "feature/bootstrap"), true);
-  assert.equal(supervisorResultAccepted(contents, "other"), false);
-  assert.equal(
-    supervisorResultAccepted(
-      JSON.stringify({
-        type: "message",
-        message: { ...entries[0].message, isError: true },
-      }),
-      "feature/bootstrap",
+test("retained project message selection ignores stale and wrong-scope records", () => {
+  const marker = "MANAGER_RECOVERY_CONTEXT_new";
+  const valid = {
+    id: "new-id",
+    branch: "feature/current",
+    fromSessionId: "lead-current",
+    text: marker,
+  };
+  assert.deepEqual(
+    retainedProjectMessageRecord(
+      [
+        { ...valid, id: "ready", text: "MANAGER_RECOVERY_READY" },
+        { ...valid, id: "branch", branch: "feature/other" },
+        { ...valid, id: "session", fromSessionId: "lead-other" },
+        { ...valid, id: "content", text: `${marker} extra` },
+        { ...valid, id: "" },
+        Object.fromEntries(
+          Object.entries(valid).filter(([key]) => key !== "id"),
+        ),
+        valid,
+      ],
+      "feature/current",
+      "lead-current",
+      marker,
     ),
-    false,
+    valid,
+  );
+  assert.equal(
+    retainedProjectMessageRecord(
+      [{ ...valid, text: "MANAGER_RECOVERY_READY" }],
+      "feature/current",
+      "lead-current",
+      marker,
+    ),
+    null,
+  );
+});
+
+test("Manager cleanup selects the recreated workspace only for exact branch and path", () => {
+  const worktree = {
+    branch: "feature/current",
+    path: "/smoke/project-worktree",
+    open_workspace_id: "new-workspace",
+  };
+  assert.equal(
+    managerCleanupTarget(
+      [worktree],
+      "feature/current",
+      "/smoke/project-worktree",
+    ),
+    worktree,
+  );
+  assert.throws(
+    () =>
+      managerCleanupTarget(
+        [worktree, worktree],
+        worktree.branch,
+        worktree.path,
+      ),
+    /one worktree/,
+  );
+  assert.throws(
+    () => managerCleanupTarget([worktree], worktree.branch, "/other/path"),
+    /path does not match/,
+  );
+  assert.throws(
+    () =>
+      managerCleanupTarget(
+        [{ ...worktree, open_workspace_id: "" }],
+        worktree.branch,
+        worktree.path,
+      ),
+    /no workspace identity/,
   );
 });
 
@@ -1200,6 +1251,7 @@ test("Manager recovery READY never matches missing session identities", () => {
 
 test("Manager READY answer follows delivered message even on a separate followUp branch", () => {
   const lead = "lead-id";
+  const branch = "manager-recovery";
   const entries = [
     { type: "session", id: "chief-id" },
     {
@@ -1220,9 +1272,9 @@ test("Manager READY answer follows delivered message even on a separate followUp
     {
       type: "custom_message",
       id: "receipt",
-      customType: "pi-herdsman-lead_message",
-      details: { fromSessionId: lead },
-      content: `From lead ${lead}: MANAGER_RECOVERY_READY`,
+      customType: "pi-herdsman-project_message",
+      details: { branch, fromSessionId: lead },
+      content: `Project ${branch} from lead ${lead}:\n\nMANAGER_RECOVERY_READY`,
     },
     {
       type: "message",
@@ -1243,38 +1295,55 @@ test("Manager READY answer follows delivered message even on a separate followUp
   ];
   const contents = (items) =>
     items.map((entry) => JSON.stringify(entry)).join("\n");
-  assert.deepEqual(managerReadyAnswer(contents(entries.slice(0, 3)), lead), {
-    receipt: false,
-    answer: null,
-    prematureReady: true,
-    prematureFinish: false,
-  });
-  assert.deepEqual(managerReadyAnswer(contents(entries.slice(0, 5)), lead), {
-    receipt: true,
-    answer: null,
-    prematureReady: true,
-    prematureFinish: false,
-  });
+  assert.deepEqual(
+    managerReadyAnswer(contents(entries.slice(0, 3)), branch, lead),
+    {
+      receipt: false,
+      answer: entries[2],
+      answerAfterReceipt: null,
+      prematureReady: true,
+      prematureFinish: false,
+    },
+  );
+  assert.deepEqual(
+    managerReadyAnswer(contents(entries.slice(0, 5)), branch, lead),
+    {
+      receipt: true,
+      answer: entries[2],
+      answerAfterReceipt: null,
+      prematureReady: true,
+      prematureFinish: false,
+    },
+  );
   const noPrematureAnswer = entries.filter((entry) => entry.id !== "premature");
   assert.deepEqual(
-    managerReadyAnswer(contents(noPrematureAnswer.slice(0, 3)), lead),
+    managerReadyAnswer(contents(noPrematureAnswer.slice(0, 3)), branch, lead),
     {
       receipt: true,
       answer: null,
+      answerAfterReceipt: null,
       prematureReady: false,
       prematureFinish: false,
     },
   );
   assert.equal(
-    managerReadyAnswer(contents(noPrematureAnswer), lead).answer?.id,
+    managerReadyAnswer(contents(noPrematureAnswer), branch, lead).answer?.id,
     "answer",
   );
+  const missingReceipt = managerReadyAnswer(
+    contents(noPrematureAnswer.filter((entry) => entry.id !== "receipt")),
+    branch,
+    lead,
+  );
+  assert.equal(missingReceipt.answer?.id, "answer");
+  assert.equal(missingReceipt.answerAfterReceipt, null);
   assert.equal(
-    managerReadyAnswer(contents(entries), lead).prematureReady,
+    managerReadyAnswer(contents(entries), branch, lead).prematureReady,
     true,
   );
   assert.equal(
-    managerReadyAnswer(contents(entries), "wrong-lead").answer,
+    managerReadyAnswer(contents(entries), branch, "wrong-lead")
+      .answerAfterReceipt,
     null,
   );
   const prematureFinish = [
@@ -1297,51 +1366,58 @@ test("Manager READY answer follows delivered message even on a separate followUp
     ...noPrematureAnswer.slice(4),
   ];
   assert.equal(
-    managerReadyAnswer(contents(prematureFinish), lead).prematureFinish,
+    managerReadyAnswer(contents(prematureFinish), branch, lead).prematureFinish,
     true,
   );
 });
 
-test("Manager READY timeout diagnostics recognize only exact current Lead receipts", () => {
+test("Manager READY timeout diagnostics recognize exact project-message receipts", () => {
+  const branch = "manager-recovery";
   const receipt = {
     type: "custom_message",
-    customType: "pi-herdsman-lead_message",
-    details: { fromSessionId: "lead-id" },
-    content: "From lead lead-id: MANAGER_RECOVERY_READY",
+    customType: "pi-herdsman-project_message",
+    details: { branch, fromSessionId: "lead-id" },
+    content: `Project ${branch} from lead lead-id:\n\nMANAGER_RECOVERY_READY`,
   };
   for (const [entry, expected] of [
     [receipt, true],
+    [{ ...receipt, details: { ...receipt.details, branch: "other" } }, false],
     [{ ...receipt, details: { fromSessionId: "wrong-lead" } }, false],
     [{ ...receipt, details: undefined }, false],
     [
-      { ...receipt, content: "From lead wrong-lead: MANAGER_RECOVERY_READY" },
+      {
+        ...receipt,
+        content:
+          "Project manager-recovery from lead wrong-lead:\n\nMANAGER_RECOVERY_READY",
+      },
       false,
     ],
     [
       {
         ...receipt,
-        content: "From lead lead-id to chief chief-id: MANAGER_RECOVERY_READY",
+        content: `Project ${branch} from lead lead-id to chief chief-id: MANAGER_RECOVERY_READY`,
       },
       false,
     ],
-    [{ ...receipt, customType: "pi-herdsman-lead_ask" }, false],
+    [{ ...receipt, customType: "pi-herdsman-lead_message" }, false],
   ])
     assert.equal(
-      managerReadyEntryEvidence(JSON.stringify(entry), "lead-id").some(
+      managerReadyEntryEvidence(JSON.stringify(entry), branch, "lead-id").some(
         (evidence) => evidence.receipt,
       ),
       expected,
     );
 });
 
-test("Manager READY receipts require a non-empty expected Lead ID", () => {
+test("Manager READY receipts require exact branch and non-empty expected Lead ID", () => {
+  const branch = "manager-recovery";
   for (const leadSessionId of [undefined, "", null, 0, false]) {
     const contents = [
       {
         type: "custom_message",
-        customType: "pi-herdsman-lead_message",
-        details: { fromSessionId: leadSessionId },
-        content: `From lead ${leadSessionId}: MANAGER_RECOVERY_READY`,
+        customType: "pi-herdsman-project_message",
+        details: { branch, fromSessionId: leadSessionId },
+        content: `Project ${branch} from lead ${leadSessionId}:\n\nMANAGER_RECOVERY_READY`,
       },
       {
         type: "message",
@@ -1354,11 +1430,15 @@ test("Manager READY receipts require a non-empty expected Lead ID", () => {
     ]
       .map((entry) => JSON.stringify(entry))
       .join("\n");
-    const answer = managerReadyAnswer(contents, leadSessionId);
+    const answer = managerReadyAnswer(contents, branch, leadSessionId);
     assert.equal(answer.receipt, false);
-    assert.equal(answer.answer, null);
+    assert.ok(
+      answer.answer,
+      "marker detection must not depend on receipt identity",
+    );
+    assert.equal(answer.answerAfterReceipt, null);
     assert.equal(
-      managerReadyEntryEvidence(contents, leadSessionId).some(
+      managerReadyEntryEvidence(contents, branch, leadSessionId).some(
         (evidence) => evidence.receipt,
       ),
       false,

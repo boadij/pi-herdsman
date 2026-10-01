@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { test, type TestContext } from "node:test";
 import { Value } from "typebox/value";
@@ -17,13 +17,15 @@ import {
   listProjectAssignments,
   listChiefMessagePaths,
   readChiefMessage,
+  readChiefDescriptor,
   supervisionRuntime,
   claimChiefLease,
   claimManagerLease,
   managerDescriptorPath,
   writeProjectAssignment,
+  listProjectMessages,
+  writeProjectMessage,
   writeChiefMessage,
-  removeProjectAssignment,
   writeLeadCoordinationState,
   readLeadCoordinationState,
   drainCoordinationInbox,
@@ -126,7 +128,7 @@ const ownershipResult = (
   },
 });
 
-test("linked Lead routes to exact Manager, fails closed on incomplete authority, then falls back to Chief", async () => {
+test("assigned Lead saves supervisor messages durably with or without a Manager", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `manager-routing-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
@@ -222,50 +224,39 @@ test("linked Lead routes to exact Manager, fails closed on incomplete authority,
     const records = (id: string) =>
       listChiefMessagePaths(runtime, id).map((path) => readChiefMessage(path));
 
-    const direct = await send("SMOKE_READY_1");
-    assert.equal(direct.details.chiefSessionId, managerId);
-    assert.ok(
-      records(managerId).some(
-        (record) =>
-          record.kind === "lead_message" &&
-          record.text === "SMOKE_READY_1" &&
-          record.toSessionId === managerId &&
-          record.fromSessionId === leadId &&
-          record.leaseId === manager.descriptor.leaseId,
+    const saved = await send("SMOKE_READY_1");
+    assert.match(JSON.stringify(saved), /Project message saved for Manager/);
+    assert.equal(records(managerId).length, 0);
+    assert.deepEqual(
+      listProjectMessages(runtime, "repo-key", "smoke/routing").map(
+        ({ repoKey, branch, fromSessionId, text }) => ({
+          repoKey,
+          branch,
+          fromSessionId,
+          text,
+        }),
       ),
+      [
+        {
+          repoKey: "repo-key",
+          branch: "smoke/routing",
+          fromSessionId: leadId,
+          text: "SMOKE_READY_1",
+        },
+      ],
     );
-    assert.equal(
-      records(chiefId).some((record) => record.kind === "lead_message"),
-      false,
-    );
-
-    realFs.unlinkSync(descriptorPath);
-    await assert.rejects(
-      send("MUST_NOT_REACH_CHIEF"),
-      /Manager descriptor|Manager authority/,
-    );
-    assert.equal(records(chiefId).length, 0);
-    assert.equal(
-      records(managerId).some(
-        (record) => record.text === "MUST_NOT_REACH_CHIEF",
-      ),
-      false,
-    );
-
-    writeFileSync(descriptorPath, descriptor);
     manager.release();
     managerReleased = true;
-    const fallback = await send("CHIEF_FALLBACK_OK");
-    assert.equal(fallback.details.chiefSessionId, chiefId);
-    assert.ok(
-      records(chiefId).some(
-        (record) =>
-          record.kind === "lead_message" &&
-          record.text === "CHIEF_FALLBACK_OK" &&
-          record.toSessionId === chiefId &&
-          record.fromSessionId === leadId &&
-          record.leaseId === chief.descriptor.leaseId,
+    const withoutManager = await send("MANAGER_ABSENT_OK");
+    assert.match(
+      JSON.stringify(withoutManager),
+      /Project message saved for Manager/,
+    );
+    assert.deepEqual(
+      listProjectMessages(runtime, "repo-key", "smoke/routing").map(
+        (record) => record.text,
       ),
+      ["SMOKE_READY_1", "MANAGER_ABSENT_OK"],
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -275,6 +266,333 @@ test("linked Lead routes to exact Manager, fails closed on incomplete authority,
       manager.release();
     }
     chief.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("unassigned Lead routes supervisor messages directly to Chief", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `unassigned-routing-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.HERDR_WORKSPACE_ID = "linked-workspace";
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  const chiefId = randomUUID();
+  const leadId = randomUUID();
+  const runtime = supervisionRuntime();
+  const chief = claimChiefLease({
+    piSessionId: chiefId,
+    paneId: "chief-pane",
+    tabId: "chief-tab",
+    workspaceId: WORKSPACE,
+  });
+  const agents = [
+    [chiefId, "chief-pane", "chief-tab", WORKSPACE],
+    [leadId, "lead-pane", "lead-tab", "linked-workspace"],
+  ].map(([id, pane_id, tab_id, workspace_id]) => ({
+    agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: id },
+    pane_id,
+    tab_id,
+    workspace_id,
+  }));
+  const exec = (_command: string, args: string[]) => {
+    let result: unknown = {};
+    if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+    else if (isAgentList(args)) result = { agents };
+    else if (args[0] === "agent" && args[1] === "get")
+      result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
+    else if (args[0] === "workspace" && args[1] === "get")
+      result = {
+        workspace: {
+          worktree: { repo_key: "repo-key", is_linked_worktree: true },
+        },
+      };
+    else if (args[0] === "worktree" && args[1] === "list")
+      result = {
+        source: {
+          repo_key: "repo-key",
+          repo_name: "project",
+          source_workspace_id: WORKSPACE,
+        },
+        worktrees: [{ open_workspace_id: "linked-workspace" }],
+      };
+    return {
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    };
+  };
+  const pi = fakeChiefPi({ exec });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext() as any;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => leadId,
+    getSessionFile: () => `/tmp/${leadId}.jsonl`,
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    const result = await pi.tools
+      .find((tool) => tool.name === "supervisor_message")!
+      .execute(
+        "message",
+        { message: "UNASSIGNED_DIRECT_TO_CHIEF" },
+        undefined,
+        undefined,
+        ctx,
+      );
+    assert.equal(result.details.chiefSessionId, chiefId);
+    assert.ok(
+      listChiefMessagePaths(runtime, chiefId).some((path) => {
+        const record = readChiefMessage(path);
+        return (
+          record.kind === "lead_message" &&
+          record.fromSessionId === leadId &&
+          record.text === "UNASSIGNED_DIRECT_TO_CHIEF"
+        );
+      }),
+    );
+    assert.deepEqual(
+      listProjectMessages(runtime, "repo-key", "smoke/routing"),
+      [],
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    chief.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("legacy Lead pendingAsk state is normalized and does not block messaging", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `legacy-lead-state-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.HERDR_WORKSPACE_ID = "linked-workspace";
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  const chiefId = randomUUID();
+  const leadId = randomUUID();
+  const runtime = supervisionRuntime();
+  const chief = claimChiefLease({
+    piSessionId: chiefId,
+    paneId: "chief-pane",
+    tabId: "chief-tab",
+    workspaceId: WORKSPACE,
+  });
+  const agents = [
+    [chiefId, "chief-pane", "chief-tab", WORKSPACE],
+    [leadId, "lead-pane", "lead-tab", "linked-workspace"],
+  ].map(([id, pane_id, tab_id, workspace_id]) => ({
+    agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: id },
+    pane_id,
+    tab_id,
+    workspace_id,
+  }));
+  const exec = (_command: string, args: string[]) => {
+    let result: unknown = {};
+    if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+    else if (isAgentList(args)) result = { agents };
+    else if (args[0] === "agent" && args[1] === "get")
+      result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
+    else if (args[0] === "workspace" && args[1] === "get")
+      result = {
+        workspace: {
+          worktree: { repo_key: "repo-key", is_linked_worktree: true },
+        },
+      };
+    else if (args[0] === "worktree" && args[1] === "list")
+      result = {
+        source: {
+          repo_key: "repo-key",
+          repo_name: "project",
+          source_workspace_id: WORKSPACE,
+        },
+        worktrees: [{ open_workspace_id: "linked-workspace" }],
+      };
+    return {
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    };
+  };
+  const pi = fakeChiefPi({
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-lead-state",
+        data: {
+          instanceId: randomUUID(),
+          pendingAsk: { question: "retired question", id: randomUUID() },
+        },
+      },
+    ],
+    exec,
+  });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext(pi.entries) as any;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => leadId,
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    const normalized = pi.entries
+      .filter((entry: any) => entry?.customType === "pi-herdsman-lead-state")
+      .at(-1) as any;
+    assert.deepEqual(Object.keys(normalized.data).sort(), ["instanceId"]);
+    assert.notEqual(
+      normalized.data.instanceId,
+      (pi.entries[0] as any).data.instanceId,
+    );
+
+    const result = await pi.tools
+      .find((tool) => tool.name === "supervisor_message")!
+      .execute(
+        "message",
+        { message: "LEGACY_STATE_MESSAGE_OK" },
+        undefined,
+        undefined,
+        ctx,
+      );
+    assert.equal(result.details.chiefSessionId, chiefId);
+    assert.ok(
+      listChiefMessagePaths(runtime, chiefId).some((path) => {
+        const record = readChiefMessage(path);
+        return (
+          record.kind === "lead_message" &&
+          record.fromSessionId === leadId &&
+          record.text === "LEGACY_STATE_MESSAGE_OK"
+        );
+      }),
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    chief.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("Chief preflight defers inbox delivery until agent_start", async (t) => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `chief-preflight-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  const sessionId = randomUUID();
+  const senderId = randomUUID();
+  const agents = [
+    [sessionId, "chief-pane", "chief-tab", WORKSPACE],
+    [senderId, "sender-pane", "sender-tab", WORKSPACE],
+  ].map(([id, pane_id, tab_id, workspace_id]) => ({
+    agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: id },
+    pane_id,
+    tab_id,
+    workspace_id,
+  }));
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    role: "lead",
+    instanceId: randomUUID(),
+    piSessionId: senderId,
+    updatedAt: Date.now(),
+  });
+  const exec = (_command: string, args: string[]) => {
+    let result: unknown = {};
+    if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+    else if (isAgentList(args)) result = { agents };
+    else if (args[0] === "agent" && args[1] === "get")
+      result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
+    else if (args[0] === "workspace" && args[1] === "get")
+      result = {
+        workspace: {
+          worktree: { repo_key: "repo-key", is_linked_worktree: true },
+        },
+      };
+    else if (args[0] === "worktree" && args[1] === "list")
+      result = {
+        source: {
+          repo_key: "repo-key",
+          repo_name: "project",
+          source_workspace_id: WORKSPACE,
+        },
+        worktrees: [{ open_workspace_id: WORKSPACE }],
+      };
+    return {
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    };
+  };
+  const pi = fakeChiefPi({ exec });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext() as any;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => sessionId,
+  };
+  ctx.isIdle = () => true;
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get("chief").handler("", ctx);
+    const descriptor = readChiefDescriptor(supervisionRuntime().descriptor);
+    writeChiefMessage(
+      {
+        version: 1,
+        id: randomUUID(),
+        leaseId: descriptor.leaseId,
+        kind: "lead_message",
+        fromSessionId: senderId,
+        toSessionId: sessionId,
+        leadSessionId: senderId,
+        text: "queued until the turn starts",
+        createdAt: Date.now(),
+      },
+      supervisionRuntime(),
+    );
+
+    const beforeAgentStart = pi.events.get("before_agent_start")![0];
+    const preflight = () =>
+      beforeAgentStart(
+        { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+        ctx,
+      );
+    await Promise.all([preflight(), preflight()]);
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    assert.equal(
+      pi.sent.some((message: any) =>
+        String(message?.content ?? "").includes("queued until the turn starts"),
+      ),
+      false,
+    );
+
+    await pi.events.get("agent_start")![0](undefined, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    assert.equal(
+      pi.sent.some((message: any) =>
+        String(message?.content ?? "").includes("queued until the turn starts"),
+      ),
+      false,
+    );
+
+    await pi.events.get("agent_start")![0](undefined, ctx);
+    await t.waitFor(() =>
+      assert.ok(
+        pi.sent.some((message: any) =>
+          String(message?.content ?? "").includes(
+            "queued until the turn starts",
+          ),
+        ),
+      ),
+    );
+    assert.equal(
+      listChiefMessagePaths(supervisionRuntime(), sessionId).length,
+      0,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }
@@ -290,11 +608,11 @@ for (const reachable of [true, false]) {
       `manager-bootstrap-${randomUUID()}.sock`,
     );
     const runtime = supervisionRuntime();
-    const managerSessionFile = join(
+    let managerSessionFile = join(
       tmpdir(),
       `pi-herdsman-manager-${randomUUID()}.jsonl`,
     );
-    const managerAgent = {
+    const managerAgent: any = {
       agent_session: {
         source: "herdr:pi",
         agent: "pi",
@@ -330,13 +648,20 @@ for (const reachable of [true, false]) {
         code: 0,
       };
     };
-    const pi = fakeChiefPi({ activeTools: ["read"], exec });
+    let managerHistory: unknown[] = [];
+    const pi = fakeChiefPi({
+      activeTools: ["read"],
+      exec,
+      sendMessage: (message) => managerHistory.push(message),
+    });
     registerExtension!(pi.pi as never);
     const ctx = fakeContext(pi.entries) as any;
+    managerHistory = pi.entries;
     if (reachable)
       ctx.sessionManager = {
         ...ctx.sessionManager,
         getSessionFile: () => managerSessionFile,
+        getBranch: () => managerHistory,
       };
     const notices: string[] = [];
     ctx.ui.notify = (message: string) => notices.push(message);
@@ -352,6 +677,69 @@ for (const reachable of [true, false]) {
         assert.equal(state.role, "manager");
         assert.ok(realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)));
         const leadId = randomUUID();
+        const branch = "smoke/manager-replay";
+        const record = {
+          version: 1 as const,
+          id: randomUUID(),
+          repoKey: "repo-key",
+          branch,
+          fromSessionId: leadId,
+          text: "retained project review handoff",
+          createdAt: Date.now(),
+        };
+        writeProjectAssignment(runtime, {
+          version: 1,
+          id: leadId,
+          repoKey: "repo-key",
+          branch,
+          text: "replay assignment",
+        });
+        writeProjectMessage(record, runtime);
+        const projectDeliveries = () =>
+          pi.sent.filter(
+            (message: any) =>
+              message?.customType === "pi-herdsman-project_message" &&
+              message?.details?.id === record.id,
+          );
+        await new Promise((resolve) => setTimeout(resolve, 650));
+        assert.equal(projectDeliveries().length, 1);
+        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), [
+          record,
+        ]);
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        assert.equal(
+          projectDeliveries().length,
+          1,
+          "same Manager must not receive a duplicate",
+        );
+
+        await pi.commandOptions.get("manager").handler("leave", ctx);
+        const replacementId = randomUUID();
+        managerSessionFile = join(tmpdir(), `${replacementId}.jsonl`);
+        managerAgent.agent_session.value = managerSessionFile;
+        managerHistory = [];
+        ctx.sessionManager = {
+          ...ctx.sessionManager,
+          getSessionId: () => replacementId,
+          getSessionFile: () => managerSessionFile,
+          getBranch: () => managerHistory,
+        };
+        await pi.commandOptions.get("manager").handler("", ctx);
+        await new Promise((resolve) => setTimeout(resolve, 650));
+        assert.equal(
+          projectDeliveries().length,
+          2,
+          "replacement Manager receives retained message",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        assert.equal(
+          projectDeliveries().length,
+          2,
+          "replacement Manager history suppresses replay duplicates",
+        );
+        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), [
+          record,
+        ]);
         process.env.HERDR_PANE_ID = "lead-pane";
         process.env.HERDR_TAB_ID = "lead-tab";
         const lead = fakeChiefPi({ exec });
@@ -372,12 +760,15 @@ for (const reachable of [true, false]) {
               undefined,
               leadCtx,
             );
-          assert.equal(result.details.chiefSessionId, LEAD_SESSION_ID);
-          assert.ok(
-            listChiefMessagePaths(runtime, LEAD_SESSION_ID).some(
-              (path) => readChiefMessage(path).text === "reachable before chat",
-            ),
+          assert.equal(result.details.branch, branch);
+          assert.ok(typeof result.details.id === "string");
+          const saved = listProjectMessages(runtime, "repo-key", branch).find(
+            (message) => message.id === result.details.id,
           );
+          assert.ok(saved);
+          assert.equal(saved.id, result.details.id);
+          assert.equal(saved.fromSessionId, leadId);
+          assert.equal(saved.text, "reachable before chat");
         } finally {
           await lead.events.get("session_shutdown")?.[0]();
           process.env.HERDR_PANE_ID = "root-pane";
@@ -473,7 +864,7 @@ for (const scenario of [
         toSessionId: sessionId,
         leadSessionId: sessionId,
         branch: assignment.branch,
-        text: `${assignment.text}\n\nWhen this work is complete, report its result with supervisor_result. Use supervisor_message only for nonterminal progress or coordination.`,
+        text: `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nUse supervisor_message when the Manager must decide or act, when material scope\nor assumptions change, or when the branch is ready for review. Routine status\nand acknowledgements stay local. The project remains open until the Manager\ncompletes or discards it.`,
         createdAt: Date.now(),
       },
       runtime,
@@ -630,29 +1021,20 @@ for (const scenario of [
         );
         assert.equal(realFs.existsSync(sessionPath), true);
       }
-      const report = () =>
-        pi.tools
-          .find((tool) => tool.name === "supervisor_result")!
-          .execute(
-            "result",
-            { result: "completed in assigned checkout" },
-            undefined,
-            undefined,
-            ctx,
-          );
-      if (scenario.moved) {
-        await assert.rejects(
-          report(),
-          /not running in its project branch worktree/,
+      const saved = await pi.tools
+        .find((tool) => tool.name === "supervisor_message")!
+        .execute(
+          "message",
+          { message: "Ready for review" },
+          undefined,
+          undefined,
+          ctx,
         );
-        assert.equal(realFs.existsSync(resultPath(sessionId)), false);
-      } else if (!scenario.mismatchedPath && !scenario.prospectivePath) {
-        await report();
-        assert.match(
-          readFileSync(resultPath(sessionId), "utf8"),
-          /completed in assigned checkout/,
-        );
-      }
+      assert.match(JSON.stringify(saved), /Project message saved for Manager/);
+      assert.equal(
+        listProjectMessages(runtime, "repo-key", assignment.branch).length,
+        1,
+      );
     } finally {
       if (scenario.mismatchedPath) realFs.rmSync(sessionPath, { force: true });
       if (scenario.prospectivePath) {
@@ -668,132 +1050,6 @@ for (const scenario of [
       setLeadEnvironment();
     }
   });
-
-test("Lead cannot persist a result after discard at the final preparation await", async (t) => {
-  setLeadEnvironment();
-  const workspace = `linked-${randomUUID()}`;
-  const session = randomUUID();
-  const branch = "smoke/result-discard-race";
-  process.env.HERDR_WORKSPACE_ID = workspace;
-  process.env.HERDR_PANE_ID = "lead-pane";
-  process.env.HERDR_TAB_ID = "lead-tab";
-  process.env.HERDR_SOCKET_PATH = join(
-    tmpdir(),
-    `result-discard-${randomUUID()}.sock`,
-  );
-  const runtime = supervisionRuntime();
-  let reporting = false;
-  let topologyPaused = false;
-  let removeOnPreparation = false;
-  let removedAtPreparation = false;
-  let resumeTopology: () => void = () => {};
-  const topologyGate = new Promise<void>((resolve) => {
-    resumeTopology = resolve;
-  });
-  const exec = async (_command: string, args: string[]) => {
-    let result: unknown = {};
-    if (args[0] === "workspace" && args[1] === "get")
-      result = {
-        workspace: {
-          worktree: {
-            repo_key: "repo-key",
-            is_linked_worktree: args[2] === workspace,
-          },
-        },
-      };
-    else if (args[0] === "worktree" && args[1] === "list") {
-      if (reporting && args[args.indexOf("--workspace") + 1] === WORKSPACE) {
-        topologyPaused = true;
-        await topologyGate;
-        removeOnPreparation = true;
-      }
-      result = {
-        source: {
-          repo_key: "repo-key",
-          repo_name: "project",
-          source_workspace_id: WORKSPACE,
-        },
-        worktrees: [{ branch, open_workspace_id: workspace }],
-      };
-    } else if (isApiSnapshot(args))
-      result = { snapshot: { agents: [], panes: [] } };
-    else if (isAgentList(args))
-      result = {
-        agents: [
-          {
-            agent_session: {
-              source: "herdr:pi",
-              agent: "pi",
-              kind: "id",
-              value: session,
-            },
-            workspace_id: workspace,
-            pane_id: "lead-pane",
-            tab_id: "lead-tab",
-          },
-        ],
-      };
-    return {
-      stdout: JSON.stringify({ id: AGENT_ID, result }),
-      stderr: "",
-      code: 0,
-    };
-  };
-  const pi = fakeChiefPi({ activeTools: ["read"], exec });
-  registerExtension!(pi.pi as never);
-  const ctx = fakeContext() as any;
-  ctx.sessionManager = {
-    ...ctx.sessionManager,
-    getSessionId: () => session,
-    getSessionFile: () => `/tmp/${session}.jsonl`,
-  };
-  Object.defineProperty(ctx, "cwd", {
-    get: () => {
-      if (removeOnPreparation) {
-        removeOnPreparation = false;
-        queueMicrotask(() => {
-          removeProjectAssignment(runtime, "repo-key", branch);
-          removedAtPreparation = true;
-        });
-      }
-      return "/tmp";
-    },
-  });
-  try {
-    writeProjectAssignment(runtime, {
-      version: 1,
-      id: session,
-      repoKey: "repo-key",
-      branch,
-      text: "finish the project",
-    });
-    await pi.events.get("session_start")![0](undefined, ctx);
-    reporting = true;
-    const report = pi.tools
-      .find((tool) => tool.name === "supervisor_result")!
-      .execute("result", { result: "late result" }, undefined, undefined, ctx);
-    try {
-      await t.waitFor(() => assert.equal(topologyPaused, true), {
-        timeout: 3000,
-      });
-      assert.equal(realFs.existsSync(resultPath(session)), false);
-    } finally {
-      resumeTopology();
-    }
-    await assert.rejects(
-      report,
-      /Project assignment changed before result could be saved/,
-    );
-    assert.equal(removedAtPreparation, true);
-    assert.deepEqual(listProjectAssignments(runtime, "repo-key"), []);
-    assert.equal(realFs.existsSync(resultPath(session)), false);
-  } finally {
-    resumeTopology();
-    await pi.events.get("session_shutdown")?.[0]();
-    delete process.env.HERDR_SOCKET_PATH;
-    setLeadEnvironment();
-  }
-});
 
 test("Manager retry correlates an ambiguous worktree create by persisted branch", async (t) => {
   setLeadEnvironment();
@@ -1203,71 +1459,27 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       getSessionFile: () => `/tmp/${childSession}.jsonl`,
     };
     await leadPi.events.get("session_start")![0](undefined, leadContext);
-    const resultTool = leadPi.tools.find(
-      (tool) => tool.name === "supervisor_result",
-    )!;
-    const result = await resultTool.execute(
-      "result",
-      { result: "finished without a Manager" },
-      undefined,
-      undefined,
-      leadContext,
-    );
-    assert.equal(result.details.queued, false);
-    assert.equal(result.details.branch, pending.branch);
-    assert.equal("result" in result.details, false);
+    const message = await leadPi.tools
+      .find((tool) => tool.name === "supervisor_message")!
+      .execute(
+        "message",
+        { message: "Ready for review without Manager" },
+        undefined,
+        undefined,
+        leadContext,
+      );
+    assert.match(JSON.stringify(message), /Project message saved for Manager/);
     assert.equal(
-      JSON.stringify(result.content).includes(childSession),
-      false,
-      JSON.stringify(result.content),
+      listProjectMessages(supervisionRuntime(), "repo-key", pending.branch)[0]
+        ?.text,
+      "Ready for review without Manager",
     );
     assert.ok(
       listProjectAssignments(supervisionRuntime(), "repo-key").some(
-        (assignment) => assignment.id === pending.id,
+        (item) => item.id === pending.id,
       ),
     );
-    assert.match(
-      readFileSync(resultPath(childSession), "utf8"),
-      /finished without a Manager/,
-    );
     await leadPi.events.get("session_shutdown")?.[0]();
-
-    process.env.HERDR_PANE_ID = "root-pane";
-    process.env.HERDR_TAB_ID = "root-tab";
-    process.env.HERDR_WORKSPACE_ID = WORKSPACE;
-    await pi.commandOptions.get("manager").handler("", ctx);
-    await pi.events.get("before_agent_start")![0](
-      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-      ctx,
-    );
-    await t.waitFor(
-      () => {
-        assert.ok(
-          pi.sent.some(
-            (message: any) =>
-              message?.customType === "pi-herdsman-report_result" &&
-              JSON.stringify(message).includes("finished without a Manager"),
-          ),
-        );
-        assert.ok(
-          !listProjectAssignments(supervisionRuntime(), "repo-key").some(
-            (assignment) => assignment.id === pending.id,
-          ),
-        );
-      },
-      { timeout: 3000 },
-    );
-    const notifications = pi.sent.filter(
-      (message: any) => message.customType === "pi-herdsman-report_result",
-    );
-    assert.equal(notifications.length, 1);
-    assert.equal(notifications[0].details.branch, pending.branch);
-    assert.ok(notifications[0].content.includes(pending.branch));
-    assert.equal(notifications[0].content.includes(childSession), false);
-    assert.match(
-      readFileSync(resultPath(childSession), "utf8"),
-      /finished without a Manager/,
-    );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -1298,22 +1510,18 @@ async function runManagerStartupScenario(
     | "preexisting-closed"
     | "occupied"
     | "multiple"
-    | "stale-placement"
     | "discard-pane-missing"
     | "discard-pi"
-    | "discard-result"
-    | "discard-result-final"
     | "invalid-topology"
     | "concurrent"
     | "active-loss"
     | "active-live"
-    | "active-result"
-    | "active-result-streaming"
-    | "active-result-periodic"
     | "active-missing"
+    | "active-missing-no-session"
     | "active-closed"
     | "close-resume"
     | "active-discard"
+    | "active-complete"
     | "close-failure"
     | "unassigned-close",
   projectTrusted = false,
@@ -1336,16 +1544,18 @@ async function runManagerStartupScenario(
   const childSessionPath = join(tmpdir(), `lead-${randomUUID()}.jsonl`);
   const childPath = "/tmp/manager-fresh-child";
   let recipientIdle = true;
-  let armAuthorizationRace = false;
-  let authorizationWorktreeLists = 0;
-  let reportResultSends = 0;
   let created = false;
   let createdBranch = "";
   let shellReady = false;
   let started =
     mode === "recovery" ||
     mode === "active-live" ||
-    ["close-resume", "active-discard", "close-failure"].includes(mode);
+    [
+      "close-resume",
+      "active-discard",
+      "active-complete",
+      "close-failure",
+    ].includes(mode);
   let startupObservations = 0;
   let identityObservations = 0;
   let cleanupOwnershipObservations = 0;
@@ -1367,12 +1577,7 @@ async function runManagerStartupScenario(
   let worktreeListCalls = 0;
   let invalidTopologyCall = Number.POSITIVE_INFINITY;
   let inspectedDiscardPane = false;
-  let finalSnapshotPaused = false;
   let duplicateWorktree = false;
-  let resumeFinalSnapshot: () => void = () => {};
-  const finalSnapshotGate = new Promise<void>((resolve) => {
-    resumeFinalSnapshot = resolve;
-  });
   const respond = (result: any) => ({
     stdout: JSON.stringify({
       id: AGENT_ID,
@@ -1396,17 +1601,6 @@ async function runManagerStartupScenario(
     tab_id: "root-tab",
   };
   const exec = async (command: string, args: string[]) => {
-    if (
-      mode === "active-result-streaming" &&
-      armAuthorizationRace &&
-      command === "herdr" &&
-      args[0] === "worktree" &&
-      args[1] === "list" &&
-      ++authorizationWorktreeLists === 7
-    ) {
-      armAuthorizationRace = false;
-      recipientIdle = false;
-    }
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
@@ -1454,7 +1648,9 @@ async function runManagerStartupScenario(
           : created
             ? (mode === "unassigned-close"
                 ? [{ branch: "smoke/unassigned" }]
-                : mode === "active-discard" || mode === "discard-pane-missing"
+                : mode === "active-discard" ||
+                    mode === "active-complete" ||
+                    mode === "discard-pane-missing"
                   ? [{ branch: createdBranch }]
                   : listProjectAssignments(supervisionRuntime(), "repo-key")
               ).map((assignment) => ({
@@ -1472,6 +1668,32 @@ async function runManagerStartupScenario(
       created = true;
       const branch = args[args.indexOf("--branch") + 1];
       assert.ok(branch);
+      if (mode === "active-missing")
+        assert.deepEqual(args, [
+          "worktree",
+          "create",
+          "--workspace",
+          WORKSPACE,
+          "--branch",
+          branch,
+          "--no-focus",
+          "--base",
+          branch,
+          "--path",
+          "/old/exact/worktree",
+        ]);
+      if (mode === "active-missing-no-session")
+        assert.deepEqual(args, [
+          "worktree",
+          "create",
+          "--workspace",
+          WORKSPACE,
+          "--branch",
+          branch,
+          "--no-focus",
+          "--base",
+          branch,
+        ]);
       createdBranch = branch;
       return respond({
         workspace: { workspace_id: childWorkspace },
@@ -1486,14 +1708,7 @@ async function runManagerStartupScenario(
         mode !== "active-closed" &&
         mode !== "preexisting" &&
         mode !== "preexisting-closed" &&
-        ![
-          "active-loss",
-          "active-live",
-          "active-result",
-          "active-result-streaming",
-          "active-result-periodic",
-          "recovery",
-        ].includes(mode)
+        !["active-loss", "active-live", "recovery"].includes(mode)
       )
         throw new Error("fresh worktree must not be opened again");
       return respond({
@@ -1507,10 +1722,6 @@ async function runManagerStartupScenario(
       });
     }
     if (command === "herdr" && args[0] === "pane" && args[1] === "list") {
-      if (mode === "discard-result" && args.includes("--workspace")) {
-        mkdirSync(dirname(resultPath(childSession)), { recursive: true });
-        writeFileSync(resultPath(childSession), "completed during discard");
-      }
       return respond({
         panes: [
           {
@@ -1537,6 +1748,7 @@ async function runManagerStartupScenario(
           ...(([
             "close-resume",
             "active-discard",
+            "active-complete",
             "close-failure",
             "unassigned-close",
           ].includes(mode) ||
@@ -1558,12 +1770,7 @@ async function runManagerStartupScenario(
       args[1] === "process-info"
     ) {
       if (
-        [
-          "discard-pane-missing",
-          "discard-pi",
-          "discard-result",
-          "discard-result-final",
-        ].includes(mode) &&
+        ["discard-pane-missing", "discard-pi"].includes(mode) &&
         args[3] === "child-pane"
       ) {
         inspectedDiscardPane = true;
@@ -1715,10 +1922,6 @@ async function runManagerStartupScenario(
       });
     }
     if (command === "herdr" && isApiSnapshot(args)) {
-      if (mode === "discard-result-final" && inspectedDiscardPane) {
-        finalSnapshotPaused = true;
-        await finalSnapshotGate;
-      }
       const currentAssignment = listProjectAssignments(
         supervisionRuntime(),
         "repo-key",
@@ -1983,31 +2186,11 @@ async function runManagerStartupScenario(
   const pi = fakeChiefPi({
     activeTools: ["read"],
     exec,
-    persistMessages: mode === "active-result",
-    sendMessage: (message: any) => {
-      if (
-        mode === "active-result-streaming" &&
-        message?.customType === "pi-herdsman-report_result"
-      ) {
-        // Pi 0.99.2's extension send callback is fire-and-forget; message_end
-        // adds the durable session entry later, simulated explicitly below.
-        reportResultSends++;
-        recipientIdle = false;
-      }
-    },
   });
   registerExtension!(pi.pi as never);
-  if (mode === "active-result-periodic")
-    t!.mock.timers.enable({ apis: ["setInterval"] });
   try {
-    const activeBranch: any[] =
-      mode === "active-result-streaming" ? [] : pi.entries;
-    const ctx = fakeContext(
-      ["active-result", "active-result-streaming"].includes(mode)
-        ? pi.entries
-        : [],
-      activeBranch,
-    ) as any;
+    const activeBranch: any[] = pi.entries;
+    const ctx = fakeContext(pi.entries, activeBranch) as any;
     ctx.isIdle = () => recipientIdle;
     if (["occupied", "multiple"].includes(mode))
       writeLeadCoordinationState(supervisionRuntime(), {
@@ -2028,28 +2211,22 @@ async function runManagerStartupScenario(
     ctx.isProjectTrusted = () => projectTrusted;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
-    if (mode === "active-result-periodic")
-      await pi.events.get("before_agent_start")![0](
-        { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-        ctx,
-      );
     const staff = pi.tools.find((tool) => tool.name === "staff_delegate")!;
     const staleId = randomUUID();
     const activeMode = [
       "active-loss",
       "active-live",
-      "active-result",
-      "active-result-streaming",
-      "active-result-periodic",
       "active-missing",
+      "active-missing-no-session",
       "active-closed",
       "close-resume",
       "active-discard",
+      "active-complete",
       "close-failure",
     ].includes(mode);
     if (activeMode) {
       childSession = staleId;
-      created = mode !== "active-missing";
+      created = !["active-missing", "active-missing-no-session"].includes(mode);
       if (created) createdBranch = "smoke/recover";
       writeProjectAssignment(supervisionRuntime(), {
         version: 1,
@@ -2058,16 +2235,13 @@ async function runManagerStartupScenario(
         branch: "smoke/recover",
         text: "recover exact Lead",
       });
-      if (
-        [
-          "active-result",
-          "active-result-streaming",
-          "active-result-periodic",
-        ].includes(mode)
-      ) {
-        mkdirSync(dirname(resultPath(staleId)), { recursive: true });
-        writeFileSync(resultPath(staleId), "completed");
-      }
+      if (mode === "active-missing")
+        nativeSessions.set(staleId, {
+          id: staleId,
+          path: `/tmp/${staleId}.jsonl`,
+          cwd: "/old/exact/worktree",
+          entries: [],
+        });
       if (mode === "active-live")
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
@@ -2076,7 +2250,14 @@ async function runManagerStartupScenario(
           piSessionId: staleId,
           updatedAt: Date.now(),
         });
-      if (["close-resume", "active-discard", "close-failure"].includes(mode))
+      if (
+        [
+          "close-resume",
+          "active-discard",
+          "active-complete",
+          "close-failure",
+        ].includes(mode)
+      )
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
           role: "lead",
@@ -2084,16 +2265,22 @@ async function runManagerStartupScenario(
           piSessionId: staleId,
           updatedAt: Date.now(),
         });
+      if (["active-discard", "active-complete"].includes(mode))
+        writeProjectMessage(
+          {
+            version: 1,
+            id: randomUUID(),
+            repoKey: "repo-key",
+            branch: "smoke/recover",
+            fromSessionId: staleId,
+            text: "retained before resolution",
+            createdAt: Date.now(),
+          },
+          supervisionRuntime(),
+        );
     }
     if (
-      [
-        "stale-placement",
-        "invalid-topology",
-        "discard-pane-missing",
-        "discard-pi",
-        "discard-result",
-        "discard-result-final",
-      ].includes(mode)
+      ["invalid-topology", "discard-pane-missing", "discard-pi"].includes(mode)
     )
       writeProjectAssignment(supervisionRuntime(), {
         version: 1,
@@ -2102,14 +2289,7 @@ async function runManagerStartupScenario(
         branch: "smoke/vanished",
         text: "recover vanished placement",
       });
-    if (
-      [
-        "discard-pane-missing",
-        "discard-pi",
-        "discard-result",
-        "discard-result-final",
-      ].includes(mode)
-    ) {
+    if (["discard-pane-missing", "discard-pi"].includes(mode)) {
       childSession = staleId;
       created = true;
       createdBranch = "smoke/vanished";
@@ -2119,8 +2299,7 @@ async function runManagerStartupScenario(
       staff.execute(
         "delegate",
         {
-          ...(!["stale-placement", "invalid-topology"].includes(mode) &&
-          !activeMode
+          ...(!["invalid-topology"].includes(mode) && !activeMode
             ? { task: "deliver the fresh assignment" }
             : {}),
           ...([
@@ -2132,7 +2311,7 @@ async function runManagerStartupScenario(
             ? { branch: "smoke/existing" }
             : {}),
           ...(mode === "concurrent" ? { branch: "smoke/concurrent" } : {}),
-          ...(["stale-placement", "invalid-topology"].includes(mode)
+          ...(["invalid-topology"].includes(mode)
             ? { branch: "smoke/vanished" }
             : activeMode
               ? { branch: "smoke/recover" }
@@ -2159,7 +2338,7 @@ async function runManagerStartupScenario(
         [],
       );
       const closed = await pi.tools
-        .find((tool) => tool.name === "staff_close")!
+        .find((tool) => tool.name === "staff_stop")!
         .execute("close", { session: staleId }, undefined, undefined, ctx);
       assert.equal(closed.details.ok, true);
       assert.equal(closed.details.session, staleId);
@@ -2193,599 +2372,217 @@ async function runManagerStartupScenario(
       return;
     }
     if (activeMode) {
-      try {
-        if (mode === "active-result-periodic") {
-          t!.mock.timers.tick(2000);
-          // The interval callback intentionally fire-and-forgets an async refresh.
-          // Yield once so its promise chain drains before asserting its effects.
-          await new Promise<void>((resolve) => setImmediate(resolve));
+      if (mode === "active-live") {
+        const running = await execute();
+        assert.equal(running.details.already_running, true);
+        assert.equal(running.details.session, staleId);
+        const messages = () =>
+          listChiefMessagePaths(supervisionRuntime(), staleId)
+            .map((path) => readChiefMessage(path))
+            .filter((message) => message.kind === "project_assignment");
+        assert.deepEqual(
+          messages().map((message) => message.id),
+          [staleId],
+        );
+        const delivered: any[] = [];
+        const entries: any[] = [];
+        const drain = () =>
+          drainCoordinationInbox({
+            runtime: supervisionRuntime(),
+            sessionId: staleId,
+            isAuthorized: (record) =>
+              record.kind === "project_assignment" && record.id === staleId,
+            isDelivered: (id) =>
+              entries.some(
+                (entry) =>
+                  entry?.customType?.startsWith?.("pi-herdsman-") &&
+                  entry?.details?.id === id,
+              ),
+            sendMessage: (message) => delivered.push(message),
+          });
+        assert.equal(await drain(), 1);
+        assert.equal(delivered[0].customType, "pi-herdsman-project_assignment");
+        assert.equal(delivered[0].details.id, staleId);
+        entries.push(delivered[0]);
+        await execute();
+        assert.deepEqual(
+          messages().map((message) => message.id),
+          [staleId],
+        );
+        assert.equal(await drain(), 0);
+        assert.equal(delivered.length, 1);
+      } else if (
+        [
+          "close-resume",
+          "active-discard",
+          "active-complete",
+          "close-failure",
+        ].includes(mode)
+      ) {
+        const control = (name: string, value: unknown) =>
+          pi.tools
+            .find((tool) => tool.name === name)!
+            .execute(name, value, undefined, undefined, ctx);
+        if (mode === "close-failure") {
+          await assert.rejects(control("staff_stop", { session: staleId }));
           assert.equal(
             listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
             staleId,
           );
-          assert.ok(
-            listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
-              (path) => readChiefMessage(path).kind === "report_result",
-            ),
-          );
-        } else if (mode === "active-live") {
-          const running = await execute();
-          assert.equal(running.details.already_running, true);
-          assert.equal(running.details.session, staleId);
-          const messages = () =>
-            listChiefMessagePaths(supervisionRuntime(), staleId)
-              .map((path) => readChiefMessage(path))
-              .filter((message) => message.kind === "project_assignment");
-          assert.deepEqual(
-            messages().map((message) => message.id),
-            [staleId],
-          );
-          const delivered: any[] = [];
-          const entries: any[] = [];
-          const drain = () =>
-            drainCoordinationInbox({
-              runtime: supervisionRuntime(),
-              sessionId: staleId,
-              isAuthorized: (record) =>
-                record.kind === "project_assignment" && record.id === staleId,
-              isDelivered: (id) =>
-                entries.some(
-                  (entry) =>
-                    entry?.customType?.startsWith?.("pi-herdsman-") &&
-                    entry?.details?.id === id,
-                ),
-              sendMessage: (message) => delivered.push(message),
-            });
-          assert.equal(await drain(), 1);
+        } else if (mode === "close-resume") {
+          const closed = await control("staff_stop", { session: staleId });
+          assert.equal(closed.details.branch, "smoke/recover");
           assert.equal(
-            delivered[0].customType,
-            "pi-herdsman-project_assignment",
+            listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
+            staleId,
           );
-          assert.equal(delivered[0].details.id, staleId);
-          entries.push(delivered[0]);
-          await execute();
-          assert.deepEqual(
-            messages().map((message) => message.id),
-            [staleId],
+          assert.equal(started, false);
+          assert.equal(created, true);
+          assert.ok(
+            JSON.parse(
+              (await exec("herdr", ["pane", "list"])).stdout,
+            ).result.panes.some((pane: any) => pane.pane_id === "child-pane"),
           );
-          assert.equal(await drain(), 0);
-          assert.equal(delivered.length, 1);
-        } else if (
-          ["close-resume", "active-discard", "close-failure"].includes(mode)
-        ) {
-          const control = (name: string, value: unknown) =>
-            pi.tools
-              .find((tool) => tool.name === name)!
-              .execute(name, value, undefined, undefined, ctx);
-          if (mode === "close-failure") {
-            await assert.rejects(control("staff_close", { session: staleId }));
-            assert.equal(
-              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
-              staleId,
-            );
-          } else if (mode === "close-resume") {
-            const closed = await control("staff_close", { session: staleId });
-            assert.equal(closed.details.branch, "smoke/recover");
-            assert.equal(
-              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
-              staleId,
-            );
-            assert.equal(started, false);
-            assert.equal(created, true);
-            assert.ok(
-              JSON.parse(
-                (await exec("herdr", ["pane", "list"])).stdout,
-              ).result.panes.some((pane: any) => pane.pane_id === "child-pane"),
-            );
-            started = true;
-            const resumed = await execute();
-            assert.equal(resumed.details.session, staleId);
-            assert.equal(
-              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
-              staleId,
-            );
-          } else {
-            const discarded = await control("staff_discard", {
-              branch: "smoke/recover",
-            });
-            assert.equal(discarded.details.ok, true);
-            assert.deepEqual(
-              listProjectAssignments(supervisionRuntime(), "repo-key"),
-              [],
-            );
-            assert.equal(created, true);
-            assert.equal(createdBranch, "smoke/recover");
-            assert.equal(started, false);
-            assert.ok(
-              JSON.parse(
-                (await exec("herdr", ["pane", "list"])).stdout,
-              ).result.panes.some((pane: any) => pane.pane_id === "child-pane"),
-            );
-            assert.ok(
-              JSON.parse(
-                (await exec("herdr", ["worktree", "list"])).stdout,
-              ).result.worktrees.some(
-                (worktree: any) =>
-                  worktree.branch === "smoke/recover" &&
-                  worktree.path === childPath,
-              ),
-            );
-          }
-          return;
-        } else if (mode === "active-missing") {
-          await assert.rejects(execute(), /assignment was preserved/i);
-          assert.deepEqual(
-            listProjectAssignments(supervisionRuntime(), "repo-key"),
-            [listProjectAssignments(supervisionRuntime(), "repo-key")[0]],
+          started = true;
+          const resumed = await execute();
+          assert.equal(resumed.details.session, staleId);
+          assert.equal(
+            listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
+            staleId,
           );
         } else {
-          if (mode === "active-result-streaming") recipientIdle = false;
-          const recovered = await execute();
-          assert.equal(recovered.details.session, staleId);
-          assert.equal(recovered.details.branch, "smoke/recover");
-          if (mode === "active-result-streaming") {
-            assert.equal(recovered.details.status, "finished");
-            const reportResults = () =>
-              listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID)
-                .map((path) => readChiefMessage(path))
-                .filter((message) => message.kind === "report_result");
-            assert.equal(reportResults().length, 1);
-            const queuedResult = reportResults()[0]!;
-            assert.equal(
-              readFileSync(resultPath(staleId), "utf8"),
-              "completed",
-            );
-
-            const worktreeListsWhileBusy = worktreeListCalls;
-            await new Promise<void>((resolve) => setTimeout(resolve, 650));
-            assert.equal(worktreeListCalls, worktreeListsWhileBusy);
-            assert.equal(reportResultSends, 0);
-            assert.equal(reportResults().length, 1);
-            assert.equal(
-              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
-              staleId,
-            );
-
-            recipientIdle = true;
-            armAuthorizationRace = true;
-            // A Manager inbox poll refreshes five topology views before lease
-            // and report-result authorization perform their two lookups.
-            await t!.waitFor(
-              () => assert.equal(authorizationWorktreeLists, 7),
-              { timeout: 3000 },
-            );
-            await new Promise<void>((resolve) => setTimeout(resolve, 50));
-            assert.equal(reportResultSends, 0);
-            assert.equal(reportResults().length, 1);
-            assert.equal(
-              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
-              staleId,
-            );
-
-            const receiptCases = [
-              {
-                label: "record ID",
-                mutate: (details: any) => ({
-                  ...details,
-                  id: randomUUID(),
-                }),
-              },
-              {
-                label: "lease ID",
-                mutate: (details: any) => ({
-                  ...details,
-                  leaseId: randomUUID(),
-                }),
-              },
-              {
-                label: "sender session",
-                mutate: (details: any) => ({
-                  ...details,
-                  fromSessionId: randomUUID(),
-                }),
-              },
-              {
-                label: "lead session",
-                mutate: (details: any) => ({
-                  ...details,
-                  leadSessionId: randomUUID(),
-                }),
-              },
-              {
-                label: "unexpected ask ID",
-                mutate: (details: any) => ({
-                  ...details,
-                  askId: randomUUID(),
-                }),
-              },
-              {
-                label: "branch",
-                mutate: (details: any) => ({
-                  ...details,
-                  branch: "smoke/other-branch",
-                }),
-              },
-              {
-                label: "custom type",
-                customType: "pi-herdsman-lead_message",
-                mutate: (details: any) => details,
-              },
-              {
-                label: "recipient session",
-                foreignRecipient: true,
-                mutate: (details: any) => details,
-              },
-            ];
-            const hasExactReceipt = (record: any) =>
-              record.toSessionId === ctx.sessionManager.getSessionId() &&
-              activeBranch.some(
-                (entry: any) =>
-                  entry?.customType === `pi-herdsman-${record.kind}` &&
-                  entry?.details?.id === record.id &&
-                  entry?.details?.leaseId === record.leaseId &&
-                  entry?.details?.fromSessionId === record.fromSessionId &&
-                  entry?.details?.leadSessionId === record.leadSessionId &&
-                  entry?.details?.askId === record.askId &&
-                  entry?.details?.branch === record.branch,
-              );
-            const assignmentExists = () =>
-              listProjectAssignments(supervisionRuntime(), "repo-key").some(
-                (assignment) => assignment.id === staleId,
-              );
-            const reportResultExists = (id: string) =>
-              reportResults().some((record) => record.id === id);
-            const resultRecord = (id: string) => ({
-              version: 1 as const,
-              id,
-              leaseId: queuedResult.leaseId,
-              kind: "report_result" as const,
-              fromSessionId: staleId,
-              toSessionId: LEAD_SESSION_ID,
-              leadSessionId: staleId,
-              branch: queuedResult.branch,
-              text: queuedResult.text,
-              createdAt: Date.now(),
-            });
-
-            for (const [index, receiptCase] of receiptCases.entries()) {
-              let record = queuedResult;
-              if (index > 0) {
-                writeProjectAssignment(supervisionRuntime(), {
-                  version: 1,
-                  id: staleId,
-                  repoKey: "repo-key",
-                  branch: queuedResult.branch!,
-                  text: "recover exact Lead",
-                });
-                record = resultRecord(randomUUID());
-                writeChiefMessage(record, supervisionRuntime());
-              }
-
-              const expectedDetails = {
-                id: record.id,
-                leaseId: record.leaseId,
-                fromSessionId: record.fromSessionId,
-                leadSessionId: record.leadSessionId,
-                branch: record.branch,
-              };
-              const receipt = {
-                type: "custom_message",
-                customType:
-                  receiptCase.customType ?? "pi-herdsman-report_result",
-                content: `stale receipt with wrong ${receiptCase.label}`,
-                display: true,
-                details: receiptCase.mutate(expectedDetails),
-              };
-              if (receiptCase.foreignRecipient) {
-                const foreignSession = {
-                  sessionId: randomUUID(),
-                  entries: [receipt],
-                };
-                assert.notEqual(
-                  foreignSession.sessionId,
-                  ctx.sessionManager.getSessionId(),
-                );
-                assert.equal(foreignSession.entries.includes(receipt), true);
-                assert.equal(pi.entries.includes(receipt), false);
-              } else {
-                pi.entries.push(receipt);
-              }
-              assert.equal(hasExactReceipt(record), false);
-              recipientIdle = true;
-              const expectedSendCount = reportResultSends + 1;
-              await t!.waitFor(
-                () => assert.equal(reportResultSends, expectedSendCount),
-                { timeout: 3000 },
-              );
-              await t!.waitFor(
-                () => {
-                  assert.equal(reportResultExists(record.id), true);
-                  assert.equal(assignmentExists(), true);
-                },
-                { timeout: 3000 },
-              );
-              assert.equal(hasExactReceipt(record), false);
-
-              if (!receiptCase.foreignRecipient) {
-                const receiptIndex = pi.entries.indexOf(receipt);
-                assert.notEqual(receiptIndex, -1);
-                pi.entries.splice(receiptIndex, 1);
-              }
-              const delivery = pi.sentMessageCalls.find(
-                (call: any) =>
-                  (call.message as any)?.customType ===
-                    "pi-herdsman-report_result" &&
-                  (call.message as any)?.details?.id === record.id,
-              );
-              assert.ok(delivery);
-              const sentResult = delivery.message as any;
-              assert.deepEqual(delivery.options, {
-                deliverAs: "followUp",
-                triggerTurn: true,
-              });
-              const exactReceipt = {
-                type: "custom_message",
-                customType: sentResult.customType,
-                content: sentResult.content,
-                display: sentResult.display,
-                details: { ...sentResult.details },
-              };
-              pi.entries.push(exactReceipt);
-
-              recipientIdle = true;
-              if (index === receiptCases.length - 1) {
-                await new Promise<void>((resolve) => setTimeout(resolve, 600));
-                assert.equal(reportResultExists(record.id), true);
-                assert.equal(assignmentExists(), true);
-                assert.equal(hasExactReceipt(record), false);
-              }
-              activeBranch.push(exactReceipt);
-              recipientIdle = true;
-              const sendCount = reportResultSends;
-              assert.equal(hasExactReceipt(record), true);
-              await t!.waitFor(
-                () => {
-                  assert.equal(reportResultExists(record.id), false);
-                  assert.equal(assignmentExists(), false);
-                },
-                { timeout: 3000 },
-              );
-              assert.equal(reportResultSends, sendCount);
-            }
-
-            assert.equal(reportResults().length, 0);
-            assert.deepEqual(
-              listProjectAssignments(supervisionRuntime(), "repo-key"),
-              [],
-            );
-
-            // A record targeted at another session is rejected independently
-            // of receipt matching; it cannot settle the durable assignment.
-            const wrongTarget = resultRecord(randomUUID());
-            writeProjectAssignment(supervisionRuntime(), {
-              version: 1,
-              id: staleId,
-              repoKey: "repo-key",
-              branch: wrongTarget.branch!,
-              text: "recover exact Lead",
-            });
-            writeChiefMessage(wrongTarget, supervisionRuntime());
-            const wrongTargetPath = listChiefMessagePaths(
-              supervisionRuntime(),
-              LEAD_SESSION_ID,
-            ).find((path) => readChiefMessage(path).id === wrongTarget.id);
-            assert.ok(wrongTargetPath);
-            writeFileSync(
-              wrongTargetPath,
-              `${JSON.stringify({
-                ...wrongTarget,
-                toSessionId: randomUUID(),
-              })}\n`,
-            );
-            realFs.rmSync(resultPath(staleId), { force: true });
-            const sendCount = reportResultSends;
-            recipientIdle = true;
-            await t!.waitFor(
-              () => assert.equal(reportResultExists(wrongTarget.id), false),
-              { timeout: 3000 },
-            );
-            assert.equal(assignmentExists(), true);
-            assert.equal(reportResultSends, sendCount);
-          } else if (mode === "active-result") {
-            assert.equal(recovered.details.status, "finished");
-            assert.equal("result" in recovered.details, false);
-            assert.equal(
-              JSON.stringify(recovered.content).includes(staleId),
-              false,
-            );
-            assert.equal(
-              readFileSync(resultPath(staleId), "utf8"),
-              "completed",
-            );
-            assert.ok(
-              listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).some(
-                (path) => readChiefMessage(path).kind === "report_result",
-              ),
-            );
-            await t!.waitFor(
-              () => {
-                assert.ok(
-                  pi.sent.some(
-                    (message: any) =>
-                      message?.customType === "pi-herdsman-report_result",
-                  ),
-                );
-                assert.deepEqual(
-                  listProjectAssignments(supervisionRuntime(), "repo-key"),
-                  [],
-                );
-              },
-              { timeout: 3000 },
-            );
-            assert.equal(
-              readFileSync(resultPath(staleId), "utf8"),
-              "completed",
-            );
-          } else {
-            assert.equal(recovered.details.session, staleId);
-            const persisted = listProjectAssignments(
+          const outcome = mode === "active-complete" ? "complete" : "discard";
+          if (mode === "active-complete") started = false;
+          const discarded = await control(`staff_${outcome}`, {
+            branch: "smoke/recover",
+          });
+          assert.equal(discarded.details.ok, true);
+          assert.deepEqual(
+            listProjectAssignments(supervisionRuntime(), "repo-key"),
+            [],
+          );
+          assert.deepEqual(
+            listProjectMessages(
               supervisionRuntime(),
               "repo-key",
-            )[0];
-            assert.equal(persisted?.id, staleId);
-          }
-        }
-        assert.equal(createCalls, 0);
-        assert.equal(
-          startCalls,
-          ["active-loss", "active-closed"].includes(mode) ? 1 : 0,
-        );
-        assert.equal(
-          openCalls,
-          ["active-closed", "active-loss"].includes(mode) ? 1 : 0,
-        );
-        assert.equal(
-          listProjectAssignments(supervisionRuntime(), "repo-key").length,
-          mode === "active-result" ? 0 : 1,
-        );
-        if (mode === "active-result-periodic") {
-          const components: any[] = [];
-          const notifications: string[] = [];
-          ctx.hasUI = true;
-          ctx.ui.notify = (text: string) => notifications.push(text);
-          ctx.ui.custom = async (factory: any) => {
-            let done: (value: unknown) => void = () => undefined;
-            const selected = new Promise((resolve) => {
-              done = resolve;
-            });
-            components.push(
-              factory(
-                { requestRender: () => undefined },
-                {
-                  fg: (_color: string, text: string) => text,
-                  bold: (text: string) => text,
-                },
-                {},
-                done,
-              ),
-            );
-            return components.length === 1 ? undefined : selected;
-          };
-          await pi.commandOptions.get("manager").handler("", ctx);
-          assert.match(components[0].render(120).join("\n"), /smoke\/recover/);
-          components[0].handleInput("\r");
-          await t!.waitFor(() => assert.equal(components.length, 2));
-          assert.match(components[1].render(120).join("\n"), /View result/);
-          components[1].handleInput("\r");
-          await t!.waitFor(() =>
-            assert.deepEqual(notifications, ["completed"]),
+              "smoke/recover",
+            ),
+            [],
           );
-          assert.equal(
-            notifications[0],
-            readFileSync(resultPath(staleId), "utf8"),
+          assert.equal(created, true);
+          assert.equal(createdBranch, "smoke/recover");
+          assert.equal(started, false);
+          assert.ok(
+            JSON.parse(
+              (await exec("herdr", ["pane", "list"])).stdout,
+            ).result.panes.some((pane: any) => pane.pane_id === "child-pane"),
           );
-          assert.equal(notifications[0].includes(resultRef(staleId)), false);
-          assert.equal(
-            listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
-            staleId,
-          );
-          assert.equal(
-            listChiefMessagePaths(supervisionRuntime(), LEAD_SESSION_ID).filter(
-              (path) => readChiefMessage(path).kind === "report_result",
-            ).length,
-            1,
+          assert.ok(
+            JSON.parse(
+              (await exec("herdr", ["worktree", "list"])).stdout,
+            ).result.worktrees.some(
+              (worktree: any) =>
+                worktree.branch === "smoke/recover" &&
+                worktree.path === childPath,
+            ),
           );
         }
-        if (mode === "active-missing" || mode === "active-live") {
-          const { SelectList } = await import("@earendil-works/pi-tui");
-          let renderedList: any;
-          t!.mock.method(SelectList.prototype, "render", function (this: any) {
-            renderedList = this;
-            return this.items.map((item: any) =>
-              [item.label, item.description].filter(Boolean).join(" · "),
-            );
-          });
-          const components: any[] = [];
-          ctx.hasUI = true;
-          ctx.ui.custom = async (factory: any) => {
-            components.push(
-              factory(
-                { requestRender: () => undefined },
-                {
-                  fg: (_color: string, text: string) => text,
-                  bold: (text: string) => text,
-                },
-                {},
-                () => undefined,
-              ),
-            );
-          };
-          await pi.events.get("before_agent_start")![0](
-            { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-            ctx,
+        return;
+      } else if (
+        ["active-missing", "active-missing-no-session"].includes(mode)
+      ) {
+        const resumed = await execute();
+        assert.equal(resumed.details.session, staleId);
+        assert.equal(resumed.details.branch, "smoke/recover");
+        assert.equal(createCalls, 1);
+        assert.equal(startCalls, 1);
+        assert.equal(
+          listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
+          staleId,
+        );
+      } else {
+        const recovered = await execute();
+        assert.equal(recovered.details.session, staleId);
+        assert.equal(recovered.details.branch, "smoke/recover");
+        const persisted = listProjectAssignments(
+          supervisionRuntime(),
+          "repo-key",
+        )[0];
+        assert.equal(persisted?.id, staleId);
+      }
+      assert.equal(
+        createCalls,
+        ["active-missing", "active-missing-no-session"].includes(mode) ? 1 : 0,
+      );
+      assert.equal(
+        startCalls,
+        [
+          "active-loss",
+          "active-closed",
+          "active-missing",
+          "active-missing-no-session",
+        ].includes(mode)
+          ? 1
+          : 0,
+      );
+      assert.equal(
+        openCalls,
+        ["active-closed", "active-loss"].includes(mode) ? 1 : 0,
+      );
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), "repo-key").length,
+        1,
+      );
+      if (mode === "active-live") {
+        const { SelectList } = await import("@earendil-works/pi-tui");
+        let renderedList: any;
+        t!.mock.method(SelectList.prototype, "render", function (this: any) {
+          renderedList = this;
+          return this.items.map((item: any) =>
+            [item.label, item.description].filter(Boolean).join(" · "),
           );
-          await pi.commandOptions.get("manager").handler("", ctx);
-          const overview = components[0];
-          const initial = overview.render(120).join("\n");
-          if (mode === "active-missing") {
-            assert.match(
-              initial,
-              /smoke\/recover · paused · worktree is unavailable/,
-            );
-            for (const available of [true, false]) {
-              created = available;
-              await pi.events.get("before_agent_start")![0](
-                {
-                  systemPrompt: "base",
-                  systemPromptOptions: { contextFiles: [] },
-                },
-                ctx,
-              );
-              const lines = overview.render(120).join("\n");
-              assert.match(lines, /smoke\/recover · paused/);
-              assert.equal(
-                lines.includes("worktree is unavailable"),
-                !available,
-              );
-              const currentList = renderedList;
-              overview.render(120);
-              assert.equal(
-                renderedList,
-                currentList,
-                "unchanged descriptions reuse the list",
-              );
-            }
-          } else {
-            assert.match(initial, /smoke\/recover · active · unknown/);
-            duplicateWorktree = true;
-            await pi.events.get("before_agent_start")![0](
+        });
+        const components: any[] = [];
+        ctx.hasUI = true;
+        ctx.ui.custom = async (factory: any) => {
+          components.push(
+            factory(
+              { requestRender: () => undefined },
               {
-                systemPrompt: "base",
-                systemPromptOptions: { contextFiles: [] },
+                fg: (_color: string, text: string) => text,
+                bold: (text: string) => text,
               },
-              ctx,
-            );
-            assert.match(
-              overview.render(120).join("\n"),
-              /conflict · project runtime identity is ambiguous/,
-            );
-            overview.handleInput("\r");
-            await t!.waitFor(() => assert.equal(components.length, 2));
-            const actions = components[1].render(120).join("\n");
-            assert.match(actions, /Focus Lead/);
-            assert.match(actions, /Close Lead/);
-            assert.match(actions, /Discard work/);
-          }
-        }
-      } finally {
-        if (
-          [
-            "active-result",
-            "active-result-streaming",
-            "active-result-periodic",
-          ].includes(mode)
-        )
-          realFs.rmSync(resultPath(staleId), { force: true });
+              {},
+              () => undefined,
+            ),
+          );
+        };
+        await pi.events.get("before_agent_start")![0](
+          { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+          ctx,
+        );
+        await pi.commandOptions.get("manager").handler("", ctx);
+        const overview = components[0];
+        const initial = overview.render(120).join("\n");
+        assert.match(initial, /smoke\/recover · active · unknown/);
+        duplicateWorktree = true;
+        await pi.events.get("before_agent_start")![0](
+          {
+            systemPrompt: "base",
+            systemPromptOptions: { contextFiles: [] },
+          },
+          ctx,
+        );
+        assert.match(
+          overview.render(120).join("\n"),
+          /conflict · project runtime identity is ambiguous/,
+        );
+        overview.handleInput("\r");
+        await t!.waitFor(() => assert.equal(components.length, 2));
+        const actions = components[1].render(120).join("\n");
+        assert.match(actions, /Focus Lead/);
+        assert.match(actions, /Stop Lead/);
+        assert.match(actions, /Discard work/);
       }
       return;
     }
@@ -2875,155 +2672,48 @@ async function runManagerStartupScenario(
       );
       return;
     }
-    if (
-      [
-        "stale-placement",
-        "discard-pane-missing",
-        "discard-pi",
-        "discard-result",
-        "discard-result-final",
-      ].includes(mode)
-    ) {
-      if (mode !== "stale-placement") {
-        const discard = () =>
-          pi.tools
-            .find((tool) => tool.name === "staff_discard")!
-            .execute(
-              "discard",
-              { branch: "smoke/vanished" },
-              undefined,
-              undefined,
-              ctx,
-            );
-        try {
-          if (mode === "discard-result-final") {
-            const pendingDiscard = discard();
-            try {
-              await t!.waitFor(() => assert.equal(finalSnapshotPaused, true), {
-                timeout: 3000,
-              });
-              assert.equal(realFs.existsSync(resultPath(staleId)), false);
-              mkdirSync(dirname(resultPath(staleId)), { recursive: true });
-              writeFileSync(
-                resultPath(staleId),
-                "completed during final inventory",
-              );
-            } finally {
-              resumeFinalSnapshot();
-            }
-            await assert.rejects(
-              pendingDiscard,
-              /completed while discard was in progress; assignment preserved/,
-            );
-            assert.equal(
-              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
-              staleId,
-            );
-          } else if (mode === "discard-pane-missing") {
-            const discarded = await discard();
-            assert.equal(discarded.details.ok, true);
-            assert.deepEqual(
-              listProjectAssignments(supervisionRuntime(), "repo-key"),
-              [],
-            );
-          } else {
-            await assert.rejects(
-              discard(),
-              mode === "discard-pi"
-                ? /A possible Pi executor remains; assignment preserved/
-                : /completed while discard was in progress; assignment preserved/,
-            );
-            assert.equal(
-              listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
-              staleId,
-            );
-          }
-          assert.equal(inspectedDiscardPane, true);
-          assert.ok(
-            pi.calls.some(
-              (args) =>
-                args[0] === "pane" &&
-                args[1] === "list" &&
-                args[2] === "--workspace" &&
-                args[3] === childWorkspace,
-            ),
+    if (["discard-pane-missing", "discard-pi"].includes(mode)) {
+      const discard = () =>
+        pi.tools
+          .find((tool) => tool.name === "staff_discard")!
+          .execute(
+            "discard",
+            { branch: "smoke/vanished" },
+            undefined,
+            undefined,
+            ctx,
           );
-          if (mode === "discard-result")
-            assert.equal(
-              readFileSync(resultPath(staleId), "utf8"),
-              "completed during discard",
-            );
-          assert.equal(created, true);
-          assert.equal(createdBranch, "smoke/vanished");
-          assert.equal(createCalls, 0);
-          assert.equal(startCalls, 0);
-          assert.equal(
-            pi.calls.some(
-              (args) =>
-                args[0] === "worktree" &&
-                ["delete", "remove"].includes(args[1]),
-            ),
-            false,
-          );
-          if (mode === "discard-pane-missing") {
-            const topology = JSON.parse(
-              (await exec("herdr", ["worktree", "list"])).stdout,
-            ).result;
-            assert.ok(
-              topology.worktrees.some(
-                (item: any) =>
-                  item.branch === "smoke/vanished" && item.path === childPath,
-              ),
-            );
-          }
-          return;
-        } finally {
-          if (mode === "discard-result" || mode === "discard-result-final")
-            realFs.rmSync(resultPath(staleId), { force: true });
-        }
+      if (mode === "discard-pane-missing") {
+        const discarded = await discard();
+        assert.equal(discarded.details.ok, true);
+        assert.deepEqual(
+          listProjectAssignments(supervisionRuntime(), "repo-key"),
+          [],
+        );
+      } else {
+        await assert.rejects(
+          discard(),
+          /A possible Pi executor remains; assignment preserved/,
+        );
+        assert.equal(
+          listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
+          staleId,
+        );
       }
-      await assert.rejects(
-        execute(),
-        new RegExp(
-          `Work on smoke/vanished is paused[\\s\\S]*assignment was preserved`,
+      assert.equal(inspectedDiscardPane, true);
+      assert.ok(
+        pi.calls.some(
+          (args) =>
+            args[0] === "pane" &&
+            args[1] === "list" &&
+            args[2] === "--workspace" &&
+            args[3] === childWorkspace,
         ),
       );
-      assert.equal(
-        listProjectAssignments(supervisionRuntime(), "repo-key").length,
-        1,
-      );
+      assert.equal(created, true);
+      assert.equal(createdBranch, "smoke/vanished");
       assert.equal(createCalls, 0);
       assert.equal(startCalls, 0);
-      await assert.rejects(
-        pi.tools
-          .find((tool) => tool.name === "staff_close")!
-          .execute("close", { session: staleId }, undefined, undefined, ctx),
-        /Exact live Lead was not found/,
-      );
-      assert.equal(
-        listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
-        staleId,
-      );
-      const discarded = await pi.tools
-        .find((tool) => tool.name === "staff_discard")!
-        .execute(
-          "discard",
-          { branch: "smoke/vanished" },
-          undefined,
-          undefined,
-          ctx,
-        );
-      assert.equal(discarded.details.ok, true);
-      assert.deepEqual(
-        listProjectAssignments(supervisionRuntime(), "repo-key"),
-        [],
-      );
-      assert.equal(
-        pi.calls.some(
-          (args) => args[0] === "pane" && args[1] === "process-info",
-        ),
-        false,
-      );
       assert.equal(
         pi.calls.some(
           (args) =>
@@ -3031,6 +2721,17 @@ async function runManagerStartupScenario(
         ),
         false,
       );
+      if (mode === "discard-pane-missing") {
+        const topology = JSON.parse(
+          (await exec("herdr", ["worktree", "list"])).stdout,
+        ).result;
+        assert.ok(
+          topology.worktrees.some(
+            (item: any) =>
+              item.branch === "smoke/vanished" && item.path === childPath,
+          ),
+        );
+      }
       return;
     }
     if (mode === "invalid-topology") {
@@ -3239,7 +2940,7 @@ async function runManagerStartupScenario(
       assert.equal(realFs.existsSync(childSessionPath), true);
       assert.equal(assignment.id, childSession);
       const closed = await pi.tools
-        .find((tool) => tool.name === "staff_close")!
+        .find((tool) => tool.name === "staff_stop")!
         .execute("close", { session: childSession }, undefined, undefined, ctx);
       assert.equal(closed.details.ok, true);
       assert.equal(started, false);
@@ -3300,22 +3001,20 @@ test("Manager recovery waits on existing exact Pi without restarting it", () =>
 for (const [mode, label] of [
   ["active-loss", "relaunches the exact lost Lead"],
   ["active-live", "returns a live exact Lead idempotently"],
-  ["active-result", "settles a durable result without restarting"],
-  ["active-missing", "retains an assignment whose worktree vanished"],
+  ["active-missing", "reconstructs a vanished worktree with saved Pi cwd"],
+  [
+    "active-missing-no-session",
+    "reconstructs a vanished worktree without saved Pi cwd",
+  ],
   ["active-closed", "reopens a closed worktree workspace"],
 ] as const)
   test(`Manager ${label}`, (t) => runManagerStartupScenario(mode, false, t));
-test("Manager periodically repairs an active assignment and View result shows canonical content", (t) =>
-  runManagerStartupScenario("active-result-periodic", false, t));
-test(
-  "Manager defers result delivery while streaming and settles it after idle delivery",
-  { timeout: 20000 },
-  (t) => runManagerStartupScenario("active-result-streaming", false, t),
-);
-test("Manager close preserves the exact assignment and resumes its session", () =>
+test("Manager stop preserves the exact assignment and resumes its session", () =>
   runManagerStartupScenario("close-resume"));
 test("Manager discard stops the active executor and preserves its worktree", () =>
   runManagerStartupScenario("active-discard"));
+test("Manager complete resolves assignment and preserves its worktree", () =>
+  runManagerStartupScenario("active-complete"));
 test("Manager retains assignment when exact Lead stop fails", () =>
   runManagerStartupScenario("close-failure"));
 test("Manager closes an unassigned direct Lead and preserves its worktree", () =>
@@ -3328,17 +3027,11 @@ test("Manager refuses an occupied worktree without reserving work", () =>
   runManagerStartupScenario("occupied"));
 test("Manager refuses ambiguous multiple Leads in a worktree", () =>
   runManagerStartupScenario("multiple"));
-test("Manager retains explicitly resumed work with vanished placement", () =>
-  runManagerStartupScenario("stale-placement"));
 for (const code of ["not_found", "pane_not_found"])
   test(`Manager discards when a freshly listed branch pane disappears (${code})`, () =>
     runManagerStartupScenario("discard-pane-missing", false, undefined, code));
 test("Manager preserves an assignment when a current branch pane may run Pi", () =>
   runManagerStartupScenario("discard-pi"));
-test("Manager preserves an assignment when a result arrives during discard", () =>
-  runManagerStartupScenario("discard-result"));
-test("Manager preserves an assignment when a result arrives in final live inventory", (t) =>
-  runManagerStartupScenario("discard-result-final", false, t));
 test("Manager serializes simultaneous same-branch delegation", () =>
   runManagerStartupScenario("concurrent"));
 test("Manager retains placement when recovery topology is not authoritative", () =>
@@ -5971,8 +5664,6 @@ test("registered lead exposes only explicit live controls", async () => {
     "agent_inspect",
     "agent_transcript",
     "supervisor_message",
-    "supervisor_ask",
-    "supervisor_result",
     "peer_list",
     "peer_message",
   ]);

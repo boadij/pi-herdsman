@@ -119,11 +119,8 @@ test("Supervision context formatting preserves state, safety, and bounded record
           tabId: "tab-b",
           paneId: "pane-b",
           runtimeState: "working" as const,
-          needsYou: true,
-          pendingAskId: "ask-123",
-          pendingAskQuestion: "OAuth or service accounts?",
           agentCounts: { active: 1, blocked: 1, total: 2 },
-          availableActions: ["inspect", "message", "reply"] as const,
+          availableActions: ["inspect", "message"] as const,
           agents: [
             { id: "agent-z", label: "reviewer", state: "blocked" as const },
             { id: "agent-a", label: "implementer", state: "working" as const },
@@ -136,7 +133,6 @@ test("Supervision context formatting preserves state, safety, and bounded record
           tabId: "tab-a",
           paneId: "pane-a",
           runtimeState: "idle" as const,
-          needsYou: false,
           agentCounts: { active: 0, blocked: 0, total: 0 },
           availableActions: ["inspect", "message"] as const,
           agents: [],
@@ -174,10 +170,8 @@ test("Supervision context formatting preserves state, safety, and bounded record
       "session: lead-aaaaaaaa",
       "runtime: working",
       "runtime: idle",
-      "available_tools: staff_inspect, staff_message, staff_reply",
+      "available_tools: staff_inspect, staff_message",
       "agent_counts: active=1 blocked=1 total=2",
-      "ask_id: ask-123",
-      "question: OAuth or service accounts?",
       "diagnostics:",
     ])
       assert.match(
@@ -219,11 +213,8 @@ test("Supervision context formatting preserves state, safety, and bounded record
             tabId: hostile,
             paneId: hostile,
             runtimeState: "unknown",
-            needsYou: true,
-            pendingAskId: hostile,
-            pendingAskQuestion: hostile,
             agentCounts: { active: 0, blocked: 0, total: 1 },
-            availableActions: ["inspect", "message", "reply"],
+            availableActions: ["inspect", "message"],
             agents: [{ id: hostile, label: hostile, state: "unknown" }],
           },
         ],
@@ -256,7 +247,6 @@ test("Supervision context formatting preserves state, safety, and bounded record
           tabId: `tab-${index}`,
           paneId: `pane-${index}`,
           runtimeState: "working" as const,
-          needsYou: false,
           agentCounts: { active: 0, blocked: 0, total: 0 },
           availableActions: ["inspect", "message"] as const,
           agents: [],
@@ -380,7 +370,6 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
         lead({
           lead: "attention",
           displayName: "attention",
-          needsYou: true,
           runtimeState: "blocked",
           agentCounts: { active: 1, total: 1 },
         }),
@@ -410,8 +399,8 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       120,
     );
     const output = rows.join("\n");
-    assert.equal(rows[1], "├─ !◐ attention · 1 agent");
-    assert.equal(rows[2], "├─ ● working · 1 agent");
+    assert.equal(rows[1], "├─ ● working · 1 agent");
+    assert.equal(rows[2], "├─ ◐ attention · 1 agent");
     assert.equal(
       rows.some((line) => line === ""),
       false,
@@ -433,7 +422,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       widgetRows.some((line) => line === ""),
       false,
     );
-    assert.match(output, /!◐ attention/);
+    assert.match(output, /◐ attention/);
     assert.match(output, /● working/);
     assert.match(output, /◐ blocked/);
     assert.match(output, /\? unknown/);
@@ -445,7 +434,6 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
         lead({
           lead: "selected",
           displayName: "selected",
-          needsYou: true,
           runtimeState: "blocked",
         }),
       ],
@@ -453,7 +441,7 @@ test("Chief ambient projection preserves branch and hidden-lead rendering", (t) 
       {},
       "selected",
     );
-    assert.equal(selectedRows[1], "└─ >!◐ selected");
+    assert.equal(selectedRows[1], "└─ >◐ selected");
   }
 
   {
@@ -479,18 +467,10 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
         displayName: "blocked",
         runtimeState: "blocked",
       }),
-      lead({
-        lead: "ask",
-        displayName: "ask",
-        needsYou: true,
-        pendingAskId: "ask-1",
-        runtimeState: "blocked",
-      }),
+      lead({ lead: "ask", displayName: "ask", runtimeState: "blocked" }),
       lead({
         lead: "orphan",
         displayName: "orphan",
-        needsYou: false,
-        pendingAskId: "old-ask",
         runtimeState: "blocked",
       }),
     ]);
@@ -498,11 +478,7 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
     const groups = groupSupervisedLeads(displays);
     assert.deepEqual(
       [...groups.keys()],
-      ["NEEDS YOU", "WORKING", "BLOCKED", "IDLE/DONE", "UNKNOWN"],
-    );
-    assert.deepEqual(
-      groups.get("NEEDS YOU")!.map((item) => item.lead),
-      ["ask"],
+      ["WORKING", "BLOCKED", "IDLE/DONE", "UNKNOWN"],
     );
     assert.deepEqual(
       groups.get("WORKING")!.map((item) => item.lead),
@@ -510,7 +486,7 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
     );
     assert.deepEqual(
       groups.get("BLOCKED")!.map((item) => item.lead),
-      ["blocked", "orphan"],
+      ["ask", "blocked", "orphan"],
     );
     assert.equal(
       renderSupervisionLeads(
@@ -520,8 +496,8 @@ test("Supervision lead projection disambiguates labels and groups stably", (t) =
       false,
     );
     assert.equal(
-      groups.get("NEEDS YOU")!.some((item) => item.lead === "blocked"),
-      false,
+      groups.get("BLOCKED")!.some((item) => item.lead === "blocked"),
+      true,
     );
   }
 });
@@ -589,12 +565,7 @@ test("Supervision display labels remain unique under suffix collisions", (t) => 
 test("Supervision rows cap ordinary leads, retain attention, and fit every width", (t) => {
   {
     const leads = [
-      lead({
-        lead: "ask",
-        displayName: "attention",
-        needsYou: true,
-        pendingAskId: "q",
-      }),
+      lead({ lead: "ask", displayName: "attention" }),
       ...Array.from({ length: 8 }, (_, index) =>
         lead({ lead: `lead-${index}`, displayName: `lead-${index}` }),
       ),
@@ -602,7 +573,7 @@ test("Supervision rows cap ordinary leads, retain attention, and fit every width
     const rows = renderSupervisionLeads(leads, 200);
     assert.match(rows[0]!, /9 direct leads/);
     assert.ok(rows.some((line) => line.includes("attention")));
-    assert.match(rows.at(-1)!, /2 more/);
+    assert.match(rows.at(-1)!, /3 more/);
     for (let width = 1; width <= 120; width++)
       assert.ok(
         renderSupervisionLeads(leads, width, { status: "stale" }).every(
@@ -1311,17 +1282,6 @@ test("coordination presentation uses the explicit operation and session target",
   assert.equal(
     renderedText(
       renderCoordinationCall(
-        "staff",
-        "reply",
-        { action: "message", session: "staff-1", lead: "wrong" },
-        presentationTheme,
-      ),
-    ),
-    "staff reply  staff-1",
-  );
-  assert.equal(
-    renderedText(
-      renderCoordinationCall(
         "peer",
         "message",
         { session: "peer-1", message: "Check this" },
@@ -1627,18 +1587,11 @@ test("coordination prose source mapping covers agent, chief, and staff actions",
       "reply message",
     ],
     ["supervisor", "message", { message: "chief message" }, "chief message"],
-    ["supervisor", "ask", { question: "chief question" }, "chief question"],
     [
       "staff",
       "message",
       { session: "lead-id", message: "staff message" },
       "staff message",
-    ],
-    [
-      "staff",
-      "reply",
-      { session: "lead-id", message: "staff reply" },
-      "staff reply",
     ],
   ] as const;
   for (const [tool, action, args, prose] of cases)
@@ -1753,6 +1706,36 @@ test("coordination results keep collapsed identity bounded and render evidence t
       new RegExp(visible.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")),
     );
   assert.doesNotMatch(expanded, /model-facing prose/);
+});
+
+test("expanded managed-agent replies show the ask ID only for agent replies", () => {
+  const askId = "99999999-9999-4999-8999-999999999999";
+  for (const [details, args] of [
+    [{ ask_id: askId }, {}],
+    [{}, { askId }],
+  ]) {
+    const rendered = renderedText(
+      renderCoordinationResult(
+        "agent",
+        "reply",
+        { details: { ok: true, ...details } },
+        { expanded: true },
+        presentationTheme,
+        { args },
+      ),
+    );
+    assert.match(rendered, new RegExp(`ask: ${askId}`));
+  }
+  const staffReply = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "reply",
+      { details: { ok: true, ask_id: askId } },
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.doesNotMatch(staffReply, /ask:/);
 });
 
 test("compact transcript results are shared by agent and staff", () => {
@@ -2071,19 +2054,6 @@ test("chief and staff coordination renderers share semantic status language", ()
   assert.equal(
     renderedText(
       renderCoordinationResult(
-        "supervisor",
-        "ask",
-        { details: { ok: true } },
-        {},
-        presentationTheme,
-        { args: { action: "ask" } },
-      ),
-    ),
-    "? waiting for supervisor",
-  );
-  assert.equal(
-    renderedText(
-      renderCoordinationResult(
         "staff",
         "list",
         {
@@ -2101,7 +2071,7 @@ test("chief and staff coordination renderers share semantic status language", ()
         { args: { action: "list" } },
       ),
     ),
-    "staff 3 leads · 3 active · 1 needs you",
+    "staff 3 leads · 3 active",
   );
   assert.match(
     renderedText(
@@ -2123,26 +2093,6 @@ test("chief and staff coordination renderers share semantic status language", ()
     /session: lead-opaque/,
   );
 
-  const chiefAsk = renderedText(
-    renderCoordinationResult(
-      "supervisor",
-      "ask",
-      {
-        details: {
-          ok: true,
-          id: "record-ask",
-          askId: "ask-camel",
-          chiefSessionId: "chief-session",
-        },
-      },
-      { expanded: true },
-      presentationTheme,
-      { args: { action: "ask" } },
-    ),
-  );
-  assert.match(chiefAsk, /ask: ask-camel/);
-  assert.match(chiefAsk, /session: chief-session/);
-
   const chiefMessage = renderedText(
     renderCoordinationResult(
       "supervisor",
@@ -2161,46 +2111,6 @@ test("chief and staff coordination renderers share semantic status language", ()
   );
   assert.match(chiefMessage, /session: chief-session-message/);
 
-  const staffReplyArgs = {
-    action: "reply",
-    session: "lead-opaque",
-    askId: "ask-for-lead",
-    message: "answer",
-  };
-  assert.match(
-    renderedText(
-      renderCoordinationCall(
-        "staff",
-        "reply",
-        staffReplyArgs,
-        presentationTheme,
-        {
-          expanded: true,
-        },
-      ),
-    ),
-    /session: lead-opaque\n\nask: ask-for-lead/,
-  );
-  assert.match(
-    renderedText(
-      renderCoordinationResult(
-        "staff",
-        "reply",
-        {
-          details: {
-            ok: true,
-            action: "reply",
-            session: "lead-opaque",
-            display_name: "workspace\/api",
-          },
-        },
-        { expanded: true },
-        presentationTheme,
-        { args: staffReplyArgs },
-      ),
-    ),
-    /ask: ask-for-lead/,
-  );
   assert.match(
     renderedText(
       renderCoordinationResult(
@@ -2227,12 +2137,9 @@ test("chief and staff coordination renderers share semantic status language", ()
               session: "lead-opaque",
               display_name: "workspace/api",
               runtime_state: "blocked",
-              needs_you: true,
-              pending_ask_id: "pending-ask",
-              pending_ask_question: "Which provider should I use?",
               agent_counts: { active: 2, blocked: 1, total: 3 },
               agents: [{ label: "one" }, { label: "two" }, { label: "three" }],
-              available_tools: ["staff_inspect", "staff_reply"],
+              available_tools: ["staff_inspect", "staff_message"],
             },
           ],
         },
@@ -2243,10 +2150,7 @@ test("chief and staff coordination renderers share semantic status language", ()
     ),
   );
   for (const evidence of [
-    "needs you: yes",
     "session: lead-opaque",
-    "ask: pending-ask",
-    "question: Which provider should I use?",
     "agent counts: active=2 · blocked=1 · total=3",
   ])
     assert.ok(staffList.includes(evidence));
@@ -4637,7 +4541,6 @@ test("Chief tree shows project and branch without internal paths or zero counts"
         paneId: "pane",
         tabId: "tab",
         runtimeState: "idle" as const,
-        needsYou: false,
         agentCounts: { active: 0, blocked: 0, total: 0 },
         leadCounts: { active: 0, blocked: 0, total: 1 },
         availableActions: [],
@@ -4647,7 +4550,6 @@ test("Chief tree shows project and branch without internal paths or zero counts"
             branch: "feat/session-usage-stats",
             displayName: "pi-herdsman/feat/session-usage-stats/lead-12345678",
             runtimeState: "idle" as const,
-            needsYou: false,
             agentCounts: { active: 0, blocked: 0, total: 0 },
           },
         ],
@@ -4672,7 +4574,7 @@ test("Chief tree shows project and branch without internal paths or zero counts"
 });
 
 test("Manager widget shares one bounded work/Lead tree and context includes project work", () => {
-  const work = (["active", "paused", "conflict", "finished"] as const).map(
+  const work = (["active", "paused", "conflict"] as const).map(
     (status, index) => ({
       branch: `feat/${status}-${"long".repeat(20)}`,
       session: `managed-${index}`,
@@ -4692,7 +4594,6 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
       lead({
         lead: "managed-0",
         branch: work[0]!.branch,
-        needsYou: true,
         runtimeState: "blocked",
       }),
     ],
@@ -4702,12 +4603,11 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
   assert.match(rows[1]!, /!◐ feat\/active.* · active/);
   assert.match(rows[2]!, /○ feat\/paused.* · paused/);
   assert.match(rows[3]!, /! feat\/conflict.* · conflict/);
-  assert.match(rows[4]!, /✓ feat\/finished.* · finished/);
   assert.match(
     renderSupervisionLeads(snapshot, 40, { role: "manager" })[1]!,
     / · active$/,
   );
-  assert.equal(rows[5], "└─ ○ feat/manual · Lead");
+  assert.equal(rows[4], "└─ ○ feat/manual · Lead");
   assert.equal(rows.filter((row) => row.startsWith("└─")).length, 1);
   assert.doesNotMatch(rows.join("\n"), /other Lead/i);
   assert.doesNotMatch(
@@ -4717,7 +4617,7 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
   const items = managerSupervisionItems(snapshot);
   assert.deepEqual(
     items.map((item) => item.kind),
-    ["work", "work", "work", "work", "lead"],
+    ["work", "work", "work", "lead"],
   );
   assert.equal(items[0]!.kind === "work" && items[0]!.lead?.lead, "managed-0");
   assert.deepEqual(
@@ -4728,7 +4628,7 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
     [
       rows[1],
       "├─ ○ feat/paused-" + "long".repeat(20) + " · paused",
-      "└─ … 3 more · /manager",
+      "└─ … 2 more · /manager",
     ],
   );
   const context = formatSupervisionContext(
@@ -4762,25 +4662,20 @@ test("Manager work status outranks live Lead markers except when active", () => 
     ["active", "●"],
     ["paused", "○"],
     ["conflict", "!"],
-    ["finished", "✓"],
   ] as const) {
-    for (const needsYou of [false, true]) {
+    {
       const snapshot = {
         work: [{ branch: "feat/example", session: "assigned", status }],
         leads: [
           lead({
             lead: "assigned",
             runtimeState: "working",
-            needsYou,
           }),
         ],
       };
       assert.deepEqual(
         renderSupervisionLeads(snapshot, 120, { role: "manager" }, "assigned"),
-        [
-          "● manager",
-          `└─ >${needsYou ? "!" : ""}${marker} feat/example · ${status}`,
-        ],
+        ["● manager", `└─ >${marker} feat/example · ${status}`],
       );
     }
   }
@@ -4797,25 +4692,15 @@ test("coordination messages render compact semantic headings and strip only know
   const envelopes = {
     chief_message: "From chief sender-session-uuid: ",
     lead_message: "From lead sender-session-uuid: ",
-    lead_ask: "From lead sender-session-uuid: ",
-    chief_reply: "From chief sender-session-uuid: ",
     manager_message: "From manager sender-session-uuid: ",
-    manager_ask: "From manager sender-session-uuid: ",
-    manager_reply: "From manager sender-session-uuid: ",
     project_assignment: "Project assignment for branch feat/bootstrap:\n\n",
-    report_result: "Project work feat/bootstrap finished:\n\n",
     peer_message: "Peer message from sender-session-uuid: ",
   };
   const headings = {
     chief_message: "Chief message",
     lead_message: "Lead message",
-    lead_ask: "? Lead needs input",
-    chief_reply: "Chief reply",
     manager_message: "Manager message",
-    manager_ask: "? Manager needs input",
-    manager_reply: "Manager reply",
     project_assignment: "→ feat/bootstrap assigned",
-    report_result: "✓ feat/bootstrap finished",
     peer_message: "Peer message",
   };
   for (const kind of COORDINATION_MESSAGE_KINDS) {
@@ -4906,7 +4791,7 @@ test("coordination messages render compact semantic headings and strip only know
 });
 
 test("expanded coordination messages show complete Markdown and useful provenance only", () => {
-  const body = `## Summary\n\nManager is **reachable**.\n\n- First worktree created\n\n${"Full result paragraph. ".repeat(20)}\n\nFinal evidence.`;
+  const body = `## Summary\n\nManager is **reachable**.\n\n- First worktree created\n\n${"Full progress paragraph. ".repeat(20)}\n\nFinal evidence.`;
   const details = {
     id: "transport-uuid",
     leaseId: "lease-uuid",
@@ -4915,26 +4800,25 @@ test("expanded coordination messages show complete Markdown and useful provenanc
     branch: "feat/bootstrap",
   };
   const rendered = renderCoordinationMessage(
-    "report_result",
+    "lead_message",
     {
-      content: `Project work feat/bootstrap finished:\n\n${body}`,
+      content: `From lead lead-pi-session: ${body}`,
       details,
     },
     { expanded: true },
     presentationTheme,
   );
   const text = renderedText(rendered);
-  assert.match(text, /✓ feat\/bootstrap finished/);
-  assert.match(text, /branch: feat\/bootstrap/);
+  assert.match(text, /Lead message/);
   assert.match(text, /session: lead-pi-session/);
   assert.match(text, /Summary/);
   assert.match(text, /Manager is reachable/);
   assert.match(text, /First worktree created/);
   assert.match(text, /Final evidence/);
-  assert.equal((text.match(/Full result paragraph\./g) ?? []).length, 20);
+  assert.equal((text.match(/Full progress paragraph\./g) ?? []).length, 18);
   assert.doesNotMatch(
     text,
-    /transport-uuid|lease-uuid|internal-assignment-session|Project work|## Summary|\*\*reachable\*\*/,
+    /transport-uuid|lease-uuid|internal-assignment-session|## Summary|\*\*reachable\*\*/,
   );
   for (let width = 1; width <= 80; width++)
     assert.ok(
@@ -4963,71 +4847,7 @@ test("expanded coordination messages show complete Markdown and useful provenanc
   );
 });
 
-test("coordination previews hide only result-source JSON and assignment UUIDs", () => {
-  const resultContent =
-    `Project work feat/bootstrap finished:\n\n` +
-    `Lead result source: {"branch":"feat/bootstrap","cwd":"/repo/wt"}\n\n` +
-    "Fixed Manager bootstrap and added regression coverage.";
-  const compactResult = renderedText(
-    renderCoordinationMessage(
-      "report_result",
-      { content: resultContent, details: { branch: "feat/bootstrap" } },
-      {},
-      presentationTheme,
-    ),
-  );
-  assert.match(compactResult, /Fixed Manager bootstrap/);
-  assert.doesNotMatch(compactResult, /Lead result source/);
-
-  const expandedResult = renderedText(
-    renderCoordinationMessage(
-      "report_result",
-      { content: resultContent, details: { branch: "feat/bootstrap" } },
-      { expanded: true },
-      presentationTheme,
-    ),
-  );
-  assert.match(expandedResult, /Lead result source/);
-  assert.match(expandedResult, /Fixed Manager bootstrap/);
-
-  const arbitraryContent = renderedText(
-    renderCoordinationMessage(
-      "report_result",
-      {
-        content:
-          "Project work feat/bootstrap finished:\n\n" +
-          "Lead result source: not JSON\n\n" +
-          "Keep this user-authored text.",
-        details: { branch: "feat/bootstrap" },
-      },
-      {},
-      presentationTheme,
-    ),
-  );
-  assert.match(arbitraryContent, /Lead result source: not JSON/);
-
-  for (const provenance of [
-    `{"branch":"other-branch","cwd":"/repo/wt"}`,
-    `{"branch":"feat/bootstrap","cwd":"/repo/wt","extra":true}`,
-  ]) {
-    const preview = renderedText(
-      renderCoordinationMessage(
-        "report_result",
-        {
-          content:
-            "Project work feat/bootstrap finished:\n\n" +
-            `Lead result source: ${provenance}\n\n` +
-            "Keep the provenance visible.",
-          details: { branch: "feat/bootstrap" },
-        },
-        {},
-        presentationTheme,
-      ),
-    );
-    assert.match(preview, /Lead result source/);
-    assert.ok(preview.includes(provenance));
-  }
-
+test("coordination previews strip only known assignment envelopes", () => {
   const assignment = renderedText(
     renderCoordinationMessage(
       "project_assignment",

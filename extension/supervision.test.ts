@@ -21,9 +21,6 @@ import {
   COORDINATION_MESSAGE_MAX_BYTES,
   COORDINATION_MESSAGE_KINDS,
   chiefMessageQuarantined,
-  chiefAskQueued,
-  chiefAskMessageId,
-  coordinationReplyQueued,
   chiefLeaseIsHeld,
   claimChiefLease,
   claimManagerLease,
@@ -39,6 +36,10 @@ import {
   removeProjectAssignment,
   projectAssignmentPath,
   projectWorkSnapshot,
+  projectMessageBytes,
+  writeProjectMessage,
+  listProjectMessages,
+  removeProjectMessages,
   findProjectAssignmentBySession,
   PROJECT_ASSIGNMENT_MAX_BYTES,
   coordinationMessageBytes,
@@ -54,11 +55,9 @@ import {
   removeCoordinationMessage,
   supervisionRuntime,
   invalidateLeadCoordinationState,
-  LEAD_STATE_MAX_BYTES,
   listChiefMessagePaths,
   normalizeHerdrLifecycleState,
   projectSupervision,
-  askMatchesSupervisor,
   quarantineChiefMessage,
   readChiefMessage,
   readLeadCoordinationState,
@@ -68,14 +67,13 @@ import {
   writeChiefMessage,
   writeCoordinationMessage,
   writePeerLeadRecord,
-  writeChiefAskMessage,
   removeChiefMessage,
   writeLeadCoordinationState,
-  validLeadCoordinationQuestion,
-  type ChiefMessageRecord,
   type LeadCoordinationState,
   type OpenProjectWorkspace,
   type PeerLeadRecord,
+  type ProjectMessage,
+  type ChiefMessageRecord,
 } from "./supervision.ts";
 
 const socket = () =>
@@ -111,17 +109,6 @@ function assertPosixMode(path: string, expected: number): void {
   if (process.platform !== "win32") assert.equal(actual, expected);
 }
 
-const askMessage = (
-  extra: Partial<ChiefMessageRecord> = {},
-): ChiefMessageRecord =>
-  message({
-    id: id(),
-    kind: "lead_ask",
-    askId: id(),
-    text: "question",
-    ...extra,
-  });
-
 function peerRecord(
   runtime: ReturnType<typeof peerRuntime>,
   piSessionId = `lead-${id()}`,
@@ -144,55 +131,6 @@ function peerRecord(
     release: lease.release,
   };
 }
-
-test("lead ask publication is idempotent and retains the first record", () => {
-  const runtime = supervisionRuntime(socket());
-  const first = askMessage();
-  const duplicate = { ...first, createdAt: first.createdAt + 1 };
-  assert.equal(
-    writeChiefAskMessage(first, runtime),
-    writeChiefAskMessage(duplicate, runtime),
-  );
-  assert.deepEqual(
-    readChiefMessage(chiefMessagePath(runtime, first.toSessionId, first.id)),
-    first,
-  );
-  assert.equal(listChiefMessagePaths(runtime, first.toSessionId).length, 1);
-});
-
-test("lead ask publication rejects a conflicting same-ID record", () => {
-  const runtime = supervisionRuntime(socket());
-  const first = askMessage();
-  const conflict = { ...first, text: "different question" };
-  writeChiefAskMessage(first, runtime);
-  assert.throws(() => writeChiefAskMessage(conflict, runtime), /conflicting/);
-  assert.equal(
-    readChiefMessage(chiefMessagePath(runtime, first.toSessionId, first.id))
-      .text,
-    first.text,
-  );
-});
-
-test("lead ask publication never replaces a quarantined same-ID record", () => {
-  const runtime = supervisionRuntime(socket());
-  const first = askMessage();
-  const replacement = { ...first, text: "replacement" };
-  writeChiefMessage(first, runtime);
-  quarantineChiefMessage(runtime, first.toSessionId, first.id);
-  assert.throws(
-    () => writeChiefAskMessage(replacement, runtime),
-    /quarantined/,
-  );
-  assert.equal(
-    chiefMessageQuarantined(runtime, first.toSessionId, first.id),
-    true,
-  );
-  assert.equal(
-    readChiefMessage(chiefMessagePath(runtime, first.toSessionId, first.id))
-      .text,
-    first.text,
-  );
-});
 
 test("message writes recover a stale crash-held lock", () => {
   const runtime = supervisionRuntime(socket());
@@ -272,15 +210,9 @@ test("chief message admission accepts exactly 8 KiB and rejects the next byte", 
 test("coordination records require branch only for project message kinds", () => {
   const runtime = supervisionRuntime(socket());
   for (const kind of COORDINATION_MESSAGE_KINDS) {
-    const projectMessage =
-      kind === "project_assignment" || kind === "report_result";
+    const projectMessage = kind === "project_assignment";
     const record = message({
       kind,
-      ...(["lead_ask", "chief_reply", "manager_ask", "manager_reply"].includes(
-        kind,
-      )
-        ? { askId: id() }
-        : {}),
       ...(projectMessage ? { branch: "feat/bootstrap" } : {}),
     });
     const path = writeCoordinationMessage(record, runtime);
@@ -303,6 +235,18 @@ test("coordination records require branch only for project message kinds", () =>
       /Invalid Chief message record/,
     );
   }
+  for (const kind of [
+    "lead_ask",
+    "chief_reply",
+    "manager_ask",
+    "manager_reply",
+    "report_result",
+  ])
+    assert.throws(
+      () => writeCoordinationMessage(message({ kind } as never), runtime),
+      /Invalid Chief message record/,
+      kind,
+    );
 });
 
 test("peer lead presence requires a live generation and excludes corruption", () => {
@@ -611,6 +555,12 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   const value = state("lead");
   const path = writeLeadCoordinationState(runtime, value);
   assert.deepEqual(readLeadCoordinationState(runtime, "lead"), value);
+  assert.deepEqual(Object.keys(value).sort(), [
+    "instanceId",
+    "piSessionId",
+    "updatedAt",
+    "version",
+  ]);
   assert.match(path.split(sep).join("/"), /coordinators\/[0-9a-f]{64}\.json$/);
   assertPosixMode(path, 0o600);
   assertPosixMode(runtime.leads, 0o700);
@@ -630,104 +580,43 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   );
 });
 
-test("durable ask binding gates projected replies and preserves legacy chief asks", () => {
+test("lead coordination reader ignores only the retired pendingAsk field", () => {
   const runtime = supervisionRuntime(socket());
-  const chief = { piSessionId: "chief", leaseId: id(), role: "chief" as const };
-  const bound = {
-    askId: id(),
-    question: "Q",
-    text: "Question: Q",
-    supervisorSessionId: chief.piSessionId,
-    supervisorLeaseId: chief.leaseId,
-    supervisorRole: chief.role,
-  };
-  const agent = {
-    sessionId: "lead",
-    sessionKind: "id" as const,
-    workspaceId: "work",
-    paneId: "pane",
-    tabId: "tab",
-  };
-  const projection = (
-    ask: LeadCoordinationState["pendingAsk"],
-    supervisor = chief,
-  ) =>
-    projectSupervision({
-      agents: [agent],
-      managedAgents: [],
-      coordinationStates: [state("lead", { pendingAsk: ask })],
-      supervisor,
-    }).leads[0];
-  writeLeadCoordinationState(runtime, state("lead", { pendingAsk: bound }));
-  assert.deepEqual(
-    readLeadCoordinationState(runtime, "lead")?.pendingAsk,
-    bound,
+  const current = state("legacy-lead");
+  const path = writeLeadCoordinationState(runtime, current);
+  writeFileSync(
+    path,
+    JSON.stringify({ ...current, pendingAsk: { malformed: "ignored" } }),
   );
-  assert.equal(askMatchesSupervisor(bound, chief), true);
-  assert.equal(projection(bound).availableActions.includes("reply"), true);
-  const replacement = { ...chief, leaseId: id() };
-  assert.equal(askMatchesSupervisor(bound, replacement), false);
-  assert.equal(
-    projection(bound, replacement).availableActions.includes("reply"),
-    false,
-  );
-  assert.equal(projection(bound, replacement).needsYou, false);
-  assert.equal(
-    projection(bound, { ...chief, role: "manager" }).availableActions.includes(
-      "reply",
-    ),
-    false,
-  );
-  assert.equal(
-    projection(
-      { askId: id(), question: "Legacy", text: "Q" },
-      replacement,
-    ).availableActions.includes("reply"),
-    true,
-  );
-  for (const invalid of [
-    { ...bound, supervisorLeaseId: undefined },
-    { ...bound, supervisorRole: "other" },
-    { ...bound, unexpected: true },
-  ])
-    assert.throws(() =>
-      writeLeadCoordinationState(
-        runtime,
-        state("lead", { pendingAsk: invalid as never }),
-      ),
-    );
-});
 
-test("lead coordination state admits the exact UTF-8 16 KiB boundary", () => {
-  const runtime = supervisionRuntime(socket());
-  const askId = id();
-  const instanceId = id();
-  const prefix = "é\t".repeat(32);
-  const stateFor = (text: string): LeadCoordinationState =>
-    state("lead", {
-      instanceId,
-      pendingAsk: { askId, question: "Q", text: prefix + text },
-    });
-  const serializedBytes = (value: LeadCoordinationState) =>
-    Buffer.byteLength(`${JSON.stringify(value)}\n`, "utf8");
-  let low = 0;
-  let high = LEAD_STATE_MAX_BYTES;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (serializedBytes(stateFor("x".repeat(middle))) <= LEAD_STATE_MAX_BYTES)
-      low = middle;
-    else high = middle - 1;
+  const loaded = readLeadCoordinationState(runtime, current.piSessionId)!;
+  assert.deepEqual(loaded, current);
+  assert.equal("pendingAsk" in loaded, false);
+  const projected = projectSupervision({
+    agents: [
+      {
+        sessionId: current.piSessionId,
+        sessionKind: "id",
+        workspaceId: "workspace",
+        paneId: "pane",
+        tabId: "tab",
+      },
+    ],
+    managedAgents: [],
+    coordinationStates: [loaded],
+  });
+  assert.equal("pendingAsk" in projected.leads[0], false);
+
+  for (const invalid of [
+    { ...current, pendingAsk: {}, unexpected: true },
+    { ...current, pendingAsk: {}, instanceId: "invalid" },
+  ]) {
+    writeFileSync(path, JSON.stringify(invalid));
+    assert.throws(
+      () => readLeadCoordinationState(runtime, current.piSessionId),
+      /Unable to read/,
+    );
   }
-  const exact = stateFor("x".repeat(low));
-  const over = stateFor("x".repeat(low + 1));
-  assert.equal(serializedBytes(exact), LEAD_STATE_MAX_BYTES);
-  assert.equal(serializedBytes(over), LEAD_STATE_MAX_BYTES + 1);
-  writeLeadCoordinationState(runtime, exact);
-  assert.deepEqual(readLeadCoordinationState(runtime, "lead"), exact);
-  assert.throws(
-    () => writeLeadCoordinationState(runtime, over),
-    /Lead coordination state is too large/,
-  );
 });
 
 test("Chief message records reject removed coordination fields", () => {
@@ -755,26 +644,6 @@ test("queued traffic remains correlated to the exact lead session after restart"
   });
   assert.equal(delivered, 1);
   assert.deepEqual(listChiefMessagePaths(runtime, original.toSessionId), []);
-});
-
-test("lead questions use one UTF-8-safe coordination limit", () => {
-  assert.equal(validLeadCoordinationQuestion("x".repeat(1024)), true);
-  assert.equal(validLeadCoordinationQuestion("x".repeat(1025)), false);
-  assert.equal(validLeadCoordinationQuestion("é".repeat(1024)), false);
-  assert.equal(validLeadCoordinationQuestion(" ".repeat(1024)), false);
-});
-
-test("ask correlation ignores ephemeral lead instance IDs", () => {
-  const askId = id();
-  const leaseId = id();
-  assert.equal(
-    chiefAskMessageId("lead", askId, leaseId),
-    chiefAskMessageId("lead", askId, leaseId),
-  );
-  assert.notEqual(
-    chiefAskMessageId("other-lead", askId, leaseId),
-    chiefAskMessageId("lead", askId, leaseId),
-  );
 });
 
 test("lead role state requires a canonical durable tool baseline", () => {
@@ -813,136 +682,7 @@ test("lead role state requires a canonical durable tool baseline", () => {
   }
 });
 
-test("needsYou clears only for the matching queued supervisor reply", () => {
-  const runtime = supervisionRuntime(socket());
-  const supervisor = {
-    piSessionId: "manager",
-    leaseId: id(),
-    role: "manager" as const,
-  };
-  const pendingAsk = {
-    askId: id(),
-    question: "Which branch?",
-    text: "Question: Which branch?",
-    supervisorSessionId: supervisor.piSessionId,
-    supervisorLeaseId: supervisor.leaseId,
-    supervisorRole: supervisor.role,
-  };
-  const lead = {
-    sessionId: "lead",
-    sessionKind: "id" as const,
-    workspaceId: "work",
-    paneId: "pane",
-    tabId: "tab",
-  };
-  const persisted = state("lead", { pendingAsk });
-  writeLeadCoordinationState(runtime, persisted);
-  const project = (
-    ask: LeadCoordinationState["pendingAsk"] | null = pendingAsk,
-  ) => {
-    const currentAsk = ask ?? undefined;
-    const answeredAskIds = new Set<string>();
-    if (
-      currentAsk &&
-      coordinationReplyQueued(
-        runtime,
-        "lead",
-        "lead",
-        currentAsk.askId,
-        supervisor,
-      )
-    )
-      answeredAskIds.add(currentAsk.askId);
-    return projectSupervision({
-      agents: [lead],
-      managedAgents: [],
-      coordinationStates: [state("lead", { pendingAsk: currentAsk })],
-      supervisor,
-      ...(answeredAskIds.size ? { answeredAskIds } : {}),
-    }).leads[0]!;
-  };
-  const reply = (
-    askId: string,
-    leaseId = supervisor.leaseId,
-  ): ChiefMessageRecord =>
-    message({
-      kind: "manager_reply",
-      fromSessionId: supervisor.piSessionId,
-      toSessionId: "lead",
-      leadSessionId: "lead",
-      askId,
-      leaseId,
-      text: "Use feat/work.",
-    });
-
-  assert.equal(project().needsYou, true);
-
-  const wrongAsk = reply(id());
-  writeChiefMessage(wrongAsk, runtime);
-  assert.equal(
-    coordinationReplyQueued(
-      runtime,
-      "lead",
-      "lead",
-      pendingAsk.askId,
-      supervisor,
-    ),
-    false,
-  );
-  assert.equal(project().needsYou, true);
-  removeChiefMessage(runtime, "lead", wrongAsk.id, wrongAsk);
-
-  const replacedLease = reply(pendingAsk.askId, id());
-  writeChiefMessage(replacedLease, runtime);
-  assert.equal(project().needsYou, true);
-  removeChiefMessage(runtime, "lead", replacedLease.id, replacedLease);
-
-  for (let i = 0; i < COORDINATION_INBOX_SCAN_LIMIT + 8; i++)
-    writeChiefMessage(
-      message({
-        kind: "manager_message",
-        fromSessionId: supervisor.piSessionId,
-        toSessionId: "lead",
-        leadSessionId: "lead",
-        createdAt: i,
-        text: `queued message ${i}`,
-      }),
-      runtime,
-    );
-  const exactReply = { ...reply(pendingAsk.askId), createdAt: 100 };
-  writeChiefMessage(exactReply, runtime);
-  const deliveryBatch = listChiefMessagePaths(runtime, "lead");
-  assert.equal(deliveryBatch.length, COORDINATION_INBOX_SCAN_LIMIT);
-  assert.equal(
-    deliveryBatch.includes(chiefMessagePath(runtime, "lead", exactReply.id)),
-    false,
-  );
-  assert.equal(project().needsYou, false);
-  assert.deepEqual(
-    readLeadCoordinationState(runtime, "lead")?.pendingAsk,
-    pendingAsk,
-  );
-  removeChiefMessage(runtime, "lead", exactReply.id, exactReply);
-  assert.equal(
-    coordinationReplyQueued(
-      runtime,
-      "lead",
-      "lead",
-      pendingAsk.askId,
-      supervisor,
-    ),
-    false,
-  );
-  assert.equal(project().needsYou, true);
-  assert.deepEqual(
-    readLeadCoordinationState(runtime, "lead")?.pendingAsk,
-    pendingAsk,
-  );
-
-  assert.equal(project(null).needsYou, false);
-});
-
-test("supervision authority is coordination state, not metadata", () => {
+test("supervision authority is coordinator state, not metadata", () => {
   const piSessionId = "11111111-1111-4111-8111-111111111111";
   const lead = {
     sessionId: piSessionId,
@@ -957,22 +697,9 @@ test("supervision authority is coordination state, not metadata", () => {
     agents: [lead],
     managedAgents: [],
     supervisor: { piSessionId: "chief", leaseId: id(), role: "chief" },
-    coordinationStates: [
-      state(piSessionId, {
-        pendingAsk: {
-          askId: id(),
-          question: "OAuth?",
-          text: "Question: OAuth?",
-        },
-      }),
-    ],
+    coordinationStates: [state(piSessionId)],
   });
-  assert.equal(snapshot.leads[0].needsYou, true);
-  assert.deepEqual(snapshot.leads[0].availableActions, [
-    "inspect",
-    "message",
-    "reply",
-  ]);
+  assert.deepEqual(snapshot.leads[0].availableActions, ["inspect", "message"]);
   const serialized = serializeSupervision(snapshot).leads[0];
   assert.equal(snapshot.leads[0].lead, piSessionId);
   assert.equal(serialized.session, piSessionId);
@@ -980,13 +707,13 @@ test("supervision authority is coordination state, not metadata", () => {
   assert.deepEqual(serialized.available_tools, [
     "staff_inspect",
     "staff_message",
-    "staff_reply",
   ]);
   assert.equal(snapshot.leads[0].displayName, "api/lead-11111111");
   assert.equal("display_name" in snapshot.leads[0], false);
   assert.equal(serialized.runtime_state, "idle");
   assert.equal(serialized.display_name, "api/lead-11111111");
-  assert.equal(serialized.pending_ask_question, "OAuth?");
+  assert.equal("pending_ask_question" in serialized, false);
+  assert.equal("needs_you" in serialized, false);
 });
 
 test("Manager supervision snapshot carries only its derived open workspaces", () => {
@@ -1003,7 +730,7 @@ test("Manager supervision snapshot carries only its derived open workspaces", ()
       path: "/repo-wt",
       linked: true,
     },
-  ];
+  ] as const;
   const snapshot = projectSupervision({
     agents: [],
     managedAgents: [],
@@ -1421,8 +1148,8 @@ test("terminal malformed inbox files do not gate a later send", () => {
   assert.equal(chiefMessageQuarantined(runtime, "lead", malformedId), false);
 });
 
-test("quarantined queued messages are excluded, non-blocking, and reconcilable", () => {
-  for (const kind of ["excluded", "new-message", "lead-ask"] as const) {
+test("quarantined queued messages are excluded and non-blocking", () => {
+  for (const kind of ["excluded", "new-message"] as const) {
     const runtime = supervisionRuntime(socket());
     if (kind === "excluded") {
       const record = message({ kind: "lead_message" });
@@ -1443,25 +1170,6 @@ test("quarantined queued messages are excluded, non-blocking, and reconcilable",
       quarantineChiefMessage(runtime, first.toSessionId, first.id);
       writeChiefMessage(second, runtime);
       assert.equal(listChiefMessagePaths(runtime, "lead").length, 2);
-    } else {
-      const record = message({
-        kind: "lead_ask",
-        askId: id(),
-        fromSessionId: "lead",
-        leadSessionId: "lead",
-        toSessionId: "chief",
-      });
-      writeChiefMessage(record, runtime);
-      quarantineChiefMessage(runtime, "chief", record.id);
-      assert.equal(
-        chiefAskQueued(runtime, "chief", "lead", record.askId!),
-        false,
-      );
-      writeChiefMessage(record, runtime);
-      assert.equal(
-        chiefAskQueued(runtime, "chief", "lead", record.askId!),
-        true,
-      );
     }
   }
 });
@@ -1719,7 +1427,7 @@ test("coordination envelopes identify senders without claiming recipient roles",
   const routes = [
     {
       name: "Lead -> Chief",
-      kind: "lead_ask",
+      kind: "lead_message",
       senderRole: "lead",
       fromSessionId: "lead-session",
       recipientRole: "chief",
@@ -1746,7 +1454,7 @@ test("coordination envelopes identify senders without claiming recipient roles",
     },
     {
       name: "Chief -> Lead",
-      kind: "chief_reply",
+      kind: "chief_message",
       senderRole: "chief",
       fromSessionId: "chief-session",
       recipientRole: "lead",
@@ -1762,27 +1470,13 @@ test("coordination envelopes identify senders without claiming recipient roles",
       toSessionId: "manager-from-chief",
       leadSessionId: "manager-session",
     },
-    {
-      name: "Manager -> Lead reply",
-      kind: "manager_reply",
-      senderRole: "manager",
-      fromSessionId: "manager-session",
-      recipientRole: "lead",
-      toSessionId: "lead-from-manager",
-      leadSessionId: "lead-session",
-    },
-  ] as const;
+  ];
   const traffic = routes.map((route) => {
     const record = message({
       kind: route.kind,
       fromSessionId: route.fromSessionId,
       toSessionId: route.toSessionId,
       leadSessionId: route.leadSessionId,
-      ...(["lead_ask", "chief_reply", "manager_ask", "manager_reply"].includes(
-        route.kind,
-      )
-        ? { askId: id() }
-        : {}),
       text: "Which credential should I use?",
     });
     writeChiefMessage(record, runtime);
@@ -2036,12 +1730,7 @@ test("coordinator state and peer presence admit only Lead or Manager roles", () 
     writeLeadCoordinationState(
       runtime,
       state("bad", {
-        pendingAsk: {
-          askId: id(),
-          question: "?",
-          text: "x",
-          extra: true,
-        } as never,
+        unknown: true,
       }),
     ),
   );
@@ -2364,7 +2053,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
   ]);
 });
 
-test("project work derives status from current worktrees, Leads and canonical result", () => {
+test("project work derives active, paused, or conflict from runtime placement", () => {
   const assignment = {
     version: 1 as const,
     id: id(),
@@ -2394,16 +2083,6 @@ test("project work derives status from current worktrees, Leads and canonical re
       name: "paused without worktree",
       input: { worktrees: [], leads: [] },
       status: "paused",
-      issue: "worktree is unavailable",
-    },
-    {
-      name: "finished from canonical result",
-      input: {
-        worktrees: [],
-        leads: [],
-        finished: new Set([assignment.id]),
-      },
-      status: "finished",
     },
     {
       name: "duplicate worktree topology",
@@ -2439,8 +2118,6 @@ test("project work derives status from current worktrees, Leads and canonical re
       assignments: [assignment],
       worktrees: scenario.input.worktrees,
       leads: scenario.input.leads,
-      finished:
-        "finished" in scenario.input ? scenario.input.finished : new Set(),
     });
     assert.equal(snapshot[0]!.status, scenario.status, scenario.name);
     assert.equal(snapshot[0]!.task, "implement work", scenario.name);
@@ -2450,45 +2127,68 @@ test("project work derives status from current worktrees, Leads and canonical re
       "runtimeState" in scenario ? scenario.runtimeState : undefined,
       scenario.name,
     );
-    if ("issue" in scenario)
-      assert.equal(snapshot[0]!.issue, scenario.issue, scenario.name);
+    assert.equal(
+      snapshot[0]!.issue,
+      "issue" in scenario ? scenario.issue : undefined,
+      scenario.name,
+    );
   }
 });
 
-test("Manager asks and project results use the one durable inbox", async () => {
+test("project messages are durable, assignment-scoped, bounded, and removable", () => {
   const runtime = supervisionRuntime(socket());
-  const ask = message({
-    kind: "manager_ask",
-    fromSessionId: "manager",
-    toSessionId: "chief",
-    leadSessionId: "manager",
-    askId: id(),
-  });
-  writeChiefAskMessage(ask, runtime);
-  const result = message({
-    kind: "report_result",
-    fromSessionId: "lead",
-    toSessionId: "manager",
-    leadSessionId: "lead",
+  const assignment = {
+    version: 1 as const,
+    id: id(),
+    repoKey: "repo",
     branch: "feat/bootstrap",
-    text: "I'm live",
-  });
-  writeChiefMessage(result, runtime);
-  const received: string[] = [];
-  for (const sessionId of ["chief", "manager"])
-    await drainCoordinationInbox({
-      runtime,
-      sessionId,
-      isAuthorized: () => true,
-      isDelivered: () => false,
-      sendMessage: (payload) =>
-        received.push((payload as { content: string }).content),
-    });
-  assert.deepEqual(received, [
-    "From manager manager: hello",
-    `Project work ${result.branch} finished:\n\n${result.text}`,
-  ]);
-  assert.doesNotMatch(received[1]!, /result:|Result from lead/);
+    text: "task",
+  };
+  const record: ProjectMessage = {
+    version: 1,
+    id: id(),
+    repoKey: assignment.repoKey,
+    branch: assignment.branch,
+    fromSessionId: assignment.id,
+    text: "Review handoff",
+    createdAt: 10,
+  };
+  writeProjectAssignment(runtime, assignment);
+  writeProjectMessage(record, runtime);
+  assert.deepEqual(
+    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+    [record],
+  );
+  assert.deepEqual(
+    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+    [record],
+    "observation does not consume the retained message",
+  );
+  assert.equal(
+    projectMessageBytes(record),
+    Buffer.byteLength(`${JSON.stringify(record)}\n`, "utf8"),
+  );
+  assert.deepEqual(
+    listProjectMessages(runtime, "other-repo", assignment.branch),
+    [],
+  );
+  assert.throws(
+    () =>
+      writeProjectMessage(
+        { ...record, text: "x".repeat(COORDINATION_MESSAGE_MAX_BYTES) },
+        runtime,
+      ),
+    /Invalid project message/,
+  );
+  assert.throws(
+    () => writeProjectMessage({ ...record, fromSessionId: "" }, runtime),
+    /Invalid project message/,
+  );
+  removeProjectMessages(runtime, assignment.repoKey, assignment.branch);
+  assert.deepEqual(
+    listProjectMessages(runtime, assignment.repoKey, assignment.branch),
+    [],
+  );
 });
 
 test("project assignment uses durable project transport, not Manager message framing", async () => {

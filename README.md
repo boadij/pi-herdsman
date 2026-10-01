@@ -30,7 +30,6 @@ _Concept animation, not a live recording._
 - **Owned usage visibility.** Inspect Pi-native token usage and cost for the current session plus transitively owned managed-Agent sessions.
 - **Your workflow stays yours.** Bring your own Agent definitions, models, tools, skills, extensions, and development process.
 
-
 ## Quick start
 
 On Linux or macOS, install the released Pi, herdr, and Pi Herdsman stack:
@@ -111,15 +110,15 @@ workflow.
 
 ## Choose your next step
 
-| Goal | Start here |
-| --- | --- |
-| Install and delegate your first task | [Getting started](docs/getting-started.md) |
-| Run independent branch-based project work | [Project orchestration](docs/guides/project-orchestration.md) |
-| Understand roles, ownership, and authority | [Coordination](docs/concepts/coordination.md) |
-| Customize Agents | [Agent definitions](docs/guides/agent-definitions.md) |
-| Build against the model-facing tools | [Coordination API](docs/coordination-api.md) |
-| Deploy an SSH-ready environment | [Container deployment](docs/guides/container-deployment.md) |
-| Contribute to Pi Herdsman | [Documentation index](docs/README.md#develop-pi-herdsman) |
+| Goal                                       | Start here                                                    |
+| ------------------------------------------ | ------------------------------------------------------------- |
+| Install and delegate your first task       | [Getting started](docs/getting-started.md)                    |
+| Run independent branch-based project work  | [Project orchestration](docs/guides/project-orchestration.md) |
+| Understand roles, ownership, and authority | [Coordination](docs/concepts/coordination.md)                 |
+| Customize Agents                           | [Agent definitions](docs/guides/agent-definitions.md)         |
+| Build against the model-facing tools       | [Coordination API](docs/coordination-api.md)                  |
+| Deploy an SSH-ready environment            | [Container deployment](docs/guides/container-deployment.md)   |
+| Contribute to Pi Herdsman                  | [Documentation index](docs/README.md#develop-pi-herdsman)     |
 
 ## Community
 

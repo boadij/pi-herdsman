@@ -23,35 +23,35 @@ disagrees.
 
 ## Canonical ownership
 
-| Subject | Canonical owner |
-| --- | --- |
-| Product positioning and repository first impression | [`README.md`](../../README.md) |
-| First successful use | [Getting started](../getting-started.md) |
-| Model-facing API navigation | [Coordination API](../coordination-api.md) |
-| Roles, authority, project scope, and system boundaries | [Coordination](../concepts/coordination.md) |
-| Agent identity | [Agents and identity](../concepts/agents.md) |
-| Delegation and execution ownership | [Delegation](../concepts/delegation.md) |
-| Asynchronous Agent lifecycle | [Lifecycle](../concepts/lifecycle.md) |
-| Manager workflow | [Project orchestration](../guides/project-orchestration.md) |
-| Creating Agent definitions | [Agent definitions](../guides/agent-definitions.md) |
-| Overrides and prompt composition | [Customizing bundled Agents](../guides/customizing-agents.md) |
-| Handoffs, files, and result references | [Handoffs and files](../guides/handoffs.md) |
-| Operator recovery | [Recovery](../guides/recovery.md) |
-| Container deployment | [Container deployment](../guides/container-deployment.md) |
-| `agent_*` contract | [Agent tools](../reference/agent.md) |
-| `ask_owner` contract | [`ask_owner`](../reference/ask-owner.md) |
-| `staff_*` and project-work contract | [Staff tools](../reference/staff.md) |
-| `supervisor_*` contract | [Supervisor tools](../reference/supervisor.md) |
-| `peer_*` contract | [Peer tools](../reference/peer.md) |
-| Slash commands | [Commands](../reference/commands.md) |
-| Agent-definition fields | [Agent-definition schema](../reference/agent-definition-schema.md) |
-| Public Agent states | [Agent states](../reference/agent-states.md) |
-| Settings | [Configuration](../reference/configuration.md) |
-| TUI status presentation | [Status widget](../reference/status-widget.md) |
-| Error categories | [Errors](../reference/errors.md) |
-| Repository checks | [Validation](validation.md) |
-| Live acceptance | [Smoke testing](smoke-testing.md) |
-| Instruction/interface design | [Instruction and interface design](instruction-interface-design.md) |
+| Subject                                                | Canonical owner                                                     |
+| ------------------------------------------------------ | ------------------------------------------------------------------- |
+| Product positioning and repository first impression    | [`README.md`](../../README.md)                                      |
+| First successful use                                   | [Getting started](../getting-started.md)                            |
+| Model-facing API navigation                            | [Coordination API](../coordination-api.md)                          |
+| Roles, authority, project scope, and system boundaries | [Coordination](../concepts/coordination.md)                         |
+| Agent identity                                         | [Agents and identity](../concepts/agents.md)                        |
+| Delegation and execution ownership                     | [Delegation](../concepts/delegation.md)                             |
+| Asynchronous Agent lifecycle                           | [Lifecycle](../concepts/lifecycle.md)                               |
+| Manager workflow                                       | [Project orchestration](../guides/project-orchestration.md)         |
+| Creating Agent definitions                             | [Agent definitions](../guides/agent-definitions.md)                 |
+| Overrides and prompt composition                       | [Customizing bundled Agents](../guides/customizing-agents.md)       |
+| Handoffs, files, and result references                 | [Handoffs and files](../guides/handoffs.md)                         |
+| Operator recovery                                      | [Recovery](../guides/recovery.md)                                   |
+| Container deployment                                   | [Container deployment](../guides/container-deployment.md)           |
+| `agent_*` contract                                     | [Agent tools](../reference/agent.md)                                |
+| `ask_owner` contract                                   | [`ask_owner`](../reference/ask-owner.md)                            |
+| `staff_*` and project-work contract                    | [Staff tools](../reference/staff.md)                                |
+| `supervisor_*` contract                                | [Supervisor tools](../reference/supervisor.md)                      |
+| `peer_*` contract                                      | [Peer tools](../reference/peer.md)                                  |
+| Slash commands                                         | [Commands](../reference/commands.md)                                |
+| Agent-definition fields                                | [Agent-definition schema](../reference/agent-definition-schema.md)  |
+| Public Agent states                                    | [Agent states](../reference/agent-states.md)                        |
+| Settings                                               | [Configuration](../reference/configuration.md)                      |
+| TUI status presentation                                | [Status widget](../reference/status-widget.md)                      |
+| Error categories                                       | [Errors](../reference/errors.md)                                    |
+| Repository checks                                      | [Validation](validation.md)                                         |
+| Live acceptance                                        | [Smoke testing](smoke-testing.md)                                   |
+| Instruction/interface design                           | [Instruction and interface design](instruction-interface-design.md) |
 
 ## Page types
 
