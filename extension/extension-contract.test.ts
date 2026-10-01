@@ -605,6 +605,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "pi-herdsman-agent-lost",
       "pi-herdsman-agent-result",
       "pi-herdsman-agent-stale",
+      "pi-herdsman-project_message",
       "pi-herdsman-stop-summary",
       ...COORDINATION_MESSAGE_KINDS.map((kind) => `pi-herdsman-${kind}`),
     ].sort(),
