@@ -107,11 +107,14 @@ process-tree cleanup when the test runner times out or leaks descendants.
 
 ## Dependency availability
 
-A fresh auxiliary worktree may not contain `node_modules`.
+A fresh worktree may not contain `node_modules`.
 
-Do not silently install dependencies as part of a source-only task unless that
-installation is authorized. If validation uses an existing dependency tree via a
-temporary link, record that fact and remove the link afterward.
+Before running local validation, ensure dependencies are installed in that
+worktree. If `node_modules` is absent, run:
+
+```sh
+npm ci
+```
 
 ## Failed or non-converging check
 
