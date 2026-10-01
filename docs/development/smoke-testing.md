@@ -56,11 +56,9 @@ managed descendants do not load the probe.
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
 generations), `chief-tree` (current Chief/session_tree behavior), and
-`manager-recovery` (real Manager delegation and direct Lead routing, graceful
-`staff_close` pause with branch-only same-session resume, Manager leave/re-entry,
-branch-only recovery after exact-session executor loss, no-duplicate-worktree
-identity, `supervisor_result` settlement, durable result retention, and
-successful Manager leave).
+`manager-recovery` (Manager delegation, review messaging, `staff_stop`, missing
+worktree reconstruction with exact Pi-session continuity, retained project
+messages across Manager turnover, and Manager-owned project resolution).
 `chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool
 snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
@@ -311,9 +309,9 @@ After every smoke:
 ## Project Manager / Chief supervision live matrix
 
 `manager-recovery` is the canonical automated live Manager lifecycle check. It
-covers fresh delegation, direct Lead-to-Manager routing, graceful pause/resume,
-Manager turnover, executor-loss recovery, result settlement, durable result
-retention, and exact cleanup.
+covers fresh delegation, project review messaging, pause/resume, missing
+worktree recovery, exact Pi-session continuity, retained project messages
+across Manager turnover, completion, and exact cleanup.
 
 The broader matrix below remains optional exploratory acceptance for supervision
 behavior not covered by the automated scenarios. A NOT RUN entry is not a claim
@@ -325,7 +323,7 @@ Automated live scenario results are separate and do not replace these checks.
 | Scenario                                                                                                                                                                       | Result  |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
 | Normal lead has Agent, supervisor, and peer semantic tools, not staff tools                                                                                                    | NOT RUN |
-| Active Chief has exactly the five staff semantic tools, not lead controller tools                                                                                              | NOT RUN |
+| Active Chief has exactly the four staff semantic tools, not lead controller tools                                                                                              | NOT RUN |
 | Selecting a pre-Chief Lead branch through `/tree` exits Chief mode and restores ordinary Lead lifecycle/tool state                                                             | NOT RUN |
 | Leaving Chief persists `role` plus exact `leadTools`; resume repairs stale restored `staff_*` before another model turn                                                        | NOT RUN |
 | A legitimate ordinary branch loadout is preserved instead of being overwritten by an older `leadTools` checkpoint                                                              | NOT RUN |
@@ -354,12 +352,8 @@ Automated live scenario results are separate and do not replace these checks.
 | A quarantined message does not block a new message to the same lead                                                                                                            | NOT RUN |
 | Leads retain descendant ownership after a Chief `message`                                                                                                                      | NOT RUN |
 | Lead `supervisor_message` reaches the active Chief                                                                                                                             | NOT RUN |
-| Lead `supervisor_ask` reaches the active Chief and creates one pending ask                                                                                                     | NOT RUN |
-| Pending ask projects as `needs_you` with bounded public question and exact reply action                                                                                        | NOT RUN |
-| A second lead ask while one is pending is rejected                                                                                                                             | NOT RUN |
-| Exact Chief `reply` reaches the lead and clears the ask after local acceptance                                                                                                 | NOT RUN |
-| Pending ask remains replyable after chief replacement using the unchanged ask ID/current lease                                                                                 | NOT RUN |
-| Failed ask queue restores the exact previous pending-ask state                                                                                                                 | NOT RUN |
+| Assigned Lead `supervisor_message` reaches the active Manager as project-scoped coordination                                                                                   | NOT RUN |
+| An assigned Lead can retain a project message while no Manager is active; a replacement Manager receives it                                                                    | NOT RUN |
 | Metadata publication failure does not remove communication eligibility                                                                                                         | NOT RUN |
 | Ordinary lead messages leave lead coordination state unchanged                                                                                                                 | NOT RUN |
 | Follow-up delivery while the receiver is streaming, never steering                                                                                                             | NOT RUN |

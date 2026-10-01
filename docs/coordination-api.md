@@ -35,18 +35,18 @@ Chief and Manager use [Staff tools](reference/staff.md) for direct-report
 observation and communication.
 
 Manager additionally uses branch-based staff operations to start, resume, pause,
-or abandon project work.
+complete, or abandon project work.
 
 ```text
 staff_list
 staff_inspect
 staff_transcript
 staff_message
-staff_reply
 
 Manager only:
 staff_delegate
-staff_close
+staff_stop
+staff_complete
 staff_discard
 ```
 
@@ -57,14 +57,16 @@ Ordinary Leads and Managers communicate upward through
 
 ```text
 supervisor_message
-supervisor_ask
-
-assigned Lead only:
-supervisor_result
 ```
 
-An ordinary Lead routes to its active project Manager when one exists,
-otherwise to Chief. A Manager routes to Chief.
+Assigned Lead messages are retained with their project assignment and are
+nonterminal. Manager resolves project work with `staff_complete` or
+`staff_discard`; `staff_stop` pauses execution without removing the assignment.
+
+An assigned project Lead saves messages with its project assignment for the
+current or a replacement Manager, even when no Manager is active; it does not
+route those messages to Chief. An unassigned Lead routes to its active Manager
+when one exists, otherwise to Chief. A Manager routes to Chief.
 
 ## Same-role peers
 

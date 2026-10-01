@@ -2,16 +2,16 @@
 
 [Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
-`supervisor_*` is upward communication across the current direct-supervisor
-edge.
+`supervisor_message` is the coordination operation for ordinary Leads and
+Managers. An assigned project Lead saves messages with its project assignment
+for the current or a replacement Manager, even when no Manager is active; it
+does not route those messages to Chief. An unassigned Lead routes to its active
+Manager when one exists, otherwise to Chief. A Manager routes to Chief. Managed
+Agents use `ask_owner` instead.
 
-An ordinary Lead routes to its active project Manager when one exists,
-otherwise to Chief. A Manager routes to Chief. Managed Agents use `ask_owner`
-instead.
-
-Every operation validates the current direct supervisor. Ambiguous or
+Direct-supervisor delivery validates the current authority. Ambiguous or
 incomplete authority fails closed instead of silently routing around an
-intermediate Manager.
+intermediate Manager; project-scoped messages instead validate the assignment.
 
 ## `supervisor_message`
 
@@ -19,85 +19,32 @@ Available to ordinary Leads and Managers.
 
 ```json
 {
-  "message": "Progress update.",
-  "files": ["result:researcher#1"]
-}
-```
-
-Use it for meaningful progress, reports, warnings, and completion that is not a
-Manager-delegated project assignment.
-
-It queues one bounded message and does not change coordination state. An
-assigned Lead uses `supervisor_result` for terminal project completion.
-
-`files` accepts ordinary paths, reusable direct Agent refs such as
-`result:implementation#1`, and canonical `result:<request-id>` refs already
-supplied as evidence. File preparation uses the same canonical submission-time
-behavior and configured byte limits as Agent messages.
-
-## `supervisor_ask`
-
-Available to ordinary Leads and Managers.
-
-```json
-{
-  "question": "Which constraint should take priority?",
-  "files": ["/tmp/evidence.md"]
-}
-```
-
-Use it only when a direct-supervisor decision is genuinely required.
-
-One pending ask is allowed per session and current supervisor authority. The
-question is durably recorded before publication so reconciliation can retry
-transient delivery failure.
-
-It must be the only tool call in the turn. Call it last and wait for the reply
-instead of guessing.
-
-## `supervisor_result`
-
-Available to an ordinary Lead, but valid only when that Lead has exactly one
-active Manager project assignment in its current Herdsman project scope.
-
-```json
-{
-  "result": "Implemented and validated the requested change.",
+  "message": "The branch is ready for review.",
   "files": ["result:reviewer#1"]
 }
 ```
 
-The result is persisted as a canonical result for the project assignment before
-notification is attempted.
+Use it for material progress, decisions, warnings, and review handoffs. For a
+Lead with a project assignment, the message is retained with that assignment
+and can be delivered to a current Manager even if no Manager is active when it
+is sent. A replacement Manager receives retained project messages; the same
+Manager session does not receive a message again once it appears in its Pi
+history. These messages are nonterminal: the project remains open until a
+Manager resolves the assignment.
 
-If the matching Manager is active, `supervisor_result` queues a durable
-notification to it. If no Manager is active, the durable result remains saved
-for the next Manager to reconcile. A durable result prevents the assignment
-from being restarted, and the assignment is removed only after accepted result
-delivery.
-
-The model-facing result identifies the project branch and whether notification
-was queued. Internal project assignment and result references are not exposed
-as project-work handles.
-
-Use `supervisor_message` for nonterminal progress or coordination. Use
-`supervisor_result` exactly once for terminal completion of the Manager
-assignment.
+For ordinary Lead or Manager-to-Chief communication, the message follows the
+current direct-supervisor route. Messages are bounded. `files` accepts ordinary
+paths, reusable direct Agent refs, and canonical result refs already supplied
+as evidence; attachments are prepared at submission and the durable message is
+text-only.
 
 ## Delivery
 
-Supervisor messages are bounded durable records and can remain queued while the
-target is working. Same-session restart preserves queued records and accepted
-IDs are deduplicated.
-
-Attachments are prepared at submission and the durable coordination record
-remains text-only. Exact sender, target, and current authority are validated
-before delivery.
-
-A project assignment remains authorized after the Manager that created it has
-left, which is why its terminal result can be completed without an active
-Manager. Ordinary messages, asks, and replies continue to require current
-direct-supervisor authority.
+Direct-supervisor messages are queued for the exact current recipient and
+validated against current authority before delivery. Assigned project Lead
+messages are scoped by repository, branch, and exact Lead session and remain
+available while the assignment exists. Resolving the assignment removes its
+retained project messages.
 
 ## See also
 

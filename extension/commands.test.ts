@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -305,23 +306,20 @@ const leadTools = [
   "agent_inspect",
   "agent_transcript",
   "supervisor_message",
-  "supervisor_ask",
-  "supervisor_result",
   "peer_list",
   "peer_message",
 ];
 const managerTools = [
   "supervisor_message",
-  "supervisor_ask",
   "peer_list",
   "peer_message",
   "staff_list",
   "staff_inspect",
   "staff_transcript",
   "staff_message",
-  "staff_reply",
   "staff_delegate",
-  "staff_close",
+  "staff_stop",
+  "staff_complete",
   "staff_discard",
 ];
 const chiefTools = [
@@ -329,7 +327,6 @@ const chiefTools = [
   "staff_inspect",
   "staff_transcript",
   "staff_message",
-  "staff_reply",
 ];
 function managerAgentIdentity() {
   return {
@@ -418,15 +415,12 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           "agent_inspect",
           "agent_transcript",
           "supervisor_message",
-          "supervisor_ask",
-          "supervisor_result",
           "peer_list",
           "peer_message",
           "staff_list",
           "staff_inspect",
           "staff_transcript",
           "staff_message",
-          "staff_reply",
           ...fixture.tools.map((tool) => tool.name),
         ]),
       ].map((name) => ({ name })),
@@ -489,9 +483,9 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       "staff_inspect",
       "staff_transcript",
       "staff_message",
-      "staff_reply",
       "staff_delegate",
-      "staff_close",
+      "staff_stop",
+      "staff_complete",
       "staff_discard",
     ];
     const staffMessage = first.tools.find(
@@ -551,7 +545,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.match(
       managerPrompt.systemPrompt,
-      /Manager role[\s\S]*Manage project work by branch[\s\S]*Actual implementation belongs to Leads and their Agent trees[\s\S]*Messages and results from direct-report Leads terminate here[\s\S]*your own escalation to Chief/i,
+      /Manager role[\s\S]*Manage project work by branch[\s\S]*Actual implementation belongs to project Leads and their Agent trees[\s\S]*Lead messages are\s+coordination and review handoffs, not project completion\. Escalate to Chief with\s+supervisor_message/i,
     );
     assert.doesNotMatch(
       managerPrompt.systemPrompt,
@@ -719,332 +713,6 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
   } finally {
     await second.events.get("session_shutdown")?.[0]();
     await first.events.get("session_shutdown")?.[0]();
-    delete process.env.HERDR_SOCKET_PATH;
-    delete process.env.HERDR_TAB_ID;
-    delete process.env.HERDR_PANE_ID;
-    setLeadEnvironment();
-  }
-});
-
-test("Manager replacement can leave with an ask bound to its old lease", async () => {
-  setLeadEnvironment();
-  process.env.HERDR_PANE_ID = "manager-pane";
-  process.env.HERDR_TAB_ID = "manager-tab";
-  process.env.HERDR_SOCKET_PATH = join(
-    tmpdir(),
-    `manager-orphan-ask-${randomUUID()}.sock`,
-  );
-  const leadSession = `lead-${randomUUID()}`;
-  const lead = {
-    pane_id: "lead-pane",
-    tab_id: "lead-tab",
-    workspace_id: WORKSPACE,
-    agent_session: {
-      source: "herdr:pi",
-      agent: "pi",
-      kind: "id",
-      value: leadSession,
-    },
-  };
-  const respond = (result: unknown) => ({
-    stdout: JSON.stringify({ id: AGENT_ID, result }),
-    stderr: "",
-    code: 0,
-  });
-  const pi = fakeChiefPi({
-    activeTools: ["read"],
-    exec: (_command, args) =>
-      args[0] === "workspace" && args[1] === "get"
-        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
-        : args[0] === "worktree" && args[1] === "list"
-          ? respond({
-              source: {
-                source_workspace_id: WORKSPACE,
-                repo_key: "repo-key",
-                repo_name: "project",
-              },
-              worktrees: [],
-            })
-          : isAgentList(args)
-            ? respond({ agents: [managerAgentIdentity(), lead] })
-            : args[0] === "agent" && args[1] === "get"
-              ? respond({
-                  agent:
-                    args[2] === lead.pane_id ? lead : managerAgentIdentity(),
-                })
-              : isApiSnapshot(args)
-                ? respond({ snapshot: { agents: [lead], panes: [lead] } })
-                : respond({}),
-  });
-  const ctx = fakeContext() as any;
-  const notices: string[] = [];
-  ctx.ui.notify = (message: string) => notices.push(message);
-  registerExtension!(pi.pi as never);
-  try {
-    await pi.events.get("session_start")![0](undefined, ctx);
-    await pi.commandOptions.get("manager").handler("", ctx);
-    const oldLease = readManagerDescriptor(supervisionRuntime(), WORKSPACE)!;
-    await pi.commandOptions.get("manager").handler("leave", ctx);
-    await pi.commandOptions.get("manager").handler("", ctx);
-    const replacement = readManagerDescriptor(supervisionRuntime(), WORKSPACE)!;
-    assert.notEqual(replacement.leaseId, oldLease.leaseId);
-    const ask = {
-      askId: randomUUID(),
-      question: "Decision?",
-      text: "Question: Decision?",
-      supervisorSessionId: oldLease.piSessionId,
-      supervisorLeaseId: oldLease.leaseId,
-      supervisorRole: "manager" as const,
-    };
-    writeLeadCoordinationState(supervisionRuntime(), {
-      version: 1,
-      instanceId: randomUUID(),
-      piSessionId: leadSession,
-      pendingAsk: ask,
-      updatedAt: Date.now(),
-    });
-    const roster = await pi.tools
-      .find((tool) => tool.name === "staff_list")!
-      .execute("list", {}, undefined, undefined, ctx);
-    assert.equal(roster.details.reports[0].pending_ask_id, ask.askId);
-    assert.equal(roster.details.reports[0].needs_you, false);
-
-    writeLeadCoordinationState(supervisionRuntime(), {
-      ...readLeadCoordinationState(supervisionRuntime(), leadSession)!,
-      pendingAsk: { ...ask, supervisorLeaseId: replacement.leaseId },
-      updatedAt: Date.now(),
-    });
-    const actionable = await pi.tools
-      .find((tool) => tool.name === "staff_list")!
-      .execute("list", {}, undefined, undefined, ctx);
-    assert.equal(actionable.details.reports[0].needs_you, true);
-    const reply = {
-      version: 1 as const,
-      id: randomUUID(),
-      leaseId: replacement.leaseId,
-      kind: "manager_reply" as const,
-      fromSessionId: replacement.piSessionId,
-      toSessionId: leadSession,
-      leadSessionId: leadSession,
-      askId: ask.askId,
-      text: "Here is the decision.",
-      createdAt: Date.now(),
-    };
-    writeChiefMessage(reply, supervisionRuntime());
-    const answered = await pi.tools
-      .find((tool) => tool.name === "staff_list")!
-      .execute("list", {}, undefined, undefined, ctx);
-    assert.equal(answered.details.reports[0].pending_ask_id, ask.askId);
-    assert.equal(answered.details.reports[0].needs_you, false);
-    removeChiefMessage(supervisionRuntime(), leadSession, reply.id, reply);
-    const unansweredAgain = await pi.tools
-      .find((tool) => tool.name === "staff_list")!
-      .execute("list", {}, undefined, undefined, ctx);
-    assert.equal(unansweredAgain.details.reports[0].needs_you, true);
-    await pi.commandOptions.get("manager").handler("leave", ctx);
-    assert.ok(
-      notices.some((message) => /Lead is waiting for a reply/.test(message)),
-    );
-    assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.leaseId,
-      replacement.leaseId,
-    );
-
-    writeLeadCoordinationState(supervisionRuntime(), {
-      ...readLeadCoordinationState(supervisionRuntime(), leadSession)!,
-      pendingAsk: ask,
-      updatedAt: Date.now(),
-    });
-    await pi.commandOptions.get("manager").handler("leave", ctx);
-    assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
-      undefined,
-    );
-    assert.equal(
-      readLeadCoordinationState(supervisionRuntime(), leadSession)?.pendingAsk
-        ?.askId,
-      ask.askId,
-    );
-    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
-  } finally {
-    await pi.events.get("session_shutdown")?.[0]();
-    delete process.env.HERDR_SOCKET_PATH;
-    delete process.env.HERDR_TAB_ID;
-    delete process.env.HERDR_PANE_ID;
-    setLeadEnvironment();
-  }
-});
-
-test("Manager leave retains a Chief-bound ask until its Chief claim is dead", async () => {
-  setLeadEnvironment();
-  process.env.HERDR_PANE_ID = "manager-pane";
-  process.env.HERDR_TAB_ID = "manager-tab";
-  process.env.HERDR_SOCKET_PATH = join(
-    tmpdir(),
-    `manager-chief-ask-${randomUUID()}.sock`,
-  );
-  const chiefId = `chief-${randomUUID()}`;
-  const chiefAgent = {
-    pane_id: "chief-pane",
-    tab_id: "chief-tab",
-    workspace_id: WORKSPACE,
-    agent_session: {
-      source: "herdr:pi",
-      agent: "pi",
-      kind: "id",
-      value: chiefId,
-    },
-  };
-  const respond = (result: unknown) => ({
-    stdout: JSON.stringify({ id: AGENT_ID, result }),
-    stderr: "",
-    code: 0,
-  });
-  const lease = claimChiefLease({
-    piSessionId: chiefId,
-    paneId: chiefAgent.pane_id,
-    tabId: chiefAgent.tab_id,
-    workspaceId: WORKSPACE,
-  });
-  const pi = fakeChiefPi({
-    activeTools: ["read"],
-    exec: (_command, args) =>
-      args[0] === "workspace" && args[1] === "get"
-        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
-        : args[0] === "worktree" && args[1] === "list"
-          ? respond({
-              source: {
-                source_workspace_id: WORKSPACE,
-                repo_key: "repo-key",
-                repo_name: "project",
-              },
-              worktrees: [],
-            })
-          : isAgentList(args)
-            ? respond({ agents: [managerAgentIdentity(), chiefAgent] })
-            : args[0] === "agent" && args[1] === "get"
-              ? respond({
-                  agent:
-                    args[2] === chiefAgent.pane_id
-                      ? chiefAgent
-                      : managerAgentIdentity(),
-                })
-              : isApiSnapshot(args)
-                ? respond({
-                    snapshot: { agents: [chiefAgent], panes: [chiefAgent] },
-                  })
-                : respond({}),
-  });
-  const ctx = fakeContext(
-    [],
-    [
-      {
-        message: {
-          role: "assistant",
-          content: [{ type: "toolCall", name: "supervisor_ask" }],
-        },
-      },
-    ],
-  ) as any;
-  const notices: string[] = [];
-  ctx.ui.notify = (message: string) => notices.push(message);
-  registerExtension!(pi.pi as never);
-  let stale = false;
-  try {
-    await pi.events.get("session_start")![0](undefined, ctx);
-    await pi.commandOptions.get("manager").handler("", ctx);
-    await pi.tools
-      .find((tool) => tool.name === "supervisor_ask")!
-      .execute("ask", { question: "Decision?" }, undefined, undefined, ctx);
-    const ask = readLeadCoordinationState(
-      supervisionRuntime(),
-      ctx.sessionManager.getSessionId(),
-    )?.pendingAsk;
-    assert.equal(ask?.supervisorLeaseId, lease.descriptor.leaseId);
-
-    await pi.commandOptions.get("manager").handler("leave", ctx);
-    assert.ok(
-      notices.some((message) =>
-        /supervisor ask remains unresolved/.test(message),
-      ),
-    );
-    assert.ok(readManagerDescriptor(supervisionRuntime(), WORKSPACE));
-
-    const descriptorPath = supervisionRuntime().descriptor;
-    const descriptor = readFileSync(descriptorPath, "utf8");
-    unlinkSync(descriptorPath);
-    const beforeMissingDescriptor = notices.length;
-    await pi.commandOptions.get("manager").handler("leave", ctx);
-    assert.ok(
-      notices
-        .slice(beforeMissingDescriptor)
-        .some((message) => /supervisor ask remains unresolved/.test(message)),
-    );
-    assert.ok(readManagerDescriptor(supervisionRuntime(), WORKSPACE));
-    writeFileSync(descriptorPath, "invalid descriptor");
-    try {
-      const before = notices.length;
-      await pi.commandOptions.get("manager").handler("leave", ctx);
-      assert.ok(
-        notices
-          .slice(before)
-          .some((message) => /supervisor ask remains unresolved/.test(message)),
-      );
-      assert.ok(readManagerDescriptor(supervisionRuntime(), WORKSPACE));
-    } finally {
-      writeFileSync(descriptorPath, descriptor);
-    }
-
-    const runtime = supervisionRuntime();
-    const deadClaim = { pid: 2147483647, id: randomUUID() };
-    const owner = join(runtime.lock, `${deadClaim.pid}-${deadClaim.id}`);
-    unlinkSync(
-      join(
-        runtime.lock,
-        `${lease.descriptor.claim.pid}-${lease.descriptor.claim.id}`,
-      ),
-    );
-    stale = true;
-    writeFileSync(owner, JSON.stringify(deadClaim));
-    const staleDescriptor = { ...lease.descriptor, claim: deadClaim };
-    writeFileSync(descriptorPath, JSON.stringify(staleDescriptor));
-    const blocked = async () => {
-      const before = notices.length;
-      await pi.commandOptions.get("manager").handler("leave", ctx);
-      assert.ok(
-        notices
-          .slice(before)
-          .some((message) => /supervisor ask remains unresolved/.test(message)),
-      );
-      assert.ok(readManagerDescriptor(runtime, WORKSPACE));
-    };
-    writeFileSync(descriptorPath, JSON.stringify(lease.descriptor));
-    await blocked(); // A dead lock belonging to a different descriptor is ambiguous.
-    writeFileSync(descriptorPath, JSON.stringify(staleDescriptor));
-    writeFileSync(owner, "invalid claim");
-    await blocked();
-    unlinkSync(descriptorPath);
-    await blocked(); // Missing descriptor does not excuse a malformed lock.
-    writeFileSync(owner, JSON.stringify(deadClaim));
-    await pi.commandOptions.get("manager").handler("leave", ctx);
-    assert.equal(
-      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
-      undefined,
-    );
-    assert.deepEqual(
-      readLeadCoordinationState(
-        supervisionRuntime(),
-        ctx.sessionManager.getSessionId(),
-      )?.pendingAsk,
-      ask,
-    );
-  } finally {
-    if (stale) {
-      rmSync(lease.runtime.descriptor, { force: true });
-      rmSync(lease.runtime.lock, { recursive: true, force: true });
-    }
-    lease.release();
-    await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
@@ -1716,12 +1384,9 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     assert.equal(delivery.kind, "project_assignment");
     assert.match(
       delivery.text,
-      /When this work is complete, report its result with supervisor_result\./,
+      /The project remains open until the Manager\s+completes or discards it\./,
     );
-    assert.match(
-      delivery.text,
-      /supervisor_message only for nonterminal progress or coordination\./,
-    );
+    assert.match(delivery.text, /ready for review/);
     assert.ok(
       pi.calls.some(
         (args) => args.includes("--no-focus") && args.includes("--branch"),
@@ -1733,10 +1398,6 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
           args[0] === "agent" && args[1] === "start" && args.includes("--pane"),
       ),
     );
-    const managerLeaseId = readManagerDescriptor(
-      supervisionRuntime(),
-      WORKSPACE,
-    )!.leaseId;
     await pi.commandOptions.get("manager").handler("leave", ctx);
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE),
@@ -1749,8 +1410,6 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     await pi.events.get("session_shutdown")?.[0]();
     manager1Shutdown = true;
     managerAgent = undefined;
-    const replacementWorkspace = `primary-${randomUUID()}`;
-    primaryWorkspace = replacementWorkspace;
     process.env.HERDR_WORKSPACE_ID = childWorkspace;
     process.env.HERDR_PANE_ID = "child-pane";
     process.env.HERDR_TAB_ID = "child-tab";
@@ -1760,235 +1419,36 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     leadCtx.sessionManager.getSessionId = () => childSession;
     leadCtx.sessionManager.getSessionFile = childSessionPath;
     try {
-      assert.equal(realFs.existsSync(childSessionPath()), true);
       await lead.events.get("session_start")![0](undefined, leadCtx);
-      await t.waitFor(() =>
-        assert.ok(
-          lead.sent.some(
-            (message: any) =>
-              message?.customType === "pi-herdsman-project_assignment",
-          ),
-          "Project assignment was not deliverable after Manager departure",
-        ),
+      const message = await lead.tools
+        .find((tool) => tool.name === "supervisor_message")!
+        .execute(
+          "message",
+          { message: "Ready for review" },
+          undefined,
+          undefined,
+          leadCtx,
+        );
+      assert.match(
+        JSON.stringify(message),
+        /Project message saved for Manager/,
       );
-      assert.equal(realFs.existsSync(childSessionPath()), true);
-      lead.pi.sendUserMessage("Begin the assigned work.");
-      const firstUserMessage = {
-        type: "message",
-        id: "first-user-message",
-        parentId: null,
-        timestamp: new Date().toISOString(),
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "Begin the assigned work." }],
-        },
-      };
-      realFs.writeFileSync(
-        childSessionPath(),
-        [
-          JSON.stringify({
-            type: "session",
-            version: 3,
-            id: childSession,
-            timestamp: new Date().toISOString(),
-            cwd: "/tmp/manager-child",
-          }),
-          JSON.stringify(firstUserMessage),
-        ].join("\n") + "\n",
+      const { listProjectMessages } = await import("./supervision.ts");
+      const retained = listProjectMessages(
+        supervisionRuntime(),
+        "repo-key",
+        assignment!.branch,
       );
-      nativeSessions.set(childSessionPath(), {
-        id: childSession,
-        path: childSessionPath(),
-        cwd: "/tmp/manager-child",
-        entries: [firstUserMessage],
-      });
-      assert.equal(realFs.existsSync(childSessionPath()), true);
-      const supervisor = lead.tools.find(
-        (tool) => tool.name === "supervisor_result",
-      )!;
-      assert.equal(
-        Value.Check(supervisor.parameters, { message: "wrong" }),
-        false,
-      );
-      const result = await supervisor.execute(
-        "result",
-        { result: "Finished implementation" },
-        undefined,
-        undefined,
-        leadCtx,
-      );
-      assert.equal(result.details.branch, assignment!.branch);
-      assert.equal("result" in result.details, false);
-      assert.equal(result.details.queued, false);
-      const savedResult = readFileSync(resultPath(assignment!.id), "utf8");
-      assert.ok(
-        savedResult.startsWith(
-          `Lead result source: ${JSON.stringify({ branch: assignment!.branch, cwd: leadCtx.cwd })}\n\n`,
-        ),
-      );
-      assert.equal(savedResult.includes(assignment!.id), false);
-      assert.equal(savedResult.includes(childWorkspace), false);
-      assert.doesNotMatch(
-        savedResult,
-        /"assignment":|"piSessionId":|"workspaceId":/,
-      );
-      assert.match(savedResult, /Finished implementation/);
-      assert.equal(
-        readFileSync(
-          projectAssignmentPath(
-            supervisionRuntime(),
-            "repo-key",
-            assignment.branch,
-          ),
-          "utf8",
-        ),
-        assignmentBytes,
-      );
-    } finally {
-      await lead.events.get("session_shutdown")![0]();
-      nativeSessions.delete(childSessionPath());
-      realFs.rmSync(childSessionPath(), { force: true });
-    }
-    const manager2Session = `manager-${randomUUID()}`;
-    managerAgent = {
-      agent_session: {
-        source: "herdr:pi",
-        agent: "pi",
-        kind: "id",
-        value: manager2Session,
-      },
-      workspace_id: replacementWorkspace,
-      pane_id: "root-pane-2",
-      tab_id: "root-tab-2",
-    };
-    process.env.HERDR_WORKSPACE_ID = replacementWorkspace;
-    process.env.HERDR_PANE_ID = "root-pane-2";
-    process.env.HERDR_TAB_ID = "root-tab-2";
-    const manager2 = fakeChiefPi({
-      activeTools: ["read"],
-      exec,
-      persistMessages: true,
-    });
-    registerExtension!(manager2.pi as never);
-    const manager2Ctx = fakeContext(manager2.entries) as any;
-    manager2Ctx.sessionManager.getSessionId = () => manager2Session;
-    try {
-      await manager2.events.get("session_start")![0](undefined, manager2Ctx);
-      await manager2.commandOptions.get("manager").handler("", manager2Ctx);
-      assert.notEqual(
-        readManagerDescriptor(supervisionRuntime(), replacementWorkspace)
-          ?.leaseId,
-        managerLeaseId,
-      );
+      assert.equal(retained.length, 1);
+      assert.equal(retained[0]!.fromSessionId, childSession);
+      assert.equal(retained[0]!.text, "Ready for review");
       assert.equal(
         listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
         childSession,
       );
-      const manager2List = await manager2.tools
-        .find((tool) => tool.name === "staff_list")!
-        .execute("list", {}, undefined, undefined, manager2Ctx);
-      assert.equal(
-        manager2List.details.work.find(
-          (item: any) => item.branch === assignment!.branch,
-        )?.status,
-        "finished",
-      );
-      assert.deepEqual(manager2List.details.open_workspaces, [
-        {
-          workspace: replacementWorkspace,
-          branch: "main",
-          path: "/tmp/manager-root",
-          linked: false,
-        },
-        {
-          workspace: childWorkspace,
-          branch: assignment!.branch,
-          path: "/tmp/manager-child",
-          linked: true,
-        },
-      ]);
-      await assert.rejects(
-        manager2.tools
-          .find((tool) => tool.name === "staff_discard")!
-          .execute(
-            "discard",
-            { branch: assignment!.branch },
-            undefined,
-            undefined,
-            manager2Ctx,
-          ),
-        /already has a durable result/,
-      );
-      await manager2.events.get("before_agent_start")![0](
-        { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-        manager2Ctx,
-      );
-      assert.ok(
-        listCoordinationMessagePaths(
-          supervisionRuntime(),
-          manager2Session,
-        ).some((path) => readChiefMessage(path).kind === "report_result"),
-      );
-      await t.waitFor(
-        () =>
-          assert.ok(
-            manager2.sent.some(
-              (message: any) =>
-                message?.customType === "pi-herdsman-report_result",
-            ),
-            "Replacement Manager did not receive the durable Lead result",
-          ),
-        { timeout: 1800 },
-      );
-      const resultNotification = manager2.sent.find(
-        (message: any) => message?.customType === "pi-herdsman-report_result",
-      );
-      assert.ok(resultNotification);
-      assert.ok(
-        String(resultNotification.content).startsWith(
-          `Project work ${assignment!.branch} finished:`,
-        ),
-      );
-      assert.equal(resultNotification.details.branch, assignment!.branch);
-      assert.doesNotMatch(
-        String(resultNotification.content),
-        /Result ref:|result:/,
-      );
-      assert.match(
-        String(resultNotification.content),
-        /Finished implementation/,
-      );
-      assert.equal(
-        String(resultNotification.content).includes(assignment!.id),
-        false,
-      );
-      assert.equal(
-        String(resultNotification.content).includes(childWorkspace),
-        false,
-      );
-      assert.ok(
-        manager2.entries.some(
-          (entry: any) =>
-            entry?.customType === "pi-herdsman-report_result" &&
-            entry?.details?.branch === assignment!.branch,
-        ),
-        "Replacement Manager result notification was not durably persisted",
-      );
-      assert.deepEqual(
-        listProjectAssignments(supervisionRuntime(), "repo-key"),
-        [],
-      );
     } finally {
-      await manager2.events.get("session_shutdown")?.[0]();
+      await lead.events.get("session_shutdown")?.[0]();
     }
-    assert.match(
-      readFileSync(resultPath(assignment!.id), "utf8"),
-      new RegExp(`"branch":"${assignment!.branch}"`),
-    );
-    assert.match(
-      readFileSync(resultPath(assignment!.id), "utf8"),
-      /Finished implementation/,
-    );
   } finally {
     if (!manager1Shutdown) await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -2188,6 +1648,22 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
     entries,
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                source_workspace_id: "root-workspace",
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
+              worktrees: [{ open_workspace_id: WORKSPACE }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       if (isAgentList(args))
         return {
           stdout: JSON.stringify({
@@ -2215,7 +1691,7 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
       {
         message: {
           role: "assistant",
-          content: [{ type: "toolCall", name: "supervisor_ask" }],
+          content: [{ type: "toolCall", name: "supervisor_message" }],
         },
       },
     ],
@@ -2229,42 +1705,24 @@ test("a Lead without a Manager routes upward to Chief and keeps peer presence", 
     const initial = readPeerLeadRecord(peerRuntime(), sessionId);
     assert.ok(initial);
 
-    const appendEntry = pi.pi.appendEntry;
-    let leadStateAttempts = 0;
-    let rollbackObservedWithdrawal = false;
-    pi.pi.appendEntry = (customType: string, data: unknown) => {
-      if (customType === "pi-herdsman-lead-state") {
-        leadStateAttempts++;
-        if (leadStateAttempts === 1)
-          throw new Error("injected lead coordination failure");
-        if (leadStateAttempts === 2) {
-          rollbackObservedWithdrawal =
-            readPeerLeadRecord(peerRuntime(), sessionId) === undefined;
-          assert.equal(
-            rollbackObservedWithdrawal,
-            true,
-            "unhealthy Lead remained globally discoverable",
-          );
-        }
-      }
-      appendEntry(customType, data);
-    };
-
-    const chief = pi.tools.find((tool) => tool.name === "supervisor_ask");
+    const chief = pi.tools.find((tool) => tool.name === "supervisor_message");
     assert.ok(chief);
-    await assert.rejects(
-      chief.execute(
-        "ask",
-        { question: "Which path?" },
-        undefined,
-        undefined,
-        context,
-      ),
-      /Lead coordination state is unavailable/,
+    const result = await chief.execute(
+      "message",
+      { message: "Which path?" },
+      undefined,
+      undefined,
+      context,
     );
-    const stillPresent = readPeerLeadRecord(peerRuntime(), sessionId);
-    assert.ok(stillPresent);
-    assert.notEqual(stillPresent.claim.id, initial.claim.id);
+    assert.match(result.content[0].text, /Message sent to supervisor/);
+    assert.equal(
+      listCoordinationMessagePaths(supervisionRuntime(), chiefId).length,
+      1,
+    );
+    assert.equal(
+      readPeerLeadRecord(peerRuntime(), sessionId)?.claim.id,
+      initial.claim.id,
+    );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     lease.release();
@@ -2322,7 +1780,7 @@ test("ordinary Lead peer presence disappears in Chief mode and on shutdown", asy
   }
 });
 
-test("coordination failure withdraws peer presence and recovery republishes a fresh generation", async (t) => {
+test("Chief message persistence failure can recover without withdrawing peer presence", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
   process.env.HERDR_TAB_ID = "lead-tab";
@@ -2355,6 +1813,22 @@ test("coordination failure withdraws peer presence and recovery republishes a fr
     entries,
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                source_workspace_id: "root-workspace",
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
+              worktrees: [{ open_workspace_id: WORKSPACE }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       if (isAgentList(args))
         return {
           stdout: JSON.stringify({
@@ -2382,13 +1856,14 @@ test("coordination failure withdraws peer presence and recovery republishes a fr
       {
         message: {
           role: "assistant",
-          content: [{ type: "toolCall", name: "supervisor_ask" }],
+          content: [{ type: "toolCall", name: "supervisor_message" }],
         },
       },
     ],
   ) as any;
   context.ui.notify = () => undefined;
   registerExtension!(pi.pi as never);
+  let obstruction: string | undefined;
   try {
     await pi.events.get("session_start")![0](undefined, context);
 
@@ -2396,53 +1871,47 @@ test("coordination failure withdraws peer presence and recovery republishes a fr
     const initial = readPeerLeadRecord(peerRuntime(), sessionId);
     assert.ok(initial);
 
-    const appendEntry = pi.pi.appendEntry;
-    let leadStateAttempts = 0;
-    let rollbackObservedWithdrawal = false;
-    pi.pi.appendEntry = (customType: string, data: unknown) => {
-      if (customType === "pi-herdsman-lead-state") {
-        leadStateAttempts++;
-        if (leadStateAttempts === 1)
-          throw new Error("injected lead coordination failure");
-        if (leadStateAttempts === 2) {
-          rollbackObservedWithdrawal =
-            readPeerLeadRecord(peerRuntime(), sessionId) === undefined;
-          assert.equal(
-            rollbackObservedWithdrawal,
-            true,
-            "unhealthy Lead remained globally discoverable",
-          );
-        }
-      }
-      appendEntry(customType, data);
-    };
+    const runtime = supervisionRuntime();
+    mkdirSync(runtime.inbox, { recursive: true });
+    obstruction = join(
+      runtime.inbox,
+      createHash("sha256").update(chiefId).digest("hex"),
+    );
+    writeFileSync(obstruction, "block Chief inbox creation");
 
-    const chief = pi.tools.find((tool) => tool.name === "supervisor_ask");
+    const chief = pi.tools.find((tool) => tool.name === "supervisor_message");
     assert.ok(chief);
     await assert.rejects(
       chief.execute(
-        "ask",
-        { question: "Which path?" },
+        "message",
+        { message: "Which path?" },
         undefined,
         undefined,
         context,
       ),
-      /Lead coordination state is unavailable/,
+      /EEXIST|not a directory/i,
     );
-    assert.equal(leadStateAttempts, 2);
-    assert.equal(rollbackObservedWithdrawal, true);
-
-    await t.waitFor(() =>
-      assert.ok(
-        readPeerLeadRecord(peerRuntime(), sessionId),
-        "healthy Lead did not republish peer presence",
-      ),
+    assert.equal(
+      readPeerLeadRecord(peerRuntime(), sessionId)?.claim.id,
+      initial.claim.id,
     );
-
-    const recovered = readPeerLeadRecord(peerRuntime(), sessionId);
-    assert.ok(recovered);
-    assert.notEqual(recovered.claim.id, initial.claim.id);
+    rmSync(obstruction, { force: true });
+    const result = await chief.execute(
+      "message",
+      { message: "Retry after inbox recovery" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.match(result.content[0].text, /Message sent to supervisor/);
+    assert.equal(listCoordinationMessagePaths(runtime, chiefId).length, 1);
+    assert.equal(
+      readPeerLeadRecord(peerRuntime(), sessionId)?.claim.id,
+      initial.claim.id,
+    );
   } finally {
+    // A failed assertion before the retry must not leave the temporary obstacle.
+    if (obstruction) rmSync(obstruction, { recursive: true, force: true });
     await pi.events.get("session_shutdown")?.[0]();
     lease.release();
     delete process.env.HERDR_SOCKET_PATH;
@@ -2837,7 +2306,6 @@ test("Chief shutdown releases its lease when ordinary tool restoration fails", a
     "staff_inspect",
     "staff_transcript",
     "staff_message",
-    "staff_reply",
   ]);
   assert.ok(
     entries.some(
@@ -2908,6 +2376,89 @@ test("Chief activation keeps its durable baseline when rollback restoration fail
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
   delete process.env.HERDR_PANE_ID;
+});
+
+test("Chief leave cancellation preserves Chief tools", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"] });
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.ui.confirm = async () => false;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("chief").handler("", context);
+    const chiefToolsNow = pi.pi.getActiveTools();
+
+    const notices: string[] = [];
+    context.ui.notify = (message: string) => notices.push(message);
+    await pi.commandOptions.get("chief").handler("leave", context);
+    assert.deepEqual(notices, ["Chief leave cancelled."]);
+    assert.deepEqual(pi.pi.getActiveTools(), chiefToolsNow);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("Chief tool activation failure restores ordinary Lead tools", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-pane";
+  process.env.HERDR_TAB_ID = "chief-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `chief-tool-activation-failure-${randomUUID()}.sock`,
+  );
+  const pi = fakeChiefPi({
+    activeTools: ["read", "bash"],
+    exec: (command, args) =>
+      command === "herdr" && args[0] === "worktree" && args[1] === "list"
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                source: {
+                  source_workspace_id: "root-workspace",
+                  repo_key: "repo-key",
+                  repo_name: "project",
+                },
+                worktrees: [{ open_workspace_id: WORKSPACE }],
+              },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : undefined,
+  });
+  const context = fakeContext() as any;
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const ordinaryTools = pi.pi.getActiveTools();
+    const setActiveTools = pi.pi.setActiveTools;
+    pi.pi.setActiveTools = (next: string[]) => {
+      if (next.includes("staff_list"))
+        throw new Error("Chief tool activation failed");
+      setActiveTools(next);
+    };
+
+    await pi.commandOptions.get("chief").handler("", context);
+
+    assert.deepEqual(pi.pi.getActiveTools(), ordinaryTools);
+    assert.deepEqual(notices, ["Chief tool activation failed"]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
 });
 
 test("selecting a pre-Chief branch restores the Lead lifecycle", async () => {
@@ -2993,7 +2544,6 @@ test("selecting a historical Chief branch activates its lease and staff tools", 
       "staff_inspect",
       "staff_transcript",
       "staff_message",
-      "staff_reply",
     ]);
     assert.equal(
       readPeerLeadRecord(peerRuntime(), context.sessionManager.getSessionId()),
@@ -3101,7 +2651,6 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
     "staff_inspect",
     "staff_transcript",
     "staff_message",
-    "staff_reply",
   ]);
   assert.deepEqual(
     entries
@@ -3160,8 +2709,6 @@ test("lead session-start retries an exact baseline after restoration fails", asy
     "agent_inspect",
     "agent_transcript",
     "supervisor_message",
-    "supervisor_ask",
-    "supervisor_result",
     "peer_list",
     "peer_message",
   ];
@@ -3187,7 +2734,6 @@ test("lead session-start retries an exact baseline after restoration fails", asy
     "staff_inspect",
     "staff_transcript",
     "staff_message",
-    "staff_reply",
   ]);
   assert.ok(
     entries.some(
@@ -3235,8 +2781,6 @@ test("lead session-start continues when chief lease release fails", async () => 
         "agent_inspect",
         "agent_transcript",
         "supervisor_message",
-        "supervisor_ask",
-        "supervisor_result",
         "peer_list",
         "peer_message",
       ],
@@ -3262,8 +2806,6 @@ test("lead session-start continues when chief lease release fails", async () => 
     "agent_inspect",
     "agent_transcript",
     "supervisor_message",
-    "supervisor_ask",
-    "supervisor_result",
     "peer_list",
     "peer_message",
   ]);
@@ -3421,9 +2963,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
       kind: "id",
       value: PARENT_SESSION_ID,
     },
-    tokens: {
-      pi_herdsman_role: "lead",
-    },
+    tokens: { pi_herdsman_role: "lead" },
   };
   const leads = [lead];
   const entries: unknown[] = [];
@@ -3438,19 +2978,14 @@ test("Chief activation replaces the lead widget and overview selection is intera
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
-            result: {
-              snapshot: { agents: leads, panes: leads },
-            },
+            result: { snapshot: { agents: leads, panes: leads } },
           }),
           stderr: "",
           code: 0,
         };
       if (isAgentList(args))
         return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: { agents: leads },
-          }),
+          stdout: JSON.stringify({ id: AGENT_ID, result: { agents: leads } }),
           stderr: "",
           code: 0,
         };
@@ -3470,19 +3005,14 @@ test("Chief activation replaces the lead widget and overview selection is intera
   const context = fakeContext(entries) as any;
   context.hasUI = true;
   const widgetKeys: string[] = [];
-  const confirmations: string[] = [];
   const notices: string[] = [];
-  let confirmLeave = false;
   let overview: any;
   let overviewDone = 0;
   let customCalls = 0;
   context.ui = {
     setWidget: (key: string) => widgetKeys.push(key),
     notify: (message: string) => notices.push(message),
-    confirm: async (title: string, body: string) => {
-      confirmations.push(`${title}\n${body}`);
-      return confirmLeave;
-    },
+    confirm: async () => false,
     select: async () => undefined,
     custom: async (factory: any) => {
       customCalls++;
@@ -3506,44 +3036,10 @@ test("Chief activation replaces the lead widget and overview selection is intera
     setLeadEnvironment();
   });
   registerExtension!(pi.pi as never);
-  const start = pi.events.get("session_start")![0];
-  await start(undefined, context);
-  writeLeadCoordinationState(supervisionRuntime(), {
-    version: 1,
-    instanceId: randomUUID(),
-    piSessionId: PARENT_SESSION_ID,
-    pendingAsk: {
-      askId: randomUUID(),
-      question: "remote question",
-      text: "Question: remote question",
-    },
-    updatedAt: Date.now(),
-  });
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "read",
-    "agent_list",
-    "agent_delegate",
-    "agent_continue",
-    "agent_steer",
-    "agent_interrupt",
-    "agent_reply",
-    "agent_close",
-    "agent_inspect",
-    "agent_transcript",
-    "supervisor_message",
-    "supervisor_ask",
-    "supervisor_result",
-    "peer_list",
-    "peer_message",
-  ]);
+  await pi.events.get("session_start")![0](undefined, context);
+  assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
   await pi.commandOptions.get("chief").handler("", context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "staff_list",
-    "staff_inspect",
-    "staff_transcript",
-    "staff_message",
-    "staff_reply",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.ok(widgetKeys.includes("pi-herdsman"));
   assert.ok(widgetKeys.includes("pi-herdsman-staff"));
   assert.equal(
@@ -3552,13 +3048,7 @@ test("Chief activation replaces the lead widget and overview selection is intera
   );
   assert.equal(customCalls, 0);
   await pi.commandOptions.get("chief").handler("", context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "staff_list",
-    "staff_inspect",
-    "staff_transcript",
-    "staff_message",
-    "staff_reply",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
   assert.equal(customCalls, 1);
   assert.ok(overview);
   assert.match(overview.render(120).join("\n"), /Pi Herdsman ·/);
@@ -3572,122 +3062,21 @@ test("Chief activation replaces the lead widget and overview selection is intera
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(customCalls, customCallsBeforePeek);
   overview.handleInput("\u001b");
-  assert.equal(overviewDone, 0);
+  assert.equal(overviewDone, 1);
   await pi.commandOptions.get("chief").handler("", context);
-  assert.ok(overview);
   overview.handleInput(" ");
   await new Promise<void>((resolve) => setImmediate(resolve));
   overview.handleInput(" ");
-  assert.equal(overviewDone, 0);
+  assert.equal(overviewDone, 1);
   await pi.commandOptions.get("chief").handler("", context);
   overview.handleInput(" ");
   await new Promise<void>((resolve) => setImmediate(resolve));
   overview.handleInput("\u0003");
-  assert.equal(overviewDone, 1);
+  assert.equal(overviewDone, 2);
   await pi.commandOptions.get("chief").handler("", context);
-  assert.ok(overview);
   overview.handleInput("\u001b[B");
   overview.handleInput("\r");
   await t.waitFor(() => assert.equal(overviewDone, 2, notices.join(" | ")));
-  const orphanSessionId = randomUUID();
-  const orphanedAsk = {
-    askId: randomUUID(),
-    question: "former chief question",
-    text: "Question: former chief question",
-    supervisorSessionId: "former-chief-session",
-    supervisorLeaseId: randomUUID(),
-    supervisorRole: "chief" as const,
-  };
-  leads.push({
-    ...lead,
-    pane_id: "other-lead-pane",
-    agent_session: { ...lead.agent_session, value: orphanSessionId },
-  });
-  writeLeadCoordinationState(supervisionRuntime(), {
-    version: 1,
-    instanceId: randomUUID(),
-    piSessionId: orphanSessionId,
-    pendingAsk: orphanedAsk,
-    updatedAt: Date.now(),
-  });
-  const actionableAskId = readLeadCoordinationState(
-    supervisionRuntime(),
-    PARENT_SESSION_ID,
-  )!.pendingAsk!.askId;
-  const entriesBeforeCancel = entries.length;
-  await pi.commandOptions.get("chief").handler("leave", context);
-  assert.match(confirmations[0], /Actionable supervised lead asks: 1/);
-  assert.equal(
-    readLeadCoordinationState(supervisionRuntime(), PARENT_SESSION_ID)
-      ?.pendingAsk?.askId,
-    actionableAskId,
-  );
-  assert.equal(
-    readLeadCoordinationState(supervisionRuntime(), orphanSessionId)?.pendingAsk
-      ?.askId,
-    orphanedAsk.askId,
-  );
-  assert.equal(pi.pi.getActiveTools().includes("staff_list"), true);
-  assert.equal(entries.length, entriesBeforeCancel);
-  assert.equal(
-    entries.some(
-      (entry: any) =>
-        entry.customType === "pi-herdsman-role" && entry.data.role === "lead",
-    ),
-    false,
-  );
-  const replacedAsk = {
-    ...readLeadCoordinationState(supervisionRuntime(), PARENT_SESSION_ID)!
-      .pendingAsk!,
-    supervisorSessionId: "former-chief-session",
-    supervisorLeaseId: randomUUID(),
-    supervisorRole: "chief" as const,
-  };
-  writeLeadCoordinationState(supervisionRuntime(), {
-    ...readLeadCoordinationState(supervisionRuntime(), PARENT_SESSION_ID)!,
-    pendingAsk: replacedAsk,
-    updatedAt: Date.now(),
-  });
-  confirmLeave = true;
-  await pi.commandOptions.get("chief").handler("leave", context);
-  assert.match(confirmations[1], /No actionable supervised lead asks/);
-  assert.equal(
-    readLeadCoordinationState(supervisionRuntime(), PARENT_SESSION_ID)
-      ?.pendingAsk?.askId,
-    replacedAsk.askId,
-  );
-  assert.equal(
-    readLeadCoordinationState(supervisionRuntime(), orphanSessionId)?.pendingAsk
-      ?.askId,
-    orphanedAsk.askId,
-  );
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "read",
-    "agent_list",
-    "agent_delegate",
-    "agent_continue",
-    "agent_steer",
-    "agent_interrupt",
-    "agent_reply",
-    "agent_close",
-    "agent_inspect",
-    "agent_transcript",
-    "supervisor_message",
-    "supervisor_ask",
-    "supervisor_result",
-    "peer_list",
-    "peer_message",
-  ]);
-  assert.match(confirmations[1], /Supervised leads will not be changed/);
-  const baseline = pi.pi.getActiveTools();
-  const setActiveTools = pi.pi.setActiveTools;
-  pi.pi.setActiveTools = (next: string[]) => {
-    if (next.includes("staff_list")) throw new Error("tool activation failed");
-    setActiveTools(next);
-  };
-  await pi.commandOptions.get("chief").handler("", context);
-  assert.deepEqual(pi.pi.getActiveTools(), baseline);
-  assert.ok(notices.includes("tool activation failed"));
 });
 
 test("Lead resume repairs stale staff from its durable displaced loadout", async () => {
@@ -3712,8 +3101,6 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
     "agent_inspect",
     "agent_transcript",
     "supervisor_message",
-    "supervisor_ask",
-    "supervisor_result",
     "peer_list",
     "peer_message",
   ];
@@ -3732,7 +3119,6 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
     "staff_inspect",
     "staff_transcript",
     "staff_message",
-    "staff_reply",
   ]);
 
   await pi.commandOptions.get("chief").handler("leave", context);
@@ -3748,7 +3134,6 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
       "staff_inspect",
       "staff_transcript",
       "staff_message",
-      "staff_reply",
     ],
     entries: [...entries],
   });
@@ -3785,8 +3170,6 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
           "agent_inspect",
           "agent_transcript",
           "supervisor_message",
-          "supervisor_ask",
-          "supervisor_result",
           "peer_list",
           "peer_message",
         ],
@@ -3806,8 +3189,6 @@ test("ordinary branch tool state wins over an older lead checkpoint", async () =
     "agent_inspect",
     "agent_transcript",
     "supervisor_message",
-    "supervisor_ask",
-    "supervisor_result",
     "peer_list",
     "peer_message",
   ];
@@ -4140,106 +3521,6 @@ test("active chief shutdown clears its role before releasing the lease", async (
   setLeadEnvironment();
 });
 
-test("Chief resume rejects a persisted pending chief ask without activation", async () => {
-  setLeadEnvironment();
-  process.env.HERDR_PANE_ID = "lead-pane";
-  process.env.HERDR_SOCKET_PATH = join(
-    tmpdir(),
-    `supervision-${randomUUID()}.sock`,
-  );
-  const entries = [
-    {
-      type: "custom",
-      customType: "pi-herdsman-role",
-      data: {
-        role: "chief",
-        leadTools: [
-          "agent_list",
-          "agent_delegate",
-          "agent_continue",
-          "agent_steer",
-          "agent_interrupt",
-          "agent_reply",
-          "agent_close",
-          "agent_inspect",
-          "agent_transcript",
-          "supervisor_message",
-          "supervisor_ask",
-          "supervisor_result",
-          "peer_list",
-          "peer_message",
-        ],
-      },
-    },
-    {
-      type: "custom",
-      customType: "pi-herdsman-lead-state",
-      data: {
-        pendingAsk: {
-          askId: "11111111-1111-4111-8111-111111111111",
-          question: "Need a decision",
-          text: "Question: Need a decision",
-        },
-      },
-    },
-  ];
-  const pi = fakeChiefPi({
-    entries,
-    activeTools: [
-      "agent_list",
-      "agent_delegate",
-      "agent_continue",
-      "agent_steer",
-      "agent_interrupt",
-      "agent_reply",
-      "agent_close",
-      "agent_inspect",
-      "agent_transcript",
-      "supervisor_message",
-      "supervisor_ask",
-      "supervisor_result",
-      "peer_list",
-      "peer_message",
-    ],
-  });
-  registerExtension!(pi.pi as never);
-  const context = fakeContext(entries) as any;
-  context.ui.notify = () => undefined;
-  await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "agent_list",
-    "agent_delegate",
-    "agent_continue",
-    "agent_steer",
-    "agent_interrupt",
-    "agent_reply",
-    "agent_close",
-    "agent_inspect",
-    "agent_transcript",
-    "supervisor_message",
-    "supervisor_ask",
-    "supervisor_result",
-    "peer_list",
-    "peer_message",
-  ]);
-  assert.equal(
-    entries.some(
-      (entry: any) =>
-        entry.customType === "pi-herdsman-role" && entry.data.role === "chief",
-    ),
-    true,
-  );
-  assert.equal(pi.pi.getActiveTools().includes("staff_list"), false);
-  assert.equal(
-    realFs.existsSync(supervisionRuntime().lock) &&
-      realFs.readdirSync(supervisionRuntime().lock).length > 0,
-    false,
-  );
-  await pi.events.get("session_shutdown")?.[0]();
-  delete process.env.HERDR_SOCKET_PATH;
-  setLeadEnvironment();
-});
-
 test("persisted chief resume isolates tools and restores its ordinary baseline", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
@@ -4268,8 +3549,6 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
           "agent_inspect",
           "agent_transcript",
           "supervisor_message",
-          "supervisor_ask",
-          "supervisor_result",
           "peer_list",
           "peer_message",
         ],
@@ -4299,7 +3578,6 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     "staff_inspect",
     "staff_transcript",
     "staff_message",
-    "staff_reply",
   ]);
   await pi.commandOptions.get("chief").handler("leave", context);
   assert.deepEqual(pi.pi.getActiveTools(), [
@@ -4316,8 +3594,6 @@ test("persisted chief resume isolates tools and restores its ordinary baseline",
     "agent_inspect",
     "agent_transcript",
     "supervisor_message",
-    "supervisor_ask",
-    "supervisor_result",
     "peer_list",
     "peer_message",
   ]);
@@ -4353,7 +3629,6 @@ test("persisted chief collision is suspended and has no lead authority", async (
           "agent_inspect",
           "agent_transcript",
           "supervisor_message",
-          "supervisor_ask",
         ],
       },
     },
@@ -4378,7 +3653,6 @@ test("persisted chief collision is suspended and has no lead authority", async (
         "agent_inspect",
         "agent_transcript",
         "supervisor_message",
-        "supervisor_ask",
       ],
     });
     registerExtension!(pi.pi as never);
