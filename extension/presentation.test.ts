@@ -4790,6 +4790,83 @@ test("coordination messages render compact semantic headings and strip only know
     );
 });
 
+test("project messages have semantic compact and expanded presentation", () => {
+  const details = {
+    branch: "feat/project-message-presentation",
+    fromSessionId: "lead-session",
+  };
+  const body =
+    "## Review handoff\n\n" +
+    "Validation passed. " +
+    "More project evidence. ".repeat(20) +
+    "\n\nFinal evidence.";
+  const message = {
+    content:
+      "Project feat/project-message-presentation from lead lead-session:\n\n" +
+      body,
+    details,
+  };
+
+  const compact = renderCoordinationMessage(
+    "project_message",
+    message,
+    { outputPad: 1 },
+    presentationTheme,
+  );
+  const compactText = renderedText(compact);
+  assert.match(
+    compactText,
+    /Project message · feat\/project-message-presentation/,
+  );
+  assert.match(compactText, /Review handoff/);
+  assert.match(compactText, /…/);
+  assert.doesNotMatch(
+    compactText,
+    /Project feat\/project-message-presentation from lead lead-session:/,
+  );
+  assert.doesNotMatch(compactText, /lead-session/);
+  for (let width = 1; width <= 80; width++)
+    assert.ok(
+      compact.render(width).every((line) => visibleWidth(line) <= width),
+    );
+
+  const expandedText = renderedText(
+    renderCoordinationMessage(
+      "project_message",
+      message,
+      { expanded: true },
+      presentationTheme,
+    ),
+  );
+  assert.match(
+    expandedText,
+    /Project message · feat\/project-message-presentation/,
+  );
+  assert.match(expandedText, /branch: feat\/project-message-presentation/);
+  assert.match(expandedText, /session: lead-session/);
+  assert.match(expandedText, /Review handoff/);
+  assert.match(expandedText, /Final evidence/);
+  assert.doesNotMatch(
+    expandedText,
+    /Project feat\/project-message-presentation from lead lead-session:/,
+  );
+
+  const mismatched = renderedText(
+    renderCoordinationMessage(
+      "project_message",
+      {
+        content:
+          "Project feat/project-message-presentation from lead someone-else:\n\n" +
+          "This is user-authored content.",
+        details,
+      },
+      {},
+      presentationTheme,
+    ),
+  );
+  assert.match(mismatched, /from lead someone-else/);
+});
+
 test("expanded coordination messages show complete Markdown and useful provenance only", () => {
   const body = `## Summary\n\nManager is **reachable**.\n\n- First worktree created\n\n${"Full progress paragraph. ".repeat(20)}\n\nFinal evidence.`;
   const details = {

@@ -2834,7 +2834,7 @@ function renderMessageBox(
 }
 
 export function renderCoordinationMessage(
-  kind: CoordinationMessageKind,
+  kind: CoordinationMessageKind | "project_message",
   message: {
     content?: string;
     details?: {
@@ -2871,6 +2871,11 @@ export function renderCoordinationMessage(
       heading = statusLine(theme, "accent", "→", `${branch} assigned`);
       if (d?.branch) prefix = `Project assignment for branch ${d.branch}:\n\n`;
       break;
+    case "project_message":
+      heading = d?.branch ? `Project message · ${d.branch}` : "Project message";
+      if (d?.branch && d?.fromSessionId)
+        prefix = `Project ${d.branch} from lead ${d.fromSessionId}:\n\n`;
+      break;
   }
   let body = message.content ?? "";
   if (prefix && body.startsWith(prefix)) body = body.slice(prefix.length);
@@ -2894,8 +2899,7 @@ export function renderCoordinationMessage(
       content.addChild(new Markdown(body, 0, 0, getMarkdownTheme()));
     }
   } else {
-    let previewBody = body;
-    const preview = collapseDisplayText(previewBody);
+    const preview = collapseDisplayText(body);
     if (preview)
       content.addChild(
         new Markdown(preview, 2, 0, getMarkdownTheme(), {

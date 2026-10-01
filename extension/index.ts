@@ -6874,6 +6874,11 @@ export default function (pi: ExtensionAPI): void {
     );
   }
   pi.registerMessageRenderer(
+    "pi-herdsman-project_message",
+    (message, options, theme) =>
+      renderCoordinationMessage("project_message", message, options, theme),
+  );
+  pi.registerMessageRenderer(
     "pi-herdsman-stop-summary",
     (message, _options, theme) => renderStopSummary(message, theme),
   );
