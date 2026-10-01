@@ -546,6 +546,8 @@ export type SupervisedLeadSnapshot = Readonly<{
   }>[];
   workspaceLabel?: string;
   runtimeState: LifecyclePresentationState;
+  herdRunStartedAt?: number;
+  contextPercent?: number;
   availableActions?: readonly string[];
   agentCounts?: Readonly<{
     active?: number;
@@ -815,6 +817,16 @@ function supervisionLeadMarker(lead: SupervisedLeadDisplay): string {
     : lifecycleMarker(lead.runtimeState);
 }
 
+function lifecycleColor(state: LifecyclePresentationState): string {
+  return STATE_COLOR[lifecycleLabel(state)] ?? "muted";
+}
+
+const MANAGER_METADATA_LAYOUTS = [
+  { elapsed: true, context: true },
+  { elapsed: false, context: true },
+  { elapsed: false, context: false },
+] as const;
+
 /** Renders the bounded ambient lead rows. */
 export function renderSupervisionLeads(
   reports: readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
@@ -823,13 +835,19 @@ export function renderSupervisionLeads(
     status?: SupervisionContextStatus;
     ordinaryCap?: number;
     role?: "chief" | "manager";
+    theme?: any;
   } = {},
   selectedLead?: string,
 ): string[] {
   const status = options.status ?? "fresh";
   const role = options.role ?? "chief";
   if (status === "unavailable")
-    return [safeLine(`● ${role} · unavailable`, width)];
+    return [
+      safeLine(
+        `${themed(options.theme, "success", "●")} ${themed(options.theme, "muted", `${role} · unavailable`)}`,
+        width,
+      ),
+    ];
   const displays = orderedSupervisionLeads(presentationReports(reports));
   const groups = groupOrderedSupervisedLeads(displays);
   const ordinary = SUPERVISION_GROUPS.flatMap((group) => groups.get(group)!);
@@ -846,10 +864,13 @@ export function renderSupervisionLeads(
     managerSnapshot && "project" in managerSnapshot
       ? managerSnapshot.project
       : undefined;
-  const header =
+  const header = `${themed(options.theme, "success", "●")} ${themed(
+    options.theme,
+    "muted",
     role === "manager"
-      ? `● manager${project ? ` · ${project}` : ""}${status === "stale" ? " · stale" : ""}`
-      : `● chief · ${supervisionCountLabel(managers, leads)}${status === "stale" ? " · stale" : ""}`;
+      ? `manager${project ? ` · ${project}` : ""}${status === "stale" ? " · stale" : ""}`
+      : `chief · ${supervisionCountLabel(managers, leads)}${status === "stale" ? " · stale" : ""}`,
+  )}`;
   if (
     managerSnapshot &&
     "leads" in managerSnapshot &&
@@ -858,11 +879,52 @@ export function renderSupervisionLeads(
     const items = managerSupervisionItems(managerSnapshot);
     const visible = items.slice(0, Math.max(0, cap));
     const remaining = items.length - visible.length;
+    const now = Date.now();
+    const metadata = visible.map((item) => ({
+      elapsed:
+        formatElapsed(
+          item.kind === "work" ? item.lead?.herdRunStartedAt : undefined,
+          now,
+        ) ?? "",
+      context: Number.isInteger(
+        item.kind === "work" ? item.lead?.contextPercent : undefined,
+      )
+        ? `${item.kind === "work" ? item.lead!.contextPercent : ""}%`
+        : "",
+    }));
     const workMarkers = {
       active: "●",
       paused: "○",
       conflict: "!",
     };
+    const layout =
+      MANAGER_METADATA_LAYOUTS.find((candidate) =>
+        visible.every((item, index) => {
+          if (item.kind !== "work") return true;
+          const branch =
+            index === visible.length - 1 && !remaining ? "└─" : "├─";
+          const marker =
+            item.work.status === "active" && item.lead
+              ? `${item.lead.runtimeState === "blocked" ? "!" : ""}${supervisionLeadMarker(item.lead)}`
+              : workMarkers[item.work.status];
+          const prefixWidth = visibleWidth(`${branch}  ${marker} `);
+          const suffixWidth = visibleWidth(` · ${item.work.status}`);
+          const telemetryWidth =
+            (candidate.elapsed && metadata[index]!.elapsed
+              ? visibleWidth(metadata[index]!.elapsed) + 2
+              : 0) +
+            (candidate.context && metadata[index]!.context
+              ? visibleWidth(metadata[index]!.context) + 2
+              : 0);
+          return (
+            prefixWidth +
+              visibleWidth(item.work.branch) +
+              suffixWidth +
+              telemetryWidth <=
+            width
+          );
+        }),
+      ) ?? MANAGER_METADATA_LAYOUTS.at(-1)!;
     return [
       safeLine(header, width),
       ...visible.map((item, index) => {
@@ -871,7 +933,7 @@ export function renderSupervisionLeads(
         const navigation = lead && lead.lead === selectedLead ? ">" : "";
         if (item.kind === "lead")
           return safeLine(
-            `${branch} ${navigation}${supervisionLeadMarker(item.lead)} ${item.lead.branch ?? item.lead.displayName} · Lead`,
+            `${themed(options.theme, lifecycleColor(item.lead.runtimeState), `${branch} ${navigation}${supervisionLeadMarker(item.lead)}`)} ${themed(options.theme, "muted", `${item.lead.branch ?? item.lead.displayName} · Lead`)}`,
             width,
           );
         const marker =
@@ -880,8 +942,39 @@ export function renderSupervisionLeads(
             : workMarkers[item.work.status];
         const prefix = `${branch} ${navigation}${marker} `;
         const suffix = ` · ${item.work.status}`;
+        const telemetry = [
+          ...(layout.elapsed && metadata[index]!.elapsed
+            ? [metadata[index]!.elapsed]
+            : []),
+          ...(layout.context && metadata[index]!.context
+            ? [metadata[index]!.context]
+            : []),
+        ];
+        const telemetryWidth = telemetry.reduce(
+          (total, value) => total + visibleWidth(value) + 2,
+          0,
+        );
+        const leadColor = lead
+          ? lifecycleColor(lead.runtimeState)
+          : item.work.status === "active"
+            ? "success"
+            : item.work.status === "conflict"
+              ? "warning"
+              : "muted";
+        const markerText = themed(options.theme, leadColor, marker);
+        const branchText = themed(
+          options.theme,
+          "muted",
+          safeLine(
+            item.work.branch,
+            width -
+              visibleWidth(prefix) -
+              visibleWidth(suffix) -
+              telemetryWidth,
+          ),
+        );
         return safeLine(
-          `${prefix}${safeLine(item.work.branch, width - visibleWidth(prefix) - visibleWidth(suffix))}${suffix}`,
+          `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${themed(options.theme, "muted", suffix)}${telemetry.map((value) => themed(options.theme, "muted", `  ${value}`)).join("")}`,
           width,
         );
       }),
@@ -899,7 +992,7 @@ export function renderSupervisionLeads(
       const indicators = navigation;
       const counts = lead.leadCounts;
       const row = safeLine(
-        `${branch} ${indicators}${marker} ${lead.displayName}${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`,
+        `${themed(options.theme, lifecycleColor(lead.runtimeState), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", `${lead.displayName}${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`)}`,
         width,
       );
       return [
@@ -908,7 +1001,7 @@ export function renderSupervisionLeads(
           .slice(0, 3)
           .map((child) =>
             safeLine(
-              `   ${child.branch ?? child.display_name} · ${child.runtime_state}${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`,
+              `${themed(options.theme, "muted", `   ${child.branch ?? child.display_name} · `)}${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
               width,
             ),
           ),
@@ -1122,6 +1215,7 @@ export function createSupervisionWidget(
     readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
   getStatus: () => SupervisionContextStatus,
   role: "chief" | "manager" = "chief",
+  theme?: any,
 ): { render(width: number): string[]; invalidate(): void } {
   return {
     render(width) {
@@ -1129,6 +1223,7 @@ export function createSupervisionWidget(
         status: getStatus(),
         ordinaryCap: 6,
         role,
+        theme,
       }).filter((line) => line.length > 0);
     },
     invalidate() {},

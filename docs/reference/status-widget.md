@@ -34,6 +34,22 @@ branches as work, including work without live Leads:
 └─ ○ fix/other · paused
 ```
 
+When available, managed work rows can append the Lead's active herd-run elapsed
+time and Pi's current context percentage:
+
+```text
+● manager · pi-herdsman
+├─ ● feat/foo · active  14m  61%
+└─ ○ fix/other · paused
+```
+
+Elapsed time is the same active herd-run interval shown by the ordinary Lead
+widget; context is Pi's current context percentage. Both are best-effort
+presentation metadata and unavailable values are omitted. Under width pressure,
+elapsed is dropped before context. Manager work status remains distinct from
+the live Lead's runtime state. Chief rows receive matching theme styling but do
+not show these telemetry columns.
+
 Manager work status is `active`, `paused`, or `conflict`.
 An active row uses the live Lead's lifecycle marker when an executor is present;
 otherwise it uses `●`. Paused uses `○` and conflict uses `!`. The row suffix is

@@ -7349,6 +7349,13 @@ export default function (pi: ExtensionAPI): void {
           ? ["--token", `pi_herdsman_role=${activeRole()}`]
           : ["--clear-token", "pi_herdsman_role"]),
     ];
+    if (mode !== "inactive" || activeRole() !== "lead")
+      args.push(
+        "--clear-token",
+        "pi_herdsman_herd_run_started_at",
+        "--clear-token",
+        "pi_herdsman_context_percent",
+      );
     leadMetadataQueue = leadMetadataQueue
       .catch(() => {})
       .then(async () => {
@@ -9270,11 +9277,32 @@ export default function (pi: ExtensionAPI): void {
     const pendingStarts = new Map<string, PendingStart>();
     let leadAgentStartedAt: number | undefined;
     let herdRunStartedAt: number | undefined;
+    const queueLeadPresentation = (
+      ctx: ExtensionContext,
+      name = pi.getSessionName(),
+    ): void => {
+      if (
+        controllerScope.kind !== "lead" ||
+        activeRole() !== "lead" ||
+        roleSuspended
+      )
+        return;
+      const paneId = process.env.HERDR_PANE_ID;
+      if (!paneId) return;
+      const percent = ctx.getContextUsage()?.percent;
+      queueLeadMetadata(ctx, {
+        paneId,
+        name,
+        ...(herdRunStartedAt !== undefined ? { herdRunStartedAt } : {}),
+        ...(percent == null ? {} : { contextPercent: Math.round(percent) }),
+      });
+    };
     let leadSettled = true;
     const beginHerdRun = (ctx: ExtensionContext): void => {
       if (herdRunStartedAt !== undefined) return;
       const startedAt = leadAgentStartedAt ?? Date.now();
       herdRunStartedAt = startedAt;
+      queueLeadPresentation(ctx);
       try {
         pi.appendEntry(HERD_RUN_ENTRY, {
           phase: "started",
@@ -9328,6 +9356,7 @@ export default function (pi: ExtensionAPI): void {
         } satisfies HerdRunEntry);
         herdRunStartedAt = undefined;
         requestStatusRefresh?.();
+        queueLeadPresentation(ctx);
         // ponytail: project correctness does not depend on this advisory handoff; add retry only if dropped notifications are observed.
         void publishSettledProjectHandoff(ctx, startedAt).catch((error) => {
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
@@ -10697,12 +10726,13 @@ export default function (pi: ExtensionAPI): void {
       supervisionTimer.unref?.();
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
       try {
-        ctx.ui.setWidget("pi-herdsman-staff", (tui, _theme) => {
+        ctx.ui.setWidget("pi-herdsman-staff", (tui, theme) => {
           requestSupervisionWidgetRender = () => tui.requestRender();
           return createSupervisionWidget(
             () => supervisionSnapshot,
             () => supervisionSnapshotStatus(ctx),
             activeRole() === "manager" ? "manager" : "chief",
+            theme,
           );
         });
       } catch {
@@ -14062,10 +14092,7 @@ export default function (pi: ExtensionAPI): void {
         process.env.HERDR_PANE_ID &&
         chiefMode === "inactive"
       ) {
-        queueLeadMetadata(ctx, {
-          paneId: process.env.HERDR_PANE_ID,
-          name: pi.getSessionName(),
-        });
+        queueLeadPresentation(ctx);
       }
       ownTools =
         controllerScope.kind === "managed-agent"
@@ -14124,11 +14151,16 @@ export default function (pi: ExtensionAPI): void {
       pi.on("session_info_changed", (event: any, ctx: ExtensionContext) => {
         if (chiefMode !== "inactive") return;
         if (!process.env.HERDR_PANE_ID) return;
-        queueLeadMetadata(ctx, {
-          paneId: process.env.HERDR_PANE_ID,
-          name: event?.name ?? pi.getSessionName(),
-        });
+        queueLeadPresentation(ctx, event?.name ?? pi.getSessionName());
       });
+    if (controllerScope.kind === "lead") {
+      pi.on("turn_end", (_event: unknown, ctx: ExtensionContext) => {
+        queueLeadPresentation(ctx);
+      });
+      pi.on("session_compact", (_event: unknown, ctx: ExtensionContext) => {
+        queueLeadPresentation(ctx);
+      });
+    }
     pi.on("session_tree", async (_event: unknown, ctx: ExtensionContext) => {
       if (!controllerSessionActive) return;
       const watchActiveAsks = (): void => {
