@@ -1322,6 +1322,7 @@ test("recovery requires the official session and retries one failed delivery", a
   let attempts = 0;
   let delivered = "";
   let deliveredDetails: any;
+  const attemptedRefs: string[] = [];
   const transientFailures = 5;
   let successful = 0;
   const previousRequestId = randomUUID();
@@ -1343,6 +1344,12 @@ test("recovery requires the official session and retries one failed delivery", a
       if ((message as any).customType === "pi-herdsman-agent-result") {
         delivered = String((message as any).content ?? "");
         deliveredDetails = (message as any).details;
+        const match = /Result ref: (result:[^\s]+)/.exec(delivered);
+        assert.ok(
+          match,
+          "every publication attempt should retain its result ref",
+        );
+        attemptedRefs.push(match[1]);
         attempts++;
         if (attempts <= transientFailures) throw new Error("transient");
         successful++;
@@ -1380,8 +1387,10 @@ test("recovery requires the official session and retries one failed delivery", a
       `^Agent result · agent=${label} · definition=agent · session=${identity.piSessionId} · status=completed`,
     ),
   );
-  // Each rejected publication permanently consumes its semantic reservation.
-  assert.match(delivered, new RegExp(`Result ref: result:${label}#7`));
+  assert.deepEqual(
+    attemptedRefs,
+    Array(transientFailures + 1).fill(`result:${label}#2`),
+  );
   assert.doesNotMatch(delivered, /Agent result source:/);
   assert.equal(
     readFileSync(resultPath(REQUEST_ID), "utf8"),
@@ -1397,7 +1406,7 @@ test("recovery requires the official session and retries one failed delivery", a
   );
   assert.equal(deliveredDetails.agentLabel, label);
   assert.equal(deliveredDetails.agentDefinition, "agent");
-  assert.equal(deliveredDetails.resultIndex, 7);
+  assert.equal(deliveredDetails.resultIndex, 2);
   assert.equal(deliveredDetails.resultRef, `result:${REQUEST_ID}`);
   assert.equal(readResult(mailbox, REQUEST_ID), undefined);
   assert.deepEqual(lifecycle.closeOrder, [label]);
