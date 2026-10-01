@@ -271,6 +271,230 @@ test("assigned Lead saves supervisor messages durably with or without a Manager"
   }
 });
 
+test("project Lead observes Manager availability across turnover without exposing identity", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `project-supervisor-state-${randomUUID()}.sock`,
+  );
+  process.env.HERDR_WORKSPACE_ID = "linked-workspace";
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  const runtime = supervisionRuntime();
+  const leadId = randomUUID();
+  const managerId = randomUUID();
+  const assignment = {
+    version: 1 as const,
+    id: leadId,
+    repoKey: "repo-key",
+    branch: "smoke/supervisor-state",
+    text: "project assignment",
+  };
+  writeProjectAssignment(runtime, assignment);
+  const manager = claimManagerLease({
+    piSessionId: managerId,
+    paneId: "manager-pane",
+    tabId: "manager-tab",
+    workspaceId: WORKSPACE,
+    repoKey: "repo-key",
+  });
+  let managerReleased = false;
+  let replacement: ReturnType<typeof claimManagerLease> | undefined;
+  writeLeadCoordinationState(runtime, {
+    version: 1,
+    role: "manager",
+    instanceId: randomUUID(),
+    piSessionId: managerId,
+    updatedAt: Date.now(),
+  });
+  const agents: any[] = [
+    {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: leadId,
+      },
+      pane_id: "lead-pane",
+      tab_id: "lead-tab",
+      workspace_id: "linked-workspace",
+    },
+    {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: managerId,
+      },
+      pane_id: "manager-pane",
+      tab_id: "manager-tab",
+      workspace_id: WORKSPACE,
+    },
+  ];
+  const exec = (_command: string, args: string[]) => {
+    let result: unknown = {};
+    if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
+    else if (isAgentList(args)) result = { agents };
+    else if (args[0] === "agent" && args[1] === "get")
+      result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
+    else if (args[0] === "workspace" && args[1] === "get")
+      result = {
+        workspace: {
+          worktree: { repo_key: "repo-key", is_linked_worktree: true },
+        },
+      };
+    else if (args[0] === "worktree" && args[1] === "list")
+      result = {
+        source: {
+          repo_key: "repo-key",
+          repo_name: "project",
+          source_workspace_id: WORKSPACE,
+        },
+        worktrees: [
+          { branch: assignment.branch, open_workspace_id: "linked-workspace" },
+        ],
+      };
+    return {
+      stdout: JSON.stringify({ id: AGENT_ID, result }),
+      stderr: "",
+      code: 0,
+    };
+  };
+  const pi = fakeChiefPi({ exec });
+  registerExtension!(pi.pi as never);
+  const branch: any[] = [];
+  const ctx = fakeContext([], branch) as any;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => leadId,
+    getSessionFile: () => `/tmp/${leadId}.jsonl`,
+  };
+  const observe = () =>
+    pi.events.get("before_agent_start")![0](
+      { systemPrompt: "prompt", systemPromptOptions: {} },
+      ctx,
+    );
+  const recordObservation = (result: any) => {
+    const message = result?.message;
+    if (message)
+      branch.push({
+        type: "custom_message",
+        customType: message.customType,
+        content: message.content,
+      });
+    return message;
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    const available = recordObservation(await observe());
+    assert.match(available.content, /supervisor: manager/);
+    assert.match(available.content, /availability: available/);
+    assert.doesNotMatch(available.content, new RegExp(managerId));
+    assert.equal(recordObservation(await observe()), undefined);
+
+    writeLeadCoordinationState(runtime, {
+      version: 1,
+      role: undefined,
+      instanceId: randomUUID(),
+      piSessionId: managerId,
+      updatedAt: Date.now(),
+    });
+    const unknown = recordObservation(await observe());
+    assert.match(unknown.content, /supervisor: manager/);
+    assert.match(unknown.content, /availability: unknown/);
+    assert.match(
+      unknown.content,
+      /project_messages: retained for the Manager role/,
+    );
+    const savedWhileUnknown = await pi.tools
+      .find((tool) => tool.name === "supervisor_message")!
+      .execute(
+        "message",
+        { message: "RETAINED_WITH_UNVERIFIED_MANAGER" },
+        undefined,
+        undefined,
+        ctx,
+      );
+    assert.match(
+      JSON.stringify(savedWhileUnknown),
+      /Project message saved for Manager/,
+    );
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", assignment.branch)[0]?.text,
+      "RETAINED_WITH_UNVERIFIED_MANAGER",
+    );
+    writeLeadCoordinationState(runtime, {
+      version: 1,
+      role: "manager",
+      instanceId: randomUUID(),
+      piSessionId: managerId,
+      updatedAt: Date.now(),
+    });
+
+    manager.release();
+    agents.splice(1, 1);
+    const unavailable = recordObservation(await observe());
+    assert.match(unavailable.content, /supervisor: manager/);
+    assert.match(unavailable.content, /availability: unavailable/);
+    assert.match(
+      unavailable.content,
+      /project_messages: retained for the Manager role/,
+    );
+    const saved = await pi.tools
+      .find((tool) => tool.name === "supervisor_message")!
+      .execute(
+        "message",
+        { message: "RETAINED_WITHOUT_MANAGER" },
+        undefined,
+        undefined,
+        ctx,
+      );
+    assert.match(JSON.stringify(saved), /Project message saved for Manager/);
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", assignment.branch)[1]?.text,
+      "RETAINED_WITHOUT_MANAGER",
+    );
+
+    const replacementId = randomUUID();
+    replacement = claimManagerLease({
+      piSessionId: replacementId,
+      paneId: "manager-replacement-pane",
+      tabId: "manager-replacement-tab",
+      workspaceId: WORKSPACE,
+      repoKey: "repo-key",
+    });
+    agents.push({
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "id",
+        value: replacementId,
+      },
+      pane_id: "manager-replacement-pane",
+      tab_id: "manager-replacement-tab",
+      workspace_id: WORKSPACE,
+    });
+    writeLeadCoordinationState(runtime, {
+      version: 1,
+      role: "manager",
+      instanceId: randomUUID(),
+      piSessionId: replacementId,
+      updatedAt: Date.now(),
+    });
+    const replacementState = recordObservation(await observe());
+    assert.match(replacementState.content, /availability: available/);
+    assert.doesNotMatch(replacementState.content, new RegExp(replacementId));
+    replacement.release();
+    replacement = undefined;
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    replacement?.release();
+    if (!managerReleased) manager.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
 test("unassigned Lead routes supervisor messages directly to Chief", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `unassigned-routing-${randomUUID()}.sock`);
@@ -296,7 +520,17 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
     tab_id,
     workspace_id,
   }));
+  let observationFailure = false;
+  let chiefDiscoveryFailure = false;
   const exec = (_command: string, args: string[]) => {
+    if (chiefDiscoveryFailure && isAgentList(args))
+      return {
+        stdout: "",
+        stderr: "simulated Chief discovery failure",
+        code: 1,
+      };
+    if (observationFailure)
+      return { stdout: "", stderr: "simulated Herdr failure", code: 1 };
     let result: unknown = {};
     if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
     else if (isAgentList(args)) result = { agents };
@@ -325,7 +559,8 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
   };
   const pi = fakeChiefPi({ exec });
   registerExtension!(pi.pi as never);
-  const ctx = fakeContext() as any;
+  const branch: any[] = [];
+  const ctx = fakeContext([], branch) as any;
   ctx.sessionManager = {
     ...ctx.sessionManager,
     getSessionId: () => leadId,
@@ -333,6 +568,26 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
   };
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
+    const beforeAgentStart = pi.events.get("before_agent_start")![0];
+    const observe = () =>
+      beforeAgentStart(
+        { systemPrompt: "prompt", systemPromptOptions: {} },
+        ctx,
+      );
+    const recordObservation = (result: any) => {
+      const message = result?.message;
+      if (message)
+        branch.push({
+          type: "custom_message",
+          customType: message.customType,
+          content: message.content,
+        });
+      return message;
+    };
+    const chiefState = recordObservation(await observe());
+    assert.match(chiefState.content, /supervisor: chief/);
+    assert.match(chiefState.content, /availability: available/);
+    assert.equal(recordObservation(await observe()), undefined);
     const result = await pi.tools
       .find((tool) => tool.name === "supervisor_message")!
       .execute(
@@ -353,6 +608,66 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
         );
       }),
     );
+    chiefDiscoveryFailure = true;
+    const unverifiedChief = recordObservation(await observe());
+    assert.match(unverifiedChief.content, /supervisor: unverified/);
+    assert.match(unverifiedChief.content, /availability: unknown/);
+    await assert.rejects(
+      pi.tools
+        .find((tool) => tool.name === "supervisor_message")!
+        .execute(
+          "message",
+          { message: "UNVERIFIED_CHIEF_MUST_REJECT" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      /No active supervisor is available/,
+    );
+    chiefDiscoveryFailure = false;
+    writeFileSync(runtime.descriptor, "invalid Chief descriptor");
+    const unreadableChief = recordObservation(await observe());
+    assert.equal(unreadableChief, undefined);
+    assert.equal(
+      branch.filter(
+        (message) =>
+          message.customType === "pi-herdsman-supervisor-state" &&
+          message.content.includes("supervisor: unverified"),
+      ).length,
+      1,
+    );
+    await assert.rejects(
+      pi.tools
+        .find((tool) => tool.name === "supervisor_message")!
+        .execute(
+          "message",
+          { message: "UNVERIFIED_DESCRIPTOR_MUST_REJECT" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      /No active supervisor is available/,
+    );
+    chief.release();
+    const noSupervisor = recordObservation(await observe());
+    assert.match(noSupervisor.content, /supervisor: none/);
+    assert.match(noSupervisor.content, /availability: unavailable/);
+    await assert.rejects(
+      pi.tools
+        .find((tool) => tool.name === "supervisor_message")!
+        .execute(
+          "message",
+          { message: "NO_SUPERVISOR_MUST_REJECT" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+      /No active supervisor is available/,
+    );
+    observationFailure = true;
+    const unverified = recordObservation(await observe());
+    assert.match(unverified.content, /supervisor: unverified/);
+    assert.match(unverified.content, /availability: unknown/);
     assert.deepEqual(
       listProjectMessages(runtime, "repo-key", "smoke/routing"),
       [],
@@ -864,7 +1179,7 @@ for (const scenario of [
         toSessionId: sessionId,
         leadSessionId: sessionId,
         branch: assignment.branch,
-        text: `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nUse supervisor_message when the Manager must decide or act, when material scope\nor assumptions change, or when the branch is ready for review. Routine status\nand acknowledgements stay local. The project remains open until the Manager\ncompletes or discards it.`,
+        text: `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nWhen a delegated herd run settles, summarize its outcome, validation, and\nimportant unresolved points in your normal response. Herdsman handles the\nnormal Manager handoff automatically.\n\nUse supervisor_message when the Manager must decide or act before normal\nsettlement, or when material scope, assumptions, risks, or evidence need\nattention. Routine status and acknowledgements stay local. The project remains open\nuntil the Manager completes or discards it.`,
         createdAt: Date.now(),
       },
       runtime,

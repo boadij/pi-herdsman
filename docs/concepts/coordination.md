@@ -94,9 +94,13 @@ project work
 
 The assignment is the durable indicator that project work remains open. It
 survives Manager turnover and runtime loss; current Herdr placement is derived
-again when the work is observed or resumed. Assigned Lead messages are retained
-with the project and remain available to a replacement Manager. They are
-coordination and review handoffs, not terminal results.
+again when the work is observed or resumed. When a project herd run settles,
+Herdsman handles the normal Manager handoff automatically. Leads summarize the
+outcome, validation, and important unresolved points in their normal response;
+the handoff is advisory and does not resolve the assignment. Assigned Lead
+messages are also retained with the project and remain available to a
+replacement Manager. Only the Manager resolves the assignment. See
+[Project orchestration](../guides/project-orchestration.md) for the workflow.
 
 `staff_stop` pauses execution while preserving the assignment, Pi session,
 branch, and worktree. Only Manager `staff_complete` or `staff_discard` removes

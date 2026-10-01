@@ -2447,6 +2447,18 @@ export function startupExecutor(
         };
       }
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            error: {
+              code: "not_git_worktree",
+              message: "Workspace is not a Git worktree",
+            },
+          }),
+          stderr: "",
+          code: 1,
+        };
       if (isApiSnapshot(args)) {
         const state = readAgentState(mailbox);
         const agents =
@@ -2742,9 +2754,9 @@ export function startupExecutor(
         stopped = true;
         return { stdout: "{}", stderr: "", code: 0 };
       }
-      if (args[0] === "agent" && args[1] === "start") {
-        onStart?.(args);
-      }
+      if (args[0] !== "agent" || args[1] !== "start")
+        return { stdout: "{}", stderr: "", code: 0 };
+      onStart?.(args);
       const startedAgent = {
         name: args[2],
         pane_id: activePaneId,

@@ -162,6 +162,7 @@ import {
   writeCoordinationMessage,
   chiefMessageBytes,
   COORDINATION_MESSAGE_MAX_BYTES,
+  projectAssignmentPath,
   projectMessageBytes,
   writeProjectMessage,
   listProjectMessages,
@@ -172,6 +173,7 @@ import {
   type ManagerLease,
   type ManagerDescriptor,
   type ProjectAssignment,
+  type ProjectMessage,
   claimManagerLease,
   readManagerDescriptor,
   readManagerDescriptorStatus,
@@ -320,6 +322,12 @@ Use staff_message for decisions and review feedback. Use staff_stop to stop a
 Lead while preserving its assignment, staff_complete when the project work is
 fulfilled, and staff_discard when it is abandoned.
 
+When a delegated herd run settles, Leads summarize its outcome, validation, and
+important unresolved points in their normal response. Herdsman handles the
+normal Manager handoff automatically. Review received handoffs, request
+corrections with staff_message when needed, and use
+staff_complete only when the project work is fulfilled.
+
 Actual implementation belongs to project Leads and their Agent trees. Your role
 is orchestration, review, decisions, and integration. Lead messages are
 coordination and review handoffs, not project completion. Escalate to Chief with
@@ -327,9 +335,10 @@ supervisor_message.`;
 function projectAssignmentInstruction(
   assignment: Pick<ProjectAssignment, "text">,
 ): string {
-  return `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nUse supervisor_message when the Manager must decide or act, when material scope\nor assumptions change, or when the branch is ready for review. Routine status\nand acknowledgements stay local. The project remains open until the Manager\ncompletes or discards it.`;
+  return `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nWhen a delegated herd run settles, summarize its outcome, validation, and\nimportant unresolved points in your normal response. Herdsman handles the\nnormal Manager handoff automatically.\n\nUse supervisor_message when the Manager must decide or act before normal\nsettlement, or when material scope, assumptions, risks, or evidence need\nattention. Routine status and acknowledgements stay local. The project remains open\nuntil the Manager completes or discards it.`;
 }
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
+const SUPERVISOR_STATE_TYPE = "pi-herdsman-supervisor-state";
 const STALE_AFTER_MS = 10 * 60_000;
 const STALE_SCAN_MS = 30_000;
 const STALE_DIAGNOSTIC_TIMEOUT_MS = 2_000;
@@ -905,6 +914,21 @@ function restoreHerdRunStartedAt(
       active = undefined;
   }
   return active;
+}
+function latestLeadResponseSince(
+  ctx: ExtensionContext,
+  startedAt: number,
+): string | undefined {
+  const entries = ctx.sessionManager.getBranch();
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i] as any;
+    if (entry.type !== "message" || entry.message.role !== "assistant")
+      continue;
+    if ((entry.message.timestamp ?? 0) < startedAt) continue;
+    const text = contentText(entry.message.content, "").trim();
+    if (text) return text;
+  }
+  return undefined;
 }
 async function placementSettings(
   _ctx: ExtensionContext,
@@ -7604,12 +7628,24 @@ export default function (pi: ExtensionAPI): void {
     )
       throw new Error("Lead coordination state changed; retry the action");
   };
-  const currentChief = (): ChiefDescriptor | undefined => {
+  const chiefLeaseMayExist = (): boolean => {
+    try {
+      statSync(supervisionRuntime().lock);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  };
+  const currentChief = (
+    failOnVerificationError = false,
+  ): ChiefDescriptor | undefined => {
     if (chiefMode === "active") return chiefLease?.descriptor;
     if (chiefMode !== "inactive") return undefined;
     try {
       return readChiefDescriptor(supervisionRuntime().descriptor);
-    } catch {
+    } catch (error) {
+      if (failOnVerificationError && chiefLeaseMayExist()) throw error;
       return undefined;
     }
   };
@@ -7626,14 +7662,13 @@ export default function (pi: ExtensionAPI): void {
       throw new Error("Manager authority does not match project");
     return status.descriptor;
   };
-  const currentManager = async (
+  const currentWorktreeScope = async (
     ctx: ExtensionContext,
-  ): Promise<ManagerDescriptor | undefined> => {
+  ): Promise<Awaited<ReturnType<typeof worktreeGroupScope>> | undefined> => {
     const workspaceId = process.env.HERDR_WORKSPACE_ID;
     if (!workspaceId) return undefined;
-    let scope;
     try {
-      scope = await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
+      return await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
     } catch (error) {
       if (
         error instanceof OperationError &&
@@ -7642,7 +7677,101 @@ export default function (pi: ExtensionAPI): void {
         return undefined;
       throw error;
     }
-    const descriptor = managerForScope(scope);
+  };
+  const projectAssignmentForScope = (
+    scope: Awaited<ReturnType<typeof worktreeGroupScope>>,
+    sessionId: string,
+  ): ProjectAssignment | undefined => {
+    const assignments = findProjectAssignmentBySession(
+      supervisionRuntime(),
+      scope.repoKey,
+      sessionId,
+    );
+    if (assignments.length > 1)
+      throw new Error("Multiple project assignments match the Lead session");
+    return assignments[0];
+  };
+  const withProjectAssignmentLock = async <T>(
+    repoKey: string,
+    branch: string,
+    operation: () => Promise<T> | T,
+  ): Promise<T> => {
+    const lease = acquireProcessLock(
+      `${projectAssignmentPath(supervisionRuntime(), repoKey, branch)}.lock`,
+      { name: "project assignment lock" },
+    );
+    try {
+      return await operation();
+    } finally {
+      lease.release();
+    }
+  };
+  const publishProjectMessage = async (
+    ctx: ExtensionContext,
+    assignment: ProjectAssignment,
+    message: string,
+    files: readonly string[] = [],
+    operation = "supervisor_message",
+  ): Promise<ProjectMessage | undefined> => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const runtime = supervisionRuntime();
+    const current = readProjectAssignment(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    );
+    if (!current || current.id !== sessionId) return undefined;
+    const id = randomUUID();
+    const createdAt = Date.now();
+    const text = await prepareCoordinationText(
+      ctx,
+      message,
+      files,
+      operation,
+      "Message",
+      (candidate) =>
+        projectMessageBytes({
+          version: 1,
+          id,
+          repoKey: assignment.repoKey,
+          branch: assignment.branch,
+          fromSessionId: sessionId,
+          text: candidate,
+          createdAt,
+        }),
+    );
+    const record: ProjectMessage = {
+      version: 1,
+      id,
+      repoKey: assignment.repoKey,
+      branch: assignment.branch,
+      fromSessionId: sessionId,
+      text,
+      createdAt,
+    };
+    return withProjectAssignmentLock(
+      assignment.repoKey,
+      assignment.branch,
+      () => {
+        const latest = readProjectAssignment(
+          runtime,
+          assignment.repoKey,
+          assignment.branch,
+        );
+        if (!latest || latest.id !== sessionId) return undefined;
+        writeProjectMessage(record, runtime);
+        return record;
+      },
+    );
+  };
+  const currentManager = async (
+    ctx: ExtensionContext,
+    scope:
+      Awaited<ReturnType<typeof worktreeGroupScope>> | undefined | null = null,
+  ): Promise<ManagerDescriptor | undefined> => {
+    const descriptor = managerForScope(
+      scope === null ? await currentWorktreeScope(ctx) : scope,
+    );
     if (!descriptor) return undefined;
     const state = readLeadCoordinationState(
       supervisionRuntime(),
@@ -7676,6 +7805,34 @@ export default function (pi: ExtensionAPI): void {
       : activeRole() === "manager"
         ? await currentChiefAuthority(ctx)
         : undefined;
+  const leadSupervisorState = async (
+    ctx: ExtensionContext,
+  ): Promise<string> => {
+    try {
+      const scope = await currentWorktreeScope(ctx);
+      const assignment = scope
+        ? projectAssignmentForScope(scope, ctx.sessionManager.getSessionId())
+        : undefined;
+      if (assignment) {
+        try {
+          if (await currentManager(ctx, scope))
+            return `<supervisor_state>\nsupervisor: manager\navailability: available\nproject_messages: retained across Manager turnover\n</supervisor_state>`;
+        } catch {
+          return `<supervisor_state>\nsupervisor: manager\navailability: unknown\nproject_messages: retained for the Manager role\n</supervisor_state>`;
+        }
+        return `<supervisor_state>\nsupervisor: manager\navailability: unavailable\nproject_messages: retained for the Manager role\n</supervisor_state>`;
+      }
+      const manager = await currentManager(ctx, scope);
+      if (manager)
+        return `<supervisor_state>\nsupervisor: manager\navailability: available\n</supervisor_state>`;
+      const chief = await currentChiefAuthority(ctx, true);
+      if (chief)
+        return `<supervisor_state>\nsupervisor: chief\navailability: available\n</supervisor_state>`;
+      return `<supervisor_state>\nsupervisor: none\navailability: unavailable\nguidance: continue independently; do not use supervisor_message until a supervisor is available\n</supervisor_state>`;
+    } catch {
+      return `<supervisor_state>\nsupervisor: unverified\navailability: unknown\nguidance: continue independently; do not use supervisor_message until a supervisor is verified\n</supervisor_state>`;
+    }
+  };
   const drainProjectMessages = async (
     ctx: ExtensionContext,
   ): Promise<number> => {
@@ -7947,21 +8104,29 @@ export default function (pi: ExtensionAPI): void {
     writeCoordinationMessage(record, peerRuntime());
     return record;
   };
-  const currentChiefAuthority = async (ctx: ExtensionContext) => {
-    const descriptor = currentChief();
+  const currentChiefAuthority = async (
+    ctx: ExtensionContext,
+    failOnVerificationError = false,
+  ) => {
+    const descriptor = currentChief(failOnVerificationError);
     if (!descriptor) return undefined;
     const runtime = supervisionRuntime();
     if (chiefMode === "active") {
       let onDisk: ChiefDescriptor;
       try {
         onDisk = readChiefDescriptor(runtime.descriptor);
-      } catch {
+      } catch (error) {
+        if (failOnVerificationError) throw error;
+        return undefined;
+      }
+      if (!chiefLease || !sameChiefDescriptor(onDisk, chiefLease.descriptor))
+        return undefined;
+      if (!chiefLeaseIsHeld(runtime)) {
+        if (failOnVerificationError && chiefLeaseMayExist())
+          throw new Error("Unable to verify Chief supervision lease");
         return undefined;
       }
       if (
-        !chiefLease ||
-        !sameChiefDescriptor(onDisk, chiefLease.descriptor) ||
-        !chiefLeaseIsHeld(runtime) ||
         descriptor.claim.pid !== process.pid ||
         descriptor.piSessionId !== ctx.sessionManager.getSessionId() ||
         descriptor.paneId !== process.env.HERDR_PANE_ID ||
@@ -7972,11 +8137,16 @@ export default function (pi: ExtensionAPI): void {
       return descriptor;
     }
     if (activeRole() !== "lead" && activeRole() !== "manager") return undefined;
-    if (chiefMode !== "inactive" || !chiefLeaseIsHeld(runtime))
+    if (chiefMode !== "inactive") return undefined;
+    if (!chiefLeaseIsHeld(runtime)) {
+      if (failOnVerificationError && chiefLeaseMayExist())
+        throw new Error("Unable to verify Chief supervision lease");
       return undefined;
+    }
     try {
       return (await remoteChiefAgent(ctx, descriptor)) ? descriptor : undefined;
-    } catch {
+    } catch (error) {
+      if (failOnVerificationError) throw error;
       return undefined;
     }
   };
@@ -8072,7 +8242,7 @@ export default function (pi: ExtensionAPI): void {
       return projectAssignmentAuthorized(true, "matched");
     }
     if (chiefMode === "active") {
-      const chief = await currentChiefAuthority(ctx);
+      const chief = await currentChiefAuthority(ctx, true);
       if (
         !chief ||
         record.leaseId !== chief.leaseId ||
@@ -9008,6 +9178,26 @@ export default function (pi: ExtensionAPI): void {
       }
       requestStatusRefresh?.();
     };
+    const publishSettledProjectHandoff = async (
+      ctx: ExtensionContext,
+      startedAt: number,
+    ): Promise<void> => {
+      const scope = await currentWorktreeScope(ctx);
+      if (!scope) return;
+      const assignment = projectAssignmentForScope(
+        scope,
+        ctx.sessionManager.getSessionId(),
+      );
+      if (!assignment) return;
+      const summary = latestLeadResponseSince(ctx, startedAt);
+      await publishProjectMessage(
+        ctx,
+        assignment,
+        summary ? `Herd run settled.\n\n${summary}` : "Herd run settled.",
+        [],
+        "herd_run",
+      );
+    };
     const maybeFinishHerdRun = (ctx: ExtensionContext): void => {
       if (herdRunStartedAt === undefined || !leadSettled) return;
       const sessionId = ctx.sessionManager.getSessionId();
@@ -9030,6 +9220,10 @@ export default function (pi: ExtensionAPI): void {
         } satisfies HerdRunEntry);
         herdRunStartedAt = undefined;
         requestStatusRefresh?.();
+        // ponytail: project correctness does not depend on this advisory handoff; add retry only if dropped notifications are observed.
+        void publishSettledProjectHandoff(ctx, startedAt).catch((error) => {
+          appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        });
       } catch (error) {
         appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
       }
@@ -9599,34 +9793,45 @@ export default function (pi: ExtensionAPI): void {
           }
           if ((await liveLead(ctx, assignment.id)).length)
             throw new Error("Lead remains live; assignment preserved");
-          const current = readProjectAssignment(
-            supervisionRuntime(),
+          await withProjectAssignmentLock(
             manager.repoKey,
             assignment.branch,
+            async () => {
+              const current = readProjectAssignment(
+                supervisionRuntime(),
+                manager.repoKey,
+                assignment.branch,
+              );
+              const finalManager = await currentManager(ctx);
+              if (
+                !finalManager ||
+                !sameManagerDescriptor(finalManager, manager)
+              )
+                throw new Error(
+                  "Manager lease changed before project resolution",
+                );
+              if (
+                !current ||
+                current.id !== assignment.id ||
+                current.repoKey !== assignment.repoKey
+              )
+                throw new Error("Project assignment changed before resolution");
+              removeProjectAssignment(
+                supervisionRuntime(),
+                manager.repoKey,
+                assignment.branch,
+              );
+              try {
+                removeProjectMessages(
+                  supervisionRuntime(),
+                  manager.repoKey,
+                  assignment.branch,
+                );
+              } catch (error) {
+                appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+              }
+            },
           );
-          const finalManager = await currentManager(ctx);
-          if (!finalManager || !sameManagerDescriptor(finalManager, manager))
-            throw new Error("Manager lease changed before project resolution");
-          if (
-            !current ||
-            current.id !== assignment.id ||
-            current.repoKey !== assignment.repoKey
-          )
-            throw new Error("Project assignment changed before resolution");
-          removeProjectAssignment(
-            supervisionRuntime(),
-            manager.repoKey,
-            assignment.branch,
-          );
-          try {
-            removeProjectMessages(
-              supervisionRuntime(),
-              manager.repoKey,
-              assignment.branch,
-            );
-          } catch (error) {
-            appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
-          }
           return {
             content: [
               {
@@ -10242,6 +10447,29 @@ export default function (pi: ExtensionAPI): void {
       }
       return refreshed;
     };
+    const latestCustomMessageText = (
+      ctx: ExtensionContext,
+      customType: string,
+    ): string | undefined => {
+      const entry = [
+        ...buildSessionProjection(ctx.sessionManager.getBranch()).entries,
+      ]
+        .reverse()
+        .find(
+          (candidate) =>
+            candidate.sourceEntry.type === "custom_message" &&
+            candidate.sourceEntry.customType === customType &&
+            candidate.messages.length > 0,
+        );
+      const message = entry?.messages[0];
+      return message ? contentText(message.content, "") : undefined;
+    };
+    const prepareLeadSupervisorStateMessage = async (ctx: ExtensionContext) => {
+      const content = await leadSupervisorState(ctx);
+      if (latestCustomMessageText(ctx, SUPERVISOR_STATE_TYPE) === content)
+        return;
+      return { customType: SUPERVISOR_STATE_TYPE, content, display: false };
+    };
     prepareSupervisionMessage = async (ctx: ExtensionContext) => {
       if (!isCurrentChief(ctx) && activeRole() !== "manager") return;
 
@@ -10259,21 +10487,7 @@ export default function (pi: ExtensionAPI): void {
           status === "unavailable" ? undefined : supervisionSnapshot,
           { status, role: activeRole() === "manager" ? "manager" : "chief" },
         );
-        const previous = [
-          ...buildSessionProjection(ctx.sessionManager.getBranch()).entries,
-        ]
-          .reverse()
-          .find(
-            (entry) =>
-              entry.sourceEntry.type === "custom_message" &&
-              entry.sourceEntry.customType === SUPERVISION_CONTEXT_TYPE &&
-              entry.messages.length > 0,
-          );
-        const previousMessage = previous?.messages[0];
-        if (
-          previousMessage &&
-          contentText(previousMessage.content, "") === content
-        )
+        if (latestCustomMessageText(ctx, SUPERVISION_CONTEXT_TYPE) === content)
           return;
 
         return {
@@ -10312,9 +10526,18 @@ export default function (pi: ExtensionAPI): void {
             ...(message ? { message } : {}),
           };
         }
+        const supervisorStateMessage =
+          activeRole() === "lead"
+            ? await prepareLeadSupervisorStateMessage(ctx)
+            : undefined;
         const roster = startupDefinitionRoster;
         if (!roster || roster.sessionId !== ctx.sessionManager.getSessionId())
-          return { systemPrompt: `${event.systemPrompt}\n\n${roleCharter}` };
+          return {
+            systemPrompt: `${event.systemPrompt}\n\n${roleCharter}`,
+            ...(supervisorStateMessage
+              ? { message: supervisorStateMessage }
+              : {}),
+          };
         return {
           systemPrompt:
             `${event.systemPrompt}\n\n` +
@@ -10326,6 +10549,9 @@ export default function (pi: ExtensionAPI): void {
             `This is the session-start definition snapshot. ` +
             `Use agent_list for live Agent state or to refresh ` +
             `Agent definitions after configuration changes.`,
+          ...(supervisorStateMessage
+            ? { message: supervisorStateMessage }
+            : {}),
         };
       });
     pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) => {
@@ -11760,9 +11986,10 @@ export default function (pi: ExtensionAPI): void {
         name: "supervisor_message",
         label: "supervisor message",
         exposure: "model-only",
-        promptSnippet: "Send material coordination to the direct supervisor",
+        promptSnippet:
+          "Send material coordination when a supervisor must decide or act",
         description:
-          "Send material coordination to the direct supervisor when a decision, action, warning, or review handoff is needed.",
+          "Send material coordination when a supervisor must decide or act, or when a blocker, warning, scope change, risk, or explicit evidence needs attention. Assigned project messages are retained for the Manager role across Manager absence.",
         executionMode: "sequential",
         parameters: supervisorMessageParameters,
         constrainedSampling: { type: "json_schema", strict: "prefer" },
@@ -11785,86 +12012,38 @@ export default function (pi: ExtensionAPI): void {
             await enterCoordinationPublication();
           try {
             const sessionId = ctx.sessionManager.getSessionId();
-            const workspaceId = process.env.HERDR_WORKSPACE_ID;
-            if (activeRole() === "lead" && workspaceId) {
-              const scope = await worktreeGroupScope(
-                pi,
+            const scope =
+              activeRole() === "lead"
+                ? await currentWorktreeScope(ctx)
+                : undefined;
+            const assignment =
+              scope && projectAssignmentForScope(scope, sessionId);
+            if (assignment) {
+              const published = await publishProjectMessage(
                 ctx,
-                workspaceId,
-                ctx.signal,
+                assignment,
+                params.message,
+                resolveMessageFiles(ctx, params.files, "supervisor_message"),
               );
-              const assignments = findProjectAssignmentBySession(
-                supervisionRuntime(),
-                scope.repoKey,
-                sessionId,
-              );
-              if (assignments.length > 1)
+              if (!published)
                 throw new Error(
-                  "Multiple project assignments match the Lead session",
+                  "Project assignment changed before message publication",
                 );
-              const assignment = assignments[0];
-              if (assignment) {
-                const current = readProjectAssignment(
-                  supervisionRuntime(),
-                  assignment.repoKey,
-                  assignment.branch,
-                );
-                if (!current || current.id !== sessionId)
-                  throw new Error(
-                    "Project assignment changed before message publication",
-                  );
-                const recordId = randomUUID();
-                const createdAt = Date.now();
-                const text = await prepareCoordinationText(
-                  ctx,
-                  params.message,
-                  resolveMessageFiles(ctx, params.files, "supervisor_message"),
-                  "supervisor_message",
-                  "Message",
-                  (candidate) =>
-                    projectMessageBytes({
-                      version: 1,
-                      id: recordId,
-                      repoKey: assignment.repoKey,
-                      branch: assignment.branch,
-                      fromSessionId: sessionId,
-                      text: candidate,
-                      createdAt,
-                    }),
-                );
-                const latest = readProjectAssignment(
-                  supervisionRuntime(),
-                  assignment.repoKey,
-                  assignment.branch,
-                );
-                if (!latest || latest.id !== sessionId)
-                  throw new Error(
-                    "Project assignment changed before message publication",
-                  );
-                writeProjectMessage(
+              return {
+                content: [
                   {
-                    version: 1,
-                    id: recordId,
-                    repoKey: assignment.repoKey,
-                    branch: assignment.branch,
-                    fromSessionId: sessionId,
-                    text,
-                    createdAt,
+                    type: "text",
+                    text: `Project message saved for Manager (${published.id}).`,
                   },
-                  supervisionRuntime(),
-                );
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: `Project message saved for Manager (${recordId}).`,
-                    },
-                  ],
-                  details: { id: recordId, branch: assignment.branch },
-                };
-              }
+                ],
+                details: { id: published.id, branch: assignment.branch },
+              };
             }
-            const chief = await currentSupervisor(ctx);
+            const chief =
+              activeRole() === "lead"
+                ? ((await currentManager(ctx, scope)) ??
+                  (await currentChiefAuthority(ctx)))
+                : await currentSupervisor(ctx);
             if (!chief) throw new Error("No active supervisor is available");
             const recordId = randomUUID();
             const createdAt = Date.now();

@@ -6,6 +6,8 @@
   the assignment means the work is resolved.
 - Only the Manager's `staff_complete` or `staff_discard` operation removes a
   project assignment.
+- Settled project herd runs may automatically emit nonterminal handoffs to the
+  Manager; these handoffs do not resolve the project assignment.
 - Project Lead messages are nonterminal coordination and review handoffs.
 - Messages from an assigned Lead to Manager are retained with the project and
   remain available across Manager absence and turnover.

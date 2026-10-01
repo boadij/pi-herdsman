@@ -61,12 +61,15 @@ independent enough to justify separate branch and execution boundaries.
 
 ## Coordinate and review
 
-Leads use `supervisor_message` for material decisions, warnings, and review
-handoffs. For an assigned project Lead, messages are retained with the
-assignment, including when no Manager is active, and are available to a
-replacement Manager. Messages are nonterminal: a Lead can report ready for
-review, receive feedback through `staff_message`, and make further revisions
-while the assignment remains open.
+When a delegated herd run settles, Herdsman handles the normal Manager handoff
+automatically. Leads summarize the outcome, validation, and important
+unresolved points in their normal response. The handoff is advisory, not
+project completion: the assignment remains open for Manager review and any
+requested corrections. Leads use `supervisor_message` for material
+coordination when the Manager must decide or act, not to duplicate the normal
+handoff. Assigned project Lead messages are retained with the assignment,
+including when no Manager is active, and are available to a replacement
+Manager. Only the Manager resolves the assignment.
 
 Use the current supervision state rather than repeatedly listing or inspecting
 reports to poll for progress. Inspect live terminal or persisted transcript

@@ -12,6 +12,15 @@ import type {
   ManagedAgentState,
 } from "./mailbox.ts";
 import { claimProcessLock } from "./lock.ts";
+import {
+  listProjectAssignments,
+  listProjectMessages,
+  projectAssignmentPath,
+  removeProjectAssignment,
+  removeProjectMessages,
+  supervisionRuntime,
+  writeProjectAssignment,
+} from "./supervision.ts";
 import support from "./support.ts";
 import {
   CHILD_SESSION_ID,
@@ -1731,6 +1740,282 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
+  }
+});
+
+test("assigned project herd settlement publishes one nonterminal current-run handoff", async (t) => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `project-handoff-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `handoff-${randomUUID()}`;
+  writeProjectAssignment(runtime, {
+    version: 1,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+  });
+
+  const label = `handoff-agent-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+  );
+  const exec = async (command: string, args: string[]) => {
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            source: {
+              repo_key: "repo-key",
+              repo_name: "project",
+              source_workspace_id: WORKSPACE,
+            },
+            worktrees: [],
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    return startup.exec(command, args);
+  };
+  const pi = fakePi({ exec });
+  const context = fakeContext(pi.entries);
+  context.hasUI = true;
+  let widget: any;
+  context.ui.setWidget = (_key, content) => {
+    if (typeof content === "function")
+      widget = content(
+        { requestRender: () => {} } as any,
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        } as any,
+      );
+  };
+  const branchEntries: any[] = (
+    context.sessionManager.getBranch as () => any[]
+  )();
+  const herdEntries = () =>
+    pi.entries.filter(
+      (entry: any) => entry.customType === "pi-herdsman-herd-run",
+    ) as any[];
+  const emit = async (name: string) => {
+    for (const handler of pi.events.get(name) ?? [])
+      await handler(undefined, context);
+  };
+
+  registerExtension!(pi.pi as never);
+  try {
+    await emit("session_start");
+    await emit("agent_start");
+    const delegated = await registeredAgentTool(pi, "delegate").execute(
+      "project-handoff",
+      { definition: "agent", label, task: "implement the project" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(delegated.details.ok, true, JSON.stringify(delegated.details));
+    await t.waitFor(() =>
+      assert.match(widget.render(120).join("\n"), /working/),
+    );
+    const startedAt = herdEntries().find(
+      (entry) => entry.data?.phase === "started",
+    )!.data.startedAt;
+    branchEntries.push(
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          timestamp: startedAt - 1,
+          content: [{ type: "text", text: "OLD_ROUND_SUMMARY" }],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          timestamp: startedAt + 1,
+          content: [{ type: "text", text: "CURRENT_ROUND_SUMMARY" }],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          timestamp: startedAt + 2,
+          content: [{ type: "toolCall", name: "agent_list" }],
+        },
+      },
+    );
+
+    resetAgentMailbox(startup.mailbox);
+    await emit("agent_settled");
+    await t.waitFor(() =>
+      assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 1),
+    );
+    const [message] = listProjectMessages(runtime, "repo-key", branch);
+    assert.match(message.text, /^Herd run settled\./);
+    assert.match(message.text, /CURRENT_ROUND_SUMMARY/);
+    assert.doesNotMatch(message.text, /OLD_ROUND_SUMMARY/);
+    assert.doesNotMatch(message.text, /agent_list/);
+    assert.equal(
+      listProjectAssignments(runtime, "repo-key").some(
+        (assignment) => assignment.id === LEAD_SESSION_ID,
+      ),
+      true,
+      "automatic handoff must not resolve the project assignment",
+    );
+
+    await emit("agent_settled");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 1);
+    assert.equal(
+      herdEntries().filter((entry) => entry.data?.phase === "finished").length,
+      1,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("automatic project handoff cannot recreate messages under assignment resolution lock", async (t) => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `project-handoff-race-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `handoff-race-${randomUUID()}`;
+  writeProjectAssignment(runtime, {
+    version: 1,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+  });
+  const label = `handoff-race-${randomUUID().slice(0, 8)}`;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+  );
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(pi.entries);
+  context.hasUI = true;
+  let widget: any;
+  context.ui.setWidget = (_key, content) => {
+    if (typeof content === "function")
+      widget = content(
+        { requestRender: () => {} } as any,
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        } as any,
+      );
+  };
+  const emit = async (name: string) => {
+    for (const handler of pi.events.get(name) ?? [])
+      await handler(undefined, context);
+  };
+  registerExtension!(pi.pi as never);
+  try {
+    await emit("session_start");
+    await emit("agent_start");
+    const delegated = await registeredAgentTool(pi, "delegate").execute(
+      "project-handoff-race",
+      { definition: "agent", label, task: "resolve project assignment" },
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(delegated.details.ok, true, JSON.stringify(delegated.details));
+    await t.waitFor(() =>
+      assert.match(widget.render(120).join("\n"), /working/),
+    );
+    resetAgentMailbox(startup.mailbox);
+
+    const releaseResolutionLock = claimProcessLock(
+      `${projectAssignmentPath(runtime, "repo-key", branch)}.lock`,
+      { name: "test project assignment resolution" },
+    );
+    try {
+      await emit("agent_settled");
+      assert.equal(
+        pi.entries.filter(
+          (entry: any) =>
+            entry.customType === "pi-herdsman-herd-run" &&
+            entry.data?.phase === "finished",
+        ).length,
+        1,
+        "the herd must finish before attempting advisory publication",
+      );
+      assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 0);
+      // Contention is fail-fast: settling cannot leave a publication retry
+      // waiting to recreate messages after assignment resolution.
+      removeProjectAssignment(runtime, "repo-key", branch);
+      removeProjectMessages(runtime, "repo-key", branch);
+      releaseResolutionLock();
+    } finally {
+      releaseResolutionLock();
+    }
+    assert.equal(listProjectAssignments(runtime, "repo-key").length, 0);
+    assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 0);
+    assert.equal(
+      realFs.existsSync(
+        projectAssignmentPath(runtime, "repo-key", branch).replace(
+          /\.json$/,
+          ".messages",
+        ),
+      ),
+      false,
+      "publication must not recreate a message directory after resolution",
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    removeProjectMessages(runtime, "repo-key", branch);
+    delete process.env.HERDR_SOCKET_PATH;
   }
 });
 

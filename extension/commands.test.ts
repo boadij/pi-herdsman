@@ -1384,9 +1384,12 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     assert.equal(delivery.kind, "project_assignment");
     assert.match(
       delivery.text,
-      /The project remains open until the Manager\s+completes or discards it\./,
+      /The project remains open[\s\S]*until the Manager completes or discards it\./,
     );
-    assert.match(delivery.text, /ready for review/);
+    assert.match(
+      delivery.text,
+      /Herdsman handles the\s+normal Manager handoff automatically\./,
+    );
     assert.ok(
       pi.calls.some(
         (args) => args.includes("--no-focus") && args.includes("--branch"),

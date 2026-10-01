@@ -2549,6 +2549,14 @@ test("definition roster matches live list and rejects stale sessions", async () 
     { systemPrompt: "base" },
     context,
   );
+  assert.match(
+    prompt?.systemPrompt ?? "",
+    /Use\s+supervisor_message when your direct supervisor must decide or act/,
+  );
+  assert.doesNotMatch(
+    prompt?.systemPrompt ?? "",
+    /available direct supervisor/,
+  );
   assert.match(prompt?.systemPrompt ?? "", /## Available agent definitions/);
   assert.match(prompt?.systemPrompt ?? "", /<agent_definitions>/);
   const roster = JSON.parse(
