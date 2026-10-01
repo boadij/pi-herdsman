@@ -100,7 +100,7 @@ preflight. It must report a Herdr client version of `>=0.9.1`,
 The supported repository contract requires:
 
 - Node `>=22.19.0`
-- Pi `0.99.2`
+- Pi `1.0.0`
 - herdr `>=0.9.1`
 
 Run focused tests and other intermediate checks before this smoke suite. Do
