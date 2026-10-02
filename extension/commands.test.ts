@@ -830,12 +830,17 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.deepEqual(first.pi.getActiveTools(), activeManagerTools);
     await first.commandOptions.get("manager").handler("leave", ctx1);
+    const leadMetadata = metadataReports.findLast((args) =>
+      args.includes("pi_herdsman_name=current lead name"),
+    );
+    const titleIndex = leadMetadata?.indexOf("--title") ?? -1;
+    const nameTokenIndex =
+      leadMetadata?.indexOf("pi_herdsman_name=current lead name") ?? -1;
     assert.ok(
-      metadataReports.some(
-        (args) =>
-          args.includes("--token") &&
-          args.includes("pi_herdsman_name=current lead name"),
-      ),
+      leadMetadata &&
+        leadMetadata[titleIndex + 1] === "current lead name" &&
+        leadMetadata[nameTokenIndex - 1] === "--token",
+      JSON.stringify(leadMetadata),
     );
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
     assert.equal(first.pi.getActiveTools().includes("staff_message"), false);
@@ -1752,14 +1757,38 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
     const chiefSession = chiefCtx.sessionManager.getSessionId();
     chiefCtx.sessionManager.getSessionId = () => chiefSession;
     registerExtension!(chief.pi as never);
+    const mailboxLabel = `chief-missing-definition-${randomUUID()}`;
     try {
       await chief.events.get("session_start")![0](undefined, chiefCtx);
       await chief.commandOptions.get("chief").handler("", chiefCtx);
       assert.deepEqual(chief.pi.getActiveTools(), chiefTools);
-      const chiefPrompt = await chief.events.get("before_agent_start")![0](
-        { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-        chiefCtx,
+      const mailbox = agentMailboxPath(WORKSPACE, mailboxLabel);
+      const state = managedState(
+        mailboxLabel,
+        undefined,
+        recoveryIdentity(mailboxLabel),
       );
+      assert.equal(state.agentDefinition, undefined);
+      writeAgentState(mailbox, state);
+      const { SessionManager } =
+        await import("@earendil-works/pi-coding-agent");
+      const sessionManager = SessionManager as any;
+      const originalOpen = sessionManager.open;
+      let openCalls = 0;
+      sessionManager.open = (...args: any[]) => {
+        openCalls++;
+        return originalOpen.apply(sessionManager, args);
+      };
+      let chiefPrompt;
+      try {
+        chiefPrompt = await chief.events.get("before_agent_start")![0](
+          { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+          chiefCtx,
+        );
+      } finally {
+        sessionManager.open = originalOpen;
+      }
+      assert.equal(openCalls, 0);
       assert.equal(chiefPrompt?.message, undefined);
       const contextMessage = chief.sentMessageCalls.findLast(
         ({ message }: any) =>
@@ -1801,6 +1830,7 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
         /not a current direct report|Lead target was not found or is no longer eligible/,
       );
     } finally {
+      resetAgentMailbox(agentMailboxPath(WORKSPACE, mailboxLabel));
       await chief.events.get("session_shutdown")![0]();
     }
   } finally {

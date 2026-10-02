@@ -7451,6 +7451,10 @@ export default function (pi: ExtensionAPI): void {
   ): Promise<void> => {
     const paneId = process.env.HERDR_PANE_ID;
     if (!paneId) return Promise.resolve();
+    const leadName =
+      mode === "inactive" && activeRole() === "lead"
+        ? pi.getSessionName()?.trim()
+        : undefined;
     const args = [
       "pane",
       "report-metadata",
@@ -7462,7 +7466,7 @@ export default function (pi: ExtensionAPI): void {
         ? "chief"
         : activeRole() === "manager"
           ? "Pi Herdsman manager"
-          : "Pi Herdsman lead",
+          : leadName || "Pi Herdsman lead",
       ...(mode === "active"
         ? ["--token", "pi_herdsman_role=chief"]
         : mode === "inactive"
@@ -7470,10 +7474,9 @@ export default function (pi: ExtensionAPI): void {
           : ["--clear-token", "pi_herdsman_role"]),
     ];
     if (mode === "inactive" && activeRole() === "lead") {
-      const name = pi.getSessionName()?.trim();
       args.push(
-        name ? "--token" : "--clear-token",
-        name ? `pi_herdsman_name=${name}` : "pi_herdsman_name",
+        leadName ? "--token" : "--clear-token",
+        leadName ? `pi_herdsman_name=${leadName}` : "pi_herdsman_name",
       );
     }
     if (mode !== "inactive" || activeRole() !== "lead")
@@ -9663,14 +9666,12 @@ export default function (pi: ExtensionAPI): void {
       suppliedInventory?: HerdrSessionSnapshot,
       suppliedAgents?: Awaited<ReturnType<typeof managedAgentSnapshots>>,
       includeAll = false,
-      allowTranscriptDefinitionFallback = true,
     ) => {
       if (activeRole() === "chief" && !includeAll) {
         const reports = await directReports(
           ctx,
-          undefined,
-          undefined,
-          allowTranscriptDefinitionFallback,
+          suppliedInventory,
+          suppliedAgents,
         );
         const managers = reports.filter(
           (report: any) => report.role === "manager",
@@ -9690,12 +9691,7 @@ export default function (pi: ExtensionAPI): void {
           ctx.signal,
         );
         const [leads, topology] = await Promise.all([
-          directReports(
-            ctx,
-            suppliedInventory,
-            suppliedAgents,
-            allowTranscriptDefinitionFallback,
-          ),
+          directReports(ctx, suppliedInventory, suppliedAgents),
           runHerdr(
             pi,
             ctx,
@@ -9844,7 +9840,6 @@ export default function (pi: ExtensionAPI): void {
       ctx: ExtensionContext,
       suppliedInventory?: HerdrSessionSnapshot,
       suppliedAgents?: Awaited<ReturnType<typeof managedAgentSnapshots>>,
-      allowTranscriptDefinitionFallback = true,
     ) => {
       if (activeRole() === "manager" && !roleSuspended) {
         const manager = await currentManager(ctx);
@@ -9865,7 +9860,6 @@ export default function (pi: ExtensionAPI): void {
           suppliedInventory,
           suppliedAgents,
           true,
-          allowTranscriptDefinitionFallback,
         );
         return snapshot.leads.filter((lead) =>
           scope.workspaceIds.includes(lead.workspaceId),
@@ -9880,22 +9874,21 @@ export default function (pi: ExtensionAPI): void {
       const allLeads = (
         await loadSupervisionSnapshot(
           ctx,
-          undefined,
-          undefined,
+          suppliedInventory,
+          suppliedAgents,
           true,
-          allowTranscriptDefinitionFallback,
         )
       ).leads;
       const managedAgents = (
-        await managedAgentSnapshots(
+        suppliedAgents ??
+        (await managedAgentSnapshots(
           pi,
           ctx,
           ctx.signal,
           false,
           true,
-          undefined,
-          allowTranscriptDefinitionFallback,
-        )
+          suppliedInventory,
+        ))
       ).agents;
       const managerLeadSessions = new Set<string>();
       const descriptors = listManagerDescriptors(supervisionRuntime());
@@ -10739,13 +10732,7 @@ export default function (pi: ExtensionAPI): void {
           inventory,
           false,
         );
-        const snapshot = await loadSupervisionSnapshot(
-          ctx,
-          inventory,
-          agents,
-          false,
-          false,
-        );
+        const snapshot = await loadSupervisionSnapshot(ctx, inventory, agents);
         if (!refreshIsCurrent()) return;
         supervisionSnapshot = snapshot;
         supervisionSnapshotKnown = true;
