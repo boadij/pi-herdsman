@@ -29,9 +29,9 @@ Leads. A Chief never gains Agent ownership through that fallback.
 
 ### Lead
 
-Every normal session starts as a Lead. A Lead implements work and owns its
-direct Agents. A delegation-enabled Agent may in turn own only the Agents its
-definition permits.
+Every normal session starts as a Lead. A Lead owns its assigned objective and
+its direct Agents. A delegation-enabled Agent may in turn own only the Agents
+its definition permits.
 
 A Lead and its recursively owned Agent hierarchy form a **herd**.
 
@@ -40,8 +40,8 @@ A Lead and its recursively owned Agent hierarchy form a **herd**.
 Manager is a dedicated project-coordination mode. It coordinates ordinary Leads
 inside one Herdsman project scope and has no `agent` capability of its own.
 
-Implementation belongs to Leads and their Agent trees. Manager can inspect and
-communicate with direct Leads, but it does not acquire ownership of their
+Project execution belongs to Leads and their Agent trees. Manager can inspect
+and communicate with direct Leads, but it does not acquire ownership of their
 Agents.
 
 ### Chief

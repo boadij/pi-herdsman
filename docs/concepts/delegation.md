@@ -87,11 +87,15 @@ name.
 The exact field semantics live in the
 [agent-definition schema](../reference/agent-definition-schema.md).
 
-## Parallelism
+## Delegation and parallelism
 
-Delegate genuinely independent or context-heavy work. Prefer agents for broad
-file inspection, large logs or command output, and dataset analysis. Keep small,
-tightly coupled work local.
+Delegate bounded execution work when an Agent can reasonably own it and the
+handoff is useful. Keep trivial or inseparable work local.
+
+Independence determines concurrency, not whether work is delegable. Run
+independent assignments in parallel; keep dependent assignments ordered.
+Prefer Agents for broad file inspection, large logs or command output, and
+dataset analysis.
 
 Do not:
 
