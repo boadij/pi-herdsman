@@ -243,7 +243,7 @@ function requireCompatibleBuild(
     operation,
     {
       nextAction: remote
-        ? `Restart the Pi session that remained running across the Herdsman update. If uncertain, restart both this session and ${target} so both load the same build.`
+        ? `Restart the Pi session that remained running across the Herdsman update. If uncertain, restart this session and any still-running target session, then retry.`
         : `Restart ${target} so it reloads the current Pi Herdsman build.`,
       details: { localBuild: HERDSMAN_BUILD, remoteBuild: remote ?? null },
     },
@@ -712,6 +712,7 @@ let metadataAbortController: AbortController | undefined;
 const REQUEST_CLEANUP_ERROR_PREFIX =
   "Acknowledged request could not be removed:";
 const RESULT_DELIVERY_ERROR_PREFIX = "Result delivery failed; retrying:";
+const BUILD_COMPATIBILITY_ERROR_PREFIX = "Incompatible Pi Herdsman build:";
 function clearRuntimeCleanupError(runtime: Runtime, prefix?: string): void {
   if (prefix === undefined || runtime.cleanupError?.startsWith(prefix))
     runtime.cleanupError = undefined;
@@ -4384,7 +4385,22 @@ function deliverPendingAsk(
 ): void {
   const state = readAgentState(runtime.mailboxPath);
   if (!state?.pendingAskId) return;
-  requireCompatibleBuild(state.build, "ask", `Agent ${state.agentLabel}`);
+  try {
+    requireCompatibleBuild(state.build, "ask", `Agent ${state.agentLabel}`);
+  } catch (error) {
+    if (
+      error instanceof OperationError &&
+      error.detail.category === "incompatible_build"
+    ) {
+      runtime.cleanupError = `${BUILD_COMPATIBILITY_ERROR_PREFIX} ${error.detail.message} ${error.detail.nextAction ?? ""}`;
+      requestStatusRefresh?.();
+    }
+    throw error;
+  }
+  if (runtime.cleanupError?.startsWith(BUILD_COMPATIBILITY_ERROR_PREFIX)) {
+    runtime.cleanupError = undefined;
+    requestStatusRefresh?.();
+  }
   const ask = readPendingAsk(runtime.mailboxPath, state);
   if (ask) deliverAsk(pi, runtime, ctx, state, ask, signal);
 }

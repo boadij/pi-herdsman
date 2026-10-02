@@ -2461,6 +2461,14 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       "function",
       "incompatible ask keeps its file watcher",
     );
+    const incompatibleList = await registeredAgentTool(
+      leadAgent,
+      "list",
+    ).execute("list-incompatible-ask", {}, undefined, undefined, leadContext);
+    assert.match(
+      String(incompatibleList.details.agents[0].cleanup_error),
+      /incompatible pi herdsman build/i,
+    );
     const errorsBefore = leadAgent.entries.filter(
       (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
     ).length;
@@ -2478,6 +2486,14 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       build: HERDSMAN_BUILD,
     });
     askWatcher!(realFs.statSync(statePath), realFs.statSync(statePath));
+    const compatibleList = await registeredAgentTool(leadAgent, "list").execute(
+      "list-compatible-ask",
+      {},
+      undefined,
+      undefined,
+      leadContext,
+    );
+    assert.equal(compatibleList.details.agents[0].cleanup_error, undefined);
     assert.equal(
       leadAgent.sent.length,
       1,
@@ -4708,7 +4724,14 @@ test("managed startup rejects a mismatched Agent before its first task and rolls
       result.details.error.nextAction,
       /session that remained running/i,
     );
-    assert.match(result.details.error.nextAction, /restart both this session/i);
+    assert.match(
+      result.details.error.nextAction,
+      /any still-running target session/i,
+    );
+    assert.doesNotMatch(
+      result.details.error.nextAction,
+      /restart both this session and Agent /i,
+    );
     assert.doesNotMatch(result.details.error.nextAction, /^Restart Lead /);
     assert.equal(taskAccepted, false);
     assert.equal(
