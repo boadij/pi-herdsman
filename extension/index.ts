@@ -242,7 +242,9 @@ function requireCompatibleBuild(
       : `Cannot establish Pi Herdsman build compatibility for ${target}; the target predates the current runtime identity contract.`,
     operation,
     {
-      nextAction: `Restart ${target} so it reloads the current Pi Herdsman build.`,
+      nextAction: remote
+        ? `Restart the Pi session that remained running across the Herdsman update. If uncertain, restart both this session and ${target} so both load the same build.`
+        : `Restart ${target} so it reloads the current Pi Herdsman build.`,
       details: { localBuild: HERDSMAN_BUILD, remoteBuild: remote ?? null },
     },
   );
@@ -4398,6 +4400,11 @@ function watchAsk(
     try {
       deliverPendingAsk(pi, runtime, ctx, signal);
     } catch (error) {
+      if (
+        error instanceof OperationError &&
+        error.detail.category === "incompatible_build"
+      )
+        return;
       appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
       if (!askWatchRetryTimers.has(path)) {
         askWatchRetryTimers.set(
@@ -10153,6 +10160,8 @@ export default function (pi: ExtensionAPI): void {
       ctx: ExtensionContext,
       signal?: AbortSignal,
     ) => {
+      const operationName =
+        operation.action === "resume" ? "staff_resume" : "staff_delegate";
       const manager = await currentManager(ctx);
       if (
         !manager ||
@@ -10215,11 +10224,7 @@ export default function (pi: ExtensionAPI): void {
         throw new Error(`Assignment ${id} has ambiguous live Lead identity`);
       if (live.length === 1) {
         const state = readLeadCoordinationState(runtime, id);
-        requireCompatibleBuild(
-          state?.build,
-          operation.action === "resume" ? "staff_resume" : "staff_delegate",
-          `Lead ${id}`,
-        );
+        requireCompatibleBuild(state?.build, operationName, `Lead ${id}`);
         if (
           !branchWorktrees[0]?.open_workspace_id ||
           live[0].workspace_id !== branchWorktrees[0].open_workspace_id ||
@@ -10235,11 +10240,7 @@ export default function (pi: ExtensionAPI): void {
         if (!fresh || !sameManagerDescriptor(fresh, manager))
           throw new Error("Manager changed during project activation");
         const latestState = readLeadCoordinationState(runtime, id);
-        requireCompatibleBuild(
-          latestState?.build,
-          operation.action === "resume" ? "staff_resume" : "staff_delegate",
-          `Lead ${id}`,
-        );
+        requireCompatibleBuild(latestState?.build, operationName, `Lead ${id}`);
         writeChiefMessage({
           version: 2,
           build: HERDSMAN_BUILD,
@@ -10458,7 +10459,7 @@ export default function (pi: ExtensionAPI): void {
           if (state)
             requireCompatibleBuild(
               state.build,
-              "staff_delegate",
+              operationName,
               `Lead ${assignment.id}`,
             );
           const managed = scanAgentStates().states.some(
@@ -10554,7 +10555,7 @@ export default function (pi: ExtensionAPI): void {
             if (candidateState)
               requireCompatibleBuild(
                 candidateState.build,
-                "staff_delegate",
+                operationName,
                 `Lead ${assignment.id}`,
               );
             if (verifyLeadCandidate(candidates[0])) {
@@ -10636,7 +10637,7 @@ export default function (pi: ExtensionAPI): void {
         );
         requireCompatibleBuild(
           latestState?.build,
-          "staff_delegate",
+          operationName,
           `Lead ${assignment.id}`,
         );
         writeChiefMessage({

@@ -1920,6 +1920,7 @@ async function runManagerStartupScenario(
     | "concurrent"
     | "active-loss"
     | "active-live"
+    | "active-live-mismatch"
     | "active-missing"
     | "active-missing-no-session"
     | "active-closed"
@@ -2562,6 +2563,7 @@ async function runManagerStartupScenario(
               ]
             : []),
           ...(mode === "active-live" ||
+          mode === "active-live-mismatch" ||
           (started && startupObservations >= 3) ||
           ([
             "close-resume",
@@ -2654,6 +2656,7 @@ async function runManagerStartupScenario(
     const activeMode = [
       "active-loss",
       "active-live",
+      "active-live-mismatch",
       "active-missing",
       "active-missing-no-session",
       "active-closed",
@@ -2681,12 +2684,15 @@ async function runManagerStartupScenario(
           cwd: "/old/exact/worktree",
           entries: [],
         });
-      if (mode === "active-live")
+      if (mode === "active-live" || mode === "active-live-mismatch")
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
           role: "lead",
           instanceId: randomUUID(),
           piSessionId: staleId,
+          ...(mode === "active-live-mismatch"
+            ? { build: OTHER_HERDSMAN_BUILD }
+            : {}),
           updatedAt: Date.now(),
         });
       if (
@@ -2834,6 +2840,14 @@ async function runManagerStartupScenario(
       return;
     }
     if (activeMode) {
+      if (mode === "active-live-mismatch") {
+        await assert.rejects(execute(), (error: any) => {
+          assert.equal(error.detail.category, "incompatible_build");
+          assert.equal(error.detail.operation, "staff_resume");
+          return true;
+        });
+        return;
+      }
       if (mode === "active-live") {
         const running = await execute();
         assert.equal(running.details.action, "resume");
@@ -3621,6 +3635,8 @@ test("Manager complete resolves assignment and preserves its worktree", () =>
   runManagerStartupScenario("active-complete"));
 test("Manager retains assignment when exact Lead stop fails", () =>
   runManagerStartupScenario("close-failure"));
+test("Manager resume reports incompatible Lead builds as staff_resume", () =>
+  runManagerStartupScenario("active-live-mismatch"));
 test("Manager closes an unassigned direct Lead and preserves its worktree", () =>
   runManagerStartupScenario("unassigned-close"));
 test("Manager adopts a preexisting branch worktree for fresh delegation", () =>

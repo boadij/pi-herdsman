@@ -31,6 +31,7 @@ import {
   PI_AGENT_ROOT,
   REQUEST_ID,
   OTHER_HERDSMAN_BUILD,
+  HERDSMAN_BUILD,
   LEAD_SESSION_ID,
   AGENT_ID,
   WORKSPACE,
@@ -2255,7 +2256,7 @@ test("restored herd waits for direct durable cleanup before finishing", async (t
   }
 });
 
-test("registered extensions preserve adjacent ask escalation and assignment results", async () => {
+test("registered extensions preserve adjacent ask escalation and assignment results", async (t) => {
   setLeadEnvironment();
   const parentLabel = "escalation-parent";
   const childLabel = "escalation-child";
@@ -2447,7 +2448,46 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     leadAgent = fakePi({ exec: leadBase });
     registerExtension!(leadAgent.pi as never);
     const leadContext = fakeContext();
+    writeAgentState(parentMailbox, {
+      ...readAgentState(parentMailbox)!,
+      build: OTHER_HERDSMAN_BUILD,
+    });
+    t.mock.timers.enable({ apis: ["setTimeout"] });
     await leadAgent.events.get("session_start")![0](undefined, leadContext);
+    const statePath = join(parentMailbox, "state.json");
+    const askWatcher = watchedResultPaths.get(statePath);
+    assert.equal(
+      typeof askWatcher,
+      "function",
+      "incompatible ask keeps its file watcher",
+    );
+    const errorsBefore = leadAgent.entries.filter(
+      (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+    ).length;
+    t.mock.timers.tick(2_000);
+    assert.equal(
+      leadAgent.entries.filter(
+        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+      ).length,
+      errorsBefore,
+      "stable build mismatch must not persist retry errors",
+    );
+    const incompatibleState = readAgentState(parentMailbox)!;
+    writeAgentState(parentMailbox, {
+      ...incompatibleState,
+      build: HERDSMAN_BUILD,
+    });
+    askWatcher!(realFs.statSync(statePath), realFs.statSync(statePath));
+    assert.equal(
+      leadAgent.sent.length,
+      1,
+      "existing watcher resumes ask delivery",
+    );
+    assert.equal(readAgentState(parentMailbox)?.runId, parent.runId);
+    assert.equal(
+      readAgentState(parentMailbox)?.pendingAskId,
+      parentWaiting.pendingAskId,
+    );
     const leadReplyResult = await registeredAgentTool(
       leadAgent,
       "reply",
@@ -4664,6 +4704,12 @@ test("managed startup rejects a mismatched Agent before its first task and rolls
       "incompatible_build",
       JSON.stringify(result.details.error),
     );
+    assert.match(
+      result.details.error.nextAction,
+      /session that remained running/i,
+    );
+    assert.match(result.details.error.nextAction, /restart both this session/i);
+    assert.doesNotMatch(result.details.error.nextAction, /^Restart Lead /);
     assert.equal(taskAccepted, false);
     assert.equal(
       pi.calls.some((args) => isPreservePaneStop(args)),
