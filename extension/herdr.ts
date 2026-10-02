@@ -722,6 +722,8 @@ export type LeadMetadata = {
   paneId: string;
   name?: string;
   pendingAskId?: string;
+  herdRunStartedAt?: number;
+  contextPercent?: number;
 };
 
 export function leadMetadataArgs(metadata: LeadMetadata): string[] {
@@ -742,6 +744,18 @@ export function leadMetadataArgs(metadata: LeadMetadata): string[] {
   if (metadata.name?.trim())
     args.push("--token", `pi_herdsman_name=${metadata.name.trim()}`);
   else args.push("--clear-token", "pi_herdsman_name");
+  if (metadata.herdRunStartedAt !== undefined)
+    args.push(
+      "--token",
+      `pi_herdsman_herd_run_started_at=${metadata.herdRunStartedAt}`,
+    );
+  else args.push("--clear-token", "pi_herdsman_herd_run_started_at");
+  if (metadata.contextPercent !== undefined)
+    args.push(
+      "--token",
+      `pi_herdsman_context_percent=${metadata.contextPercent}`,
+    );
+  else args.push("--clear-token", "pi_herdsman_context_percent");
   return args;
 }
 

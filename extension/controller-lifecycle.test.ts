@@ -1585,8 +1585,9 @@ test("staged fresh assignment removes a fast completion without observing workin
   }
 });
 
-test("lead herd runs start once and stay open through intermediate settlement", async () => {
+test("lead herd runs start once and stay open through intermediate settlement", async (t) => {
   setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
   const label = "agent";
   const startup = startupExecutor(
     label,
@@ -1602,6 +1603,16 @@ test("lead herd runs start once and stay open through intermediate settlement", 
   );
   const pi = fakePi({ exec: startup.exec });
   const context = fakeContext(pi.entries);
+  let contextPercent: number | null = 61;
+  context.getContextUsage = () => ({
+    tokens: 2,
+    contextWindow: 10,
+    percent: contextPercent,
+  });
+  const metadataCalls = () =>
+    pi.calls.filter(
+      (args) => args[0] === "pane" && args[1] === "report-metadata",
+    );
   const herdEntries = () =>
     pi.entries.filter(
       (entry: any) => entry.customType === "pi-herdsman-herd-run",
@@ -1613,6 +1624,25 @@ test("lead herd runs start once and stay open through intermediate settlement", 
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    await t.waitFor(() =>
+      assert.ok(
+        metadataCalls().some((args) =>
+          args.includes("pi_herdsman_context_percent=61"),
+        ),
+      ),
+    );
+    await emit("turn_end");
+    contextPercent = null;
+    await emit("session_compact");
+    await t.waitFor(() =>
+      assert.ok(
+        metadataCalls().some(
+          (args) =>
+            args.includes("--clear-token") &&
+            args.includes("pi_herdsman_context_percent"),
+        ),
+      ),
+    );
     await emit("agent_start");
     const first = await registeredAgentTool(pi, "delegate").execute(
       "first-delegate",
@@ -1628,6 +1658,15 @@ test("lead herd runs start once and stay open through intermediate settlement", 
     assert.equal(started.length, 1);
     assert.equal(started[0].data.sessionId, LEAD_SESSION_ID);
     assert.equal(Number.isFinite(started[0].data.startedAt), true);
+    await t.waitFor(() =>
+      assert.ok(
+        metadataCalls().some((args) =>
+          args.includes(
+            `pi_herdsman_herd_run_started_at=${started[0].data.startedAt}`,
+          ),
+        ),
+      ),
+    );
 
     await emit("agent_settled");
     assert.equal(
@@ -1684,6 +1723,7 @@ test("lead herd runs start once and stay open through intermediate settlement", 
 
 test("restored herd run keeps its start and closes after settlement", async (t) => {
   setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
   const startedAt = 1_700_000_000_000;
   const entries: unknown[] = [
     {
@@ -1723,6 +1763,15 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
     );
     assert.equal(finished.data.startedAt, startedAt);
     assert.ok(finished.data.completedAt >= startedAt);
+    assert.ok(
+      pi.calls.some(
+        (args) =>
+          args[0] === "pane" &&
+          args[1] === "report-metadata" &&
+          args.includes("--clear-token") &&
+          args.includes("pi_herdsman_herd_run_started_at"),
+      ),
+    );
     for (const handler of pi.events.get("agent_start") ?? [])
       await handler(undefined, context);
     const second = await registeredAgentTool(pi, "delegate").execute(

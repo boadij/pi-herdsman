@@ -275,6 +275,8 @@ test("lead metadata is display-only and carries current name and ask", () => {
       paneId: "root-pane",
       name: " API root ",
       pendingAskId: "ask-1",
+      herdRunStartedAt: 1_700_000_000_000,
+      contextPercent: 61,
     }),
     [
       "pane",
@@ -290,13 +292,21 @@ test("lead metadata is display-only and carries current name and ask", () => {
       "pi_herdsman_ask=ask-1",
       "--token",
       "pi_herdsman_name=API root",
+      "--token",
+      "pi_herdsman_herd_run_started_at=1700000000000",
+      "--token",
+      "pi_herdsman_context_percent=61",
     ],
   );
-  assert.deepEqual(leadMetadataArgs({ paneId: "root-pane" }).slice(-4), [
+  assert.deepEqual(leadMetadataArgs({ paneId: "root-pane" }).slice(-8), [
     "--clear-token",
     "pi_herdsman_ask",
     "--clear-token",
     "pi_herdsman_name",
+    "--clear-token",
+    "pi_herdsman_herd_run_started_at",
+    "--clear-token",
+    "pi_herdsman_context_percent",
   ]);
 });
 

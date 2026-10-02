@@ -2004,6 +2004,8 @@ export type LeadCoordinationState = CoordinatorState;
 export type SupervisedLead = {
   lead: string;
   branch?: string;
+  herdRunStartedAt?: number;
+  contextPercent?: number;
   /** Internal: path to a non-empty persisted session candidate. */
   piSessionFile?: string;
   instanceId?: string;
@@ -2312,6 +2314,16 @@ export function normalizeHerdrLifecycleState(agent: any): RuntimeState {
     : "unknown";
 }
 
+function metadataInteger(
+  tokens: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): number | undefined {
+  const raw = tokens?.[key];
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) return undefined;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : undefined;
+}
+
 /** Projects caller-proven live leads and validated agent evidence; metadata is never authority. */
 export function projectSupervision(options: {
   agents: LiveAgent[];
@@ -2403,8 +2415,18 @@ export function projectSupervision(options: {
         : undefined) ||
       tabLabel ||
       `lead-${agent.sessionId.slice(0, 8)}`;
+    const herdRunStartedAt = metadataInteger(
+      agent.tokens,
+      "pi_herdsman_herd_run_started_at",
+    );
+    const contextPercent = metadataInteger(
+      agent.tokens,
+      "pi_herdsman_context_percent",
+    );
     leads.push({
       lead: agent.sessionId,
+      ...(herdRunStartedAt !== undefined ? { herdRunStartedAt } : {}),
+      ...(contextPercent !== undefined ? { contextPercent } : {}),
       instanceId: state.instanceId,
       displayName: `${workspaceLabel || agent.workspaceId}/${name}`,
       ...(provenance?.branch ? { branch: provenance.branch } : {}),

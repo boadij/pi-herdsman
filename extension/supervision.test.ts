@@ -705,6 +705,11 @@ test("supervision authority is coordinator state, not metadata", () => {
     tabId: "tab",
     displayName: "backend",
     runtimeState: "idle" as const,
+    tokens: {
+      pi_herdsman_name: "lead",
+      pi_herdsman_herd_run_started_at: "1700000000000",
+      pi_herdsman_context_percent: "61",
+    },
   };
   const snapshot = projectSupervision({
     agents: [lead],
@@ -721,12 +726,33 @@ test("supervision authority is coordinator state, not metadata", () => {
     "staff_inspect",
     "staff_message",
   ]);
-  assert.equal(snapshot.leads[0].displayName, "api/lead-11111111");
+  assert.equal(snapshot.leads[0].displayName, "api/lead");
   assert.equal("display_name" in snapshot.leads[0], false);
   assert.equal(serialized.runtime_state, "idle");
-  assert.equal(serialized.display_name, "api/lead-11111111");
+  assert.equal(serialized.display_name, "api/lead");
+  assert.equal(snapshot.leads[0]?.herdRunStartedAt, 1_700_000_000_000);
+  assert.equal(snapshot.leads[0]?.contextPercent, 61);
+  assert.equal("herdRunStartedAt" in serialized, false);
+  assert.equal("contextPercent" in serialized, false);
   assert.equal("pending_ask_question" in serialized, false);
   assert.equal("needs_you" in serialized, false);
+
+  const malformed = projectSupervision({
+    agents: [
+      {
+        ...lead,
+        tokens: {
+          pi_herdsman_name: "lead",
+          pi_herdsman_herd_run_started_at: "NaN",
+          pi_herdsman_context_percent: "61%",
+        },
+      },
+    ],
+    managedAgents: [],
+    coordinationStates: [state(piSessionId)],
+  }).leads[0]!;
+  assert.equal("herdRunStartedAt" in malformed, false);
+  assert.equal("contextPercent" in malformed, false);
 });
 
 test("Manager supervision snapshot carries only its derived open workspaces", () => {

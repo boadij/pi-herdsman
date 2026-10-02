@@ -4657,27 +4657,143 @@ test("Manager widget shares one bounded work/Lead tree and context includes proj
   );
 });
 
+test("Manager work rows show responsive Lead telemetry with semantic theme", () => {
+  const now = Date.now();
+  const snapshot = {
+    project: "pi-herdsman",
+    leads: [
+      lead({
+        lead: "lead-session",
+        branch: "feat/foo",
+        runtimeState: "working",
+        herdRunStartedAt: now - 14 * 60_000,
+        contextPercent: 61,
+      }),
+    ],
+    work: [
+      {
+        branch: "feat/foo",
+        session: "lead-session",
+        status: "active" as const,
+      },
+    ],
+  };
+  const full = renderSupervisionLeads(snapshot, 100, { role: "manager" }).join(
+    "\n",
+  );
+  assert.match(full, /14m/);
+  assert.match(full, /61%/);
+  assert.doesNotMatch(full, /ctx/);
+
+  const rowsAt = (width: number) =>
+    renderSupervisionLeads(snapshot, width, { role: "manager" });
+  const contextOnlyWidth = Array.from({ length: 100 }, (_, i) => i + 1).find(
+    (width) => {
+      const row = rowsAt(width)[1]!;
+      return row.includes("61%") && !row.includes("14m");
+    },
+  );
+  assert.ok(contextOnlyWidth);
+  const compactWidth = Array.from(
+    { length: contextOnlyWidth - 1 },
+    (_, i) => i + 1,
+  ).find((width) => {
+    const row = rowsAt(width)[1]!;
+    return (
+      !row.includes("61%") &&
+      !row.includes("14m") &&
+      row.includes("feat/foo") &&
+      row.includes("active")
+    );
+  });
+  assert.ok(compactWidth);
+  assert.match(rowsAt(contextOnlyWidth)[1]!, /feat\/foo.* · active.*61%/);
+  assert.match(rowsAt(compactWidth)[1]!, /feat\/foo.* · active/);
+  for (let width = 1; width <= 100; width++)
+    assert.ok(rowsAt(width).every((row) => visibleWidth(row) <= width));
+
+  const theme = {
+    fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
+    bold: (text: string) => `<b>${text}</b>`,
+  };
+  const themedRows = renderSupervisionLeads(snapshot, 140, {
+    role: "manager",
+    theme,
+  });
+  assert.ok(
+    themedRows[0]!.includes(
+      "<success>●</success> <muted>manager · pi-herdsman</muted>",
+    ),
+  );
+  assert.ok(themedRows[1]!.includes("<success>●</success>"));
+  assert.ok(themedRows[1]!.includes("<muted>feat/foo"));
+  assert.ok(themedRows[1]!.includes(theme.fg("muted", "  61%")));
+  const staleManagerHeader = renderSupervisionLeads(snapshot, 140, {
+    role: "manager",
+    status: "stale",
+    theme,
+  })[0]!;
+  assert.ok(staleManagerHeader.includes("<success>●</success>"));
+  assert.ok(
+    staleManagerHeader.includes("<muted>manager · pi-herdsman · stale</muted>"),
+  );
+  const widgetRows = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    theme,
+  ).render(100);
+  assert.ok(widgetRows[1]!.includes("<success>●</success>"));
+
+  const chiefRows = renderSupervisionLeads(
+    [
+      lead({
+        runtimeState: "working",
+        herdRunStartedAt: now - 14 * 60_000,
+        contextPercent: 61,
+      }),
+    ],
+    100,
+    { theme },
+  );
+  assert.doesNotMatch(chiefRows.join("\n"), /14m|61%/);
+  assert.ok(
+    chiefRows[0]!.includes(
+      "<success>●</success> <muted>chief · 1 direct lead</muted>",
+    ),
+  );
+  assert.ok(chiefRows[1]!.includes("<success>└─ ●</success>"));
+});
+
 test("Manager work status outranks live Lead markers except when active", () => {
-  for (const [status, marker] of [
-    ["active", "●"],
-    ["paused", "○"],
-    ["conflict", "!"],
+  const theme = {
+    fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
+  };
+  for (const [status, marker, color] of [
+    ["active", "●", "success"],
+    ["paused", "○", "muted"],
+    ["conflict", "!", "warning"],
   ] as const) {
-    {
-      const snapshot = {
-        work: [{ branch: "feat/example", session: "assigned", status }],
-        leads: [
-          lead({
-            lead: "assigned",
-            runtimeState: "working",
-          }),
-        ],
-      };
-      assert.deepEqual(
-        renderSupervisionLeads(snapshot, 120, { role: "manager" }, "assigned"),
-        ["● manager", `└─ >${marker} feat/example · ${status}`],
-      );
-    }
+    const snapshot = {
+      work: [{ branch: "feat/example", session: "assigned", status }],
+      leads: [
+        lead({
+          lead: "assigned",
+          runtimeState: "working",
+        }),
+      ],
+    };
+    assert.deepEqual(
+      renderSupervisionLeads(snapshot, 120, { role: "manager" }, "assigned"),
+      ["● manager", `└─ >${marker} feat/example · ${status}`],
+    );
+    const themedRow = renderSupervisionLeads(
+      snapshot,
+      120,
+      { role: "manager", theme },
+      "assigned",
+    )[1]!;
+    assert.ok(themedRow.includes(`<${color}>${marker}</${color}>`));
   }
 });
 
