@@ -168,6 +168,7 @@ import {
   writeCoordinationMessage,
   chiefMessageBytes,
   COORDINATION_MESSAGE_MAX_BYTES,
+  projectAssignmentBytes,
   projectAssignmentPath,
   projectMessageBytes,
   writeProjectMessage,
@@ -8301,29 +8302,18 @@ export default function (pi: ExtensionAPI): void {
       managerDiagnostic("project_assignment_scope_complete");
       if (!scope.workspaceIds.includes(workspaceId))
         return projectAssignmentAuthorized(false, "workspace_scope_mismatch");
-      const matches = listProjectAssignments(
-        supervisionRuntime(),
-        scope.repoKey,
-      ).filter((assignment) => {
-        const expected = assignment.resultBindings ?? [];
-        const actual = record.resultBindings ?? [];
-
-        return (
-          assignment.id === sessionId &&
-          record.branch === assignment.branch &&
-          assignment.repoKey === scope.repoKey &&
-          assignment.text &&
-          record.text === projectAssignmentInstruction(assignment) &&
-          actual.length === expected.length &&
-          actual.every(
-            (binding, index) =>
-              binding.ref === expected[index]?.ref &&
-              binding.canonicalRef === expected[index]?.canonicalRef,
+      const assignment = record.branch
+        ? readProjectAssignment(
+            supervisionRuntime(),
+            scope.repoKey,
+            record.branch,
           )
-        );
-      });
-      const assignment = matches.length === 1 ? matches[0] : undefined;
-      if (!assignment)
+        : undefined;
+      if (
+        !assignment ||
+        assignment.id !== sessionId ||
+        record.id !== assignment.id
+      )
         return projectAssignmentAuthorized(
           false,
           "assignment_evidence_mismatch",
@@ -8694,8 +8684,39 @@ export default function (pi: ExtensionAPI): void {
               throw new Error(
                 "Coordination delivery deferred while recipient is active",
               );
-            importResultBindings(pi, ctx, record.resultBindings, record.kind);
-            const result = await pi.sendMessage(message, options);
+            let payload = message;
+            let resultBindings = record.resultBindings;
+            if (record.kind === "project_assignment") {
+              const workspaceId = process.env.HERDR_WORKSPACE_ID;
+              if (!workspaceId || !record.branch)
+                throw new Error("Project assignment changed before delivery");
+              const scope = await worktreeGroupScope(
+                pi,
+                ctx,
+                workspaceId,
+                ctx.signal,
+              );
+              const assignment = readProjectAssignment(
+                supervisionRuntime(),
+                scope.repoKey,
+                record.branch,
+              );
+              if (
+                !assignment ||
+                assignment.id !== ctx.sessionManager.getSessionId() ||
+                record.id !== assignment.id
+              )
+                throw new Error("Project assignment changed before delivery");
+              resultBindings = assignment.resultBindings;
+              payload = {
+                ...(message as object),
+                content:
+                  `Project assignment for branch ${assignment.branch}:\n\n` +
+                  projectAssignmentInstruction(assignment),
+              };
+            }
+            importResultBindings(pi, ctx, resultBindings, record.kind);
+            const result = await pi.sendMessage(payload, options);
             if (projectAssignment)
               managerDiagnostic("project_assignment_send", {
                 outcome: "resolved",
@@ -10108,10 +10129,7 @@ export default function (pi: ExtensionAPI): void {
           toSessionId: id,
           leadSessionId: id,
           branch: unresolved!.branch,
-          text: projectAssignmentInstruction(unresolved!),
-          ...(unresolved!.resultBindings?.length
-            ? { resultBindings: unresolved!.resultBindings }
-            : {}),
+          text: "Project assignment ready.",
           createdAt: Date.now(),
         });
         return {
@@ -10170,28 +10188,28 @@ export default function (pi: ExtensionAPI): void {
       let assignment: ProjectAssignment;
       if (unresolved) assignment = unresolved;
       else {
-        const createdAt = Date.now();
-        const prepared = await prepareCoordinationInput(
-          ctx,
+        const limits = await messageLimits(ctx);
+        const prepared = prepareMessageInput(
           params.task,
           resolveMessageFiles(ctx, params.files, "staff_delegate"),
+          ctx.cwd,
           "staff_delegate",
-          "Message",
-          (candidate, resultBindings) => ({
-            version: 2,
-            id,
-            leaseId: manager.leaseId,
-            kind: "project_assignment",
-            fromSessionId: manager.piSessionId,
-            toSessionId: "x".repeat(512),
-            leadSessionId: "x".repeat(512),
-            branch,
-            text: projectAssignmentInstruction({ text: candidate }),
-            ...(resultBindings.length
-              ? { resultBindings: [...resultBindings] }
-              : {}),
-            createdAt,
-          }),
+          "Task",
+          {
+            inlineLimitBytes: limits.inline.bytes,
+            mailboxLimitBytes: limits.mailbox.bytes,
+            serializedBytes: (candidate, resultBindings) =>
+              projectAssignmentBytes({
+                version: 2,
+                id,
+                repoKey: manager.repoKey,
+                branch,
+                text: candidate,
+                ...(resultBindings.length
+                  ? { resultBindings: [...resultBindings] }
+                  : {}),
+              }),
+          },
         );
         const preCreationManager = await currentManager(ctx);
         if (
@@ -10482,10 +10500,7 @@ export default function (pi: ExtensionAPI): void {
           toSessionId: leadSessionId,
           leadSessionId,
           branch: assignment.branch,
-          text: projectAssignmentInstruction(assignment),
-          ...(assignment.resultBindings?.length
-            ? { resultBindings: assignment.resultBindings }
-            : {}),
+          text: "Project assignment ready.",
           createdAt: Date.now(),
         });
         let rediscovered: any;

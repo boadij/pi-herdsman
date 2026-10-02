@@ -46,10 +46,13 @@ are errors. Reads do not create the directory or file. Configuration changes
 through `/agents` update this single file atomically.
 
 `inlineAttachmentLimitBytes` applies per file. Eligible complete strict UTF-8
-files are embedded only when the exact serialized mailbox record fits; other
-files remain canonical references. `mailboxPayloadLimitBytes` limits the exact
-serialized request, ask, or chief message record. Chief messages also retain
-their fixed 8 KiB protocol ceiling.
+files are embedded only when the complete durable payload fits; other files
+remain canonical references. `mailboxPayloadLimitBytes` limits new managed-Agent
+request and ask payloads and new Manager project assignments. Ordinary
+coordination records remain subject to this configured limit and their fixed
+8 KiB ceiling. Project assignments are persisted separately from their compact
+inbox notification, so that coordination ceiling does not reduce the evidence
+capacity of a Manager-to-Lead assignment.
 
 When `contextRetirement` is enabled, automatic context pressure retires a
 managed-agent session. Herdsman suppresses preventive threshold compaction
