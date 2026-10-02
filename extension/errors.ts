@@ -7,6 +7,7 @@ export type ErrorCategory =
   | "rollback_failure"
   | "agent_busy"
   | "invalid_request"
+  | "incompatible_build"
   | "internal_failure";
 
 export interface ErrorCause {

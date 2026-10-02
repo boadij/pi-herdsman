@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const CHECK_TIMEOUT_MS = 120_000;
+export const CHECK_TIMEOUT_MS = 180_000;
 const TERM_GRACE_MS = 1_000;
 const TASKKILL_TIMEOUT_MS = 1_000;
 const TREE_GONE_TIMEOUT_MS = 5_000;

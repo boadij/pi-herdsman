@@ -22,7 +22,7 @@ import type {
 } from "./mailbox.ts";
 import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import {
-  claimChiefLease,
+  claimChiefLease as claimChiefLeaseRaw,
   listProjectAssignments,
   projectAssignmentPath,
   listCoordinationMessagePaths,
@@ -38,10 +38,10 @@ import {
   supervisionRuntime,
   readLeadCoordinationState,
   sessionLeadRoleState,
-  writeLeadCoordinationState,
-  writeChiefMessage,
-  writeCoordinationMessage,
-  writePeerLeadRecord,
+  writeLeadCoordinationState as writeLeadCoordinationStateRaw,
+  writeChiefMessage as writeChiefMessageRaw,
+  writeCoordinationMessage as writeCoordinationMessageRaw,
+  writePeerLeadRecord as writePeerLeadRecordRaw,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
 import { resultPath } from "./storage.ts";
@@ -56,6 +56,8 @@ import support, {
   LEAD_SESSION_ID,
   StatusWidget,
   AGENT_ID,
+  HERDSMAN_BUILD,
+  OTHER_HERDSMAN_BUILD,
   WORKSPACE,
   agentFromState,
   buildStatusRows,
@@ -93,6 +95,28 @@ import support, {
   writeResult,
   writeAgentState,
 } from "./support.ts";
+const claimChiefLease = (identity: any) =>
+  claimChiefLeaseRaw({ ...identity, build: identity.build ?? HERDSMAN_BUILD });
+const writeLeadCoordinationState = (runtime: any, state: any) =>
+  writeLeadCoordinationStateRaw(runtime, {
+    ...state,
+    build: state.build ?? HERDSMAN_BUILD,
+  });
+const writeChiefMessage = (record: any, runtime?: any) =>
+  writeChiefMessageRaw(
+    { ...record, build: record.build ?? HERDSMAN_BUILD },
+    runtime,
+  );
+const writeCoordinationMessage = (record: any, runtime?: any) =>
+  writeCoordinationMessageRaw(
+    { ...record, build: record.build ?? HERDSMAN_BUILD },
+    runtime,
+  );
+const writePeerLeadRecord = (runtime: any, record: any) =>
+  writePeerLeadRecordRaw(runtime, {
+    ...record,
+    build: record.build ?? HERDSMAN_BUILD,
+  });
 const { readConfig, updateConfig } = await import("./config.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
   pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
@@ -2153,6 +2177,7 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
   });
   const targetRecord = {
     version: 1 as const,
+    build: OTHER_HERDSMAN_BUILD,
     piSessionId: targetId,
     paneId: "target-pane",
     tabId: "target-tab",
@@ -2165,6 +2190,29 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
     await sender.events.get("session_start")![0](undefined, senderContext);
     const peer = sender.tools.find((tool) => tool.name === "peer_message");
     assert.ok(peer);
+    await assert.rejects(
+      peer.execute(
+        "message",
+        { session: targetId, message: "mismatch must not publish" },
+        undefined,
+        undefined,
+        senderContext,
+      ),
+      (
+        error: Error & { category?: string; detail?: { category?: string } },
+      ) => {
+        assert.equal(
+          error.category ?? error.detail?.category,
+          "incompatible_build",
+        );
+        return true;
+      },
+    );
+    assert.deepEqual(listCoordinationMessagePaths(runtime, targetId), []);
+    writePeerLeadRecord(runtime, {
+      ...targetRecord,
+      build: HERDSMAN_BUILD,
+    });
     const queued = await peer.execute(
       "message",
       { session: targetId, message: "sender survived" },
@@ -6514,6 +6562,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
         live = true;
         writeAgentState(mailbox, {
           version: 5,
+          build: HERDSMAN_BUILD,
           runId: startedRunId,
           ownerSessionId: startedOwnerSessionId,
           workspaceId: WORKSPACE,

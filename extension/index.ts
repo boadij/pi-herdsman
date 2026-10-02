@@ -40,6 +40,12 @@ import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import packageMetadata from "../package.json" with { type: "json" };
 import {
+  formatRuntimeBuild,
+  runtimeBuild,
+  sameRuntimeBuild,
+  type RuntimeBuild,
+} from "./compatibility.ts";
+import {
   herdsmanTempRoot,
   resultPath as canonicalResultPath,
   resultRef,
@@ -222,6 +228,27 @@ import {
   OperationError,
   type ErrorCategory,
 } from "./errors.ts";
+
+function requireCompatibleBuild(
+  remote: RuntimeBuild | undefined,
+  operation: string,
+  target: string,
+): asserts remote is RuntimeBuild {
+  if (remote && sameRuntimeBuild(HERDSMAN_BUILD, remote)) return;
+  fail(
+    "incompatible_build",
+    remote
+      ? `Pi Herdsman build mismatch for ${target}: local ${formatRuntimeBuild(HERDSMAN_BUILD)}, target ${formatRuntimeBuild(remote)}.`
+      : `Cannot establish Pi Herdsman build compatibility for ${target}; the target predates the current runtime identity contract.`,
+    operation,
+    {
+      nextAction: remote
+        ? `Restart the Pi session that remained running across the Herdsman update. If uncertain, restart this session and any still-running target session, then retry.`
+        : `Restart ${target} so it reloads the current Pi Herdsman build.`,
+      details: { localBuild: HERDSMAN_BUILD, remoteBuild: remote ?? null },
+    },
+  );
+}
 import {
   MAX_BYTE_LIMIT,
   MIN_BYTE_LIMIT,
@@ -266,12 +293,16 @@ import {
 import type { SupervisionContextStatus } from "./presentation.ts";
 
 const HERDSMAN_VERSION = packageMetadata.version;
+const HERDSMAN_EXTENSION_PATH = fileURLToPath(import.meta.url);
+export const HERDSMAN_BUILD = runtimeBuild(
+  HERDSMAN_VERSION,
+  HERDSMAN_EXTENSION_PATH,
+);
 const RESERVED_PREFIX = "__PI_HERDSMAN_AGENT_V5__:";
 const LEAD_INSTANCE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Keep model-facing lead handles aligned with Pi's SessionManager grammar.
 const PI_SESSION_ID_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$";
-const HERDSMAN_EXTENSION_PATH = fileURLToPath(import.meta.url);
 const AGENT_DEFINITIONS_ENTRY = "pi-herdsman-agent-definitions";
 const RESULT_REF_ENTRY = "pi-herdsman-result-ref";
 const HERD_RUN_ENTRY = "pi-herdsman-herd-run";
@@ -681,6 +712,7 @@ let metadataAbortController: AbortController | undefined;
 const REQUEST_CLEANUP_ERROR_PREFIX =
   "Acknowledged request could not be removed:";
 const RESULT_DELIVERY_ERROR_PREFIX = "Result delivery failed; retrying:";
+const BUILD_COMPATIBILITY_ERROR_PREFIX = "Incompatible Pi Herdsman build:";
 function clearRuntimeCleanupError(runtime: Runtime, prefix?: string): void {
   if (prefix === undefined || runtime.cleanupError?.startsWith(prefix))
     runtime.cleanupError = undefined;
@@ -2602,6 +2634,7 @@ function envManagedAgent(ctx: ExtensionContext): ManagedAgentState | undefined {
   if (managedAgentEnvironmentError()) return undefined;
   return {
     version: 5,
+    build: HERDSMAN_BUILD,
     runId: e.PI_HERDSMAN_RUN_ID,
     ownerSessionId: e.PI_HERDSMAN_OWNER_SESSION_ID,
     workspaceId: e.PI_HERDSMAN_WORKSPACE_ID,
@@ -2648,6 +2681,7 @@ function sameManagedAgentDurableState(
 function runtimeIdentityState(runtime: Runtime): ManagedAgentState {
   return {
     version: 5,
+    build: HERDSMAN_BUILD,
     runId: runtime.runId,
     ownerSessionId: runtime.ownerSessionId,
     workspaceId: runtime.workspaceId,
@@ -2678,6 +2712,7 @@ async function submit(
     fail("invalid_request", "Reply request is missing its ask ID", operation);
   const request: RequestRecord = {
     version: 5,
+    build: HERDSMAN_BUILD,
     runId: runtime.runId,
     requestId,
     ownerSessionId: runtime.ownerSessionId,
@@ -2708,6 +2743,11 @@ async function submit(
     if (!current)
       fail("target_not_found", "Agent mailbox state is unavailable", operation);
     validateIdentity(runtime, current);
+    requireCompatibleBuild(
+      current.build,
+      operation,
+      `Agent ${current.agentLabel}`,
+    );
     if (current.lastAck) {
       try {
         removeRequest(runtime.mailboxPath, current.lastAck.requestId);
@@ -2733,6 +2773,7 @@ async function submit(
         "Request exceeds the mailbox size limit",
         operation,
       );
+    if (error instanceof OperationError) throw error;
     fail("internal_failure", String(error), operation);
   } finally {
     release();
@@ -2775,7 +2816,9 @@ async function submit(
               ? "invalid_request"
               : ack.code === "identity"
                 ? "target_not_found"
-                : "internal_failure";
+                : ack.code === "incompatible"
+                  ? "incompatible_build"
+                  : "internal_failure";
       fail(category, ack.message ?? "Agent rejected request", operation);
     }
     if (kind === "task") {
@@ -4328,6 +4371,11 @@ function scheduleAskDeliveryRetry(
     try {
       deliverPendingAsk(pi, runtime, ctx, signal);
     } catch (readError) {
+      if (
+        readError instanceof OperationError &&
+        readError.detail.category === "incompatible_build"
+      )
+        return;
       scheduleAskDeliveryRetry(pi, runtime, ctx, state, ask, signal, readError);
     }
   }, 250);
@@ -4342,6 +4390,22 @@ function deliverPendingAsk(
 ): void {
   const state = readAgentState(runtime.mailboxPath);
   if (!state?.pendingAskId) return;
+  try {
+    requireCompatibleBuild(state.build, "ask", `Agent ${state.agentLabel}`);
+  } catch (error) {
+    if (
+      error instanceof OperationError &&
+      error.detail.category === "incompatible_build"
+    ) {
+      runtime.cleanupError = `${BUILD_COMPATIBILITY_ERROR_PREFIX} ${error.detail.message} ${error.detail.nextAction ?? ""}`;
+      requestStatusRefresh?.();
+    }
+    throw error;
+  }
+  if (runtime.cleanupError?.startsWith(BUILD_COMPATIBILITY_ERROR_PREFIX)) {
+    runtime.cleanupError = undefined;
+    requestStatusRefresh?.();
+  }
   const ask = readPendingAsk(runtime.mailboxPath, state);
   if (ask) deliverAsk(pi, runtime, ctx, state, ask, signal);
 }
@@ -4357,6 +4421,11 @@ function watchAsk(
     try {
       deliverPendingAsk(pi, runtime, ctx, signal);
     } catch (error) {
+      if (
+        error instanceof OperationError &&
+        error.detail.category === "incompatible_build"
+      )
+        return;
       appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
       if (!askWatchRetryTimers.has(path)) {
         askWatchRetryTimers.set(
@@ -4401,6 +4470,11 @@ function settlePendingAsks(
     try {
       deliverPendingAsk(pi, runtime, ctx, signal);
     } catch (error) {
+      if (
+        error instanceof OperationError &&
+        error.detail.category === "incompatible_build"
+      )
+        continue;
       appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
     }
   }
@@ -5610,6 +5684,7 @@ function requestRecordBytesFor(
 ): number {
   return mailboxRecordBytes({
     version: 5,
+    build: HERDSMAN_BUILD,
     runId: runtime.runId,
     requestId,
     ownerSessionId: runtime.ownerSessionId,
@@ -5639,6 +5714,7 @@ function prospectiveAssignmentFits(
   return (
     mailboxRecordBytes({
       version: 5,
+      build: HERDSMAN_BUILD,
       runId,
       requestId,
       ownerSessionId,
@@ -6269,6 +6345,12 @@ async function actionUnsafe(
         (s) => s.runId === runId && s.ownerSessionId === owner,
         { timeoutMs: 30_000, signal },
       ).catch(() => undefined);
+      if (state)
+        requireCompatibleBuild(
+          state.build,
+          p.action,
+          `Agent ${label} in pane ${started.paneId}`,
+        );
       if (!state) {
         let startupDiagnostic: string | undefined;
         let startupProcess: Record<string, unknown> | undefined;
@@ -7411,6 +7493,7 @@ export default function (pi: ExtensionAPI): void {
     try {
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
+        build: HERDSMAN_BUILD,
         role: activeRole() === "manager" ? "manager" : "lead",
         instanceId: leadInstanceId,
         piSessionId: leadContext?.sessionManager.getSessionId() ?? "",
@@ -7505,6 +7588,7 @@ export default function (pi: ExtensionAPI): void {
       }
       const record: PeerLeadRecord = {
         version: 1,
+        build: HERDSMAN_BUILD,
         role: activeRole() === "manager" ? "manager" : "lead",
         piSessionId: sessionId,
         paneId,
@@ -7728,6 +7812,8 @@ export default function (pi: ExtensionAPI): void {
       !state ||
       state.instanceId !== leadInstanceId ||
       state.piSessionId !== ctx.sessionManager.getSessionId() ||
+      !state.build ||
+      !sameRuntimeBuild(state.build, HERDSMAN_BUILD) ||
       (state.role ?? "lead") !==
         (activeRole() === "manager" ? "manager" : "lead")
     )
@@ -7896,6 +7982,16 @@ export default function (pi: ExtensionAPI): void {
       throw new Error(
         "Manager authority exists but its coordination state could not be verified",
       );
+    requireCompatibleBuild(
+      descriptor.build,
+      "supervision",
+      `Manager ${descriptor.piSessionId}`,
+    );
+    requireCompatibleBuild(
+      state.build,
+      "supervision",
+      `Manager ${descriptor.piSessionId}`,
+    );
     if (activeRole() === "manager" && !roleSuspended) {
       return managerLease &&
         sameManagerDescriptor(descriptor, managerLease.descriptor) &&
@@ -8131,6 +8227,8 @@ export default function (pi: ExtensionAPI): void {
     if (
       chiefMode !== "inactive" ||
       record.kind !== "peer_message" ||
+      !record.build ||
+      !sameRuntimeBuild(record.build, HERDSMAN_BUILD) ||
       record.toSessionId !== ctx.sessionManager.getSessionId() ||
       record.fromSessionId === record.toSessionId ||
       record.leadSessionId !== record.fromSessionId
@@ -8200,11 +8298,22 @@ export default function (pi: ExtensionAPI): void {
       throw new Error(
         "Peer sender or target changed before the message was queued",
       );
+    requireCompatibleBuild(
+      sender.build,
+      "peer_message",
+      `local peer presence ${sender.piSessionId}`,
+    );
+    requireCompatibleBuild(
+      target.build,
+      "peer_message",
+      `peer ${target.piSessionId}`,
+    );
     // Best effort only: the target's held presence lock and the inbox
     // message lock are independent process locks, so replacement can race
     // after this reread and before durable publication.
     const record: ChiefMessageRecord = {
       version: 2,
+      build: HERDSMAN_BUILD,
       id: recordId,
       leaseId: sender.claim.id,
       kind: "peer_message",
@@ -8224,6 +8333,11 @@ export default function (pi: ExtensionAPI): void {
   ) => {
     const descriptor = currentChief(failOnVerificationError);
     if (!descriptor) return undefined;
+    requireCompatibleBuild(
+      descriptor.build,
+      "supervision",
+      `Chief ${descriptor.piSessionId}`,
+    );
     const runtime = supervisionRuntime();
     if (chiefMode === "active") {
       let onDisk: ChiefDescriptor;
@@ -8248,6 +8362,11 @@ export default function (pi: ExtensionAPI): void {
         descriptor.workspaceId !== process.env.HERDR_WORKSPACE_ID
       )
         return undefined;
+      requireCompatibleBuild(
+        descriptor.build,
+        "supervision",
+        `Chief ${descriptor.piSessionId}`,
+      );
       return descriptor;
     }
     if (activeRole() !== "lead" && activeRole() !== "manager") return undefined;
@@ -8258,8 +8377,20 @@ export default function (pi: ExtensionAPI): void {
       return undefined;
     }
     try {
-      return (await remoteChiefAgent(ctx, descriptor)) ? descriptor : undefined;
+      const remote = await remoteChiefAgent(ctx, descriptor);
+      if (!remote) return undefined;
+      requireCompatibleBuild(
+        descriptor.build,
+        "supervision",
+        `Chief ${descriptor.piSessionId}`,
+      );
+      return descriptor;
     } catch (error) {
+      if (
+        error instanceof OperationError &&
+        error.detail.category === "incompatible_build"
+      )
+        throw error;
       if (failOnVerificationError) throw error;
       return undefined;
     }
@@ -8284,6 +8415,8 @@ export default function (pi: ExtensionAPI): void {
   ): Promise<boolean> => {
     const sessionId = ctx.sessionManager.getSessionId();
     if (record.toSessionId !== sessionId) return false;
+    if (!record.build || !sameRuntimeBuild(record.build, HERDSMAN_BUILD))
+      return false;
     if (record.kind === "project_assignment") {
       const workspaceId = process.env.HERDR_WORKSPACE_ID;
       if (
@@ -8504,6 +8637,7 @@ export default function (pi: ExtensionAPI): void {
       throw new Error("Supervisor target is invalid");
     const record: ChiefMessageRecord = {
       version: 2,
+      build: HERDSMAN_BUILD,
       id: recordId ?? randomUUID(),
       leaseId: chief.leaseId,
       kind,
@@ -8762,6 +8896,13 @@ export default function (pi: ExtensionAPI): void {
         },
         accepted: async (_record: ChiefMessageRecord) => {},
         rejected: (record: ChiefMessageRecord) => {
+          if (!record.build || !sameRuntimeBuild(record.build, HERDSMAN_BUILD))
+            ctx.ui.notify(
+              record.build
+                ? `Rejected Pi Herdsman coordination from ${formatRuntimeBuild(record.build)}; local build is ${formatRuntimeBuild(HERDSMAN_BUILD)}. Restart the stale Pi session.`
+                : "Rejected coordination from a Pi Herdsman runtime without build identity. Restart the stale Pi session.",
+              "error",
+            );
           void record;
         },
       };
@@ -8928,6 +9069,7 @@ export default function (pi: ExtensionAPI): void {
     controllerRole = "manager";
     try {
       managerLease = claimManagerLease({
+        build: HERDSMAN_BUILD,
         piSessionId: ctx.sessionManager.getSessionId(),
         piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
@@ -8969,6 +9111,7 @@ export default function (pi: ExtensionAPI): void {
     let lease: ManagerLease;
     try {
       lease = claimManagerLease({
+        build: HERDSMAN_BUILD,
         piSessionId: ctx.sessionManager.getSessionId(),
         piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
@@ -9079,6 +9222,7 @@ export default function (pi: ExtensionAPI): void {
     let lease: ChiefLease;
     try {
       lease = claimChiefLease({
+        build: HERDSMAN_BUILD,
         piSessionId: sessionId,
         piSessionFile: ctx.sessionManager.getSessionFile(),
         paneId,
@@ -10042,6 +10186,8 @@ export default function (pi: ExtensionAPI): void {
       ctx: ExtensionContext,
       signal?: AbortSignal,
     ) => {
+      const operationName =
+        operation.action === "resume" ? "staff_resume" : "staff_delegate";
       const manager = await currentManager(ctx);
       if (
         !manager ||
@@ -10104,6 +10250,7 @@ export default function (pi: ExtensionAPI): void {
         throw new Error(`Assignment ${id} has ambiguous live Lead identity`);
       if (live.length === 1) {
         const state = readLeadCoordinationState(runtime, id);
+        requireCompatibleBuild(state?.build, operationName, `Lead ${id}`);
         if (
           !branchWorktrees[0]?.open_workspace_id ||
           live[0].workspace_id !== branchWorktrees[0].open_workspace_id ||
@@ -10118,8 +10265,11 @@ export default function (pi: ExtensionAPI): void {
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
           throw new Error("Manager changed during project activation");
+        const latestState = readLeadCoordinationState(runtime, id);
+        requireCompatibleBuild(latestState?.build, operationName, `Lead ${id}`);
         writeChiefMessage({
           version: 2,
+          build: HERDSMAN_BUILD,
           id,
           leaseId: manager.leaseId,
           kind: "project_assignment",
@@ -10332,6 +10482,12 @@ export default function (pi: ExtensionAPI): void {
             supervisionRuntime(),
             assignment.id,
           );
+          if (state)
+            requireCompatibleBuild(
+              state.build,
+              operationName,
+              `Lead ${assignment.id}`,
+            );
           const managed = scanAgentStates().states.some(
             ({ state }) => state.piSessionId === assignment.id,
           );
@@ -10417,9 +10573,17 @@ export default function (pi: ExtensionAPI): void {
             herdrSessionReported = Boolean(candidates[0]?.agent_session);
             const sessionId = herdrSessionId(candidates[0]);
             sessionIdResolved = Boolean(sessionId);
-            leadStateObserved = Boolean(
-              readLeadCoordinationState(supervisionRuntime(), assignment.id),
+            const candidateState = readLeadCoordinationState(
+              supervisionRuntime(),
+              assignment.id,
             );
+            leadStateObserved = Boolean(candidateState);
+            if (candidateState)
+              requireCompatibleBuild(
+                candidateState.build,
+                operationName,
+                `Lead ${assignment.id}`,
+              );
             if (verifyLeadCandidate(candidates[0])) {
               lead = candidates[0];
               break;
@@ -10493,8 +10657,18 @@ export default function (pi: ExtensionAPI): void {
             throw new Error("Manager changed during project activation");
         };
         await assertManagerCurrent();
+        const latestState = readLeadCoordinationState(
+          supervisionRuntime(),
+          assignment.id,
+        );
+        requireCompatibleBuild(
+          latestState?.build,
+          operationName,
+          `Lead ${assignment.id}`,
+        );
         writeChiefMessage({
           version: 2,
+          build: HERDSMAN_BUILD,
           id: assignment.id,
           leaseId: manager.leaseId,
           kind: "project_assignment",
@@ -12245,6 +12419,7 @@ export default function (pi: ExtensionAPI): void {
               "Message",
               (candidate, resultBindings) => ({
                 version: 2,
+                build: HERDSMAN_BUILD,
                 id: recordId,
                 leaseId: chief.leaseId,
                 kind:
@@ -12417,6 +12592,7 @@ export default function (pi: ExtensionAPI): void {
             "Message",
             (candidate, resultBindings) => ({
               version: 2,
+              build: HERDSMAN_BUILD,
               id: recordId,
               leaseId: sender.claim.id,
               kind: "peer_message",
@@ -12733,6 +12909,7 @@ export default function (pi: ExtensionAPI): void {
             "Message",
             (candidate, resultBindings) => ({
               version: 2,
+              build: HERDSMAN_BUILD,
               id: recordId,
               leaseId: finalChief.leaseId,
               kind:
@@ -12766,8 +12943,18 @@ export default function (pi: ExtensionAPI): void {
             throw new Error(
               "Lead or Chief changed before the message was queued",
             );
+          const targetState = readLeadCoordinationState(
+            supervisionRuntime(),
+            reportSession(writeLead),
+          );
+          requireCompatibleBuild(
+            targetState?.build,
+            "staff_message",
+            `${targetState?.role ?? "Lead"} ${reportSession(writeLead)}`,
+          );
           const record: ChiefMessageRecord = {
             version: 2,
+            build: HERDSMAN_BUILD,
             id: recordId,
             leaseId: finalChief.leaseId,
             kind:
@@ -14958,7 +15145,8 @@ export default function (pi: ExtensionAPI): void {
   const acknowledge = (
     requestId: string,
     accepted: boolean,
-    code?: "busy" | "idle" | "invalid" | "identity" | "delivery",
+    code?:
+      "busy" | "idle" | "invalid" | "identity" | "delivery" | "incompatible",
     message?: string,
   ): boolean => {
     if (!state) return false;
@@ -14983,7 +15171,8 @@ export default function (pi: ExtensionAPI): void {
     requestId: string,
     accepted: boolean,
     ctx: ExtensionContext,
-    code?: "busy" | "idle" | "invalid" | "identity" | "delivery",
+    code?:
+      "busy" | "idle" | "invalid" | "identity" | "delivery" | "incompatible",
     message?: string,
   ): void => {
     if (!state) return;
@@ -15258,7 +15447,12 @@ export default function (pi: ExtensionAPI): void {
       }
       state = candidate;
       if (existing && sameManagedAgentIdentity(existing, candidate)) {
-        state = { ...candidate, ...existing, updatedAt: Date.now() };
+        state = {
+          ...candidate,
+          ...existing,
+          build: HERDSMAN_BUILD,
+          updatedAt: Date.now(),
+        };
         forceActivityTouch = !!state.activeRequestId;
         if (state.activeRequestId && !state.pendingAskId) {
           try {
@@ -15332,7 +15526,12 @@ export default function (pi: ExtensionAPI): void {
             "agent mailbox changed while session start was preparing",
           );
         if (existing === undefined && current !== undefined)
-          state = { ...candidate, ...current, updatedAt: Date.now() };
+          state = {
+            ...candidate,
+            ...current,
+            build: HERDSMAN_BUILD,
+            updatedAt: Date.now(),
+          };
         writeAgentState(mailbox, state);
       } finally {
         release();
@@ -15449,6 +15648,18 @@ export default function (pi: ExtensionAPI): void {
         ctx,
         "identity",
         "Request identity did not match agent state",
+      );
+      return { action: "handled" };
+    }
+    if (!request.build || !sameRuntimeBuild(request.build, HERDSMAN_BUILD)) {
+      acknowledgeAndDiscard(
+        id,
+        false,
+        ctx,
+        "incompatible",
+        request.build
+          ? `Owner build ${formatRuntimeBuild(request.build)} does not match local ${formatRuntimeBuild(HERDSMAN_BUILD)}`
+          : "Owner build identity is unavailable; restart the owner session",
       );
       return { action: "handled" };
     }

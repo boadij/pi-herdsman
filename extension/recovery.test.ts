@@ -21,6 +21,7 @@ import support, {
   REQUEST_ID,
   LEAD_SESSION_ID,
   AGENT_ID,
+  HERDSMAN_BUILD,
   WORKSPACE,
   cascadeExecutor,
   defaultFixtureIdentity,
@@ -697,6 +698,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
       started = true;
       writeAgentState(mailbox, {
         version: 5,
+        build: HERDSMAN_BUILD,
         runId,
         ownerSessionId,
         workspaceId: WORKSPACE,
@@ -1169,6 +1171,7 @@ test("assignment rollback retains primary failure and actionable cleanup details
         };
       writeAgentState(mailbox, {
         version: 5,
+        build: HERDSMAN_BUILD,
         runId,
         ownerSessionId,
         workspaceId: WORKSPACE,

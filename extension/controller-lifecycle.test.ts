@@ -30,6 +30,8 @@ import {
   PI_AGENTS_DIR,
   PI_AGENT_ROOT,
   REQUEST_ID,
+  OTHER_HERDSMAN_BUILD,
+  HERDSMAN_BUILD,
   LEAD_SESSION_ID,
   AGENT_ID,
   WORKSPACE,
@@ -2254,7 +2256,7 @@ test("restored herd waits for direct durable cleanup before finishing", async (t
   }
 });
 
-test("registered extensions preserve adjacent ask escalation and assignment results", async () => {
+test("registered extensions preserve adjacent ask escalation and assignment results", async (t) => {
   setLeadEnvironment();
   const parentLabel = "escalation-parent";
   const childLabel = "escalation-child";
@@ -2443,10 +2445,131 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       parent.piSessionId,
       parentIdentity,
     );
-    leadAgent = fakePi({ exec: leadBase });
+    let failInitialAskDelivery = true;
+    leadAgent = fakePi({
+      exec: leadBase,
+      sendMessage: (message) => {
+        if (
+          failInitialAskDelivery &&
+          (message as any)?.customType === "pi-herdsman-agent-ask"
+        ) {
+          failInitialAskDelivery = false;
+          throw new Error("temporary ask delivery failure");
+        }
+      },
+    });
     registerExtension!(leadAgent.pi as never);
     const leadContext = fakeContext();
+    t.mock.timers.enable({ apis: ["setTimeout"] });
     await leadAgent.events.get("session_start")![0](undefined, leadContext);
+    const statePath = join(parentMailbox, "state.json");
+    const askWatcher = watchedResultPaths.get(statePath);
+    assert.equal(
+      typeof askWatcher,
+      "function",
+      "pending ask keeps its file watcher",
+    );
+    assert.equal(
+      failInitialAskDelivery,
+      false,
+      "initial compatible ask delivery should schedule a retry",
+    );
+    const retryingList = await registeredAgentTool(leadAgent, "list").execute(
+      "list-retrying-ask",
+      {},
+      undefined,
+      undefined,
+      leadContext,
+    );
+    assert.match(
+      String(retryingList.details.agents[0].cleanup_error),
+      /Ask delivery failed; retrying/i,
+    );
+    writeAgentState(parentMailbox, {
+      ...readAgentState(parentMailbox)!,
+      build: OTHER_HERDSMAN_BUILD,
+    });
+    askWatcher!(realFs.statSync(statePath), realFs.statSync(statePath));
+    const incompatibleList = await registeredAgentTool(
+      leadAgent,
+      "list",
+    ).execute("list-incompatible-ask", {}, undefined, undefined, leadContext);
+    assert.match(
+      String(incompatibleList.details.agents[0].cleanup_error),
+      /incompatible pi herdsman build/i,
+    );
+    const errorsBefore = leadAgent.entries.filter(
+      (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+    ).length;
+    for (let attempt = 0; attempt < 3; attempt++)
+      for (const handler of leadAgent.events.get("agent_settled") ?? [])
+        await handler(undefined, leadContext);
+    assert.equal(
+      leadAgent.entries.filter(
+        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+      ).length,
+      errorsBefore,
+      "repeated settle checks must not persist stable build mismatch errors",
+    );
+    const stillIncompatibleList = await registeredAgentTool(
+      leadAgent,
+      "list",
+    ).execute(
+      "list-still-incompatible-ask",
+      {},
+      undefined,
+      undefined,
+      leadContext,
+    );
+    assert.match(
+      String(stillIncompatibleList.details.agents[0].cleanup_error),
+      /incompatible pi herdsman build/i,
+      "transient incompatibility status remains visible",
+    );
+    t.mock.timers.tick(2_000);
+    assert.equal(
+      leadAgent.entries.filter(
+        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+      ).length,
+      errorsBefore,
+      "stable build mismatch must not persist retry errors",
+    );
+    const afterRetryList = await registeredAgentTool(leadAgent, "list").execute(
+      "list-after-mismatch-retry",
+      {},
+      undefined,
+      undefined,
+      leadContext,
+    );
+    assert.match(
+      String(afterRetryList.details.agents[0].cleanup_error),
+      /incompatible pi herdsman build/i,
+      "scheduled retry must stop without replacing the transient mismatch status",
+    );
+    const incompatibleState = readAgentState(parentMailbox)!;
+    writeAgentState(parentMailbox, {
+      ...incompatibleState,
+      build: HERDSMAN_BUILD,
+    });
+    askWatcher!(realFs.statSync(statePath), realFs.statSync(statePath));
+    const compatibleList = await registeredAgentTool(leadAgent, "list").execute(
+      "list-compatible-ask",
+      {},
+      undefined,
+      undefined,
+      leadContext,
+    );
+    assert.equal(compatibleList.details.agents[0].cleanup_error, undefined);
+    assert.equal(
+      leadAgent.sent.length,
+      2,
+      "existing watcher resumes ask delivery",
+    );
+    assert.equal(readAgentState(parentMailbox)?.runId, parent.runId);
+    assert.equal(
+      readAgentState(parentMailbox)?.pendingAskId,
+      parentWaiting.pendingAskId,
+    );
     const leadReplyResult = await registeredAgentTool(
       leadAgent,
       "reply",
@@ -4613,6 +4736,78 @@ test("managed startup accepts matching mailbox state after five seconds", async 
     const result = await resultPromise;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
   } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+  }
+});
+
+test("managed startup rejects a mismatched Agent before its first task and rolls back", async () => {
+  setLeadEnvironment();
+  const label = "incompatible-startup";
+  let taskAccepted = false;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    () => {
+      taskAccepted = true;
+    },
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+  );
+  const pi = fakePi({
+    exec: async (command, args, options) => {
+      const result = await startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        const state = readAgentState(startup.mailbox)!;
+        writeAgentState(startup.mailbox, {
+          ...state,
+          build: OTHER_HERDSMAN_BUILD,
+        });
+      }
+      return result;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "id",
+      { definition: "agent", label, task: "must not be submitted" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(
+      result.details.error.category,
+      "incompatible_build",
+      JSON.stringify(result.details.error),
+    );
+    assert.match(
+      result.details.error.nextAction,
+      /session that remained running/i,
+    );
+    assert.match(
+      result.details.error.nextAction,
+      /any still-running target session/i,
+    );
+    assert.doesNotMatch(
+      result.details.error.nextAction,
+      /restart both this session and Agent /i,
+    );
+    assert.doesNotMatch(result.details.error.nextAction, /^Restart Lead /);
+    assert.equal(taskAccepted, false);
+    assert.equal(
+      pi.calls.some((args) => isPreservePaneStop(args)),
+      true,
+      "incompatible newly-started Agent should be rolled back",
+    );
+    assert.equal(readAgentState(startup.mailbox), undefined);
+  } finally {
+    startup.stopMailboxConsumer();
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
   }

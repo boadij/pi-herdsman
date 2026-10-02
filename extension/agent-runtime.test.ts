@@ -18,6 +18,8 @@ import support, {
   REQUEST_ID,
   LEAD_SESSION_ID,
   AGENT_ID,
+  HERDSMAN_BUILD,
+  OTHER_HERDSMAN_BUILD,
   WORKSPACE,
   controlMarker,
   fakeContext,
@@ -90,6 +92,7 @@ test("managed requests pump through Pi semantic input", async (t) => {
   try {
     await agent.events.get("session_start")![0](undefined, context);
     const state = readAgentState(mailbox)!;
+    assert.deepEqual(state.build, HERDSMAN_BUILD);
     const request: RequestRecord = {
       version: 5,
       runId: state.runId,
@@ -2575,6 +2578,7 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
 test("agent reload preserves an active request", async () => {
   const mailbox = setAgentEnvironment();
   const state = managedState("registered-agent", REQUEST_ID);
+  state.build = OTHER_HERDSMAN_BUILD;
   state.lastAck = {
     requestId: REQUEST_ID,
     accepted: true,
@@ -2588,6 +2592,7 @@ test("agent reload preserves an active request", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   const reloaded = readAgentState(mailbox)!;
   assert.equal(reloaded.activeRequestId, REQUEST_ID);
+  assert.deepEqual(reloaded.build, HERDSMAN_BUILD);
   assert.equal(typeof reloaded.lastActivityAt, "number");
   assert.deepEqual(reloaded.lastAck, state.lastAck);
   agent.events.get("session_shutdown")?.[0]();
@@ -2605,6 +2610,46 @@ test("agent reload preserves an active request", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(readAgentState(sameSessionMailbox)?.activeRequestId, REQUEST_ID);
   sameSessionAgent.events.get("session_shutdown")?.[0]();
+});
+
+test("managed receiver discards mismatched build commands before model input", async () => {
+  for (const kind of ["task", "steer", "interrupt"] as const) {
+    const mailbox = setAgentEnvironment(`build-${kind}`);
+    const agent = fakePi();
+    const context = fakeAgentContext();
+    try {
+      registerExtension!(agent.pi as never);
+      await agent.events.get("session_start")![0](undefined, context);
+      const state = readAgentState(mailbox)!;
+      const request: RequestRecord = {
+        version: 5,
+        build: OTHER_HERDSMAN_BUILD,
+        runId: state.runId,
+        requestId: randomUUID(),
+        ownerSessionId: state.ownerSessionId,
+        workspaceId: state.workspaceId,
+        agentLabel: state.agentLabel,
+        paneId: state.paneId,
+        kind,
+        text: "must not reach the model",
+        createdAt: Date.now(),
+      };
+      writeRequest(mailbox, request);
+      assert.deepEqual(
+        agent.events.get("input")![0](
+          { text: controlMarker(request.requestId) },
+          context,
+        ),
+        { action: "handled" },
+      );
+      assert.equal(readAgentState(mailbox)?.lastAck?.accepted, false);
+      assert.equal(readAgentState(mailbox)?.lastAck?.code, "incompatible");
+      assert.equal(readRequest(mailbox, request.requestId), undefined);
+    } finally {
+      agent.events.get("session_shutdown")?.[0]();
+      resetAgentMailbox(mailbox);
+    }
+  }
 });
 
 test("agent reload preserves a completed request awaiting delivery", async () => {

@@ -26,6 +26,7 @@ import {
   isResultBinding,
   type ResultBinding,
 } from "./storage.ts";
+import { isRuntimeBuild, type RuntimeBuild } from "./compatibility.ts";
 
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
 // Staff and supervisor cross one edge; only Lead/Manager sessions may be peers.
@@ -73,6 +74,7 @@ export function sessionLeadRoleState(
 
 export type ChiefDescriptor = {
   version: 1;
+  build?: RuntimeBuild;
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
@@ -87,6 +89,7 @@ export type ChiefIdentity = Omit<
   ChiefDescriptor,
   "version" | "leaseId" | "claim" | "createdAt"
 > & {
+  build: RuntimeBuild;
   createdAt?: number;
 };
 
@@ -123,6 +126,7 @@ export type CoordinationMessageKind = ChiefMessageKind;
 
 export type ChiefMessageRecord = {
   version: 2;
+  build?: RuntimeBuild;
   id: string;
   leaseId: string;
   kind: ChiefMessageKind;
@@ -176,6 +180,13 @@ function validSession(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 512;
 }
 
+function sameRuntimeBuildEvidence(
+  left: RuntimeBuild | undefined,
+  right: RuntimeBuild | undefined,
+): boolean {
+  return left?.version === right?.version && left?.sha256 === right?.sha256;
+}
+
 function validNativeIdentity(value: unknown): value is string {
   return (
     typeof value === "string" && value.trim().length > 0 && value.length <= 512
@@ -196,7 +207,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
     "text",
     "createdAt",
   ];
-  const optional = ["branch", "resultBindings"];
+  const optional = ["branch", "resultBindings", "build"];
   if (
     Object.keys(record).some(
       (key) => !keys.includes(key) && !optional.includes(key),
@@ -215,6 +226,7 @@ function validMessage(value: unknown): value is ChiefMessageRecord {
   }
   return (
     record.version === 2 &&
+    (record.build === undefined || isRuntimeBuild(record.build)) &&
     typeof record.id === "string" &&
     UUID.test(record.id) &&
     typeof record.leaseId === "string" &&
@@ -412,6 +424,8 @@ export function writeChiefMessage(
   runtime = supervisionRuntime(),
   clearQuarantine = true,
 ): string {
+  if (!record.build)
+    throw new Error("Coordination message build identity is required");
   assertMessage(record);
   return withChiefMessageLock(
     chiefMessagePath(runtime, record.toSessionId, record.id),
@@ -938,6 +952,7 @@ export type PeerRuntime = SupervisionRuntime & {
 
 export type PeerRecord = Readonly<{
   version: 1;
+  build?: RuntimeBuild;
   role?: PeerRole;
   piSessionId: string;
   paneId: string;
@@ -1006,6 +1021,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
     Object.keys(record).every((key) =>
       [
         "version",
+        "build",
         "role",
         "piSessionId",
         "paneId",
@@ -1026,6 +1042,7 @@ function validPeerLeadRecord(value: unknown): value is PeerLeadRecord {
       "updatedAt",
     ].every((key) => Object.hasOwn(record, key)) &&
     record.version === 1 &&
+    (record.build === undefined || isRuntimeBuild(record.build)) &&
     (record.role === undefined ||
       record.role === "lead" ||
       record.role === "manager") &&
@@ -1055,6 +1072,7 @@ export function samePeerLeadRecord(
 ): boolean {
   return (
     actual.version === expected.version &&
+    sameRuntimeBuildEvidence(actual.build, expected.build) &&
     (actual.role ?? "lead") === (expected.role ?? "lead") &&
     actual.piSessionId === expected.piSessionId &&
     actual.paneId === expected.paneId &&
@@ -1077,6 +1095,7 @@ export function samePeerLeadGeneration(
 ): boolean {
   return (
     actual.piSessionId === expected.piSessionId &&
+    sameRuntimeBuildEvidence(actual.build, expected.build) &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id
   );
@@ -1109,6 +1128,7 @@ export function writePeerLeadRecord(
   runtime: PeerRuntime,
   record: PeerLeadRecord,
 ): string {
+  if (!record.build) throw new Error("Peer lead build identity is required");
   if (!validPeerLeadRecord(record)) throw new Error("Invalid peer lead record");
   const live = livePeerClaim(runtime, record.piSessionId);
   if (live.pid !== record.claim.pid || live.id !== record.claim.id)
@@ -1202,7 +1222,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     "workspaceId",
     "createdAt",
   ];
-  const optional = ["tabId", "piSessionFile"];
+  const optional = ["tabId", "piSessionFile", "build"];
   return (
     Object.keys(record).every(
       (key) => keys.includes(key) || optional.includes(key),
@@ -1210,6 +1230,7 @@ function validDescriptor(value: unknown): value is ChiefDescriptor {
     Object.keys(record).length >= keys.length &&
     keys.every((key) => Object.hasOwn(record, key)) &&
     record.version === 1 &&
+    (record.build === undefined || isRuntimeBuild(record.build)) &&
     typeof record.leaseId === "string" &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
       record.leaseId,
@@ -1302,6 +1323,7 @@ export function sameChiefDescriptor(
 ): boolean {
   return (
     actual.leaseId === expected.leaseId &&
+    sameRuntimeBuildEvidence(actual.build, expected.build) &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
@@ -1316,6 +1338,7 @@ export function sameChiefDescriptor(
 export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
   if (
     !identity ||
+    !isRuntimeBuild(identity.build) ||
     typeof identity.piSessionId !== "string" ||
     !identity.piSessionId ||
     identity.piSessionId.length > 512 ||
@@ -1348,6 +1371,7 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
   });
   const descriptor: ChiefDescriptor = {
     version: 1,
+    build: identity.build,
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
@@ -1393,6 +1417,7 @@ export function claimChiefLease(identity: ChiefIdentity): ChiefLease {
 
 export type ManagerDescriptor = {
   version: 1;
+  build?: RuntimeBuild;
   leaseId: string;
   claim: ProcessLockClaim;
   piSessionId: string;
@@ -1411,7 +1436,7 @@ export type ManagerIdentity = Pick<
   | "tabId"
   | "workspaceId"
   | "repoKey"
-> & { createdAt?: number };
+> & { build: RuntimeBuild; createdAt?: number };
 export type ManagerLease = {
   descriptor: ManagerDescriptor;
   runtime: SupervisionRuntime;
@@ -1450,10 +1475,11 @@ function validManagerDescriptor(value: unknown): value is ManagerDescriptor {
   ];
   return (
     Object.keys(r).every(
-      (key) => keys.includes(key) || key === "piSessionFile",
+      (key) => keys.includes(key) || key === "piSessionFile" || key === "build",
     ) &&
     keys.every((key) => Object.hasOwn(r, key)) &&
     r.version === 1 &&
+    (r.build === undefined || isRuntimeBuild(r.build)) &&
     UUID.test(String(r.leaseId)) &&
     isProcessLockClaim(r.claim) &&
     validSession(r.piSessionId) &&
@@ -1475,6 +1501,7 @@ export function sameManagerDescriptor(
   return (
     actual.version === expected.version &&
     actual.leaseId === expected.leaseId &&
+    sameRuntimeBuildEvidence(actual.build, expected.build) &&
     actual.claim.pid === expected.claim.pid &&
     actual.claim.id === expected.claim.id &&
     actual.piSessionId === expected.piSessionId &&
@@ -1584,6 +1611,7 @@ export function claimManagerLease(
 ): ManagerLease {
   if (
     !identity ||
+    !isRuntimeBuild(identity.build) ||
     !validSession(identity.piSessionId) ||
     (identity.piSessionFile !== undefined &&
       (typeof identity.piSessionFile !== "string" ||
@@ -1604,6 +1632,7 @@ export function claimManagerLease(
   });
   const descriptor: ManagerDescriptor = {
     version: 1,
+    build: identity.build,
     leaseId: randomUUID(),
     claim: lease.claim,
     piSessionId: identity.piSessionId,
@@ -1998,6 +2027,7 @@ export function removeProjectMessages(
 
 export type CoordinatorState = {
   version: 1;
+  build?: RuntimeBuild;
   role?: CoordinatorRole;
   instanceId: string;
   piSessionId: string;
@@ -2201,12 +2231,15 @@ function validLeadState(value: unknown): value is CoordinatorState {
   const r = value as Record<string, unknown>;
   const keys = ["version", "instanceId", "piSessionId", "updatedAt"];
   if (
-    Object.keys(r).some((k) => !keys.includes(k) && k !== "role") ||
+    Object.keys(r).some(
+      (k) => !keys.includes(k) && k !== "role" && k !== "build",
+    ) ||
     keys.some((k) => !Object.hasOwn(r, k))
   )
     return false;
   return (
     r.version === 1 &&
+    (r.build === undefined || isRuntimeBuild(r.build)) &&
     (r.role === undefined || r.role === "lead" || r.role === "manager") &&
     UUID.test(String(r.instanceId)) &&
     validSession(r.piSessionId) &&
@@ -2245,7 +2278,7 @@ export function writeLeadCoordinationState(
   runtime: SupervisionRuntime,
   state: LeadCoordinationState,
 ): string {
-  if (!validLeadState(state))
+  if (!state.build || !validLeadState(state))
     throw new Error("Invalid lead coordination state");
   const directory = leadStateDirectory(runtime);
   const path = leadCoordinationStatePath(runtime, state.piSessionId);

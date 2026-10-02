@@ -19,21 +19,23 @@ import {
   readChiefMessage,
   readChiefDescriptor,
   supervisionRuntime,
-  claimChiefLease,
-  claimManagerLease,
+  claimChiefLease as claimChiefLeaseRaw,
+  claimManagerLease as claimManagerLeaseRaw,
   managerDescriptorPath,
   writeProjectAssignment,
   listProjectMessages,
   writeProjectMessage,
-  writeChiefMessage,
+  writeChiefMessage as writeChiefMessageRaw,
   chiefMessageBytes,
   COORDINATION_MESSAGE_MAX_BYTES,
-  writeLeadCoordinationState,
+  writeLeadCoordinationState as writeLeadCoordinationStateRaw,
   readLeadCoordinationState,
   drainCoordinationInbox,
 } from "./supervision.ts";
 import support, {
   CHILD_SESSION_ID,
+  HERDSMAN_BUILD,
+  OTHER_HERDSMAN_BUILD,
   DEFAULT_PI_SESSION_ID,
   PARENT_SESSION_ID,
   PI_AGENTS_DIR,
@@ -83,6 +85,23 @@ import support, {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
+const claimChiefLease = (identity: any) =>
+  claimChiefLeaseRaw({ ...identity, build: identity.build ?? HERDSMAN_BUILD });
+const claimManagerLease = (identity: any) =>
+  claimManagerLeaseRaw({
+    ...identity,
+    build: identity.build ?? HERDSMAN_BUILD,
+  });
+const writeLeadCoordinationState = (runtime: any, state: any) =>
+  writeLeadCoordinationStateRaw(runtime, {
+    ...state,
+    build: state.build ?? HERDSMAN_BUILD,
+  });
+const writeChiefMessage = (record: any, runtime?: any) =>
+  writeChiefMessageRaw(
+    { ...record, build: record.build ?? HERDSMAN_BUILD },
+    runtime,
+  );
 function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
   let fixture: ReturnType<typeof fakePi>;
   const initialTools = Array.isArray(options.activeTools)
@@ -507,7 +526,7 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
   const chiefId = randomUUID();
   const leadId = randomUUID();
   const runtime = supervisionRuntime();
-  const chief = claimChiefLease({
+  let chief = claimChiefLease({
     piSessionId: chiefId,
     paneId: "chief-pane",
     tabId: "chief-tab",
@@ -590,6 +609,43 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
     assert.match(chiefState.content, /supervisor: chief/);
     assert.match(chiefState.content, /availability: available/);
     assert.equal(recordObservation(await observe()), undefined);
+    chief.release();
+    chief = claimChiefLease({
+      piSessionId: chiefId,
+      paneId: "chief-pane",
+      tabId: "chief-tab",
+      workspaceId: WORKSPACE,
+      build: OTHER_HERDSMAN_BUILD,
+    });
+    const supervisorMessage = pi.tools.find(
+      (tool) => tool.name === "supervisor_message",
+    )!;
+    await assert.rejects(
+      supervisorMessage.execute(
+        "message",
+        { message: "MISMATCH_MUST_NOT_PUBLISH" },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      (
+        error: Error & { category?: string; detail?: { category?: string } },
+      ) => {
+        assert.equal(
+          error.category ?? error.detail?.category,
+          "incompatible_build",
+        );
+        return true;
+      },
+    );
+    assert.deepEqual(listChiefMessagePaths(runtime, chiefId), []);
+    chief.release();
+    chief = claimChiefLease({
+      piSessionId: chiefId,
+      paneId: "chief-pane",
+      tabId: "chief-tab",
+      workspaceId: WORKSPACE,
+    });
     const result = await pi.tools
       .find((tool) => tool.name === "supervisor_message")!
       .execute(
@@ -1838,6 +1894,8 @@ async function runManagerStartupScenario(
     | "success"
     | "missing-state"
     | "missing-herdr-session"
+    | "incompatible-build"
+    | "staff-message-mismatch"
     | "delayed-herdr-session"
     | "conflict"
     | "managed-agent"
@@ -1862,6 +1920,7 @@ async function runManagerStartupScenario(
     | "concurrent"
     | "active-loss"
     | "active-live"
+    | "active-live-mismatch"
     | "active-missing"
     | "active-missing-no-session"
     | "active-closed"
@@ -2313,6 +2372,9 @@ async function runManagerStartupScenario(
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
           role: mode === "conflict" ? "manager" : "lead",
+          ...(mode === "incompatible-build"
+            ? { build: OTHER_HERDSMAN_BUILD }
+            : {}),
           instanceId: randomUUID(),
           piSessionId: childSession,
           updatedAt: Date.now(),
@@ -2501,6 +2563,7 @@ async function runManagerStartupScenario(
               ]
             : []),
           ...(mode === "active-live" ||
+          mode === "active-live-mismatch" ||
           (started && startupObservations >= 3) ||
           ([
             "close-resume",
@@ -2593,6 +2656,7 @@ async function runManagerStartupScenario(
     const activeMode = [
       "active-loss",
       "active-live",
+      "active-live-mismatch",
       "active-missing",
       "active-missing-no-session",
       "active-closed",
@@ -2620,12 +2684,15 @@ async function runManagerStartupScenario(
           cwd: "/old/exact/worktree",
           entries: [],
         });
-      if (mode === "active-live")
+      if (mode === "active-live" || mode === "active-live-mismatch")
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
           role: "lead",
           instanceId: randomUUID(),
           piSessionId: staleId,
+          ...(mode === "active-live-mismatch"
+            ? { build: OTHER_HERDSMAN_BUILD }
+            : {}),
           updatedAt: Date.now(),
         });
       if (
@@ -2773,6 +2840,14 @@ async function runManagerStartupScenario(
       return;
     }
     if (activeMode) {
+      if (mode === "active-live-mismatch") {
+        await assert.rejects(execute(), (error: any) => {
+          assert.equal(error.detail.category, "incompatible_build");
+          assert.equal(error.detail.operation, "staff_resume");
+          return true;
+        });
+        return;
+      }
       if (mode === "active-live") {
         const running = await execute();
         assert.equal(running.details.action, "resume");
@@ -3048,6 +3123,39 @@ async function runManagerStartupScenario(
       assert.equal(startupObservations, 2);
       return;
     }
+    if (mode === "incompatible-build") {
+      await assert.rejects(
+        execute(),
+        (
+          error: Error & { category?: string; detail?: { category?: string } },
+        ) => {
+          assert.equal(
+            error.category ?? error.detail?.category,
+            "incompatible_build",
+          );
+          return true;
+        },
+      );
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        "repo-key",
+      )[0]!;
+      assert.equal(assignment.id, childSession);
+      assert.deepEqual(Object.keys(assignment).sort(), [
+        "branch",
+        "id",
+        "repoKey",
+        "text",
+        "version",
+      ]);
+      assert.equal(
+        listChiefMessagePaths(supervisionRuntime(), childSession)
+          .map((path) => readChiefMessage(path))
+          .some((message) => message.text === "Project assignment ready."),
+        false,
+      );
+      return;
+    }
     if (mode === "preexisting" || mode === "preexisting-closed") {
       await execute();
       assert.equal(
@@ -3294,6 +3402,45 @@ async function runManagerStartupScenario(
       mode === "managed-agent" ? 2 : startupObservations,
     );
     assert.equal(started, true);
+    if (mode === "staff-message-mismatch") {
+      const state = readLeadCoordinationState(
+        supervisionRuntime(),
+        childSession,
+      )!;
+      writeLeadCoordinationState(supervisionRuntime(), {
+        ...state,
+        build: OTHER_HERDSMAN_BUILD,
+        updatedAt: Date.now(),
+      });
+      const staffMessage = pi.tools.find(
+        (tool) => tool.name === "staff_message",
+      )!;
+      await assert.rejects(
+        staffMessage.execute(
+          "message",
+          { session: childSession, message: "MISMATCH_MUST_NOT_PUBLISH" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+        (
+          error: Error & { category?: string; detail?: { category?: string } },
+        ) => {
+          assert.equal(
+            error.category ?? error.detail?.category,
+            "incompatible_build",
+          );
+          return true;
+        },
+      );
+      assert.equal(
+        listChiefMessagePaths(supervisionRuntime(), childSession)
+          .map((path) => readChiefMessage(path))
+          .some((message) => message.text === "MISMATCH_MUST_NOT_PUBLISH"),
+        false,
+      );
+      return;
+    }
     if (mode === "success") {
       const createCallsBeforeDuplicate = createCalls;
       await assert.rejects(
@@ -3399,6 +3546,10 @@ async function runManagerStartupScenario(
 
 test("Manager activates only after mocked Lead-state publication", () =>
   runManagerStartupScenario("success"));
+test("Manager preserves project assignment and skips notification for incompatible Lead", () =>
+  runManagerStartupScenario("incompatible-build"));
+test("Manager staff message does not publish to incompatible Lead", () =>
+  runManagerStartupScenario("staff-message-mismatch"));
 test("Manager delegates large attachment evidence outside coordination limits", () =>
   runManagerStartupScenario(
     "success",
@@ -3484,6 +3635,8 @@ test("Manager complete resolves assignment and preserves its worktree", () =>
   runManagerStartupScenario("active-complete"));
 test("Manager retains assignment when exact Lead stop fails", () =>
   runManagerStartupScenario("close-failure"));
+test("Manager resume reports incompatible Lead builds as staff_resume", () =>
+  runManagerStartupScenario("active-live-mismatch"));
 test("Manager closes an unassigned direct Lead and preserves its worktree", () =>
   runManagerStartupScenario("unassigned-close"));
 test("Manager adopts a preexisting branch worktree for fresh delegation", () =>
@@ -6155,15 +6308,36 @@ test("registered lead exposes only explicit live controls", async () => {
     "agent_interrupt",
     "agent_close",
   ]);
-  const steer = await accepting.tools
-    .find((candidate) => candidate.name === "agent_steer")!
-    .execute(
-      "id",
-      { agent: label, message: "continue", files: [steerFile] },
-      undefined,
-      undefined,
-      context,
-    );
+  writeAgentState(mailbox, {
+    ...readAgentState(mailbox)!,
+    build: OTHER_HERDSMAN_BUILD,
+  });
+  const steerTool = accepting.tools.find(
+    (candidate) => candidate.name === "agent_steer",
+  )!;
+  const rejectedSteer = await steerTool.execute(
+    "id",
+    { agent: label, message: "must not publish" },
+    undefined,
+    undefined,
+    context,
+  );
+  assert.equal(rejectedSteer.details.error.category, "incompatible_build");
+  assert.equal(steerSubmitted, undefined);
+  assert.ok(
+    accepting.tools.some((candidate) => candidate.name === "agent_close"),
+  );
+  writeAgentState(mailbox, {
+    ...readAgentState(mailbox)!,
+    build: HERDSMAN_BUILD,
+  });
+  const steer = await steerTool.execute(
+    "id",
+    { agent: label, message: "continue", files: [steerFile] },
+    undefined,
+    undefined,
+    context,
+  );
   assert.equal(steer.details.ok, true);
   assert.equal(steer.details.action, "steer");
   assert.equal(steer.details.agent, label);
