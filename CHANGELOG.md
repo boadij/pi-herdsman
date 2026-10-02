@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.19.0](https://github.com/boadij/pi-herdsman/compare/v0.18.0...v0.19.0) (2026-10-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* add project-scoped Manager work orchestration ([#144](https://github.com/boadij/pi-herdsman/issues/144))
+
+### Features
+
+* add owned session usage stats ([#177](https://github.com/boadij/pi-herdsman/issues/177)) ([5d1800c](https://github.com/boadij/pi-herdsman/commit/5d1800c657017a2de1d4403820885455663f9fd5))
+* add project-scoped Manager work orchestration ([#144](https://github.com/boadij/pi-herdsman/issues/144)) ([8f389b7](https://github.com/boadij/pi-herdsman/commit/8f389b71464e4a9582bedb3558496d4306a76608))
+* **manager:** automate project handoffs and supervisor awareness ([#201](https://github.com/boadij/pi-herdsman/issues/201)) ([5909f7d](https://github.com/boadij/pi-herdsman/commit/5909f7dc82ff51bdf197c841badee9be30729e9c))
+* reject incompatible live Herdsman builds ([#219](https://github.com/boadij/pi-herdsman/issues/219)) ([fd2de5a](https://github.com/boadij/pi-herdsman/commit/fd2de5af43bc0eac21432afe28651092c22c61dd))
+* **ui:** align supervision with Lead status ([#215](https://github.com/boadij/pi-herdsman/issues/215)) ([d77655e](https://github.com/boadij/pi-herdsman/commit/d77655e15c171b35afe964312d72b3488d267687))
+
+
+### Fixes
+
+* allocate semantic result refs globally ([#213](https://github.com/boadij/pi-herdsman/issues/213)) ([9688a33](https://github.com/boadij/pi-herdsman/commit/9688a3392f01faec64391ae0062b992854b6c8f2))
+* **context:** place pre-turn synthetic context before user message ([#221](https://github.com/boadij/pi-herdsman/issues/221)) ([b38a6d3](https://github.com/boadij/pi-herdsman/commit/b38a6d384df5dfb6ecc78c3c981ce8e80fa68e51))
+* **coordination:** make file handoff guidance consistent across roles ([#223](https://github.com/boadij/pi-herdsman/issues/223)) ([e75a7dd](https://github.com/boadij/pi-herdsman/commit/e75a7dd700df4323cf32bf9cf046dc5a1f21c117))
+* keep bootstrap-installed extension updateable ([#175](https://github.com/boadij/pi-herdsman/issues/175)) ([bace16d](https://github.com/boadij/pi-herdsman/commit/bace16daa07791ad67bdb742da975456ce7dc553))
+* **manager:** align project assignment payload limits ([#217](https://github.com/boadij/pi-herdsman/issues/217)) ([01f9b27](https://github.com/boadij/pi-herdsman/commit/01f9b271383514af435cd3699627b205e153467e))
+* **presentation:** restore project message rendering ([#216](https://github.com/boadij/pi-herdsman/issues/216)) ([40cb1a2](https://github.com/boadij/pi-herdsman/commit/40cb1a2e27f2bac239f8d90f710dcc6c74ea4271))
+* preserve semantic result refs across handoffs ([#211](https://github.com/boadij/pi-herdsman/issues/211)) ([5a29780](https://github.com/boadij/pi-herdsman/commit/5a29780fe346ad08fde26851d2b7dd6c117f8cb6))
+
+
+### Refactoring
+
+* **coordination:** make managed Leads orchestration-first ([#224](https://github.com/boadij/pi-herdsman/issues/224)) ([85a4ddf](https://github.com/boadij/pi-herdsman/commit/85a4ddf721158c9650df1bd15b643b2153bdd7f7))
+* **manager:** make project lifecycle manager-owned ([#196](https://github.com/boadij/pi-herdsman/issues/196)) ([156b1c6](https://github.com/boadij/pi-herdsman/commit/156b1c661a2e147d6bb2ef415abe44dd6b11af2f))
+* **manager:** retire project work on worktree removal ([#226](https://github.com/boadij/pi-herdsman/issues/226)) ([ad403ad](https://github.com/boadij/pi-herdsman/commit/ad403ad4c3d78b07c2f449e5a57f38f00206fc74))
+* **manager:** split staff_delegate and staff_resume ([#220](https://github.com/boadij/pi-herdsman/issues/220)) ([382a188](https://github.com/boadij/pi-herdsman/commit/382a18800198b082730d89cd4132d38d25b5d669)), closes [#197](https://github.com/boadij/pi-herdsman/issues/197)
+
+
+### Documentation
+
+* add community discussions link ([98e5bf8](https://github.com/boadij/pi-herdsman/commit/98e5bf8659c37dd60c6ee4b53ea6aadf09dcc58a))
+* **adr:** preserve prompt-cache continuity and pre-compaction retirement ([#191](https://github.com/boadij/pi-herdsman/issues/191)) ([464b3d6](https://github.com/boadij/pi-herdsman/commit/464b3d62bdda7bca853617f89b068dfe6ca88f1a))
+* backfill architecture decisions ([#188](https://github.com/boadij/pi-herdsman/issues/188)) ([d35eb33](https://github.com/boadij/pi-herdsman/commit/d35eb33998a51d0f8cb71cdcbcdc151da90b5b35))
+* establish architecture decision records ([#186](https://github.com/boadij/pi-herdsman/issues/186)) ([7c7ecda](https://github.com/boadij/pi-herdsman/commit/7c7ecda1937aafc11e1f8c281464f56771f4a374))
+* install dependencies before local validation ([#212](https://github.com/boadij/pi-herdsman/issues/212)) ([3e7692b](https://github.com/boadij/pi-herdsman/commit/3e7692b7540fcd8f283bfb7c21ebd69add95dc03))
+* prefer positive steering in agent instructions ([#193](https://github.com/boadij/pi-herdsman/issues/193)) ([077366b](https://github.com/boadij/pi-herdsman/commit/077366b58ae4b4d67a4b57d6bf250930f0b4c30f))
+* redesign README and documentation architecture ([#182](https://github.com/boadij/pi-herdsman/issues/182)) ([a209ff7](https://github.com/boadij/pi-herdsman/commit/a209ff79d0436120cf7adfb7d6850b8616b4d0c5))
+
+
+### Tests
+
+* harden live smoke against stalls and transient observations ([#210](https://github.com/boadij/pi-herdsman/issues/210)) ([e9a4766](https://github.com/boadij/pi-herdsman/commit/e9a476601f4fa167fce011d58eff041800cb7d0a))
+
+
+### Other Changes
+
+* **deps:** update supported Pi runtime to 0.99.2 ([#194](https://github.com/boadij/pi-herdsman/issues/194)) ([a6e07e1](https://github.com/boadij/pi-herdsman/commit/a6e07e13e3f034af244f2148ab7121dffce97a9b))
+* **deps:** update supported Pi runtime to 1.0.0 ([#209](https://github.com/boadij/pi-herdsman/issues/209)) ([9015413](https://github.com/boadij/pi-herdsman/commit/90154134fdaf3851b7e7768abf697506ca5e344a))
+
 ## [0.18.0](https://github.com/boadij/pi-herdsman/compare/v0.17.1...v0.18.0) (2026-09-28)
 
 
