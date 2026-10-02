@@ -2445,13 +2445,21 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       parent.piSessionId,
       parentIdentity,
     );
-    leadAgent = fakePi({ exec: leadBase });
+    let failInitialAskDelivery = true;
+    leadAgent = fakePi({
+      exec: leadBase,
+      sendMessage: (message) => {
+        if (
+          failInitialAskDelivery &&
+          (message as any)?.customType === "pi-herdsman-agent-ask"
+        ) {
+          failInitialAskDelivery = false;
+          throw new Error("temporary ask delivery failure");
+        }
+      },
+    });
     registerExtension!(leadAgent.pi as never);
     const leadContext = fakeContext();
-    writeAgentState(parentMailbox, {
-      ...readAgentState(parentMailbox)!,
-      build: OTHER_HERDSMAN_BUILD,
-    });
     t.mock.timers.enable({ apis: ["setTimeout"] });
     await leadAgent.events.get("session_start")![0](undefined, leadContext);
     const statePath = join(parentMailbox, "state.json");
@@ -2459,8 +2467,29 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     assert.equal(
       typeof askWatcher,
       "function",
-      "incompatible ask keeps its file watcher",
+      "pending ask keeps its file watcher",
     );
+    assert.equal(
+      failInitialAskDelivery,
+      false,
+      "initial compatible ask delivery should schedule a retry",
+    );
+    const retryingList = await registeredAgentTool(leadAgent, "list").execute(
+      "list-retrying-ask",
+      {},
+      undefined,
+      undefined,
+      leadContext,
+    );
+    assert.match(
+      String(retryingList.details.agents[0].cleanup_error),
+      /Ask delivery failed; retrying/i,
+    );
+    writeAgentState(parentMailbox, {
+      ...readAgentState(parentMailbox)!,
+      build: OTHER_HERDSMAN_BUILD,
+    });
+    askWatcher!(realFs.statSync(statePath), realFs.statSync(statePath));
     const incompatibleList = await registeredAgentTool(
       leadAgent,
       "list",
@@ -2472,6 +2501,31 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     const errorsBefore = leadAgent.entries.filter(
       (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
     ).length;
+    for (let attempt = 0; attempt < 3; attempt++)
+      for (const handler of leadAgent.events.get("agent_settled") ?? [])
+        await handler(undefined, leadContext);
+    assert.equal(
+      leadAgent.entries.filter(
+        (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
+      ).length,
+      errorsBefore,
+      "repeated settle checks must not persist stable build mismatch errors",
+    );
+    const stillIncompatibleList = await registeredAgentTool(
+      leadAgent,
+      "list",
+    ).execute(
+      "list-still-incompatible-ask",
+      {},
+      undefined,
+      undefined,
+      leadContext,
+    );
+    assert.match(
+      String(stillIncompatibleList.details.agents[0].cleanup_error),
+      /incompatible pi herdsman build/i,
+      "transient incompatibility status remains visible",
+    );
     t.mock.timers.tick(2_000);
     assert.equal(
       leadAgent.entries.filter(
@@ -2479,6 +2533,18 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       ).length,
       errorsBefore,
       "stable build mismatch must not persist retry errors",
+    );
+    const afterRetryList = await registeredAgentTool(leadAgent, "list").execute(
+      "list-after-mismatch-retry",
+      {},
+      undefined,
+      undefined,
+      leadContext,
+    );
+    assert.match(
+      String(afterRetryList.details.agents[0].cleanup_error),
+      /incompatible pi herdsman build/i,
+      "scheduled retry must stop without replacing the transient mismatch status",
     );
     const incompatibleState = readAgentState(parentMailbox)!;
     writeAgentState(parentMailbox, {
@@ -2496,7 +2562,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     assert.equal(compatibleList.details.agents[0].cleanup_error, undefined);
     assert.equal(
       leadAgent.sent.length,
-      1,
+      2,
       "existing watcher resumes ask delivery",
     );
     assert.equal(readAgentState(parentMailbox)?.runId, parent.runId);

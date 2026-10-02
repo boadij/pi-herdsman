@@ -4371,6 +4371,11 @@ function scheduleAskDeliveryRetry(
     try {
       deliverPendingAsk(pi, runtime, ctx, signal);
     } catch (readError) {
+      if (
+        readError instanceof OperationError &&
+        readError.detail.category === "incompatible_build"
+      )
+        return;
       scheduleAskDeliveryRetry(pi, runtime, ctx, state, ask, signal, readError);
     }
   }, 250);
@@ -4465,6 +4470,11 @@ function settlePendingAsks(
     try {
       deliverPendingAsk(pi, runtime, ctx, signal);
     } catch (error) {
+      if (
+        error instanceof OperationError &&
+        error.detail.category === "incompatible_build"
+      )
+        continue;
       appendDurableError(pi, ctx, "pi_herdsman_cleanup_error", error);
     }
   }
