@@ -388,10 +388,11 @@ through `files`.
 
 Chief uses `staff_list`, `staff_inspect`, `staff_transcript`, and
 `staff_message`. Manager has those direct-report tools plus `staff_delegate`,
-`staff_stop`, `staff_complete`, and `staff_discard`. `staff_inspect` provides
-bounded live terminal/process evidence; `staff_transcript` provides bounded
-persisted Pi conversation/tool evidence. Target a Lead by the exact full Pi
-session ID in a fresh snapshot or `staff_list`, never by `display_name`.
+`staff_resume`, `staff_stop`, `staff_complete`, and `staff_discard`.
+`staff_inspect` provides bounded live terminal/process evidence;
+`staff_transcript` provides bounded persisted Pi conversation/tool evidence.
+Target a Lead by the exact full Pi session ID in a fresh snapshot or
+`staff_list`, never by `display_name`.
 `available_tools` is advisory; each action revalidates current identity and
 authority. Chief supervises direct reports but does not own their Agent trees.
 
@@ -423,10 +424,10 @@ Pi Herdsman uses one durable vocabulary:
   Agents; delegated implementation belongs to Leads and their Agent trees;
 - project work belongs to the project, not a Manager session. The project
   assignment represents open work and its Git branch is the work handle. A
-  Manager starts work with `staff_delegate` using `task` and optional `branch`,
-  and uses `staff_delegate` with `branch` only to resume existing work. Missing
-  worktrees are reconstructed from the same branch, resuming the exact saved Pi
-  session when available;
+  Manager uses `staff_delegate` with a task and optional branch to start new
+  project work, and `staff_resume` with its branch to resume an existing
+  assignment. Missing worktrees are reconstructed from the same branch,
+  resuming the exact saved Pi session when available;
 - settled project herd runs are handled through the normal automatic Manager
   handoff, and the Lead summarizes the outcome, validation, and important
   unresolved points in its normal response;

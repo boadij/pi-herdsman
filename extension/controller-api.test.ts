@@ -1624,6 +1624,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     const staff = pi.tools.find((tool) => tool.name === "staff_delegate")!;
+    const staffResume = pi.tools.find((tool) => tool.name === "staff_resume")!;
     const staffListTool = pi.tools.find((tool) => tool.name === "staff_list")!;
     await assert.rejects(
       staff.execute(
@@ -1738,8 +1739,8 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
         /Work already exists/,
       );
     }
-    const retryPromise = staff.execute(
-      "delegate",
+    const retryPromise = staffResume.execute(
+      "resume",
       { branch: pending.branch },
       undefined,
       undefined,
@@ -1764,10 +1765,10 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     releaseReadiness();
     const retry = await retryPromise;
     assert.equal(retry.details.ok, true, JSON.stringify(retry.details));
+    assert.equal(retry.details.action, "resume");
     assert.equal(retry.details.branch, pending.branch);
     assert.equal(retry.details.session, childSession);
     assert.equal(createCalls, 2);
-    assert.equal(openCalls, 1);
     assert.equal(
       listProjectAssignments(supervisionRuntime(), "repo-key").find(
         (item) => item.id === pending.id,
@@ -2587,6 +2588,7 @@ async function runManagerStartupScenario(
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     const staff = pi.tools.find((tool) => tool.name === "staff_delegate")!;
+    const staffResume = pi.tools.find((tool) => tool.name === "staff_resume")!;
     const staleId = randomUUID();
     const activeMode = [
       "active-loss",
@@ -2599,6 +2601,7 @@ async function runManagerStartupScenario(
       "active-complete",
       "close-failure",
     ].includes(mode);
+    const resumeMode = activeMode || mode === "invalid-topology";
     if (activeMode) {
       childSession = staleId;
       created = !["active-missing", "active-missing-no-session"].includes(mode);
@@ -2671,33 +2674,40 @@ async function runManagerStartupScenario(
     }
     const execute = () => (
       (invalidTopologyCall = worktreeListCalls + 4),
-      staff.execute(
-        "delegate",
-        {
-          ...(!["invalid-topology"].includes(mode) && !activeMode
-            ? {
-                task:
-                  limits?.mailboxPayloadLimitBytes !== undefined
-                    ? "x".repeat(2048)
-                    : "deliver the fresh assignment",
-                ...(largeEvidence ? { files: [attachmentPath] } : {}),
-              }
-            : {}),
-          ...([
-            "preexisting",
-            "preexisting-closed",
-            "occupied",
-            "multiple",
-          ].includes(mode)
-            ? { branch: "smoke/existing" }
-            : {}),
-          ...(mode === "concurrent" ? { branch: "smoke/concurrent" } : {}),
-          ...(["invalid-topology"].includes(mode)
-            ? { branch: "smoke/vanished" }
-            : activeMode
-              ? { branch: "smoke/recover" }
-              : {}),
-        },
+      (resumeMode ? staffResume : staff).execute(
+        resumeMode ? "resume" : "delegate",
+        resumeMode
+          ? {
+              branch:
+                mode === "invalid-topology"
+                  ? "smoke/vanished"
+                  : "smoke/recover",
+            }
+          : {
+              ...(!["invalid-topology"].includes(mode) && !activeMode
+                ? {
+                    task:
+                      limits?.mailboxPayloadLimitBytes !== undefined
+                        ? "x".repeat(2048)
+                        : "deliver the fresh assignment",
+                    ...(largeEvidence ? { files: [attachmentPath] } : {}),
+                  }
+                : {}),
+              ...([
+                "preexisting",
+                "preexisting-closed",
+                "occupied",
+                "multiple",
+              ].includes(mode)
+                ? { branch: "smoke/existing" }
+                : {}),
+              ...(mode === "concurrent" ? { branch: "smoke/concurrent" } : {}),
+              ...(mode === "invalid-topology"
+                ? { branch: "smoke/vanished" }
+                : activeMode
+                  ? { branch: "smoke/recover" }
+                  : {}),
+            },
         undefined,
         undefined,
         ctx,
@@ -2765,6 +2775,7 @@ async function runManagerStartupScenario(
     if (activeMode) {
       if (mode === "active-live") {
         const running = await execute();
+        assert.equal(running.details.action, "resume");
         assert.equal(running.details.already_running, true);
         assert.equal(running.details.session, staleId);
         const messages = () =>
@@ -2795,7 +2806,9 @@ async function runManagerStartupScenario(
         assert.equal(delivered[0].customType, "pi-herdsman-project_assignment");
         assert.equal(delivered[0].details.id, staleId);
         entries.push(delivered[0]);
-        await execute();
+        const stillRunning = await execute();
+        assert.equal(stillRunning.details.action, "resume");
+        assert.equal(stillRunning.details.already_running, true);
         assert.deepEqual(
           messages().map((message) => message.id),
           [staleId],
@@ -2836,6 +2849,7 @@ async function runManagerStartupScenario(
           );
           started = true;
           const resumed = await execute();
+          assert.equal(resumed.details.action, "resume");
           assert.equal(resumed.details.session, staleId);
           assert.equal(
             listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
@@ -2883,6 +2897,7 @@ async function runManagerStartupScenario(
         ["active-missing", "active-missing-no-session"].includes(mode)
       ) {
         const resumed = await execute();
+        assert.equal(resumed.details.action, "resume");
         assert.equal(resumed.details.session, staleId);
         assert.equal(resumed.details.branch, "smoke/recover");
         assert.equal(createCalls, 1);
@@ -2893,6 +2908,7 @@ async function runManagerStartupScenario(
         );
       } else {
         const recovered = await execute();
+        assert.equal(recovered.details.action, "resume");
         assert.equal(recovered.details.session, staleId);
         assert.equal(recovered.details.branch, "smoke/recover");
         const persisted = listProjectAssignments(
@@ -3143,7 +3159,7 @@ async function runManagerStartupScenario(
       await assert.rejects(
         execute(),
         mode.startsWith("identity-manager-lost-")
-          ? /Manager changed during delegation/
+          ? /Manager changed during project activation/
           : mode === "identity-ambiguity"
             ? /identity became ambiguous/
             : /identity did not materialize; assignment preserved/,
@@ -3256,6 +3272,7 @@ async function runManagerStartupScenario(
       }
       const result = await delegation;
       assert.equal(result.details.ok, true);
+      assert.equal(result.details.action, "delegate");
       assert.equal(result.details.session, childSession);
     }
     const assignment = listProjectAssignments(
@@ -3278,6 +3295,7 @@ async function runManagerStartupScenario(
     );
     assert.equal(started, true);
     if (mode === "success") {
+      const createCallsBeforeDuplicate = createCalls;
       await assert.rejects(
         staff.execute(
           "delegate",
@@ -3289,8 +3307,31 @@ async function runManagerStartupScenario(
           undefined,
           ctx,
         ),
-        /Work already exists/,
+        /Work already exists.*staff_resume/,
       );
+      assert.equal(createCalls, createCallsBeforeDuplicate);
+      const assignmentsBeforeMissingResume = listProjectAssignments(
+        supervisionRuntime(),
+        "repo-key",
+      );
+      const startsBeforeMissingResume = startCalls;
+      const createsBeforeMissingResume = createCalls;
+      await assert.rejects(
+        staffResume.execute(
+          "resume",
+          { branch: "smoke/missing" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+        /No existing work.*staff_delegate/,
+      );
+      assert.deepEqual(
+        listProjectAssignments(supervisionRuntime(), "repo-key"),
+        assignmentsBeforeMissingResume,
+      );
+      assert.equal(createCalls, createsBeforeMissingResume);
+      assert.equal(startCalls, startsBeforeMissingResume);
       await assert.rejects(
         staff.execute(
           "delegate",

@@ -631,14 +631,40 @@ export function staffDelegateResults(contents) {
   });
 }
 
-export function staffActionResults(contents, toolName, action) {
-  return sessionEntries(contents).flatMap((entry) => {
+export function staffActionResults(contents, toolName, action, prompt) {
+  const entries = sessionEntries(contents);
+  const byId = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  const promptEntry =
+    prompt === undefined
+      ? null
+      : entries.find(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message?.role === "user" &&
+            messageText(entry.message.content) === prompt,
+        );
+  const descendsFromPrompt = (entry) => {
+    if (prompt === undefined) return true;
+    if (!promptEntry) return false;
+    const visited = new Set();
+    let parentId = entry.parentId;
+    while (parentId && !visited.has(parentId)) {
+      if (parentId === promptEntry.id) return true;
+      visited.add(parentId);
+      parentId = byId.get(parentId)?.parentId;
+    }
+    return false;
+  };
+  return entries.flatMap((entry) => {
     const message = entry.message;
     if (
       entry.type !== "message" ||
       message?.role !== "toolResult" ||
       message.toolName !== toolName ||
-      message.isError
+      message.isError ||
+      !descendsFromPrompt(entry)
     )
       return [];
     const value = message.details;
@@ -1690,7 +1716,7 @@ export function managerRecoveryFreshPrompt(branch) {
 }
 
 export function managerRecoveryResumePrompt(branch) {
-  return `Resume the existing work on branch ${branch}.\n\nCall staff_delegate using only:\n${JSON.stringify({ branch })}\n\nDo not start new work or supply task, base, or files.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
+  return `Resume the existing work on branch ${branch}.\n\nCall staff_resume using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
 }
 
 export function managerRecoveryPostRecoveryPrompt() {
@@ -1714,10 +1740,10 @@ export function managerRecoveryCompletePrompt(branch) {
 }
 
 export function managerRecoveryResumeOnlyPrompt(branch) {
-  return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall staff_delegate exactly once using only these arguments:\n${JSON.stringify({ branch })}\n\nDo not supply task, base, or files. Do not call any other tool.\n\nAfter staff_delegate succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
+  return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall staff_resume exactly once using only these arguments:\n${JSON.stringify({ branch })}\n\nDo not call any other tool.\n\nAfter staff_resume succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
 }
 
-export function managerRecoveryDelegateDiagnostics(contents, prompt) {
+export function managerRecoveryResumeDiagnostics(contents, prompt) {
   const entries = sessionEntries(contents);
   const byId = new Map(
     entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
@@ -1748,14 +1774,14 @@ export function managerRecoveryDelegateDiagnostics(contents, prompt) {
       return [];
     return (Array.isArray(entry.message.content) ? entry.message.content : [])
       .filter(
-        (part) => part.type === "toolCall" && part.name === "staff_delegate",
+        (part) => part.type === "toolCall" && part.name === "staff_resume",
       )
       .map((call) => {
         const result = entries.find(
           (candidate) =>
             candidate.type === "message" &&
             candidate.message?.role === "toolResult" &&
-            candidate.message.toolName === "staff_delegate" &&
+            candidate.message.toolName === "staff_resume" &&
             candidate.message.toolCallId === call.id,
         );
         return {
@@ -2933,9 +2959,14 @@ async function runManagerRecoverySmoke(ctx) {
   const resumed = await waitFor("graceful-resume", async () => {
     const session = await rootSnapshot();
     if (!session) return null;
-    const results = staffDelegateResults(session.contents);
+    const results = staffActionResults(
+      session.contents,
+      "staff_resume",
+      "resume",
+      resumePrompt,
+    );
     if (
-      results.length !== 2 ||
+      results.length !== 1 ||
       !assistantResultForSession(
         session,
         resumePrompt,
@@ -2943,7 +2974,7 @@ async function runManagerRecoverySmoke(ctx) {
       )
     )
       return null;
-    return results[1];
+    return results[0];
   });
   markStage(ctx, "graceful-resume-validation");
   assert.equal(resumed.session, first.session);
@@ -3107,8 +3138,15 @@ async function runManagerRecoverySmoke(ctx) {
   markStage(ctx, "recovered-identity-validation");
   const recovery = await waitFor("recovery", async () => {
     const session = await rootSnapshot();
-    const results = session && staffDelegateResults(session.contents);
-    return results?.length === 3 &&
+    const results =
+      session &&
+      staffActionResults(
+        session.contents,
+        "staff_resume",
+        "resume",
+        recoveryPrompt,
+      );
+    return results?.length === 1 &&
       assistantResultForSession(
         session,
         recoveryPrompt,
@@ -3117,11 +3155,11 @@ async function runManagerRecoverySmoke(ctx) {
       ? { session, results }
       : null;
   });
-  const recovered = recovery.results[2];
+  const recovered = recovery.results[0];
   assert.equal(recovered.session, first.session);
   assert.equal(recovered.branch, first.branch);
   assert.ok(recovered.workspace_id);
-  assert.equal(recovery.results.length, 3);
+  assert.equal(recovery.results.length, 1);
   const afterWorktrees = await matchingWorktrees();
   assert.equal(afterWorktrees.length, 1);
   assert.equal(
@@ -3738,8 +3776,8 @@ async function collectDiagnostics(ctx, owned, failure) {
           path: session.path,
           status: session.status,
           ...summarizeSession(session.contents),
-          gracefulResumeDelegateCalls: ctx.managerRecovery?.resumePrompt
-            ? managerRecoveryDelegateDiagnostics(
+          gracefulResumeCalls: ctx.managerRecovery?.resumePrompt
+            ? managerRecoveryResumeDiagnostics(
                 session.contents,
                 ctx.managerRecovery.resumePrompt,
               )

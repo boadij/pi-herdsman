@@ -34,8 +34,8 @@ The lifecycle and execution-ownership rules are documented in
 Chief and Manager use [Staff tools](reference/staff.md) for direct-report
 observation and communication.
 
-Manager additionally uses branch-based staff operations to start, resume, pause,
-complete, or abandon project work.
+Manager additionally uses branch-based staff operations to start, resume,
+pause, complete, or abandon project work.
 
 ```text
 staff_list
@@ -45,6 +45,7 @@ staff_message
 
 Manager only:
 staff_delegate
+staff_resume
 staff_stop
 staff_complete
 staff_discard

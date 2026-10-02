@@ -123,6 +123,7 @@ const REGISTERED_ROLE_TOOLS = [
     "staff_transcript",
     "staff_message",
     "staff_delegate",
+    "staff_resume",
     "staff_stop",
     "staff_complete",
     "staff_discard",
@@ -216,6 +217,39 @@ const STAFF_TOOL_CASES = [
   ],
 ] as const;
 
+const MANAGER_STAFF_TOOL_CASES = [
+  [
+    "staff_delegate",
+    { task: "implement" },
+    { branch: "feat/existing" },
+    ["task"],
+  ],
+  [
+    "staff_resume",
+    { branch: "feat/existing" },
+    { branch: "feat/existing", task: "replace it" },
+    ["branch"],
+  ],
+  [
+    "staff_stop",
+    { session: "session-id" },
+    { session: "session-id", branch: "feat/x" },
+    ["session"],
+  ],
+  [
+    "staff_complete",
+    { branch: "feat/x" },
+    { branch: "feat/x", task: "x" },
+    ["branch"],
+  ],
+  [
+    "staff_discard",
+    { branch: "feat/x" },
+    { branch: "feat/x", task: "x" },
+    ["branch"],
+  ],
+] as const;
+
 test("semantic coordination tools expose exact strict object contracts", () => {
   setLeadEnvironment();
   const pi = fakePi();
@@ -269,6 +303,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
       "staff_transcript",
       "staff_message",
       "staff_delegate",
+      "staff_resume",
       "staff_stop",
       "staff_complete",
       "staff_discard",
@@ -280,6 +315,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     "staff_transcript",
     "staff_message",
     "staff_delegate",
+    "staff_resume",
     "staff_stop",
     "staff_complete",
     "staff_discard",
@@ -288,6 +324,26 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     assert.equal(tool.defaultActive, false);
     assert.equal(typeof tool.renderCall, "function");
     assert.equal(typeof tool.renderResult, "function");
+  }
+  for (const [name, valid, invalid, required] of MANAGER_STAFF_TOOL_CASES) {
+    const tool = tools.get(name);
+    assert.ok(tool, `missing ${name}`);
+    assertPortableToolSchema(tool);
+    assert.deepEqual(
+      [...(tool.parameters.required ?? [])].sort(),
+      [...required].sort(),
+      name,
+    );
+    assert.equal(
+      Value.Check(tool.parameters, valid),
+      true,
+      `${name} valid input`,
+    );
+    assert.equal(
+      Value.Check(tool.parameters, invalid),
+      false,
+      `${name} cross-operation input`,
+    );
   }
   pi.events.get("session_shutdown")?.[0]();
 
@@ -566,6 +622,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "staff_transcript",
       "staff_message",
       "staff_delegate",
+      "staff_resume",
       "staff_stop",
       "staff_complete",
       "staff_discard",

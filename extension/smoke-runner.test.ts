@@ -21,7 +21,7 @@ import {
   managerRecoveryPostRecoveryPrompt,
   managerRecoveryStopPrompt,
   managerRecoveryResumeOnlyPrompt,
-  managerRecoveryDelegateDiagnostics,
+  managerRecoveryResumeDiagnostics,
   managerRecoveryResumePrompt,
   managerRecoveryReviewPrompt,
   managerRecoveryCompletePrompt,
@@ -962,7 +962,7 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   const resume = managerRecoveryResumePrompt(branch);
   assert.match(
     resume,
-    /staff_delegate using only:\n\{"branch":"herdsman\/smoke-manager-recovery-exact"\}/,
+    /staff_resume using only:\n\{"branch":"herdsman\/smoke-manager-recovery-exact"\}/,
   );
   assert.match(resume, /PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED/);
   assert.doesNotMatch(resume, /supervisor_result|supervisor_ask/);
@@ -985,7 +985,7 @@ test("manager-recovery stops by Lead session, reviews, and completes by branch",
     /staff_complete exactly once/,
   );
   const resume = managerRecoveryResumeOnlyPrompt(branch);
-  assert.match(resume, /staff_delegate exactly once/);
+  assert.match(resume, /staff_resume exactly once/);
   assert.ok(resume.includes(JSON.stringify({ branch })));
   assert.match(resume, /exact full branch string/);
   assert.match(resume, /Copy that branch string verbatim/);
@@ -1019,7 +1019,7 @@ test("manager-recovery seeds continuity only in the Lead conversation, then reca
   );
 });
 
-test("manager-recovery diagnostics capture the resume delegate argument and result", () => {
+test("manager-recovery diagnostics capture the resume argument and result", () => {
   const branch = "herdsman/smoke-manager-recovery-exact";
   const prompt = managerRecoveryResumeOnlyPrompt(branch);
   const entries = [
@@ -1037,8 +1037,8 @@ test("manager-recovery diagnostics capture the resume delegate argument and resu
         content: [
           {
             type: "toolCall",
-            id: "delegate-call",
-            name: "staff_delegate",
+            id: "resume-call",
+            name: "staff_resume",
             arguments: { branch: "herdsman/smoke-manager-recovery-exac" },
           },
         ],
@@ -1050,15 +1050,15 @@ test("manager-recovery diagnostics capture the resume delegate argument and resu
       parentId: "call",
       message: {
         role: "toolResult",
-        toolName: "staff_delegate",
-        toolCallId: "delegate-call",
+        toolName: "staff_resume",
+        toolCallId: "resume-call",
         isError: true,
         content: [{ type: "text", text: "No existing work was found." }],
       },
     },
   ];
   const contents = entries.map((entry) => JSON.stringify(entry)).join("\n");
-  assert.deepEqual(managerRecoveryDelegateDiagnostics(contents, prompt), [
+  assert.deepEqual(managerRecoveryResumeDiagnostics(contents, prompt), [
     {
       branch: "herdsman/smoke-manager-recovery-exac",
       arguments: { branch: "herdsman/smoke-manager-recovery-exac" },
@@ -1070,7 +1070,7 @@ test("manager-recovery diagnostics capture the resume delegate argument and resu
     },
   ]);
   assert.deepEqual(
-    managerRecoveryDelegateDiagnostics(contents, "different prompt"),
+    managerRecoveryResumeDiagnostics(contents, "different prompt"),
     [],
   );
 });
@@ -1091,6 +1091,7 @@ test("smoke parses successful staff_stop results only", () => {
     session: "lead-session",
     branch: "feat/example",
   };
+  const resumed = { ok: true, action: "resume", branch: "feat/example" };
   const contents = [
     {
       toolName: "staff_stop",
@@ -1099,6 +1100,7 @@ test("smoke parses successful staff_stop results only", () => {
       ],
       details: result,
     },
+    { toolName: "staff_resume", details: resumed },
     { toolName: "staff_delegate", content: JSON.stringify(result) },
     { toolName: "staff_stop", isError: true, content: JSON.stringify(result) },
   ]
@@ -1112,6 +1114,104 @@ test("smoke parses successful staff_stop results only", () => {
   assert.deepEqual(staffActionResults(contents, "staff_stop", "stop"), [
     result,
   ]);
+  assert.deepEqual(staffActionResults(contents, "staff_resume", "resume"), [
+    resumed,
+  ]);
+});
+
+test("manager-recovery selects the resume result descended from its exact prompt", () => {
+  const gracefulPrompt = "resume after staff_stop";
+  const recoveryPrompt = "resume after executor loss";
+  const entries = [
+    {
+      type: "message",
+      id: "graceful-prompt",
+      message: { role: "user", content: gracefulPrompt },
+    },
+    {
+      type: "message",
+      id: "graceful-call",
+      parentId: "graceful-prompt",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "resume-1", name: "staff_resume" }],
+      },
+    },
+    {
+      type: "message",
+      id: "graceful-result",
+      parentId: "graceful-call",
+      message: {
+        role: "toolResult",
+        toolName: "staff_resume",
+        toolCallId: "resume-1",
+        details: { ok: true, action: "resume", session: "lead" },
+      },
+    },
+    {
+      type: "message",
+      id: "graceful-answer",
+      parentId: "graceful-result",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "PI_HERDSMAN_MANAGER_RECOVERY_RESUMED",
+      },
+    },
+    {
+      type: "message",
+      id: "recovery-prompt",
+      message: { role: "user", content: recoveryPrompt },
+    },
+    {
+      type: "message",
+      id: "recovery-call",
+      parentId: "recovery-prompt",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "resume-2", name: "staff_resume" }],
+      },
+    },
+    {
+      type: "message",
+      id: "recovery-result",
+      parentId: "recovery-call",
+      message: {
+        role: "toolResult",
+        toolName: "staff_resume",
+        toolCallId: "resume-2",
+        details: { ok: true, action: "resume", session: "lead" },
+      },
+    },
+    {
+      type: "message",
+      id: "recovery-answer",
+      parentId: "recovery-result",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED",
+      },
+    },
+  ];
+  const contents = entries.map((entry) => JSON.stringify(entry)).join("\n");
+
+  assert.equal(
+    staffActionResults(contents, "staff_resume", "resume").length,
+    2,
+  );
+  assert.deepEqual(
+    staffActionResults(contents, "staff_resume", "resume", recoveryPrompt),
+    [{ ok: true, action: "resume", session: "lead" }],
+  );
+  assert.equal(
+    assistantResultForSession(
+      { contents },
+      recoveryPrompt,
+      "PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED",
+    )?.id,
+    "recovery-answer",
+  );
 });
 
 test("staff delegate results retain only valid successful delegation payloads in order", () => {

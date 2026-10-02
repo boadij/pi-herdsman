@@ -37,12 +37,14 @@ project-work handles. A branch is optional when starting new work. If omitted,
 Pi Herdsman can generate one. The first delegation can create the first linked
 worktree, and an unoccupied existing worktree for the branch is reused.
 
-Resume an existing assignment by branch only. If its worktree is missing,
-Herdsman recreates it from the existing branch and resumes the exact persisted
-Pi session when available. The saved session cwd is used when history exists;
-if the branch itself is unavailable, recreation fails closed.
+Start new work with `staff_delegate`. Resume existing work with
+`staff_resume` using its branch. If its worktree is missing, Herdsman recreates
+it from the existing branch and resumes the exact persisted Pi session when
+available. The saved session cwd is used when history exists; if the branch
+itself is unavailable, recreation fails closed.
 
-See [`staff_delegate`](../reference/staff.md#staff_delegate).
+See [`staff_delegate`](../reference/staff.md#staff_delegate) and
+[`staff_resume`](../reference/staff.md#staff_resume).
 
 ## Run independent work in parallel
 
@@ -79,10 +81,10 @@ evidence only when it materially matters.
 
 `staff_stop` stops a Lead and its owned Agent execution tree while preserving
 the assignment, Pi session, Git branch, and worktree. Resume the same work with
-`staff_delegate` using its branch. `staff_stop` does not resolve project work.
+`staff_resume` using its branch. `staff_stop` does not resolve project work.
 
 See [`staff_stop`](../reference/staff.md#staff_stop) and
-[`staff_delegate`](../reference/staff.md#staff_delegate).
+[`staff_resume`](../reference/staff.md#staff_resume).
 
 ## Complete or abandon
 

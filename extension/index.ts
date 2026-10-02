@@ -306,6 +306,7 @@ const MANAGER_TOOLS = [
   ...PEER_TOOLS,
   ...STAFF_TOOLS,
   "staff_delegate",
+  "staff_resume",
   "staff_stop",
   "staff_complete",
   "staff_discard",
@@ -322,9 +323,9 @@ supervisor_message when your direct supervisor must decide or act, and
 peer_list/peer_message for peer coordination. Keep work inside your assigned
 scope.`;
 const MANAGER_ROLE_CHARTER = `## Manager role
-Manage project work by branch. Use staff_delegate with task and optional branch
-to start work and with branch only to resume existing work. Project work remains
-open across implementation and review iterations.
+Manage project work by branch. Use staff_delegate with a task and optional branch
+to start new project work. Use staff_resume with its branch to resume existing
+project work. Project work remains open across implementation and review iterations.
 
 Use staff_message for decisions and review feedback. Use staff_stop to stop a
 Lead while preserving its assignment, staff_complete when the project work is
@@ -572,11 +573,12 @@ type StaffParams =
   | { action: "list" }
   | {
       action: "delegate";
-      task?: string;
+      task: string;
       branch?: string;
       base?: string;
       files?: string[];
     }
+  | { action: "resume"; branch: string }
   | { action: "stop"; session: string }
   | { action: "complete" | "discard"; branch: string }
   | { action: "inspect" | "transcript"; session: string }
@@ -7080,37 +7082,33 @@ export default function (pi: ExtensionAPI): void {
   );
   const staffDelegateParameters = Type.Object(
     {
-      task: Type.Optional(
-        Type.String({
-          pattern: "\\S",
-          description:
-            "Task for new project work. Omit when resuming existing work.",
-        }),
-      ),
+      task: Type.String({
+        pattern: "\\S",
+        description: "Non-empty task for new project work.",
+      }),
       branch: Type.Optional(
         Type.String({
           pattern: "\\S",
           description:
-            "Git branch identifying the work. Required when resuming existing work.",
+            "Optional Git branch for the new project work; Herdsman generates one when omitted.",
         }),
       ),
       base: Type.Optional(
         Type.String({
           pattern: "\\S",
           description:
-            "Base ref used only when a new worktree must be created.",
+            "Base ref used only when Herdsman creates a new worktree.",
         }),
       ),
       files: FILES_SCHEMA,
     },
     { additionalProperties: false },
   );
-  const staffDiscardParameters = Type.Object(
+  const staffBranchParameters = Type.Object(
     {
       branch: Type.String({
         pattern: "\\S",
-        description:
-          "Exact project branch whose assignment is being resolved. The worktree and Git branch are preserved.",
+        description: "Exact project branch.",
       }),
     },
     { additionalProperties: false },
@@ -7122,22 +7120,21 @@ export default function (pi: ExtensionAPI): void {
   const activeRole = (): SessionRole =>
     chiefMode === "inactive" ? controllerRole : "chief";
   let roleSuspended = false;
-  const projectDelegationLocks = new Map<string, Promise<void>>();
-  const withProjectDelegationLock = async <T>(
+  const projectWorkLocks = new Map<string, Promise<void>>();
+  const withProjectWorkLock = async <T>(
     key: string,
     operation: () => Promise<T>,
   ): Promise<T> => {
-    const previous = projectDelegationLocks.get(key);
+    const previous = projectWorkLocks.get(key);
     let release!: () => void;
     const current = new Promise<void>((resolve) => (release = resolve));
-    projectDelegationLocks.set(key, current);
+    projectWorkLocks.set(key, current);
     await previous;
     try {
       return await operation();
     } finally {
       release();
-      if (projectDelegationLocks.get(key) === current)
-        projectDelegationLocks.delete(key);
+      if (projectWorkLocks.get(key) === current) projectWorkLocks.delete(key);
     }
   };
   let managerLease: ManagerLease | undefined;
@@ -7246,6 +7243,7 @@ export default function (pi: ExtensionAPI): void {
     ...PEER_TOOLS,
     ...STAFF_TOOLS,
     "staff_delegate",
+    "staff_resume",
     "staff_stop",
     "staff_complete",
     "staff_discard",
@@ -9847,10 +9845,7 @@ export default function (pi: ExtensionAPI): void {
         };
       };
       return assignment
-        ? withProjectDelegationLock(
-            `${manager.repoKey}\0${assignment.branch}`,
-            close,
-          )
+        ? withProjectWorkLock(`${manager.repoKey}\0${assignment.branch}`, close)
         : close();
     };
     const resolveProjectWork = async (
@@ -9866,180 +9861,186 @@ export default function (pi: ExtensionAPI): void {
         !sameManagerDescriptor(manager, managerLease.descriptor)
       )
         throw new Error("Manager lease is no longer active");
-      return withProjectDelegationLock(
-        `${manager.repoKey}\0${branch}`,
-        async () => {
-          const scope = await worktreeGroupScope(
+      return withProjectWorkLock(`${manager.repoKey}\0${branch}`, async () => {
+        const scope = await worktreeGroupScope(
+          pi,
+          ctx,
+          manager.workspaceId,
+          signal,
+        );
+        const assignment = readProjectAssignment(
+          supervisionRuntime(),
+          manager.repoKey,
+          branch,
+        );
+        if (!assignment || assignment.repoKey !== manager.repoKey)
+          throw new Error(`Project assignment was not found on ${branch}`);
+        const topology = await runHerdr(
+          pi,
+          ctx,
+          ["worktree", "list", "--workspace", scope.primaryWorkspaceId],
+          { signal },
+        );
+        if (
+          topology?.source?.source_workspace_id !== scope.primaryWorkspaceId ||
+          topology?.source?.repo_key !== scope.repoKey ||
+          !Array.isArray(topology?.worktrees)
+        )
+          throw new Error("Herdr worktree topology is not authoritative");
+        const worktrees = topology.worktrees.filter(
+          (item: any) => item.branch === branch,
+        );
+        if (worktrees.length > 1)
+          throw new Error("Ambiguous branch worktree; assignment preserved");
+        const currentWorkspace = worktrees[0]?.open_workspace_id;
+        const live = await liveLead(ctx, assignment.id);
+        if (live.length > 1)
+          throw new Error("Ambiguous Lead identity; assignment preserved");
+        if (
+          live.length &&
+          (!currentWorkspace || live[0].workspace_id !== currentWorkspace)
+        )
+          throw new Error(
+            "Assigned Lead is outside its branch worktree; assignment preserved",
+          );
+        if (live.length)
+          await stopProjectLeadExecution(assignment.id, live[0], ctx, signal);
+        else {
+          const summary = await stopOwnedAgentsForSession(
             pi,
             ctx,
-            manager.workspaceId,
+            assignment.id,
             signal,
           );
-          const assignment = readProjectAssignment(
-            supervisionRuntime(),
-            manager.repoKey,
-            branch,
-          );
-          if (!assignment || assignment.repoKey !== manager.repoKey)
-            throw new Error(`Project assignment was not found on ${branch}`);
-          const topology = await runHerdr(
-            pi,
-            ctx,
-            ["worktree", "list", "--workspace", scope.primaryWorkspaceId],
-            { signal },
-          );
-          if (
-            topology?.source?.source_workspace_id !==
-              scope.primaryWorkspaceId ||
-            topology?.source?.repo_key !== scope.repoKey ||
-            !Array.isArray(topology?.worktrees)
-          )
-            throw new Error("Herdr worktree topology is not authoritative");
-          const worktrees = topology.worktrees.filter(
-            (item: any) => item.branch === branch,
-          );
-          if (worktrees.length > 1)
-            throw new Error("Ambiguous branch worktree; assignment preserved");
-          const currentWorkspace = worktrees[0]?.open_workspace_id;
-          const live = await liveLead(ctx, assignment.id);
-          if (live.length > 1)
-            throw new Error("Ambiguous Lead identity; assignment preserved");
-          if (
-            live.length &&
-            (!currentWorkspace || live[0].workspace_id !== currentWorkspace)
-          )
-            throw new Error(
-              "Assigned Lead is outside its branch worktree; assignment preserved",
-            );
-          if (live.length)
-            await stopProjectLeadExecution(assignment.id, live[0], ctx, signal);
-          else {
-            const summary = await stopOwnedAgentsForSession(
+          if (summary.includes("✗") || summary.includes("not closed"))
+            throw new Error(`Agent-tree cleanup failed: ${summary}`);
+        }
+        if (!live.length && currentWorkspace) {
+          const panes = (
+            await runHerdr(
               pi,
               ctx,
-              assignment.id,
-              signal,
+              ["pane", "list", "--workspace", currentWorkspace],
+              { signal },
+            )
+          )?.panes;
+          if (!Array.isArray(panes))
+            throw new Error(
+              "Current workspace panes are unavailable; assignment preserved",
             );
-            if (summary.includes("✗") || summary.includes("not closed"))
-              throw new Error(`Agent-tree cleanup failed: ${summary}`);
-          }
-          if (!live.length && currentWorkspace) {
-            const panes = (
-              await runHerdr(
+          for (const pane of panes) {
+            let processInfo;
+            try {
+              processInfo = await runHerdr(
                 pi,
                 ctx,
-                ["pane", "list", "--workspace", currentWorkspace],
+                ["pane", "process-info", "--pane", pane.pane_id],
                 { signal },
-              )
-            )?.panes;
-            if (!Array.isArray(panes))
-              throw new Error(
-                "Current workspace panes are unavailable; assignment preserved",
               );
-            for (const pane of panes) {
-              let processInfo;
-              try {
-                processInfo = await runHerdr(
-                  pi,
-                  ctx,
-                  ["pane", "process-info", "--pane", pane.pane_id],
-                  { signal },
-                );
-              } catch (error) {
-                const code =
-                  error instanceof OperationError
-                    ? error.detail.details?.herdrCode
-                    : undefined;
-                if (code === "not_found" || code === "pane_not_found") continue;
-                throw error;
-              }
-              if (
-                processInfo?.process_info?.foreground_processes?.some(
-                  (process: any) =>
-                    /(^|[\\/\s])pi(?:\s|$)/i.test(
-                      `${process?.argv0 ?? ""} ${process?.cmdline ?? ""}`,
-                    ),
-                )
-              )
-                throw new Error(
-                  "A possible Pi executor remains; assignment preserved",
-                );
+            } catch (error) {
+              const code =
+                error instanceof OperationError
+                  ? error.detail.details?.herdrCode
+                  : undefined;
+              if (code === "not_found" || code === "pane_not_found") continue;
+              throw error;
             }
+            if (
+              processInfo?.process_info?.foreground_processes?.some(
+                (process: any) =>
+                  /(^|[\\/\s])pi(?:\s|$)/i.test(
+                    `${process?.argv0 ?? ""} ${process?.cmdline ?? ""}`,
+                  ),
+              )
+            )
+              throw new Error(
+                "A possible Pi executor remains; assignment preserved",
+              );
           }
-          if ((await liveLead(ctx, assignment.id)).length)
-            throw new Error("Lead remains live; assignment preserved");
-          await withProjectAssignmentLock(
-            manager.repoKey,
-            assignment.branch,
-            async () => {
-              const current = readProjectAssignment(
+        }
+        if ((await liveLead(ctx, assignment.id)).length)
+          throw new Error("Lead remains live; assignment preserved");
+        await withProjectAssignmentLock(
+          manager.repoKey,
+          assignment.branch,
+          async () => {
+            const current = readProjectAssignment(
+              supervisionRuntime(),
+              manager.repoKey,
+              assignment.branch,
+            );
+            const finalManager = await currentManager(ctx);
+            if (!finalManager || !sameManagerDescriptor(finalManager, manager))
+              throw new Error(
+                "Manager lease changed before project resolution",
+              );
+            if (
+              !current ||
+              current.id !== assignment.id ||
+              current.repoKey !== assignment.repoKey
+            )
+              throw new Error("Project assignment changed before resolution");
+            removeProjectAssignment(
+              supervisionRuntime(),
+              manager.repoKey,
+              assignment.branch,
+            );
+            try {
+              removeProjectMessages(
                 supervisionRuntime(),
                 manager.repoKey,
                 assignment.branch,
               );
-              const finalManager = await currentManager(ctx);
-              if (
-                !finalManager ||
-                !sameManagerDescriptor(finalManager, manager)
-              )
-                throw new Error(
-                  "Manager lease changed before project resolution",
-                );
-              if (
-                !current ||
-                current.id !== assignment.id ||
-                current.repoKey !== assignment.repoKey
-              )
-                throw new Error("Project assignment changed before resolution");
-              removeProjectAssignment(
-                supervisionRuntime(),
-                manager.repoKey,
-                assignment.branch,
-              );
-              try {
-                removeProjectMessages(
-                  supervisionRuntime(),
-                  manager.repoKey,
-                  assignment.branch,
-                );
-              } catch (error) {
-                appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
-              }
+            } catch (error) {
+              appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+            }
+          },
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Project work on ${branch} ${outcome === "complete" ? "completed" : "discarded"}; branch and worktree preserved.`,
             },
-          );
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Project work on ${branch} ${outcome === "complete" ? "completed" : "discarded"}; branch and worktree preserved.`,
-              },
-            ],
-            details: { ok: true, action: outcome, branch },
-          };
-        },
-      );
+          ],
+          details: { ok: true, action: outcome, branch },
+        };
+      });
     };
-    const delegateProjectLead = async (
-      params: any,
+    type ProjectLeadActivation =
+      | {
+          action: "delegate";
+          id: string;
+          branch: string;
+          task: string;
+          base?: string;
+          files?: string[];
+        }
+      | { action: "resume"; branch: string };
+    const activateProjectLead = async (
+      params: Extract<StaffParams, { action: "delegate" | "resume" }>,
       ctx: ExtensionContext,
       signal?: AbortSignal,
     ) => {
-      if (!params.branch && (!params.task || !params.task.trim()))
-        throw new Error("Starting new work without a branch requires task");
       const repoKey = managerLease?.descriptor.repoKey;
       if (!repoKey) throw new Error("Manager lease is no longer active");
-      const freshId = randomUUID();
-      const branch =
-        params.branch ?? `herdsman/work-${randomUUID().slice(0, 8)}`;
-      return withProjectDelegationLock(`${repoKey}\0${branch}`, () =>
-        delegateProjectLeadLocked({ ...params, branch }, ctx, signal, freshId),
+      const operation: ProjectLeadActivation =
+        params.action === "delegate"
+          ? {
+              ...params,
+              id: randomUUID(),
+              branch:
+                params.branch ?? `herdsman/work-${randomUUID().slice(0, 8)}`,
+            }
+          : params;
+      return withProjectWorkLock(`${repoKey}\0${operation.branch}`, () =>
+        activateProjectLeadLocked(operation, ctx, signal),
       );
     };
-    const delegateProjectLeadLocked = async (
-      params: any,
+    const activateProjectLeadLocked = async (
+      operation: ProjectLeadActivation,
       ctx: ExtensionContext,
       signal?: AbortSignal,
-      freshId?: string,
     ) => {
       const manager = await currentManager(ctx);
       if (
@@ -10063,27 +10064,23 @@ export default function (pi: ExtensionAPI): void {
         );
       const primaryWorkspaceId = group.primaryWorkspaceId;
       const runtime = supervisionRuntime();
-      const unresolved = readProjectAssignment(
+      const existing = readProjectAssignment(
         runtime,
         manager.repoKey,
-        params.branch,
+        operation.branch,
       );
-      if (unresolved && unresolved.repoKey !== manager.repoKey)
+      if (existing && existing.repoKey !== manager.repoKey)
         throw new Error("Project assignment belongs to another repository");
-      if (unresolved) {
-        if (params.task || params.base || params.files?.length)
-          throw new Error(
-            `Work already exists on ${params.branch}; resume it with staff_delegate using only branch.`,
-          );
-      } else if (typeof params.task !== "string" || !params.task.trim())
+      if (operation.action === "delegate" && existing)
         throw new Error(
-          `No existing work was found on ${params.branch}; starting new work requires task.`,
+          `Work already exists on ${operation.branch}; resume it with staff_resume.`,
         );
-      const id = unresolved?.id ?? freshId!;
-      const branch =
-        unresolved?.branch ??
-        params.branch ??
-        `herdsman/work-${randomUUID().slice(0, 8)}`;
+      if (operation.action === "resume" && !existing)
+        throw new Error(
+          `No existing work was found on ${operation.branch}; start it with staff_delegate and a task.`,
+        );
+      const id = operation.action === "resume" ? existing!.id : operation.id;
+      const branch = operation.branch;
       const topology = await runHerdr(
         pi,
         ctx,
@@ -10101,7 +10098,8 @@ export default function (pi: ExtensionAPI): void {
       );
       if (branchWorktrees.length > 1)
         throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
-      const live = unresolved ? await liveAgent(ctx, unresolved.id) : [];
+      const live =
+        operation.action === "resume" ? await liveAgent(ctx, existing!.id) : [];
       if (live.length > 1)
         throw new Error(`Assignment ${id} has ambiguous live Lead identity`);
       if (live.length === 1) {
@@ -10119,7 +10117,7 @@ export default function (pi: ExtensionAPI): void {
           );
         const fresh = await currentManager(ctx);
         if (!fresh || !sameManagerDescriptor(fresh, manager))
-          throw new Error("Manager changed during delegation");
+          throw new Error("Manager changed during project activation");
         writeChiefMessage({
           version: 2,
           id,
@@ -10128,7 +10126,7 @@ export default function (pi: ExtensionAPI): void {
           fromSessionId: manager.piSessionId,
           toSessionId: id,
           leadSessionId: id,
-          branch: unresolved!.branch,
+          branch: existing!.branch,
           text: "Project assignment ready.",
           createdAt: Date.now(),
         });
@@ -10141,7 +10139,7 @@ export default function (pi: ExtensionAPI): void {
           ],
           details: {
             ok: true,
-            action: "delegate",
+            action: "resume",
             branch,
             session: id,
             status: "active",
@@ -10149,7 +10147,11 @@ export default function (pi: ExtensionAPI): void {
           },
         };
       }
-      if (!unresolved && branchWorktrees.length && params.base)
+      if (
+        operation.action === "delegate" &&
+        branchWorktrees.length &&
+        operation.base
+      )
         throw new Error(
           "base applies only when Herdsman creates a new worktree",
         );
@@ -10176,7 +10178,7 @@ export default function (pi: ExtensionAPI): void {
         });
         if (leads.length > 1)
           throw new Error(
-            `Branch ${branch} has multiple live Leads; automatic delegation is ambiguous.`,
+            `Branch ${branch} has multiple live Leads; project activation is ambiguous.`,
           );
         if (leads.length)
           throw new Error(
@@ -10186,12 +10188,12 @@ export default function (pi: ExtensionAPI): void {
       if (branchWorktrees[0]?.open_workspace_id)
         await assertUnoccupied(branchWorktrees[0].open_workspace_id);
       let assignment: ProjectAssignment;
-      if (unresolved) assignment = unresolved;
+      if (operation.action === "resume") assignment = existing!;
       else {
         const limits = await messageLimits(ctx);
         const prepared = prepareMessageInput(
-          params.task,
-          resolveMessageFiles(ctx, params.files, "staff_delegate"),
+          operation.task,
+          resolveMessageFiles(ctx, operation.files, "staff_delegate"),
           ctx.cwd,
           "staff_delegate",
           "Task",
@@ -10216,7 +10218,7 @@ export default function (pi: ExtensionAPI): void {
           !preCreationManager ||
           !sameManagerDescriptor(preCreationManager, manager)
         )
-          throw new Error("Manager changed before delegation");
+          throw new Error("Manager changed before project activation");
         assignment = {
           version: 2,
           id,
@@ -10285,7 +10287,7 @@ export default function (pi: ExtensionAPI): void {
             assignment.branch,
             "--no-focus",
           ];
-          if (unresolved) {
+          if (operation.action === "resume") {
             const saved = (await SessionManager.listAll()).filter(
               (session) => session.id === assignment.id,
             );
@@ -10295,7 +10297,7 @@ export default function (pi: ExtensionAPI): void {
               );
             args.push("--base", assignment.branch);
             if (saved[0]?.cwd) args.push("--path", saved[0].cwd);
-          } else args.push("--base", params.base ?? "HEAD");
+          } else args.push("--base", operation.base ?? "HEAD");
           const created = await runHerdr(pi, ctx, args, { signal });
           workspaceId = created?.workspace?.workspace_id;
           paneId = created?.root_pane?.pane_id;
@@ -10488,7 +10490,7 @@ export default function (pi: ExtensionAPI): void {
         const assertManagerCurrent = async () => {
           const fresh = await currentManager(ctx);
           if (!fresh || !sameManagerDescriptor(fresh, manager))
-            throw new Error("Manager changed during delegation");
+            throw new Error("Manager changed during project activation");
         };
         await assertManagerCurrent();
         writeChiefMessage({
@@ -10512,7 +10514,9 @@ export default function (pi: ExtensionAPI): void {
               candidate.tab_id === tabId,
           );
           if (exact.length > 1)
-            throw new Error("Lead identity became ambiguous during delegation");
+            throw new Error(
+              "Lead identity became ambiguous during project activation",
+            );
           if (exact.length === 1) {
             rediscovered = exact[0];
             break;
@@ -10557,21 +10561,21 @@ export default function (pi: ExtensionAPI): void {
               type: "text" as const,
               text: JSON.stringify({
                 ok: true,
-                action: "delegate",
+                action: operation.action,
                 session: leadSessionId,
                 workspace_id: workspaceId,
                 branch: assignment.branch,
-                ...(unresolved ? { recovered: true } : {}),
+                ...(operation.action === "resume" ? { recovered: true } : {}),
               }),
             },
           ],
           details: {
             ok: true,
-            action: "delegate",
+            action: operation.action,
             session: leadSessionId,
             workspace_id: workspaceId,
             branch: assignment.branch,
-            ...(unresolved ? { recovered: true } : {}),
+            ...(operation.action === "resume" ? { recovered: true } : {}),
           },
         };
       } catch (error) {
@@ -11007,7 +11011,11 @@ export default function (pi: ExtensionAPI): void {
                 } else if (action === "stop")
                   await stopProjectLead(entry.session, ctx, ctx.signal);
                 else if (action === "resume")
-                  await delegateProjectLead({ branch }, ctx, ctx.signal);
+                  await activateProjectLead(
+                    { action: "resume", branch },
+                    ctx,
+                    ctx.signal,
+                  );
                 await refreshSupervision(ctx);
                 showOverview();
                 tui.requestRender();
@@ -12485,10 +12493,10 @@ export default function (pi: ExtensionAPI): void {
           if (!authority || roleSuspended)
             throw new Error("Supervisor lease is no longer active");
           const params = raw as StaffParams;
-          if (params.action === "delegate") {
+          if (params.action === "delegate" || params.action === "resume") {
             if (activeRole() !== "manager")
-              throw new Error("Only Managers can delegate project work");
-            return delegateProjectLead(params, ctx, signal);
+              throw new Error("Only Managers can control project work");
+            return activateProjectLead(params, ctx, signal);
           }
           if (params.action === "stop") {
             if (activeRole() !== "manager")
@@ -12906,7 +12914,7 @@ export default function (pi: ExtensionAPI): void {
           name: "staff_delegate",
           label: "staff delegate",
           description:
-            "Start new project work or resume existing work by Git branch. Reuses an unoccupied Herdr worktree when available.",
+            "Start new project work. Reuses an unoccupied Herdr worktree when available.",
           parameters: staffDelegateParameters,
           promptSnippet: undefined,
           constrainedSampling: { type: "json_schema", strict: "prefer" },
@@ -12928,6 +12936,34 @@ export default function (pi: ExtensionAPI): void {
             renderCoordinationCall("staff", "delegate", a, t, c),
           renderResult: (r: any, o: any, t: any, c: any) =>
             renderCoordinationResult("staff", "delegate", r, o, t, c),
+        });
+        pi.registerTool({
+          ...staffTool,
+          name: "staff_resume",
+          label: "staff resume",
+          description:
+            "Resume existing unresolved project work by its exact Git branch.",
+          parameters: staffBranchParameters,
+          promptSnippet: undefined,
+          constrainedSampling: { type: "json_schema", strict: "prefer" },
+          execute: (
+            id: string,
+            p: any,
+            signal: AbortSignal | undefined,
+            update: unknown,
+            ctx: ExtensionContext,
+          ) =>
+            staffTool.execute(
+              id,
+              { action: "resume", branch: p.branch },
+              signal,
+              update,
+              ctx,
+            ),
+          renderCall: (a: unknown, t: any, c: any) =>
+            renderCoordinationCall("staff", "resume", a, t, c),
+          renderResult: (r: any, o: any, t: any, c: any) =>
+            renderCoordinationResult("staff", "resume", r, o, t, c),
         });
         pi.registerTool({
           ...staffTool,
@@ -12963,7 +12999,7 @@ export default function (pi: ExtensionAPI): void {
           label: "staff complete",
           description:
             "Complete fulfilled project work while preserving its branch and worktree.",
-          parameters: staffDiscardParameters,
+          parameters: staffBranchParameters,
           promptSnippet: undefined,
           constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
@@ -12991,7 +13027,7 @@ export default function (pi: ExtensionAPI): void {
           label: "staff discard",
           description:
             "Abandon project work by branch, stopping its executor and removing the assignment while preserving Git branch and worktree.",
-          parameters: staffDiscardParameters,
+          parameters: staffBranchParameters,
           promptSnippet: undefined,
           constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (

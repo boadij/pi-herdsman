@@ -1292,6 +1292,32 @@ test("coordination presentation uses the explicit operation and session target",
   );
 });
 
+test("staff project operations present their branch target", () => {
+  assert.equal(
+    renderedText(
+      renderCoordinationCall(
+        "staff",
+        "resume",
+        { branch: "feat/recovery" },
+        presentationTheme,
+      ),
+    ),
+    "staff resume  feat/recovery",
+  );
+
+  const expanded = renderedText(
+    renderCoordinationCall(
+      "staff",
+      "resume",
+      { branch: "feat/recovery" },
+      presentationTheme,
+      { expanded: true },
+    ),
+  );
+  assert.match(expanded, /branch: feat\/recovery/);
+  assert.doesNotMatch(expanded, /task:|base:|session:/);
+});
+
 test("compact coordination calls show available agent definitions", () => {
   for (const [action, expected] of [
     ["steer", "agent steer  release-review · researcher"],
