@@ -14,7 +14,6 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
-import { MAX_BYTE_LIMIT } from "./config.ts";
 import {
   acquireProcessLock,
   isProcessLockClaim,
@@ -1653,7 +1652,7 @@ export type ProjectAssignment = Readonly<{
   text: string;
   resultBindings?: ResultBinding[];
 }>;
-export const PROJECT_ASSIGNMENT_MAX_BYTES = MAX_BYTE_LIMIT;
+export const PROJECT_ASSIGNMENT_MAX_BYTES = 1024 * 1024;
 
 export function projectAssignmentBytes(assignment: ProjectAssignment): number {
   return Buffer.byteLength(`${JSON.stringify(assignment)}\n`, "utf8");
