@@ -10869,9 +10869,9 @@ export default function (pi: ExtensionAPI): void {
             chiefModeGeneration,
           });
           const message = await prepareSupervisionMessage(ctx);
+          if (message) pi.sendMessage(message, { triggerTurn: false });
           return {
             systemPrompt: chiefSystemPrompt(event.systemPromptOptions),
-            ...(message ? { message } : {}),
           };
         }
         const roleCharter =
@@ -10880,22 +10880,21 @@ export default function (pi: ExtensionAPI): void {
             : LEAD_ROLE_CHARTER;
         if (activeRole() === "manager" && !roleSuspended) {
           const message = await prepareSupervisionMessage(ctx);
+          if (message) pi.sendMessage(message, { triggerTurn: false });
           return {
             systemPrompt: `${event.systemPrompt}\n\n${roleCharter}`,
-            ...(message ? { message } : {}),
           };
         }
         const supervisorStateMessage =
           activeRole() === "lead"
             ? await prepareLeadSupervisorStateMessage(ctx)
             : undefined;
+        if (supervisorStateMessage)
+          pi.sendMessage(supervisorStateMessage, { triggerTurn: false });
         const roster = startupDefinitionRoster;
         if (!roster || roster.sessionId !== ctx.sessionManager.getSessionId())
           return {
             systemPrompt: `${event.systemPrompt}\n\n${roleCharter}`,
-            ...(supervisorStateMessage
-              ? { message: supervisorStateMessage }
-              : {}),
           };
         return {
           systemPrompt:
@@ -10908,9 +10907,6 @@ export default function (pi: ExtensionAPI): void {
             `This is the session-start definition snapshot. ` +
             `Use agent_list for live Agent state or to refresh ` +
             `Agent definitions after configuration changes.`,
-          ...(supervisorStateMessage
-            ? { message: supervisorStateMessage }
-            : {}),
         };
       });
     pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) => {
