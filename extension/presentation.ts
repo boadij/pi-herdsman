@@ -954,14 +954,15 @@ export function renderSupervisionLeads(
           (total, value) => total + visibleWidth(value) + 2,
           0,
         );
-        const leadColor = lead
-          ? lifecycleColor(lead.runtimeState)
-          : item.work.status === "active"
-            ? "success"
-            : item.work.status === "conflict"
-              ? "warning"
-              : "muted";
-        const markerText = themed(options.theme, leadColor, marker);
+        const markerColor =
+          item.work.status === "active" && lead
+            ? lifecycleColor(lead.runtimeState)
+            : item.work.status === "active"
+              ? "success"
+              : item.work.status === "conflict"
+                ? "warning"
+                : "muted";
+        const markerText = themed(options.theme, markerColor, marker);
         const branchText = themed(
           options.theme,
           "muted",

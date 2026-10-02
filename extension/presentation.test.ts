@@ -4766,26 +4766,34 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
 });
 
 test("Manager work status outranks live Lead markers except when active", () => {
-  for (const [status, marker] of [
-    ["active", "●"],
-    ["paused", "○"],
-    ["conflict", "!"],
+  const theme = {
+    fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
+  };
+  for (const [status, marker, color] of [
+    ["active", "●", "success"],
+    ["paused", "○", "muted"],
+    ["conflict", "!", "warning"],
   ] as const) {
-    {
-      const snapshot = {
-        work: [{ branch: "feat/example", session: "assigned", status }],
-        leads: [
-          lead({
-            lead: "assigned",
-            runtimeState: "working",
-          }),
-        ],
-      };
-      assert.deepEqual(
-        renderSupervisionLeads(snapshot, 120, { role: "manager" }, "assigned"),
-        ["● manager", `└─ >${marker} feat/example · ${status}`],
-      );
-    }
+    const snapshot = {
+      work: [{ branch: "feat/example", session: "assigned", status }],
+      leads: [
+        lead({
+          lead: "assigned",
+          runtimeState: "working",
+        }),
+      ],
+    };
+    assert.deepEqual(
+      renderSupervisionLeads(snapshot, 120, { role: "manager" }, "assigned"),
+      ["● manager", `└─ >${marker} feat/example · ${status}`],
+    );
+    const themedRow = renderSupervisionLeads(
+      snapshot,
+      120,
+      { role: "manager", theme },
+      "assigned",
+    )[1]!;
+    assert.ok(themedRow.includes(`<${color}>${marker}</${color}>`));
   }
 });
 
