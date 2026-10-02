@@ -344,8 +344,6 @@ const managerTools = [
   "staff_delegate",
   "staff_resume",
   "staff_stop",
-  "staff_complete",
-  "staff_discard",
 ];
 const chiefTools = [
   "staff_list",
@@ -511,8 +509,6 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       "staff_delegate",
       "staff_resume",
       "staff_stop",
-      "staff_complete",
-      "staff_discard",
     ];
     const staffMessage = first.tools.find(
       (tool) => tool.name === "staff_message",
@@ -1492,7 +1488,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       assert.match(assignmentDelivery.content!, /acceptance of Agent outputs/);
       assert.match(
         assignmentDelivery.content!,
-        /The project remains open[\s\S]*until the Manager completes or discards it\./,
+        /Settling your herd is\s+nonterminal; do not infer project closure from runtime state\./,
       );
       assert.match(
         assignmentDelivery.content!,

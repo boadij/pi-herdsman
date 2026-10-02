@@ -695,10 +695,16 @@ export function retainedProjectMessageRecord(records, branch, sessionId, text) {
   );
 }
 
-export function managerCleanupTarget(worktrees, branch, worktreePath) {
+export function managerCleanupTarget(
+  worktrees,
+  branch,
+  worktreePath,
+  retirementRequested = false,
+) {
   if (typeof worktreePath !== "string" || !worktreePath)
     throw new Error("captured worktree path is unavailable");
   const matches = worktrees.filter((item) => item.branch === branch);
+  if (matches.length === 0 && retirementRequested) return null;
   if (matches.length !== 1)
     throw new Error("exact branch must identify one worktree");
   const [target] = matches;
@@ -1733,10 +1739,6 @@ export function managerRecoveryStopPrompt(session) {
 
 export function managerRecoveryReviewPrompt(branch) {
   return `Use staff_message to ask the Lead to confirm readiness for review of ${branch}. Then end the turn.`;
-}
-
-export function managerRecoveryCompletePrompt(branch) {
-  return `Complete project work on ${branch}. Call staff_complete exactly once using only ${JSON.stringify({ branch })}. Do not call other tools. After it succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_COMPLETED.`;
 }
 
 export function managerRecoveryResumeOnlyPrompt(branch) {
@@ -3129,8 +3131,12 @@ async function runManagerRecoverySmoke(ctx) {
   );
 
   markStage(ctx, "missing-worktree");
-  await nestedCommand(ctx, ["worktree", "remove", "--workspace", workspaceId]);
+  await nestedCommand(ctx, ["workspace", "close", workspaceId]);
+  await run("git", ["worktree", "remove", "--force", worktreePath], {
+    cwd: ctx.primaryCheckoutPath,
+  });
   assert.equal((await matchingWorktrees()).length, 0);
+  await assertUnchangedAssignment();
 
   const recoveryPrompt = managerRecoveryResumePrompt(branch);
   markStage(ctx, "assignment-recovery");
@@ -3286,27 +3292,14 @@ async function runManagerRecoverySmoke(ctx) {
     deliveredRecords[0].content,
     `Project ${branch} from lead ${first.session}:\n\n${contextMarker}`,
   );
-  const completePrompt = managerRecoveryCompletePrompt(branch);
-  await promptRoot(completePrompt);
-  const completed = await waitFor("project-complete", async () => {
-    const session = await rootSnapshot();
-    if (
-      !session ||
-      !assistantResultForSession(
-        session,
-        completePrompt,
-        "PI_HERDSMAN_MANAGER_RECOVERY_COMPLETED",
-      )
-    )
-      return null;
-    const result = staffActionResults(
-      session.contents,
-      "staff_complete",
-      "complete",
-    );
-    return result.some((item) => item.branch === branch) ? session : null;
-  });
-  markStage(ctx, "assignment-settlement");
+  markStage(ctx, "project-retirement");
+  ctx.owned.managerWorktreeRetirementRequested = true;
+  await nestedCommand(ctx, [
+    "worktree",
+    "remove",
+    "--workspace",
+    recovered.workspace_id,
+  ]);
   await waitFor(
     "assignment-removed",
     async () => {
@@ -3322,9 +3315,13 @@ async function runManagerRecoverySmoke(ctx) {
   );
   await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
   await assert.rejects(lstat(messagesDirectory), { code: "ENOENT" });
-  assert.equal((await matchingWorktrees()).length, 1);
-  assert.ok(completed.contents.includes(contextMarker));
-  ctx.managerRecovery.completed = branch;
+  assert.equal((await matchingWorktrees()).length, 0);
+  await run(
+    "git",
+    ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+    { cwd: ctx.primaryCheckoutPath },
+  );
+  ctx.managerRecovery.retired = branch;
   markStage(ctx, "manager-leave-command-submission");
   await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
   markStage(ctx, "manager-leave-output-wait");
@@ -3873,14 +3870,17 @@ async function cleanup(paths, owned, ctx) {
         worktrees,
         owned.managerBranch,
         owned.managerWorktreePath,
+        owned.managerWorktreeRetirementRequested === true,
       );
-      const env = nestedControlEnv(process.env, paths, owned.sessionName);
-      await cleanupHerdr(
-        ["worktree", "remove", "--workspace", target.open_workspace_id],
-        {
-          env,
-        },
-      );
+      if (target) {
+        const env = nestedControlEnv(process.env, paths, owned.sessionName);
+        await cleanupHerdr(
+          ["worktree", "remove", "--workspace", target.open_workspace_id],
+          {
+            env,
+          },
+        );
+      }
     } catch (error) {
       managerWorktreeSafe = false;
       failures.push(

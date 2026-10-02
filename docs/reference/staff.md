@@ -5,8 +5,7 @@
 `staff_*` is the direct-report interface for active Chief and Manager sessions.
 Chief and Manager can list, inspect, read transcripts, and message direct
 reports. Manager additionally owns branch-based project operations:
-`staff_delegate`, `staff_resume`, `staff_stop`, `staff_complete`, and
-`staff_discard`.
+`staff_delegate`, `staff_resume`, and `staff_stop`.
 
 Lead-targeted actions use the exact full Pi `session` ID from a fresh
 supervision snapshot or `staff_list`. Project actions use the Git branch.
@@ -132,22 +131,9 @@ Stops the exact Lead and its owned Agent execution tree. For managed project
 work, the assignment, Pi session, Git branch, and worktree are preserved. Resume
 the work with `staff_resume` using its branch. An unassigned direct Lead can
 also be stopped without creating project work. Failed or ambiguous cleanup does
-not resolve an assignment.
-
-## `staff_complete` and `staff_discard`
-
-Manager only. Both take the exact project branch:
-
-```json
-{ "branch": "feat/example" }
-```
-
-`staff_complete` resolves fulfilled work; `staff_discard` abandons it. Both
-revalidate Manager authority and current topology, stop the exact Lead and its
-owned Agent tree, and remove the assignment only after execution is proven
-stopped. The Git branch and worktree remain. Ambiguous identity, possible live
-Pi execution, or failed cleanup preserves the assignment. Retained project
-messages are removed after assignment resolution.
+not retire an assignment. Project retirement is driven by a successful Herdr
+worktree removal; a missing worktree alone leaves the assignment recoverable
+with `staff_resume`.
 
 ## See also
 

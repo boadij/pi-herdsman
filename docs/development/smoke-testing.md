@@ -58,7 +58,7 @@ propagation), `continuation` (persisted Pi-session continuation across managed
 generations), `chief-tree` (current Chief/session_tree behavior), and
 `manager-recovery` (Manager delegation, review messaging, `staff_stop`, missing
 worktree reconstruction with exact Pi-session continuity, retained project
-messages across Manager turnover, and Manager-owned project resolution).
+messages across Manager turnover, and Herdr-driven project retirement).
 `chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool
 snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
@@ -319,8 +319,9 @@ After every smoke:
 
 `manager-recovery` is the canonical automated live Manager lifecycle check. It
 covers fresh delegation, project review messaging, pause/resume, missing
-worktree recovery, exact Pi-session continuity, retained project messages
-across Manager turnover, completion, and exact cleanup.
+worktree recovery without an explicit Herdr removal event, exact Pi-session
+continuity, retained project messages across Manager turnover, retirement after
+successful Herdr worktree removal, and exact cleanup.
 
 The broader matrix below remains optional exploratory acceptance for supervision
 behavior not covered by the automated scenarios. A NOT RUN entry is not a claim

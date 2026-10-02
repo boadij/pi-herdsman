@@ -1,5 +1,7 @@
 # Manager owns project assignment resolution
 
+> Superseded by [ADR 0013](0013-use-herdr-worktree-removal-for-project-retirement.md).
+
 ## Decision
 
 - An existing project assignment represents unresolved project work; absence of

@@ -24,7 +24,6 @@ import {
   managerRecoveryResumeDiagnostics,
   managerRecoveryResumePrompt,
   managerRecoveryReviewPrompt,
-  managerRecoveryCompletePrompt,
   continuationResultsForPrompt,
   continuationSessionEvidence,
   correlatedContinuationTask,
@@ -969,7 +968,7 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   assert.doesNotMatch(resume, /"assignment"|"task"|"base"|"files"/);
 });
 
-test("manager-recovery stops by Lead session, reviews, and completes by branch", () => {
+test("manager-recovery stops by Lead session and resumes by branch", () => {
   const branch = "herdsman/smoke-manager-recovery-exact";
   const session = "lead-session-exact";
   const marker = "MANAGER_RECOVERY_CONTEXT_test";
@@ -980,10 +979,6 @@ test("manager-recovery stops by Lead session, reviews, and completes by branch",
   const review = managerRecoveryReviewPrompt(branch);
   assert.match(review, /staff_message/);
   assert.doesNotMatch(review, new RegExp(marker));
-  assert.match(
-    managerRecoveryCompletePrompt(branch),
-    /staff_complete exactly once/,
-  );
   const resume = managerRecoveryResumeOnlyPrompt(branch);
   assert.match(resume, /staff_resume exactly once/);
   assert.ok(resume.includes(JSON.stringify({ branch })));
@@ -1003,7 +998,6 @@ test("manager-recovery seeds continuity only in the Lead conversation, then reca
     managerRecoveryReviewPrompt(branch),
     managerRecoveryStopPrompt("lead-session-exact"),
     managerRecoveryResumeOnlyPrompt(branch),
-    managerRecoveryCompletePrompt(branch),
   ];
 
   assert.match(leadPrompt, new RegExp(marker));
@@ -1359,6 +1353,24 @@ test("Manager cleanup selects the recreated workspace only for exact branch and 
         worktree.path,
       ),
     /no workspace identity/,
+  );
+  assert.throws(
+    () => managerCleanupTarget([], worktree.branch, worktree.path),
+    /one worktree/,
+  );
+  assert.equal(
+    managerCleanupTarget([], worktree.branch, worktree.path, true),
+    null,
+  );
+  assert.throws(
+    () =>
+      managerCleanupTarget(
+        [worktree, worktree],
+        worktree.branch,
+        worktree.path,
+        true,
+      ),
+    /one worktree/,
   );
 });
 
