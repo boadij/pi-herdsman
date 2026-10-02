@@ -198,7 +198,6 @@ test("parent delegates two same-definition children with exact ownership", async
       "Use agent_delegate to start a fresh bounded assignment from a definition; use agent_continue to resume an exact historical managed-Agent Pi session with a new bounded assignment.",
       "Each live Agent generation exists for one assignment; after its terminal result is delivered, Herdsman cleans up that generation.",
       "Agent labels identify the current live generation; exact Pi sessions identify historical context and continuation.",
-      "`files` carries relevant assignment evidence, not runtime capability.",
       "Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md, GEMINI.md, or equivalents merely because they exist.",
       "A proven lost Agent remains unresolved; physical disappearance is not completion. Unknown or conflicting identity remains fail-closed. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed.",
     ])

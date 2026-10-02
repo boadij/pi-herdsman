@@ -404,6 +404,12 @@ const AGENT_DELEGATION_GUIDANCE =
   "Use agent_delegate for genuinely independent or context-heavy work; keep small, tightly coupled work local.";
 const AGENT_EXECUTION_OWNERSHIP_GUIDANCE =
   "Each unresolved unit of work has one executor. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.";
+const FILE_HANDOFF_GUIDANCE =
+  "Pass every user-supplied or already-available artifact relevant to what " +
+  "the recipient must do or decide through `files`; do not assume the " +
+  "recipient inherits the sender's conversation or attachments. Preserve " +
+  "exact supplied result refs when forwarding them and omit unrelated " +
+  "evidence. `files` carries evidence, not runtime capability.";
 const AGENT_HANDOFF_GUIDANCE =
   "Use agent_delegate to start a fresh bounded assignment from a definition; " +
   "use agent_continue to resume an exact historical managed-Agent Pi session " +
@@ -411,13 +417,9 @@ const AGENT_HANDOFF_GUIDANCE =
   "assignment; after its terminal result is delivered, Herdsman cleans up that " +
   "generation. Agent labels identify the current live generation; exact Pi " +
   "sessions identify historical context and continuation. For new or updated " +
-  "assignments, `task`/`message` and `files` carry assignment evidence. Pass " +
-  "every user-supplied or already-available artifact relevant to the target's " +
-  "work through `files`; do not assume the caller's conversation or attachments " +
-  "are inherited. `files` carries relevant assignment evidence, not runtime " +
-  "capability. Complete strict UTF-8 text may be embedded; other files remain " +
-  "canonical local references and are not copied or snapshotted. Preserve exact " +
-  "supplied result refs when forwarding them and omit unrelated evidence. " +
+  "assignments, `task`/`message` and `files` carry assignment evidence. " +
+  "Complete strict UTF-8 text may be embedded; other files remain canonical " +
+  "local references and are not copied or snapshotted. " +
   "Do not attach or mention agent instruction files such as AGENTS.md, " +
   "CLAUDE.md, GEMINI.md, or equivalents merely because " +
   "they exist. Rely on normal project or runtime discovery when it supplies " +
@@ -7065,7 +7067,7 @@ export default function (pi: ExtensionAPI): void {
       }),
       {
         description:
-          "File or result evidence transferred with this message. Copy result refs exactly. Files do not grant runtime capabilities.",
+          "File or result evidence transferred to the recipient. Copy result refs exactly. Files do not grant runtime capabilities.",
       },
     ),
   );
@@ -13072,6 +13074,7 @@ export default function (pi: ExtensionAPI): void {
           description: "Send a durable follow-up message to a direct report.",
           parameters: staffMessageParameters,
           promptSnippet: undefined,
+          promptGuidelines: [FILE_HANDOFF_GUIDANCE],
           constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
@@ -13100,6 +13103,7 @@ export default function (pi: ExtensionAPI): void {
             "Start new project work. Reuses an unoccupied Herdr worktree when available.",
           parameters: staffDelegateParameters,
           promptSnippet: undefined,
+          promptGuidelines: [FILE_HANDOFF_GUIDANCE],
           constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
@@ -14719,7 +14723,7 @@ export default function (pi: ExtensionAPI): void {
         "Start one fresh bounded assignment from an Agent definition.",
       parameters: agentDelegateParameters,
       promptSnippet: undefined,
-      promptGuidelines: undefined,
+      promptGuidelines: [FILE_HANDOFF_GUIDANCE],
       execute: (
         id: string,
         params: any,
@@ -14747,7 +14751,7 @@ export default function (pi: ExtensionAPI): void {
         "Start one bounded assignment from an exact historical managed-Agent Pi session.",
       parameters: agentContinueParameters,
       promptSnippet: undefined,
-      promptGuidelines: undefined,
+      promptGuidelines: [FILE_HANDOFF_GUIDANCE],
       execute: (
         id: string,
         params: any,
@@ -14775,7 +14779,7 @@ export default function (pi: ExtensionAPI): void {
         "Cooperatively change a live direct Agent's current assignment.",
       parameters: agentMessageParameters,
       promptSnippet: undefined,
-      promptGuidelines: undefined,
+      promptGuidelines: [FILE_HANDOFF_GUIDANCE],
       execute: (
         id: string,
         params: any,
@@ -14803,7 +14807,7 @@ export default function (pi: ExtensionAPI): void {
         "Cancel a live Agent's current Pi operation and continue the same assignment with replacement direction.",
       parameters: agentMessageParameters,
       promptSnippet: undefined,
-      promptGuidelines: undefined,
+      promptGuidelines: [FILE_HANDOFF_GUIDANCE],
       execute: (
         id: string,
         params: any,
@@ -14831,7 +14835,7 @@ export default function (pi: ExtensionAPI): void {
         "Answer the exact pending ask_owner question for a direct Agent.",
       parameters: agentMessageParameters,
       promptSnippet: undefined,
-      promptGuidelines: undefined,
+      promptGuidelines: [FILE_HANDOFF_GUIDANCE],
       execute: (
         id: string,
         params: any,
@@ -14929,6 +14933,7 @@ export default function (pi: ExtensionAPI): void {
         name: "supervisor_message",
         parameters: supervisorMessageParameters,
         promptSnippet: undefined,
+        promptGuidelines: [FILE_HANDOFF_GUIDANCE],
         constrainedSampling: { type: "json_schema", strict: "prefer" },
         execute: (
           id: string,
@@ -14968,6 +14973,7 @@ export default function (pi: ExtensionAPI): void {
         name: "peer_message",
         parameters: peerMessageParameters,
         promptSnippet: undefined,
+        promptGuidelines: [FILE_HANDOFF_GUIDANCE],
         constrainedSampling: { type: "json_schema", strict: "prefer" },
         execute: (
           id: string,
@@ -15253,6 +15259,7 @@ export default function (pi: ExtensionAPI): void {
     exposure: "model-only",
     promptSnippet:
       "Ask this managed agent's direct owner for a required decision",
+    promptGuidelines: [FILE_HANDOFF_GUIDANCE],
     description:
       "Ask your direct owner for a decision that is required to continue. Call this alone as the final tool call of the turn, then stop and wait for the reply. Only one question may be outstanding.",
     executionMode: "sequential",

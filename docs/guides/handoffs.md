@@ -2,27 +2,38 @@
 
 [Documentation index](../README.md)
 
+Any coordination operation whose schema accepts `files` uses it as the explicit
+evidence channel across session boundaries.
+
+Pass user-supplied or already-available artifacts through `files` when they are
+relevant to what the recipient must do or decide. Do not assume the recipient
+inherits the sender's conversation or attachments. Preserve exact supplied
+result refs when forwarding them and omit unrelated evidence. `files` carries
+evidence, not runtime capability.
+
 Pi Herdsman has two text-file mechanisms with different purposes:
 
-- `files` supplies evidence to `agent_delegate`, `agent_continue`,
-  `agent_steer`, `agent_interrupt`, `agent_reply`, or `ask_owner`.
+- `files` supplies evidence to the coordination operations that accept it:
+  `agent_delegate`, `agent_continue`, `agent_steer`, `agent_interrupt`,
+  `agent_reply`, `staff_delegate`, `staff_message`, `supervisor_message`,
+  `peer_message`, and `ask_owner`.
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
 
 Strict UTF-8 text is embedded when it fits; non-text and non-fitting files are
 canonical local references and are not copied or snapshotted.
 
-## Message `files`
+## Coordination `files`
 
-Agent-session context crosses boundaries explicitly.
+Coordination evidence crosses session boundaries explicitly.
 
-- task or message text and `files` carry assignment-specific evidence;
-- `agent_continue` resumes an exact managed-agent Pi session;
-- the caller's conversation and caller-side attachments are not implicitly
-  copied into another agent session.
+- Task or message text and `files` carry evidence relevant to the recipient's
+  work or decision.
+- The sender's conversation and attachments are not implicitly copied into
+  another session.
 
-When a new or updated assignment depends on a caller-visible file, pass that
-file through `files`.
+When the recipient's work or decision depends on a user-supplied or
+already-available artifact, pass it through `files`.
 
 Do not attach or mention agent instruction files such as `AGENTS.md`, `CLAUDE.md`,
 `GEMINI.md`, or equivalents merely because they exist; rely on normal project
@@ -89,11 +100,12 @@ physical path attribute, and observed byte size. File content remains raw text. 
 markup frames evidence for the model and is not a security boundary.
 
 `files` is supported by `agent_delegate`, `agent_continue`, `agent_steer`,
-`agent_interrupt`, `agent_reply`, and `ask_owner`. For
-controller actions, relative paths resolve from the calling controller's cwd;
-for `ask_owner`, they resolve from the managed agent's cwd. Accepted ordinary
-filesystem paths retain canonical absolute-path names; semantic and canonical
-result refs retain the exact supplied reference as the model-facing name.
+`agent_interrupt`, `agent_reply`, `staff_delegate`, `staff_message`,
+`supervisor_message`, `peer_message`, and `ask_owner`. For controller actions,
+relative paths resolve from the calling controller's cwd; for `ask_owner`, they
+resolve from the managed agent's cwd. Accepted ordinary filesystem paths retain
+canonical absolute-path names; semantic and canonical result refs retain the
+exact supplied reference as the model-facing name.
 
 Supplied paths must resolve to readable regular files. Missing, broken,
 unreadable, and non-regular paths reject the whole operation. Canonical

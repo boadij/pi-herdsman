@@ -31,11 +31,12 @@ Use these high-salience rules for the model-facing agent boundary:
 - Each unresolved unit of work has one executor. Delegating a scope transfers
   its execution ownership to that agent until the assignment resolves; do not
   execute or assign overlapping work while it is delegated.
-- For new or updated agent assignments, `task`/`message` and `files` carry
-  assignment evidence. Pass every user-supplied or already-available artifact
-  relevant to the target's work through `files`; do not assume the caller's
-  conversation or attachments are inherited. `agent_continue` resumes an exact
-  managed-agent Pi session.
+- For any coordination tool that accepts `files`, pass every user-supplied or
+  already-available artifact relevant to what the recipient must do or decide
+  through `files`. Do not assume another session inherits the sender's
+  conversation or attachments. Preserve exact supplied result refs when
+  forwarding them and omit unrelated evidence. `files` carries evidence, not
+  runtime capability.
 - When agent work is unresolved, handle required agent control, then continue
   only necessary work you still own or end the turn without concluding; agent
   results or attention will resume the session automatically. Do not check
@@ -130,12 +131,6 @@ Complete strict UTF-8 text is embedded when it fits; other files are canonical
 local references with byte size. Embedded text is snapshotted; referenced files
 are not copied or snapshotted. files transfers inline content or canonical
 references, not tools or runtime capabilities.
-
-For agent handoffs, task text and `files` carry assignment-specific evidence.
-`agent_continue` resumes an exact managed-agent Pi session. Fresh delegation does not
-inherit the caller's conversation or caller-side attachments.
-
-Pass relevant evidence explicitly through `files`; omit unrelated evidence.
 
 Use the project-local `.pi-herdsman/` directory as the default workspace for
 temporary coordination artifacts such as plans, scopes, specifications,
