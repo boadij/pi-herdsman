@@ -30,6 +30,7 @@ import {
   PI_AGENTS_DIR,
   PI_AGENT_ROOT,
   REQUEST_ID,
+  OTHER_HERDSMAN_BUILD,
   LEAD_SESSION_ID,
   AGENT_ID,
   WORKSPACE,
@@ -4613,6 +4614,65 @@ test("managed startup accepts matching mailbox state after five seconds", async 
     const result = await resultPromise;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
   } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(startup.mailbox);
+  }
+});
+
+test("managed startup rejects a mismatched Agent before its first task and rolls back", async () => {
+  setLeadEnvironment();
+  const label = "incompatible-startup";
+  let taskAccepted = false;
+  const startup = startupExecutor(
+    label,
+    () => DEFAULT_PI_SESSION_ID,
+    undefined,
+    () => {
+      taskAccepted = true;
+    },
+    false,
+    undefined,
+    "/tmp",
+    AGENT_ID,
+    false,
+    true,
+  );
+  const pi = fakePi({
+    exec: async (command, args, options) => {
+      const result = await startup.exec(command, args, options);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+        const state = readAgentState(startup.mailbox)!;
+        writeAgentState(startup.mailbox, {
+          ...state,
+          build: OTHER_HERDSMAN_BUILD,
+        });
+      }
+      return result;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const result = await registeredAgentTool(pi, "delegate").execute(
+      "id",
+      { definition: "agent", label, task: "must not be submitted" },
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.equal(
+      result.details.error.category,
+      "incompatible_build",
+      JSON.stringify(result.details.error),
+    );
+    assert.equal(taskAccepted, false);
+    assert.equal(
+      pi.calls.some((args) => isPreservePaneStop(args)),
+      true,
+      "incompatible newly-started Agent should be rolled back",
+    );
+    assert.equal(readAgentState(startup.mailbox), undefined);
+  } finally {
+    startup.stopMailboxConsumer();
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
   }

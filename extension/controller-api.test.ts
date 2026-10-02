@@ -526,7 +526,7 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
   const chiefId = randomUUID();
   const leadId = randomUUID();
   const runtime = supervisionRuntime();
-  const chief = claimChiefLease({
+  let chief = claimChiefLease({
     piSessionId: chiefId,
     paneId: "chief-pane",
     tabId: "chief-tab",
@@ -609,6 +609,43 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
     assert.match(chiefState.content, /supervisor: chief/);
     assert.match(chiefState.content, /availability: available/);
     assert.equal(recordObservation(await observe()), undefined);
+    chief.release();
+    chief = claimChiefLease({
+      piSessionId: chiefId,
+      paneId: "chief-pane",
+      tabId: "chief-tab",
+      workspaceId: WORKSPACE,
+      build: OTHER_HERDSMAN_BUILD,
+    });
+    const supervisorMessage = pi.tools.find(
+      (tool) => tool.name === "supervisor_message",
+    )!;
+    await assert.rejects(
+      supervisorMessage.execute(
+        "message",
+        { message: "MISMATCH_MUST_NOT_PUBLISH" },
+        undefined,
+        undefined,
+        ctx,
+      ),
+      (
+        error: Error & { category?: string; detail?: { category?: string } },
+      ) => {
+        assert.equal(
+          error.category ?? error.detail?.category,
+          "incompatible_build",
+        );
+        return true;
+      },
+    );
+    assert.deepEqual(listChiefMessagePaths(runtime, chiefId), []);
+    chief.release();
+    chief = claimChiefLease({
+      piSessionId: chiefId,
+      paneId: "chief-pane",
+      tabId: "chief-tab",
+      workspaceId: WORKSPACE,
+    });
     const result = await pi.tools
       .find((tool) => tool.name === "supervisor_message")!
       .execute(
@@ -1857,6 +1894,8 @@ async function runManagerStartupScenario(
     | "success"
     | "missing-state"
     | "missing-herdr-session"
+    | "incompatible-build"
+    | "staff-message-mismatch"
     | "delayed-herdr-session"
     | "conflict"
     | "managed-agent"
@@ -2332,6 +2371,9 @@ async function runManagerStartupScenario(
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
           role: mode === "conflict" ? "manager" : "lead",
+          ...(mode === "incompatible-build"
+            ? { build: OTHER_HERDSMAN_BUILD }
+            : {}),
           instanceId: randomUUID(),
           piSessionId: childSession,
           updatedAt: Date.now(),
@@ -3067,6 +3109,39 @@ async function runManagerStartupScenario(
       assert.equal(startupObservations, 2);
       return;
     }
+    if (mode === "incompatible-build") {
+      await assert.rejects(
+        execute(),
+        (
+          error: Error & { category?: string; detail?: { category?: string } },
+        ) => {
+          assert.equal(
+            error.category ?? error.detail?.category,
+            "incompatible_build",
+          );
+          return true;
+        },
+      );
+      const assignment = listProjectAssignments(
+        supervisionRuntime(),
+        "repo-key",
+      )[0]!;
+      assert.equal(assignment.id, childSession);
+      assert.deepEqual(Object.keys(assignment).sort(), [
+        "branch",
+        "id",
+        "repoKey",
+        "text",
+        "version",
+      ]);
+      assert.equal(
+        listChiefMessagePaths(supervisionRuntime(), childSession)
+          .map((path) => readChiefMessage(path))
+          .some((message) => message.text === "Project assignment ready."),
+        false,
+      );
+      return;
+    }
     if (mode === "preexisting" || mode === "preexisting-closed") {
       await execute();
       assert.equal(
@@ -3313,6 +3388,45 @@ async function runManagerStartupScenario(
       mode === "managed-agent" ? 2 : startupObservations,
     );
     assert.equal(started, true);
+    if (mode === "staff-message-mismatch") {
+      const state = readLeadCoordinationState(
+        supervisionRuntime(),
+        childSession,
+      )!;
+      writeLeadCoordinationState(supervisionRuntime(), {
+        ...state,
+        build: OTHER_HERDSMAN_BUILD,
+        updatedAt: Date.now(),
+      });
+      const staffMessage = pi.tools.find(
+        (tool) => tool.name === "staff_message",
+      )!;
+      await assert.rejects(
+        staffMessage.execute(
+          "message",
+          { session: childSession, message: "MISMATCH_MUST_NOT_PUBLISH" },
+          undefined,
+          undefined,
+          ctx,
+        ),
+        (
+          error: Error & { category?: string; detail?: { category?: string } },
+        ) => {
+          assert.equal(
+            error.category ?? error.detail?.category,
+            "incompatible_build",
+          );
+          return true;
+        },
+      );
+      assert.equal(
+        listChiefMessagePaths(supervisionRuntime(), childSession)
+          .map((path) => readChiefMessage(path))
+          .some((message) => message.text === "MISMATCH_MUST_NOT_PUBLISH"),
+        false,
+      );
+      return;
+    }
     if (mode === "success") {
       const createCallsBeforeDuplicate = createCalls;
       await assert.rejects(
@@ -3418,6 +3532,10 @@ async function runManagerStartupScenario(
 
 test("Manager activates only after mocked Lead-state publication", () =>
   runManagerStartupScenario("success"));
+test("Manager preserves project assignment and skips notification for incompatible Lead", () =>
+  runManagerStartupScenario("incompatible-build"));
+test("Manager staff message does not publish to incompatible Lead", () =>
+  runManagerStartupScenario("staff-message-mismatch"));
 test("Manager delegates large attachment evidence outside coordination limits", () =>
   runManagerStartupScenario(
     "success",

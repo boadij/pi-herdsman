@@ -57,6 +57,7 @@ import support, {
   StatusWidget,
   AGENT_ID,
   HERDSMAN_BUILD,
+  OTHER_HERDSMAN_BUILD,
   WORKSPACE,
   agentFromState,
   buildStatusRows,
@@ -2176,6 +2177,7 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
   });
   const targetRecord = {
     version: 1 as const,
+    build: OTHER_HERDSMAN_BUILD,
     piSessionId: targetId,
     paneId: "target-pane",
     tabId: "target-tab",
@@ -2188,6 +2190,29 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
     await sender.events.get("session_start")![0](undefined, senderContext);
     const peer = sender.tools.find((tool) => tool.name === "peer_message");
     assert.ok(peer);
+    await assert.rejects(
+      peer.execute(
+        "message",
+        { session: targetId, message: "mismatch must not publish" },
+        undefined,
+        undefined,
+        senderContext,
+      ),
+      (
+        error: Error & { category?: string; detail?: { category?: string } },
+      ) => {
+        assert.equal(
+          error.category ?? error.detail?.category,
+          "incompatible_build",
+        );
+        return true;
+      },
+    );
+    assert.deepEqual(listCoordinationMessagePaths(runtime, targetId), []);
+    writePeerLeadRecord(runtime, {
+      ...targetRecord,
+      build: HERDSMAN_BUILD,
+    });
     const queued = await peer.execute(
       "message",
       { session: targetId, message: "sender survived" },
