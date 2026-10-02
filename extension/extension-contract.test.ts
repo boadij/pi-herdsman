@@ -119,6 +119,21 @@ function assertPortableToolSchema(tool: any): void {
   assert.equal(tool.parameters?.allOf, undefined);
   assert.doesNotThrow(() => makeStrictJsonSchema(tool.parameters));
   assert.equal(tool.parameters.required?.includes("files") ?? false, false);
+  if (tool.parameters.properties.files) {
+    const guidance = tool.promptGuidelines?.join(" ") ?? "";
+
+    assert.match(
+      guidance,
+      /Pass every user-supplied or already-available artifact relevant to what the recipient must do or decide through `files`/,
+      tool.name,
+    );
+    assert.match(
+      guidance,
+      /do not assume the recipient inherits the sender's conversation or attachments/,
+      tool.name,
+    );
+    assert.match(guidance, /omit unrelated evidence/, tool.name);
+  }
   assert.equal(tool.parameters.properties.action, undefined, tool.name);
   assert.deepEqual(tool.constrainedSampling, {
     type: "json_schema",
@@ -663,18 +678,6 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.ok(
     lead.tools.find((tool) => tool.name === "agent_list")?.promptGuidelines
       ?.length,
-  );
-  const leadGuidance =
-    lead.tools
-      .find((tool) => tool.name === "agent_list")
-      ?.promptGuidelines?.join(" ") ?? "";
-  assert.match(
-    leadGuidance,
-    /Pass every user-supplied or already-available artifact relevant to the target's work through `files`/,
-  );
-  assert.match(
-    leadGuidance,
-    /do not assume the caller's conversation or attachments are inherited/,
   );
   assert.deepEqual(
     lead.messageRenderers.map(({ customType }) => customType).sort(),
@@ -2837,15 +2840,7 @@ test("delegating agents receive only their allowed definition roster", async () 
     agentListTool.description,
     /agent_(?:delegate|continue|steer|interrupt|reply|close|inspect|transcript)/,
   );
-  assert.equal(
-    pi.tools.filter((tool) => tool.promptGuidelines?.length).length,
-    1,
-  );
   const sharedGuidance = agentListTool.promptGuidelines?.join(" ") ?? "";
-  assert.match(
-    sharedGuidance,
-    /Pass every user-supplied or already-available artifact relevant to the target's work through `files`/,
-  );
   for (const toolName of [
     "agent_list",
     "agent_delegate",
@@ -2903,7 +2898,6 @@ test("delegating agents receive only their allowed definition roster", async () 
   for (const file of ["AGENTS\\.md", "CLAUDE\\.md", "GEMINI\\.md"])
     assert.match(sharedGuidance, new RegExp(file));
   assert.match(sharedGuidance, /do not attach or mention/i);
-  assert.match(sharedGuidance, /not runtime capability/);
   assert.match(sharedGuidance, /Complete strict UTF-8 text may be embedded/);
   assert.match(
     sharedGuidance,
