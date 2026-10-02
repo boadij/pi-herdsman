@@ -8049,7 +8049,6 @@ export default function (pi: ExtensionAPI): void {
     );
     if (!observed) return;
     const expectedId = observed.id;
-    const sessionId = ctx.sessionManager.getSessionId();
     const scope = await currentWorktreeScope(ctx);
     if (!scope || scope.repoKey !== removed.repoKey) return;
 
@@ -8065,8 +8064,6 @@ export default function (pi: ExtensionAPI): void {
               removed.repoKey,
               removed.branch,
               async () => {
-                const manager = await currentManager(ctx, scope);
-                if (manager && manager.piSessionId !== sessionId) return;
                 const current = readProjectAssignment(
                   runtime,
                   removed.repoKey,

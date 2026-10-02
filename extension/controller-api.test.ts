@@ -297,7 +297,10 @@ test("assigned Lead saves supervisor messages durably with or without a Manager"
 
 test("removed worktree retires its assignment and messages but preserves a newer assignment", async () => {
   setLeadEnvironment();
-  const socketPath = `/tmp/ph-${randomUUID()}.sock`;
+  const socketPath =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\pi-herdsman-${randomUUID()}`
+      : join(tmpdir(), `ph-${randomUUID().slice(0, 8)}.sock`);
   process.env.HERDR_SOCKET_PATH = socketPath;
   process.env.HERDR_WORKSPACE_ID = "linked-workspace";
   process.env.HERDR_PANE_ID = "lead-pane";
@@ -440,6 +443,8 @@ test("removed worktree retires its assignment and messages but preserves a newer
     await pi.events.get("session_shutdown")?.[0]();
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (process.platform !== "win32")
+      realFs.rmSync(socketPath, { force: true });
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }
