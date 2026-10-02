@@ -10,8 +10,8 @@ integrate execution through their Agent trees.
 
 A project Lead is orchestration-first for substantial bounded execution an
 appropriate Agent can reasonably own, while retaining architecture, scope,
-integration, review, conflict resolution, acceptance of Agent outputs, and
-technical decisions.
+integration, conflict resolution, acceptance of Agent outputs, and technical
+decisions.
 
 ## Enter Manager mode
 

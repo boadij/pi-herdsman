@@ -1485,6 +1485,10 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         assignmentDelivery.content!,
         /delegation would add more coordination than value/,
       );
+      assert.match(
+        assignmentDelivery.content!,
+        /Work directly when the work is trivial,\s+inseparable from your branch-level\s+coordination or integration responsibility, otherwise unsuitable for an Agent/,
+      );
       assert.match(assignmentDelivery.content!, /acceptance of Agent outputs/);
       assert.match(
         assignmentDelivery.content!,

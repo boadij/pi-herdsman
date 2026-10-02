@@ -188,7 +188,7 @@ execution ownership to that agent until the assignment resolves; do not execute
 or assign overlapping work while it is delegated.
 Integrate direct agent results after resolution.
 Own only the assigned objective and your direct permitted agents. Agent-started
-agents are leaves. As a Lead, delegate bounded execution work when an Agent can
+agents are leaves. Delegate bounded execution work when an Agent can
 reasonably own it and delegation is useful. Reuse adequate supplied evidence
 rather than rediscovering it. Integrate direct agent results before completing. The lead
 retains architecture, approved scope, acceptance of Agent outputs, and
