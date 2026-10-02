@@ -185,10 +185,17 @@ export const {
   resetAgentMailbox,
   agentMailboxPath,
   writeAsk,
-  writeRequest,
+  writeRequest: writeRequestRecord,
   writeResult,
   writeAgentState,
 } = await import("./mailbox.ts");
+
+export function writeRequest(path: string, request: RequestRecord): void {
+  writeRequestRecord(path, {
+    ...request,
+    build: request.build ?? HERDSMAN_BUILD,
+  });
+}
 
 mock.module("@earendil-works/pi-coding-agent", {
   namedExports: {
@@ -486,7 +493,15 @@ export const {
   sessionAgentIdentity,
   sessionContextRetired,
   resolveAssignmentSession,
+  HERDSMAN_BUILD,
 } = extension;
+export const OTHER_HERDSMAN_BUILD = {
+  ...HERDSMAN_BUILD,
+  sha256:
+    HERDSMAN_BUILD.sha256[0] === "0"
+      ? `1${HERDSMAN_BUILD.sha256.slice(1)}`
+      : `0${HERDSMAN_BUILD.sha256.slice(1)}`,
+};
 export const { herdrAgentAlias: runScopedHerdrAlias } =
   await import("./herdr.ts");
 export const {
@@ -913,6 +928,7 @@ export function managedState(
 ): ManagedAgentState {
   return {
     version: 5,
+    build: HERDSMAN_BUILD,
     runId: AGENT_ID,
     ownerSessionId: LEAD_SESSION_ID,
     workspaceId: WORKSPACE,
@@ -994,6 +1010,7 @@ export function requestRecordBytes(
   return Buffer.byteLength(
     JSON.stringify({
       version: 5,
+      build: HERDSMAN_BUILD,
       runId: AGENT_ID,
       requestId: REQUEST_ID,
       ownerSessionId: LEAD_SESSION_ID,
@@ -1595,6 +1612,7 @@ export function delegatedLifecycleExecutor(
         const tabForPane = tabByPane.get(paneId) ?? "delegated-tab";
         const state: ManagedAgentState = {
           version: 5,
+          build: HERDSMAN_BUILD,
           runId,
           ownerSessionId,
           workspaceId,
@@ -2323,6 +2341,7 @@ export function writeMetadataTask(
   const state = readAgentState(mailbox)!;
   const request: RequestRecord = {
     version: 5,
+    build: HERDSMAN_BUILD,
     runId: state.runId,
     requestId,
     ownerSessionId: state.ownerSessionId,
@@ -2772,6 +2791,7 @@ export function startupExecutor(
       };
       writeAgentState(mailbox, {
         version: 5,
+        build: HERDSMAN_BUILD,
         runId,
         ownerSessionId,
         workspaceId: WORKSPACE,

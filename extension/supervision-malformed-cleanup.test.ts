@@ -3,7 +3,10 @@ import * as realFs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { mock, test } from "node:test";
+import packageMetadata from "../package.json" with { type: "json" };
+import { runtimeBuild } from "./compatibility.ts";
 
 let failUnlink = false;
 let failureDirectory: string | undefined;
@@ -104,6 +107,10 @@ mock.module("node:fs", {
   },
 });
 
+const HERDSMAN_BUILD = runtimeBuild(
+  packageMetadata.version,
+  fileURLToPath(new URL("./index.ts", import.meta.url)),
+);
 const {
   chiefMessagePath,
   claimChiefLease,
@@ -135,6 +142,7 @@ test(
     failureDirectory = runtime.root;
     try {
       const lease = claimChiefLease({
+        build: HERDSMAN_BUILD,
         piSessionId: randomUUID(),
         paneId: "pane",
         workspaceId: "workspace",
@@ -266,6 +274,7 @@ test(
     const runtime = supervisionRuntime(socket());
     const record = {
       version: 2 as const,
+      build: HERDSMAN_BUILD,
       id: randomUUID(),
       leaseId: randomUUID(),
       kind: "lead_message" as const,
@@ -353,6 +362,7 @@ test(
     const path = writeChiefMessage(
       {
         version: 2,
+        build: HERDSMAN_BUILD,
         id,
         leaseId: randomUUID(),
         kind: "chief_message",

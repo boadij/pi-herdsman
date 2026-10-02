@@ -15,6 +15,11 @@ import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import {
+  isRuntimeBuild,
+  runtimeBuild,
+  sameRuntimeBuild,
+} from "./compatibility.ts";
+import {
   controlMarker,
   claimAgentMailbox,
   MailboxClaimOccupiedError,
@@ -51,6 +56,7 @@ function assertPosixMode(path: string, expected: number): void {
 
 const state: ManagedAgentState = {
   version: 5,
+  build: { version: "0.18.0-pr.149.gabc123", sha256: "a".repeat(64) },
   runId: "11111111-1111-4111-8111-111111111111",
   ownerSessionId: "22222222-2222-4222-8222-222222222222",
   workspaceId: "w",
@@ -68,6 +74,84 @@ test("V5 markers require canonical UUIDs and never contain task text", () => {
   assert.equal(parseControlMarker("__PI_HERDSMAN_AGENT_V5__:bad"), undefined);
   assert.equal(parseControlMarker("__PI_HERDSMAN_AGENT_V5__:"), undefined);
 });
+test("runtime build identity includes exact executable bytes", () => {
+  const path = join(tmpdir(), `herdsman-build-${randomUUID()}.js`);
+  writeFileSync(path, "export default 1;\n");
+  const first = runtimeBuild("0.0.0-pr.149.gabc123", path);
+  const same = runtimeBuild("0.0.0-pr.149.gabc123", path);
+  writeFileSync(path, "export default 2;\n");
+  const changed = runtimeBuild("0.0.0-pr.149.gabc123", path);
+  assert.equal(sameRuntimeBuild(first, same), true);
+  assert.equal(sameRuntimeBuild(first, changed), false);
+  assert.equal(isRuntimeBuild(first), true);
+  assert.equal(isRuntimeBuild({ ...first, extra: true }), false);
+});
+test("live mailbox build evidence is optional to read but required to write", () => {
+  const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
+  const requestId = "44444444-4444-4444-8444-444444444444";
+  writeAgentState(path, state);
+  assert.deepEqual(readAgentState(path), state);
+  const request: RequestRecord = {
+    version: 5,
+    build: state.build,
+    runId: state.runId,
+    requestId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    kind: "task",
+    text: "work",
+    createdAt: Date.now(),
+  };
+  writeRequest(path, request);
+  assert.deepEqual(readRequest(path, requestId), request);
+
+  const legacyState = { ...state };
+  delete legacyState.build;
+  writeFileSync(join(path, "state.json"), JSON.stringify(legacyState));
+  assert.deepEqual(readAgentState(path), legacyState);
+  const legacyRequest = { ...request };
+  delete legacyRequest.build;
+  writeFileSync(
+    join(path, `request-${requestId}.json`),
+    JSON.stringify(legacyRequest),
+  );
+  assert.deepEqual(readRequest(path, requestId), legacyRequest);
+
+  assert.throws(
+    () => writeAgentState(path, legacyState),
+    /build identity is required/,
+  );
+  assert.throws(
+    () => writeRequest(path, legacyRequest),
+    /build identity is required/,
+  );
+  writeFileSync(
+    join(path, "state.json"),
+    JSON.stringify({ ...state, build: { ...state.build, sha256: "bad" } }),
+  );
+  assert.throws(() => readAgentState(path), /Invalid runtime build identity/);
+  writeFileSync(
+    join(path, `request-${requestId}.json`),
+    JSON.stringify({ ...request, build: { ...state.build, sha256: "bad" } }),
+  );
+  assert.throws(
+    () => readRequest(path, requestId),
+    /Invalid runtime build identity/,
+  );
+
+  writeAgentState(path, {
+    ...state,
+    lastAck: {
+      requestId,
+      accepted: false,
+      code: "incompatible",
+      acknowledgedAt: Date.now(),
+    },
+  });
+  assert.equal(readAgentState(path)?.lastAck?.code, "incompatible");
+});
 test("Pi UUIDv7 session and run identities are valid mailbox fields", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const v7State: ManagedAgentState = {
@@ -81,6 +165,7 @@ test("Pi UUIDv7 session and run identities are valid mailbox fields", () => {
   const requestId = "018f2f2e-7b14-7abc-8def-0123456789ab";
   writeRequest(path, {
     version: 5,
+    build: state.build,
     runId: v7State.runId,
     requestId,
     ownerSessionId: v7State.ownerSessionId,
@@ -94,6 +179,7 @@ test("Pi UUIDv7 session and run identities are valid mailbox fields", () => {
   assert.equal(readRequest(path, requestId)?.requestId, requestId);
   const interruptRequest = {
     version: 5 as const,
+    build: state.build,
     runId: v7State.runId,
     requestId: "018f2f2e-7b15-7abc-8def-0123456789ab",
     ownerSessionId: v7State.ownerSessionId,
@@ -129,6 +215,7 @@ test("asks and reply requests round-trip with strict correlation", () => {
   assert.deepEqual(readAsk(path), ask);
   const request: RequestRecord = {
     version: 5,
+    build: state.build,
     runId: state.runId,
     requestId: "55555555-5555-4555-8555-555555555555",
     ownerSessionId: state.ownerSessionId,
@@ -153,6 +240,7 @@ test("request and ask result bindings are strictly validated", () => {
   };
   const request: RequestRecord = {
     version: 5,
+    build: state.build,
     runId: state.runId,
     requestId: "55555555-5555-4555-8555-555555555555",
     ownerSessionId: state.ownerSessionId,
@@ -203,6 +291,7 @@ test("reply ask IDs are required and non-reply requests cannot carry one", () =>
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const base = {
     version: 5 as const,
+    build: state.build,
     runId: state.runId,
     requestId: "55555555-5555-4555-8555-555555555555",
     ownerSessionId: state.ownerSessionId,
@@ -365,6 +454,7 @@ test("rejects unsafe IDs and invalid conditional results", () => {
     () =>
       writeRequest(path, {
         version: 5,
+        build: state.build,
         runId: state.runId,
         requestId: "../escape",
         ownerSessionId: state.ownerSessionId,
@@ -443,6 +533,7 @@ test("mailbox records are atomic JSON files with strict identity fields", () => 
   assert.deepEqual(readAgentState(path), state);
   const request: RequestRecord = {
     version: 5,
+    build: state.build,
     runId: state.runId,
     requestId: "55555555-5555-4555-8555-555555555555",
     ownerSessionId: state.ownerSessionId,
@@ -463,6 +554,7 @@ test("acknowledgement identity determines whether a handoff remains pending", ()
   const requestId = "66666666-6666-4666-8666-666666666666";
   writeRequest(path, {
     version: 5,
+    build: state.build,
     runId: state.runId,
     requestId,
     ownerSessionId: state.ownerSessionId,
@@ -525,6 +617,7 @@ test("ambiguous unacknowledged requests are rejected", () => {
   ])
     writeRequest(path, {
       version: 5,
+      build: state.build,
       runId: state.runId,
       requestId,
       ownerSessionId: state.ownerSessionId,
@@ -574,6 +667,7 @@ test("startup claims serialize access and reset preserves the claim", () => {
   const requestId = "88888888-8888-4888-8888-888888888888";
   writeRequest(path, {
     version: 5,
+    build: state.build,
     runId: state.runId,
     requestId,
     ownerSessionId: state.ownerSessionId,
@@ -853,6 +947,7 @@ test("request and result size limits remain independent", () => {
   const path = mkdtempSync(join(tmpdir(), "pi-herdsman-mailbox-test-"));
   const request = {
     version: 5 as const,
+    build: state.build,
     runId: state.runId,
     requestId: "77777777-7777-4777-8777-777777777777",
     ownerSessionId: state.ownerSessionId,

@@ -19,21 +19,23 @@ import {
   readChiefMessage,
   readChiefDescriptor,
   supervisionRuntime,
-  claimChiefLease,
-  claimManagerLease,
+  claimChiefLease as claimChiefLeaseRaw,
+  claimManagerLease as claimManagerLeaseRaw,
   managerDescriptorPath,
   writeProjectAssignment,
   listProjectMessages,
   writeProjectMessage,
-  writeChiefMessage,
+  writeChiefMessage as writeChiefMessageRaw,
   chiefMessageBytes,
   COORDINATION_MESSAGE_MAX_BYTES,
-  writeLeadCoordinationState,
+  writeLeadCoordinationState as writeLeadCoordinationStateRaw,
   readLeadCoordinationState,
   drainCoordinationInbox,
 } from "./supervision.ts";
 import support, {
   CHILD_SESSION_ID,
+  HERDSMAN_BUILD,
+  OTHER_HERDSMAN_BUILD,
   DEFAULT_PI_SESSION_ID,
   PARENT_SESSION_ID,
   PI_AGENTS_DIR,
@@ -83,6 +85,23 @@ import support, {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
+const claimChiefLease = (identity: any) =>
+  claimChiefLeaseRaw({ ...identity, build: identity.build ?? HERDSMAN_BUILD });
+const claimManagerLease = (identity: any) =>
+  claimManagerLeaseRaw({
+    ...identity,
+    build: identity.build ?? HERDSMAN_BUILD,
+  });
+const writeLeadCoordinationState = (runtime: any, state: any) =>
+  writeLeadCoordinationStateRaw(runtime, {
+    ...state,
+    build: state.build ?? HERDSMAN_BUILD,
+  });
+const writeChiefMessage = (record: any, runtime?: any) =>
+  writeChiefMessageRaw(
+    { ...record, build: record.build ?? HERDSMAN_BUILD },
+    runtime,
+  );
 function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
   let fixture: ReturnType<typeof fakePi>;
   const initialTools = Array.isArray(options.activeTools)
@@ -6155,15 +6174,36 @@ test("registered lead exposes only explicit live controls", async () => {
     "agent_interrupt",
     "agent_close",
   ]);
-  const steer = await accepting.tools
-    .find((candidate) => candidate.name === "agent_steer")!
-    .execute(
-      "id",
-      { agent: label, message: "continue", files: [steerFile] },
-      undefined,
-      undefined,
-      context,
-    );
+  writeAgentState(mailbox, {
+    ...readAgentState(mailbox)!,
+    build: OTHER_HERDSMAN_BUILD,
+  });
+  const steerTool = accepting.tools.find(
+    (candidate) => candidate.name === "agent_steer",
+  )!;
+  const rejectedSteer = await steerTool.execute(
+    "id",
+    { agent: label, message: "must not publish" },
+    undefined,
+    undefined,
+    context,
+  );
+  assert.equal(rejectedSteer.details.error.category, "incompatible_build");
+  assert.equal(steerSubmitted, undefined);
+  assert.ok(
+    accepting.tools.some((candidate) => candidate.name === "agent_close"),
+  );
+  writeAgentState(mailbox, {
+    ...readAgentState(mailbox)!,
+    build: HERDSMAN_BUILD,
+  });
+  const steer = await steerTool.execute(
+    "id",
+    { agent: label, message: "continue", files: [steerFile] },
+    undefined,
+    undefined,
+    context,
+  );
   assert.equal(steer.details.ok, true);
   assert.equal(steer.details.action, "steer");
   assert.equal(steer.details.agent, label);

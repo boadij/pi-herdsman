@@ -14,6 +14,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { isRuntimeBuild, type RuntimeBuild } from "./compatibility.ts";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import {
   herdsmanDataRoot,
@@ -23,6 +24,7 @@ import {
 
 export interface ManagedAgentState {
   version: 5;
+  build?: RuntimeBuild;
   runId: string;
   ownerSessionId: string;
   workspaceId: string;
@@ -40,7 +42,14 @@ export interface ManagedAgentState {
   lastAck?: {
     requestId: string;
     accepted: boolean;
-    code?: "busy" | "idle" | "invalid" | "identity" | "delivery" | "ambiguous";
+    code?:
+      | "busy"
+      | "idle"
+      | "invalid"
+      | "identity"
+      | "delivery"
+      | "ambiguous"
+      | "incompatible";
     message?: string;
     acknowledgedAt: number;
   };
@@ -64,6 +73,7 @@ export interface ResultPersistenceError {
 }
 export interface RequestRecord {
   version: 5;
+  build?: RuntimeBuild;
   runId: string;
   requestId: string;
   ownerSessionId: string;
@@ -247,6 +257,7 @@ function validate(
     kind === "state"
       ? [
           "version",
+          "build",
           "runId",
           "ownerSessionId",
           "workspaceId",
@@ -267,6 +278,7 @@ function validate(
       : kind === "request"
         ? [
             "version",
+            "build",
             "runId",
             "requestId",
             "ownerSessionId",
@@ -310,6 +322,12 @@ function validate(
             ];
   if (Object.keys(v).some((key) => !allowed.includes(key)))
     throw new Error("Unknown mailbox field");
+  if (
+    (kind === "state" || kind === "request") &&
+    v.build !== undefined &&
+    !isRuntimeBuild(v.build)
+  )
+    throw new Error("Invalid runtime build identity");
   const required =
     kind === "state"
       ? [
@@ -471,6 +489,7 @@ function validate(
         "identity",
         "delivery",
         "ambiguous",
+        "incompatible",
       ];
       if (ack.accepted && ack.code !== undefined)
         throw new Error("Accepted acknowledgement cannot have an error code");
@@ -667,6 +686,7 @@ export function removeAgentMailbox(path: string): void {
   }
 }
 export function writeAgentState(path: string, state: ManagedAgentState): void {
+  if (!state.build) throw new Error("Managed agent build identity is required");
   atomic(file(path, "state.json"), state, "state");
 }
 export function agentStatePath(path: string): string {
@@ -678,6 +698,7 @@ export function readAgentState(path: string): ManagedAgentState | undefined {
   return v;
 }
 export function writeRequest(path: string, request: RequestRecord): void {
+  if (!request.build) throw new Error("Request build identity is required");
   assertFileId(request.requestId);
   atomic(file(path, `request-${request.requestId}.json`), request, "request");
 }

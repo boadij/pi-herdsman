@@ -10,6 +10,11 @@ import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import {
+  runtimeBuild,
+  sameRuntimeBuild,
+  isRuntimeBuild,
+} from "./compatibility.ts";
+import {
   COORDINATION_MESSAGE_KINDS,
   claimChiefLease,
   claimManagerLease,
@@ -54,6 +59,7 @@ import support, {
   isAgentList,
   isApiSnapshot,
   managedState,
+  HERDSMAN_BUILD,
   nativeSessions,
   agentControllerExecutor,
   leadExec,
@@ -73,6 +79,18 @@ import support, {
   writeAsk,
   writeAgentState,
 } from "./support.ts";
+
+test("runtime build identity includes exact executable bytes", () => {
+  const path = join(tmpdir(), `herdsman-build-${randomUUID()}.js`);
+  writeFileSync(path, "export default 1;\n");
+  const first = runtimeBuild("0.0.0-pr.149.gabc", path);
+  const same = runtimeBuild("0.0.0-pr.149.gabc", path);
+  writeFileSync(path, "export default 2;\n");
+  const changed = runtimeBuild("0.0.0-pr.149.gabc", path);
+  assert.equal(sameRuntimeBuild(first, same), true);
+  assert.equal(sameRuntimeBuild(first, changed), false);
+  assert.equal(isRuntimeBuild(first), true);
+});
 
 function assertToolResult(result: any): asserts result is {
   content: { type: "text"; text: string }[];
@@ -799,6 +817,7 @@ test("peer list and message use global peer presence, not caller inventory", asy
     });
     const record = {
       version: 1 as const,
+      build: HERDSMAN_BUILD,
       piSessionId: sessionId,
       paneId,
       tabId,
@@ -978,6 +997,7 @@ test("Lead startup publishes minimal peer presence before provenance resolves", 
     const record = readPeerLeadRecord(runtime, sessionId);
     assert.ok(record);
     assert.deepEqual(Object.keys(record).sort(), [
+      "build",
       "claim",
       "cwd",
       "paneId",
@@ -1118,6 +1138,7 @@ test("peer publication rejects sender and target generation replacement during a
     });
     const record = {
       version: 1 as const,
+      build: HERDSMAN_BUILD,
       piSessionId: sessionId,
       paneId,
       tabId,
@@ -1224,6 +1245,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
     });
     const record = {
       version: 1 as const,
+      build: HERDSMAN_BUILD,
       piSessionId: sessionId,
       paneId,
       tabId,
@@ -1414,6 +1436,7 @@ test("stale peer publication cannot replace a same-session lifecycle generation"
     );
     const replacement = {
       version: 1 as const,
+      build: HERDSMAN_BUILD,
       piSessionId: sessionId,
       paneId: "replacement-pane",
       tabId: "replacement-tab",
@@ -1778,6 +1801,7 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
   };
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
+    build: HERDSMAN_BUILD,
     instanceId: randomUUID(),
     piSessionId: leadId,
     updatedAt: Date.now(),
@@ -1938,6 +1962,7 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
   );
   const chiefId = `chief-${randomUUID()}`;
   const descriptorIdentity = {
+    build: HERDSMAN_BUILD,
     piSessionId: chiefId,
     paneId: "chief-pane",
     tabId: "chief-tab",

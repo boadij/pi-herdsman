@@ -80,11 +80,13 @@ import {
 const socket = () =>
   join(mkdtempSync(join(tmpdir(), "supervision-test-")), "sock");
 const id = () => randomUUID();
+const BUILD = { version: "0.18.0", sha256: "a".repeat(64) } as const;
 const state = (
   piSessionId: string,
   extra: Partial<LeadCoordinationState> = {},
 ): LeadCoordinationState => ({
   version: 1,
+  build: BUILD,
   instanceId: id(),
   piSessionId,
   updatedAt: 1,
@@ -94,6 +96,7 @@ const message = (
   extra: Partial<ChiefMessageRecord> = {},
 ): ChiefMessageRecord => ({
   version: 2,
+  build: BUILD,
   id: id(),
   leaseId: id(),
   kind: "lead_message",
@@ -121,6 +124,7 @@ function peerRecord(
   return {
     record: {
       version: 1,
+      build: BUILD,
       piSessionId,
       paneId: "pane",
       tabId: "tab",
@@ -570,6 +574,7 @@ test("lead coordination state is strict, private, bounded, and atomic", () => {
   const path = writeLeadCoordinationState(runtime, value);
   assert.deepEqual(readLeadCoordinationState(runtime, "lead"), value);
   assert.deepEqual(Object.keys(value).sort(), [
+    "build",
     "instanceId",
     "piSessionId",
     "updatedAt",
@@ -630,6 +635,72 @@ test("lead coordination reader ignores only the retired pendingAsk field", () =>
       () => readLeadCoordinationState(runtime, current.piSessionId),
       /Unable to read/,
     );
+  }
+});
+
+test("live supervision records validate optional build evidence and require it for writes", () => {
+  const runtime = supervisionRuntime(socket());
+  const value = state("legacy-live");
+  const path = writeLeadCoordinationState(runtime, value);
+  const legacy = { ...value } as Record<string, unknown>;
+  delete legacy.build;
+  writeFileSync(path, JSON.stringify(legacy));
+  assert.deepEqual(
+    readLeadCoordinationState(runtime, value.piSessionId),
+    legacy,
+  );
+  assert.throws(
+    () =>
+      writeLeadCoordinationState(runtime, {
+        ...value,
+        build: { version: "v", sha256: "bad" },
+      } as never),
+    /Invalid lead coordination state/,
+  );
+  assert.throws(
+    () =>
+      writeLeadCoordinationState(runtime, {
+        ...value,
+        build: undefined,
+      } as never),
+    /Invalid lead coordination state/,
+  );
+
+  const record = message();
+  assert.throws(
+    () => writeChiefMessage({ ...record, build: undefined } as never, runtime),
+    /build identity is required/,
+  );
+  assert.throws(
+    () =>
+      writeChiefMessage(
+        { ...record, build: { version: "v", sha256: "bad" } } as never,
+        runtime,
+      ),
+    /Invalid Chief message record/,
+  );
+
+  const peers = peerRuntime();
+  const peer = peerRecord(peers);
+  try {
+    assert.throws(
+      () =>
+        writePeerLeadRecord(peers, {
+          ...peer.record,
+          build: undefined,
+        } as never),
+      /build identity is required/,
+    );
+    assert.throws(
+      () =>
+        writePeerLeadRecord(peers, {
+          ...peer.record,
+          build: { version: "v", sha256: "bad" },
+        } as never),
+      /Invalid peer lead record/,
+    );
+  } finally {
+    peer.release();
   }
 });
 
@@ -1571,6 +1642,7 @@ test("lifecycle normalization uses current Herdr fields and fails closed", () =>
 });
 
 const chiefIdentity = () => ({
+  build: BUILD,
   piSessionId: id(),
   paneId: "pane",
   workspaceId: "workspace",
@@ -1793,6 +1865,7 @@ test("coordinator state and peer presence admit only Lead or Manager roles", () 
 test("Manager leases are exclusive per root and fail closed on stale descriptor generations", () => {
   const runtime = supervisionRuntime(socket());
   const identity = {
+    build: BUILD,
     piSessionId: id(),
     piSessionFile: "/tmp/manager-session.jsonl",
     paneId: "pane",
@@ -1866,6 +1939,7 @@ test("Manager descriptor status distinguishes live, incomplete, and absent autho
   assert.equal(readManagerDescriptorStatus(runtime, workspaceId), undefined);
   const lease = claimManagerLease(
     {
+      build: BUILD,
       piSessionId: id(),
       paneId: "pane",
       tabId: "tab",

@@ -22,7 +22,7 @@ import type {
 } from "./mailbox.ts";
 import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import {
-  claimChiefLease,
+  claimChiefLease as claimChiefLeaseRaw,
   listProjectAssignments,
   projectAssignmentPath,
   listCoordinationMessagePaths,
@@ -38,10 +38,10 @@ import {
   supervisionRuntime,
   readLeadCoordinationState,
   sessionLeadRoleState,
-  writeLeadCoordinationState,
-  writeChiefMessage,
-  writeCoordinationMessage,
-  writePeerLeadRecord,
+  writeLeadCoordinationState as writeLeadCoordinationStateRaw,
+  writeChiefMessage as writeChiefMessageRaw,
+  writeCoordinationMessage as writeCoordinationMessageRaw,
+  writePeerLeadRecord as writePeerLeadRecordRaw,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
 import { resultPath } from "./storage.ts";
@@ -56,6 +56,7 @@ import support, {
   LEAD_SESSION_ID,
   StatusWidget,
   AGENT_ID,
+  HERDSMAN_BUILD,
   WORKSPACE,
   agentFromState,
   buildStatusRows,
@@ -93,6 +94,28 @@ import support, {
   writeResult,
   writeAgentState,
 } from "./support.ts";
+const claimChiefLease = (identity: any) =>
+  claimChiefLeaseRaw({ ...identity, build: identity.build ?? HERDSMAN_BUILD });
+const writeLeadCoordinationState = (runtime: any, state: any) =>
+  writeLeadCoordinationStateRaw(runtime, {
+    ...state,
+    build: state.build ?? HERDSMAN_BUILD,
+  });
+const writeChiefMessage = (record: any, runtime?: any) =>
+  writeChiefMessageRaw(
+    { ...record, build: record.build ?? HERDSMAN_BUILD },
+    runtime,
+  );
+const writeCoordinationMessage = (record: any, runtime?: any) =>
+  writeCoordinationMessageRaw(
+    { ...record, build: record.build ?? HERDSMAN_BUILD },
+    runtime,
+  );
+const writePeerLeadRecord = (runtime: any, record: any) =>
+  writePeerLeadRecordRaw(runtime, {
+    ...record,
+    build: record.build ?? HERDSMAN_BUILD,
+  });
 const { readConfig, updateConfig } = await import("./config.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
   pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
@@ -6514,6 +6537,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
         live = true;
         writeAgentState(mailbox, {
           version: 5,
+          build: HERDSMAN_BUILD,
           runId: startedRunId,
           ownerSessionId: startedOwnerSessionId,
           workspaceId: WORKSPACE,
