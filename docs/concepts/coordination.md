@@ -99,12 +99,15 @@ Herdsman handles the normal Manager handoff automatically. Leads summarize the
 outcome, validation, and important unresolved points in their normal response;
 the handoff is advisory and does not resolve the assignment. Assigned Lead
 messages are also retained with the project and remain available to a
-replacement Manager. Only the Manager resolves the assignment. See
-[Project orchestration](../guides/project-orchestration.md) for the workflow.
+replacement Manager. Project retirement follows the Herdr worktree lifecycle;
+see [Project orchestration](../guides/project-orchestration.md) for the
+workflow.
 
 `staff_stop` pauses execution while preserving the assignment, Pi session,
-branch, and worktree. Only Manager `staff_complete` or `staff_discard` removes
-the assignment. Both preserve the Git branch and worktree.
+branch, and worktree. Successful Herdr worktree removal retires the matching
+assignment and its retained project messages while preserving the Git branch.
+A worktree that is merely missing does not retire the assignment; it remains
+recoverable through `staff_resume`.
 
 For the task-oriented workflow, see
 [Project orchestration](../guides/project-orchestration.md). Exact operations

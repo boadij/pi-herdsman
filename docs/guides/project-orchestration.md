@@ -77,7 +77,7 @@ requested corrections. Leads use `supervisor_message` for material
 coordination when the Manager must decide or act, not to duplicate the normal
 handoff. Assigned project Lead messages are retained with the assignment,
 including when no Manager is active, and are available to a replacement
-Manager. Only the Manager resolves the assignment.
+Manager. Lead settlement and Manager review do not retire the assignment.
 
 Use the current supervision state rather than repeatedly listing or inspecting
 reports to poll for progress. Inspect live terminal or persisted transcript
@@ -92,16 +92,12 @@ the assignment, Pi session, Git branch, and worktree. Resume the same work with
 See [`staff_stop`](../reference/staff.md#staff_stop) and
 [`staff_resume`](../reference/staff.md#staff_resume).
 
-## Complete or abandon
+## Retire project work
 
-The assignment is the durable indicator that project work remains open. After
-review and any requested corrections, Manager resolves fulfilled work with
-`staff_complete`. Use `staff_discard` when abandoning it. Both stop the exact
-execution tree and remove the assignment only after current topology proves
-execution has stopped. The Git branch and worktree are preserved.
-
-See [`staff_complete`](../reference/staff.md#staff_complete-and-staff_discard)
-and [`staff_discard`](../reference/staff.md#staff_complete-and-staff_discard).
+Successful Herdr worktree removal retires the matching project assignment and
+its retained messages; the Git branch remains. A worktree that is merely
+missing does not imply retirement, so the assignment remains recoverable with
+`staff_resume` when its branch is available.
 
 ## Leave and return
 

@@ -45,6 +45,7 @@ import {
   startupTimeoutBudget,
   structuredTopologyEnvironment,
   type HerdrStartPlacement,
+  type RemovedHerdrWorktree,
 } from "./herdr.ts";
 import { claimProcessLock } from "./lock.ts";
 import { OperationError } from "./errors.ts";
@@ -200,6 +201,7 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
   const sockets = new Set<Socket>();
   let connections = 0;
   let request: any;
+  const changes: (RemovedHerdrWorktree | undefined)[] = [];
   server.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
@@ -224,12 +226,51 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
           }) + "\n",
         );
         socket.end();
+      } else {
+        const valid = {
+          event: "worktree_removed",
+          data: {
+            type: "worktree_removed",
+            workspace_id: "linked",
+            workspace: {
+              workspace_id: "linked",
+              worktree: {
+                repo_key: "repo-key",
+                checkout_path: "/repo/worktree",
+                is_linked_worktree: true,
+              },
+            },
+            worktree: {
+              path: "/repo/worktree",
+              branch: "feat/example",
+              is_linked_worktree: true,
+            },
+            forced: false,
+          },
+        };
+        socket.write(
+          [
+            valid,
+            {
+              ...valid,
+              data: { ...valid.data, workspace_id: "other" },
+            },
+            {
+              ...valid,
+              data: {
+                ...valid.data,
+                worktree: { ...valid.data.worktree, path: "/other/path" },
+              },
+            },
+          ]
+            .map((event) => JSON.stringify(event) + "\n")
+            .join(""),
+        );
       }
     });
   });
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
   const controller = new AbortController();
-  let changes = 0;
   let ready!: () => void;
   let timeout!: ReturnType<typeof setTimeout>;
   const reconnected = new Promise<void>((resolve, reject) => {
@@ -241,9 +282,9 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
     timeout.unref();
   });
   try {
-    watchHerdrLifecycle(socketPath, controller.signal, () => {
-      changes++;
-      if (changes >= 3 && connections >= 2) ready();
+    watchHerdrLifecycle(socketPath, controller.signal, (removed) => {
+      changes.push(removed);
+      if (changes.length >= 6 && connections >= 2) ready();
     });
     await reconnected;
     assert.equal(request.method, "events.subscribe");
@@ -255,10 +296,20 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
         "pane.moved",
         "tab.closed",
         "workspace.closed",
+        "worktree.removed",
       ],
     );
     assert.equal(connections, 2);
-    assert.equal(changes, 3);
+    assert.equal(changes.length, 6);
+    assert.equal(changes[0], undefined);
+    assert.equal(changes[1], undefined);
+    assert.equal(changes[2], undefined);
+    assert.deepEqual(changes[3], {
+      repoKey: "repo-key",
+      branch: "feat/example",
+    });
+    assert.equal(changes[4], undefined);
+    assert.equal(changes[5], undefined);
   } finally {
     clearTimeout(timeout);
     controller.abort();

@@ -34,8 +34,8 @@ The lifecycle and execution-ownership rules are documented in
 Chief and Manager use [Staff tools](reference/staff.md) for direct-report
 observation and communication.
 
-Manager additionally uses branch-based staff operations to start, resume,
-pause, complete, or abandon project work.
+Manager additionally uses branch-based staff operations to start and resume
+project work, and can stop a Lead without retiring its assignment.
 
 ```text
 staff_list
@@ -47,8 +47,6 @@ Manager only:
 staff_delegate
 staff_resume
 staff_stop
-staff_complete
-staff_discard
 ```
 
 ## Direct supervisor
@@ -61,8 +59,10 @@ supervisor_message
 ```
 
 Assigned Lead messages are retained with their project assignment and are
-nonterminal. Manager resolves project work with `staff_complete` or
-`staff_discard`; `staff_stop` pauses execution without removing the assignment.
+nonterminal. `staff_stop` pauses execution without removing the assignment.
+Successful Herdr worktree removal retires the matching project assignment and
+its retained messages. A missing worktree alone does not retire an assignment;
+`staff_resume` can reconstruct the checkout when its branch remains available.
 
 An assigned project Lead saves messages with its project assignment for the
 current or a replacement Manager, even when no Manager is active; it does not

@@ -177,8 +177,9 @@ relinquishes the lease and restores the exact Lead tool baseline, including
 opens the overview without changing the role or lease. See
 [Coordination](../concepts/coordination.md) for the role and project boundaries.
 The Manager overview lists branch-based work, including paused work whose Lead
-is no longer running. It offers resume, close, and discard actions as applicable;
-discard removes the assignment but keeps the Git branch and worktree.
+is no longer running. It offers resume for paused work and focus or stop for a
+live Lead. Project retirement follows successful Herdr worktree removal; a
+missing worktree alone leaves the assignment recoverable with `staff_resume`.
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
 While Chief, `/chief` opens the overview and `/chief leave` exits the mode.

@@ -390,7 +390,7 @@ through `files`.
 
 Chief uses `staff_list`, `staff_inspect`, `staff_transcript`, and
 `staff_message`. Manager has those direct-report tools plus `staff_delegate`,
-`staff_resume`, `staff_stop`, `staff_complete`, and `staff_discard`.
+`staff_resume`, and `staff_stop`.
 `staff_inspect` provides bounded live terminal/process evidence;
 `staff_transcript` provides bounded persisted Pi conversation/tool evidence.
 Target a Lead by the exact full Pi session ID in a fresh snapshot or
@@ -437,12 +437,13 @@ Pi Herdsman uses one durable vocabulary:
   retained across Manager absence and turnover. Project work remains open
   through implementation and review iterations;
 - `staff_stop` stops an exact Lead and its owned Agent tree while preserving
-  the assignment, Pi session, branch, and worktree. Only Manager
-  `staff_complete` or `staff_discard` resolves the assignment, preserving the
-  Git branch and worktree. Never infer ownership from worktree membership or
-  start an overlapping writer beside another Lead;
-- `/manager leave` preserves project work; a later Manager can resume or
-  resolve the same branch-based assignment;
+  the assignment, Pi session, branch, and worktree. Successful Herdr worktree
+  removal retires the matching assignment and retained project messages while
+  preserving the Git branch. A missing worktree alone does not retire the
+  assignment; `staff_resume` can reconstruct it. Never infer ownership from
+  worktree membership or start an overlapping writer beside another Lead;
+- `/manager leave` preserves project work; a later Manager can resume the same
+  branch-based assignment;
 - a **herd** is one Lead and the complete Agent tree it owns;
 - a **Lead** owns its Agents. An assigned project Lead sends
   `supervisor_message` to project-scoped storage for the current or a

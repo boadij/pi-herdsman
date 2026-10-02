@@ -105,6 +105,7 @@ const LIFECYCLE_SUBSCRIPTIONS = [
   { type: "pane.moved" },
   { type: "tab.closed" },
   { type: "workspace.closed" },
+  { type: "worktree.removed" },
 ] as const;
 const LIFECYCLE_SUBSCRIPTION_ID = "pi-herdsman:lifecycle";
 const LIFECYCLE_RECONNECT_MS = 1_000;
@@ -175,6 +176,40 @@ export type AgentInspection = {
   recentOutput?: string;
   process?: PaneProcess;
 };
+
+export type RemovedHerdrWorktree = Readonly<{
+  repoKey: string;
+  branch: string;
+}>;
+
+function removedHerdrWorktree(message: any): RemovedHerdrWorktree | undefined {
+  if (
+    message?.event !== "worktree_removed" ||
+    message?.data?.type !== "worktree_removed"
+  )
+    return;
+
+  const data = message.data;
+  const workspace = data.workspace;
+  const membership = workspace?.worktree;
+  const worktree = data.worktree;
+
+  if (
+    typeof data.workspace_id !== "string" ||
+    data.workspace_id !== workspace?.workspace_id ||
+    membership?.is_linked_worktree !== true ||
+    worktree?.is_linked_worktree !== true ||
+    typeof membership.repo_key !== "string" ||
+    !membership.repo_key ||
+    typeof membership.checkout_path !== "string" ||
+    membership.checkout_path !== worktree?.path ||
+    typeof worktree?.branch !== "string" ||
+    !worktree.branch
+  )
+    return;
+
+  return { repoKey: membership.repo_key, branch: worktree.branch };
+}
 
 export async function inspectHerdrAgent(
   pi: ExtensionAPI,
@@ -637,7 +672,7 @@ export async function herdrSessionSnapshot(
 export function watchHerdrLifecycle(
   socketPath: string,
   signal: AbortSignal,
-  onChange: () => void,
+  onChange: (removed?: RemovedHerdrWorktree) => void,
 ): void {
   let socket: Socket | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
@@ -695,7 +730,7 @@ export function watchHerdrLifecycle(
           onChange();
           continue;
         }
-        onChange();
+        onChange(removedHerdrWorktree(message));
       }
     });
     current.on("error", drop);

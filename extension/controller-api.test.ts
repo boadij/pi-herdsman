@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { createServer, type Socket } from "node:net";
 import { test, type TestContext } from "node:test";
 import { Value } from "typebox/value";
 import type {
@@ -25,6 +26,7 @@ import {
   writeProjectAssignment,
   listProjectMessages,
   writeProjectMessage,
+  projectAssignmentPath,
   writeChiefMessage as writeChiefMessageRaw,
   chiefMessageBytes,
   COORDINATION_MESSAGE_MAX_BYTES,
@@ -32,6 +34,7 @@ import {
   readLeadCoordinationState,
   drainCoordinationInbox,
 } from "./supervision.ts";
+import { claimProcessLock } from "./lock.ts";
 import support, {
   CHILD_SESSION_ID,
   HERDSMAN_BUILD,
@@ -287,6 +290,156 @@ test("assigned Lead saves supervisor messages durably with or without a Manager"
       manager.release();
     }
     chief.release();
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  }
+});
+
+test("removed worktree retires its assignment and messages but preserves a newer assignment", async () => {
+  setLeadEnvironment();
+  const socketPath = `/tmp/ph-${randomUUID()}.sock`;
+  process.env.HERDR_SOCKET_PATH = socketPath;
+  process.env.HERDR_WORKSPACE_ID = "linked-workspace";
+  process.env.HERDR_PANE_ID = "lead-pane";
+  process.env.HERDR_TAB_ID = "lead-tab";
+  const runtime = supervisionRuntime();
+  const repoKey = "repo-key";
+  const branch = "feat/retirement";
+  const assignment = {
+    version: 2 as const,
+    id: randomUUID(),
+    repoKey,
+    branch,
+    text: "project assignment",
+  };
+  const message = (id: string) => ({
+    version: 2 as const,
+    id,
+    repoKey,
+    branch,
+    fromSessionId: assignment.id,
+    text: "retained project message",
+    createdAt: Date.now(),
+  });
+  writeProjectAssignment(runtime, assignment);
+  writeProjectMessage(message(randomUUID()), runtime);
+
+  const server = createServer();
+  const sockets = new Set<Socket>();
+  let notifyWorktreeList!: () => void;
+  let subscribed!: () => void;
+  let worktreeListRequested = new Promise<void>((resolve) => {
+    notifyWorktreeList = resolve;
+  });
+  const subscriptionReady = new Promise<void>((resolve) => {
+    subscribed = resolve;
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline));
+      socket.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+      subscribed();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+
+  const exec = (_command: string, args: string[]) => {
+    if (args[0] === "worktree" && args[1] === "list") {
+      notifyWorktreeList();
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            source: {
+              repo_key: repoKey,
+              repo_name: "project",
+              source_workspace_id: WORKSPACE,
+            },
+            worktrees: [{ open_workspace_id: "linked-workspace" }],
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    }
+    return {
+      stdout: JSON.stringify({ id: AGENT_ID, result: {} }),
+      stderr: "",
+      code: 0,
+    };
+  };
+  const pi = fakeChiefPi({ exec });
+  registerExtension!(pi.pi as never);
+  const ctx = fakeContext() as any;
+  ctx.sessionManager = {
+    ...ctx.sessionManager,
+    getSessionId: () => assignment.id,
+    getSessionFile: () => `/tmp/${assignment.id}.jsonl`,
+  };
+  try {
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await subscriptionReady;
+
+    const publishRemoval = (removedBranch: string) =>
+      [...sockets][0]!.write(
+        `${JSON.stringify({
+          event: "worktree_removed",
+          data: {
+            type: "worktree_removed",
+            workspace_id: "linked-workspace",
+            workspace: {
+              workspace_id: "linked-workspace",
+              worktree: {
+                repo_key: repoKey,
+                checkout_path: "/repo/worktree",
+                is_linked_worktree: true,
+              },
+            },
+            worktree: {
+              path: "/repo/worktree",
+              branch: removedBranch,
+              is_linked_worktree: true,
+            },
+          },
+        })}\n`,
+      );
+    publishRemoval(branch);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (!listProjectAssignments(runtime, repoKey).length) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), []);
+    assert.deepEqual(listProjectMessages(runtime, repoKey, branch), []);
+
+    const staleObserved = { ...assignment, id: randomUUID() };
+    writeProjectAssignment(runtime, staleObserved);
+    writeProjectMessage(message(randomUUID()), runtime);
+    const releaseLock = claimProcessLock(
+      `${projectAssignmentPath(runtime, repoKey, branch)}.lock`,
+      { name: "test project assignment lock" },
+    );
+    const replacement = { ...assignment, id: randomUUID() };
+    worktreeListRequested = new Promise<void>((resolve) => {
+      notifyWorktreeList = resolve;
+    });
+    publishRemoval(branch);
+    await worktreeListRequested;
+    writeProjectAssignment(runtime, replacement);
+    releaseLock();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), [replacement]);
+    assert.equal(listProjectMessages(runtime, repoKey, branch).length, 1);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }
@@ -1952,8 +2105,6 @@ async function runManagerStartupScenario(
     | "preexisting-closed"
     | "occupied"
     | "multiple"
-    | "discard-pane-missing"
-    | "discard-pi"
     | "invalid-topology"
     | "concurrent"
     | "active-loss"
@@ -1963,8 +2114,6 @@ async function runManagerStartupScenario(
     | "active-missing-no-session"
     | "active-closed"
     | "close-resume"
-    | "active-discard"
-    | "active-complete"
     | "close-failure"
     | "unassigned-close",
   projectTrusted = false,
@@ -2011,12 +2160,7 @@ async function runManagerStartupScenario(
   let started =
     mode === "recovery" ||
     mode === "active-live" ||
-    [
-      "close-resume",
-      "active-discard",
-      "active-complete",
-      "close-failure",
-    ].includes(mode);
+    ["close-resume", "close-failure"].includes(mode);
   let startupObservations = 0;
   let identityObservations = 0;
   let cleanupOwnershipObservations = 0;
@@ -2037,7 +2181,6 @@ async function runManagerStartupScenario(
   let startCalls = 0;
   let worktreeListCalls = 0;
   let invalidTopologyCall = Number.POSITIVE_INFINITY;
-  let inspectedDiscardPane = false;
   let duplicateWorktree = false;
   const respond = (result: any) => ({
     stdout: JSON.stringify({
@@ -2109,11 +2252,7 @@ async function runManagerStartupScenario(
           : created
             ? (mode === "unassigned-close"
                 ? [{ branch: "smoke/unassigned" }]
-                : mode === "active-discard" ||
-                    mode === "active-complete" ||
-                    mode === "discard-pane-missing"
-                  ? [{ branch: createdBranch }]
-                  : listProjectAssignments(supervisionRuntime(), "repo-key")
+                : listProjectAssignments(supervisionRuntime(), "repo-key")
               ).map((assignment) => ({
                 branch: assignment.branch,
                 path: childPath,
@@ -2206,13 +2345,9 @@ async function runManagerStartupScenario(
           tab_id: "child-tab",
           terminal_id: "child-terminal",
           cwd: childPath,
-          ...(([
-            "close-resume",
-            "active-discard",
-            "active-complete",
-            "close-failure",
-            "unassigned-close",
-          ].includes(mode) ||
+          ...((["close-resume", "close-failure", "unassigned-close"].includes(
+            mode,
+          ) ||
             prospective) &&
           started
             ? {
@@ -2230,44 +2365,15 @@ async function runManagerStartupScenario(
       args[0] === "pane" &&
       args[1] === "process-info"
     ) {
-      if (
-        ["discard-pane-missing", "discard-pi"].includes(mode) &&
-        args[3] === "child-pane"
-      ) {
-        inspectedDiscardPane = true;
-        if (mode === "discard-pane-missing")
-          return {
-            stdout: JSON.stringify({
-              id: AGENT_ID,
-              error: { code: missingPaneCode, message: "pane not found" },
-            }),
-            stderr: "",
-            code: 1,
-          };
-        if (mode === "discard-pi")
-          return respond({
-            process_info: {
-              foreground_processes: [
-                {
-                  argv0: "/usr/bin/pi",
-                  cmdline: "pi --session-id awaiting-bootstrap",
-                },
-              ],
-            },
-          });
-      }
       return respond({
         process_info: {
           pane_id: "child-pane",
           shell_pid: 33,
           foreground_process_group_id:
             started &&
-            ([
-              "close-resume",
-              "active-discard",
-              "close-failure",
-              "unassigned-close",
-            ].includes(mode) ||
+            (["close-resume", "close-failure", "unassigned-close"].includes(
+              mode,
+            ) ||
               prospective)
               ? 44
               : 33,
@@ -2303,14 +2409,7 @@ async function runManagerStartupScenario(
     if (command === "herdr" && args[0] === "pane" && args[1] === "run")
       return respond({});
     if (command === "herdr" && args[0] === "agent" && args[1] === "send-keys") {
-      if (
-        [
-          "close-resume",
-          "active-discard",
-          "close-failure",
-          "unassigned-close",
-        ].includes(mode)
-      )
+      if (["close-resume", "close-failure", "unassigned-close"].includes(mode))
         assert.deepEqual(args, [
           "agent",
           "send-keys",
@@ -2603,12 +2702,9 @@ async function runManagerStartupScenario(
           ...(mode === "active-live" ||
           mode === "active-live-mismatch" ||
           (started && startupObservations >= 3) ||
-          ([
-            "close-resume",
-            "active-discard",
-            "close-failure",
-            "unassigned-close",
-          ].includes(mode) &&
+          (["close-resume", "close-failure", "unassigned-close"].includes(
+            mode,
+          ) &&
             started)
             ? Array.from(
                 { length: mode === "identity-ambiguity" && delivered ? 2 : 1 },
@@ -2699,8 +2795,6 @@ async function runManagerStartupScenario(
       "active-missing-no-session",
       "active-closed",
       "close-resume",
-      "active-discard",
-      "active-complete",
       "close-failure",
     ].includes(mode);
     const resumeMode = activeMode || mode === "invalid-topology";
@@ -2733,14 +2827,7 @@ async function runManagerStartupScenario(
             : {}),
           updatedAt: Date.now(),
         });
-      if (
-        [
-          "close-resume",
-          "active-discard",
-          "active-complete",
-          "close-failure",
-        ].includes(mode)
-      )
+      if (["close-resume", "close-failure"].includes(mode))
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
           role: "lead",
@@ -2748,23 +2835,8 @@ async function runManagerStartupScenario(
           piSessionId: staleId,
           updatedAt: Date.now(),
         });
-      if (["active-discard", "active-complete"].includes(mode))
-        writeProjectMessage(
-          {
-            version: 2,
-            id: randomUUID(),
-            repoKey: "repo-key",
-            branch: "smoke/recover",
-            fromSessionId: staleId,
-            text: "retained before resolution",
-            createdAt: Date.now(),
-          },
-          supervisionRuntime(),
-        );
     }
-    if (
-      ["invalid-topology", "discard-pane-missing", "discard-pi"].includes(mode)
-    )
+    if (mode === "invalid-topology")
       writeProjectAssignment(supervisionRuntime(), {
         version: 2,
         id: staleId,
@@ -2772,11 +2844,6 @@ async function runManagerStartupScenario(
         branch: "smoke/vanished",
         text: "recover vanished placement",
       });
-    if (["discard-pane-missing", "discard-pi"].includes(mode)) {
-      childSession = staleId;
-      created = true;
-      createdBranch = "smoke/vanished";
-    }
     const execute = () => (
       (invalidTopologyCall = worktreeListCalls + 4),
       (resumeMode ? staffResume : staff).execute(
@@ -2928,14 +2995,7 @@ async function runManagerStartupScenario(
         );
         assert.equal(await drain(), 0);
         assert.equal(delivered.length, 1);
-      } else if (
-        [
-          "close-resume",
-          "active-discard",
-          "active-complete",
-          "close-failure",
-        ].includes(mode)
-      ) {
+      } else if (["close-resume", "close-failure"].includes(mode)) {
         const control = (name: string, value: unknown) =>
           pi.tools
             .find((tool) => tool.name === name)!
@@ -2967,42 +3027,6 @@ async function runManagerStartupScenario(
           assert.equal(
             listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
             staleId,
-          );
-        } else {
-          const outcome = mode === "active-complete" ? "complete" : "discard";
-          if (mode === "active-complete") started = false;
-          const discarded = await control(`staff_${outcome}`, {
-            branch: "smoke/recover",
-          });
-          assert.equal(discarded.details.ok, true);
-          assert.deepEqual(
-            listProjectAssignments(supervisionRuntime(), "repo-key"),
-            [],
-          );
-          assert.deepEqual(
-            listProjectMessages(
-              supervisionRuntime(),
-              "repo-key",
-              "smoke/recover",
-            ),
-            [],
-          );
-          assert.equal(created, true);
-          assert.equal(createdBranch, "smoke/recover");
-          assert.equal(started, false);
-          assert.ok(
-            JSON.parse(
-              (await exec("herdr", ["pane", "list"])).stdout,
-            ).result.panes.some((pane: any) => pane.pane_id === "child-pane"),
-          );
-          assert.ok(
-            JSON.parse(
-              (await exec("herdr", ["worktree", "list"])).stdout,
-            ).result.worktrees.some(
-              (worktree: any) =>
-                worktree.branch === "smoke/recover" &&
-                worktree.path === childPath,
-            ),
           );
         }
         return;
@@ -3099,10 +3123,10 @@ async function runManagerStartupScenario(
         );
         overview.handleInput("\r");
         await t!.waitFor(() => assert.equal(components.length, 2));
-        const actions = components[1].render(120).join("\n");
-        assert.match(actions, /Focus Lead/);
-        assert.match(actions, /Stop Lead/);
-        assert.match(actions, /Discard work/);
+        assert.doesNotMatch(
+          components[1].render(120).join("\n"),
+          /Discard work|Complete work/,
+        );
       }
       return;
     }
@@ -3223,68 +3247,6 @@ async function runManagerStartupScenario(
         listProjectAssignments(supervisionRuntime(), "repo-key"),
         [],
       );
-      return;
-    }
-    if (["discard-pane-missing", "discard-pi"].includes(mode)) {
-      const discard = () =>
-        pi.tools
-          .find((tool) => tool.name === "staff_discard")!
-          .execute(
-            "discard",
-            { branch: "smoke/vanished" },
-            undefined,
-            undefined,
-            ctx,
-          );
-      if (mode === "discard-pane-missing") {
-        const discarded = await discard();
-        assert.equal(discarded.details.ok, true);
-        assert.deepEqual(
-          listProjectAssignments(supervisionRuntime(), "repo-key"),
-          [],
-        );
-      } else {
-        await assert.rejects(
-          discard(),
-          /A possible Pi executor remains; assignment preserved/,
-        );
-        assert.equal(
-          listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
-          staleId,
-        );
-      }
-      assert.equal(inspectedDiscardPane, true);
-      assert.ok(
-        pi.calls.some(
-          (args) =>
-            args[0] === "pane" &&
-            args[1] === "list" &&
-            args[2] === "--workspace" &&
-            args[3] === childWorkspace,
-        ),
-      );
-      assert.equal(created, true);
-      assert.equal(createdBranch, "smoke/vanished");
-      assert.equal(createCalls, 0);
-      assert.equal(startCalls, 0);
-      assert.equal(
-        pi.calls.some(
-          (args) =>
-            args[0] === "worktree" && ["delete", "remove"].includes(args[1]),
-        ),
-        false,
-      );
-      if (mode === "discard-pane-missing") {
-        const topology = JSON.parse(
-          (await exec("herdr", ["worktree", "list"])).stdout,
-        ).result;
-        assert.ok(
-          topology.worktrees.some(
-            (item: any) =>
-              item.branch === "smoke/vanished" && item.path === childPath,
-          ),
-        );
-      }
       return;
     }
     if (mode === "invalid-topology") {
@@ -3667,10 +3629,6 @@ for (const [mode, label] of [
   test(`Manager ${label}`, (t) => runManagerStartupScenario(mode, false, t));
 test("Manager stop preserves the exact assignment and resumes its session", () =>
   runManagerStartupScenario("close-resume"));
-test("Manager discard stops the active executor and preserves its worktree", () =>
-  runManagerStartupScenario("active-discard"));
-test("Manager complete resolves assignment and preserves its worktree", () =>
-  runManagerStartupScenario("active-complete"));
 test("Manager retains assignment when exact Lead stop fails", () =>
   runManagerStartupScenario("close-failure"));
 test("Manager resume reports incompatible Lead builds as staff_resume", () =>
@@ -3685,11 +3643,6 @@ test("Manager refuses an occupied worktree without reserving work", () =>
   runManagerStartupScenario("occupied"));
 test("Manager refuses ambiguous multiple Leads in a worktree", () =>
   runManagerStartupScenario("multiple"));
-for (const code of ["not_found", "pane_not_found"])
-  test(`Manager discards when a freshly listed branch pane disappears (${code})`, () =>
-    runManagerStartupScenario("discard-pane-missing", false, undefined, code));
-test("Manager preserves an assignment when a current branch pane may run Pi", () =>
-  runManagerStartupScenario("discard-pi"));
 test("Manager serializes simultaneous same-branch delegation", () =>
   runManagerStartupScenario("concurrent"));
 test("Manager retains placement when recovery topology is not authoritative", () =>

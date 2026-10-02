@@ -162,8 +162,6 @@ const REGISTERED_ROLE_TOOLS = [
     "staff_delegate",
     "staff_resume",
     "staff_stop",
-    "staff_complete",
-    "staff_discard",
   ].map((name) => ({ name })),
 ];
 
@@ -273,18 +271,6 @@ const MANAGER_STAFF_TOOL_CASES = [
     { session: "session-id", branch: "feat/x" },
     ["session"],
   ],
-  [
-    "staff_complete",
-    { branch: "feat/x" },
-    { branch: "feat/x", task: "x" },
-    ["branch"],
-  ],
-  [
-    "staff_discard",
-    { branch: "feat/x" },
-    { branch: "feat/x", task: "x" },
-    ["branch"],
-  ],
 ] as const;
 
 test("semantic coordination tools expose exact strict object contracts", () => {
@@ -295,7 +281,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   const semanticNames = SEMANTIC_TOOL_CASES.map(([name]) => name);
   for (const legacy of ["agent", "chief", "peer", "staff"])
     assert.equal(tools.has(legacy), false, `legacy tool remains: ${legacy}`);
-  for (const removed of ["staff_close"])
+  for (const removed of ["staff_close", "staff_complete", "staff_discard"])
     assert.equal(tools.has(removed), false, `removed tool remains: ${removed}`);
 
   for (const [name, valid, invalid, required] of SEMANTIC_TOOL_CASES) {
@@ -342,8 +328,6 @@ test("semantic coordination tools expose exact strict object contracts", () => {
       "staff_delegate",
       "staff_resume",
       "staff_stop",
-      "staff_complete",
-      "staff_discard",
     ].sort(),
   );
   for (const name of [
@@ -354,8 +338,6 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     "staff_delegate",
     "staff_resume",
     "staff_stop",
-    "staff_complete",
-    "staff_discard",
   ]) {
     const tool = tools.get(name)!;
     assert.equal(tool.defaultActive, false);
@@ -487,7 +469,7 @@ test("Chief activation exposes only semantic staff tools", async () => {
         `${name} cross-operation input`,
       );
     }
-    for (const name of ["staff_delegate", "staff_stop", "staff_discard"])
+    for (const name of ["staff_delegate", "staff_stop"])
       assert.equal(tools.get(name)?.exposure, "model-only", name);
   } finally {
     await chief.events.get("session_shutdown")?.[0]();
@@ -661,8 +643,6 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       "staff_delegate",
       "staff_resume",
       "staff_stop",
-      "staff_complete",
-      "staff_discard",
     ].sort(),
   );
   assert.equal(
