@@ -974,7 +974,6 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
       workspaceId: "workspace",
       paneId: `pane-${sessionId}`,
       tabId: `tab-${sessionId}`,
-      sessionName: "persisted session",
       herdrName: "unstable-herdr-name",
       tabLabel: "unstable tab label",
     }));
@@ -990,7 +989,11 @@ test("supervision presentation preserves provenance and naming fallbacks", () =>
     });
     assert.deepEqual(
       snapshot.leads.map((lead) => lead.displayName),
-      ["project/meaningful token", "project/none", "project/persisted session"],
+      [
+        "project/meaningful token",
+        "project/none",
+        "project/unstable-herdr-name",
+      ],
     );
   }
   {

@@ -365,6 +365,104 @@ function managerAgentIdentity() {
   };
 }
 
+test("active Manager supervision refreshes serialize and coalesce concurrent requests", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "coalesced-manager-pane";
+  process.env.HERDR_TAB_ID = "coalesced-manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `supervision-coalescing-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const release = Promise.withResolvers<void>();
+  const gatedSnapshotStarted = Promise.withResolvers<void>();
+  let snapshots = 0;
+  let active = 0;
+  let maxActive = 0;
+  let gateRefresh = false;
+  let refreshSnapshotBase = 0;
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec: async (_command, args) => {
+      if (args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: {
+            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+          },
+        });
+      if (args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            source_workspace_id: WORKSPACE,
+            repo_key: "repo-key",
+            repo_name: "project",
+          },
+          worktrees: [],
+        });
+      if (isAgentList(args))
+        return respond({ agents: [managerAgentIdentity()] });
+      if (args[0] === "agent" && args[1] === "get")
+        return respond({ agent: managerAgentIdentity() });
+      if (isApiSnapshot(args)) {
+        snapshots++;
+        active++;
+        maxActive = Math.max(maxActive, active);
+        if (gateRefresh && snapshots === refreshSnapshotBase + 1) {
+          gatedSnapshotStarted.resolve();
+          await release.promise;
+        }
+        active--;
+        return respond({ snapshot: { agents: [], panes: [] } });
+      }
+      return respond({});
+    },
+  });
+  const context = fakeContext() as any;
+  context.mode = "rpc";
+  registerExtension!(pi.pi as never);
+  t.after(async () => {
+    release.resolve();
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  });
+
+  await pi.events.get("session_start")![0](undefined, context);
+  await pi.commandOptions.get("manager").handler("", context);
+  assert.equal(
+    readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
+    "manager",
+  );
+  refreshSnapshotBase = snapshots;
+  maxActive = 0;
+  gateRefresh = true;
+  const beforeStart = pi.events.get("before_agent_start")![0];
+  const firstCaller = beforeStart(
+    { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+    context,
+  );
+  await gatedSnapshotStarted.promise;
+  const callers = Array.from({ length: 4 }, () =>
+    beforeStart(
+      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+      context,
+    ),
+  );
+  release.resolve();
+  const results = await Promise.all([firstCaller, ...callers]);
+  assert.ok(
+    results.every((result) => /Manager role/.test(result?.systemPrompt ?? "")),
+  );
+  assert.equal(maxActive, 1);
+  assert.equal(snapshots - refreshSnapshotBase, 2);
+});
+
 function nonGitWorkspaceResponse() {
   return {
     stdout: JSON.stringify({
@@ -464,7 +562,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     stderr: "",
     code: 0,
   });
+  const metadataReports: string[][] = [];
   const exec = (command: string, args: string[]) => {
+    if (
+      command === "herdr" &&
+      args[0] === "pane" &&
+      args[1] === "report-metadata"
+    )
+      metadataReports.push(args);
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
@@ -488,7 +593,11 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       return respond({ snapshot: { agents: [], panes: [] } });
     return respond({});
   };
-  const first = fakeChiefPi({ activeTools: ["read"], exec });
+  const first = fakeChiefPi({
+    activeTools: ["read"],
+    exec,
+    sessionName: "current lead name",
+  });
   const second = fakeChiefPi({ activeTools: ["read"], exec });
   const ctx1 = fakeContext() as any;
   const managerNotices: string[] = [];
@@ -721,6 +830,18 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.deepEqual(first.pi.getActiveTools(), activeManagerTools);
     await first.commandOptions.get("manager").handler("leave", ctx1);
+    const leadMetadata = metadataReports.findLast((args) =>
+      args.includes("pi_herdsman_name=current lead name"),
+    );
+    const titleIndex = leadMetadata?.indexOf("--title") ?? -1;
+    const nameTokenIndex =
+      leadMetadata?.indexOf("pi_herdsman_name=current lead name") ?? -1;
+    assert.ok(
+      leadMetadata &&
+        leadMetadata[titleIndex + 1] === "current lead name" &&
+        leadMetadata[nameTokenIndex - 1] === "--token",
+      JSON.stringify(leadMetadata),
+    );
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...leadTools]);
     assert.equal(first.pi.getActiveTools().includes("staff_message"), false);
     assert.equal(
@@ -1636,14 +1757,38 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
     const chiefSession = chiefCtx.sessionManager.getSessionId();
     chiefCtx.sessionManager.getSessionId = () => chiefSession;
     registerExtension!(chief.pi as never);
+    const mailboxLabel = `chief-missing-definition-${randomUUID()}`;
     try {
       await chief.events.get("session_start")![0](undefined, chiefCtx);
       await chief.commandOptions.get("chief").handler("", chiefCtx);
       assert.deepEqual(chief.pi.getActiveTools(), chiefTools);
-      const chiefPrompt = await chief.events.get("before_agent_start")![0](
-        { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-        chiefCtx,
+      const mailbox = agentMailboxPath(WORKSPACE, mailboxLabel);
+      const state = managedState(
+        mailboxLabel,
+        undefined,
+        recoveryIdentity(mailboxLabel),
       );
+      assert.equal(state.agentDefinition, undefined);
+      writeAgentState(mailbox, state);
+      const { SessionManager } =
+        await import("@earendil-works/pi-coding-agent");
+      const sessionManager = SessionManager as any;
+      const originalOpen = sessionManager.open;
+      let openCalls = 0;
+      sessionManager.open = (...args: any[]) => {
+        openCalls++;
+        return originalOpen.apply(sessionManager, args);
+      };
+      let chiefPrompt;
+      try {
+        chiefPrompt = await chief.events.get("before_agent_start")![0](
+          { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+          chiefCtx,
+        );
+      } finally {
+        sessionManager.open = originalOpen;
+      }
+      assert.equal(openCalls, 0);
       assert.equal(chiefPrompt?.message, undefined);
       const contextMessage = chief.sentMessageCalls.findLast(
         ({ message }: any) =>
@@ -1685,6 +1830,7 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
         /not a current direct report|Lead target was not found or is no longer eligible/,
       );
     } finally {
+      resetAgentMailbox(agentMailboxPath(WORKSPACE, mailboxLabel));
       await chief.events.get("session_shutdown")![0]();
     }
   } finally {

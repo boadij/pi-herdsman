@@ -2188,7 +2188,6 @@ export type LiveAgent = {
   workspaceCwd?: string;
   herdrName?: string;
   tabLabel?: string;
-  sessionName?: string;
   tokens?: Readonly<Record<string, unknown>>;
   runtimeState?: RuntimeState;
 };
@@ -2438,13 +2437,10 @@ export function projectSupervision(options: {
       typeof agent.tokens?.pi_herdsman_name === "string"
         ? agent.tokens.pi_herdsman_name.trim()
         : "";
-    const sessionName =
-      typeof agent.sessionName === "string" ? agent.sessionName.trim() : "";
     const herdrName = agent.herdrName?.trim();
     const tabLabel = agent.tabLabel?.trim();
     const name =
       tokensName ||
-      sessionName ||
       (herdrName &&
       herdrName !== agent.sessionId &&
       !/_[0-9a-f]{16}$/iu.test(herdrName)
