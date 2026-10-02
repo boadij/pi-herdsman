@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/boadij/pi-herdsman/compare/v0.19.0...v0.19.1) (2026-10-02)
+
+
+### Performance
+
+* make periodic status and supervision transcript-free ([#229](https://github.com/boadij/pi-herdsman/issues/229)) ([f4f249a](https://github.com/boadij/pi-herdsman/commit/f4f249a2b2c74d2a5c4c960b9705ca9ea6974c80))
+
 ## [0.19.0](https://github.com/boadij/pi-herdsman/compare/v0.18.0...v0.19.0) (2026-10-02)
 
 
