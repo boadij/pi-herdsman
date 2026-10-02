@@ -581,10 +581,13 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       managerPrompt.systemPrompt,
       /Available agent definitions/,
     );
-    assert.equal(
-      managerPrompt.message?.customType,
-      "pi-herdsman-supervision-context",
+    assert.equal(managerPrompt.message, undefined);
+    const managerContext = first.sentMessageCalls.findLast(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervision-context",
     );
+    assert.ok(managerContext);
+    assert.deepEqual(managerContext.options, { triggerTurn: false });
     assert.equal(
       await first.events.get("tool_call")![0](
         { toolName: "agent_list", input: {} },
@@ -1376,8 +1379,13 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
       ctx,
     );
+    assert.equal(contextProjection?.message, undefined);
+    const contextMessage = pi.sentMessageCalls.findLast(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervision-context",
+    );
     assert.match(
-      String(contextProjection?.message?.content),
+      String((contextMessage?.message as any)?.content),
       new RegExp(
         `open_workspaces:[\\s\\S]*main · workspace=${WORKSPACE} · primary[\\s\\S]*${assignment!.branch} · workspace=${childWorkspace} · linked`,
       ),
@@ -1626,8 +1634,15 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
         { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
         chiefCtx,
       );
+      assert.equal(chiefPrompt?.message, undefined);
+      const contextMessage = chief.sentMessageCalls.findLast(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervision-context",
+      );
       assert.ok(
-        JSON.stringify(chiefPrompt.message).includes(independentLeadSession),
+        JSON.stringify(contextMessage?.message).includes(
+          independentLeadSession,
+        ),
       );
       const staff = chief.tools.find((tool) => tool.name === "staff_list")!;
       const listed = await staff.execute(
