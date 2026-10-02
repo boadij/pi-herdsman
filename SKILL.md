@@ -26,8 +26,10 @@ Coordinate managed agents.
 
 Use these high-salience rules for the model-facing agent boundary:
 
-- Use `agent_delegate` for genuinely independent or context-heavy work; keep small,
-  tightly coupled work local.
+- Delegate bounded execution work when an Agent can reasonably own it and
+  delegation is useful. Keep work local when it is trivial, inseparable from
+  work you must own, otherwise unsuitable for an Agent, or delegation would add
+  more coordination than value.
 - Each unresolved unit of work has one executor. Delegating a scope transfers
   its execution ownership to that agent until the assignment resolves; do not
   execute or assign overlapping work while it is delegated.
@@ -168,11 +170,12 @@ delegated work.
 
 <!-- pi-herdsman-runtime-lead:start -->
 
-Own architecture, approved scope, acceptance, integration, conflict resolution,
-and final decisions. Decompose only as far as useful. Assign each independent
-objective to the narrowest capable owner and let delegation-enabled agents own
-their permitted supporting agents. Reuse adequate existing evidence instead
-of duplicating work.
+Own architecture, approved scope, acceptance of Agent outputs, integration,
+conflict resolution, and final technical decisions within your assigned
+objective. Decompose only as far as useful. Assign bounded execution work to
+the narrowest capable owner when delegation is useful and let delegation-enabled
+agents own their permitted supporting agents. Reuse adequate existing evidence
+instead of duplicating work.
 
 <!-- pi-herdsman-runtime-lead:end -->
 
@@ -185,10 +188,11 @@ execution ownership to that agent until the assignment resolves; do not execute
 or assign overlapping work while it is delegated.
 Integrate direct agent results after resolution.
 Own only the assigned objective and your direct permitted agents. Agent-started
-agents are leaves. As a Lead, keep tightly coupled work local; delegate bounded independent
-or unfamiliar work when useful. Reuse adequate supplied evidence rather than
-rediscovering it. Integrate direct agent results before completing. The lead
-retains architecture, approved scope, acceptance, and final-decision authority.
+agents are leaves. Delegate bounded execution work when an Agent can
+reasonably own it and delegation is useful. Reuse adequate supplied evidence
+rather than rediscovering it. Integrate direct agent results before completing. The lead
+retains architecture, approved scope, acceptance of Agent outputs, and
+final-decision authority.
 Delegate only to definitions listed in your effective agents field. `ask_owner`
 follows its normal eligibility rules when you have no unresolved direct-agent
 work. If unresolved direct-agent work exists, every such agent must itself be
@@ -249,10 +253,13 @@ For product documentation, start at [docs/README.md](docs/README.md).
 ## Authority and decomposition
 
 As a Lead, keep authority, acceptance, and final decisions with you; give each agent
-one bounded objective and the narrowest capable role. Delegate genuinely
-independent or context-heavy work. Prefer agents for broad file inspection,
-large logs or command output, and dataset analysis. Keep small, tightly coupled
-work local. Never overlap writers in one worktree or file-ownership boundary.
+one bounded objective and the narrowest capable role. Delegate bounded execution
+work when an Agent can reasonably own it and delegation is useful. Keep work local
+when it is trivial, inseparable from work you must own, otherwise unsuitable for
+an Agent, or delegation would add more coordination than value. Independence
+determines parallelism, not delegation eligibility. Prefer agents for broad file
+inspection, large logs or command output, and dataset analysis. Never overlap
+writers in one worktree or file-ownership boundary.
 
 ## Assignment discipline
 
@@ -416,7 +423,7 @@ Pi Herdsman uses one durable vocabulary:
   worktree group: its primary workspace and linked-worktree workspaces;
 - a **Manager** explicitly assumes dedicated project coordination from that
   group's primary workspace, has no `agent` capability, and does not own Leads'
-  Agents; delegated implementation belongs to Leads and their Agent trees;
+  Agents; project execution belongs to Leads and their Agent trees;
 - project work belongs to the project, not a Manager session. The project
   assignment represents open work and its Git branch is the work handle. A
   Manager uses `staff_delegate` with a task and optional branch to start new

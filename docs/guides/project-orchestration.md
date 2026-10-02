@@ -5,7 +5,13 @@
 Use Manager when independent project work deserves separate Leads and Git
 branches instead of more Agents inside one Lead's worktree.
 
-Manager coordinates. Leads implement.
+Manager coordinates project assignments. Project Leads orchestrate and
+integrate execution through their Agent trees.
+
+A project Lead is orchestration-first for substantial bounded execution an
+appropriate Agent can reasonably own, while retaining architecture, scope,
+integration, conflict resolution, acceptance of Agent outputs, and technical
+decisions.
 
 ## Enter Manager mode
 

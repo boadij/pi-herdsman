@@ -571,7 +571,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.match(
       managerPrompt.systemPrompt,
-      /Manager role[\s\S]*Manage project work by branch[\s\S]*staff_delegate with a task and optional branch\s+to start new project work\. Use staff_resume with its branch to resume existing\s+project work\.[\s\S]*Actual implementation belongs to project Leads and their Agent trees[\s\S]*Lead messages are\s+coordination and review handoffs, not project completion\. Escalate to Chief with\s+supervisor_message/i,
+      /Manager role[\s\S]*Manage project work by branch[\s\S]*staff_delegate with a task and optional branch\s+to start new project work\. Use staff_resume with its branch to resume existing\s+project work\.[\s\S]*Project execution belongs to project Leads and their Agent trees[\s\S]*Lead messages are\s+coordination and review handoffs, not project completion\. Escalate to Chief with\s+supervisor_message/i,
     );
     assert.doesNotMatch(
       managerPrompt.systemPrompt,
@@ -1476,6 +1476,20 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       ) as { content?: string } | undefined;
       assert.ok(assignmentDelivery);
       assert.match(assignmentDelivery.content!, /Implement focused change/);
+      assert.match(assignmentDelivery.content!, /Be orchestration-first/);
+      assert.match(
+        assignmentDelivery.content!,
+        /investigation,\s+implementation,\s+debugging,\s+test and validation execution,\s+review,\s+documentation/,
+      );
+      assert.match(
+        assignmentDelivery.content!,
+        /delegation would add more coordination than value/,
+      );
+      assert.match(
+        assignmentDelivery.content!,
+        /Work directly when the work is trivial,\s+inseparable from your branch-level\s+coordination or integration responsibility, otherwise unsuitable for an Agent/,
+      );
+      assert.match(assignmentDelivery.content!, /acceptance of Agent outputs/);
       assert.match(
         assignmentDelivery.content!,
         /The project remains open[\s\S]*until the Manager completes or discards it\./,

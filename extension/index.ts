@@ -368,14 +368,37 @@ normal Manager handoff automatically. Review received handoffs, request
 corrections with staff_message when needed, and use
 staff_complete only when the project work is fulfilled.
 
-Actual implementation belongs to project Leads and their Agent trees. Your role
+Project execution belongs to project Leads and their Agent trees. Your role
 is orchestration, review, decisions, and integration. Lead messages are
 coordination and review handoffs, not project completion. Escalate to Chief with
 supervisor_message.`;
 function projectAssignmentInstruction(
   assignment: Pick<ProjectAssignment, "text">,
 ): string {
-  return `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nWhen a delegated herd run settles, summarize its outcome, validation, and\nimportant unresolved points in your normal response. Herdsman handles the\nnormal Manager handoff automatically.\n\nUse supervisor_message when the Manager must decide or act before normal\nsettlement, or when material scope, assumptions, risks, or evidence need\nattention. Routine status and acknowledgements stay local. The project remains open\nuntil the Manager completes or discards it.`;
+  return `${assignment.text}
+
+You are the project Lead for this branch. Be orchestration-first: delegate
+substantial bounded execution work to the narrowest capable managed Agent when
+it can reasonably own that work. This includes investigation, implementation,
+debugging, test and validation execution, review, documentation, and similar
+execution work.
+
+Work directly when the work is trivial, inseparable from your branch-level
+coordination or integration responsibility, otherwise unsuitable for an Agent,
+or delegation would add more coordination than value.
+
+Retain decomposition, architecture, approved scope, technical direction,
+integration, conflict resolution, acceptance of Agent outputs, and final
+technical decisions within the assignment.
+
+When a delegated herd run settles, summarize its outcome, validation, and
+important unresolved points in your normal response. Herdsman handles the
+normal Manager handoff automatically.
+
+Use supervisor_message when the Manager must decide or act before normal
+settlement, or when material scope, assumptions, risks, or evidence need
+attention. Routine status and acknowledgements stay local. The project remains open
+until the Manager completes or discards it.`;
 }
 const SUPERVISION_CONTEXT_TYPE = "pi-herdsman-supervision-context";
 const SUPERVISOR_STATE_TYPE = "pi-herdsman-supervisor-state";
@@ -401,7 +424,9 @@ function formatMessageLimit(bytes: number): string {
   return `${bytes / 1024} KiB · ≈${tokens.toLocaleString("en-US")} tokens`;
 }
 const AGENT_DELEGATION_GUIDANCE =
-  "Use agent_delegate for genuinely independent or context-heavy work; keep small, tightly coupled work local.";
+  "Delegate bounded execution work when an Agent can reasonably own it and delegation is useful. " +
+  "Keep work local when it is trivial, inseparable from work you must own, " +
+  "otherwise unsuitable for an Agent, or delegation would add more coordination than value.";
 const AGENT_EXECUTION_OWNERSHIP_GUIDANCE =
   "Each unresolved unit of work has one executor. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.";
 const FILE_HANDOFF_GUIDANCE =
@@ -435,14 +460,16 @@ const AGENT_UNRESOLVED_GUIDANCE =
   "When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. " +
   "Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. A repeated reminder for the same stale episode is additional recovery evidence: unchanged qualifying activity means the Agent has not crossed an execution boundary since the previous reminder. A steer queued during that unchanged episode cannot have taken effect yet. Do not repeat diagnostic reads solely because a reminder fired. Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use agent_interrupt to stop the current operation and continue the same assignment. " +
   "A proven lost Agent remains unresolved; physical disappearance is not completion. Unknown or conflicting identity remains fail-closed. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed. Do not invent work merely to remain active.";
-const LEAD_SCOPE_DESCRIPTION = `Own architecture, approved scope, acceptance, integration, conflict resolution,
-and final decisions. Decompose only as far as useful. Assign each independent
-objective to the narrowest capable owner and let delegation-enabled agents own
-their permitted supporting agents. Reuse adequate existing evidence instead
-of duplicating work.`;
+const LEAD_SCOPE_DESCRIPTION = `Own architecture, approved scope, acceptance of Agent outputs, integration, conflict resolution,
+and final technical decisions within your assigned objective. Decompose only as far as useful.
+Assign bounded execution work to the narrowest capable owner when delegation is useful and let
+delegation-enabled agents own their permitted supporting agents. Reuse adequate existing evidence
+instead of duplicating work.`;
 const DELEGATING_AGENT_SCOPE_DESCRIPTION = `Own the assigned objective and your direct permitted agents. While direct assignments are unresolved, your execution scope is limited to the non-delegated remainder. Agent-started
-agents are leaves. Keep tightly coupled work local; delegate bounded independent
-or unfamiliar work when useful. Reuse adequate supplied evidence rather than
+agents are leaves. Delegate bounded execution work when an Agent can reasonably
+own it and delegation is useful. Keep work local when it is trivial,
+inseparable, otherwise unsuitable for an Agent, or delegation would add more
+coordination than value. Reuse adequate supplied evidence rather than
 rediscovering it. Integrate direct agent results after resolution.
 The lead retains architecture, approved scope, acceptance, and final-decision
 authority. Delegate only to definitions listed in your effective agents field.

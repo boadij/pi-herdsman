@@ -2841,6 +2841,18 @@ test("delegating agents receive only their allowed definition roster", async () 
     /agent_(?:delegate|continue|steer|interrupt|reply|close|inspect|transcript)/,
   );
   const sharedGuidance = agentListTool.promptGuidelines?.join(" ") ?? "";
+  assert.match(
+    sharedGuidance,
+    /Delegate bounded execution work when an Agent can reasonably own it and delegation is useful/,
+  );
+  assert.match(
+    sharedGuidance,
+    /delegation would add more coordination than value/,
+  );
+  assert.doesNotMatch(
+    sharedGuidance,
+    /genuinely independent or context-heavy work/,
+  );
   for (const toolName of [
     "agent_list",
     "agent_delegate",
@@ -2877,6 +2889,14 @@ test("delegating agents receive only their allowed definition roster", async () 
   assert.match(
     description,
     /execution scope is limited to the non-delegated remainder/,
+  );
+  assert.match(
+    description,
+    /Agent-started agents are leaves\. Delegate bounded execution work when an Agent can reasonably\s+own it and delegation is useful\./,
+  );
+  assert.doesNotMatch(
+    description,
+    /genuinely independent or context-heavy work|independent or unfamiliar work/,
   );
   assert.match(
     description,
