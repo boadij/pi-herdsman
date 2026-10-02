@@ -5,6 +5,10 @@ import { dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { test } from "node:test";
 import packageMetadata from "../package.json" with { type: "json" };
+import {
+  buildSessionProjection,
+  convertToLlm,
+} from "@earendil-works/pi-coding-agent";
 import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
@@ -1571,12 +1575,15 @@ test("active chief describes authoritative remote ask projection", async () => {
     context,
   );
   const chiefPrompt = beforeStart?.systemPrompt;
-  assert.equal(
-    beforeStart?.message?.customType,
-    "pi-herdsman-supervision-context",
+  assert.equal(beforeStart?.message, undefined);
+  const contextCall = pi.sentMessageCalls.findLast(
+    ({ message }: any) =>
+      message?.customType === "pi-herdsman-supervision-context",
   );
-  assert.equal(beforeStart?.message?.display, false);
-  assert.match(String(beforeStart?.message?.content), /status="fresh"/);
+  assert.ok(contextCall);
+  assert.deepEqual(contextCall.options, { triggerTurn: false });
+  assert.equal((contextCall.message as any).display, false);
+  assert.match(String((contextCall.message as any).content), /status="fresh"/);
   assert.match(
     String(chiefPrompt),
     /Chief coordination is event-driven, not polling/,
@@ -2189,19 +2196,33 @@ test("a replacement chief never falls back to the previous session supervision",
   try {
     await sessionStart(undefined, context);
     const first = await beforeStart();
-    assert.equal(first?.message?.customType, "pi-herdsman-supervision-context");
-    assert.equal(first?.message?.display, false);
-    assert.match(String(first?.message?.content), /status="fresh"/);
+    assert.equal(first?.message, undefined);
+    let call = pi.sentMessageCalls.findLast(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervision-context",
+    )!;
+    assert.deepEqual(call.options, { triggerTurn: false });
+    assert.equal((call.message as any).display, false);
+    assert.match(String((call.message as any).content), /status="fresh"/);
 
     sessionId = chiefB;
     failRefresh = true;
     await sessionStart(undefined, context);
-    const message = (await beforeStart())?.message;
-    assert.equal(message?.customType, "pi-herdsman-supervision-context");
-    assert.equal(message?.display, false);
-    assert.match(String(message?.content), /status="unavailable"/);
-    assert.doesNotMatch(String(message?.content), /status="stale"/);
-    assert.doesNotMatch(String(message?.content), new RegExp(leadId));
+    assert.equal((await beforeStart())?.message, undefined);
+    call = pi.sentMessageCalls.findLast(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervision-context",
+    )!;
+    assert.equal((call.message as any).display, false);
+    assert.match(String((call.message as any).content), /status="unavailable"/);
+    assert.doesNotMatch(
+      String((call.message as any).content),
+      /status="stale"/,
+    );
+    assert.doesNotMatch(
+      String((call.message as any).content),
+      new RegExp(leadId),
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
@@ -2307,9 +2328,14 @@ test("an obsolete background supervision refresh cannot publish after chief tran
   try {
     await sessionStart(undefined, context);
     const first = await beforeStart();
-    assert.equal(first?.message?.customType, "pi-herdsman-supervision-context");
-    assert.equal(first?.message?.display, false);
-    assert.match(String(first?.message?.content), /status="fresh"/);
+    assert.equal(first?.message, undefined);
+    let call = pi.sentMessageCalls.findLast(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervision-context",
+    )!;
+    assert.deepEqual(call.options, { triggerTurn: false });
+    assert.equal((call.message as any).display, false);
+    assert.match(String((call.message as any).content), /status="fresh"/);
     blockNextRefresh = true;
     const command = pi.commandOptions.get("chief");
     assert.ok(command);
@@ -2321,12 +2347,21 @@ test("an obsolete background supervision refresh cannot publish after chief tran
     failRefresh = true;
     releaseBlocked();
     await background;
-    const message = (await beforeStart())?.message;
-    assert.equal(message?.customType, "pi-herdsman-supervision-context");
-    assert.equal(message?.display, false);
-    assert.match(String(message?.content), /status="unavailable"/);
-    assert.doesNotMatch(String(message?.content), /status="stale"/);
-    assert.doesNotMatch(String(message?.content), new RegExp(leadId));
+    assert.equal((await beforeStart())?.message, undefined);
+    call = pi.sentMessageCalls.findLast(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervision-context",
+    )!;
+    assert.equal((call.message as any).display, false);
+    assert.match(String((call.message as any).content), /status="unavailable"/);
+    assert.doesNotMatch(
+      String((call.message as any).content),
+      /status="stale"/,
+    );
+    assert.doesNotMatch(
+      String((call.message as any).content),
+      new RegExp(leadId),
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
@@ -2355,7 +2390,21 @@ test("Chief supervision context is persistent, deduplicated, and compaction-awar
     },
   ];
   const branch: any[] = [];
-  const pi = fakePi({ entries, allTools: REGISTERED_ROLE_TOOLS });
+  let nextId = 0;
+  const pi = fakePi({
+    entries,
+    allTools: REGISTERED_ROLE_TOOLS,
+    sendMessage: (message: any) => {
+      const id = `snapshot-${++nextId}`;
+      branch.push({
+        type: "custom_message",
+        id,
+        parentId: branch.at(-1)?.id ?? null,
+        timestamp: new Date().toISOString(),
+        ...message,
+      });
+    },
+  });
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries, branch) as any;
   const beforeStart = () =>
@@ -2367,38 +2416,74 @@ test("Chief supervision context is persistent, deduplicated, and compaction-awar
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const first = await beforeStart();
-    assert.equal(first?.message?.customType, "pi-herdsman-supervision-context");
-    assert.equal(first?.message?.display, false);
-    assert.match(String(first?.message?.content), /status="fresh"/);
-
-    const content = String(first?.message?.content);
-    branch.push({
-      type: "custom_message",
-      id: "snapshot-1",
-      parentId: null,
-      timestamp: new Date().toISOString(),
-      customType: "pi-herdsman-supervision-context",
-      content,
-      display: false,
+    assert.equal(first?.message, undefined);
+    assert.equal(pi.sentMessageCalls.length, 1);
+    assert.equal(
+      (pi.sentMessageCalls[0]!.message as any).customType,
+      "pi-herdsman-supervision-context",
+    );
+    assert.deepEqual(pi.sentMessageCalls[0]!.options, {
+      triggerTurn: false,
     });
+    const snapshot = branch.at(-1)!;
+    assert.equal(snapshot.display, false);
+    assert.match(String(snapshot.content), /status="fresh"/);
+
+    branch.push({
+      type: "message",
+      id: "user-1",
+      parentId: snapshot.id,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "actual user request" }],
+        timestamp: Date.now(),
+      },
+    });
+    const projected = buildSessionProjection(branch).messages;
+    assert.equal(projected.at(-2)?.role, "custom");
+    assert.equal(
+      (projected.at(-2) as any)?.customType,
+      "pi-herdsman-supervision-context",
+    );
+    assert.equal(projected.at(-1)?.role, "user");
+    assert.match(
+      JSON.stringify(projected.at(-1)?.content),
+      /actual user request/,
+    );
+    const modelVisible = convertToLlm(projected);
+    assert.equal(modelVisible.at(-2)?.role, "user");
+    assert.match(
+      JSON.stringify(modelVisible.at(-2)?.content),
+      /supervision_state/,
+    );
+    assert.equal(modelVisible.at(-1)?.role, "user");
+    assert.match(
+      JSON.stringify(modelVisible.at(-1)?.content),
+      /actual user request/,
+    );
+
+    const beforeDuplicate = pi.sentMessageCalls.length;
     const second = await beforeStart();
     assert.equal(second?.message, undefined);
+    assert.equal(pi.sentMessageCalls.length, beforeDuplicate);
 
     branch.push({
       type: "context_edit",
       id: "snapshot-edit",
-      parentId: "snapshot-1",
+      parentId: branch.at(-1)?.id ?? null,
       timestamp: new Date().toISOString(),
-      targetId: "snapshot-1",
+      targetId: snapshot.id,
       replacement: null,
     });
+    const beforeOmission = pi.sentMessageCalls.length;
     const afterOmission = await beforeStart();
     assert.equal(
-      afterOmission?.message?.customType,
+      (pi.sentMessageCalls.at(-1)!.message as any).customType,
       "pi-herdsman-supervision-context",
     );
-    assert.equal(afterOmission?.message?.display, false);
-    assert.match(String(afterOmission?.message?.content), /status="fresh"/);
+    assert.equal(pi.sentMessageCalls.length, beforeOmission + 1);
+    assert.equal(afterOmission?.message, undefined);
 
     branch.splice(
       0,
@@ -2409,7 +2494,7 @@ test("Chief supervision context is persistent, deduplicated, and compaction-awar
         parentId: null,
         timestamp: new Date().toISOString(),
         customType: "pi-herdsman-supervision-context",
-        content,
+        content: snapshot.content,
         display: false,
       },
       {
@@ -2433,8 +2518,10 @@ test("Chief supervision context is persistent, deduplicated, and compaction-awar
         tokensBefore: 100,
       },
     );
+    const beforeCompactionRefresh = pi.sentMessageCalls.length;
     const afterCompaction = await beforeStart();
-    assert.ok(afterCompaction?.message);
+    assert.equal(afterCompaction?.message, undefined);
+    assert.equal(pi.sentMessageCalls.length, beforeCompactionRefresh + 1);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_PANE_ID;
@@ -2871,9 +2958,15 @@ test("leaf agents and active Chiefs do not receive agent definition rosters", as
   );
   assert.match(prompt?.systemPrompt ?? "", /Chief/);
   assert.doesNotMatch(prompt?.systemPrompt ?? "", /<agent_definitions>/);
-  assert.equal(prompt?.message?.customType, "pi-herdsman-supervision-context");
-  assert.equal(prompt?.message?.display, false);
-  assert.match(String(prompt?.message?.content), /status="fresh"/);
+  assert.equal(prompt?.message, undefined);
+  const contextCall = chief.sentMessageCalls.findLast(
+    ({ message }: any) =>
+      message?.customType === "pi-herdsman-supervision-context",
+  );
+  assert.ok(contextCall);
+  assert.deepEqual(contextCall.options, { triggerTurn: false });
+  assert.equal((contextCall.message as any).display, false);
+  assert.match(String((contextCall.message as any).content), /status="fresh"/);
   chief.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_PANE_ID;
   delete process.env.HERDR_TAB_ID;
@@ -2912,11 +3005,20 @@ test("first failed chief supervision refresh is explicitly unavailable", async (
     { systemPromptOptions: { contextFiles: [] } },
     context,
   );
-  assert.equal(result?.message?.customType, "pi-herdsman-supervision-context");
-  assert.equal(result?.message?.display, false);
-  assert.match(String(result?.message?.content), /status="unavailable"/);
+  assert.equal(result?.message, undefined);
+  const contextCall = pi.sentMessageCalls.findLast(
+    ({ message }: any) =>
+      message?.customType === "pi-herdsman-supervision-context",
+  );
+  assert.ok(contextCall);
+  assert.deepEqual(contextCall.options, { triggerTurn: false });
+  assert.equal((contextCall.message as any).display, false);
   assert.match(
-    String(result?.message?.content),
+    String((contextCall.message as any).content),
+    /status="unavailable"/,
+  );
+  assert.match(
+    String((contextCall.message as any).content),
     /Current supervision state could not be established/,
   );
   pi.events.get("session_shutdown")?.[0]();

@@ -381,9 +381,22 @@ test("project Lead observes Manager availability across turnover without exposin
       code: 0,
     };
   };
-  const pi = fakeChiefPi({ exec });
-  registerExtension!(pi.pi as never);
   const branch: any[] = [];
+  let messageId = 0;
+  const pi = fakeChiefPi({
+    exec,
+    sendMessage: (message: any) => {
+      const id = `synthetic-${++messageId}`;
+      branch.push({
+        type: "custom_message",
+        id,
+        parentId: branch.at(-1)?.id ?? null,
+        timestamp: new Date().toISOString(),
+        ...message,
+      });
+    },
+  });
+  registerExtension!(pi.pi as never);
   const ctx = fakeContext([], branch) as any;
   ctx.sessionManager = {
     ...ctx.sessionManager,
@@ -395,23 +408,27 @@ test("project Lead observes Manager availability across turnover without exposin
       { systemPrompt: "prompt", systemPromptOptions: {} },
       ctx,
     );
-  const recordObservation = (result: any) => {
-    const message = result?.message;
-    if (message)
-      branch.push({
-        type: "custom_message",
-        customType: message.customType,
-        content: message.content,
-      });
-    return message;
-  };
+  const latestState = () =>
+    branch.findLast(
+      (entry) => entry.customType === "pi-herdsman-supervisor-state",
+    );
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
-    const available = recordObservation(await observe());
+    const sentBefore = pi.sentMessageCalls.length;
+    const availableResult = await observe();
+    assert.equal(availableResult?.message, undefined);
+    assert.equal(pi.sentMessageCalls.length, sentBefore + 1);
+    assert.deepEqual(pi.sentMessageCalls.at(-1)!.options, {
+      triggerTurn: false,
+    });
+    const available = latestState();
+    assert.equal(available.customType, "pi-herdsman-supervisor-state");
     assert.match(available.content, /supervisor: manager/);
     assert.match(available.content, /availability: available/);
     assert.doesNotMatch(available.content, new RegExp(managerId));
-    assert.equal(recordObservation(await observe()), undefined);
+    const duplicateCount = pi.sentMessageCalls.length;
+    assert.equal((await observe())?.message, undefined);
+    assert.equal(pi.sentMessageCalls.length, duplicateCount);
 
     writeLeadCoordinationState(runtime, {
       version: 1,
@@ -420,7 +437,8 @@ test("project Lead observes Manager availability across turnover without exposin
       piSessionId: managerId,
       updatedAt: Date.now(),
     });
-    const unknown = recordObservation(await observe());
+    assert.equal((await observe())?.message, undefined);
+    const unknown = latestState();
     assert.match(unknown.content, /supervisor: manager/);
     assert.match(unknown.content, /availability: unknown/);
     assert.match(
@@ -454,7 +472,8 @@ test("project Lead observes Manager availability across turnover without exposin
 
     manager.release();
     agents.splice(1, 1);
-    const unavailable = recordObservation(await observe());
+    assert.equal((await observe())?.message, undefined);
+    const unavailable = latestState();
     assert.match(unavailable.content, /supervisor: manager/);
     assert.match(unavailable.content, /availability: unavailable/);
     assert.match(
@@ -502,7 +521,8 @@ test("project Lead observes Manager availability across turnover without exposin
       piSessionId: replacementId,
       updatedAt: Date.now(),
     });
-    const replacementState = recordObservation(await observe());
+    assert.equal((await observe())?.message, undefined);
+    const replacementState = latestState();
     assert.match(replacementState.content, /availability: available/);
     assert.doesNotMatch(replacementState.content, new RegExp(replacementId));
     replacement.release();
@@ -578,9 +598,22 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
       code: 0,
     };
   };
-  const pi = fakeChiefPi({ exec });
-  registerExtension!(pi.pi as never);
   const branch: any[] = [];
+  let messageId = 0;
+  const pi = fakeChiefPi({
+    exec,
+    sendMessage: (message: any) => {
+      const id = `synthetic-${++messageId}`;
+      branch.push({
+        type: "custom_message",
+        id,
+        parentId: branch.at(-1)?.id ?? null,
+        timestamp: new Date().toISOString(),
+        ...message,
+      });
+    },
+  });
+  registerExtension!(pi.pi as never);
   const ctx = fakeContext([], branch) as any;
   ctx.sessionManager = {
     ...ctx.sessionManager,
@@ -595,20 +628,21 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
         { systemPrompt: "prompt", systemPromptOptions: {} },
         ctx,
       );
-    const recordObservation = (result: any) => {
-      const message = result?.message;
-      if (message)
-        branch.push({
-          type: "custom_message",
-          customType: message.customType,
-          content: message.content,
-        });
-      return message;
-    };
-    const chiefState = recordObservation(await observe());
+    const chiefStateResult = await observe();
+    assert.equal(chiefStateResult?.message, undefined);
+    const chiefState = branch.at(-1);
+    assert.equal(
+      (pi.sentMessageCalls.at(-1)!.message as any).customType,
+      "pi-herdsman-supervisor-state",
+    );
+    assert.deepEqual(pi.sentMessageCalls.at(-1)!.options, {
+      triggerTurn: false,
+    });
     assert.match(chiefState.content, /supervisor: chief/);
     assert.match(chiefState.content, /availability: available/);
-    assert.equal(recordObservation(await observe()), undefined);
+    const duplicateCount = pi.sentMessageCalls.length;
+    assert.equal((await observe())?.message, undefined);
+    assert.equal(pi.sentMessageCalls.length, duplicateCount);
     chief.release();
     chief = claimChiefLease({
       piSessionId: chiefId,
@@ -667,7 +701,8 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
       }),
     );
     chiefDiscoveryFailure = true;
-    const unverifiedChief = recordObservation(await observe());
+    assert.equal((await observe())?.message, undefined);
+    const unverifiedChief = branch.at(-1);
     assert.match(unverifiedChief.content, /supervisor: unverified/);
     assert.match(unverifiedChief.content, /availability: unknown/);
     await assert.rejects(
@@ -684,8 +719,9 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
     );
     chiefDiscoveryFailure = false;
     writeFileSync(runtime.descriptor, "invalid Chief descriptor");
-    const unreadableChief = recordObservation(await observe());
-    assert.equal(unreadableChief, undefined);
+    const unreadableCount = pi.sentMessageCalls.length;
+    assert.equal((await observe())?.message, undefined);
+    assert.equal(pi.sentMessageCalls.length, unreadableCount);
     assert.equal(
       branch.filter(
         (message) =>
@@ -707,7 +743,8 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
       /No active supervisor is available/,
     );
     chief.release();
-    const noSupervisor = recordObservation(await observe());
+    assert.equal((await observe())?.message, undefined);
+    const noSupervisor = branch.at(-1);
     assert.match(noSupervisor.content, /supervisor: none/);
     assert.match(noSupervisor.content, /availability: unavailable/);
     await assert.rejects(
@@ -723,7 +760,8 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
       /No active supervisor is available/,
     );
     observationFailure = true;
-    const unverified = recordObservation(await observe());
+    assert.equal((await observe())?.message, undefined);
+    const unverified = branch.at(-1);
     assert.match(unverified.content, /supervisor: unverified/);
     assert.match(unverified.content, /availability: unknown/);
     assert.deepEqual(
