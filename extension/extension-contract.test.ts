@@ -1808,13 +1808,28 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
     assert.ok(listTool);
     assert.ok(tool);
 
-    const listed = await listTool.execute(
-      "list",
-      {},
-      undefined,
-      undefined,
-      context,
-    );
+    const { SessionManager: observedSessionManager } =
+      await import("@earendil-works/pi-coding-agent");
+    const observedManager = observedSessionManager as any;
+    const originalOpen = observedManager.open;
+    let openCalls = 0;
+    observedManager.open = (...args: any[]) => {
+      openCalls++;
+      return originalOpen.apply(observedManager, args);
+    };
+    let listed: any;
+    try {
+      listed = await listTool.execute(
+        "list",
+        {},
+        undefined,
+        undefined,
+        context,
+      );
+      assert.equal(openCalls, 0);
+    } finally {
+      observedManager.open = originalOpen;
+    }
     assertToolResult(listed);
     const listedLead = (listed.details?.reports as any[])[0];
     assert.equal(listedLead.session, leadId);
@@ -3219,6 +3234,217 @@ test("managed non-TUI agents do not receive the widget", async () => {
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
   setLeadEnvironment();
+});
+
+test("leaf status proves its Lead boundary from coordination state without opening transcripts", async (t) => {
+  const label = "status-lead-boundary";
+  const mailbox = setAgentEnvironment(label);
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `status-lead-boundary-${randomUUID()}.sock`,
+  );
+  const ownerSessionId = LEAD_SESSION_ID;
+  process.env.PI_HERDSMAN_OWNER_SESSION_ID = ownerSessionId;
+  const leadPaneId = "status-boundary-lead-pane";
+  const agentSessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const agentPaneId = "status-boundary-agent-pane";
+  const agentSessionFile = join(
+    tmpdir(),
+    `status-boundary-${randomUUID()}.jsonl`,
+  );
+  process.env.HERDR_PANE_ID = agentPaneId;
+  process.env.HERDR_TAB_ID = "status-boundary-tab";
+  writeAgentState(
+    mailbox,
+    managedState(label, undefined, {
+      paneId: agentPaneId,
+      tabId: "status-boundary-tab",
+      piSessionId: agentSessionId,
+      piSessionFile: agentSessionFile,
+    }),
+  );
+  const identity = {
+    agent: "pi",
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: agentSessionId,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: agentPaneId,
+    tab_id: "status-boundary-tab",
+    cwd: "/tmp",
+    agent_status: "idle",
+  };
+  const lead = {
+    agent: "pi",
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: ownerSessionId,
+    },
+    workspace_id: WORKSPACE,
+    pane_id: leadPaneId,
+    tab_id: "status-boundary-lead-tab",
+    cwd: "/tmp",
+    agent_status: "idle",
+  };
+  const pi = fakePi({
+    exec: (_command, args) =>
+      isApiSnapshot(args)
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                snapshot: {
+                  agents: [identity, lead],
+                  panes: [
+                    {
+                      pane_id: agentPaneId,
+                      workspace_id: WORKSPACE,
+                      agent: "pi",
+                    },
+                    {
+                      pane_id: leadPaneId,
+                      workspace_id: WORKSPACE,
+                      agent: "pi",
+                    },
+                  ],
+                },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
+  const context = fakeAgentContext() as any;
+  context.sessionManager.getSessionFile = () => agentSessionFile;
+  context.mode = "tui";
+  context.hasUI = true;
+  let widget: any;
+  context.ui.setWidget = (_key: string, content: any) => {
+    if (typeof content === "function")
+      widget = content(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, value: string) => value,
+          bold: (value: string) => value,
+        },
+      );
+  };
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const sessionManager = SessionManager as any;
+  const originalOpen = sessionManager.open;
+  const originalSetInterval = globalThis.setInterval;
+  let openCalls = 0;
+  let refreshTimer: TimerHandler | undefined;
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+    if (delay === 2000) refreshTimer = callback;
+    return {} as ReturnType<typeof setInterval>;
+  }) as typeof setInterval;
+  t.after(() => {
+    globalThis.setInterval = originalSetInterval;
+    sessionManager.open = originalOpen;
+    pi.events.get("session_shutdown")?.[0]();
+    invalidateLeadCoordinationState(supervisionRuntime(), ownerSessionId);
+    resetAgentMailbox(mailbox);
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  });
+  sessionManager.open = (...args: any[]) => {
+    openCalls++;
+    return originalOpen.apply(sessionManager, args);
+  };
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    build: HERDSMAN_BUILD,
+    instanceId: randomUUID(),
+    piSessionId: ownerSessionId,
+    updatedAt: Date.now(),
+  });
+  assert.equal(readAgentState(mailbox)?.agentDefinition, undefined);
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+  }
+  await t.waitFor(() => assert.match(widget.render(120)[0], /herd/));
+  assert.equal(openCalls, 0);
+
+  invalidateLeadCoordinationState(supervisionRuntime(), ownerSessionId);
+  assert.equal(typeof refreshTimer, "function");
+  (refreshTimer as () => void)();
+  await t.waitFor(() => assert.match(widget.render(120)[0], /\?/));
+  assert.equal(openCalls, 0);
+});
+
+test("periodic health loss reminders do not open transcripts for missing mailbox definitions", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "health-missing-definition-pane";
+  process.env.HERDR_TAB_ID = "health-missing-definition-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `health-missing-definition-${randomUUID()}.sock`,
+  );
+  const label = "health-missing-definition";
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  const state = managedState(label, undefined, recoveryIdentity(label));
+  assert.equal(state.agentDefinition, undefined);
+  writeAgentState(mailbox, state);
+  const pi = fakePi({
+    exec: (_command, args) =>
+      isApiSnapshot(args)
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { snapshot: { agents: [], panes: [] } },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
+  const context = fakeContext() as any;
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const sessionManager = SessionManager as any;
+  const originalOpen = sessionManager.open;
+  let openCalls = 0;
+  sessionManager.open = (...args: any[]) => {
+    openCalls++;
+    return originalOpen.apply(sessionManager, args);
+  };
+  registerExtension!(pi.pi as never);
+  t.after(async () => {
+    sessionManager.open = originalOpen;
+    await pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  });
+
+  await pi.events.get("session_start")![0](undefined, context);
+  // Startup runtime recovery may use the explicit definition fallback; count
+  // only calls caused by the periodic health reconciliation below.
+  openCalls = 0;
+  await t.waitFor(() =>
+    assert.ok(
+      pi.sentMessageCalls.some(
+        ({ message }: any) => message?.customType === "pi-herdsman-agent-lost",
+      ),
+      "health reconciliation did not publish the lost assignment reminder",
+    ),
+  );
+  const reminder = pi.sentMessageCalls.find(
+    ({ message }: any) => message?.customType === "pi-herdsman-agent-lost",
+  );
+  assert.equal((reminder?.message as any).details.agentDefinition, "unknown");
+  assert.equal(openCalls, 0);
 });
 
 test("registered agent inspect exposes process and recent activity evidence", async () => {
