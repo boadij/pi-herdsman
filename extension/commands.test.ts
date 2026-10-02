@@ -318,6 +318,7 @@ const managerTools = [
   "staff_transcript",
   "staff_message",
   "staff_delegate",
+  "staff_resume",
   "staff_stop",
   "staff_complete",
   "staff_discard",
@@ -484,6 +485,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       "staff_transcript",
       "staff_message",
       "staff_delegate",
+      "staff_resume",
       "staff_stop",
       "staff_complete",
       "staff_discard",
@@ -545,7 +547,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.match(
       managerPrompt.systemPrompt,
-      /Manager role[\s\S]*Manage project work by branch[\s\S]*Actual implementation belongs to project Leads and their Agent trees[\s\S]*Lead messages are\s+coordination and review handoffs, not project completion\. Escalate to Chief with\s+supervisor_message/i,
+      /Manager role[\s\S]*Manage project work by branch[\s\S]*staff_delegate with a task and optional branch\s+to start new project work\. Use staff_resume with its branch to resume existing\s+project work\.[\s\S]*Actual implementation belongs to project Leads and their Agent trees[\s\S]*Lead messages are\s+coordination and review handoffs, not project completion\. Escalate to Chief with\s+supervisor_message/i,
     );
     assert.doesNotMatch(
       managerPrompt.systemPrompt,
@@ -567,11 +569,22 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       undefined,
     );
     const staff = first.tools.find((tool) => tool.name === "staff_delegate");
+    const resume = first.tools.find((tool) => tool.name === "staff_resume");
     assert.ok(staff);
+    assert.ok(resume);
     assert.equal(staff.parameters.properties.assignment, undefined);
-    assert.match(
-      staff.description,
-      /project work or resume existing work by Git branch/i,
+    assert.match(staff.description, /start new project work/i);
+    assert.equal(
+      Value.Check(staff.parameters, { branch: "feat/existing" }),
+      false,
+    );
+    assert.equal(
+      Value.Check(resume.parameters, { branch: "feat/existing" }),
+      true,
+    );
+    assert.equal(
+      Value.Check(resume.parameters, { branch: "feat/existing", task: "x" }),
+      false,
     );
     assert.ok(
       Value.Check(staff.parameters, {

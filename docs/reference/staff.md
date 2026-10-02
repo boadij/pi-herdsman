@@ -5,7 +5,8 @@
 `staff_*` is the direct-report interface for active Chief and Manager sessions.
 Chief and Manager can list, inspect, read transcripts, and message direct
 reports. Manager additionally owns branch-based project operations:
-`staff_delegate`, `staff_stop`, `staff_complete`, and `staff_discard`.
+`staff_delegate`, `staff_resume`, `staff_stop`, `staff_complete`, and
+`staff_discard`.
 
 Lead-targeted actions use the exact full Pi `session` ID from a fresh
 supervision snapshot or `staff_list`. Project actions use the Git branch.
@@ -85,38 +86,41 @@ hidden semantic-result bindings needed for the recipient to forward them.
 
 ## `staff_delegate`
 
-Manager only. Start new project work with `task` and optional `branch`, `base`,
-and `files`:
+Manager only. Start new project work with a required `task` and optional
+`branch`, `base`, and `files`:
 
 ```json
 { "task": "Implement the change", "branch": "feat/example" }
 ```
 
-Resume existing project work by branch only:
-
-```json
-{ "branch": "feat/example" }
-```
-
-If a branch already has an assignment, new task, base, or files cannot replace
-it. If it has no assignment, `task` is required. An unoccupied existing Herdr
-worktree is reused. A different live Lead occupying that worktree prevents
-another managed writer.
-
-If an assigned worktree is missing, Herdsman recreates it from the same branch.
-When the exact Pi session has persisted history, its saved cwd is used and the
-same session ID resumes. If the branch no longer exists, recreation fails
-closed rather than creating it from the current default branch.
+An existing assignment on that branch is rejected; use `staff_resume` to
+continue it. An unoccupied existing Herdr worktree may still be reused for new
+work. A different live Lead occupying that worktree prevents another managed
+writer.
 
 For new work, `files` uses the same configured attachment sizing policy as
 Agent delegation: `inlineAttachmentLimitBytes` controls per-file embedding and
 `mailboxPayloadLimitBytes` bounds the durable project assignment. Non-text or
 non-fitting files remain canonical references.
 
-Repeating delegation for already-running work returns the current Lead instead
-of starting another. Manager-created Leads inherit the Manager session's
-effective project-trust decision for that run; this does not modify Pi's
-persistent trust store.
+Manager-created Leads inherit the Manager session's effective project-trust
+decision for that run; this does not modify Pi's persistent trust store.
+
+## `staff_resume`
+
+Manager only. Resume existing unresolved project work using its exact branch:
+
+```json
+{ "branch": "feat/example" }
+```
+
+The assignment must already exist; resume does not create or replace it.
+Resuming already-running work returns the current exact Lead instead of
+starting another. A stopped Lead is relaunched with the same assignment. If
+the worktree is missing, Herdsman recreates it from the existing branch and
+resumes the exact saved Pi session; its saved cwd is used when available. If
+the branch no longer exists, recovery fails closed rather than creating it
+from the current default branch.
 
 ## `staff_stop`
 
@@ -126,7 +130,7 @@ persistent trust store.
 
 Stops the exact Lead and its owned Agent execution tree. For managed project
 work, the assignment, Pi session, Git branch, and worktree are preserved. Resume
-the work with `staff_delegate` using its branch. An unassigned direct Lead can
+the work with `staff_resume` using its branch. An unassigned direct Lead can
 also be stopped without creating project work. Failed or ambiguous cleanup does
 not resolve an assignment.
 

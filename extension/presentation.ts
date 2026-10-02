@@ -2148,12 +2148,12 @@ function renderExpandedCoordinationCall(
     } else if (action === "continue") {
       if (args.session) fields.push(["session", args.session]);
     } else if (args.agent) fields.push(["agent", args.agent]);
-  } else if (tool === "staff" || tool === "peer") {
+  } else if (tool === "staff") {
     if (args.session) fields.push(["session", args.session]);
-    if (action === "delegate") {
-      if (args.branch) fields.push(["branch", args.branch]);
-      if (args.base) fields.push(["base", args.base]);
-    }
+    if (args.branch) fields.push(["branch", args.branch]);
+    if (action === "delegate" && args.base) fields.push(["base", args.base]);
+  } else if (tool === "peer") {
+    if (args.session) fields.push(["session", args.session]);
   }
   const content = new Container();
   content.addChild(new Text(header, 0, 0));
@@ -2206,7 +2206,14 @@ export function renderCoordinationCall(
   else if (tool === "agent" && action === "continue")
     target = value(context?.state?.agentLabel);
   else if (tool === "agent") target = value(a.agent);
-  else if (tool === "staff" || tool === "peer")
+  else if (tool === "staff")
+    target =
+      action === "list"
+        ? ""
+        : typeof a.branch === "string"
+          ? a.branch
+          : shortIdentity(a.session);
+  else if (tool === "peer")
     target = action === "list" ? "" : shortIdentity(a.session);
   const definition =
     tool === "agent"
