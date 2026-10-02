@@ -42,6 +42,7 @@ import {
   removeProjectMessages,
   findProjectAssignmentBySession,
   PROJECT_ASSIGNMENT_MAX_BYTES,
+  projectAssignmentBytes,
   coordinationMessageBytes,
   coordinationMessagePath,
   drainCoordinationInbox,
@@ -1936,15 +1937,27 @@ test("project assignments are scoped by repository and branch, strict, and remov
       extra: true,
     } as never),
   );
-  assert.throws(() =>
-    writeProjectAssignment(runtime, {
-      ...assignment,
-      text: "é".repeat(PROJECT_ASSIGNMENT_MAX_BYTES),
-    }),
+  const largerAssignment = {
+    ...assignment,
+    text: "é".repeat(9 * 1024),
+  };
+  assert.ok(projectAssignmentBytes(largerAssignment) > 16 * 1024);
+  assert.equal(
+    projectAssignmentBytes(largerAssignment),
+    Buffer.byteLength(`${JSON.stringify(largerAssignment)}\n`, "utf8"),
   );
+  writeProjectAssignment(runtime, largerAssignment);
   assert.deepEqual(
     readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
-    assignment,
+    largerAssignment,
+  );
+  assert.throws(
+    () =>
+      writeProjectAssignment(runtime, {
+        ...assignment,
+        text: "é".repeat(PROJECT_ASSIGNMENT_MAX_BYTES),
+      }),
+    /Project assignment is too large/,
   );
   writeFileSync(
     path,

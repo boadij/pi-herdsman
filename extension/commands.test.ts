@@ -1382,14 +1382,8 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     assert.equal(paths.length, 1);
     const delivery = readChiefMessage(paths[0]!);
     assert.equal(delivery.kind, "project_assignment");
-    assert.match(
-      delivery.text,
-      /The project remains open[\s\S]*until the Manager completes or discards it\./,
-    );
-    assert.match(
-      delivery.text,
-      /Herdsman handles the\s+normal Manager handoff automatically\./,
-    );
+    assert.equal(delivery.text, "Project assignment ready.");
+    assert.equal(delivery.resultBindings, undefined);
     assert.ok(
       pi.calls.some(
         (args) => args.includes("--no-focus") && args.includes("--branch"),
@@ -1423,6 +1417,28 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     leadCtx.sessionManager.getSessionFile = childSessionPath;
     try {
       await lead.events.get("session_start")![0](undefined, leadCtx);
+      await t.waitFor(() =>
+        assert.ok(
+          lead.sent.some(
+            (message: any) =>
+              message.customType === "pi-herdsman-project_assignment",
+          ),
+        ),
+      );
+      const assignmentDelivery = lead.sent.find(
+        (message: any) =>
+          message.customType === "pi-herdsman-project_assignment",
+      ) as { content?: string } | undefined;
+      assert.ok(assignmentDelivery);
+      assert.match(assignmentDelivery.content!, /Implement focused change/);
+      assert.match(
+        assignmentDelivery.content!,
+        /The project remains open[\s\S]*until the Manager completes or discards it\./,
+      );
+      assert.match(
+        assignmentDelivery.content!,
+        /Herdsman handles the\s+normal Manager handoff automatically\./,
+      );
       const message = await lead.tools
         .find((tool) => tool.name === "supervisor_message")!
         .execute(

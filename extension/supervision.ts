@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
+import { MAX_BYTE_LIMIT } from "./config.ts";
 import {
   acquireProcessLock,
   isProcessLockClaim,
@@ -1652,7 +1653,11 @@ export type ProjectAssignment = Readonly<{
   text: string;
   resultBindings?: ResultBinding[];
 }>;
-export const PROJECT_ASSIGNMENT_MAX_BYTES = 16 * 1024;
+export const PROJECT_ASSIGNMENT_MAX_BYTES = MAX_BYTE_LIMIT;
+
+export function projectAssignmentBytes(assignment: ProjectAssignment): number {
+  return Buffer.byteLength(`${JSON.stringify(assignment)}\n`, "utf8");
+}
 
 export function projectAssignmentPath(
   runtime: SupervisionRuntime,
@@ -1698,7 +1703,7 @@ export function writeProjectAssignment(
   if (!validProjectAssignment(assignment))
     throw new Error("Invalid project assignment");
   const content = `${JSON.stringify(assignment)}\n`;
-  if (Buffer.byteLength(content, "utf8") > PROJECT_ASSIGNMENT_MAX_BYTES)
+  if (projectAssignmentBytes(assignment) > PROJECT_ASSIGNMENT_MAX_BYTES)
     throw new Error("Project assignment is too large");
   const path = projectAssignmentPath(
     runtime,

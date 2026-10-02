@@ -26,6 +26,8 @@ import {
   listProjectMessages,
   writeProjectMessage,
   writeChiefMessage,
+  chiefMessageBytes,
+  COORDINATION_MESSAGE_MAX_BYTES,
   writeLeadCoordinationState,
   readLeadCoordinationState,
   drainCoordinationInbox,
@@ -1135,13 +1137,6 @@ for (const scenario of [
     mismatchedPath: true,
     prospectivePath: false,
   },
-  {
-    name: "denies a mismatched project-assignment result binding",
-    moved: false,
-    mismatchedPath: false,
-    prospectivePath: false,
-    mismatchedBinding: true,
-  },
 ])
   test(`project assignment delivery ${scenario.name}`, async (t) => {
     setLeadEnvironment();
@@ -1172,19 +1167,13 @@ for (const scenario of [
       ref: "result:researcher#1",
       canonicalRef: resultRef(randomUUID()),
     };
-    const tamperedBinding = {
-      ref: expectedBinding.ref,
-      canonicalRef: resultRef(randomUUID()),
-    };
     const assignment = {
       version: 2 as const,
       id: sessionId,
       repoKey: "repo-key",
       branch: "smoke/delivery-placement",
-      text: "deliver only in the assigned checkout",
-      ...(scenario.mismatchedBinding
-        ? { resultBindings: [expectedBinding] }
-        : {}),
+      text: `deliver only in the assigned checkout\n${"evidence\n".repeat(4096)}`,
+      resultBindings: [expectedBinding],
     };
     writeProjectAssignment(runtime, assignment);
     writeChiefMessage(
@@ -1197,14 +1186,19 @@ for (const scenario of [
         toSessionId: sessionId,
         leadSessionId: sessionId,
         branch: assignment.branch,
-        text: `${assignment.text}\n\nYou are the project Lead for this branch. Coordinate implementation through\nyour managed Agents. Delegate implementation and corrective code edits; keep\nyour own work focused on decomposition, technical direction, review,\nintegration decisions, and validation.\n\nWhen a delegated herd run settles, summarize its outcome, validation, and\nimportant unresolved points in your normal response. Herdsman handles the\nnormal Manager handoff automatically.\n\nUse supervisor_message when the Manager must decide or act before normal\nsettlement, or when material scope, assumptions, risks, or evidence need\nattention. Routine status and acknowledgements stay local. The project remains open\nuntil the Manager completes or discards it.`,
-        ...(scenario.mismatchedBinding
-          ? { resultBindings: [tamperedBinding] }
-          : {}),
+        text: "Project assignment ready.",
         createdAt: Date.now(),
       },
       runtime,
     );
+    const signal = listChiefMessagePaths(runtime, sessionId)
+      .map((path) => readChiefMessage(path))
+      .find((record) => record.kind === "project_assignment")!;
+    assert.ok(Buffer.byteLength(assignment.text, "utf8") > 16 * 1024);
+    assert.ok(chiefMessageBytes(signal) <= COORDINATION_MESSAGE_MAX_BYTES);
+    assert.equal(signal.text, "Project assignment ready.");
+    assert.equal(signal.resultBindings, undefined);
+    assert.doesNotMatch(signal.text, /evidence/);
     const agent = {
       agent_session: {
         source: "herdr:pi",
@@ -1292,28 +1286,27 @@ for (const scenario of [
       );
       assert.equal(
         delivered.length,
-        scenario.moved || scenario.mismatchedPath || scenario.mismatchedBinding
-          ? 0
-          : 1,
+        scenario.moved || scenario.mismatchedPath ? 0 : 1,
       );
-      if (scenario.mismatchedBinding)
-        assert.equal(
-          entries.some(
-            (entry: any) =>
-              entry.customType === "pi-herdsman-result-ref" &&
-              entry.data?.canonicalRef === tamperedBinding.canonicalRef,
-          ),
-          false,
-        );
-      if (
-        !scenario.moved &&
-        !scenario.mismatchedPath &&
-        !scenario.mismatchedBinding
-      ) {
+      if (!scenario.moved && !scenario.mismatchedPath) {
         assert.equal(delivered[0].details.id, sessionId);
         assert.equal(delivered[0].details.branch, assignment.branch);
         assert.ok(delivered[0].content.includes(assignment.branch));
+        assert.ok(delivered[0].content.includes(assignment.text));
+        assert.ok(Buffer.byteLength(delivered[0].content, "utf8") > 8 * 1024);
+        assert.ok(
+          delivered[0].content.includes(
+            `${"evidence\n".repeat(4096)}\n\nYou are the project Lead`,
+          ),
+        );
         assert.equal(delivered[0].content.includes(sessionId), false);
+        assert.ok(
+          entries.some(
+            (entry: any) =>
+              entry.customType === "pi-herdsman-result-ref" &&
+              entry.data?.canonicalRef === expectedBinding.canonicalRef,
+          ),
+        );
       }
       if (scenario.prospectivePath) {
         assert.equal(realFs.existsSync(sessionPath), false);
@@ -1354,14 +1347,13 @@ for (const scenario of [
         assert.equal(authorization.reason, "matched");
         assert.equal(send.outcome, "resolved");
         assert.equal(send.triggerTurn, true);
-        assert.doesNotMatch(
-          diagnosticOutput
-            .filter((line) =>
-              line.startsWith("[pi-herdsman-manager-diagnostic] "),
-            )
-            .join("\n"),
-          new RegExp(`${sessionId}|${assignment.text}`),
-        );
+        const diagnostics = diagnosticOutput
+          .filter((line) =>
+            line.startsWith("[pi-herdsman-manager-diagnostic] "),
+          )
+          .join("\n");
+        assert.equal(diagnostics.includes(sessionId), false);
+        assert.equal(diagnostics.includes(assignment.text), false);
         writeFileSync(
           sessionPath,
           `${JSON.stringify({
@@ -1880,8 +1872,24 @@ async function runManagerStartupScenario(
   projectTrusted = false,
   t?: TestContext,
   missingPaneCode = "pane_not_found",
+  largeEvidence = false,
+  limits?: {
+    inlineAttachmentLimitBytes?: number;
+    mailboxPayloadLimitBytes?: number;
+  },
 ): Promise<void> {
   setLeadEnvironment();
+  const configPath = join(PI_AGENT_ROOT, "pi-herdsman", "config.json");
+  const previousConfig = realFs.existsSync(configPath)
+    ? realFs.readFileSync(configPath, "utf8")
+    : undefined;
+  if (limits?.inlineAttachmentLimitBytes !== undefined)
+    updateConfig(
+      "inlineAttachmentLimitBytes",
+      limits.inlineAttachmentLimitBytes,
+    );
+  if (limits?.mailboxPayloadLimitBytes !== undefined)
+    updateConfig("mailboxPayloadLimitBytes", limits.mailboxPayloadLimitBytes);
   const prospective =
     mode === "unmaterialized-path" || mode.startsWith("identity-");
   process.env.HERDR_PANE_ID = "root-pane";
@@ -1896,6 +1904,8 @@ async function runManagerStartupScenario(
   let childSession = "";
   const childSessionPath = join(tmpdir(), `lead-${randomUUID()}.jsonl`);
   const childPath = "/tmp/manager-fresh-child";
+  const attachmentPath = join(tmpdir(), `assignment-${randomUUID()}.md`);
+  if (largeEvidence) writeFileSync(attachmentPath, "evidence\n".repeat(4096));
   let recipientIdle = true;
   let created = false;
   let createdBranch = "";
@@ -2245,6 +2255,18 @@ async function runManagerStartupScenario(
         supervisionRuntime(),
         "repo-key",
       )[0]!;
+      if (largeEvidence) {
+        assert.match(starting.text, /<file name=.*>/);
+        if (limits?.inlineAttachmentLimitBytes !== undefined) {
+          assert.ok(Buffer.byteLength(starting.text, "utf8") < 16 * 1024);
+          assert.match(starting.text, /<file name=.* bytes="\d+" \/>/);
+          assert.doesNotMatch(starting.text, /evidence\n/);
+        } else {
+          assert.ok(Buffer.byteLength(starting.text, "utf8") > 16 * 1024);
+          assert.match(starting.text, /evidence/);
+        }
+        assert.match(starting.text, /\nTask:\ndeliver the fresh assignment/);
+      }
       childSession = starting.id;
       assert.equal(args[args.indexOf("--session-id") + 1], starting.id);
       assert.deepEqual(
@@ -2653,7 +2675,13 @@ async function runManagerStartupScenario(
         "delegate",
         {
           ...(!["invalid-topology"].includes(mode) && !activeMode
-            ? { task: "deliver the fresh assignment" }
+            ? {
+                task:
+                  limits?.mailboxPayloadLimitBytes !== undefined
+                    ? "x".repeat(2048)
+                    : "deliver the fresh assignment",
+                ...(largeEvidence ? { files: [attachmentPath] } : {}),
+              }
             : {}),
           ...([
             "preexisting",
@@ -2675,6 +2703,16 @@ async function runManagerStartupScenario(
         ctx,
       )
     );
+    if (limits?.mailboxPayloadLimitBytes !== undefined) {
+      await assert.rejects(execute(), /Mailbox payload is .* configured limit/);
+      assert.equal(createCalls, 0);
+      assert.equal(startCalls, 0);
+      assert.deepEqual(
+        listProjectAssignments(supervisionRuntime(), "repo-key"),
+        [],
+      );
+      return;
+    }
     if (mode === "unassigned-close") {
       childSession = staleId;
       created = true;
@@ -3285,7 +3323,8 @@ async function runManagerStartupScenario(
             message.leadSessionId === childSession &&
             message.branch === assignment.branch &&
             !message.text.includes(childSession) &&
-            message.text.includes("deliver the fresh assignment"),
+            chiefMessageBytes(message) <= COORDINATION_MESSAGE_MAX_BYTES &&
+            message.text === "Project assignment ready.",
         ),
       );
     }
@@ -3303,6 +3342,10 @@ async function runManagerStartupScenario(
       );
     }
   } finally {
+    realFs.rmSync(attachmentPath, { force: true });
+    if (previousConfig !== undefined)
+      realFs.writeFileSync(configPath, previousConfig);
+    else realFs.rmSync(configPath, { force: true });
     Date.now = originalNow;
     nativeSessions.delete(childSession);
     realFs.rmSync(childSessionPath, { force: true });
@@ -3315,6 +3358,36 @@ async function runManagerStartupScenario(
 
 test("Manager activates only after mocked Lead-state publication", () =>
   runManagerStartupScenario("success"));
+test("Manager delegates large attachment evidence outside coordination limits", () =>
+  runManagerStartupScenario(
+    "success",
+    false,
+    undefined,
+    "pane_not_found",
+    true,
+  ));
+test("Manager keeps attachments above the inline limit as references", () =>
+  runManagerStartupScenario(
+    "success",
+    false,
+    undefined,
+    "pane_not_found",
+    true,
+    {
+      inlineAttachmentLimitBytes: 1024,
+    },
+  ));
+test("Manager rejects over-limit assignments before creating work", () =>
+  runManagerStartupScenario(
+    "success",
+    false,
+    undefined,
+    "pane_not_found",
+    false,
+    {
+      mailboxPayloadLimitBytes: 1024,
+    },
+  ));
 test("trusted Manager starts its Lead with approval and the assignment session ID", () =>
   runManagerStartupScenario("success", true));
 test("untrusted Manager starts its Lead without approval and with the assignment session ID", () =>

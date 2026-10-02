@@ -108,6 +108,11 @@ When the exact Pi session has persisted history, its saved cwd is used and the
 same session ID resumes. If the branch no longer exists, recreation fails
 closed rather than creating it from the current default branch.
 
+For new work, `files` uses the same configured attachment sizing policy as
+Agent delegation: `inlineAttachmentLimitBytes` controls per-file embedding and
+`mailboxPayloadLimitBytes` bounds the durable project assignment. Non-text or
+non-fitting files remain canonical references.
+
 Repeating delegation for already-running work returns the current Lead instead
 of starting another. Manager-created Leads inherit the Manager session's
 effective project-trust decision for that run; this does not modify Pi's
