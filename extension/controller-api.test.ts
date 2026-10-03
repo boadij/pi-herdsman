@@ -1218,6 +1218,7 @@ for (const reachable of [true, false]) {
       };
     };
     let managerHistory: unknown[] = [];
+    let managerBranch: unknown[] = [];
     const pi = fakeChiefPi({
       activeTools: ["read"],
       exec,
@@ -1226,11 +1227,13 @@ for (const reachable of [true, false]) {
     registerExtension!(pi.pi as never);
     const ctx = fakeContext(pi.entries) as any;
     managerHistory = pi.entries;
+    managerBranch = managerHistory;
     if (reachable)
       ctx.sessionManager = {
         ...ctx.sessionManager,
         getSessionFile: () => managerSessionFile,
-        getBranch: () => managerHistory,
+        getEntries: () => managerHistory,
+        getBranch: () => managerBranch,
       };
     const notices: string[] = [];
     ctx.ui.notify = (message: string) => notices.push(message);
@@ -1275,11 +1278,33 @@ for (const reachable of [true, false]) {
         assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), [
           record,
         ]);
+        const deliveredIndex = managerHistory.findIndex(
+          (entry: any) =>
+            entry?.customType === "pi-herdsman-project_message" &&
+            entry?.details?.id === record.id,
+        );
+        assert.ok(deliveredIndex >= 0);
+        managerBranch = managerHistory.slice(0, deliveredIndex);
+        assert.ok(
+          managerHistory.some(
+            (entry: any) =>
+              entry?.customType === "pi-herdsman-project_message" &&
+              entry?.details?.id === record.id,
+          ),
+        );
+        assert.equal(
+          managerBranch.some(
+            (entry: any) =>
+              entry?.customType === "pi-herdsman-project_message" &&
+              entry?.details?.id === record.id,
+          ),
+          false,
+        );
         await new Promise((resolve) => setTimeout(resolve, 600));
         assert.equal(
           projectDeliveries().length,
           1,
-          "same Manager must not receive a duplicate",
+          "same Manager tree navigation must not replay retained message",
         );
 
         await pi.commandOptions.get("manager").handler("leave", ctx);
@@ -1287,11 +1312,13 @@ for (const reachable of [true, false]) {
         managerSessionFile = join(tmpdir(), `${replacementId}.jsonl`);
         managerAgent.agent_session.value = managerSessionFile;
         managerHistory = [];
+        managerBranch = managerHistory;
         ctx.sessionManager = {
           ...ctx.sessionManager,
           getSessionId: () => replacementId,
           getSessionFile: () => managerSessionFile,
-          getBranch: () => managerHistory,
+          getEntries: () => managerHistory,
+          getBranch: () => managerBranch,
         };
         await pi.commandOptions.get("manager").handler("", ctx);
         await new Promise((resolve) => setTimeout(resolve, 650));
