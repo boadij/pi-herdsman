@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { mock, test } from "node:test";
+import { mock, test, type TestContext } from "node:test";
 import packageMetadata from "../package.json" with { type: "json" };
 import { Value } from "typebox/value";
 import type {
@@ -1208,7 +1208,10 @@ test("linked and non-project sessions derive ordinary Lead tools", async () => {
   }
 });
 
-test("Manager delegate persists an exact worktree Lead assignment", async (t) => {
+async function managerDelegateAssignmentTest(
+  t: TestContext,
+  projectTrusted: boolean,
+) {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
   process.env.HERDR_TAB_ID = "root-tab";
@@ -1223,7 +1226,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
   mkdirSync(managedLeadDir, { recursive: true });
   writeFileSync(
     join(managedLeadDir, "managed-lead.md"),
-    "---\nname: managed-lead\nthinking: high\nbodyMode: append\n---\n\nTARGET_WORKTREE_MANAGED_LEAD",
+    "---\nname: managed-lead\nthinking: low\nbodyMode: append\n---\n\nTARGET_WORKTREE_MANAGED_LEAD",
   );
   let childSession = `lead-${randomUUID()}`;
   let primaryWorkspace = WORKSPACE;
@@ -1375,17 +1378,19 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       assert.equal(args.includes("--no-extensions"), true);
       const thinkingIndex = args.indexOf("--thinking");
       assert.notEqual(thinkingIndex, -1);
-      assert.equal(args[thinkingIndex + 1], "high");
+      assert.equal(args[thinkingIndex + 1] === "low", projectTrusted);
+      assert.equal(args.includes("--approve"), projectTrusted);
+      assert.equal(args.includes("--no-approve"), !projectTrusted);
       const promptIndex = args.indexOf("--system-prompt");
       assert.notEqual(promptIndex, -1);
       assert.match(
         readFileSync(args[promptIndex + 1]!, "utf8"),
         /Delegate project execution.*Do not take executable work back/s,
       );
-      assert.match(
-        readFileSync(args[promptIndex + 1]!, "utf8"),
-        /TARGET_WORKTREE_MANAGED_LEAD/,
-      );
+      const childPrompt = readFileSync(args[promptIndex + 1]!, "utf8");
+      if (projectTrusted)
+        assert.match(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
+      else assert.doesNotMatch(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
         role: "lead",
@@ -1479,7 +1484,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
   registerExtension!(pi.pi as never);
   try {
     const ctx = fakeContext(pi.entries) as any;
-    ctx.isProjectTrusted = () => true;
+    ctx.isProjectTrusted = () => projectTrusted;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     const staff = pi.tools.find((tool) => tool.name === "staff_delegate")!;
@@ -1674,7 +1679,11 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     delete process.env.HERDR_PANE_ID;
     setLeadEnvironment();
   }
-});
+}
+
+for (const projectTrusted of [true, false])
+  test(`Manager delegate persists an exact worktree Lead assignment (${projectTrusted ? "trusted" : "untrusted"})`, (t) =>
+    managerDelegateAssignmentTest(t, projectTrusted));
 
 test("Chief staff and ambient supervision include Managers and unclaimed Leads", async () => {
   setLeadEnvironment();
