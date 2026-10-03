@@ -17,7 +17,9 @@ export function assignmentLockPath(mailbox: string): string {
   );
 }
 
-export function sessionActivationLockPath(canonicalSessionPath: string): string {
+export function sessionActivationLockPath(
+  canonicalSessionPath: string,
+): string {
   return join(
     herdsmanTempRoot(),
     "locks",
@@ -32,7 +34,9 @@ export function claimAssignmentLock(mailbox: string): () => void {
   });
 }
 
-export function tryClaimAssignmentLock(mailbox: string): (() => void) | undefined {
+export function tryClaimAssignmentLock(
+  mailbox: string,
+): (() => void) | undefined {
   try {
     return claimAssignmentLock(mailbox);
   } catch (error) {
@@ -41,7 +45,9 @@ export function tryClaimAssignmentLock(mailbox: string): (() => void) | undefine
   }
 }
 
-export function claimSessionActivationLock(canonicalSessionPath: string): () => void {
+export function claimSessionActivationLock(
+  canonicalSessionPath: string,
+): () => void {
   return claimProcessLock(sessionActivationLockPath(canonicalSessionPath), {
     name: "session activation",
     occupiedMessage: "The exact Pi session is already being activated",

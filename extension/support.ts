@@ -493,12 +493,8 @@ mock.module("typebox", {
 const {
   resolveAssignmentSession: resolveOwnedAssignmentSession,
   sessionAgentIdentity,
-} = await import(
-  "./agent-controller.ts"
-);
-const { sessionContextRetired } = await import(
-  "./managed-agent-runtime.ts"
-);
+} = await import("./agent-controller.ts");
+const { sessionContextRetired } = await import("./managed-agent-runtime.ts");
 const { default: registerExtension } = await import("./index.ts");
 const { readConfig } = await import("./config.ts");
 export function resolveAssignmentSession(

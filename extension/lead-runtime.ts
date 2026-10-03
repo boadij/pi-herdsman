@@ -1,4 +1,7 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import type {
   ChiefLease,
@@ -17,7 +20,11 @@ import { OperationError } from "./errors.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
 import { contentText, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { prepareMessageInput } from "./core.ts";
-import { createAgentController, parsePresentationTokens, statusBreadcrumb } from "./agent-controller.ts";
+import {
+  createAgentController,
+  parsePresentationTokens,
+  statusBreadcrumb,
+} from "./agent-controller.ts";
 import type { ManagedAgentState, ResultBinding } from "./mailbox.ts";
 import {
   collapseDisplayText,
@@ -40,10 +47,24 @@ type LeadTransitionHost = any;
 const LEAD_INSTANCE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-export function buildLeadStatusSnapshot(view: any, ctx: ExtensionContext, host: any): StatusSnapshot {
+export function buildLeadStatusSnapshot(
+  view: any,
+  ctx: ExtensionContext,
+  host: any,
+): StatusSnapshot {
   const ownerSessionId = ctx.sessionManager.getSessionId();
-  const unresolvedMailboxState = host.scope.kind === "lead" && host.hasStateIssues();
-  const listed = view.visible.map((snapshot: any) => host.listedAgentRecord(view, snapshot, ownerSessionId, host.scope, unresolvedMailboxState, host.runtimeForLabel));
+  const unresolvedMailboxState =
+    host.scope.kind === "lead" && host.hasStateIssues();
+  const listed = view.visible.map((snapshot: any) =>
+    host.listedAgentRecord(
+      view,
+      snapshot,
+      ownerSessionId,
+      host.scope,
+      unresolvedMailboxState,
+      host.runtimeForLabel,
+    ),
+  );
   const agents = listed.map((agent: any) => {
     const runtime = host.runtimeForLabel(agent.agent as string);
     const tokens = agent.tokens ?? {};
@@ -51,25 +72,53 @@ export function buildLeadStatusSnapshot(view: any, ctx: ExtensionContext, host: 
     return {
       label: agent.agent as string,
       state: agent.state,
-      definition: collapseDisplayText(typeof agent.agent_definition === "string" && agent.agent_definition.trim() ? agent.agent_definition : typeof tokens.role === "string" ? tokens.role : undefined),
+      definition: collapseDisplayText(
+        typeof agent.agent_definition === "string" &&
+          agent.agent_definition.trim()
+          ? agent.agent_definition
+          : typeof tokens.role === "string"
+            ? tokens.role
+            : undefined,
+      ),
       paneId: agent.pane_id,
       sessionId: agent.pi_session_id,
       task: typeof tokens.task === "string" ? tokens.task : runtime?.task,
       startedAt: presentation.startedAt ?? runtime?.startedAt,
-      model: presentation.model !== undefined ? presentation.model : runtime?.model,
-      thinking: presentation.thinking !== undefined ? presentation.thinking : runtime?.thinking,
+      model:
+        presentation.model !== undefined ? presentation.model : runtime?.model,
+      thinking:
+        presentation.thinking !== undefined
+          ? presentation.thinking
+          : runtime?.thinking,
       contextPercent: presentation.contextPercent,
-      ...(agent.stale ? { stale: true, inactiveMs: typeof agent.inactive_ms === "number" ? agent.inactive_ms : undefined } : {}),
+      ...(agent.stale
+        ? {
+            stale: true,
+            inactiveMs:
+              typeof agent.inactive_ms === "number"
+                ? agent.inactive_ms
+                : undefined,
+          }
+        : {}),
       ...(agent.parent_label ? { parentLabel: agent.parent_label } : {}),
     };
   });
-  const herdStartedAt = host.scope.kind === "lead" ? host.herdStartedAt() : undefined;
+  const herdStartedAt =
+    host.scope.kind === "lead" ? host.herdStartedAt() : undefined;
   return {
     agents,
     stale: false,
     unavailable: false,
     ...(herdStartedAt !== undefined ? { herdRunStartedAt: herdStartedAt } : {}),
-    breadcrumb: host.scope.kind === "lead" ? ["herd"] : statusBreadcrumb(view, host.environmentIdentity(ctx), host.identityFromEnvironment(), host.sameIdentity),
+    breadcrumb:
+      host.scope.kind === "lead"
+        ? ["herd"]
+        : statusBreadcrumb(
+            view,
+            host.environmentIdentity(ctx),
+            host.identityFromEnvironment(),
+            host.sameIdentity,
+          ),
     ...host.ownToolsSnapshot(),
     refreshedAt: Date.now(),
   };
@@ -110,14 +159,21 @@ export function createLeadToolState(
 ) {
   const ownedTools = new Set(ownedNames);
   let leadTools: string[] | undefined;
-  const registeredToolNames = () => new Set(getAllTools().map((tool) => tool.name));
+  const registeredToolNames = () =>
+    new Set(getAllTools().map((tool) => tool.name));
   const normalizeBaseTools = (tools: readonly string[]) => {
     const registered = registeredToolNames();
-    return tools.filter((name, index) =>
-      !ownedTools.has(name) && registered.has(name) && tools.indexOf(name) === index,
+    return tools.filter(
+      (name, index) =>
+        !ownedTools.has(name) &&
+        registered.has(name) &&
+        tools.indexOf(name) === index,
     );
   };
-  const appendRegisteredTools = (tools: readonly string[], names: readonly string[]) => {
+  const appendRegisteredTools = (
+    tools: readonly string[],
+    names: readonly string[],
+  ) => {
     const registered = registeredToolNames();
     const next = [...tools];
     for (const name of names)
@@ -131,7 +187,9 @@ export function createLeadToolState(
     normalizeLeadTools: (tools: readonly string[]) =>
       appendRegisteredTools(normalizeBaseTools(tools), leadCoordinationNames),
     getLeadTools: () => leadTools,
-    setLeadTools: (tools: string[] | undefined) => { leadTools = tools; },
+    setLeadTools: (tools: string[] | undefined) => {
+      leadTools = tools;
+    },
   };
 }
 
@@ -165,7 +223,10 @@ export function createLeadSessionTreeRuntime(host: any) {
     async sessionTree(ctx: ExtensionContext): Promise<void> {
       if (!host.controller.sessionActive()) return;
       const watchActiveAsks = (): void => {
-        host.controller.sessionTreeChanged(ctx, host.controller.sessionSignal());
+        host.controller.sessionTreeChanged(
+          ctx,
+          host.controller.sessionSignal(),
+        );
       };
       // Ordinary Lead tree changes need synchronous ask watching before reconciliation.
       const roleAtTreeChange = host.roleTransitions.branchRoleObservation();
@@ -198,13 +259,17 @@ export function createLeadSessionStartRuntime(host: any) {
         let persistedRole: SessionRole = "lead";
         let malformedRole = false;
         try {
-          const persisted = host.sessionLeadRoleState(ctx.sessionManager.getEntries());
+          const persisted = host.sessionLeadRoleState(
+            ctx.sessionManager.getEntries(),
+          );
           if (persisted) {
             persistedRole = persisted.role;
             const activeBaseline = host.normalizeLeadTools(host.activeTools());
             host.setLeadTools(
               persisted.role === "lead" &&
-                activeBaseline.some((name: string) => !host.ownedTools().has(name))
+                activeBaseline.some(
+                  (name: string) => !host.ownedTools().has(name),
+                )
                 ? activeBaseline
                 : [...persisted.leadTools],
             );
@@ -254,28 +319,43 @@ export function createLeadSessionStartRuntime(host: any) {
       const sessionSignal = host.controller.beginSession();
       host.controller.sessionStart();
       if (
-        host.isLead() && process.env.HERDR_SOCKET_PATH &&
+        host.isLead() &&
+        process.env.HERDR_SOCKET_PATH &&
         host.roleTransitions.canStartChiefInbox()
-      ) host.leadInboxRuntime.start(ctx);
+      )
+        host.leadInboxRuntime.start(ctx);
       host.leadStatusRuntime.prepareSession(ctx, () =>
         host.clearSupervisionUI(
-          previousChiefMode === "active" || previousControllerRole === "manager",
-        ));
+          previousChiefMode === "active" ||
+            previousControllerRole === "manager",
+        ),
+      );
       if (
-        host.isLead() && process.env.HERDR_PANE_ID &&
+        host.isLead() &&
+        process.env.HERDR_PANE_ID &&
         host.roleTransitions.chiefModeInactive()
-      ) host.queueLeadPresentation(ctx);
+      )
+        host.queueLeadPresentation(ctx);
       host.setOwnTools(host.isManagedAgent() ? host.activeTools() : undefined);
       host.leadStatusRuntime.setSnapshot({
-        agents: [], stale: false, unavailable: true,
+        agents: [],
+        stale: false,
+        unavailable: true,
         breadcrumb: host.initialStatusBreadcrumb(),
         ...host.ownToolsSnapshot(),
       });
-      const activeManager = host.isLead() && host.roleTransitions.activeManager();
-      if (host.isLead() && (host.roleTransitions.chiefModeActive() || activeManager))
+      const activeManager =
+        host.isLead() && host.roleTransitions.activeManager();
+      if (
+        host.isLead() &&
+        (host.roleTransitions.chiefModeActive() || activeManager)
+      )
         host.startSupervisionUI(ctx);
       else host.leadStatusRuntime.start(ctx);
-      if (!(host.isLead() && (host.roleTransitions.chiefModeActive() || activeManager))) {
+      if (!(
+        host.isLead() &&
+        (host.roleTransitions.chiefModeActive() || activeManager)
+      )) {
         try {
           host.setDefinitionRoster({
             sessionId: ctx.sessionManager.getSessionId(),
@@ -290,7 +370,8 @@ export function createLeadSessionStartRuntime(host: any) {
         host.leadStatusRuntime.requestRefresh();
         return;
       }
-      if (!activeManager) await host.controller.recoverRuntimes(ctx, sessionSignal);
+      if (!activeManager)
+        await host.controller.recoverRuntimes(ctx, sessionSignal);
       if (host.isLead()) host.herdRun.finishIfIdle(ctx);
       host.controller.startHealthScanner(ctx, sessionSignal);
     },
@@ -305,7 +386,9 @@ export function createLeadAgentEventRuntime(host: any) {
         host.leadInboxRuntime.holdStartPreflight(ctx);
         const message = await host.prepareSupervisionMessage(ctx);
         if (message) host.sendMessage(message);
-        return { systemPrompt: host.chiefSystemPrompt(event.systemPromptOptions) };
+        return {
+          systemPrompt: host.chiefSystemPrompt(event.systemPromptOptions),
+        };
       }
       const roleCharter = host.roleCharter();
       if (host.isActiveManager()) {
@@ -337,10 +420,16 @@ export function createLeadAgentEventRuntime(host: any) {
     async agentSettled(ctx: ExtensionContext): Promise<void> {
       host.controller.settleAsks(ctx, host.controller.sessionSignal());
       host.herdRun.agentSettled(ctx);
-      await host.controller.settleResults(ctx, host.controller.sessionSignal()).catch(() => {});
+      await host.controller
+        .settleResults(ctx, host.controller.sessionSignal())
+        .catch(() => {});
     },
-    toolCall(event: any, ctx: ExtensionContext): { block: true; reason: string } | undefined {
-      if (host.isStaffTool(event.toolName) || !host.isCurrentChief(ctx)) return undefined;
+    toolCall(
+      event: any,
+      ctx: ExtensionContext,
+    ): { block: true; reason: string } | undefined {
+      if (host.isStaffTool(event.toolName) || !host.isCurrentChief(ctx))
+        return undefined;
       return { block: true, reason: "Chief mode may only use staff tools." };
     },
   };
@@ -352,33 +441,73 @@ export function createLeadCommandRuntime(host: any) {
   return {
     async openPlacementMenu(ctx: ExtensionCommandContext): Promise<void> {
       const current = await host.placementSettings(ctx);
-      const selected = await host.selectMenu(ctx, "Layout", [
-        { value: "tab", label: current.effective === "tab" ? "Lead agents tab (current)" : "Lead agents tab" },
-        { value: "subtree", label: current.effective === "subtree" ? "Subtree tabs (current)" : "Subtree tabs" },
-        { value: "split", label: current.effective === "split" ? "Split from caller (current)" : "Split from caller" },
-      ], current.effective);
+      const selected = await host.selectMenu(
+        ctx,
+        "Layout",
+        [
+          {
+            value: "tab",
+            label:
+              current.effective === "tab"
+                ? "Lead agents tab (current)"
+                : "Lead agents tab",
+          },
+          {
+            value: "subtree",
+            label:
+              current.effective === "subtree"
+                ? "Subtree tabs (current)"
+                : "Subtree tabs",
+          },
+          {
+            value: "split",
+            label:
+              current.effective === "split"
+                ? "Split from caller (current)"
+                : "Split from caller",
+          },
+        ],
+        current.effective,
+      );
       if (!selected) return;
       host.updateSpawnPlacement(selected);
       const verified = await host.placementSettings(ctx);
       if (verified.effective !== selected)
-        throw new Error(`Agent placement did not become effective: ${verified.effective}`);
+        throw new Error(
+          `Agent placement did not become effective: ${verified.effective}`,
+        );
       ctx.ui.notify(`placement: ${verified.effective}`);
     },
     async openMessageLimitsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedLimit = "inlineAttachmentLimitBytes";
       const presets = [1, 4, 16, 64, 128].map((kib) => ({
-        label: host.formatMessageLimit(kib * 1024), bytes: kib * 1024,
+        label: host.formatMessageLimit(kib * 1024),
+        bytes: kib * 1024,
       }));
       while (true) {
         const limits = await host.messageLimits(ctx);
-        const setting = await host.selectMenu(ctx, "Message limits", [
-          { value: "inlineAttachmentLimitBytes", label: `Inline attachments   ${host.formatMessageLimit(limits.inline.bytes)}` },
-          { value: "mailboxPayloadLimitBytes", label: `Mailbox payload      ${host.formatMessageLimit(limits.mailbox.bytes)}` },
-        ], selectedLimit);
+        const setting = await host.selectMenu(
+          ctx,
+          "Message limits",
+          [
+            {
+              value: "inlineAttachmentLimitBytes",
+              label: `Inline attachments   ${host.formatMessageLimit(limits.inline.bytes)}`,
+            },
+            {
+              value: "mailboxPayloadLimitBytes",
+              label: `Mailbox payload      ${host.formatMessageLimit(limits.mailbox.bytes)}`,
+            },
+          ],
+          selectedLimit,
+        );
         if (!setting) return;
         selectedLimit = setting;
         const choice = await host.selectMenu(ctx, "Limit", [
-          ...presets.map(({ label, bytes }: any) => ({ value: String(bytes), label })),
+          ...presets.map(({ label, bytes }: any) => ({
+            value: String(bytes),
+            label,
+          })),
           { value: "custom", label: "Custom…" },
           { value: "reset", label: "Reset" },
         ]);
@@ -389,67 +518,101 @@ export function createLeadCommandRuntime(host: any) {
           const input = await host.input(ctx, "Custom limit in KiB (1–1024)");
           if (input === undefined) continue;
           const kib = Number(input);
-          if (!/^\d+$/u.test(input.trim()) || !host.validByteLimit(kib * 1024)) {
+          if (
+            !/^\d+$/u.test(input.trim()) ||
+            !host.validByteLimit(kib * 1024)
+          ) {
             ctx.ui.notify("Enter an integer from 1 through 1024 KiB", "error");
             continue;
           }
           value = kib * 1024;
         } else value = Number(choice);
         host.updateMessageLimit(selectedLimit, value);
-        ctx.ui.notify(`${selectedLimit}: ${value === undefined ? "reset" : host.formatMessageLimit(value)}`);
+        ctx.ui.notify(
+          `${selectedLimit}: ${value === undefined ? "reset" : host.formatMessageLimit(value)}`,
+        );
       }
     },
-    executionSettings(ctx: ExtensionContext, definition: any): { model: string; thinking: string } {
+    executionSettings(
+      ctx: ExtensionContext,
+      definition: any,
+    ): { model: string; thinking: string } {
       return {
-        model: typeof definition.frontmatter.model === "string"
-          ? compactModelToken(definition.frontmatter.model)
-          : ctx.model
-          ? `inherit · ${compactModelToken(modelToken(ctx.model))}`
-          : "inherit",
-        thinking: definition.frontmatter.thinking === false
-          ? "off"
-          : typeof definition.frontmatter.thinking === "string"
-          ? definition.frontmatter.thinking
-          : `inherit · ${host.getThinkingLevel()}`,
+        model:
+          typeof definition.frontmatter.model === "string"
+            ? compactModelToken(definition.frontmatter.model)
+            : ctx.model
+              ? `inherit · ${compactModelToken(modelToken(ctx.model))}`
+              : "inherit",
+        thinking:
+          definition.frontmatter.thinking === false
+            ? "off"
+            : typeof definition.frontmatter.thinking === "string"
+              ? definition.frontmatter.thinking
+              : `inherit · ${host.getThinkingLevel()}`,
       };
     },
     resolveConfiguredModel(ctx: ExtensionContext, configured: string): any {
       const models = ctx.modelRegistry.getAll();
-      const canonical = models.find((candidate: any) => modelToken(candidate) === configured);
+      const canonical = models.find(
+        (candidate: any) => modelToken(candidate) === configured,
+      );
       if (canonical) return canonical;
-      const compactMatches = models.filter((candidate: any) =>
-        compactModelToken(modelToken(candidate)) === configured);
+      const compactMatches = models.filter(
+        (candidate: any) =>
+          compactModelToken(modelToken(candidate)) === configured,
+      );
       return compactMatches.length === 1 ? compactMatches[0] : undefined;
     },
     async openDefinitionsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedDefinition: string | undefined;
       while (true) {
-        const definitions = (await host.contextAgentDefinitions(ctx)).definitions;
-        const bundled = definitions.filter((definition: any) => definition.extensionSource);
-        const custom = definitions.filter((definition: any) => !definition.extensionSource);
+        const definitions = (await host.contextAgentDefinitions(ctx))
+          .definitions;
+        const bundled = definitions.filter(
+          (definition: any) => definition.extensionSource,
+        );
+        const custom = definitions.filter(
+          (definition: any) => !definition.extensionSource,
+        );
         const format = (definition: any) => {
           const { model, thinking } = this.executionSettings(ctx, definition);
           const name = `${definition.name}${definition.projectSource ? " [project]" : ""}${definition.overrideSource && (definition.extensionSource || definition.projectSource) ? " *" : ""}`;
           return { name, model, thinking, definition };
         };
         const entries = [...bundled, ...custom].map(format);
-        const nameWidth = Math.max(0, ...entries.map(({ name }: any) => visibleWidth(name)));
-        const modelWidth = Math.max(0, ...entries.map(({ model }: any) => visibleWidth(model)));
+        const nameWidth = Math.max(
+          0,
+          ...entries.map(({ name }: any) => visibleWidth(name)),
+        );
+        const modelWidth = Math.max(
+          0,
+          ...entries.map(({ model }: any) => visibleWidth(model)),
+        );
         const options: { value: string; label: string }[] = [];
         const addGroup = (title: string, group: any[]) => {
           if (!group.length) return;
           options.push({ value: "", label: `--- ${title} ---` });
-          options.push(...group.map(({ name, model, thinking, definition }) => ({
-            value: definition.name,
-            label: `${padVisible(name, nameWidth)}  ${padVisible(model, modelWidth)}  ${thinking}`,
-          })));
+          options.push(
+            ...group.map(({ name, model, thinking, definition }) => ({
+              value: definition.name,
+              label: `${padVisible(name, nameWidth)}  ${padVisible(model, modelWidth)}  ${thinking}`,
+            })),
+          );
         };
         addGroup("Bundled (* overridden)", bundled.map(format));
         addGroup("Custom", custom.map(format));
-        const selected = await host.selectMenu(ctx, "Definitions", options, selectedDefinition);
+        const selected = await host.selectMenu(
+          ctx,
+          "Definitions",
+          options,
+          selectedDefinition,
+        );
         if (selected === undefined) return;
         if (!selected) continue;
-        const selectedEntry = entries.find(({ definition }: any) => definition.name === selected);
+        const selectedEntry = entries.find(
+          ({ definition }: any) => definition.name === selected,
+        );
         if (!selectedEntry) continue;
         selectedDefinition = selectedEntry.definition.name;
         let definition = selectedEntry.definition;
@@ -457,32 +620,55 @@ export function createLeadCommandRuntime(host: any) {
         let selectedAction = "model";
         while (true) {
           const { model, thinking } = this.executionSettings(ctx, definition);
-          const action = await host.selectMenu(ctx, definition.name, [
-            { value: "model", label: `Model       ${model}` },
-            { value: "thinking", label: `Thinking    ${thinking}` },
-            { value: "enabled", label: `Enabled     ${host.agentDefinitionEnabled(definition) ? "yes" : "no"}` },
-            { value: "details", label: "Details…" },
-          ], selectedAction);
+          const action = await host.selectMenu(
+            ctx,
+            definition.name,
+            [
+              { value: "model", label: `Model       ${model}` },
+              { value: "thinking", label: `Thinking    ${thinking}` },
+              {
+                value: "enabled",
+                label: `Enabled     ${host.agentDefinitionEnabled(definition) ? "yes" : "no"}`,
+              },
+              { value: "details", label: "Details…" },
+            ],
+            selectedAction,
+          );
           if (!action) break;
           selectedAction = action;
           if (action === "details") {
             let current;
             try {
-              current = (await host.contextAgentDefinitions(ctx)).definitions.find((candidate: any) => candidate.name === selectedName);
+              current = (
+                await host.contextAgentDefinitions(ctx)
+              ).definitions.find(
+                (candidate: any) => candidate.name === selectedName,
+              );
             } catch (error) {
               ctx.ui.notify(String(error), "error");
               break;
             }
             if (!current) {
-              ctx.ui.notify(`Definition ${selectedName} is no longer available.`, "warning");
+              ctx.ui.notify(
+                `Definition ${selectedName} is no longer available.`,
+                "warning",
+              );
               break;
             }
             definition = current;
             const metadata = host.agentDefinitionMetadata(current);
             if (ctx.mode === "tui") {
-              const instructions = host.expandAgentBodyFiles(current.body, [], "definition details");
-              host.appendDefinitionsEntry({ definitions: [metadata], instructions });
-            } else ctx.ui.notify(host.formatAgentDefinitions([metadata]).join("\n"));
+              const instructions = host.expandAgentBodyFiles(
+                current.body,
+                [],
+                "definition details",
+              );
+              host.appendDefinitionsEntry({
+                definitions: [metadata],
+                instructions,
+              });
+            } else
+              ctx.ui.notify(host.formatAgentDefinitions([metadata]).join("\n"));
             continue;
           }
           let field: "model" | "thinking" | "enabled";
@@ -491,11 +677,18 @@ export function createLeadCommandRuntime(host: any) {
             field = "model";
             await ctx.modelRegistry.refresh();
             const models = ctx.modelRegistry.getAvailable();
-            const tokens = [...new Set(models.map((item: any) => modelToken(item)))].sort();
-            const configured = typeof definition.frontmatter.model === "string" ? definition.frontmatter.model : undefined;
+            const tokens = [
+              ...new Set(models.map((item: any) => modelToken(item))),
+            ].sort();
+            const configured =
+              typeof definition.frontmatter.model === "string"
+                ? definition.frontmatter.model
+                : undefined;
             if (configured && !tokens.includes(configured)) {
               const resolved = this.resolveConfiguredModel(ctx, configured);
-              const resolvedToken = resolved ? modelToken(resolved) : configured;
+              const resolvedToken = resolved
+                ? modelToken(resolved)
+                : configured;
               if (!tokens.includes(resolvedToken)) tokens.push(resolvedToken);
             }
             const idCounts = new Map<string, number>();
@@ -503,49 +696,103 @@ export function createLeadCommandRuntime(host: any) {
               const id = compactModelToken(token);
               idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
             }
-            const resolvedConfigured = configured ? this.resolveConfiguredModel(ctx, configured) : undefined;
-            const modelsByToken = new Map(models.map((item: any) => [modelToken(item), item]));
-            if (resolvedConfigured) modelsByToken.set(modelToken(resolvedConfigured), resolvedConfigured);
+            const resolvedConfigured = configured
+              ? this.resolveConfiguredModel(ctx, configured)
+              : undefined;
+            const modelsByToken = new Map(
+              models.map((item: any) => [modelToken(item), item]),
+            );
+            if (resolvedConfigured)
+              modelsByToken.set(
+                modelToken(resolvedConfigured),
+                resolvedConfigured,
+              );
             const modelItems = tokens.map((token) => {
               const id = compactModelToken(token);
-              return { value: token, label: idCounts.get(id) === 1 ? id : token,
-                searchText: `${id} ${token} ${modelsByToken.get(token)?.name ?? ""}` };
+              return {
+                value: token,
+                label: idCounts.get(id) === 1 ? id : token,
+                searchText: `${id} ${token} ${modelsByToken.get(token)?.name ?? ""}`,
+              };
             });
-            const selectedModel = await host.selectModelMenu(ctx, [
-              { value: "inherit", label: "Inherit current session", searchText: "Inherit current session inherit" },
-              ...modelItems,
-            ], configured ? resolvedConfigured ? modelToken(resolvedConfigured) : configured : "inherit");
+            const selectedModel = await host.selectModelMenu(
+              ctx,
+              [
+                {
+                  value: "inherit",
+                  label: "Inherit current session",
+                  searchText: "Inherit current session inherit",
+                },
+                ...modelItems,
+              ],
+              configured
+                ? resolvedConfigured
+                  ? modelToken(resolvedConfigured)
+                  : configured
+                : "inherit",
+            );
             if (!selectedModel) continue;
             value = selectedModel === "inherit" ? undefined : selectedModel;
           } else if (action === "thinking") {
             field = "thinking";
             await ctx.modelRegistry.refresh();
-            const configured = typeof definition.frontmatter.model === "string" ? definition.frontmatter.model : undefined;
-            const model = configured ? this.resolveConfiguredModel(ctx, configured) : ctx.model;
-            const levels = model ? getSupportedThinkingLevels(model) : [...host.validThinkingLevels];
-            const configuredThinking = definition.frontmatter.thinking === false ? "off" :
-              typeof definition.frontmatter.thinking === "string" ? definition.frontmatter.thinking : undefined;
+            const configured =
+              typeof definition.frontmatter.model === "string"
+                ? definition.frontmatter.model
+                : undefined;
+            const model = configured
+              ? this.resolveConfiguredModel(ctx, configured)
+              : ctx.model;
+            const levels = model
+              ? getSupportedThinkingLevels(model)
+              : [...host.validThinkingLevels];
+            const configuredThinking =
+              definition.frontmatter.thinking === false
+                ? "off"
+                : typeof definition.frontmatter.thinking === "string"
+                  ? definition.frontmatter.thinking
+                  : undefined;
             const thinkingItems = [
               { value: "inherit", label: "Inherit current session" },
-              ...levels.map((level: string) => ({ value: level, label: level })),
+              ...levels.map((level: string) => ({
+                value: level,
+                label: level,
+              })),
             ];
             if (configuredThinking && !levels.includes(configuredThinking))
-              thinkingItems.push({ value: configuredThinking, label: configuredThinking });
-            const selectedThinking = await host.selectMenu(ctx, "Thinking", thinkingItems, configuredThinking ?? "inherit");
+              thinkingItems.push({
+                value: configuredThinking,
+                label: configuredThinking,
+              });
+            const selectedThinking = await host.selectMenu(
+              ctx,
+              "Thinking",
+              thinkingItems,
+              configuredThinking ?? "inherit",
+            );
             if (!selectedThinking) continue;
-            value = selectedThinking === "inherit" ? undefined : selectedThinking;
+            value =
+              selectedThinking === "inherit" ? undefined : selectedThinking;
           } else if (action === "enabled") {
             field = "enabled";
             value = !host.agentDefinitionEnabled(definition);
           } else continue;
           const result = host.updateAgentOverride(definition, field, value);
-          const verified = host.discoverAgent(definition.name, definition.projectSource ? { projectRoot: ctx.cwd } : {});
+          const verified = host.discoverAgent(
+            definition.name,
+            definition.projectSource ? { projectRoot: ctx.cwd } : {},
+          );
           if (result.changed && verified.overrideSource !== result.path)
-            throw new Error(`agent ${definition.name} override verification failed`);
-          ctx.ui.notify(result.changed
-            ? field === "enabled" ? `${definition.name} ${value ? "enabled" : "disabled"}.`
-              : `${definition.name} ${field} ${value === undefined ? "inherited" : `set to ${value}`}.`
-            : `${definition.name} ${field} is already inherited; no change made.`);
+            throw new Error(
+              `agent ${definition.name} override verification failed`,
+            );
+          ctx.ui.notify(
+            result.changed
+              ? field === "enabled"
+                ? `${definition.name} ${value ? "enabled" : "disabled"}.`
+                : `${definition.name} ${field} ${value === undefined ? "inherited" : `set to ${value}`}.`
+              : `${definition.name} ${field} is already inherited; no change made.`,
+          );
           definition = verified;
         }
       }
@@ -554,18 +801,25 @@ export function createLeadCommandRuntime(host: any) {
       const signal = host.controller.sessionSignal();
       const snapshot = await host.loadStatusSnapshot(ctx, signal);
       const rows = host.buildStatusRows(
-        snapshot.agents.filter((agent: any) => agent.state !== "lost" && agent.state !== "unknown"),
+        snapshot.agents.filter(
+          (agent: any) => agent.state !== "lost" && agent.state !== "unknown",
+        ),
         { now: Date.now() },
       );
       if (!rows.length) {
-        ctx.ui.notify('No running agents. Ask Pi normally, for example: "Use scout to inspect this repository."');
+        ctx.ui.notify(
+          'No running agents. Ask Pi normally, for example: "Use scout to inspect this repository."',
+        );
         return;
       }
       const options = host.renderRunningOptions(rows);
       const optionRows = new Map<string, number>();
       for (const [index, option] of options.entries()) {
         if (optionRows.has(option)) {
-          ctx.ui.notify("Running list is ambiguous; reopen Running.", "warning");
+          ctx.ui.notify(
+            "Running list is ambiguous; reopen Running.",
+            "warning",
+          );
           return;
         }
         optionRows.set(option, index);
@@ -573,12 +827,21 @@ export function createLeadCommandRuntime(host: any) {
       const selected = await ctx.ui.select("Running", options);
       if (selected === undefined) return;
       const selectedIndex = optionRows.get(selected);
-      const selectedRow = selectedIndex === undefined || selectedIndex < 0 ? undefined : rows[selectedIndex];
+      const selectedRow =
+        selectedIndex === undefined || selectedIndex < 0
+          ? undefined
+          : rows[selectedIndex];
       if (!selectedRow) return;
-      const fresh = await host.loadStatusSnapshot(ctx, host.controller.sessionSignal());
-      const target = fresh.agents.find((agent: any) =>
-        agent.label === selectedRow.label && agent.paneId === selectedRow.paneId &&
-        agent.sessionId === selectedRow.sessionId);
+      const fresh = await host.loadStatusSnapshot(
+        ctx,
+        host.controller.sessionSignal(),
+      );
+      const target = fresh.agents.find(
+        (agent: any) =>
+          agent.label === selectedRow.label &&
+          agent.paneId === selectedRow.paneId &&
+          agent.sessionId === selectedRow.sessionId,
+      );
       if (!target?.paneId) {
         ctx.ui.notify("Agent changed; reopen Running.", "warning");
         return;
@@ -589,12 +852,21 @@ export function createLeadCommandRuntime(host: any) {
     },
     showSessionStats(ctx: ExtensionCommandContext): void {
       const stats = host.collectOwnedSessionUsage(ctx);
-      ctx.ui.notify(host.formatSessionUsage(
-        stats.current, stats.agents, stats.agentSessions, stats.complete, stats.breakdown,
-      ));
+      ctx.ui.notify(
+        host.formatSessionUsage(
+          stats.current,
+          stats.agents,
+          stats.agentSessions,
+          stats.complete,
+          stats.breakdown,
+        ),
+      );
     },
     async confirmAndStopAll(ctx: ExtensionCommandContext): Promise<void> {
-      const snapshot = await host.loadStatusSnapshot(ctx, host.controller.sessionSignal());
+      const snapshot = await host.loadStatusSnapshot(
+        ctx,
+        host.controller.sessionSignal(),
+      );
       if (!snapshot.agents.length) {
         host.presentStopSummary("No owned agents running.");
         return;
@@ -606,7 +878,9 @@ export function createLeadCommandRuntime(host: any) {
       if (!confirmed) return;
       ctx.abort();
       const summary = await host.controller.stopOwnedAgentsForSession(
-        ctx, ctx.sessionManager.getSessionId(), host.controller.sessionSignal(),
+        ctx,
+        ctx.sessionManager.getSessionId(),
+        host.controller.sessionSignal(),
       );
       host.presentStopSummary(summary);
       if (host.isLead()) host.maybeFinishHerdRun(ctx);
@@ -614,33 +888,57 @@ export function createLeadCommandRuntime(host: any) {
     async openAgentsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedSection = "running";
       while (true) {
-        const snapshot = await host.loadStatusSnapshot(ctx, host.controller.sessionSignal());
+        const snapshot = await host.loadStatusSnapshot(
+          ctx,
+          host.controller.sessionSignal(),
+        );
         const running = host.formatStatusCounts(snapshot.agents) || "0";
-        const definitions = (await host.contextAgentDefinitions(ctx)).definitions;
-        const selected = await host.selectMenu(ctx, `Pi Herdsman · v${host.version}`, [
-          { value: "running", label: `Running        ${running}` },
-          { value: "stats", label: "Session stats" },
-          { value: "definitions", label: `Definitions    ${definitions.length}` },
-          { value: "layout", label: `Layout         ${(await host.placementSettings(ctx)).effective}` },
-          { value: "context-retirement", label: `Context retirement  ${host.readConfig().contextRetirement ? "on" : "off"}` },
-          { value: "message-limits", label: "Message limits" },
-          { value: "stop-all", label: "Stop all…" },
-        ], selectedSection);
+        const definitions = (await host.contextAgentDefinitions(ctx))
+          .definitions;
+        const selected = await host.selectMenu(
+          ctx,
+          `Pi Herdsman · v${host.version}`,
+          [
+            { value: "running", label: `Running        ${running}` },
+            { value: "stats", label: "Session stats" },
+            {
+              value: "definitions",
+              label: `Definitions    ${definitions.length}`,
+            },
+            {
+              value: "layout",
+              label: `Layout         ${(await host.placementSettings(ctx)).effective}`,
+            },
+            {
+              value: "context-retirement",
+              label: `Context retirement  ${host.readConfig().contextRetirement ? "on" : "off"}`,
+            },
+            { value: "message-limits", label: "Message limits" },
+            { value: "stop-all", label: "Stop all…" },
+          ],
+          selectedSection,
+        );
         if (!selected) return;
         selectedSection = selected;
         if (selected === "running") await this.openRunningAgentsMenu(ctx);
         else if (selected === "stats") this.showSessionStats(ctx);
-        else if (selected === "definitions") await this.openDefinitionsMenu(ctx);
+        else if (selected === "definitions")
+          await this.openDefinitionsMenu(ctx);
         else if (selected === "layout") await this.openPlacementMenu(ctx);
         else if (selected === "context-retirement") {
           const enabled = !host.readConfig().contextRetirement;
           host.updateConfig("contextRetirement", enabled);
           ctx.ui.notify(`context retirement: ${enabled ? "on" : "off"}`);
-        } else if (selected === "message-limits") await this.openMessageLimitsMenu(ctx);
+        } else if (selected === "message-limits")
+          await this.openMessageLimitsMenu(ctx);
         else if (selected === "stop-all") await this.confirmAndStopAll(ctx);
       }
     },
-    async runRoleCommand(role: "manager" | "chief", rawArgs: string, ctx: ExtensionCommandContext): Promise<void> {
+    async runRoleCommand(
+      role: "manager" | "chief",
+      rawArgs: string,
+      ctx: ExtensionCommandContext,
+    ): Promise<void> {
       const args = rawArgs.trim().split(/\s+/u).filter(Boolean);
       const usage = `Usage: /${role} [leave]`;
       if (args.length > 1 || (args[0] && args[0] !== "leave")) {
@@ -652,31 +950,43 @@ export function createLeadCommandRuntime(host: any) {
           await host.openSupervisionOverview(ctx);
           return;
         }
-        ctx.ui.notify(await host.transitionRole(role, args[0] === "leave", ctx));
+        ctx.ui.notify(
+          await host.transitionRole(role, args[0] === "leave", ctx),
+        );
       } catch (error) {
         ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
       }
     },
-    async runAgentsCommand(rawArgs: string, ctx: ExtensionCommandContext): Promise<void> {
+    async runAgentsCommand(
+      rawArgs: string,
+      ctx: ExtensionCommandContext,
+    ): Promise<void> {
       if (!ctx.hasUI) return;
-      const usage = "Usage: /agents stats | definitions | placement [tab|subtree|split] | stop";
+      const usage =
+        "Usage: /agents stats | definitions | placement [tab|subtree|split] | stop";
       const placementUsage = "Usage: /agents placement [tab|subtree|split]";
       const args = rawArgs.trim() ? rawArgs.trim().split(/\s+/u) : [];
       try {
         if (!args.length) return void (await this.openAgentsMenu(ctx));
-        if (args[0] === "stats" && args.length === 1) return void this.showSessionStats(ctx);
-        if (args[0] === "definitions" && args.length === 1) return void (await this.openDefinitionsMenu(ctx));
+        if (args[0] === "stats" && args.length === 1)
+          return void this.showSessionStats(ctx);
+        if (args[0] === "definitions" && args.length === 1)
+          return void (await this.openDefinitionsMenu(ctx));
         if (args[0] === "placement") {
           if (args.length > 2 || (args[1] && !host.isSpawnPlacement(args[1])))
             return void ctx.ui.notify(placementUsage, "error");
-          if (args.length === 1) return void (await this.openPlacementMenu(ctx));
+          if (args.length === 1)
+            return void (await this.openPlacementMenu(ctx));
           host.updateConfig("spawnPlacement", args[1]);
           const verified = await host.placementSettings(ctx);
           if (verified.effective !== args[1])
-            throw new Error(`Agent placement did not become effective: ${verified.effective}`);
+            throw new Error(
+              `Agent placement did not become effective: ${verified.effective}`,
+            );
           return void ctx.ui.notify(`placement: ${verified.effective}`);
         }
-        if (args[0] === "stop" && args.length === 1) return void (await this.confirmAndStopAll(ctx));
+        if (args[0] === "stop" && args.length === 1)
+          return void (await this.confirmAndStopAll(ctx));
         ctx.ui.notify(usage, "error");
       } catch (error) {
         ctx.ui.notify(String(error), "error");
@@ -693,7 +1003,9 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
       statusRuntime,
       leadRuntime: createLeadRuntimeState(),
       leadToolState: createLeadToolState(
-        () => pi.getAllTools(), options.ownedToolNames ?? [], options.leadCoordinationToolNames ?? [],
+        () => pi.getAllTools(),
+        options.ownedToolNames ?? [],
+        options.leadCoordinationToolNames ?? [],
       ),
       supervisionUiRuntime: undefined,
       coordinationRuntime: undefined,
@@ -702,25 +1014,35 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
       herdRunRuntime: undefined,
     };
   const leadRuntime = options.leadRuntime ?? createLeadRuntimeState();
-  const leadToolState = options.leadToolState ?? createLeadToolState(
-    () => pi.getAllTools(), options.ownedToolNames, options.leadCoordinationToolNames,
-  );
+  const leadToolState =
+    options.leadToolState ??
+    createLeadToolState(
+      () => pi.getAllTools(),
+      options.ownedToolNames,
+      options.leadCoordinationToolNames,
+    );
   options.leadRuntime = leadRuntime;
   options.leadToolState = leadToolState;
   options.onLeadRuntimeReady?.(leadRuntime, leadToolState);
   let roleTransitions!: ReturnType<typeof createLeadRoleTransitions>;
   let identityRuntime!: ReturnType<typeof createLeadIdentityRuntime>;
   const liveAgent = (...args: any[]) => identityRuntime.liveAgent(...args);
-  const remoteChiefAgent = (...args: any[]) => identityRuntime.remoteChiefAgent(...args);
+  const remoteChiefAgent = (...args: any[]) =>
+    identityRuntime.remoteChiefAgent(...args);
   const liveLead = (...args: any[]) => identityRuntime.liveLead(...args);
   const coordinationServices = {
     ...options.coordinationHost,
     currentManager: (...args: any[]) => roleTransitions.currentManager(...args),
-    currentWorktreeScope: (ctx: ExtensionContext) => roleTransitions.currentWorktreeScope(ctx),
-    projectAssignmentForScope: (...args: any[]) => roleTransitions.projectAssignmentForScope(...args),
-    publishProjectMessage: (...args: any[]) => roleTransitions.publishProjectMessage(...args),
-    currentChiefAuthority: (...args: any[]) => roleTransitions.currentChiefAuthority(...args),
-    currentSupervisor: (...args: any[]) => roleTransitions.currentSupervisor(...args),
+    currentWorktreeScope: (ctx: ExtensionContext) =>
+      roleTransitions.currentWorktreeScope(ctx),
+    projectAssignmentForScope: (...args: any[]) =>
+      roleTransitions.projectAssignmentForScope(...args),
+    publishProjectMessage: (...args: any[]) =>
+      roleTransitions.publishProjectMessage(...args),
+    currentChiefAuthority: (...args: any[]) =>
+      roleTransitions.currentChiefAuthority(...args),
+    currentSupervisor: (...args: any[]) =>
+      roleTransitions.currentSupervisor(...args),
   };
   const coordinationRuntime = createLeadCoordinationRuntime({
     ...coordinationServices,
@@ -740,15 +1062,22 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     isCurrentChief: (ctx: ExtensionContext) =>
       options.leadRuntime.chiefMode === "active" &&
       !!options.leadRuntime.chiefLease &&
-      options.leadRuntime.chiefLease.descriptor.piSessionId === ctx.sessionManager.getSessionId(),
+      options.leadRuntime.chiefLease.descriptor.piSessionId ===
+        ctx.sessionManager.getSessionId(),
     currentManager: (...args: any[]) => roleTransitions.currentManager(...args),
     currentChief: (...args: any[]) => roleTransitions.currentChief(...args),
-    currentChiefAuthority: (...args: any[]) => roleTransitions.currentChiefAuthority(...args),
+    currentChiefAuthority: (...args: any[]) =>
+      roleTransitions.currentChiefAuthority(...args),
     latestMessageText: (ctx: ExtensionContext) =>
-      coordinationRuntime.latestCustomMessageText(ctx, options.supervisionHost.contextType),
+      coordinationRuntime.latestCustomMessageText(
+        ctx,
+        options.supervisionHost.contextType,
+      ),
     persistedTranscriptReady: (target: any) =>
       controllerPersistedTranscriptReady(target, (path) => {
-        const file = (options.supervisionHost.statSync ?? statSync)(path, { throwIfNoEntry: false });
+        const file = (options.supervisionHost.statSync ?? statSync)(path, {
+          throwIfNoEntry: false,
+        });
         return !!file?.isFile() && file.size > 0;
       }),
   });
@@ -801,9 +1130,12 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
       !managerDiagnosticAllowlist.has(event) ||
       managerDiagnosticEvents.has(event) ||
       managerDiagnosticEvents.size >= 16
-    ) return;
+    )
+      return;
     managerDiagnosticEvents.add(event);
-    console.error(`[pi-herdsman-manager-diagnostic] ${JSON.stringify({ event, ...details })}`);
+    console.error(
+      `[pi-herdsman-manager-diagnostic] ${JSON.stringify({ event, ...details })}`,
+    );
   };
   const roleHost = options.roleTransitionHost;
   let leadMetadataQueue = Promise.resolve();
@@ -815,28 +1147,65 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     const paneId = roleHost.paneId();
     if (!paneId) return Promise.resolve();
     const activeRole = () => activeLeadRole(leadRuntime);
-    const leadName = mode === "inactive" && activeRole() === "lead"
-      ? roleHost.getSessionName()?.trim()
-      : undefined;
-    const args = ["pane", "report-metadata", paneId, "--source", "pi-herdsman:lead", "--title",
-      mode === "active" ? "chief" : activeRole() === "manager" ? "Pi Herdsman manager" : leadName || "Pi Herdsman lead",
-      ...(mode === "active" ? ["--token", "pi_herdsman_role=chief"] : mode === "inactive" ? ["--token", `pi_herdsman_role=${activeRole()}`] : ["--clear-token", "pi_herdsman_role"])];
+    const leadName =
+      mode === "inactive" && activeRole() === "lead"
+        ? roleHost.getSessionName()?.trim()
+        : undefined;
+    const args = [
+      "pane",
+      "report-metadata",
+      paneId,
+      "--source",
+      "pi-herdsman:lead",
+      "--title",
+      mode === "active"
+        ? "chief"
+        : activeRole() === "manager"
+          ? "Pi Herdsman manager"
+          : leadName || "Pi Herdsman lead",
+      ...(mode === "active"
+        ? ["--token", "pi_herdsman_role=chief"]
+        : mode === "inactive"
+          ? ["--token", `pi_herdsman_role=${activeRole()}`]
+          : ["--clear-token", "pi_herdsman_role"]),
+    ];
     if (mode === "inactive" && activeRole() === "lead")
-      args.push(leadName ? "--token" : "--clear-token", leadName ? `pi_herdsman_name=${leadName}` : "pi_herdsman_name");
+      args.push(
+        leadName ? "--token" : "--clear-token",
+        leadName ? `pi_herdsman_name=${leadName}` : "pi_herdsman_name",
+      );
     if (mode !== "inactive" || activeRole() !== "lead")
-      args.push("--clear-token", "pi_herdsman_herd_run_started_at", "--clear-token", "pi_herdsman_context_percent");
-    leadMetadataQueue = leadMetadataQueue.catch(() => {}).then(async () => {
-      if (generation !== leadRuntime.chiefModeGeneration) return;
-      await roleHost.runHerdr(pi, ctx, args, { noResult: true, timeout: 10_000 });
-    }).catch(() => {});
+      args.push(
+        "--clear-token",
+        "pi_herdsman_herd_run_started_at",
+        "--clear-token",
+        "pi_herdsman_context_percent",
+      );
+    leadMetadataQueue = leadMetadataQueue
+      .catch(() => {})
+      .then(async () => {
+        if (generation !== leadRuntime.chiefModeGeneration) return;
+        await roleHost.runHerdr(pi, ctx, args, {
+          noResult: true,
+          timeout: 10_000,
+        });
+      })
+      .catch(() => {});
     return leadMetadataQueue;
   };
   const queueLeadMetadata = (ctx: ExtensionContext, metadata: any): void => {
     if (leadRuntime.controllerRole === "manager") {
-      void publishLeadRole(ctx, leadRuntime.roleSuspended ? "suspended" : "inactive", leadRuntime.chiefModeGeneration);
+      void publishLeadRole(
+        ctx,
+        leadRuntime.roleSuspended ? "suspended" : "inactive",
+        leadRuntime.chiefModeGeneration,
+      );
       return;
     }
-    leadMetadataQueue = leadMetadataQueue.catch(() => {}).then(() => roleHost.reportLeadMetadata(pi, ctx, metadata)).catch(() => {});
+    leadMetadataQueue = leadMetadataQueue
+      .catch(() => {})
+      .then(() => roleHost.reportLeadMetadata(pi, ctx, metadata))
+      .catch(() => {});
   };
   const persistRole = (role: SessionRole): void => {
     const tools = leadToolState.getLeadTools();
@@ -844,27 +1213,46 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     pi.appendEntry("pi-herdsman-role", { role, leadTools: [...tools] });
   };
   const leadEntryEffects: LeadEntryEffects = {
-    advancePresenceGeneration: () => coordinationRuntime.advancePresenceGeneration(),
+    advancePresenceGeneration: () =>
+      coordinationRuntime.advancePresenceGeneration(),
     clearChiefStartPreflight: () => inboxRuntime.clearStartPreflight(),
     resetSupervisionSnapshot: () => supervisionUiRuntime.reset(),
     removePeerPresence: () => coordinationRuntime.removePeerPresence(),
     reconcileRoleTools: () => roleTransitions.reconcileRoleTools(),
     persistRole,
-    persistCoordinatorState: () => coordinationRuntime.persistCoordinatorState(),
+    persistCoordinatorState: () =>
+      coordinationRuntime.persistCoordinatorState(),
     coordinationHealthy: () => coordinationRuntime.coordinationHealthy(),
-    schedulePeerPresence: (ctx) => { void coordinationRuntime.schedulePeerPresence(ctx); },
-    publishLeadRole: (ctx, mode, generation) => { void publishLeadRole(ctx, mode, generation); },
-    appendRoleError: (ctx, error) => roleHost.appendDurableError(pi, ctx, "pi_herdsman_role_error", error),
+    schedulePeerPresence: (ctx) => {
+      void coordinationRuntime.schedulePeerPresence(ctx);
+    },
+    publishLeadRole: (ctx, mode, generation) => {
+      void publishLeadRole(ctx, mode, generation);
+    },
+    appendRoleError: (ctx, error) =>
+      roleHost.appendDurableError(pi, ctx, "pi_herdsman_role_error", error),
   };
-  const enterLead = (ctx?: ExtensionContext, persist = true): void => enterLeadRole(leadRuntime, leadEntryEffects, ctx, persist);
-  const enterChief = (ctx: ExtensionContext, lease: ChiefLease, generation: number): void => enterChiefRole(leadRuntime, leadEntryEffects, ctx, lease, generation);
-  const enterSuspended = (ctx?: ExtensionContext): void => enterSuspendedRole(leadRuntime, leadEntryEffects, ctx);
-  const activationGuard = (sessionId: string, role: "Chief" | "Manager"): void => {
+  const enterLead = (ctx?: ExtensionContext, persist = true): void =>
+    enterLeadRole(leadRuntime, leadEntryEffects, ctx, persist);
+  const enterChief = (
+    ctx: ExtensionContext,
+    lease: ChiefLease,
+    generation: number,
+  ): void =>
+    enterChiefRole(leadRuntime, leadEntryEffects, ctx, lease, generation);
+  const enterSuspended = (ctx?: ExtensionContext): void =>
+    enterSuspendedRole(leadRuntime, leadEntryEffects, ctx);
+  const activationGuard = (
+    sessionId: string,
+    role: "Chief" | "Manager",
+  ): void => {
     if (!coordinationRuntime.coordinationHealthy())
       throw new Error("Lead coordination state is unavailable");
     const { states, issues } = roleHost.scanAgentStates();
     if (issues.length)
-      throw new Error(`Cannot activate ${role} while managed mailbox state is unresolved`);
+      throw new Error(
+        `Cannot activate ${role} while managed mailbox state is unresolved`,
+      );
     if (states.some(({ state }: any) => state.ownerSessionId === sessionId))
       throw new Error(`Cannot activate ${role} while owned agent work exists`);
   };
@@ -872,20 +1260,27 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     ...roleHost,
     controllerScope: { kind: "lead" },
     activationGuard,
-    advancePeerPresenceGeneration: () => coordinationRuntime.advancePresenceGeneration(),
-    setCoordinationHealthy: (healthy: boolean) => coordinationRuntime.setCoordinationHealthy(healthy),
+    advancePeerPresenceGeneration: () =>
+      coordinationRuntime.advancePresenceGeneration(),
+    setCoordinationHealthy: (healthy: boolean) =>
+      coordinationRuntime.setCoordinationHealthy(healthy),
     normalizeBaseTools: leadToolState.normalizeBaseTools,
     appendRegisteredTools: leadToolState.appendRegisteredTools,
     normalizeLeadTools: leadToolState.normalizeLeadTools,
     ownedTools: () => leadToolState.ownedTools,
     getLeadTools: () => leadToolState.getLeadTools(),
-    setLeadTools: (tools: string[] | undefined) => leadToolState.setLeadTools(tools),
-    currentChiefAuthority: (...args: any[]) => roleTransitions.currentChiefAuthority(...args),
-    persistCoordinatorState: () => coordinationRuntime.persistCoordinatorState(),
+    setLeadTools: (tools: string[] | undefined) =>
+      leadToolState.setLeadTools(tools),
+    currentChiefAuthority: (...args: any[]) =>
+      roleTransitions.currentChiefAuthority(...args),
+    persistCoordinatorState: () =>
+      coordinationRuntime.persistCoordinatorState(),
     persistRole,
-    persistLeadCoordination: () => coordinationRuntime.persistLeadCoordination(),
+    persistLeadCoordination: () =>
+      coordinationRuntime.persistLeadCoordination(),
     coordinationHealthy: () => coordinationRuntime.coordinationHealthy(),
-    schedulePeerPresence: (ctx: ExtensionContext) => coordinationRuntime.schedulePeerPresence(ctx),
+    schedulePeerPresence: (ctx: ExtensionContext) =>
+      coordinationRuntime.schedulePeerPresence(ctx),
     removePeerPresence: () => coordinationRuntime.removePeerPresence(),
     clearNormalUI: () => statusRuntime.clear(),
     startNormalUI: (ctx: ExtensionContext) => statusRuntime.start(ctx),
@@ -896,17 +1291,21 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     enterLead,
     enterChief,
     waitForPeerPresence: () => coordinationRuntime.waitForPeerPresence(),
-    markLeadCoordinationUnhealthy: (ctx?: ExtensionContext) => coordinationRuntime.markLeadCoordinationUnhealthy(ctx),
+    markLeadCoordinationUnhealthy: (ctx?: ExtensionContext) =>
+      coordinationRuntime.markLeadCoordinationUnhealthy(ctx),
     reconcileRoleTools: () => roleTransitions.reconcileRoleTools(),
     enterSuspended,
     resetSupervisionSnapshot: () => supervisionUiRuntime.reset(),
-    focusExistingChief: (ctx: ExtensionContext) => supervisionUiRuntime.focusChief(ctx),
+    focusExistingChief: (ctx: ExtensionContext) =>
+      supervisionUiRuntime.focusChief(ctx),
   };
   roleTransitions = createLeadRoleTransitions(options.leadRuntime, {
     ...roleTransitionServices,
     pi,
     leadInstanceId: () => options.leadRuntime.instanceId,
-    setLeadInstanceId: (id: string) => { options.leadRuntime.instanceId = id; },
+    setLeadInstanceId: (id: string) => {
+      options.leadRuntime.instanceId = id;
+    },
     clearChiefStartPreflight: () => inboxRuntime.clearStartPreflight(),
     advanceChiefInboxGeneration: () => inboxRuntime.advanceGeneration(),
     clearChiefInboxTimer: () => inboxRuntime.clearTimer(),
@@ -926,16 +1325,21 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     isCurrentChief: (ctx: ExtensionContext) =>
       options.leadRuntime.chiefMode === "active" &&
       !!options.leadRuntime.chiefLease &&
-      options.leadRuntime.chiefLease.descriptor.piSessionId === ctx.sessionManager.getSessionId(),
-    prepareSupervisionMessage: (ctx: ExtensionContext) => supervisionUiRuntime.prepareMessage(ctx),
+      options.leadRuntime.chiefLease.descriptor.piSessionId ===
+        ctx.sessionManager.getSessionId(),
+    prepareSupervisionMessage: (ctx: ExtensionContext) =>
+      supervisionUiRuntime.prepareMessage(ctx),
     authorizePeerRecord: (record: ChiefMessageRecord, ctx: ExtensionContext) =>
       coordinationRuntime.authorizePeerRecord(record, ctx),
     assertCurrentLeadCoordination: (ctx: ExtensionContext) =>
       coordinationRuntime.assertCurrentLeadCoordination(ctx),
-    currentChiefAuthority: (ctx: ExtensionContext, failOnVerificationError = false) =>
-      roleTransitions.currentChiefAuthority(ctx, failOnVerificationError),
+    currentChiefAuthority: (
+      ctx: ExtensionContext,
+      failOnVerificationError = false,
+    ) => roleTransitions.currentChiefAuthority(ctx, failOnVerificationError),
     currentManager: (...args: any[]) => roleTransitions.currentManager(...args),
-    managerForScope: (...args: any[]) => roleTransitions.managerForScope(...args),
+    managerForScope: (...args: any[]) =>
+      roleTransitions.managerForScope(...args),
     currentPeerPresenceValid: (ctx: ExtensionContext) =>
       coordinationRuntime.currentPeerPresenceValid(ctx),
     drainProjectMessages: (ctx: ExtensionContext) =>
@@ -949,10 +1353,20 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     build: options.build,
     onChanged: () => statusRuntime.requestRefresh(),
     onWorkChanged: (ctx: ExtensionContext) => herdRunRuntime?.maybeFinish(ctx),
-    onWorktreeRemoved: (removed: any, ctx: ExtensionContext, signal: AbortSignal) => {
-      void roleTransitions.retireRemovedProjectWork(removed, ctx, signal).catch((error) =>
-        options.controllerServices.appendError(ctx, "pi_herdsman_state_error", error),
-      );
+    onWorktreeRemoved: (
+      removed: any,
+      ctx: ExtensionContext,
+      signal: AbortSignal,
+    ) => {
+      void roleTransitions
+        .retireRemovedProjectWork(removed, ctx, signal)
+        .catch((error) =>
+          options.controllerServices.appendError(
+            ctx,
+            "pi_herdsman_state_error",
+            error,
+          ),
+        );
     },
   });
   identityRuntime = createLeadIdentityRuntime({
@@ -964,10 +1378,15 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     ctx: ExtensionContext,
     signal = controller.sessionSignal(),
     allowTranscriptDefinitionFallback = true,
-    runtimeForLabel: (label: string) => any = (label) => controller.runtimeForLabel(label),
+    runtimeForLabel: (label: string) => any = (label) =>
+      controller.runtimeForLabel(label),
   ): Promise<StatusSnapshot> => {
     const view = await controller.agentSnapshotView(
-      ctx, { kind: "lead" }, signal, true, allowTranscriptDefinitionFallback,
+      ctx,
+      { kind: "lead" },
+      signal,
+      true,
+      allowTranscriptDefinitionFallback,
     );
     return buildLeadStatusSnapshot(view, ctx, {
       ...options.statusSnapshotHost,
@@ -995,13 +1414,18 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     liveLead,
     currentManager: (...args: any[]) => roleTransitions.currentManager(...args),
     sameManagerDescriptor: projectHost.sameManagerDescriptor,
-    withProjectWorkLock: (...args: any[]) => roleTransitions.withProjectWorkLock(...args),
+    withProjectWorkLock: (...args: any[]) =>
+      roleTransitions.withProjectWorkLock(...args),
     activeRole: () => activeLeadRole(options.leadRuntime),
     managerLease: () => options.leadRuntime.managerLease,
-    currentChiefAuthority: (...args: any[]) => roleTransitions.currentChiefAuthority(...args),
-    directReports: (...args: any[]) => supervisionUiRuntime.directReports(...args),
-    loadSupervisionSnapshot: (...args: any[]) => supervisionUiRuntime.loadSnapshot(...args),
-    prepareCoordinationInput: (...args: any[]) => coordinationRuntime.prepareCoordinationInput(...args),
+    currentChiefAuthority: (...args: any[]) =>
+      roleTransitions.currentChiefAuthority(...args),
+    directReports: (...args: any[]) =>
+      supervisionUiRuntime.directReports(...args),
+    loadSupervisionSnapshot: (...args: any[]) =>
+      supervisionUiRuntime.loadSnapshot(...args),
+    prepareCoordinationInput: (...args: any[]) =>
+      coordinationRuntime.prepareCoordinationInput(...args),
   };
   projectRuntime = createLeadProjectRuntime({
     ...projectServices,
@@ -1039,22 +1463,34 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
       supervisionUiRuntime.openOverview(ctx, {
         focusLead: (...args: any[]) => supervisionUiRuntime.focusLead(...args),
         stopProjectLead: (...args: any[]) => projectRuntime.stop(...args),
-        activateProjectLead: (...args: any[]) => projectRuntime.activateProjectLead(...args),
+        activateProjectLead: (...args: any[]) =>
+          projectRuntime.activateProjectLead(...args),
         selectMenu: options.commandHost.selectMenu,
       }),
     controller,
     loadStatusSnapshot: (ctx: ExtensionContext) =>
       loadStatusSnapshot(ctx, controller.sessionSignal(), true),
-    roleActive: (role: "manager" | "chief") => role === "manager"
-      ? activeLeadRole(options.leadRuntime) === "manager" && !options.leadRuntime.roleSuspended
-      : options.leadRuntime.chiefMode === "active",
-    transitionRole: (role: "manager" | "chief", leave: boolean, ctx: ExtensionCommandContext) =>
+    roleActive: (role: "manager" | "chief") =>
       role === "manager"
-        ? leave ? roleTransitions.leaveManager(ctx) : roleTransitions.activateManager(ctx)
-        : leave ? roleTransitions.leaveChief(ctx) : roleTransitions.activateChief(ctx),
+        ? activeLeadRole(options.leadRuntime) === "manager" &&
+          !options.leadRuntime.roleSuspended
+        : options.leadRuntime.chiefMode === "active",
+    transitionRole: (
+      role: "manager" | "chief",
+      leave: boolean,
+      ctx: ExtensionCommandContext,
+    ) =>
+      role === "manager"
+        ? leave
+          ? roleTransitions.leaveManager(ctx)
+          : roleTransitions.activateManager(ctx)
+        : leave
+          ? roleTransitions.leaveChief(ctx)
+          : roleTransitions.activateChief(ctx),
     runHerdr: (ctx: ExtensionContext, args: string[], runOptions: any) =>
       options.commandHost.runHerdr(pi, ctx, args, runOptions),
-    maybeFinishHerdRun: (ctx: ExtensionContext) => herdRunRuntime!.maybeFinish(ctx),
+    maybeFinishHerdRun: (ctx: ExtensionContext) =>
+      herdRunRuntime!.maybeFinish(ctx),
     getThinkingLevel: () => pi.getThinkingLevel(),
   });
   const agentEvents = createLeadAgentEventRuntime({
@@ -1093,28 +1529,37 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
   });
   pi.on("turn_start", () => controller.resetAssignmentGuidance());
   pi.on("before_agent_start", (event: any, ctx: ExtensionContext) =>
-    agentEvents.beforeAgentStart(event, ctx));
+    agentEvents.beforeAgentStart(event, ctx),
+  );
   pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) =>
-    agentEvents.agentStart(ctx));
+    agentEvents.agentStart(ctx),
+  );
   pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) =>
-    agentEvents.agentSettled(ctx));
+    agentEvents.agentSettled(ctx),
+  );
   pi.on("tool_call", (event: any, ctx: ExtensionContext) =>
-    agentEvents.toolCall(event, ctx));
+    agentEvents.toolCall(event, ctx),
+  );
   pi.on("session_start", (_event: unknown, ctx: ExtensionContext) =>
-    sessionStart.sessionStart(ctx));
+    sessionStart.sessionStart(ctx),
+  );
   pi.on("session_info_changed", (event: any, ctx: ExtensionContext) => {
     if (!roleTransitions.chiefModeInactive()) return;
     if (!options.hasPane()) return;
     options.queueLeadPresentation(ctx, event?.name ?? options.sessionName());
   });
   pi.on("turn_end", (_event: unknown, ctx: ExtensionContext) =>
-    options.queueLeadPresentation(ctx));
+    options.queueLeadPresentation(ctx),
+  );
   pi.on("session_compact", (_event: unknown, ctx: ExtensionContext) =>
-    options.queueLeadPresentation(ctx));
+    options.queueLeadPresentation(ctx),
+  );
   pi.on("session_tree", (_event: unknown, ctx: ExtensionContext) =>
-    sessionTree.sessionTree(ctx));
+    sessionTree.sessionTree(ctx),
+  );
   pi.on("session_shutdown", (_event: unknown, ctx: ExtensionContext) =>
-    shutdown.shutdown(ctx));
+    shutdown.shutdown(ctx),
+  );
   return {
     roleTransitions,
     publishLeadRole,
@@ -1175,13 +1620,15 @@ export function createLeadIdentityRuntime(host: any) {
       matches[0].pane_id !== descriptor.paneId ||
       matches[0].tab_id !== descriptor.tabId ||
       matches[0].workspace_id !== descriptor.workspaceId
-    ) return undefined;
+    )
+      return undefined;
     try {
       const alias = (await host.getAgent(ctx, descriptor.paneId))?.agent;
       if (
         !host.isPiAgent(alias) ||
         !host.matchesExpectedSession(alias.agent_session, expected)
-      ) return undefined;
+      )
+        return undefined;
     } catch {
       // A failed alias lookup is not identity proof.
       return undefined;
@@ -1196,7 +1643,10 @@ export function createLeadIdentityRuntime(host: any) {
     const expected = host.expectedSession(sessionId, sessionPath);
     const matches = await liveAgent(ctx, sessionId, sessionPath);
     const snapshot = await host.leadController.managedAgentSnapshots(
-      ctx, ctx.signal, false, true,
+      ctx,
+      ctx.signal,
+      false,
+      true,
     );
     const hasManagedAgent = snapshot.agents.some(
       ({ state }: any) => state.piSessionId === sessionId,
@@ -1212,15 +1662,17 @@ export function createLeadIdentityRuntime(host: any) {
 }
 
 export function createLeadStatusRuntime() {
-  let options: {
-    loadSnapshot(ctx: ExtensionContext): Promise<StatusSnapshot>;
-    pendingStartEntries(): readonly any[];
-    hasPendingStart(label: string): boolean;
-    clearPendingStart(label: string, expected: any): boolean;
-    runtimeForLabel(label: string): any;
-    ownToolsSnapshot(): { ownTools?: string[] };
-    initialWidgetSnapshot?(): StatusSnapshot | undefined;
-  } | undefined;
+  let options:
+    | {
+        loadSnapshot(ctx: ExtensionContext): Promise<StatusSnapshot>;
+        pendingStartEntries(): readonly any[];
+        hasPendingStart(label: string): boolean;
+        clearPendingStart(label: string, expected: any): boolean;
+        runtimeForLabel(label: string): any;
+        ownToolsSnapshot(): { ownTools?: string[] };
+        initialWidgetSnapshot?(): StatusSnapshot | undefined;
+      }
+    | undefined;
   let statusWidget: ReturnType<typeof createStatusWidget> | undefined;
   let statusTimer: ReturnType<typeof setInterval> | undefined;
   let statusContext: ExtensionContext | undefined;
@@ -1230,7 +1682,10 @@ export function createLeadStatusRuntime() {
   let statusInFlight = false;
   let requestActive = false;
   let lastValidStatus: StatusSnapshot = {
-    agents: [], stale: false, unavailable: true, breadcrumb: ["herd"],
+    agents: [],
+    stale: false,
+    unavailable: true,
+    breadcrumb: ["herd"],
   };
   const widgetSnapshot = (snapshot: StatusSnapshot): StatusSnapshot => {
     const pendingStarts = options?.pendingStartEntries() ?? [];
@@ -1241,13 +1696,22 @@ export function createLeadStatusRuntime() {
         : agent,
     );
     const pendingAgents = pendingStarts
-      .filter(({ label }) => !snapshot.agents.some((agent) => agent.label === label))
+      .filter(
+        ({ label }) => !snapshot.agents.some((agent) => agent.label === label),
+      )
       .map(({ label, definition, task, startedAt, parentLabel }) => ({
-        label, definition, state: "starting" as const,
-        ...(task !== undefined ? { task } : {}), startedAt,
+        label,
+        definition,
+        state: "starting" as const,
+        ...(task !== undefined ? { task } : {}),
+        startedAt,
         ...(parentLabel ? { parentLabel } : {}),
       }));
-    return { ...snapshot, unavailable: false, agents: [...agents, ...pendingAgents] };
+    return {
+      ...snapshot,
+      unavailable: false,
+      agents: [...agents, ...pendingAgents],
+    };
   };
   const reconcilePendingStarts = (snapshot: StatusSnapshot): void => {
     if (!options) return;
@@ -1255,9 +1719,13 @@ export function createLeadStatusRuntime() {
       const { label } = pending;
       const agent = snapshot.agents.find((item) => item.label === label);
       const runtime = options.runtimeForLabel(label);
-      const resolved = pending.requestId !== undefined &&
-        (agent?.state === "working" || agent?.state === "blocked" ||
-          (runtime?.activeRequestId === pending.requestId && agent !== undefined && agent.state !== "settling") ||
+      const resolved =
+        pending.requestId !== undefined &&
+        (agent?.state === "working" ||
+          agent?.state === "blocked" ||
+          (runtime?.activeRequestId === pending.requestId &&
+            agent !== undefined &&
+            agent.state !== "settling") ||
           runtime?.completedRequestId === pending.requestId);
       if (resolved) options.clearPendingStart(label, pending);
     }
@@ -1267,7 +1735,13 @@ export function createLeadStatusRuntime() {
     generation = statusGeneration,
   ): Promise<void> => {
     const configured = options;
-    if (!configured || !ctx || generation !== statusGeneration || ctx !== statusContext) return;
+    if (
+      !configured ||
+      !ctx ||
+      generation !== statusGeneration ||
+      ctx !== statusContext
+    )
+      return;
     if (statusInFlight) {
       statusRefresh = true;
       return;
@@ -1278,14 +1752,30 @@ export function createLeadStatusRuntime() {
       if (generation !== statusGeneration || ctx !== statusContext) return;
       reconcilePendingStarts(lastValidStatus);
       if (
-        generation === statusGeneration && ctx === statusContext &&
+        generation === statusGeneration &&
+        ctx === statusContext &&
         statusWidgetGeneration === generation
-      ) statusWidget?.setSnapshot(widgetSnapshot(lastValidStatus));
+      )
+        statusWidget?.setSnapshot(widgetSnapshot(lastValidStatus));
     } catch {
       if (generation === statusGeneration && ctx === statusContext)
-        statusWidget?.setSnapshot(widgetSnapshot(lastValidStatus.unavailable
-          ? { agents: [], stale: false, unavailable: true, breadcrumb: lastValidStatus.breadcrumb, ...configured.ownToolsSnapshot() }
-          : { ...lastValidStatus, stale: true, ...configured.ownToolsSnapshot() }));
+        statusWidget?.setSnapshot(
+          widgetSnapshot(
+            lastValidStatus.unavailable
+              ? {
+                  agents: [],
+                  stale: false,
+                  unavailable: true,
+                  breadcrumb: lastValidStatus.breadcrumb,
+                  ...configured.ownToolsSnapshot(),
+                }
+              : {
+                  ...lastValidStatus,
+                  stale: true,
+                  ...configured.ownToolsSnapshot(),
+                },
+          ),
+        );
     } finally {
       if (generation === statusGeneration && ctx === statusContext) {
         statusInFlight = false;
@@ -1308,9 +1798,12 @@ export function createLeadStatusRuntime() {
     }
   };
   return {
-    configure: (value: NonNullable<typeof options>) => { options = value; },
+    configure: (value: NonNullable<typeof options>) => {
+      options = value;
+    },
     requestRefresh: () => {
-      if (requestActive && statusContext) void refresh(statusContext, statusGeneration);
+      if (requestActive && statusContext)
+        void refresh(statusContext, statusGeneration);
     },
     start: (ctx: ExtensionContext) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
@@ -1349,7 +1842,9 @@ export function createLeadStatusRuntime() {
       statusContext = ctx;
       return ++statusGeneration;
     },
-    setSnapshot: (snapshot: StatusSnapshot) => { lastValidStatus = snapshot; },
+    setSnapshot: (snapshot: StatusSnapshot) => {
+      lastValidStatus = snapshot;
+    },
     shutdown: () => {
       ++statusGeneration;
       clearTimer();
@@ -1369,355 +1864,363 @@ export function createLeadSupervisionRuntime(host: any) {
     suppliedInventory?: any,
     suppliedAgents?: any,
     includeAll = false,
-    ) => {
+  ) => {
     if (host.activeRole() === "chief" && !includeAll) {
-        const reports = await directReports(
-          ctx,
-          suppliedInventory,
-          suppliedAgents,
-        );
-        const managers = reports.filter(
-          (report: any) => report.role === "manager",
-        );
-  return {
-          managers,
-          leads: reports.filter((report: any) => report.role === "lead"),
-      };
-      }
-    if (host.activeRole() === "manager" && !includeAll) {
-        const manager = await host.currentManager(ctx);
-      if (!manager) throw new Error("Manager lease is no longer active");
-        const group = await host.worktreeGroupScope(
-          host.pi,
-          ctx,
-          manager.workspaceId,
-          ctx.signal,
-        );
-        const [leads, topology] = await Promise.all([
-          directReports(ctx, suppliedInventory, suppliedAgents),
-          host.runHerdr(
-            host.pi,
-            ctx,
-            ["worktree", "list", "--workspace", group.primaryWorkspaceId],
-            { signal: ctx.signal },
-          ),
-        ]);
-      if (
-          topology?.source?.repo_key !== group.repoKey ||
-          !Array.isArray(topology?.worktrees)
-        )
-          throw new Error("Herdr worktree topology is not authoritative");
-        const assignments = host.listProjectAssignments(
-          host.supervisionRuntime(),
-          group.repoKey,
-        );
-        const openWorkspaces = topology.worktrees.flatMap((worktree: any) =>
-          typeof worktree?.open_workspace_id === "string" &&
-          worktree.open_workspace_id
-            ? [
-                {
-                  workspaceId: worktree.open_workspace_id,
-                  ...(typeof worktree.branch === "string" && worktree.branch
-                    ? { branch: worktree.branch }
-                    : {}),
-                  path: String(worktree.path ?? ""),
-                  linked: worktree.is_linked_worktree === true,
-                },
-              ]
-            : [],
-        );
-        return {
-          project: group.repoName,
-          work: host.projectWorkSnapshot({
-            assignments,
-            worktrees: topology.worktrees,
-            leads,
-          }),
-          openWorkspaces,
-          leads,
-      };
-      }
-      const inventory =
-        suppliedInventory ?? (await host.herdrSessionSnapshot(host.pi, ctx, ctx.signal));
-      const live = inventory.agents;
-      const agentSnapshot =
-        suppliedAgents ??
-        (await host.managedAgentSnapshots(host.pi, ctx,
-          ctx.signal,
-          false,
-          true,
-          inventory,
-        ));
-      const agentEvidence = agentSnapshot.agents.map(({ state, listed }) => ({
-        piSessionId: state.piSessionId,
-        ownerSessionId: state.ownerSessionId,
-        workspaceId: state.workspaceId,
-        paneId: state.paneId,
-        runtimeState: listed.state,
-        agentLabel: state.agentLabel,
-      }));
-      const managedAgentSessionIds = new Set(
-        agentEvidence.map((agent) => agent.piSessionId),
+      const reports = await directReports(
+        ctx,
+        suppliedInventory,
+        suppliedAgents,
       );
-      const agents = live.flatMap((agent: any) => {
-        const sessionId = host.herdrSessionId(agent);
-      if (!host.isPiAgent(agent) || !sessionId) return [];
-        const candidateSessionFile = host.supervisedSessionFile(agent, sessionId);
-        const piSessionFile =
-          candidateSessionFile &&
-          host.persistedTranscriptReady({
-            piSessionId: sessionId,
-            piSessionFile: candidateSessionFile,
-          })
-            ? candidateSessionFile
-            : undefined;
-        return [
-          {
-            sessionId,
-            sessionKind: "id" as const,
-            workspaceId: agent.workspace_id,
-            paneId: agent.pane_id,
-            tabId: agent.tab_id,
-            workspaceCwd: agent.cwd,
-            herdrName: agent.name,
-            ...(piSessionFile ? { piSessionFile } : {}),
-            tokens: agent.tokens,
-            runtimeState: host.normalizeHerdrLifecycleState(agent),
-          },
-        ];
-      });
-      const workspaceCwds = new Map<string, string>();
-      for (const agent of agents)
-      if (!workspaceCwds.has(agent.workspaceId) && agent.workspaceCwd)
-          workspaceCwds.set(agent.workspaceId, agent.workspaceCwd);
-      const workspaceProvenance = await host.workspacePresentationProvenance(
+      const managers = reports.filter(
+        (report: any) => report.role === "manager",
+      );
+      return {
+        managers,
+        leads: reports.filter((report: any) => report.role === "lead"),
+      };
+    }
+    if (host.activeRole() === "manager" && !includeAll) {
+      const manager = await host.currentManager(ctx);
+      if (!manager) throw new Error("Manager lease is no longer active");
+      const group = await host.worktreeGroupScope(
         host.pi,
         ctx,
-        [...new Set(agents.map((agent) => agent.workspaceId))],
-        workspaceCwds,
+        manager.workspaceId,
         ctx.signal,
       );
-      const diagnostics = live.some(
-        (agent: any) =>
-          (agent?.agent === "pi" || agent?.agent_session?.agent === "pi") &&
-          !host.isPiAgent(agent),
+      const [leads, topology] = await Promise.all([
+        directReports(ctx, suppliedInventory, suppliedAgents),
+        host.runHerdr(
+          host.pi,
+          ctx,
+          ["worktree", "list", "--workspace", group.primaryWorkspaceId],
+          { signal: ctx.signal },
+        ),
+      ]);
+      if (
+        topology?.source?.repo_key !== group.repoKey ||
+        !Array.isArray(topology?.worktrees)
       )
-        ? [
-            "Live Pi agents are present but their session identities are unresolvable",
-          ]
-        : undefined;
-      const coordinationStates = agents.flatMap((agent) => {
-        try {
-          const state = host.readLeadCoordinationState(
-            host.supervisionRuntime(),
-            agent.sessionId,
-          );
-          return state ? [state] : [];
-        } catch (error) {
-          // Missing state is a normal pre-publication condition. Any other
-          // failure is an ambiguous lead and must remain observable.
-          host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
-          throw error;
-        }
-      });
+        throw new Error("Herdr worktree topology is not authoritative");
+      const assignments = host.listProjectAssignments(
+        host.supervisionRuntime(),
+        group.repoKey,
+      );
+      const openWorkspaces = topology.worktrees.flatMap((worktree: any) =>
+        typeof worktree?.open_workspace_id === "string" &&
+        worktree.open_workspace_id
+          ? [
+              {
+                workspaceId: worktree.open_workspace_id,
+                ...(typeof worktree.branch === "string" && worktree.branch
+                  ? { branch: worktree.branch }
+                  : {}),
+                path: String(worktree.path ?? ""),
+                linked: worktree.is_linked_worktree === true,
+              },
+            ]
+          : [],
+      );
       return {
-        ...host.projectSupervision({
-          agents,
-          managedAgents: agentEvidence,
-          coordinationStates,
-          workspaceProvenance,
-          excludedSessionIds: new Set([
-            ...host.listManagerDescriptors(host.supervisionRuntime()).map(
-              (manager) => manager.piSessionId,
-            ),
-            ...(host.currentChief() ? [host.currentChief()!.piSessionId] : []),
-          ]),
-          managedAgentSessionIds,
+        project: group.repoName,
+        work: host.projectWorkSnapshot({
+          assignments,
+          worktrees: topology.worktrees,
+          leads,
         }),
-        ...(diagnostics ? { diagnostics } : {}),
+        openWorkspaces,
+        leads,
+      };
+    }
+    const inventory =
+      suppliedInventory ??
+      (await host.herdrSessionSnapshot(host.pi, ctx, ctx.signal));
+    const live = inventory.agents;
+    const agentSnapshot =
+      suppliedAgents ??
+      (await host.managedAgentSnapshots(
+        host.pi,
+        ctx,
+        ctx.signal,
+        false,
+        true,
+        inventory,
+      ));
+    const agentEvidence = agentSnapshot.agents.map(({ state, listed }) => ({
+      piSessionId: state.piSessionId,
+      ownerSessionId: state.ownerSessionId,
+      workspaceId: state.workspaceId,
+      paneId: state.paneId,
+      runtimeState: listed.state,
+      agentLabel: state.agentLabel,
+    }));
+    const managedAgentSessionIds = new Set(
+      agentEvidence.map((agent) => agent.piSessionId),
+    );
+    const agents = live.flatMap((agent: any) => {
+      const sessionId = host.herdrSessionId(agent);
+      if (!host.isPiAgent(agent) || !sessionId) return [];
+      const candidateSessionFile = host.supervisedSessionFile(agent, sessionId);
+      const piSessionFile =
+        candidateSessionFile &&
+        host.persistedTranscriptReady({
+          piSessionId: sessionId,
+          piSessionFile: candidateSessionFile,
+        })
+          ? candidateSessionFile
+          : undefined;
+      return [
+        {
+          sessionId,
+          sessionKind: "id" as const,
+          workspaceId: agent.workspace_id,
+          paneId: agent.pane_id,
+          tabId: agent.tab_id,
+          workspaceCwd: agent.cwd,
+          herdrName: agent.name,
+          ...(piSessionFile ? { piSessionFile } : {}),
+          tokens: agent.tokens,
+          runtimeState: host.normalizeHerdrLifecycleState(agent),
+        },
+      ];
+    });
+    const workspaceCwds = new Map<string, string>();
+    for (const agent of agents)
+      if (!workspaceCwds.has(agent.workspaceId) && agent.workspaceCwd)
+        workspaceCwds.set(agent.workspaceId, agent.workspaceCwd);
+    const workspaceProvenance = await host.workspacePresentationProvenance(
+      host.pi,
+      ctx,
+      [...new Set(agents.map((agent) => agent.workspaceId))],
+      workspaceCwds,
+      ctx.signal,
+    );
+    const diagnostics = live.some(
+      (agent: any) =>
+        (agent?.agent === "pi" || agent?.agent_session?.agent === "pi") &&
+        !host.isPiAgent(agent),
+    )
+      ? [
+          "Live Pi agents are present but their session identities are unresolvable",
+        ]
+      : undefined;
+    const coordinationStates = agents.flatMap((agent) => {
+      try {
+        const state = host.readLeadCoordinationState(
+          host.supervisionRuntime(),
+          agent.sessionId,
+        );
+        return state ? [state] : [];
+      } catch (error) {
+        // Missing state is a normal pre-publication condition. Any other
+        // failure is an ambiguous lead and must remain observable.
+        host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+        throw error;
+      }
+    });
+    return {
+      ...host.projectSupervision({
+        agents,
+        managedAgents: agentEvidence,
+        coordinationStates,
+        workspaceProvenance,
+        excludedSessionIds: new Set([
+          ...host
+            .listManagerDescriptors(host.supervisionRuntime())
+            .map((manager) => manager.piSessionId),
+          ...(host.currentChief() ? [host.currentChief()!.piSessionId] : []),
+        ]),
+        managedAgentSessionIds,
+      }),
+      ...(diagnostics ? { diagnostics } : {}),
     };
   };
   const directReports = async (
     ctx: ExtensionContext,
     suppliedInventory?: any,
     suppliedAgents?: any,
-    ) => {
+  ) => {
     if (host.activeRole() === "manager" && !host.state.roleSuspended) {
-        const manager = await host.currentManager(ctx);
+      const manager = await host.currentManager(ctx);
       if (
-          !manager ||
-          !host.state.managerLease ||
-          !host.sameManagerDescriptor(manager, host.state.managerLease.descriptor)
-        )
-          throw new Error("Manager lease is no longer active");
-        const scope = await host.worktreeGroupScope(
+        !manager ||
+        !host.state.managerLease ||
+        !host.sameManagerDescriptor(manager, host.state.managerLease.descriptor)
+      )
+        throw new Error("Manager lease is no longer active");
+      const scope = await host.worktreeGroupScope(
+        host.pi,
+        ctx,
+        manager.workspaceId,
+        ctx.signal,
+      );
+      const snapshot = await loadSupervisionSnapshot(
+        ctx,
+        suppliedInventory,
+        suppliedAgents,
+        true,
+      );
+      return snapshot.leads.filter((lead) =>
+        scope.workspaceIds.includes(lead.workspaceId),
+      );
+    }
+    if (host.activeRole() !== "chief")
+      throw new Error("Staff is available only to an active supervisor");
+    const chiefAuthority = await host.currentChiefAuthority(ctx);
+    if (!chiefAuthority)
+      throw new Error("Staff is available only to an active supervisor");
+    const managers = [];
+    const allLeads = (
+      await loadSupervisionSnapshot(
+        ctx,
+        suppliedInventory,
+        suppliedAgents,
+        true,
+      )
+    ).leads;
+    const managedAgents = (
+      suppliedAgents ??
+      (await host.managedAgentSnapshots(
+        host.pi,
+        ctx,
+        ctx.signal,
+        false,
+        true,
+        suppliedInventory,
+      ))
+    ).agents;
+    const managerLeadSessions = new Set<string>();
+    const descriptors = host.listManagerDescriptors(host.supervisionRuntime());
+    for (const descriptor of descriptors) {
+      if (
+        descriptors.filter(
+          (candidate) => candidate.piSessionId === descriptor.piSessionId,
+        ).length !== 1
+      )
+        continue;
+      const live = await host.remoteChiefAgent(ctx, descriptor);
+      if (!live) continue;
+      const state = host.readLeadCoordinationState(
+        host.supervisionRuntime(),
+        descriptor.piSessionId,
+      );
+      if (!state || state.role !== "manager") continue;
+      let scope;
+      try {
+        scope = await host.worktreeGroupScope(
           host.pi,
           ctx,
-          manager.workspaceId,
+          descriptor.workspaceId,
           ctx.signal,
         );
-        const snapshot = await loadSupervisionSnapshot(
-          ctx,
-          suppliedInventory,
-          suppliedAgents,
-          true,
-        );
-        return snapshot.leads.filter((lead) =>
-          scope.workspaceIds.includes(lead.workspaceId),
-        );
+      } catch {
+        continue;
       }
-    if (host.activeRole() !== "chief")
-        throw new Error("Staff is available only to an active supervisor");
-      const chiefAuthority = await host.currentChiefAuthority(ctx);
-    if (!chiefAuthority)
-        throw new Error("Staff is available only to an active supervisor");
-      const managers = [];
-      const allLeads = (
-        await loadSupervisionSnapshot(
-          ctx,
-          suppliedInventory,
-          suppliedAgents,
-          true,
-        )
-      ).leads;
-      const managedAgents = (
-        suppliedAgents ??
-        (await host.managedAgentSnapshots(host.pi, ctx,
-          ctx.signal,
-          false,
-          true,
-          suppliedInventory,
-        ))
-      ).agents;
-      const managerLeadSessions = new Set<string>();
-      const descriptors = host.listManagerDescriptors(host.supervisionRuntime());
-      for (const descriptor of descriptors) {
       if (
-          descriptors.filter(
-            (candidate) => candidate.piSessionId === descriptor.piSessionId,
-          ).length !== 1
-        )
-          continue;
-        const live = await host.remoteChiefAgent(ctx, descriptor);
-      if (!live) continue;
-        const state = host.readLeadCoordinationState(
-          host.supervisionRuntime(),
-          descriptor.piSessionId,
-        );
-      if (!state || state.role !== "manager") continue;
-        let scope;
-        try {
-          scope = await host.worktreeGroupScope(
-            host.pi,
-            ctx,
-            descriptor.workspaceId,
-            ctx.signal,
-          );
-        } catch {
-          continue;
-        }
-      if (
-          scope.repoKey !== descriptor.repoKey ||
-          scope.primaryWorkspaceId !== descriptor.workspaceId
-        )
-          continue;
-        const leads = allLeads.filter((lead) =>
-          scope.workspaceIds.includes(lead.workspaceId),
-        );
-        for (const lead of leads) managerLeadSessions.add(lead.lead);
-        const ownerSessions = new Set([descriptor.piSessionId]);
-        const ownedAgents = [] as typeof managedAgents;
-        for (let changed = true; changed;) {
-          changed = false;
-          for (const agent of managedAgents) {
+        scope.repoKey !== descriptor.repoKey ||
+        scope.primaryWorkspaceId !== descriptor.workspaceId
+      )
+        continue;
+      const leads = allLeads.filter((lead) =>
+        scope.workspaceIds.includes(lead.workspaceId),
+      );
+      for (const lead of leads) managerLeadSessions.add(lead.lead);
+      const ownerSessions = new Set([descriptor.piSessionId]);
+      const ownedAgents = [] as typeof managedAgents;
+      for (let changed = true; changed;) {
+        changed = false;
+        for (const agent of managedAgents) {
           if (
-              ownerSessions.has(agent.state.ownerSessionId) &&
-              !ownerSessions.has(agent.state.piSessionId)
-            ) {
-              ownerSessions.add(agent.state.piSessionId);
-              ownedAgents.push(agent);
-              changed = true;
-            }
+            ownerSessions.has(agent.state.ownerSessionId) &&
+            !ownerSessions.has(agent.state.piSessionId)
+          ) {
+            ownerSessions.add(agent.state.piSessionId);
+            ownedAgents.push(agent);
+            changed = true;
           }
         }
-        managers.push({
-          session: descriptor.piSessionId,
-          instanceId: state.instanceId,
-          displayName: scope.repoName,
-          project: scope.repoName,
-          workspaceId: descriptor.workspaceId,
-          paneId: descriptor.paneId,
-          tabId: descriptor.tabId,
-          runtimeState: host.normalizeHerdrLifecycleState(live),
-          ...(host.supervisedSessionFile(live, descriptor.piSessionId) &&
-          host.persistedTranscriptReady({
-            piSessionId: descriptor.piSessionId,
-            piSessionFile: host.supervisedSessionFile(live, descriptor.piSessionId)!,
-          })
-            ? {
-                piSessionFile: host.supervisedSessionFile(
-                  live,
-                  descriptor.piSessionId,
-                ),
-              }
-            : {}),
-          agentCounts: {
-            active:
-              ownedAgents.filter(({ listed }) => listed.state === "working")
-                .length +
-              leads.reduce((n, lead) => n + lead.agentCounts.active, 0),
-            blocked:
-              ownedAgents.filter(({ listed }) => listed.state === "blocked")
-                .length +
-              leads.reduce((n, lead) => n + lead.agentCounts.blocked, 0),
-            total:
-              ownedAgents.length +
-              leads.reduce((n, lead) => n + lead.agentCounts.total, 0),
-          },
-          leadCounts: {
-            active: leads.filter((lead) =>
-              ["working", "starting", "settling"].includes(lead.runtimeState),
-            ).length,
-            blocked: leads.filter((lead) => lead.runtimeState === "blocked")
-              .length,
-            total: leads.length,
-          },
-          leads: leads.slice(0, 32).map((lead) => ({
-            session: lead.lead,
-            displayName: lead.displayName,
-            ...(lead.branch ? { branch: lead.branch } : {}),
-            runtimeState: lead.runtimeState,
-            agentCounts: lead.agentCounts,
-          })),
-          availableActions: [
-            "inspect",
-            "message",
-            ...(host.supervisedSessionFile(live, descriptor.piSessionId) &&
-            host.persistedTranscriptReady({
-              piSessionId: descriptor.piSessionId,
+      }
+      managers.push({
+        session: descriptor.piSessionId,
+        instanceId: state.instanceId,
+        displayName: scope.repoName,
+        project: scope.repoName,
+        workspaceId: descriptor.workspaceId,
+        paneId: descriptor.paneId,
+        tabId: descriptor.tabId,
+        runtimeState: host.normalizeHerdrLifecycleState(live),
+        ...(host.supervisedSessionFile(live, descriptor.piSessionId) &&
+        host.persistedTranscriptReady({
+          piSessionId: descriptor.piSessionId,
+          piSessionFile: host.supervisedSessionFile(
+            live,
+            descriptor.piSessionId,
+          )!,
+        })
+          ? {
               piSessionFile: host.supervisedSessionFile(
                 live,
                 descriptor.piSessionId,
-              )!,
-            })
-              ? ["transcript" as const]
-              : []),
-          ],
-        });
-      }
-      const unclaimedLeads = allLeads.filter(
-        (lead) => !managerLeadSessions.has(lead.lead),
-      );
-      return [
-        ...managers.map((manager: any) => ({
-          ...manager,
-          role: "manager" as const,
+              ),
+            }
+          : {}),
+        agentCounts: {
+          active:
+            ownedAgents.filter(({ listed }) => listed.state === "working")
+              .length +
+            leads.reduce((n, lead) => n + lead.agentCounts.active, 0),
+          blocked:
+            ownedAgents.filter(({ listed }) => listed.state === "blocked")
+              .length +
+            leads.reduce((n, lead) => n + lead.agentCounts.blocked, 0),
+          total:
+            ownedAgents.length +
+            leads.reduce((n, lead) => n + lead.agentCounts.total, 0),
+        },
+        leadCounts: {
+          active: leads.filter((lead) =>
+            ["working", "starting", "settling"].includes(lead.runtimeState),
+          ).length,
+          blocked: leads.filter((lead) => lead.runtimeState === "blocked")
+            .length,
+          total: leads.length,
+        },
+        leads: leads.slice(0, 32).map((lead) => ({
+          session: lead.lead,
+          displayName: lead.displayName,
+          ...(lead.branch ? { branch: lead.branch } : {}),
+          runtimeState: lead.runtimeState,
+          agentCounts: lead.agentCounts,
         })),
-        ...unclaimedLeads.map((lead) => ({ ...lead, role: "lead" as const })),
-      ];
+        availableActions: [
+          "inspect",
+          "message",
+          ...(host.supervisedSessionFile(live, descriptor.piSessionId) &&
+          host.persistedTranscriptReady({
+            piSessionId: descriptor.piSessionId,
+            piSessionFile: host.supervisedSessionFile(
+              live,
+              descriptor.piSessionId,
+            )!,
+          })
+            ? ["transcript" as const]
+            : []),
+        ],
+      });
+    }
+    const unclaimedLeads = allLeads.filter(
+      (lead) => !managerLeadSessions.has(lead.lead),
+    );
+    return [
+      ...managers.map((manager: any) => ({
+        ...manager,
+        role: "manager" as const,
+      })),
+      ...unclaimedLeads.map((lead) => ({ ...lead, role: "lead" as const })),
+    ];
   };
 
-    let loadSnapshot = host.loadSnapshot ?? loadSupervisionSnapshot;
+  let loadSnapshot = host.loadSnapshot ?? loadSupervisionSnapshot;
   let snapshot: any = { leads: [] };
   let known = false;
   let generationId: string | undefined;
@@ -1729,14 +2232,17 @@ export function createLeadSupervisionRuntime(host: any) {
   let renderOverview: (() => void) | undefined;
   let renderWidget: (() => void) | undefined;
 
-  const generation = (ctx?: ExtensionContext): string => [
-    host.state.chiefModeGeneration,
-    host.state.sessionGeneration,
-    host.state.chiefLease?.descriptor.leaseId ?? "",
-    host.state.managerLease?.descriptor.leaseId ?? "",
-    host.activeRole(),
-    ctx?.sessionManager.getSessionId() ?? host.state.leadContext?.sessionManager.getSessionId() ?? "",
-  ].join(":");
+  const generation = (ctx?: ExtensionContext): string =>
+    [
+      host.state.chiefModeGeneration,
+      host.state.sessionGeneration,
+      host.state.chiefLease?.descriptor.leaseId ?? "",
+      host.state.managerLease?.descriptor.leaseId ?? "",
+      host.activeRole(),
+      ctx?.sessionManager.getSessionId() ??
+        host.state.leadContext?.sessionManager.getSessionId() ??
+        "",
+    ].join(":");
   const snapshotKnown = (ctx?: ExtensionContext): boolean =>
     known && generationId === generation(ctx);
   const status = (ctx?: ExtensionContext): "fresh" | "stale" | "unavailable" =>
@@ -1749,13 +2255,28 @@ export function createLeadSupervisionRuntime(host: any) {
     stale = false;
   };
   const refreshOnce = async (ctx: ExtensionContext): Promise<void> => {
-    if (host.state.chiefMode !== "active" &&
-      !(host.activeRole() === "manager" && !host.state.roleSuspended)) return;
+    if (
+      host.state.chiefMode !== "active" &&
+      !(host.activeRole() === "manager" && !host.state.roleSuspended)
+    )
+      return;
     const currentGeneration = generation(ctx);
     const current = (): boolean => generation(ctx) === currentGeneration;
     try {
-      const inventory = await host.herdrSessionSnapshot(host.pi, ctx, ctx.signal);
-      const agents = await host.managedAgentSnapshots(host.pi, ctx, ctx.signal, false, true, inventory, false);
+      const inventory = await host.herdrSessionSnapshot(
+        host.pi,
+        ctx,
+        ctx.signal,
+      );
+      const agents = await host.managedAgentSnapshots(
+        host.pi,
+        ctx,
+        ctx.signal,
+        false,
+        true,
+        inventory,
+        false,
+      );
       const value = await loadSnapshot(ctx, inventory, agents);
       if (!current()) return;
       snapshot = value;
@@ -1766,8 +2287,16 @@ export function createLeadSupervisionRuntime(host: any) {
     } catch {
       if (current()) stale = snapshotKnown(ctx);
     }
-    if (current() && (host.state.chiefMode === "active" || host.activeRole() === "manager") && ctx.mode === "tui") {
-      try { renderWidget?.(); } catch { /* A failed redraw must not reject observation. */ }
+    if (
+      current() &&
+      (host.state.chiefMode === "active" || host.activeRole() === "manager") &&
+      ctx.mode === "tui"
+    ) {
+      try {
+        renderWidget?.();
+      } catch {
+        /* A failed redraw must not reject observation. */
+      }
     }
   };
   const refresh = (ctx: ExtensionContext): Promise<void> => {
@@ -1779,70 +2308,274 @@ export function createLeadSupervisionRuntime(host: any) {
         pending = undefined;
         await refreshOnce(next);
       }
-    })().finally(() => { inFlight = undefined; });
+    })().finally(() => {
+      inFlight = undefined;
+    });
     return inFlight;
   };
   const nextOverviewGeneration = (): number => ++overviewGeneration;
   const openOverview = async (
-      ctx: ExtensionCommandContext,
-      uiActions: {
-        focusLead(ctx: ExtensionContext, leadId: string): Promise<void>;
-        stopProjectLead(...args: any[]): Promise<any>;
-        activateProjectLead(...args: any[]): Promise<any>;
-        selectMenu(...args: any[]): Promise<string | undefined>;
-      },
-    ): Promise<void> => {
-      if (ctx.mode !== "tui") {
-        await refresh(ctx);
-        ctx.ui.notify(
-          host.formatSupervisionNotification(
-            snapshot,
-            status(ctx),
-          ),
-        );
-        return;
-      }
-      await ctx.ui.custom(
-        (tui: any, theme: any, _keys: any, done: (v: unknown) => void) => {
-          const viewGeneration = nextOverviewGeneration();
-          const supervisionGeneration = generation(ctx);
-          const sessionId = ctx.sessionManager.getSessionId();
-          let selected: string | undefined;
-          let mode: "overview" | "peek" = "overview";
-          let peekLead:
-            | ReturnType<typeof host.presentationReports>[number]
-            | undefined;
-          let peekEvidence: any;
-          let list: SelectList | undefined;
-          let renderedLeads = "";
-          const container = new host.tui.Container();
-          const selectTheme = {
-            selectedPrefix: (text: string) => theme.fg("accent", text),
-            selectedText: (text: string) => theme.fg("accent", text),
-            description: (text: string) => theme.fg("muted", text),
-            scrollInfo: (text: string) => theme.fg("muted", text),
-            noMatch: (text: string) => theme.fg("warning", text),
+    ctx: ExtensionCommandContext,
+    uiActions: {
+      focusLead(ctx: ExtensionContext, leadId: string): Promise<void>;
+      stopProjectLead(...args: any[]): Promise<any>;
+      activateProjectLead(...args: any[]): Promise<any>;
+      selectMenu(...args: any[]): Promise<string | undefined>;
+    },
+  ): Promise<void> => {
+    if (ctx.mode !== "tui") {
+      await refresh(ctx);
+      ctx.ui.notify(host.formatSupervisionNotification(snapshot, status(ctx)));
+      return;
+    }
+    await ctx.ui.custom(
+      (tui: any, theme: any, _keys: any, done: (v: unknown) => void) => {
+        const viewGeneration = nextOverviewGeneration();
+        const supervisionGeneration = generation(ctx);
+        const sessionId = ctx.sessionManager.getSessionId();
+        let selected: string | undefined;
+        let mode: "overview" | "peek" = "overview";
+        let peekLead:
+          ReturnType<typeof host.presentationReports>[number] | undefined;
+        let peekEvidence: any;
+        let list: SelectList | undefined;
+        let renderedLeads = "";
+        const container = new host.tui.Container();
+        const selectTheme = {
+          selectedPrefix: (text: string) => theme.fg("accent", text),
+          selectedText: (text: string) => theme.fg("accent", text),
+          description: (text: string) => theme.fg("muted", text),
+          scrollInfo: (text: string) => theme.fg("muted", text),
+          noMatch: (text: string) => theme.fg("warning", text),
+        };
+        const isCurrentOverview = (): boolean =>
+          viewGeneration === overviewGeneration &&
+          generation(ctx) === supervisionGeneration &&
+          ctx.sessionManager.getSessionId() === sessionId &&
+          (host.state.chiefMode === "active" ||
+            (host.activeRole() === "manager" && !host.state.roleSuspended));
+        const finish = (): void => {
+          if (viewGeneration === overviewGeneration) nextOverviewGeneration();
+          renderOverview = undefined;
+          done(undefined);
+        };
+        const focusSelected = (leadId: string): void => {
+          void uiActions
+            .focusLead(ctx, leadId)
+            .then(finish)
+            .catch((error) =>
+              ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error"),
+            );
+        };
+        const showOverview = (): void => {
+          const status = supervisionStatus(ctx);
+          const leads =
+            status === "unavailable"
+              ? []
+              : host.orderedSupervisionLeads(
+                  host.presentationReports(snapshot),
+                );
+          const work =
+            host.activeRole() === "manager" &&
+            status !== "unavailable" &&
+            "work" in snapshot
+              ? (snapshot.work ?? [])
+              : [];
+          const items: SelectItem[] =
+            host.activeRole() === "manager" && status !== "unavailable"
+              ? host.managerSupervisionItems(snapshot).map((entry) =>
+                  entry.kind === "work"
+                    ? {
+                        value: entry.work.branch,
+                        label: entry.work.branch,
+                        description: [
+                          entry.work.status,
+                          entry.work.runtimeState,
+                          entry.work.issue,
+                        ]
+                          .filter(Boolean)
+                          .join(" · "),
+                      }
+                    : {
+                        value: entry.lead.lead,
+                        label: entry.lead.branch ?? entry.lead.displayName,
+                        description: entry.lead.runtimeState,
+                      },
+                )
+              : leads.map((lead) => ({
+                  value: lead.lead,
+                  label: lead.displayName,
+                  description: `${lead.runtimeState}${lead.agentCounts.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`,
+                }));
+          if (!items.some((item) => item.value === selected))
+            selected = items[0]?.value;
+          list = new host.tui.SelectList(items, 8, selectTheme);
+          const index = items.findIndex((item) => item.value === selected);
+          if (index >= 0) list.setSelectedIndex(index);
+          list.onSelectionChange = (item) => {
+            if (item) selected = item.value;
           };
-          const isCurrentOverview = (): boolean =>
-            viewGeneration === overviewGeneration &&
-            generation(ctx) === supervisionGeneration &&
-            ctx.sessionManager.getSessionId() === sessionId &&
-            (host.state.chiefMode === "active" ||
-              (host.activeRole() === "manager" && !host.state.roleSuspended));
-          const finish = (): void => {
-            if (viewGeneration === overviewGeneration)
-              nextOverviewGeneration();
-            renderOverview = undefined;
-            done(undefined);
-          };
-          const focusSelected = (leadId: string): void => {
-            void uiActions.focusLead(ctx, leadId)
-              .then(finish)
-              .catch((error) =>
+          list.onSelect = (item) => {
+            if (!item) return;
+            if (!work.some((entry) => entry.branch === item.value)) {
+              if (host.activeRole() !== "manager")
+                return focusSelected(item.value);
+              void (async () => {
+                const action = await uiActions.selectMenu(
+                  ctx,
+                  items.find((entry) => entry.value === item.value)?.label ??
+                    "Lead",
+                  [
+                    { value: "focus", label: "Focus" },
+                    { value: "stop", label: "Stop Lead" },
+                  ],
+                );
+                if (!action || !isCurrentOverview()) return;
+                if (action === "focus") return focusSelected(item.value);
+                await uiActions.stopProjectLead(item.value, ctx, ctx.signal);
+                await refresh(ctx);
+                showOverview();
+                tui.requestRender();
+              })().catch((error) =>
                 ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error"),
               );
+              return;
+            }
+            const branch = item.value;
+            const entry = work.find((item) => item.branch === branch);
+            if (!entry) return;
+            const liveLead = host
+              .managerSupervisionItems(snapshot)
+              .some(
+                (item) =>
+                  item.kind === "work" &&
+                  item.work.branch === branch &&
+                  !!item.lead,
+              );
+            void (async () => {
+              const actions =
+                entry.status === "paused"
+                  ? [{ value: "resume", label: "Resume" }]
+                  : liveLead
+                    ? [
+                        { value: "focus", label: "Focus Lead" },
+                        { value: "stop", label: "Stop Lead" },
+                      ]
+                    : [];
+              if (!actions.length) return;
+              const action = await uiActions.selectMenu(ctx, branch, actions);
+              if (!action || !isCurrentOverview()) return;
+              if (action === "focus") return focusSelected(entry.session);
+              if (action === "stop")
+                await uiActions.stopProjectLead(entry.session, ctx, ctx.signal);
+              else if (action === "resume")
+                await uiActions.activateProjectLead(
+                  { action: "resume", branch },
+                  ctx,
+                  ctx.signal,
+                );
+              await refresh(ctx);
+              showOverview();
+              tui.requestRender();
+            })().catch((error) =>
+              ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error"),
+            );
           };
-          const showOverview = (): void => {
+          list.onCancel = finish;
+          container.clear();
+          container.addChild(
+            new host.tui.DynamicBorder((line: string) =>
+              theme.fg("border", line),
+            ),
+          );
+          container.addChild(
+            new host.tui.Text(
+              theme.bold(
+                theme.fg(
+                  "accent",
+                  status === "unavailable"
+                    ? "Pi Herdsman · unavailable"
+                    : host.activeRole() === "manager" && "project" in snapshot
+                      ? `Pi Herdsman · ${snapshot.project}`
+                      : `Pi Herdsman · ${leads.length} herd${leads.length === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`,
+                ),
+              ),
+              0,
+              0,
+            ),
+          );
+          container.addChild(list);
+          container.addChild(
+            new host.tui.Text(
+              theme.fg(
+                "muted",
+                host.activeRole() === "manager"
+                  ? "Enter actions · Esc close"
+                  : "Space peek · Enter focus · Esc close",
+              ),
+              0,
+              0,
+            ),
+          );
+          container.addChild(
+            new host.tui.DynamicBorder((line: string) =>
+              theme.fg("border", line),
+            ),
+          );
+          renderedLeads = [
+            status,
+            ...work.map(
+              (item) =>
+                `${item.branch}:${item.status}:${item.runtimeState ?? ""}:${item.issue ?? ""}`,
+            ),
+            ...leads.map(
+              (lead) =>
+                `${lead.lead}:${lead.runtimeState}:${lead.agentCounts.total}`,
+            ),
+          ].join("\0");
+        };
+        const showPeek = (): void => {
+          container.clear();
+          container.addChild(
+            new host.tui.DynamicBorder((line: string) =>
+              theme.fg("border", line),
+            ),
+          );
+          if (peekLead)
+            container.addChild(
+              new host.tui.Text(
+                theme.bold(
+                  theme.fg("accent", `Peek · ${peekLead.displayName}`),
+                ),
+                0,
+                0,
+              ),
+            );
+          if (peekLead)
+            container.addChild(
+              new host.tui.Text(
+                host
+                  .renderSupervisionPeek(peekLead, peekEvidence, 10_000)
+                  .join("\n"),
+                0,
+                0,
+              ),
+            );
+          container.addChild(
+            new host.tui.Text(
+              theme.fg("muted", "Esc back · Enter focus · Ctrl+C close"),
+              0,
+              0,
+            ),
+          );
+          container.addChild(
+            new host.tui.DynamicBorder((line: string) =>
+              theme.fg("border", line),
+            ),
+          );
+        };
+        const component = {
+          render(width: number): string[] {
             const status = supervisionStatus(ctx);
             const leads =
               status === "unavailable"
@@ -1850,259 +2583,60 @@ export function createLeadSupervisionRuntime(host: any) {
                 : host.orderedSupervisionLeads(
                     host.presentationReports(snapshot),
                   );
-            const work =
-              host.activeRole() === "manager" &&
-              status !== "unavailable" &&
-              "work" in snapshot
-                ? (snapshot.work ?? [])
-                : [];
-            const items: SelectItem[] =
-              host.activeRole() === "manager" && status !== "unavailable"
-                ? host.managerSupervisionItems(snapshot).map((entry) =>
-                    entry.kind === "work"
-                      ? {
-                          value: entry.work.branch,
-                          label: entry.work.branch,
-                          description: [
-                            entry.work.status,
-                            entry.work.runtimeState,
-                            entry.work.issue,
-                          ]
-                            .filter(Boolean)
-                            .join(" · "),
-                        }
-                      : {
-                          value: entry.lead.lead,
-                          label: entry.lead.branch ?? entry.lead.displayName,
-                          description: entry.lead.runtimeState,
-                        },
-                  )
-                : leads.map((lead) => ({
-                    value: lead.lead,
-                    label: lead.displayName,
-                    description: `${lead.runtimeState}${lead.agentCounts.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`,
-                  }));
-            if (!items.some((item) => item.value === selected))
-              selected = items[0]?.value;
-            list = new host.tui.SelectList(items, 8, selectTheme);
-            const index = items.findIndex((item) => item.value === selected);
-            if (index >= 0) list.setSelectedIndex(index);
-            list.onSelectionChange = (item) => {
-              if (item) selected = item.value;
-            };
-            list.onSelect = (item) => {
-              if (!item) return;
-              if (!work.some((entry) => entry.branch === item.value)) {
-                if (host.activeRole() !== "manager")
-                  return focusSelected(item.value);
-                void (async () => {
-                  const action = await uiActions.selectMenu(
-                    ctx,
-                    items.find((entry) => entry.value === item.value)?.label ??
-                      "Lead",
-                    [
-                      { value: "focus", label: "Focus" },
-                      { value: "stop", label: "Stop Lead" },
-                    ],
-                  );
-                  if (!action || !isCurrentOverview()) return;
-                  if (action === "focus") return focusSelected(item.value);
-                  await uiActions.stopProjectLead(item.value, ctx, ctx.signal);
-                  await refresh(ctx);
-                  showOverview();
-                  tui.requestRender();
-                })().catch((error) =>
-                  ctx.ui.notify(
-                    String(error).replace(/^Error: /u, ""),
-                    "error",
-                  ),
-                );
-                return;
-              }
-              const branch = item.value;
-              const entry = work.find((item) => item.branch === branch);
-              if (!entry) return;
-              const liveLead = host.managerSupervisionItems(
-                snapshot,
-              ).some(
-                (item) =>
-                  item.kind === "work" &&
-                  item.work.branch === branch &&
-                  !!item.lead,
-              );
-              void (async () => {
-                const actions =
-                  entry.status === "paused"
-                    ? [{ value: "resume", label: "Resume" }]
-                    : liveLead
-                      ? [
-                          { value: "focus", label: "Focus Lead" },
-                          { value: "stop", label: "Stop Lead" },
-                        ]
-                      : [];
-                if (!actions.length) return;
-                const action = await uiActions.selectMenu(ctx, branch, actions);
-                if (!action || !isCurrentOverview()) return;
-                if (action === "focus") return focusSelected(entry.session);
-                if (action === "stop")
-                  await uiActions.stopProjectLead(entry.session, ctx, ctx.signal);
-                else if (action === "resume")
-                  await uiActions.activateProjectLead(
-                    { action: "resume", branch },
-                    ctx,
-                    ctx.signal,
-                  );
-                await refresh(ctx);
-                showOverview();
-                tui.requestRender();
-              })().catch((error) =>
-                ctx.ui.notify(String(error).replace(/^Error: /u, ""), "error"),
-              );
-            };
-            list.onCancel = finish;
-            container.clear();
-            container.addChild(
-              new host.tui.DynamicBorder((line: string) => theme.fg("border", line)),
-            );
-            container.addChild(
-              new host.tui.Text(
-                theme.bold(
-                  theme.fg(
-                    "accent",
-                    status === "unavailable"
-                      ? "Pi Herdsman · unavailable"
-                      : host.activeRole() === "manager" &&
-                          "project" in snapshot
-                        ? `Pi Herdsman · ${snapshot.project}`
-                        : `Pi Herdsman · ${leads.length} herd${leads.length === 1 ? "" : "s"}${status === "stale" ? " · stale" : ""}`,
-                  ),
-                ),
-                0,
-                0,
-              ),
-            );
-            container.addChild(list);
-            container.addChild(
-              new host.tui.Text(
-                theme.fg(
-                  "muted",
-                  host.activeRole() === "manager"
-                    ? "Enter actions · Esc close"
-                    : "Space peek · Enter focus · Esc close",
-                ),
-                0,
-                0,
-              ),
-            );
-            container.addChild(
-              new host.tui.DynamicBorder((line: string) => theme.fg("border", line)),
-            );
-            renderedLeads = [
+            if (mode === "peek" && peekLead) return container.render(width);
+            const key = [
               status,
-              ...work.map(
-                (item) =>
-                  `${item.branch}:${item.status}:${item.runtimeState ?? ""}:${item.issue ?? ""}`,
-              ),
+              ...("work" in snapshot
+                ? (snapshot.work?.map(
+                    (item) =>
+                      `${item.branch}:${item.status}:${item.runtimeState ?? ""}:${item.issue ?? ""}`,
+                  ) ?? [])
+                : []),
               ...leads.map(
                 (lead) =>
                   `${lead.lead}:${lead.runtimeState}:${lead.agentCounts.total}`,
               ),
             ].join("\0");
-          };
-          const showPeek = (): void => {
-            container.clear();
-            container.addChild(
-              new host.tui.DynamicBorder((line: string) => theme.fg("border", line)),
-            );
-            if (peekLead)
-              container.addChild(
-                new host.tui.Text(
-                  theme.bold(
-                    theme.fg("accent", `Peek · ${peekLead.displayName}`),
-                  ),
-                  0,
-                  0,
-                ),
-              );
-            if (peekLead)
-              container.addChild(
-                new host.tui.Text(
-                  host.renderSupervisionPeek(peekLead, peekEvidence, 10_000).join(
-                    "\n",
-                  ),
-                  0,
-                  0,
-                ),
-              );
-            container.addChild(
-              new host.tui.Text(
-                theme.fg("muted", "Esc back · Enter focus · Ctrl+C close"),
-                0,
-                0,
-              ),
-            );
-            container.addChild(
-              new host.tui.DynamicBorder((line: string) => theme.fg("border", line)),
-            );
-          };
-          const component = {
-            render(width: number): string[] {
-              const status = supervisionStatus(ctx);
-              const leads =
-                status === "unavailable"
-                  ? []
-                  : host.orderedSupervisionLeads(
-                      host.presentationReports(snapshot),
-                    );
-              if (mode === "peek" && peekLead) return container.render(width);
-              const key = [
-                status,
-                ...("work" in snapshot
-                  ? (snapshot.work?.map(
-                      (item) =>
-                        `${item.branch}:${item.status}:${item.runtimeState ?? ""}:${item.issue ?? ""}`,
-                    ) ?? [])
-                  : []),
-                ...leads.map(
-                  (lead) =>
-                    `${lead.lead}:${lead.runtimeState}:${lead.agentCounts.total}`,
-                ),
-              ].join("\0");
-              if (!list || key !== renderedLeads) showOverview();
-              return container.render(width);
-            },
-            invalidate() {
-              tui.requestRender();
-            },
-            handleInput(data: string) {
-              if (host.tui.matchesKey(data, host.tui.Key.ctrl("c"))) return finish();
-              if (mode === "peek") {
-                if (
-                  host.tui.matchesKey(data, host.tui.Key.escape) ||
-                  host.tui.matchesKey(data, host.tui.Key.space)
-                ) {
-                  mode = "overview";
-                  showOverview();
-                  tui.requestRender();
-                } else if (host.tui.matchesKey(data, host.tui.Key.enter) && peekLead)
-                  focusSelected(peekLead.lead);
-                return;
-              }
-              if (host.tui.matchesKey(data, host.tui.Key.space)) {
-                const lead = host.presentationReports(
-                  snapshot,
-                ).find((item) => item.lead === selected);
-                if (!lead) return;
-                peekLead = lead;
-                peekEvidence = {
-                  agents: (lead.agents ?? []).map(
-                    (agent) => `${agent.label} · ${agent.state}`,
-                  ),
-                };
-                mode = "peek";
-                showPeek();
+            if (!list || key !== renderedLeads) showOverview();
+            return container.render(width);
+          },
+          invalidate() {
+            tui.requestRender();
+          },
+          handleInput(data: string) {
+            if (host.tui.matchesKey(data, host.tui.Key.ctrl("c")))
+              return finish();
+            if (mode === "peek") {
+              if (
+                host.tui.matchesKey(data, host.tui.Key.escape) ||
+                host.tui.matchesKey(data, host.tui.Key.space)
+              ) {
+                mode = "overview";
+                showOverview();
                 tui.requestRender();
-                void host.inspectHerdrAgent(
+              } else if (
+                host.tui.matchesKey(data, host.tui.Key.enter) &&
+                peekLead
+              )
+                focusSelected(peekLead.lead);
+              return;
+            }
+            if (host.tui.matchesKey(data, host.tui.Key.space)) {
+              const lead = host
+                .presentationReports(snapshot)
+                .find((item) => item.lead === selected);
+              if (!lead) return;
+              peekLead = lead;
+              peekEvidence = {
+                agents: (lead.agents ?? []).map(
+                  (agent) => `${agent.label} · ${agent.state}`,
+                ),
+              };
+              mode = "peek";
+              showPeek();
+              tui.requestRender();
+              void host
+                .inspectHerdrAgent(
                   host.pi,
                   ctx,
                   {
@@ -2116,42 +2650,46 @@ export function createLeadSupervisionRuntime(host: any) {
                     agent?.pane_id === lead.paneId &&
                     agent?.tab_id === lead.tabId &&
                     host.herdrSessionId(agent) === lead.lead &&
-                    host.readLeadCoordinationState(host.supervisionRuntime(), lead.lead)
-                      ?.piSessionId === lead.lead &&
+                    host.readLeadCoordinationState(
+                      host.supervisionRuntime(),
+                      lead.lead,
+                    )?.piSessionId === lead.lead &&
                     lead.availableActions.includes("inspect"),
                 )
-                  .then((inspection) => {
-                    if (!isCurrentOverview()) return;
-                    peekEvidence = {
-                      recentOutput: inspection.recentOutput,
-                      process: inspection.process,
-                      agents: lead.agents.map(
-                        (agent) => `${agent.label} · ${agent.state}`,
-                      ),
-                    };
-                    mode = "peek";
-                    showPeek();
-                    tui.requestRender();
-                  })
-                  .catch(() => undefined);
-                return;
-              }
-              list?.handleInput(data);
-            },
-          };
-          showOverview();
-          renderOverview = () => tui.requestRender();
-          void refresh(ctx)
-            .then(() => tui.requestRender())
-            .catch(() => undefined);
-          void theme;
-          return component;
-        },
-      );
-    };
+                .then((inspection) => {
+                  if (!isCurrentOverview()) return;
+                  peekEvidence = {
+                    recentOutput: inspection.recentOutput,
+                    process: inspection.process,
+                    agents: lead.agents.map(
+                      (agent) => `${agent.label} · ${agent.state}`,
+                    ),
+                  };
+                  mode = "peek";
+                  showPeek();
+                  tui.requestRender();
+                })
+                .catch(() => undefined);
+              return;
+            }
+            list?.handleInput(data);
+          },
+        };
+        showOverview();
+        renderOverview = () => tui.requestRender();
+        void refresh(ctx)
+          .then(() => tui.requestRender())
+          .catch(() => undefined);
+        void theme;
+        return component;
+      },
+    );
+  };
 
   return {
-    get snapshot() { return snapshot; },
+    get snapshot() {
+      return snapshot;
+    },
     status,
     generation,
     reset,
@@ -2161,34 +2699,50 @@ export function createLeadSupervisionRuntime(host: any) {
     directReports,
     focusLead: async (ctx: ExtensionContext, leadId: string): Promise<void> => {
       const fresh = await loadSnapshot(ctx);
-      const lead = host.presentationReports(fresh).find(
-        (candidate: any) => candidate.lead === leadId,
-      );
+      const lead = host
+        .presentationReports(fresh)
+        .find((candidate: any) => candidate.lead === leadId);
       if (!lead) throw new Error("Lead changed; reopen staff.");
       const coordination = host.readLeadCoordinationState(
-        host.supervisionRuntime(), lead.lead,
+        host.supervisionRuntime(),
+        lead.lead,
       );
-      if (!coordination || coordination.piSessionId !== lead.lead ||
-        (lead.instanceId !== undefined && coordination.instanceId !== lead.instanceId))
+      if (
+        !coordination ||
+        coordination.piSessionId !== lead.lead ||
+        (lead.instanceId !== undefined &&
+          coordination.instanceId !== lead.instanceId)
+      )
         throw new Error("Lead changed; reopen staff.");
       const verified = await host.listAllHerdrAgents(host.pi, ctx, ctx.signal);
-      const matches = verified.agents.filter((candidate: any) =>
-        candidate?.pane_id === lead.paneId && candidate?.tab_id === lead.tabId &&
-        candidate?.workspace_id === lead.workspaceId && host.isPiAgent(candidate) &&
-        host.herdrSessionId(candidate) === lead.lead,
+      const matches = verified.agents.filter(
+        (candidate: any) =>
+          candidate?.pane_id === lead.paneId &&
+          candidate?.tab_id === lead.tabId &&
+          candidate?.workspace_id === lead.workspaceId &&
+          host.isPiAgent(candidate) &&
+          host.herdrSessionId(candidate) === lead.lead,
       );
       if (matches.length !== 1) throw new Error("Lead changed; reopen staff.");
-      await host.runHerdr(host.pi, ctx, ["agent", "focus", lead.paneId], { signal: ctx.signal });
+      await host.runHerdr(host.pi, ctx, ["agent", "focus", lead.paneId], {
+        signal: ctx.signal,
+      });
     },
     focusChief: async (ctx: ExtensionCommandContext): Promise<void> => {
       const choice = await ctx.ui.select("chief", ["Focus chief", "Cancel"]);
       if (choice !== "Focus chief") return;
-      const descriptor = host.readChiefDescriptor(host.supervisionRuntime().descriptor);
+      const descriptor = host.readChiefDescriptor(
+        host.supervisionRuntime().descriptor,
+      );
       const candidate = await host.remoteChiefAgent(ctx, descriptor);
-      const current = host.readChiefDescriptor(host.supervisionRuntime().descriptor);
+      const current = host.readChiefDescriptor(
+        host.supervisionRuntime().descriptor,
+      );
       if (!candidate || !host.sameChiefDescriptor(current, descriptor))
         throw new Error("Chief changed; reopen the command.");
-      await host.runHerdr(host.pi, ctx, ["agent", "focus", candidate.pane_id], { signal: ctx.signal });
+      await host.runHerdr(host.pi, ctx, ["agent", "focus", candidate.pane_id], {
+        signal: ctx.signal,
+      });
     },
     prepareMessage: async (ctx: ExtensionContext): Promise<any> => {
       if (!host.isCurrentChief(ctx) && host.activeRole() !== "manager") return;
@@ -2202,7 +2756,10 @@ export function createLeadSupervisionRuntime(host: any) {
         const contextStatus = status(ctx);
         const content = host.formatContext(
           contextStatus === "unavailable" ? undefined : snapshot,
-          { status: contextStatus, role: host.activeRole() === "manager" ? "manager" : "chief" },
+          {
+            status: contextStatus,
+            role: host.activeRole() === "manager" ? "manager" : "chief",
+          },
         );
         if (host.latestMessageText(ctx) === content) return;
         return { customType: host.contextType, content, display: false };
@@ -2210,7 +2767,9 @@ export function createLeadSupervisionRuntime(host: any) {
         // Automatic observation must not prevent a Chief or Manager run.
       }
     },
-    setWidgetRender: (render: (() => void) | undefined) => { renderWidget = render; },
+    setWidgetRender: (render: (() => void) | undefined) => {
+      renderWidget = render;
+    },
     registerWidget: (ctx: ExtensionContext, role: "chief" | "manager") => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
       try {
@@ -2229,7 +2788,9 @@ export function createLeadSupervisionRuntime(host: any) {
       }
     },
     removeWidget: (ctx: ExtensionContext) => {
-      try { ctx.ui.setWidget("pi-herdsman-staff", undefined); } catch {
+      try {
+        ctx.ui.setWidget("pi-herdsman-staff", undefined);
+      } catch {
         // Widget teardown is best-effort during UI failure or shutdown.
       }
     },
@@ -2267,10 +2828,14 @@ export function createLeadHerdRunRuntime(host: any) {
     let summary: string | undefined;
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i] as any;
-      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+      if (entry.type !== "message" || entry.message.role !== "assistant")
+        continue;
       if ((entry.message.timestamp ?? 0) < startedAt) continue;
       const text = contentText(entry.message.content, "").trim();
-      if (text) { summary = text; break; }
+      if (text) {
+        summary = text;
+        break;
+      }
     }
     await host.publishProjectMessage(
       ctx,
@@ -2285,15 +2850,22 @@ export function createLeadHerdRunRuntime(host: any) {
     const sessionId = ctx.sessionManager.getSessionId();
     if (
       host.hasPendingStarts() ||
-      host.listAgentStates().some(
-        ({ state }: { state: ManagedAgentState }) => state.ownerSessionId === sessionId,
-      )
-    ) return;
+      host
+        .listAgentStates()
+        .some(
+          ({ state }: { state: ManagedAgentState }) =>
+            state.ownerSessionId === sessionId,
+        )
+    )
+      return;
     const startedAt = herdRunStartedAt;
     const completedAt = Date.now();
     try {
       host.pi.appendEntry(host.entryName, {
-        phase: "finished", sessionId, startedAt, completedAt,
+        phase: "finished",
+        sessionId,
+        startedAt,
+        completedAt,
       });
       herdRunStartedAt = undefined;
       host.requestStatusRefresh();
@@ -2324,11 +2896,21 @@ export function createLeadHerdRunRuntime(host: any) {
   return {
     begin,
     maybeFinish,
-    agentStarted: () => { leadAgentStartedAt = Date.now(); leadSettled = false; },
-    agentSettled: (ctx: ExtensionContext) => { leadSettled = true; maybeFinish(ctx); },
+    agentStarted: () => {
+      leadAgentStartedAt = Date.now();
+      leadSettled = false;
+    },
+    agentSettled: (ctx: ExtensionContext) => {
+      leadSettled = true;
+      maybeFinish(ctx);
+    },
     restoreSession: (entries: unknown[], sessionId: string) => {
       leadAgentStartedAt = undefined;
-      herdRunStartedAt = restoreHerdRunStartedAt(entries, sessionId, host.entryName);
+      herdRunStartedAt = restoreHerdRunStartedAt(
+        entries,
+        sessionId,
+        host.entryName,
+      );
       leadSettled = herdRunStartedAt === undefined;
     },
     finishIfIdle: (ctx: ExtensionContext) => {
@@ -2356,16 +2938,31 @@ function restoreHerdRunStartedAt(
   let active: number | undefined;
   for (const entry of entries) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const record = entry as { type?: unknown; customType?: unknown; data?: unknown };
+    const record = entry as {
+      type?: unknown;
+      customType?: unknown;
+      data?: unknown;
+    };
     if (record.type !== "custom" || record.customType !== entryName) continue;
-    if (!record.data || typeof record.data !== "object" || Array.isArray(record.data)) continue;
+    if (
+      !record.data ||
+      typeof record.data !== "object" ||
+      Array.isArray(record.data)
+    )
+      continue;
     const value = record.data as Record<string, unknown>;
     if (value.sessionId !== sessionId) continue;
     if (value.phase === "started" && valid(value.startedAt)) {
       if (active === undefined) active = value.startedAt;
       continue;
     }
-    if (value.phase === "finished" && valid(value.startedAt) && valid(value.completedAt) && value.completedAt >= value.startedAt && active === value.startedAt)
+    if (
+      value.phase === "finished" &&
+      valid(value.startedAt) &&
+      valid(value.completedAt) &&
+      value.completedAt >= value.startedAt &&
+      active === value.startedAt
+    )
       active = undefined;
   }
   return active;
@@ -2381,12 +2978,7 @@ export function createLeadProjectRuntime(host: any) {
     const summary = await host.stopOwnedAgentsForSession(ctx, session, signal);
     if (summary.includes("✗") || summary.includes("not closed"))
       throw new Error(`Agent-tree cleanup failed: ${summary}`);
-    await host.stopProjectLeadPane(
-      ctx,
-      target,
-      session,
-      signal,
-    );
+    await host.stopProjectLeadPane(ctx, target, session, signal);
     if ((await host.liveLead(ctx, session)).length)
       throw new Error("Lead remains live after stop; work was preserved");
   };
@@ -2397,11 +2989,22 @@ export function createLeadProjectRuntime(host: any) {
   ) => {
     const manager = await host.currentManager(ctx);
     const lease = host.managerLease();
-    if (!manager || !lease || !host.sameManagerDescriptor(manager, lease.descriptor))
+    if (
+      !manager ||
+      !lease ||
+      !host.sameManagerDescriptor(manager, lease.descriptor)
+    )
       throw new Error("Manager lease is no longer active");
-    const scope = await host.worktreeGroupScope(host.pi, ctx, manager.workspaceId, signal);
+    const scope = await host.worktreeGroupScope(
+      host.pi,
+      ctx,
+      manager.workspaceId,
+      signal,
+    );
     const assignments = host.findProjectAssignmentBySession(
-      host.supervisionRuntime(), manager.repoKey, session,
+      host.supervisionRuntime(),
+      manager.repoKey,
+      session,
     );
     if (assignments.length > 1)
       throw new Error("Multiple project assignments match the Lead session");
@@ -2409,8 +3012,13 @@ export function createLeadProjectRuntime(host: any) {
     const close = async () => {
       if (
         assignment &&
-        host.readProjectAssignment(host.supervisionRuntime(), manager.repoKey, assignment.branch)?.branch !== assignment.branch
-      ) throw new Error("Project assignment changed before close");
+        host.readProjectAssignment(
+          host.supervisionRuntime(),
+          manager.repoKey,
+          assignment.branch,
+        )?.branch !== assignment.branch
+      )
+        throw new Error("Project assignment changed before close");
       const live = (await host.liveLead(ctx, session)).filter((agent: any) =>
         scope.workspaceIds.includes(agent.workspace_id),
       );
@@ -2418,980 +3026,1018 @@ export function createLeadProjectRuntime(host: any) {
         throw new Error("Exact live Lead was not found or is ambiguous");
       await stopExecution(session, live[0], ctx, signal);
       return {
-        content: [{ type: "text" as const, text: `Lead ${session} stopped; project work preserved.` }],
-        details: { ok: true, action: "stop", session, ...(assignment ? { branch: assignment.branch } : {}) },
+        content: [
+          {
+            type: "text" as const,
+            text: `Lead ${session} stopped; project work preserved.`,
+          },
+        ],
+        details: {
+          ok: true,
+          action: "stop",
+          session,
+          ...(assignment ? { branch: assignment.branch } : {}),
+        },
       };
     };
     return assignment
-      ? host.withProjectWorkLock(`${manager.repoKey}\0${assignment.branch}`, close)
+      ? host.withProjectWorkLock(
+          `${manager.repoKey}\0${assignment.branch}`,
+          close,
+        )
       : close();
   };
   const {
-    pi, leadRuntime, HERDSMAN_BUILD, HERDSMAN_EXTENSION_PATH, SessionManager,
-    currentManager, sameManagerDescriptor, worktreeGroupScope, supervisionRuntime,
-    readProjectAssignment, runHerdr, liveAgent, readLeadCoordinationState,
-    requireCompatibleBuild, scanAgentStates, writeChiefMessage, herdrSessionSnapshot,
-    isPiAgent, herdrSessionId, messageLimits, prepareMessageInput,
-    resolveMessageFiles, projectAssignmentBytes, writeProjectAssignment, delay,
-    startHerdrAgentInPane, sessionIdentity, captureStartupDiagnostic,
-    appendDurableError, stopHerdrAgentPreservingPane, expectedSession, liveLead,
+    pi,
+    leadRuntime,
+    HERDSMAN_BUILD,
+    HERDSMAN_EXTENSION_PATH,
+    SessionManager,
+    currentManager,
+    sameManagerDescriptor,
+    worktreeGroupScope,
+    supervisionRuntime,
+    readProjectAssignment,
+    runHerdr,
+    liveAgent,
+    readLeadCoordinationState,
+    requireCompatibleBuild,
+    scanAgentStates,
+    writeChiefMessage,
+    herdrSessionSnapshot,
+    isPiAgent,
+    herdrSessionId,
+    messageLimits,
+    prepareMessageInput,
+    resolveMessageFiles,
+    projectAssignmentBytes,
+    writeProjectAssignment,
+    delay,
+    startHerdrAgentInPane,
+    sessionIdentity,
+    captureStartupDiagnostic,
+    appendDurableError,
+    stopHerdrAgentPreservingPane,
+    expectedSession,
+    liveLead,
     withProjectWorkLock,
   } = host;
   const {
-    activeRole, currentChiefAuthority, directReports, truncateModelText,
-    loadSupervisionSnapshot, inspectHerdrAgent, readPersistedTranscript,
-    prepareCoordinationInput, stopProjectLead: projectStop,
+    activeRole,
+    currentChiefAuthority,
+    directReports,
+    truncateModelText,
+    loadSupervisionSnapshot,
+    inspectHerdrAgent,
+    readPersistedTranscript,
+    prepareCoordinationInput,
+    stopProjectLead: projectStop,
   } = host;
-type ProjectLeadActivation =
-  | {
-      action: "delegate";
-      id: string;
-      branch: string;
-      task: string;
-      base?: string;
-      files?: string[];
-    }
-  | { action: "resume"; branch: string };
-type StaffOperation =
-  | { action: "list" }
-  | { action: "delegate"; task: string; branch?: string; base?: string; files?: string[] }
-  | { action: "resume"; branch: string }
-  | { action: "stop"; session: string }
-  | { action: "inspect" | "transcript"; session: string }
-  | { action: "message"; session: string; message: string; files?: string[] };
-const activateProjectLead = async (
-  params: {
-    action: "delegate";
-    task: string;
-    branch?: string;
-    base?: string;
-    files?: string[];
-  } | { action: "resume"; branch: string },
-  ctx: ExtensionContext,
-  signal?: AbortSignal,
-) => {
-  const repoKey = leadRuntime.managerLease?.descriptor.repoKey;
-  if (!repoKey) throw new Error("Manager lease is no longer active");
-  const operation: ProjectLeadActivation =
-    params.action === "delegate"
-      ? {
-          ...params,
-          id: randomUUID(),
-          branch:
-            params.branch ?? `herdsman/work-${randomUUID().slice(0, 8)}`,
+  type ProjectLeadActivation =
+    | {
+        action: "delegate";
+        id: string;
+        branch: string;
+        task: string;
+        base?: string;
+        files?: string[];
+      }
+    | { action: "resume"; branch: string };
+  type StaffOperation =
+    | { action: "list" }
+    | {
+        action: "delegate";
+        task: string;
+        branch?: string;
+        base?: string;
+        files?: string[];
+      }
+    | { action: "resume"; branch: string }
+    | { action: "stop"; session: string }
+    | { action: "inspect" | "transcript"; session: string }
+    | { action: "message"; session: string; message: string; files?: string[] };
+  const activateProjectLead = async (
+    params:
+      | {
+          action: "delegate";
+          task: string;
+          branch?: string;
+          base?: string;
+          files?: string[];
         }
-      : params;
-  return withProjectWorkLock(`${repoKey}\0${operation.branch}`, () =>
-    activateProjectLeadLocked(operation, ctx, signal),
-  );
-};
-const activateProjectLeadLocked = async (
-  operation: ProjectLeadActivation,
-  ctx: ExtensionContext,
-  signal?: AbortSignal,
-) => {
-  const operationName =
-    operation.action === "resume" ? "staff_resume" : "staff_delegate";
-  const manager = await currentManager(ctx);
-  if (
-    !manager ||
-    !leadRuntime.managerLease ||
-    !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)
-  )
-    throw new Error("Manager lease is no longer active");
-  const group = await worktreeGroupScope(
-    pi,
-    ctx,
-    manager.workspaceId,
-    signal,
-  );
-  if (
-    group.repoKey !== manager.repoKey ||
-    group.primaryWorkspaceId !== manager.workspaceId
-  )
-    throw new Error(
-      "Manager workspace is not the primary workspace of its Herdr worktree group",
+      | { action: "resume"; branch: string },
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ) => {
+    const repoKey = leadRuntime.managerLease?.descriptor.repoKey;
+    if (!repoKey) throw new Error("Manager lease is no longer active");
+    const operation: ProjectLeadActivation =
+      params.action === "delegate"
+        ? {
+            ...params,
+            id: randomUUID(),
+            branch:
+              params.branch ?? `herdsman/work-${randomUUID().slice(0, 8)}`,
+          }
+        : params;
+    return withProjectWorkLock(`${repoKey}\0${operation.branch}`, () =>
+      activateProjectLeadLocked(operation, ctx, signal),
     );
-  const primaryWorkspaceId = group.primaryWorkspaceId;
-  const runtime = supervisionRuntime();
-  const existing = readProjectAssignment(
-    runtime,
-    manager.repoKey,
-    operation.branch,
-  );
-  if (existing && existing.repoKey !== manager.repoKey)
-    throw new Error("Project assignment belongs to another repository");
-  if (operation.action === "delegate" && existing)
-    throw new Error(
-      `Work already exists on ${operation.branch}; resume it with staff_resume.`,
-    );
-  if (operation.action === "resume" && !existing)
-    throw new Error(
-      `No existing work was found on ${operation.branch}; start it with staff_delegate and a task.`,
-    );
-  const id = operation.action === "resume" ? existing!.id : operation.id;
-  const branch = operation.branch;
-  const topology = await runHerdr(
-    pi,
-    ctx,
-    ["worktree", "list", "--workspace", primaryWorkspaceId],
-    { signal },
-  );
-  if (
-    topology?.source?.source_workspace_id !== primaryWorkspaceId ||
-    topology?.source?.repo_key !== manager.repoKey ||
-    !Array.isArray(topology?.worktrees)
-  )
-    throw new Error("Herdr worktree topology is not authoritative");
-  const branchWorktrees = topology.worktrees.filter(
-    (worktree: any) => worktree?.branch === branch,
-  );
-  if (branchWorktrees.length > 1)
-    throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
-  const live =
-    operation.action === "resume" ? await liveAgent(ctx, existing!.id) : [];
-  if (live.length > 1)
-    throw new Error(`Assignment ${id} has ambiguous live Lead identity`);
-  if (live.length === 1) {
-    const state = readLeadCoordinationState(runtime, id);
-    requireCompatibleBuild(
-      HERDSMAN_BUILD,
-      state?.build,
-      operationName,
-      `Lead ${id}`,
-    );
-    if (
-      !branchWorktrees[0]?.open_workspace_id ||
-      live[0].workspace_id !== branchWorktrees[0].open_workspace_id ||
-      !state ||
-      (state.role ?? "lead") !== "lead" ||
-      state.piSessionId !== id ||
-      scanAgentStates().states.some(({ state }) => state.piSessionId === id)
-    )
-      throw new Error(
-        `Lead session ${id} has conflicting placement or role; work was preserved.`,
-      );
-    const fresh = await currentManager(ctx);
-    if (!fresh || !sameManagerDescriptor(fresh, manager))
-      throw new Error("Manager changed during project activation");
-    const latestState = readLeadCoordinationState(runtime, id);
-    requireCompatibleBuild(
-      HERDSMAN_BUILD,
-      latestState?.build,
-      operationName,
-      `Lead ${id}`,
-    );
-    writeChiefMessage({
-      version: 2,
-      build: HERDSMAN_BUILD,
-      id,
-      leaseId: manager.leaseId,
-      kind: "project_assignment",
-      fromSessionId: manager.piSessionId,
-      toSessionId: id,
-      leadSessionId: id,
-      branch: existing!.branch,
-      text: "Project assignment ready.",
-      createdAt: Date.now(),
-    });
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: `Work on ${branch} is already running in Lead ${id}.`,
-        },
-      ],
-      details: {
-        ok: true,
-        action: "resume",
-        branch,
-        session: id,
-        status: "active",
-        already_running: true,
-      },
-    };
-  }
-  if (
-    operation.action === "delegate" &&
-    branchWorktrees.length &&
-    operation.base
-  )
-    throw new Error(
-      "base applies only when Herdsman creates a new worktree",
-    );
-  const assertUnoccupied = async (workspaceId: string) => {
-    const inventory = await herdrSessionSnapshot(pi, ctx, signal);
-    const managed = new Set(
-      scanAgentStates().states.map(({ state }) => state.piSessionId),
-    );
-    const leads = inventory.agents.filter((agent: any) => {
-      const session = herdrSessionId(agent);
-      if (
-        !session ||
-        !isPiAgent(agent) ||
-        agent.workspace_id !== workspaceId ||
-        managed.has(session) ||
-        session === id
-      )
-        return false;
-      const state = readLeadCoordinationState(
-        supervisionRuntime(),
-        session,
-      );
-      return state && (state.role ?? "lead") === "lead";
-    });
-    if (leads.length > 1)
-      throw new Error(
-        `Branch ${branch} has multiple live Leads; project activation is ambiguous.`,
-      );
-    if (leads.length)
-      throw new Error(
-        `Branch ${branch} already has live Lead session ${herdrSessionId(leads[0])}. Coordinate with that Lead or close it before starting managed work on this branch.`,
-      );
   };
-  if (branchWorktrees[0]?.open_workspace_id)
-    await assertUnoccupied(branchWorktrees[0].open_workspace_id);
-  let assignment: ProjectAssignment;
-  if (operation.action === "resume") assignment = existing!;
-  else {
-    const limits = await messageLimits(ctx);
-    const prepared = prepareMessageInput(
-      operation.task,
-      resolveMessageFiles(ctx, operation.files, "staff_delegate"),
-      ctx.cwd,
-      "staff_delegate",
-      "Task",
-      {
-        inlineLimitBytes: limits.inline.bytes,
-        mailboxLimitBytes: limits.mailbox.bytes,
-        serializedBytes: (candidate, resultBindings) =>
-          projectAssignmentBytes({
-            version: 2,
-            id,
-            repoKey: manager.repoKey,
-            branch,
-            text: candidate,
-            ...(resultBindings.length
-              ? { resultBindings: [...resultBindings] }
-              : {}),
-          }),
-      },
-    );
-    const preCreationManager = await currentManager(ctx);
+  const activateProjectLeadLocked = async (
+    operation: ProjectLeadActivation,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ) => {
+    const operationName =
+      operation.action === "resume" ? "staff_resume" : "staff_delegate";
+    const manager = await currentManager(ctx);
     if (
-      !preCreationManager ||
-      !sameManagerDescriptor(preCreationManager, manager)
+      !manager ||
+      !leadRuntime.managerLease ||
+      !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)
     )
-      throw new Error("Manager changed before project activation");
-    assignment = {
-      version: 2,
-      id,
-      repoKey: manager.repoKey,
-      branch,
-      text: prepared.text,
-      ...(prepared.resultBindings.length
-        ? { resultBindings: prepared.resultBindings }
-        : {}),
-    };
-    writeProjectAssignment(runtime, assignment);
-  }
-  try {
-    let workspaceId: string | undefined;
-    let paneId: string | undefined;
-    let tabId: string | undefined;
-    let cwd: string | undefined;
-    const matchingWorktrees = topology.worktrees.filter(
-      (worktree: any) => worktree?.branch === assignment.branch,
+      throw new Error("Manager lease is no longer active");
+    const group = await worktreeGroupScope(
+      pi,
+      ctx,
+      manager.workspaceId,
+      signal,
     );
-    if (matchingWorktrees.length > 1)
+    if (
+      group.repoKey !== manager.repoKey ||
+      group.primaryWorkspaceId !== manager.workspaceId
+    )
       throw new Error(
-        `Multiple Herdr worktrees match assignment branch ${assignment.branch}`,
+        "Manager workspace is not the primary workspace of its Herdr worktree group",
       );
-    if (matchingWorktrees.length === 1) {
-      const worktree = matchingWorktrees[0];
-      cwd = worktree?.path;
-      if (typeof cwd !== "string" || !cwd)
+    const primaryWorkspaceId = group.primaryWorkspaceId;
+    const runtime = supervisionRuntime();
+    const existing = readProjectAssignment(
+      runtime,
+      manager.repoKey,
+      operation.branch,
+    );
+    if (existing && existing.repoKey !== manager.repoKey)
+      throw new Error("Project assignment belongs to another repository");
+    if (operation.action === "delegate" && existing)
+      throw new Error(
+        `Work already exists on ${operation.branch}; resume it with staff_resume.`,
+      );
+    if (operation.action === "resume" && !existing)
+      throw new Error(
+        `No existing work was found on ${operation.branch}; start it with staff_delegate and a task.`,
+      );
+    const id = operation.action === "resume" ? existing!.id : operation.id;
+    const branch = operation.branch;
+    const topology = await runHerdr(
+      pi,
+      ctx,
+      ["worktree", "list", "--workspace", primaryWorkspaceId],
+      { signal },
+    );
+    if (
+      topology?.source?.source_workspace_id !== primaryWorkspaceId ||
+      topology?.source?.repo_key !== manager.repoKey ||
+      !Array.isArray(topology?.worktrees)
+    )
+      throw new Error("Herdr worktree topology is not authoritative");
+    const branchWorktrees = topology.worktrees.filter(
+      (worktree: any) => worktree?.branch === branch,
+    );
+    if (branchWorktrees.length > 1)
+      throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
+    const live =
+      operation.action === "resume" ? await liveAgent(ctx, existing!.id) : [];
+    if (live.length > 1)
+      throw new Error(`Assignment ${id} has ambiguous live Lead identity`);
+    if (live.length === 1) {
+      const state = readLeadCoordinationState(runtime, id);
+      requireCompatibleBuild(
+        HERDSMAN_BUILD,
+        state?.build,
+        operationName,
+        `Lead ${id}`,
+      );
+      if (
+        !branchWorktrees[0]?.open_workspace_id ||
+        live[0].workspace_id !== branchWorktrees[0].open_workspace_id ||
+        !state ||
+        (state.role ?? "lead") !== "lead" ||
+        state.piSessionId !== id ||
+        scanAgentStates().states.some(({ state }) => state.piSessionId === id)
+      )
         throw new Error(
-          `Herdr worktree for branch ${assignment.branch} has no exact path`,
+          `Lead session ${id} has conflicting placement or role; work was preserved.`,
         );
-      {
-        const opened = await runHerdr(
-          pi,
-          ctx,
-          [
-            "worktree",
-            "open",
-            "--workspace",
-            primaryWorkspaceId,
-            "--branch",
-            assignment.branch,
-            "--no-focus",
-          ],
-          { signal },
-        );
-        workspaceId = opened?.workspace?.workspace_id;
-        paneId = opened?.root_pane?.pane_id;
-        tabId = opened?.tab?.tab_id ?? opened?.root_pane?.tab_id;
-        cwd = opened?.worktree?.path;
+      const fresh = await currentManager(ctx);
+      if (!fresh || !sameManagerDescriptor(fresh, manager))
+        throw new Error("Manager changed during project activation");
+      const latestState = readLeadCoordinationState(runtime, id);
+      requireCompatibleBuild(
+        HERDSMAN_BUILD,
+        latestState?.build,
+        operationName,
+        `Lead ${id}`,
+      );
+      writeChiefMessage({
+        version: 2,
+        build: HERDSMAN_BUILD,
+        id,
+        leaseId: manager.leaseId,
+        kind: "project_assignment",
+        fromSessionId: manager.piSessionId,
+        toSessionId: id,
+        leadSessionId: id,
+        branch: existing!.branch,
+        text: "Project assignment ready.",
+        createdAt: Date.now(),
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Work on ${branch} is already running in Lead ${id}.`,
+          },
+        ],
+        details: {
+          ok: true,
+          action: "resume",
+          branch,
+          session: id,
+          status: "active",
+          already_running: true,
+        },
+      };
+    }
+    if (
+      operation.action === "delegate" &&
+      branchWorktrees.length &&
+      operation.base
+    )
+      throw new Error("base applies only when Herdsman creates a new worktree");
+    const assertUnoccupied = async (workspaceId: string) => {
+      const inventory = await herdrSessionSnapshot(pi, ctx, signal);
+      const managed = new Set(
+        scanAgentStates().states.map(({ state }) => state.piSessionId),
+      );
+      const leads = inventory.agents.filter((agent: any) => {
+        const session = herdrSessionId(agent);
         if (
-          opened?.worktree?.branch &&
-          opened.worktree.branch !== assignment.branch
+          !session ||
+          !isPiAgent(agent) ||
+          agent.workspace_id !== workspaceId ||
+          managed.has(session) ||
+          session === id
+        )
+          return false;
+        const state = readLeadCoordinationState(supervisionRuntime(), session);
+        return state && (state.role ?? "lead") === "lead";
+      });
+      if (leads.length > 1)
+        throw new Error(
+          `Branch ${branch} has multiple live Leads; project activation is ambiguous.`,
+        );
+      if (leads.length)
+        throw new Error(
+          `Branch ${branch} already has live Lead session ${herdrSessionId(leads[0])}. Coordinate with that Lead or close it before starting managed work on this branch.`,
+        );
+    };
+    if (branchWorktrees[0]?.open_workspace_id)
+      await assertUnoccupied(branchWorktrees[0].open_workspace_id);
+    let assignment: ProjectAssignment;
+    if (operation.action === "resume") assignment = existing!;
+    else {
+      const limits = await messageLimits(ctx);
+      const prepared = prepareMessageInput(
+        operation.task,
+        resolveMessageFiles(ctx, operation.files, "staff_delegate"),
+        ctx.cwd,
+        "staff_delegate",
+        "Task",
+        {
+          inlineLimitBytes: limits.inline.bytes,
+          mailboxLimitBytes: limits.mailbox.bytes,
+          serializedBytes: (candidate, resultBindings) =>
+            projectAssignmentBytes({
+              version: 2,
+              id,
+              repoKey: manager.repoKey,
+              branch,
+              text: candidate,
+              ...(resultBindings.length
+                ? { resultBindings: [...resultBindings] }
+                : {}),
+            }),
+        },
+      );
+      const preCreationManager = await currentManager(ctx);
+      if (
+        !preCreationManager ||
+        !sameManagerDescriptor(preCreationManager, manager)
+      )
+        throw new Error("Manager changed before project activation");
+      assignment = {
+        version: 2,
+        id,
+        repoKey: manager.repoKey,
+        branch,
+        text: prepared.text,
+        ...(prepared.resultBindings.length
+          ? { resultBindings: prepared.resultBindings }
+          : {}),
+      };
+      writeProjectAssignment(runtime, assignment);
+    }
+    try {
+      let workspaceId: string | undefined;
+      let paneId: string | undefined;
+      let tabId: string | undefined;
+      let cwd: string | undefined;
+      const matchingWorktrees = topology.worktrees.filter(
+        (worktree: any) => worktree?.branch === assignment.branch,
+      );
+      if (matchingWorktrees.length > 1)
+        throw new Error(
+          `Multiple Herdr worktrees match assignment branch ${assignment.branch}`,
+        );
+      if (matchingWorktrees.length === 1) {
+        const worktree = matchingWorktrees[0];
+        cwd = worktree?.path;
+        if (typeof cwd !== "string" || !cwd)
+          throw new Error(
+            `Herdr worktree for branch ${assignment.branch} has no exact path`,
+          );
+        {
+          const opened = await runHerdr(
+            pi,
+            ctx,
+            [
+              "worktree",
+              "open",
+              "--workspace",
+              primaryWorkspaceId,
+              "--branch",
+              assignment.branch,
+              "--no-focus",
+            ],
+            { signal },
+          );
+          workspaceId = opened?.workspace?.workspace_id;
+          paneId = opened?.root_pane?.pane_id;
+          tabId = opened?.tab?.tab_id ?? opened?.root_pane?.tab_id;
+          cwd = opened?.worktree?.path;
+          if (
+            opened?.worktree?.branch &&
+            opened.worktree.branch !== assignment.branch
+          )
+            throw new Error(
+              "Herdr opened a worktree on a different branch than the persisted assignment",
+            );
+        }
+      } else {
+        const args = [
+          "worktree",
+          "create",
+          "--workspace",
+          primaryWorkspaceId,
+          "--branch",
+          assignment.branch,
+          "--no-focus",
+        ];
+        if (operation.action === "resume") {
+          const saved = (await SessionManager.listAll()).filter(
+            (session) => session.id === assignment.id,
+          );
+          if (saved.length > 1)
+            throw new Error(
+              `Pi session ${assignment.id} is ambiguous; project work was preserved.`,
+            );
+          args.push("--base", assignment.branch);
+          if (saved[0]?.cwd) args.push("--path", saved[0].cwd);
+        } else args.push("--base", operation.base ?? "HEAD");
+        const created = await runHerdr(pi, ctx, args, { signal });
+        workspaceId = created?.workspace?.workspace_id;
+        paneId = created?.root_pane?.pane_id;
+        tabId = created?.tab?.tab_id;
+        cwd = created?.worktree?.path;
+        if (
+          created?.worktree?.branch &&
+          created.worktree.branch !== assignment.branch
         )
           throw new Error(
-            "Herdr opened a worktree on a different branch than the persisted assignment",
+            "Herdr created a worktree on a different branch than the persisted assignment",
           );
       }
-    } else {
-      const args = [
-        "worktree",
-        "create",
-        "--workspace",
-        primaryWorkspaceId,
-        "--branch",
-        assignment.branch,
-        "--no-focus",
-      ];
-      if (operation.action === "resume") {
-        const saved = (await SessionManager.listAll()).filter(
-          (session) => session.id === assignment.id,
-        );
-        if (saved.length > 1)
+      if (
+        ![workspaceId, paneId, tabId, cwd].every(
+          (value) => typeof value === "string" && value,
+        )
+      )
+        throw new Error("Herdr did not return exact worktree identities");
+      await assertUnoccupied(workspaceId!);
+      let lead: any;
+      let startedLead = false;
+      const verifyLeadCandidate = (candidate: any): boolean => {
+        const reported = sessionIdentity(candidate?.agent_session);
+        if (!reported) return false;
+        const resolvedSessionId = herdrSessionId(candidate);
+        if (resolvedSessionId && resolvedSessionId !== assignment.id)
           throw new Error(
-            `Pi session ${assignment.id} is ambiguous; project work was preserved.`,
+            "Herdr session identity does not match the Manager assignment",
           );
-        args.push("--base", assignment.branch);
-        if (saved[0]?.cwd) args.push("--path", saved[0].cwd);
-      } else args.push("--base", operation.base ?? "HEAD");
-      const created = await runHerdr(pi, ctx, args, { signal });
-      workspaceId = created?.workspace?.workspace_id;
-      paneId = created?.root_pane?.pane_id;
-      tabId = created?.tab?.tab_id;
-      cwd = created?.worktree?.path;
-      if (
-        created?.worktree?.branch &&
-        created.worktree.branch !== assignment.branch
-      )
-        throw new Error(
-          "Herdr created a worktree on a different branch than the persisted assignment",
+        const state = readLeadCoordinationState(
+          supervisionRuntime(),
+          assignment.id,
         );
-    }
-    if (
-      ![workspaceId, paneId, tabId, cwd].every(
-        (value) => typeof value === "string" && value,
-      )
-    )
-      throw new Error("Herdr did not return exact worktree identities");
-    await assertUnoccupied(workspaceId!);
-    let lead: any;
-    let startedLead = false;
-    const verifyLeadCandidate = (candidate: any): boolean => {
-      const reported = sessionIdentity(candidate?.agent_session);
-      if (!reported) return false;
-      const resolvedSessionId = herdrSessionId(candidate);
-      if (resolvedSessionId && resolvedSessionId !== assignment.id)
-        throw new Error(
-          "Herdr session identity does not match the Manager assignment",
+        if (state)
+          requireCompatibleBuild(
+            HERDSMAN_BUILD,
+            state.build,
+            operationName,
+            `Lead ${assignment.id}`,
+          );
+        const managed = scanAgentStates().states.some(
+          ({ state }) => state.piSessionId === assignment.id,
         );
-      const state = readLeadCoordinationState(
-        supervisionRuntime(),
-        assignment.id,
-      );
-      if (state)
-        requireCompatibleBuild(
-          HERDSMAN_BUILD,
-          state.build,
-          operationName,
-          `Lead ${assignment.id}`,
-        );
-      const managed = scanAgentStates().states.some(
-        ({ state }) => state.piSessionId === assignment.id,
-      );
-      if (
-        managed ||
-        (state &&
-          ((state.role ?? "lead") !== "lead" ||
-            state.piSessionId !== assignment.id))
-      )
-        throw new Error(
-          "Existing session in new worktree has a conflicting role or identity",
-        );
-      return state?.role === "lead" && state.piSessionId === assignment.id;
-    };
-    const currentInventory = await herdrSessionSnapshot(pi, ctx, signal);
-    const currentCandidates = currentInventory.agents.filter(
-      (agent: any) =>
-        isPiAgent(agent) &&
-        agent.workspace_id === workspaceId &&
-        agent.pane_id === paneId &&
-        agent.tab_id === tabId,
-    );
-    if (currentCandidates.length > 1)
-      throw new Error("Ambiguous Lead session in new worktree");
-    if (currentCandidates.length === 1) {
-      if (verifyLeadCandidate(currentCandidates[0]))
-        lead = currentCandidates[0];
-    }
-    if (!lead) {
-      const processInfo = await runHerdr(
-        pi,
-        ctx,
-        ["pane", "process-info", "--pane", paneId],
-        { signal },
-      );
-      const foreground = processInfo?.process_info?.foreground_processes;
-      const piAlreadyRunning =
-        currentCandidates.length === 1 ||
-        (Array.isArray(foreground) &&
-          foreground.some((process: any) => {
-            const executable = `${process?.argv0 ?? ""} ${process?.cmdline ?? ""}`;
-            return /(^|[\\/\s])pi(?:\s|$)/i.test(executable);
-          }));
-      if (!piAlreadyRunning) {
-        await assertUnoccupied(workspaceId!);
-        await startHerdrAgentInPane(pi, ctx, {
-          primaryWorkspaceId,
-          workspaceId,
-          tabId,
-          paneId,
-          cwd,
-          label: `lead-${id.slice(0, 8)}`,
-          runId: id,
-          extensionPath: HERDSMAN_EXTENSION_PATH,
-          agentArgs: [
-            "--session-id",
-            assignment.id,
-            ctx.isProjectTrusted() ? "--approve" : "--no-approve",
-          ],
-          signal,
-        });
-        startedLead = true;
-      }
-    }
-    const deadline = Date.now() + 30_000;
-    let piProcessSeen = false;
-    let herdrSessionReported = false;
-    let sessionIdResolved = false;
-    let leadStateObserved = false;
-    while (!lead && Date.now() < deadline) {
-      const inventory = await herdrSessionSnapshot(pi, ctx, signal);
-      const candidates = inventory.agents.filter(
+        if (
+          managed ||
+          (state &&
+            ((state.role ?? "lead") !== "lead" ||
+              state.piSessionId !== assignment.id))
+        )
+          throw new Error(
+            "Existing session in new worktree has a conflicting role or identity",
+          );
+        return state?.role === "lead" && state.piSessionId === assignment.id;
+      };
+      const currentInventory = await herdrSessionSnapshot(pi, ctx, signal);
+      const currentCandidates = currentInventory.agents.filter(
         (agent: any) =>
           isPiAgent(agent) &&
           agent.workspace_id === workspaceId &&
           agent.pane_id === paneId &&
           agent.tab_id === tabId,
       );
-      if (candidates.length > 1)
+      if (currentCandidates.length > 1)
         throw new Error("Ambiguous Lead session in new worktree");
-      if (candidates.length === 1) {
-        piProcessSeen = true;
-        herdrSessionReported = Boolean(candidates[0]?.agent_session);
-        const sessionId = herdrSessionId(candidates[0]);
-        sessionIdResolved = Boolean(sessionId);
-        const candidateState = readLeadCoordinationState(
-          supervisionRuntime(),
-          assignment.id,
+      if (currentCandidates.length === 1) {
+        if (verifyLeadCandidate(currentCandidates[0]))
+          lead = currentCandidates[0];
+      }
+      if (!lead) {
+        const processInfo = await runHerdr(
+          pi,
+          ctx,
+          ["pane", "process-info", "--pane", paneId],
+          { signal },
         );
-        leadStateObserved = Boolean(candidateState);
-        if (candidateState)
-          requireCompatibleBuild(
-            HERDSMAN_BUILD,
-            candidateState.build,
-            operationName,
-            `Lead ${assignment.id}`,
-          );
-        if (verifyLeadCandidate(candidates[0])) {
-          lead = candidates[0];
-          break;
+        const foreground = processInfo?.process_info?.foreground_processes;
+        const piAlreadyRunning =
+          currentCandidates.length === 1 ||
+          (Array.isArray(foreground) &&
+            foreground.some((process: any) => {
+              const executable = `${process?.argv0 ?? ""} ${process?.cmdline ?? ""}`;
+              return /(^|[\\/\s])pi(?:\s|$)/i.test(executable);
+            }));
+        if (!piAlreadyRunning) {
+          await assertUnoccupied(workspaceId!);
+          await startHerdrAgentInPane(pi, ctx, {
+            primaryWorkspaceId,
+            workspaceId,
+            tabId,
+            paneId,
+            cwd,
+            label: `lead-${id.slice(0, 8)}`,
+            runId: id,
+            extensionPath: HERDSMAN_EXTENSION_PATH,
+            agentArgs: [
+              "--session-id",
+              assignment.id,
+              ctx.isProjectTrusted() ? "--approve" : "--no-approve",
+            ],
+            signal,
+          });
+          startedLead = true;
         }
       }
-      try {
-        const process = await runHerdr(
+      const deadline = Date.now() + 30_000;
+      let piProcessSeen = false;
+      let herdrSessionReported = false;
+      let sessionIdResolved = false;
+      let leadStateObserved = false;
+      while (!lead && Date.now() < deadline) {
+        const inventory = await herdrSessionSnapshot(pi, ctx, signal);
+        const candidates = inventory.agents.filter(
+          (agent: any) =>
+            isPiAgent(agent) &&
+            agent.workspace_id === workspaceId &&
+            agent.pane_id === paneId &&
+            agent.tab_id === tabId,
+        );
+        if (candidates.length > 1)
+          throw new Error("Ambiguous Lead session in new worktree");
+        if (candidates.length === 1) {
+          piProcessSeen = true;
+          herdrSessionReported = Boolean(candidates[0]?.agent_session);
+          const sessionId = herdrSessionId(candidates[0]);
+          sessionIdResolved = Boolean(sessionId);
+          const candidateState = readLeadCoordinationState(
+            supervisionRuntime(),
+            assignment.id,
+          );
+          leadStateObserved = Boolean(candidateState);
+          if (candidateState)
+            requireCompatibleBuild(
+              HERDSMAN_BUILD,
+              candidateState.build,
+              operationName,
+              `Lead ${assignment.id}`,
+            );
+          if (verifyLeadCandidate(candidates[0])) {
+            lead = candidates[0];
+            break;
+          }
+        }
+        try {
+          const process = await runHerdr(
+            pi,
+            ctx,
+            ["pane", "process-info", "--pane", paneId],
+            { signal },
+          );
+          const foreground = process?.process_info?.foreground_processes;
+          piProcessSeen ||=
+            Array.isArray(foreground) &&
+            foreground.some((entry: any) => {
+              const executable = `${entry?.argv0 ?? ""} ${entry?.cmdline ?? ""}`;
+              return /(^|[\\/\s])pi(?:\s|$)/i.test(executable);
+            });
+        } catch {
+          // Process evidence is diagnostic only; keep polling the authoritative session API.
+        }
+        await delay(250, undefined, { signal });
+      }
+      const leadSessionId = lead && assignment.id;
+      if (!leadSessionId) {
+        const readiness = !piProcessSeen
+          ? "No Pi process or exact-pane Herdr session was observed"
+          : !herdrSessionReported
+            ? "Pi process seen in the exact pane, but Herdr never reported a Pi session identity"
+            : !leadStateObserved
+              ? "Herdr session reported, but Herdsman Lead coordination state was never published"
+              : !sessionIdResolved
+                ? "Lead state was present but Herdr's session path is not yet materialized"
+                : "Lead coordination state was present but not a valid Lead identity";
+        let processInfo = "unavailable";
+        try {
+          const process = await runHerdr(
+            pi,
+            ctx,
+            ["pane", "process-info", "--pane", paneId],
+            { signal },
+          );
+          processInfo = JSON.stringify(process?.process_info).slice(0, 1024);
+        } catch {
+          processInfo = "unavailable";
+        }
+        const pane = await captureStartupDiagnostic(
           pi,
           ctx,
-          ["pane", "process-info", "--pane", paneId],
-          { signal },
+          paneId,
+          Date.now() + 2_000,
+          signal,
         );
-        const foreground = process?.process_info?.foreground_processes;
-        piProcessSeen ||=
-          Array.isArray(foreground) &&
-          foreground.some((entry: any) => {
-            const executable = `${entry?.argv0 ?? ""} ${entry?.cmdline ?? ""}`;
-            return /(^|[\\/\s])pi(?:\s|$)/i.test(executable);
-          });
-      } catch {
-        // Process evidence is diagnostic only; keep polling the authoritative session API.
+        const diagnostic = JSON.stringify({
+          readiness,
+          paneId,
+          processInfo,
+          pane: pane.status === "captured" ? pane.snapshot : pane.status,
+        });
+        throw new Error(
+          `Timed out verifying the new Lead session in pane ${paneId}; ${diagnostic}`.slice(
+            0,
+            4096,
+          ),
+        );
       }
-      await delay(250, undefined, { signal });
+      const assertManagerCurrent = async () => {
+        const fresh = await currentManager(ctx);
+        if (!fresh || !sameManagerDescriptor(fresh, manager))
+          throw new Error("Manager changed during project activation");
+      };
+      await assertManagerCurrent();
+      const latestState = readLeadCoordinationState(
+        supervisionRuntime(),
+        assignment.id,
+      );
+      requireCompatibleBuild(
+        HERDSMAN_BUILD,
+        latestState?.build,
+        operationName,
+        `Lead ${assignment.id}`,
+      );
+      writeChiefMessage({
+        version: 2,
+        build: HERDSMAN_BUILD,
+        id: assignment.id,
+        leaseId: manager.leaseId,
+        kind: "project_assignment",
+        fromSessionId: manager.piSessionId,
+        toSessionId: leadSessionId,
+        leadSessionId,
+        branch: assignment.branch,
+        text: "Project assignment ready.",
+        createdAt: Date.now(),
+      });
+      let rediscovered: any;
+      while (Date.now() < deadline) {
+        const exact = (await liveLead(ctx, assignment.id)).filter(
+          (candidate: any) =>
+            candidate.workspace_id === workspaceId &&
+            candidate.pane_id === paneId &&
+            candidate.tab_id === tabId,
+        );
+        if (exact.length > 1)
+          throw new Error(
+            "Lead identity became ambiguous during project activation",
+          );
+        if (exact.length === 1) {
+          rediscovered = exact[0];
+          break;
+        }
+        await delay(100, undefined, { signal });
+      }
+      if (!rediscovered) {
+        await assertManagerCurrent();
+        const observed = sessionIdentity(lead.agent_session);
+        const resolvedSessionId = herdrSessionId(lead);
+        if (
+          startedLead &&
+          observed?.kind === "path" &&
+          (!resolvedSessionId || resolvedSessionId === assignment.id)
+        ) {
+          try {
+            await stopHerdrAgentPreservingPane(
+              pi,
+              ctx,
+              paneId!,
+              {
+                paneId,
+                tabId,
+                workspaceId,
+                cwd,
+                session: expectedSession(assignment.id, observed.value),
+              },
+              signal,
+            );
+          } catch (error) {
+            appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+          }
+        }
+        throw new Error(
+          "Lead started but its exact Pi session identity did not materialize; assignment preserved",
+        );
+      }
+      await assertManagerCurrent();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              ok: true,
+              action: operation.action,
+              session: leadSessionId,
+              workspace_id: workspaceId,
+              branch: assignment.branch,
+              ...(operation.action === "resume" ? { recovered: true } : {}),
+            }),
+          },
+        ],
+        details: {
+          ok: true,
+          action: operation.action,
+          session: leadSessionId,
+          workspace_id: workspaceId,
+          branch: assignment.branch,
+          ...(operation.action === "resume" ? { recovered: true } : {}),
+        },
+      };
+    } catch (error) {
+      appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+      throw error;
     }
-    const leadSessionId = lead && assignment.id;
-    if (!leadSessionId) {
-      const readiness = !piProcessSeen
-        ? "No Pi process or exact-pane Herdr session was observed"
-        : !herdrSessionReported
-          ? "Pi process seen in the exact pane, but Herdr never reported a Pi session identity"
-          : !leadStateObserved
-            ? "Herdr session reported, but Herdsman Lead coordination state was never published"
-            : !sessionIdResolved
-              ? "Lead state was present but Herdr's session path is not yet materialized"
-              : "Lead coordination state was present but not a valid Lead identity";
-      let processInfo = "unavailable";
-      try {
-        const process = await runHerdr(
-          pi,
-          ctx,
-          ["pane", "process-info", "--pane", paneId],
-          { signal },
-        );
-        processInfo = JSON.stringify(process?.process_info).slice(0, 1024);
-      } catch {
-        processInfo = "unavailable";
-      }
-      const pane = await captureStartupDiagnostic(
+  };
+  const executeStaff = async (
+    _id: string,
+    raw: unknown,
+    signal: AbortSignal | undefined,
+    _update: unknown,
+    ctx: ExtensionContext,
+  ) => {
+    if (activeRole() !== "chief" && activeRole() !== "manager")
+      throw new Error("Staff is available only to active supervisors");
+    const authority =
+      activeRole() === "chief"
+        ? await currentChiefAuthority(ctx)
+        : await currentManager(ctx);
+    if (!authority || leadRuntime.roleSuspended)
+      throw new Error("Supervisor lease is no longer active");
+    const params = raw as StaffOperation;
+    if (params.action === "delegate" || params.action === "resume") {
+      if (activeRole() !== "manager")
+        throw new Error("Only Managers can control project work");
+      return activateProjectLead(params, ctx, signal);
+    }
+    if (params.action === "stop") {
+      if (activeRole() !== "manager")
+        throw new Error("Only Managers can control project work");
+      return projectStop(params.session, ctx, signal);
+    }
+    const refresh = async () => directReports(ctx);
+    const result = (value: Record<string, unknown>) => {
+      const bounded = truncateModelText(JSON.stringify(value, null, 2), {
+        keep: "head",
+        sessionId: ctx.sessionManager.getSessionId(),
+        key: _id,
+      });
+      return {
+        content: [{ type: "text" as const, text: bounded.content }],
+        details: {
+          ...value,
+          truncated: bounded.truncated,
+          ...(bounded.fullOutputPath
+            ? { full_output_path: bounded.fullOutputPath }
+            : {}),
+        },
+      };
+    };
+    const reports = await refresh();
+    const reportSession = (report: any): string =>
+      report.session ?? report.lead;
+    if (params.action === "list") {
+      if (
+        !(activeRole() === "chief"
+          ? await currentChiefAuthority(ctx)
+          : await currentManager(ctx))
+      )
+        throw new Error("Supervisor lease is no longer active");
+      const managerSnapshot =
+        leadRuntime.controllerRole === "manager" && leadRuntime.managerLease
+          ? await loadSupervisionSnapshot(ctx)
+          : undefined;
+      return result({
+        ok: true,
+        action: "list",
+        self: {
+          role: activeRole(),
+          session: ctx.sessionManager.getSessionId(),
+        },
+        ...(managerSnapshot
+          ? {
+              work: managerSnapshot.work?.map((item) => ({
+                branch: item.branch,
+                status: item.status,
+                ...(item.runtimeState
+                  ? { runtime_state: item.runtimeState }
+                  : {}),
+                ...(item.task ? { task: item.task } : {}),
+                ...(item.issue ? { issue: item.issue } : {}),
+              })),
+              open_workspaces:
+                managerSnapshot.openWorkspaces?.map((workspace) => ({
+                  workspace: workspace.workspaceId,
+                  ...(workspace.branch ? { branch: workspace.branch } : {}),
+                  path: workspace.path,
+                  linked: workspace.linked,
+                })) ?? [],
+            }
+          : {}),
+        reports: reports.map((report: any) => ({
+          role: activeRole() === "chief" ? report.role : "lead",
+          session: reportSession(report),
+          display_name: report.displayName,
+          runtime_state: report.runtimeState,
+          agent_counts: report.agentCounts,
+          ...(activeRole() === "chief"
+            ? {
+                project: "project" in report ? report.project : "",
+                lead_counts:
+                  "leadCounts" in report ? report.leadCounts : undefined,
+                leads: "leads" in report ? report.leads : [],
+              }
+            : {}),
+          available_actions: report.availableActions,
+        })),
+      });
+    }
+    const lead = reports.find(
+      (candidate: any) => reportSession(candidate) === params.session,
+    );
+    if (!lead)
+      throw new Error(
+        "Lead target was not found or is no longer eligible. Retry with session set to the exact full Pi session ID shown as session in a fresh automatic supervision snapshot or returned by staff_list; never use display_name.",
+      );
+    const sameLeadIdentity = (
+      candidate: typeof lead,
+      expected: typeof lead,
+    ): boolean =>
+      reportSession(candidate) === reportSession(expected) &&
+      candidate.paneId === expected.paneId &&
+      candidate.workspaceId === expected.workspaceId &&
+      candidate.tabId === expected.tabId &&
+      candidate.instanceId === expected.instanceId;
+    const sameLeadTarget = (
+      candidate: typeof lead,
+      expected: typeof lead,
+    ): boolean => sameLeadIdentity(candidate, expected);
+    if (!lead.availableActions.includes(params.action))
+      throw new Error(`Lead does not currently allow ${params.action}`);
+    if (params.action === "inspect") {
+      const evidence = await inspectHerdrAgent(
         pi,
         ctx,
-        paneId,
-        Date.now() + 2_000,
+        {
+          workspaceId: lead.workspaceId,
+          paneId: lead.paneId,
+          piSessionId: reportSession(lead),
+        },
         signal,
+        (agent) => {
+          return (
+            isPiAgent(agent) &&
+            herdrSessionId(agent) === reportSession(lead) &&
+            agent.pane_id === lead.paneId &&
+            agent.tab_id === lead.tabId &&
+            (() => {
+              const state = readLeadCoordinationState(
+                supervisionRuntime(),
+                reportSession(lead),
+              );
+              return (
+                state?.piSessionId === reportSession(lead) &&
+                state.instanceId === lead.instanceId
+              );
+            })()
+          );
+        },
       );
-      const diagnostic = JSON.stringify({
-        readiness,
-        paneId,
-        processInfo,
-        pane: pane.status === "captured" ? pane.snapshot : pane.status,
+      return result({
+        ok: true,
+        action: "inspect",
+        session: lead.lead,
+        display_name: lead.displayName,
+        identity: {
+          workspace_id: lead.workspaceId,
+          pane_id: lead.paneId,
+          tab_id: lead.tabId,
+          pi_session_id: reportSession(lead),
+        },
+        captured_at: evidence.capturedAt,
+        recent_output_truncated: evidence.recentOutputTruncated,
+        ...(evidence.recentOutput
+          ? { recent_output: evidence.recentOutput }
+          : {}),
+        ...(evidence.process ? { process: evidence.process } : {}),
+        agents: lead.agents ?? [],
       });
-      throw new Error(
-        `Timed out verifying the new Lead session in pane ${paneId}; ${diagnostic}`.slice(
-          0,
-          4096,
-        ),
-      );
     }
-    const assertManagerCurrent = async () => {
-      const fresh = await currentManager(ctx);
-      if (!fresh || !sameManagerDescriptor(fresh, manager))
-        throw new Error("Manager changed during project activation");
-    };
-    await assertManagerCurrent();
-    const latestState = readLeadCoordinationState(
+    if (params.action === "transcript") {
+      const sessionFile = lead.piSessionFile;
+      if (!sessionFile)
+        throw new Error("Lead transcript is not currently available");
+      const transcript = readPersistedTranscript({
+        piSessionId: reportSession(lead),
+        piSessionFile: sessionFile,
+      });
+      const currentChief =
+        activeRole() === "chief"
+          ? await currentChiefAuthority(ctx)
+          : await currentManager(ctx);
+      const currentLead = (await directReports(ctx)).find(
+        (candidate: any) => reportSession(candidate) === params.session,
+      );
+      if (
+        !currentChief ||
+        currentChief.leaseId !== authority.leaseId ||
+        !currentLead ||
+        !sameLeadIdentity(currentLead, lead) ||
+        currentLead.piSessionFile !== sessionFile ||
+        !currentLead.availableActions.includes("transcript")
+      )
+        throw new Error("Lead changed during transcript read");
+      return result({
+        ok: true,
+        action: "transcript",
+        session: lead.lead,
+        display_name: lead.displayName,
+        session_id: reportSession(lead),
+        transcript: transcript.transcript,
+        transcript_truncated: transcript.truncated,
+      });
+    }
+    // Projection is only a discovery snapshot. Re-read every identity
+    // and authority field immediately before creating a transport file.
+    const currentChief =
+      activeRole() === "chief"
+        ? await currentChiefAuthority(ctx)
+        : await currentManager(ctx);
+    if (!currentChief || currentChief.leaseId !== authority.leaseId)
+      throw new Error("Chief lease is no longer active");
+    const currentLead = (await directReports(ctx)).find(
+      (candidate: any) => reportSession(candidate) === params.session,
+    );
+    if (
+      !currentLead ||
+      !sameLeadTarget(currentLead, lead) ||
+      !currentLead.availableActions.includes(params.action)
+    )
+      throw new Error("Lead target changed before the message was queued");
+    // The supervision snapshot load is awaited and can observe a lease replacement.
+    const finalChief =
+      activeRole() === "chief"
+        ? await currentChiefAuthority(ctx)
+        : await currentManager(ctx);
+    if (!finalChief || finalChief.leaseId !== authority.leaseId)
+      throw new Error("Chief lease is no longer active");
+    const recordId = randomUUID();
+    const createdAt = Date.now();
+    const prepared = await prepareCoordinationInput(
+      ctx,
+      params.message,
+      resolveMessageFiles(ctx, params.files, `staff.${params.action}`),
+      `staff.${params.action}`,
+      "Message",
+      (candidate, resultBindings) => ({
+        version: 2,
+        build: HERDSMAN_BUILD,
+        id: recordId,
+        leaseId: finalChief.leaseId,
+        kind: activeRole() === "chief" ? "chief_message" : "manager_message",
+        fromSessionId: finalChief.piSessionId,
+        toSessionId: reportSession(lead),
+        leadSessionId: reportSession(lead),
+        text: candidate,
+        ...(resultBindings.length
+          ? { resultBindings: [...resultBindings] }
+          : {}),
+        createdAt,
+      }),
+    );
+    // Attachment preparation can reread Herdsman configuration and files. Recheck
+    // every identity and authority field immediately before transport.
+    const writeChief =
+      activeRole() === "chief"
+        ? await currentChiefAuthority(ctx)
+        : await currentManager(ctx);
+    const writeLead = (await directReports(ctx)).find(
+      (candidate: any) => reportSession(candidate) === params.session,
+    );
+    if (
+      !writeChief ||
+      writeChief.leaseId !== finalChief.leaseId ||
+      !writeLead ||
+      !sameLeadTarget(writeLead, currentLead) ||
+      !writeLead.availableActions.includes(params.action)
+    )
+      throw new Error("Lead or Chief changed before the message was queued");
+    const targetState = readLeadCoordinationState(
       supervisionRuntime(),
-      assignment.id,
+      reportSession(writeLead),
     );
     requireCompatibleBuild(
       HERDSMAN_BUILD,
-      latestState?.build,
-      operationName,
-      `Lead ${assignment.id}`,
+      targetState?.build,
+      "staff_message",
+      `${targetState?.role ?? "Lead"} ${reportSession(writeLead)}`,
     );
-    writeChiefMessage({
+    const record: ChiefMessageRecord = {
       version: 2,
       build: HERDSMAN_BUILD,
-      id: assignment.id,
-      leaseId: manager.leaseId,
-      kind: "project_assignment",
-      fromSessionId: manager.piSessionId,
-      toSessionId: leadSessionId,
-      leadSessionId,
-      branch: assignment.branch,
-      text: "Project assignment ready.",
-      createdAt: Date.now(),
-    });
-    let rediscovered: any;
-    while (Date.now() < deadline) {
-      const exact = (await liveLead(ctx, assignment.id)).filter(
-        (candidate: any) =>
-          candidate.workspace_id === workspaceId &&
-          candidate.pane_id === paneId &&
-          candidate.tab_id === tabId,
-      );
-      if (exact.length > 1)
-        throw new Error(
-          "Lead identity became ambiguous during project activation",
-        );
-      if (exact.length === 1) {
-        rediscovered = exact[0];
-        break;
-      }
-      await delay(100, undefined, { signal });
-    }
-    if (!rediscovered) {
-      await assertManagerCurrent();
-      const observed = sessionIdentity(lead.agent_session);
-      const resolvedSessionId = herdrSessionId(lead);
-      if (
-        startedLead &&
-        observed?.kind === "path" &&
-        (!resolvedSessionId || resolvedSessionId === assignment.id)
-      ) {
-        try {
-          await stopHerdrAgentPreservingPane(
-            pi,
-            ctx,
-            paneId!,
-            {
-              paneId,
-              tabId,
-              workspaceId,
-              cwd,
-              session: expectedSession(assignment.id, observed.value),
-            },
-            signal,
-          );
-        } catch (error) {
-          appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
-        }
-      }
-      throw new Error(
-        "Lead started but its exact Pi session identity did not materialize; assignment preserved",
-      );
-    }
-    await assertManagerCurrent();
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({
-            ok: true,
-            action: operation.action,
-            session: leadSessionId,
-            workspace_id: workspaceId,
-            branch: assignment.branch,
-            ...(operation.action === "resume" ? { recovered: true } : {}),
-          }),
-        },
-      ],
-      details: {
-        ok: true,
-        action: operation.action,
-        session: leadSessionId,
-        workspace_id: workspaceId,
-        branch: assignment.branch,
-        ...(operation.action === "resume" ? { recovered: true } : {}),
-      },
+      id: recordId,
+      leaseId: finalChief.leaseId,
+      kind: activeRole() === "chief" ? "chief_message" : "manager_message",
+      fromSessionId: finalChief.piSessionId,
+      toSessionId: reportSession(lead),
+      leadSessionId: reportSession(lead),
+      text: prepared.text,
+      ...(prepared.resultBindings.length
+        ? { resultBindings: prepared.resultBindings }
+        : {}),
+      createdAt,
     };
-  } catch (error) {
-    appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
-    throw error;
-  }
-};
-const executeStaff = async (
-          _id: string,
-          raw: unknown,
-          signal: AbortSignal | undefined,
-          _update: unknown,
-          ctx: ExtensionContext,
-        ) => {
-          if (activeRole() !== "chief" && activeRole() !== "manager")
-            throw new Error("Staff is available only to active supervisors");
-          const authority =
-            activeRole() === "chief"
-              ? await currentChiefAuthority(ctx)
-              : await currentManager(ctx);
-          if (!authority || leadRuntime.roleSuspended)
-            throw new Error("Supervisor lease is no longer active");
-          const params = raw as StaffOperation;
-          if (params.action === "delegate" || params.action === "resume") {
-            if (activeRole() !== "manager")
-              throw new Error("Only Managers can control project work");
-            return activateProjectLead(params, ctx, signal);
-          }
-          if (params.action === "stop") {
-            if (activeRole() !== "manager")
-              throw new Error("Only Managers can control project work");
-            return projectStop(params.session, ctx, signal);
-          }
-          const refresh = async () => directReports(ctx);
-          const result = (value: Record<string, unknown>) => {
-            const bounded = truncateModelText(JSON.stringify(value, null, 2), {
-              keep: "head",
-              sessionId: ctx.sessionManager.getSessionId(),
-              key: _id,
-            });
-            return {
-              content: [{ type: "text" as const, text: bounded.content }],
-              details: {
-                ...value,
-                truncated: bounded.truncated,
-                ...(bounded.fullOutputPath
-                  ? { full_output_path: bounded.fullOutputPath }
-                  : {}),
-              },
-            };
-          };
-          const reports = await refresh();
-          const reportSession = (report: any): string =>
-            report.session ?? report.lead;
-          if (params.action === "list") {
-            if (
-              !(activeRole() === "chief"
-                ? await currentChiefAuthority(ctx)
-                : await currentManager(ctx))
-            )
-              throw new Error("Supervisor lease is no longer active");
-            const managerSnapshot =
-              leadRuntime.controllerRole === "manager" && leadRuntime.managerLease
-                ? await loadSupervisionSnapshot(ctx)
-                : undefined;
-            return result({
-              ok: true,
-              action: "list",
-              self: {
-                role: activeRole(),
-                session: ctx.sessionManager.getSessionId(),
-              },
-              ...(managerSnapshot
-                ? {
-                    work: managerSnapshot.work?.map((item) => ({
-                      branch: item.branch,
-                      status: item.status,
-                      ...(item.runtimeState
-                        ? { runtime_state: item.runtimeState }
-                        : {}),
-                      ...(item.task ? { task: item.task } : {}),
-                      ...(item.issue ? { issue: item.issue } : {}),
-                    })),
-                    open_workspaces:
-                      managerSnapshot.openWorkspaces?.map((workspace) => ({
-                        workspace: workspace.workspaceId,
-                        ...(workspace.branch
-                          ? { branch: workspace.branch }
-                          : {}),
-                        path: workspace.path,
-                        linked: workspace.linked,
-                      })) ?? [],
-                  }
-                : {}),
-              reports: reports.map((report: any) => ({
-                role: activeRole() === "chief" ? report.role : "lead",
-                session: reportSession(report),
-                display_name: report.displayName,
-                runtime_state: report.runtimeState,
-                agent_counts: report.agentCounts,
-                ...(activeRole() === "chief"
-                  ? {
-                      project: "project" in report ? report.project : "",
-                      lead_counts:
-                        "leadCounts" in report ? report.leadCounts : undefined,
-                      leads: "leads" in report ? report.leads : [],
-                    }
-                  : {}),
-                available_actions: report.availableActions,
-              })),
-            });
-          }
-          const lead = reports.find(
-            (candidate: any) => reportSession(candidate) === params.session,
-          );
-          if (!lead)
-            throw new Error(
-              "Lead target was not found or is no longer eligible. Retry with session set to the exact full Pi session ID shown as session in a fresh automatic supervision snapshot or returned by staff_list; never use display_name.",
-            );
-          const sameLeadIdentity = (
-            candidate: typeof lead,
-            expected: typeof lead,
-          ): boolean =>
-            reportSession(candidate) === reportSession(expected) &&
-            candidate.paneId === expected.paneId &&
-            candidate.workspaceId === expected.workspaceId &&
-            candidate.tabId === expected.tabId &&
-            candidate.instanceId === expected.instanceId;
-          const sameLeadTarget = (
-            candidate: typeof lead,
-            expected: typeof lead,
-          ): boolean => sameLeadIdentity(candidate, expected);
-          if (!lead.availableActions.includes(params.action))
-            throw new Error(`Lead does not currently allow ${params.action}`);
-          if (params.action === "inspect") {
-            const evidence = await inspectHerdrAgent(
-              pi,
-              ctx,
-              {
-                workspaceId: lead.workspaceId,
-                paneId: lead.paneId,
-                piSessionId: reportSession(lead),
-              },
-              signal,
-              (agent) => {
-                return (
-                  isPiAgent(agent) &&
-                  herdrSessionId(agent) === reportSession(lead) &&
-                  agent.pane_id === lead.paneId &&
-                  agent.tab_id === lead.tabId &&
-                  (() => {
-                    const state = readLeadCoordinationState(
-                      supervisionRuntime(),
-                      reportSession(lead),
-                    );
-                    return (
-                      state?.piSessionId === reportSession(lead) &&
-                      state.instanceId === lead.instanceId
-                    );
-                  })()
-                );
-              },
-            );
-            return result({
-              ok: true,
-              action: "inspect",
-              session: lead.lead,
-              display_name: lead.displayName,
-              identity: {
-                workspace_id: lead.workspaceId,
-                pane_id: lead.paneId,
-                tab_id: lead.tabId,
-                pi_session_id: reportSession(lead),
-              },
-              captured_at: evidence.capturedAt,
-              recent_output_truncated: evidence.recentOutputTruncated,
-              ...(evidence.recentOutput
-                ? { recent_output: evidence.recentOutput }
-                : {}),
-              ...(evidence.process ? { process: evidence.process } : {}),
-              agents: lead.agents ?? [],
-            });
-          }
-          if (params.action === "transcript") {
-            const sessionFile = lead.piSessionFile;
-            if (!sessionFile)
-              throw new Error("Lead transcript is not currently available");
-            const transcript = readPersistedTranscript({
-              piSessionId: reportSession(lead),
-              piSessionFile: sessionFile,
-            });
-            const currentChief =
-              activeRole() === "chief"
-                ? await currentChiefAuthority(ctx)
-                : await currentManager(ctx);
-            const currentLead = (await directReports(ctx)).find(
-              (candidate: any) => reportSession(candidate) === params.session,
-            );
-            if (
-              !currentChief ||
-              currentChief.leaseId !== authority.leaseId ||
-              !currentLead ||
-              !sameLeadIdentity(currentLead, lead) ||
-              currentLead.piSessionFile !== sessionFile ||
-              !currentLead.availableActions.includes("transcript")
-            )
-              throw new Error("Lead changed during transcript read");
-            return result({
-              ok: true,
-              action: "transcript",
-              session: lead.lead,
-              display_name: lead.displayName,
-              session_id: reportSession(lead),
-              transcript: transcript.transcript,
-              transcript_truncated: transcript.truncated,
-            });
-          }
-          // Projection is only a discovery snapshot. Re-read every identity
-          // and authority field immediately before creating a transport file.
-          const currentChief =
-            activeRole() === "chief"
-              ? await currentChiefAuthority(ctx)
-              : await currentManager(ctx);
-          if (!currentChief || currentChief.leaseId !== authority.leaseId)
-            throw new Error("Chief lease is no longer active");
-          const currentLead = (await directReports(ctx)).find(
-            (candidate: any) => reportSession(candidate) === params.session,
-          );
-          if (
-            !currentLead ||
-            !sameLeadTarget(currentLead, lead) ||
-            !currentLead.availableActions.includes(params.action)
-          )
-            throw new Error(
-              "Lead target changed before the message was queued",
-            );
-          // The supervision snapshot load is awaited and can observe a lease replacement.
-          const finalChief =
-            activeRole() === "chief"
-              ? await currentChiefAuthority(ctx)
-              : await currentManager(ctx);
-          if (!finalChief || finalChief.leaseId !== authority.leaseId)
-            throw new Error("Chief lease is no longer active");
-          const recordId = randomUUID();
-          const createdAt = Date.now();
-          const prepared = await prepareCoordinationInput(
-            ctx,
-            params.message,
-            resolveMessageFiles(ctx, params.files, `staff.${params.action}`),
-            `staff.${params.action}`,
-            "Message",
-            (candidate, resultBindings) => ({
-              version: 2,
-              build: HERDSMAN_BUILD,
-              id: recordId,
-              leaseId: finalChief.leaseId,
-              kind:
-                activeRole() === "chief" ? "chief_message" : "manager_message",
-              fromSessionId: finalChief.piSessionId,
-              toSessionId: reportSession(lead),
-              leadSessionId: reportSession(lead),
-              text: candidate,
-              ...(resultBindings.length
-                ? { resultBindings: [...resultBindings] }
-                : {}),
-              createdAt,
-            }),
-          );
-          // Attachment preparation can reread Herdsman configuration and files. Recheck
-          // every identity and authority field immediately before transport.
-          const writeChief =
-            activeRole() === "chief"
-              ? await currentChiefAuthority(ctx)
-              : await currentManager(ctx);
-          const writeLead = (await directReports(ctx)).find(
-            (candidate: any) => reportSession(candidate) === params.session,
-          );
-          if (
-            !writeChief ||
-            writeChief.leaseId !== finalChief.leaseId ||
-            !writeLead ||
-            !sameLeadTarget(writeLead, currentLead) ||
-            !writeLead.availableActions.includes(params.action)
-          )
-            throw new Error(
-              "Lead or Chief changed before the message was queued",
-            );
-          const targetState = readLeadCoordinationState(
-            supervisionRuntime(),
-            reportSession(writeLead),
-          );
-          requireCompatibleBuild(
-            HERDSMAN_BUILD,
-            targetState?.build,
-            "staff_message",
-            `${targetState?.role ?? "Lead"} ${reportSession(writeLead)}`,
-          );
-          const record: ChiefMessageRecord = {
-            version: 2,
-            build: HERDSMAN_BUILD,
-            id: recordId,
-            leaseId: finalChief.leaseId,
-            kind:
-              activeRole() === "chief" ? "chief_message" : "manager_message",
-            fromSessionId: finalChief.piSessionId,
-            toSessionId: reportSession(lead),
-            leadSessionId: reportSession(lead),
-            text: prepared.text,
-            ...(prepared.resultBindings.length
-              ? { resultBindings: prepared.resultBindings }
-              : {}),
-            createdAt,
-          };
-          const runtime = supervisionRuntime();
-          writeChiefMessage(record, runtime);
-          return result({
-            ok: true,
-            action: params.action,
-            id: record.id,
-            session: lead.lead,
-            display_name: lead.displayName,
-            next_action:
-              "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
-          });
-        };
+    const runtime = supervisionRuntime();
+    writeChiefMessage(record, runtime);
+    return result({
+      ok: true,
+      action: params.action,
+      id: record.id,
+      session: lead.lead,
+      display_name: lead.displayName,
+      next_action:
+        "Report activity returns asynchronously; continue only independent work, otherwise end the turn. Do not poll.",
+    });
+  };
   return { stopExecution, stop, activateProjectLead, executeStaff };
 }
 
@@ -3400,7 +4046,10 @@ export function readLeadSessionIds(
   mailboxes: readonly any[],
   workspaceId: string,
   dependencies: {
-    matchesExpectedSession: (session: unknown, expected: { id: string }) => boolean;
+    matchesExpectedSession: (
+      session: unknown,
+      expected: { id: string },
+    ) => boolean;
     isPiAgent: (agent: any) => boolean;
     supervisionRuntime: () => unknown;
     readLeadCoordinationState: (runtime: unknown, sessionId: string) => any;
@@ -3409,28 +4058,41 @@ export function readLeadSessionIds(
   const panes = inventory.panes;
   if (!Array.isArray(panes)) return [];
   const leadSessionIds: string[] = [];
-  const ownerSessionIds = new Set(mailboxes.map(({ state }) => state.ownerSessionId));
+  const ownerSessionIds = new Set(
+    mailboxes.map(({ state }) => state.ownerSessionId),
+  );
   for (const ownerSessionId of ownerSessionIds) {
     const ownerAgents = inventory.agents.filter((agent: any) => {
       try {
-        return dependencies.matchesExpectedSession(agent?.agent_session, { id: ownerSessionId });
+        return dependencies.matchesExpectedSession(agent?.agent_session, {
+          id: ownerSessionId,
+        });
       } catch {
         return false;
       }
     });
     if (ownerAgents.length !== 1) continue;
     const ownerAgent = ownerAgents[0];
-    if (typeof ownerAgent.pane_id !== "string" || !ownerAgent.pane_id.trim()) continue;
-    const ownerPanes = panes.filter((pane: any) =>
-      pane?.workspace_id === workspaceId && pane?.pane_id === ownerAgent.pane_id,
+    if (typeof ownerAgent.pane_id !== "string" || !ownerAgent.pane_id.trim())
+      continue;
+    const ownerPanes = panes.filter(
+      (pane: any) =>
+        pane?.workspace_id === workspaceId &&
+        pane?.pane_id === ownerAgent.pane_id,
     );
-    if (ownerPanes.length !== 1 || !dependencies.isPiAgent(ownerAgent) || ownerPanes[0]?.agent !== "pi") continue;
+    if (
+      ownerPanes.length !== 1 ||
+      !dependencies.isPiAgent(ownerAgent) ||
+      ownerPanes[0]?.agent !== "pi"
+    )
+      continue;
     try {
       const state = dependencies.readLeadCoordinationState(
         dependencies.supervisionRuntime(),
         ownerSessionId,
       );
-      if (state && (state.role ?? "lead") === "lead") leadSessionIds.push(ownerSessionId);
+      if (state && (state.role ?? "lead") === "lead")
+        leadSessionIds.push(ownerSessionId);
     } catch {
       // Missing or invalid Lead authority stays unknown.
     }
@@ -3446,20 +4108,50 @@ export function createLeadCoordinationRuntime(host: any) {
   let peerPresencePublication = Promise.resolve();
   let coordinationPublication = Promise.resolve();
   const {
-    pi, leadRuntime, processRole, controllerScope, activeRole, HERDSMAN_BUILD,
-    supervisionRuntime, writeLeadCoordinationState, appendDurableError,
-    peerRuntime, removePeerLeadRecord, acquireProcessLock, peerLeadLockPath,
-    listPeerLeadRecords, publishProjectMessage, resolveMessageFiles,
-    buildSessionProjection, contentText, supervisorStateType,
-    workspacePresentationProvenance, basename, readPeerLeadRecord,
-    samePeerLeadRecord, writePeerLeadRecord, invalidateLeadCoordinationState,
-    runHerdr, leadInstanceId, currentManager, currentWorktreeScope,
-    projectAssignmentForScope, currentChiefAuthority, currentSupervisor,
-    sameManagerDescriptor, requireCompatibleBuild, sameRuntimeBuild,
-    samePeerLeadGeneration, writeCoordinationMessage, writeChiefMessage,
+    pi,
+    leadRuntime,
+    processRole,
+    controllerScope,
+    activeRole,
+    HERDSMAN_BUILD,
+    supervisionRuntime,
+    writeLeadCoordinationState,
+    appendDurableError,
+    peerRuntime,
+    removePeerLeadRecord,
+    acquireProcessLock,
+    peerLeadLockPath,
+    listPeerLeadRecords,
+    publishProjectMessage,
+    resolveMessageFiles,
+    buildSessionProjection,
+    contentText,
+    supervisorStateType,
+    workspacePresentationProvenance,
+    basename,
+    readPeerLeadRecord,
+    samePeerLeadRecord,
+    writePeerLeadRecord,
+    invalidateLeadCoordinationState,
+    runHerdr,
+    leadInstanceId,
+    currentManager,
+    currentWorktreeScope,
+    projectAssignmentForScope,
+    currentChiefAuthority,
+    currentSupervisor,
+    sameManagerDescriptor,
+    requireCompatibleBuild,
+    sameRuntimeBuild,
+    samePeerLeadGeneration,
+    writeCoordinationMessage,
+    writeChiefMessage,
     readLeadCoordinationState,
-    removeChiefMessage, quarantineChiefMessage,
-    listProjectAssignments, listProjectMessages, readProjectAssignment,
+    removeChiefMessage,
+    quarantineChiefMessage,
+    listProjectAssignments,
+    listProjectMessages,
+    readProjectAssignment,
     importResultBindings,
   } = host;
   const readLeadSessionIdsFromHost = (
@@ -3473,15 +4165,26 @@ export function createLeadCoordinationRuntime(host: any) {
     files: readonly any[],
     operation: string,
     heading: "Message" | "Reply" | "Question",
-    recordForInput: (text: string, resultBindings: readonly ResultBinding[]) => any,
+    recordForInput: (
+      text: string,
+      resultBindings: readonly ResultBinding[],
+    ) => any,
   ) => {
     const limits = await host.messageLimits(ctx);
     return prepareMessageInput(text, files, ctx.cwd, operation, heading, {
       inlineLimitBytes: limits.inline.bytes,
-      mailboxLimitBytes: Math.min(limits.mailbox.bytes, host.coordinationMessageMaxBytes),
-      serializedBytes: (candidate: string, resultBindings: readonly ResultBinding[]) => {
+      mailboxLimitBytes: Math.min(
+        limits.mailbox.bytes,
+        host.coordinationMessageMaxBytes,
+      ),
+      serializedBytes: (
+        candidate: string,
+        resultBindings: readonly ResultBinding[],
+      ) => {
         const record = recordForInput(candidate, resultBindings);
-        return typeof record === "number" ? record : host.chiefMessageBytes(record);
+        return typeof record === "number"
+          ? record
+          : host.chiefMessageBytes(record);
       },
     });
   };
@@ -3494,7 +4197,12 @@ export function createLeadCoordinationRuntime(host: any) {
     } catch (error) {
       markLeadCoordinationUnhealthy();
       if (leadRuntime.leadContext)
-        appendDurableError(pi, leadRuntime.leadContext, "pi_herdsman_state_error", error);
+        appendDurableError(
+          pi,
+          leadRuntime.leadContext,
+          "pi_herdsman_state_error",
+          error,
+        );
       return false;
     }
   };
@@ -3512,16 +4220,23 @@ export function createLeadCoordinationRuntime(host: any) {
         build: HERDSMAN_BUILD,
         role: activeRole() === "manager" ? "manager" : "lead",
         instanceId: host.leadInstanceId(),
-        piSessionId: leadRuntime.leadContext?.sessionManager.getSessionId() ?? "",
+        piSessionId:
+          leadRuntime.leadContext?.sessionManager.getSessionId() ?? "",
         updatedAt: Date.now(),
       });
       leadCoordinationHealthy = true;
-      if (!wasHealthy && leadRuntime.leadContext) void schedulePeerPresence(leadRuntime.leadContext);
+      if (!wasHealthy && leadRuntime.leadContext)
+        void schedulePeerPresence(leadRuntime.leadContext);
       return true;
     } catch (error) {
       markLeadCoordinationUnhealthy();
       if (leadRuntime.leadContext)
-        appendDurableError(pi, leadRuntime.leadContext, "pi_herdsman_state_error", error);
+        appendDurableError(
+          pi,
+          leadRuntime.leadContext,
+          "pi_herdsman_state_error",
+          error,
+        );
       return false;
     }
   };
@@ -3537,13 +4252,23 @@ export function createLeadCoordinationRuntime(host: any) {
       removePeerLeadRecord(peerRuntime(), record.piSessionId, record);
     } catch (error) {
       if (leadRuntime.leadContext)
-        appendDurableError(pi, leadRuntime.leadContext, "pi_herdsman_state_error", error);
+        appendDurableError(
+          pi,
+          leadRuntime.leadContext,
+          "pi_herdsman_state_error",
+          error,
+        );
     }
     try {
       peerPresenceLease?.release();
     } catch (error) {
       if (leadRuntime.leadContext)
-        appendDurableError(pi, leadRuntime.leadContext, "pi_herdsman_state_error", error);
+        appendDurableError(
+          pi,
+          leadRuntime.leadContext,
+          "pi_herdsman_state_error",
+          error,
+        );
     }
     peerPresenceLease = undefined;
   };
@@ -3992,303 +4717,339 @@ export function createLeadCoordinationRuntime(host: any) {
   };
   const prepareLeadSupervisorStateMessage = async (ctx: ExtensionContext) => {
     const content = await leadSupervisorState(ctx);
-    if (latestCustomMessageText(ctx, supervisorStateType) === content)
-      return;
+    if (latestCustomMessageText(ctx, supervisorStateType) === content) return;
     return { customType: supervisorStateType, content, display: false };
   };
   type PeerOperation =
     | { action: "list" }
     | { action: "message"; session: string; message: string; files?: string[] };
   const executeSupervisorMessage = async (
-          _id: string,
-          raw: unknown,
-          _signal: AbortSignal | undefined,
-          _update: unknown,
-          ctx: ExtensionContext,
-        ) => {
-          if (controllerScope.kind !== "lead" || leadRuntime.chiefMode !== "inactive")
-            throw new Error("Chief is available only to ordinary leads");
-          const params = raw as { message: string; files?: readonly string[] };
-          if (typeof params.message !== "string" || !params.message.trim())
-            throw new Error("Message must contain non-whitespace text");
-          if (!leadCoordinationHealthy)
-            throw new Error("Lead coordination state is unavailable");
-          let record: ChiefMessageRecord | undefined;
-          const releaseCoordinationPublication =
-            await enterCoordinationPublication();
+    _id: string,
+    raw: unknown,
+    _signal: AbortSignal | undefined,
+    _update: unknown,
+    ctx: ExtensionContext,
+  ) => {
+    if (controllerScope.kind !== "lead" || leadRuntime.chiefMode !== "inactive")
+      throw new Error("Chief is available only to ordinary leads");
+    const params = raw as { message: string; files?: readonly string[] };
+    if (typeof params.message !== "string" || !params.message.trim())
+      throw new Error("Message must contain non-whitespace text");
+    if (!leadCoordinationHealthy)
+      throw new Error("Lead coordination state is unavailable");
+    let record: ChiefMessageRecord | undefined;
+    const releaseCoordinationPublication = await enterCoordinationPublication();
+    try {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const scope =
+        activeRole() === "lead" ? await currentWorktreeScope(ctx) : undefined;
+      const assignment = scope && projectAssignmentForScope(scope, sessionId);
+      if (assignment) {
+        const published = await publishProjectMessage(
+          ctx,
+          assignment,
+          params.message,
+          resolveMessageFiles(ctx, params.files, "supervisor_message"),
+        );
+        if (!published)
+          throw new Error(
+            "Project assignment changed before message publication",
+          );
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Project message saved for Manager (${published.id}).`,
+            },
+          ],
+          details: { id: published.id, branch: assignment.branch },
+        };
+      }
+      const chief =
+        activeRole() === "lead"
+          ? ((await currentManager(ctx, scope)) ??
+            (await currentChiefAuthority(ctx)))
+          : await currentSupervisor(ctx);
+      if (!chief) throw new Error("No active supervisor is available");
+      const recordId = randomUUID();
+      const createdAt = Date.now();
+      const prepared = await prepareCoordinationInput(
+        ctx,
+        params.message,
+        resolveMessageFiles(ctx, params.files, "supervisor_message"),
+        "supervisor_message",
+        "Message",
+        (candidate, resultBindings) => ({
+          version: 2,
+          build: HERDSMAN_BUILD,
+          id: recordId,
+          leaseId: chief.leaseId,
+          kind: activeRole() === "manager" ? "manager_message" : "lead_message",
+          fromSessionId: ctx.sessionManager.getSessionId(),
+          toSessionId: chief.piSessionId,
+          leadSessionId: ctx.sessionManager.getSessionId(),
+          text: candidate,
+          ...(resultBindings.length
+            ? { resultBindings: [...resultBindings] }
+            : {}),
+          createdAt,
+        }),
+      );
+      record = await queueChiefRecord(
+        activeRole() === "manager" ? "manager_message" : "lead_message",
+        prepared.text,
+        ctx,
+        recordId,
+        createdAt,
+        undefined,
+        undefined,
+        prepared.resultBindings,
+      );
+    } catch (error) {
+      try {
+        if (record)
           try {
-            const sessionId = ctx.sessionManager.getSessionId();
-            const scope =
-              activeRole() === "lead"
-                ? await currentWorktreeScope(ctx)
-                : undefined;
-            const assignment =
-              scope && projectAssignmentForScope(scope, sessionId);
-            if (assignment) {
-              const published = await publishProjectMessage(
-                ctx,
-                assignment,
-                params.message,
-                resolveMessageFiles(ctx, params.files, "supervisor_message"),
-              );
-              if (!published)
-                throw new Error(
-                  "Project assignment changed before message publication",
-                );
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Project message saved for Manager (${published.id}).`,
-                  },
-                ],
-                details: { id: published.id, branch: assignment.branch },
-              };
-            }
-            const chief =
-              activeRole() === "lead"
-                ? ((await currentManager(ctx, scope)) ??
-                  (await currentChiefAuthority(ctx)))
-                : await currentSupervisor(ctx);
-            if (!chief) throw new Error("No active supervisor is available");
-            const recordId = randomUUID();
-            const createdAt = Date.now();
-            const prepared = await prepareCoordinationInput(
-              ctx,
-              params.message,
-              resolveMessageFiles(ctx, params.files, "supervisor_message"),
-              "supervisor_message",
-              "Message",
-              (candidate, resultBindings) => ({
-                version: 2,
-                build: HERDSMAN_BUILD,
-                id: recordId,
-                leaseId: chief.leaseId,
-                kind:
-                  activeRole() === "manager"
-                    ? "manager_message"
-                    : "lead_message",
-                fromSessionId: ctx.sessionManager.getSessionId(),
-                toSessionId: chief.piSessionId,
-                leadSessionId: ctx.sessionManager.getSessionId(),
-                text: candidate,
-                ...(resultBindings.length
-                  ? { resultBindings: [...resultBindings] }
-                  : {}),
-                createdAt,
-              }),
+            removeChiefMessage(
+              supervisionRuntime(),
+              record.toSessionId,
+              record.id,
+              record,
             );
-            record = await queueChiefRecord(
-              activeRole() === "manager" ? "manager_message" : "lead_message",
-              prepared.text,
-              ctx,
-              recordId,
-              createdAt,
-              undefined,
-              undefined,
-              prepared.resultBindings,
-            );
-          } catch (error) {
+          } catch (cleanupError) {
+            markLeadCoordinationUnhealthy(ctx);
             try {
-              if (record)
-                try {
-                  removeChiefMessage(
-                    supervisionRuntime(),
-                    record.toSessionId,
-                    record.id,
-                    record,
-                  );
-                } catch (cleanupError) {
-                  markLeadCoordinationUnhealthy(ctx);
-                  try {
-                    quarantineChiefMessage(
-                      supervisionRuntime(),
-                      record.toSessionId,
-                      record.id,
-                    );
-                  } catch (quarantineError) {
-                    appendDurableError(
-                      pi,
-                      ctx,
-                      "pi_herdsman_state_error",
-                      quarantineError,
-                    );
-                  }
-                  appendDurableError(
-                    pi,
-                    ctx,
-                    "pi_herdsman_state_error",
-                    cleanupError,
-                  );
-                }
-            } catch (cleanupError) {
+              quarantineChiefMessage(
+                supervisionRuntime(),
+                record.toSessionId,
+                record.id,
+              );
+            } catch (quarantineError) {
               appendDurableError(
                 pi,
                 ctx,
                 "pi_herdsman_state_error",
-                cleanupError,
+                quarantineError,
               );
             }
-            throw error;
-          } finally {
-            releaseCoordinationPublication();
+            appendDurableError(
+              pi,
+              ctx,
+              "pi_herdsman_state_error",
+              cleanupError,
+            );
           }
-          if (!record) throw new Error("Supervisor message was not queued");
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Message sent to supervisor (${record.id}).`,
-              },
-            ],
-            details: { id: record.id, chiefSessionId: record.toSessionId },
-          };
+      } catch (cleanupError) {
+        appendDurableError(pi, ctx, "pi_herdsman_state_error", cleanupError);
+      }
+      throw error;
+    } finally {
+      releaseCoordinationPublication();
+    }
+    if (!record) throw new Error("Supervisor message was not queued");
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Message sent to supervisor (${record.id}).`,
+        },
+      ],
+      details: { id: record.id, chiefSessionId: record.toSessionId },
+    };
   };
   const executePeerMessage = async (
-          _id: string,
-          raw: unknown,
-          _signal: AbortSignal | undefined,
-          _update: unknown,
-          ctx: ExtensionContext,
-        ) => {
-          if (
-            controllerScope.kind !== "lead" ||
-            leadRuntime.chiefMode !== "inactive" ||
-            leadRuntime.roleSuspended
-          )
-            throw new Error("Peer is unavailable in this role");
-          if (
-            leadRuntime.controllerRole === "manager" &&
-            (!leadRuntime.managerLease ||
-              (await currentManager(ctx))?.leaseId !==
-                leadRuntime.managerLease.descriptor.leaseId)
-          )
-            throw new Error("Manager lease is no longer active");
-          const params = raw as PeerOperation;
-          if (params.action === "list") {
-            const self = ctx.sessionManager.getSessionId();
-            const peers = listPeerLeadRecords(peerRuntime())
-              .filter(
-                (record) =>
-                  (record.role ?? "lead") === activeRole() &&
-                  record.piSessionId !== self,
-              )
-              .map((record) => ({
-                session: record.piSessionId,
-                name: record.name ?? `lead-${record.piSessionId.slice(0, 8)}`,
-                cwd: record.cwd ?? "",
-                repo: record.repo ?? "",
-                branch: record.branch ?? "",
-                workspace_label: record.workspaceLabel ?? "",
-              }));
-            return {
-              content: [
-                { type: "text", text: JSON.stringify({ self, peers }) },
-              ],
-              details: { ok: true, action: "list", self, peers },
-            };
-          }
-          const sender = await livePeerLead(
-            ctx,
-            ctx.sessionManager.getSessionId(),
-          );
-          const target = await livePeerLead(ctx, params.session);
-          if (
-            !sender ||
-            !target ||
-            (sender.role ?? "lead") !== activeRole() ||
-            (target.role ?? "lead") !== activeRole()
-          )
-            throw new Error(
-              "Peer target was not found or is no longer a live same-role peer",
-            );
-          const recordId = randomUUID();
-          const createdAt = Date.now();
-          const prepared = await prepareCoordinationInput(
-            ctx,
-            params.message,
-            resolveMessageFiles(ctx, params.files, "peer.message"),
-            "peer.message",
-            "Message",
-            (candidate, resultBindings) => ({
-              version: 2,
-              build: HERDSMAN_BUILD,
-              id: recordId,
-              leaseId: sender.claim.id,
-              kind: "peer_message",
-              fromSessionId: sender.piSessionId,
-              toSessionId: target.piSessionId,
-              leadSessionId: sender.piSessionId,
-              text: candidate,
-              ...(resultBindings.length
-                ? { resultBindings: [...resultBindings] }
-                : {}),
-              createdAt,
-            }),
-          );
-          const record = await queuePeerRecord(
-            prepared.text,
-            target.piSessionId,
-            ctx,
-            sender,
-            target,
-            recordId,
-            createdAt,
-            prepared.resultBindings,
-          );
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Peer message queued for ${record.toSessionId}.`,
-              },
-            ],
-            details: {
-              ok: true,
-              action: "message",
-              session: record.toSessionId,
-              id: record.id,
-            },
-          };
+    _id: string,
+    raw: unknown,
+    _signal: AbortSignal | undefined,
+    _update: unknown,
+    ctx: ExtensionContext,
+  ) => {
+    if (
+      controllerScope.kind !== "lead" ||
+      leadRuntime.chiefMode !== "inactive" ||
+      leadRuntime.roleSuspended
+    )
+      throw new Error("Peer is unavailable in this role");
+    if (
+      leadRuntime.controllerRole === "manager" &&
+      (!leadRuntime.managerLease ||
+        (await currentManager(ctx))?.leaseId !==
+          leadRuntime.managerLease.descriptor.leaseId)
+    )
+      throw new Error("Manager lease is no longer active");
+    const params = raw as PeerOperation;
+    if (params.action === "list") {
+      const self = ctx.sessionManager.getSessionId();
+      const peers = listPeerLeadRecords(peerRuntime())
+        .filter(
+          (record) =>
+            (record.role ?? "lead") === activeRole() &&
+            record.piSessionId !== self,
+        )
+        .map((record) => ({
+          session: record.piSessionId,
+          name: record.name ?? `lead-${record.piSessionId.slice(0, 8)}`,
+          cwd: record.cwd ?? "",
+          repo: record.repo ?? "",
+          branch: record.branch ?? "",
+          workspace_label: record.workspaceLabel ?? "",
+        }));
+      return {
+        content: [{ type: "text", text: JSON.stringify({ self, peers }) }],
+        details: { ok: true, action: "list", self, peers },
+      };
+    }
+    const sender = await livePeerLead(ctx, ctx.sessionManager.getSessionId());
+    const target = await livePeerLead(ctx, params.session);
+    if (
+      !sender ||
+      !target ||
+      (sender.role ?? "lead") !== activeRole() ||
+      (target.role ?? "lead") !== activeRole()
+    )
+      throw new Error(
+        "Peer target was not found or is no longer a live same-role peer",
+      );
+    const recordId = randomUUID();
+    const createdAt = Date.now();
+    const prepared = await prepareCoordinationInput(
+      ctx,
+      params.message,
+      resolveMessageFiles(ctx, params.files, "peer.message"),
+      "peer.message",
+      "Message",
+      (candidate, resultBindings) => ({
+        version: 2,
+        build: HERDSMAN_BUILD,
+        id: recordId,
+        leaseId: sender.claim.id,
+        kind: "peer_message",
+        fromSessionId: sender.piSessionId,
+        toSessionId: target.piSessionId,
+        leadSessionId: sender.piSessionId,
+        text: candidate,
+        ...(resultBindings.length
+          ? { resultBindings: [...resultBindings] }
+          : {}),
+        createdAt,
+      }),
+    );
+    const record = await queuePeerRecord(
+      prepared.text,
+      target.piSessionId,
+      ctx,
+      sender,
+      target,
+      recordId,
+      createdAt,
+      prepared.resultBindings,
+    );
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Peer message queued for ${record.toSessionId}.`,
+        },
+      ],
+      details: {
+        ok: true,
+        action: "message",
+        session: record.toSessionId,
+        id: record.id,
+      },
+    };
   };
 
-  const drainProjectMessages = async (ctx: ExtensionContext): Promise<number> => {
-    if (activeRole() !== "manager" || leadRuntime.roleSuspended || !ctx.isIdle()) return 0;
+  const drainProjectMessages = async (
+    ctx: ExtensionContext,
+  ): Promise<number> => {
+    if (
+      activeRole() !== "manager" ||
+      leadRuntime.roleSuspended ||
+      !ctx.isIdle()
+    )
+      return 0;
     const manager = await currentManager(ctx);
-    if (!manager || !leadRuntime.managerLease || !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)) return 0;
-    for (const assignment of listProjectAssignments(supervisionRuntime(), manager.repoKey)) {
-      for (const record of listProjectMessages(supervisionRuntime(), manager.repoKey, assignment.branch)) {
+    if (
+      !manager ||
+      !leadRuntime.managerLease ||
+      !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)
+    )
+      return 0;
+    for (const assignment of listProjectAssignments(
+      supervisionRuntime(),
+      manager.repoKey,
+    )) {
+      for (const record of listProjectMessages(
+        supervisionRuntime(),
+        manager.repoKey,
+        assignment.branch,
+      )) {
         if (record.fromSessionId !== assignment.id) continue;
-        const delivered = ctx.sessionManager.getBranch().some((entry: any) =>
-          entry?.customType === "pi-herdsman-project_message" && entry?.details?.id === record.id &&
-          entry?.details?.repoKey === record.repoKey && entry?.details?.branch === record.branch &&
-          entry?.details?.fromSessionId === record.fromSessionId);
+        const delivered = ctx.sessionManager
+          .getBranch()
+          .some(
+            (entry: any) =>
+              entry?.customType === "pi-herdsman-project_message" &&
+              entry?.details?.id === record.id &&
+              entry?.details?.repoKey === record.repoKey &&
+              entry?.details?.branch === record.branch &&
+              entry?.details?.fromSessionId === record.fromSessionId,
+          );
         if (delivered) continue;
         const current = await currentManager(ctx);
-        const stillAssigned = readProjectAssignment(supervisionRuntime(), manager.repoKey, assignment.branch);
-        if (!ctx.isIdle() || !current || !sameManagerDescriptor(current, manager) || !stillAssigned || stillAssigned.id !== assignment.id) return 0;
+        const stillAssigned = readProjectAssignment(
+          supervisionRuntime(),
+          manager.repoKey,
+          assignment.branch,
+        );
+        if (
+          !ctx.isIdle() ||
+          !current ||
+          !sameManagerDescriptor(current, manager) ||
+          !stillAssigned ||
+          stillAssigned.id !== assignment.id
+        )
+          return 0;
         importResultBindings(pi, ctx, record.resultBindings, "project_message");
-        await pi.sendMessage({
-          customType: "pi-herdsman-project_message",
-          content: `Project ${record.branch} from lead ${record.fromSessionId}:\n\n${record.text}`,
-          display: true,
-          details: { id: record.id, repoKey: record.repoKey, branch: record.branch, fromSessionId: record.fromSessionId },
-        }, { deliverAs: "followUp", triggerTurn: true });
+        await pi.sendMessage(
+          {
+            customType: "pi-herdsman-project_message",
+            content: `Project ${record.branch} from lead ${record.fromSessionId}:\n\n${record.text}`,
+            display: true,
+            details: {
+              id: record.id,
+              repoKey: record.repoKey,
+              branch: record.branch,
+              fromSessionId: record.fromSessionId,
+            },
+          },
+          { deliverAs: "followUp", triggerTurn: true },
+        );
         return 1;
       }
     }
     return 0;
   };
   return {
-    persistCoordinatorState, persistLeadCoordination, removePeerPresence,
-    markLeadCoordinationUnhealthy, schedulePeerPresence,
+    persistCoordinatorState,
+    persistLeadCoordination,
+    removePeerPresence,
+    markLeadCoordinationUnhealthy,
+    schedulePeerPresence,
     advancePresenceGeneration: () => peerPresenceGeneration++,
     waitForPeerPresence: () => peerPresencePublication,
     coordinationHealthy: () => leadCoordinationHealthy,
-    setCoordinationHealthy: (value: boolean) => { leadCoordinationHealthy = value; },
-    assertCurrentLeadCoordination, leadSupervisorState, livePeerLead,
-    currentPeerPresenceValid, authorizePeerRecord, queuePeerRecord,
-    queueChiefRecord, enterCoordinationPublication,
+    setCoordinationHealthy: (value: boolean) => {
+      leadCoordinationHealthy = value;
+    },
+    assertCurrentLeadCoordination,
+    leadSupervisorState,
+    livePeerLead,
+    currentPeerPresenceValid,
+    authorizePeerRecord,
+    queuePeerRecord,
+    queueChiefRecord,
+    enterCoordinationPublication,
     drainProjectMessages,
     readLeadSessionIds: readLeadSessionIdsFromHost,
     supervisorMessage: executeSupervisorMessage,
@@ -4301,7 +5062,9 @@ export function createLeadCoordinationRuntime(host: any) {
 export const activeLeadRole = (state: LeadRuntimeState): SessionRole =>
   state.chiefMode === "inactive" ? state.controllerRole : "chief";
 
-function projectAssignmentInstruction(assignment: Pick<ProjectAssignment, "text">): string {
+function projectAssignmentInstruction(
+  assignment: Pick<ProjectAssignment, "text">,
+): string {
   return `${assignment.text}
 
 You are the project Lead for this branch. Be orchestration-first: delegate
@@ -4339,18 +5102,42 @@ export function createLeadInboxRuntime(host: any) {
   };
   const chiefStartPreflights: ChiefStartPreflight[] = [];
   const {
-    leadRuntime, leadInstanceId: getLeadInstanceId, controllerScope, activeRole,
-    supervisionRuntime, peerRuntime, pi, coordinationHealthy,
-    appendDurableError, managerDiagnostic, authorizePeerRecord,
+    leadRuntime,
+    leadInstanceId: getLeadInstanceId,
+    controllerScope,
+    activeRole,
+    supervisionRuntime,
+    peerRuntime,
+    pi,
+    coordinationHealthy,
+    appendDurableError,
+    managerDiagnostic,
+    authorizePeerRecord,
     assertCurrentLeadCoordination,
-    currentChiefAuthority, currentManager, worktreeGroupScope, readProjectAssignment,
-    managerForScope, listManagerDescriptors, remoteChiefAgent, liveLead,
-    readLeadCoordinationState, runHerdr, sameRuntimeBuild,
-    projectAssignmentInstruction, importResultBindings,
-    HERDSMAN_BUILD, formatRuntimeBuild, listChiefMessagePaths,
-    chiefMessageQuarantined, prepareSupervisionMessage, isCurrentChief,
-    drainCoordinationInbox, currentPeerPresenceValid, drainProjectMessages,
-    basename, managerDiagnosticEvents,
+    currentChiefAuthority,
+    currentManager,
+    worktreeGroupScope,
+    readProjectAssignment,
+    managerForScope,
+    listManagerDescriptors,
+    remoteChiefAgent,
+    liveLead,
+    readLeadCoordinationState,
+    runHerdr,
+    sameRuntimeBuild,
+    projectAssignmentInstruction,
+    importResultBindings,
+    HERDSMAN_BUILD,
+    formatRuntimeBuild,
+    listChiefMessagePaths,
+    chiefMessageQuarantined,
+    prepareSupervisionMessage,
+    isCurrentChief,
+    drainCoordinationInbox,
+    currentPeerPresenceValid,
+    drainProjectMessages,
+    basename,
+    managerDiagnosticEvents,
   } = host;
   const chiefStartPreflightHeld = (ctx: ExtensionContext): boolean => {
     if (leadRuntime.chiefMode !== "active") return false;
@@ -4362,7 +5149,9 @@ export function createLeadInboxRuntime(host: any) {
         preflight.chiefModeGeneration === leadRuntime.chiefModeGeneration,
     );
   };
-  const clearStartPreflight = (): void => { chiefStartPreflights.length = 0; };
+  const clearStartPreflight = (): void => {
+    chiefStartPreflights.length = 0;
+  };
   const consumeStartPreflight = (ctx: ExtensionContext): void => {
     if (!chiefStartPreflightHeld(ctx)) return;
     const sessionId = ctx.sessionManager.getSessionId();
@@ -4873,7 +5662,8 @@ export function createLeadInboxRuntime(host: any) {
         );
         return complete(chief + peer + (await drainProjectMessages(ctx)));
       }
-      const active = leadRuntime.chiefMode === "active" || activeRole() === "manager";
+      const active =
+        leadRuntime.chiefMode === "active" || activeRole() === "manager";
       const chief = await drainCoordinationInbox(inboxOptions(active, active));
       const peerPresent = currentPeerPresenceValid(ctx);
       managerDiagnostic("inbox_peer_presence", {
@@ -4923,12 +5713,15 @@ export function createLeadInboxRuntime(host: any) {
     isStartPreflightHeld: chiefStartPreflightHeld,
     clearStartPreflight,
     consumeStartPreflight,
-    holdStartPreflight: (ctx: ExtensionContext) => chiefStartPreflights.push({
-      sessionId: ctx.sessionManager.getSessionId(),
-      sessionGeneration: leadRuntime.sessionGeneration,
-      chiefModeGeneration: leadRuntime.chiefModeGeneration,
-    }),
-    advanceGeneration: () => { chiefInboxGeneration++; },
+    holdStartPreflight: (ctx: ExtensionContext) =>
+      chiefStartPreflights.push({
+        sessionId: ctx.sessionManager.getSessionId(),
+        sessionGeneration: leadRuntime.sessionGeneration,
+        chiefModeGeneration: leadRuntime.chiefModeGeneration,
+      }),
+    advanceGeneration: () => {
+      chiefInboxGeneration++;
+    },
     clearTimer,
     beginSession: () => {
       chiefInboxAbortController?.abort();
@@ -4963,10 +5756,7 @@ export type LeadEntryEffects = {
   appendRoleError(ctx: ExtensionContext, error: unknown): void;
 };
 
-function captureLifecycleError(
-  operation: () => void,
-  prior: unknown,
-): unknown {
+function captureLifecycleError(operation: () => void, prior: unknown): unknown {
   try {
     operation();
   } catch (error) {
@@ -4988,17 +5778,32 @@ export function enterLeadRole(
   const manager = state.managerLease;
   state.managerLease = undefined;
   effects.clearChiefStartPreflight();
-  lifecycleError = captureLifecycleError(() => chief?.release(), lifecycleError);
-  lifecycleError = captureLifecycleError(() => manager?.release(), lifecycleError);
+  lifecycleError = captureLifecycleError(
+    () => chief?.release(),
+    lifecycleError,
+  );
+  lifecycleError = captureLifecycleError(
+    () => manager?.release(),
+    lifecycleError,
+  );
   effects.resetSupervisionSnapshot();
   state.chiefMode = "inactive";
   state.roleSuspended = false;
   if (ctx && effects.coordinationHealthy()) effects.schedulePeerPresence(ctx);
-  lifecycleError = captureLifecycleError(effects.reconcileRoleTools, lifecycleError);
+  lifecycleError = captureLifecycleError(
+    effects.reconcileRoleTools,
+    lifecycleError,
+  );
   if (persist)
-    lifecycleError = captureLifecycleError(() => effects.persistRole("lead"), lifecycleError);
+    lifecycleError = captureLifecycleError(
+      () => effects.persistRole("lead"),
+      lifecycleError,
+    );
   if (effects.coordinationHealthy())
-    lifecycleError = captureLifecycleError(effects.persistCoordinatorState, lifecycleError);
+    lifecycleError = captureLifecycleError(
+      effects.persistCoordinatorState,
+      lifecycleError,
+    );
   if (lifecycleError && ctx) effects.appendRoleError(ctx, lifecycleError);
   if (ctx) effects.publishLeadRole(ctx, "inactive", state.chiefModeGeneration);
 }
@@ -5042,9 +5847,18 @@ export function enterSuspendedRole(
   state.chiefMode = "suspended";
   state.roleSuspended = true;
   effects.removePeerPresence();
-  lifecycleError = captureLifecycleError(() => chief?.release(), lifecycleError);
-  lifecycleError = captureLifecycleError(effects.reconcileRoleTools, lifecycleError);
-  lifecycleError = captureLifecycleError(() => effects.persistRole("chief"), lifecycleError);
+  lifecycleError = captureLifecycleError(
+    () => chief?.release(),
+    lifecycleError,
+  );
+  lifecycleError = captureLifecycleError(
+    effects.reconcileRoleTools,
+    lifecycleError,
+  );
+  lifecycleError = captureLifecycleError(
+    () => effects.persistRole("chief"),
+    lifecycleError,
+  );
   if (lifecycleError && ctx) effects.appendRoleError(ctx, lifecycleError);
   if (ctx) effects.publishLeadRole(ctx, "suspended", state.chiefModeGeneration);
 }
@@ -5101,7 +5915,9 @@ export async function resolveLeadControllerRole(
   requestedRole: SessionRole,
   deps: {
     identity: { paneId?: string; tabId?: string; workspaceId?: string };
-    build: Parameters<typeof import("./supervision.ts").claimManagerLease>[0]["build"];
+    build: Parameters<
+      typeof import("./supervision.ts").claimManagerLease
+    >[0]["build"];
     worktreeGroupScope: (
       workspaceId: string,
       signal: AbortSignal,
@@ -5168,8 +5984,9 @@ export function createLeadRoleTransitions(
     const current = new Promise<void>((resolve) => (release = resolve));
     projectWorkLocks.set(key, current);
     await previous;
-    try { return await operation(); }
-    finally {
+    try {
+      return await operation();
+    } finally {
       release();
       if (projectWorkLocks.get(key) === current) projectWorkLocks.delete(key);
     }
@@ -5177,18 +5994,25 @@ export function createLeadRoleTransitions(
   const currentWorktreeScope = async (ctx: ExtensionContext) => {
     const workspaceId = host.workspaceId();
     if (!workspaceId) return undefined;
-    try { return await host.worktreeGroupScope(ctx, workspaceId, ctx.signal); }
-    catch (error) {
+    try {
+      return await host.worktreeGroupScope(ctx, workspaceId, ctx.signal);
+    } catch (error) {
       if (
         error instanceof OperationError &&
         error.detail.details?.herdrCode === "not_git_worktree"
-      ) return undefined;
+      )
+        return undefined;
       throw error;
     }
   };
-  const projectAssignmentForScope = (scope: any, sessionId: string): ProjectAssignment | undefined => {
+  const projectAssignmentForScope = (
+    scope: any,
+    sessionId: string,
+  ): ProjectAssignment | undefined => {
     const assignments = host.findProjectAssignmentBySession(
-      host.supervisionRuntime(), scope.repoKey, sessionId,
+      host.supervisionRuntime(),
+      scope.repoKey,
+      sessionId,
     );
     if (assignments.length > 1)
       throw new Error("Multiple project assignments match the Lead session");
@@ -5203,8 +6027,11 @@ export function createLeadRoleTransitions(
       `${host.projectAssignmentPath(host.supervisionRuntime(), repoKey, branch)}.lock`,
       { name: "project assignment lock" },
     );
-    try { return await operation(); }
-    finally { lease.release(); }
+    try {
+      return await operation();
+    } finally {
+      lease.release();
+    }
   };
   const publishProjectMessage = async (
     ctx: ExtensionContext,
@@ -5215,12 +6042,20 @@ export function createLeadRoleTransitions(
   ): Promise<ProjectMessage | undefined> => {
     const sessionId = ctx.sessionManager.getSessionId();
     const runtime = host.supervisionRuntime();
-    const current = host.readProjectAssignment(runtime, assignment.repoKey, assignment.branch);
+    const current = host.readProjectAssignment(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    );
     if (!current || current.id !== sessionId) return undefined;
     const id = randomUUID();
     const createdAt = Date.now();
     const prepared = await host.prepareCoordinationInput(
-      ctx, message, files, operation, "Message",
+      ctx,
+      message,
+      files,
+      operation,
+      "Message",
       (candidate: string, resultBindings: readonly any[]) =>
         host.projectMessageBytes({
           version: 2,
@@ -5229,7 +6064,9 @@ export function createLeadRoleTransitions(
           branch: assignment.branch,
           fromSessionId: sessionId,
           text: candidate,
-          ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
+          ...(resultBindings.length
+            ? { resultBindings: [...resultBindings] }
+            : {}),
           createdAt,
         }),
     );
@@ -5240,20 +6077,31 @@ export function createLeadRoleTransitions(
       branch: assignment.branch,
       fromSessionId: sessionId,
       text: prepared.text,
-      ...(prepared.resultBindings.length ? { resultBindings: prepared.resultBindings } : {}),
+      ...(prepared.resultBindings.length
+        ? { resultBindings: prepared.resultBindings }
+        : {}),
       createdAt,
     };
-    return withProjectAssignmentLock(assignment.repoKey, assignment.branch, () => {
-      const latest = host.readProjectAssignment(runtime, assignment.repoKey, assignment.branch);
-      if (!latest || latest.id !== sessionId) return undefined;
-      host.writeProjectMessage(record, runtime);
-      return record;
-    });
+    return withProjectAssignmentLock(
+      assignment.repoKey,
+      assignment.branch,
+      () => {
+        const latest = host.readProjectAssignment(
+          runtime,
+          assignment.repoKey,
+          assignment.branch,
+        );
+        if (!latest || latest.id !== sessionId) return undefined;
+        host.writeProjectMessage(record, runtime);
+        return record;
+      },
+    );
   };
   const managerForScope = (scope: any): ManagerDescriptor | undefined => {
     if (!scope) return undefined;
     const status = host.readManagerDescriptorStatus(
-      host.supervisionRuntime(), scope.primaryWorkspaceId,
+      host.supervisionRuntime(),
+      scope.primaryWorkspaceId,
     );
     if (!status || !status.live) return undefined;
     if (status.descriptor.repoKey !== scope.repoKey)
@@ -5264,29 +6112,48 @@ export function createLeadRoleTransitions(
     ctx: ExtensionContext,
     scope?: any | null,
   ): Promise<ManagerDescriptor | undefined> => {
-    const descriptor = managerForScope(scope === null || scope === undefined
-      ? await currentWorktreeScope(ctx)
-      : scope);
+    const descriptor = managerForScope(
+      scope === null || scope === undefined
+        ? await currentWorktreeScope(ctx)
+        : scope,
+    );
     if (!descriptor) return undefined;
     const coordinator = host.readLeadCoordinationState(
-      host.supervisionRuntime(), descriptor.piSessionId,
+      host.supervisionRuntime(),
+      descriptor.piSessionId,
     );
     if (
-      !coordinator || coordinator.role !== "manager" ||
+      !coordinator ||
+      coordinator.role !== "manager" ||
       coordinator.piSessionId !== descriptor.piSessionId
-    ) throw new Error("Manager authority exists but its coordination state could not be verified");
-    host.requireCompatibleBuild(host.build, descriptor.build, "supervision", `Manager ${descriptor.piSessionId}`);
-    host.requireCompatibleBuild(host.build, coordinator.build, "supervision", `Manager ${descriptor.piSessionId}`);
+    )
+      throw new Error(
+        "Manager authority exists but its coordination state could not be verified",
+      );
+    host.requireCompatibleBuild(
+      host.build,
+      descriptor.build,
+      "supervision",
+      `Manager ${descriptor.piSessionId}`,
+    );
+    host.requireCompatibleBuild(
+      host.build,
+      coordinator.build,
+      "supervision",
+      `Manager ${descriptor.piSessionId}`,
+    );
     if (activeLeadRole(state) === "manager" && !state.roleSuspended) {
       return state.managerLease &&
-          host.sameManagerDescriptor(descriptor, state.managerLease.descriptor) &&
-          descriptor.piSessionId === ctx.sessionManager.getSessionId() &&
-          descriptor.workspaceId === state.managerLease.descriptor.workspaceId
+        host.sameManagerDescriptor(descriptor, state.managerLease.descriptor) &&
+        descriptor.piSessionId === ctx.sessionManager.getSessionId() &&
+        descriptor.workspaceId === state.managerLease.descriptor.workspaceId
         ? descriptor
         : undefined;
     }
     if (!(await host.remoteChiefAgent(ctx, descriptor)))
-      throw new Error("Manager authority exists but live discovery is inconclusive");
+      throw new Error(
+        "Manager authority exists but live discovery is inconclusive",
+      );
     return descriptor;
   };
   const chiefLeaseMayExist = (): boolean => {
@@ -5298,7 +6165,9 @@ export function createLeadRoleTransitions(
       throw error;
     }
   };
-  const currentChief = (failOnVerificationError = false): ChiefDescriptor | undefined => {
+  const currentChief = (
+    failOnVerificationError = false,
+  ): ChiefDescriptor | undefined => {
     if (state.chiefMode === "active") return state.chiefLease?.descriptor;
     if (state.chiefMode !== "inactive") return undefined;
     try {
@@ -5314,15 +6183,29 @@ export function createLeadRoleTransitions(
   ): Promise<ChiefDescriptor | undefined> => {
     const descriptor = currentChief(failOnVerificationError);
     if (!descriptor) return undefined;
-    host.requireCompatibleBuild(host.build, descriptor.build, "supervision", `Chief ${descriptor.piSessionId}`);
+    host.requireCompatibleBuild(
+      host.build,
+      descriptor.build,
+      "supervision",
+      `Chief ${descriptor.piSessionId}`,
+    );
     const runtime = host.supervisionRuntime();
     if (state.chiefMode === "active") {
       let onDisk: ChiefDescriptor;
-      try { onDisk = host.readChiefDescriptor(runtime.descriptor); }
-      catch (error) { if (failOnVerificationError) throw error; return undefined; }
-      if (!state.chiefLease || !host.sameChiefDescriptor(onDisk, state.chiefLease.descriptor)) return undefined;
+      try {
+        onDisk = host.readChiefDescriptor(runtime.descriptor);
+      } catch (error) {
+        if (failOnVerificationError) throw error;
+        return undefined;
+      }
+      if (
+        !state.chiefLease ||
+        !host.sameChiefDescriptor(onDisk, state.chiefLease.descriptor)
+      )
+        return undefined;
       if (!host.chiefLeaseIsHeld(runtime)) {
-        if (failOnVerificationError && chiefLeaseMayExist()) throw new Error("Unable to verify Chief supervision lease");
+        if (failOnVerificationError && chiefLeaseMayExist())
+          throw new Error("Unable to verify Chief supervision lease");
         return undefined;
       }
       if (
@@ -5331,21 +6214,42 @@ export function createLeadRoleTransitions(
         descriptor.paneId !== host.identity.paneId ||
         descriptor.tabId !== host.identity.tabId ||
         descriptor.workspaceId !== host.identity.workspaceId
-      ) return undefined;
-      host.requireCompatibleBuild(host.build, descriptor.build, "supervision", `Chief ${descriptor.piSessionId}`);
+      )
+        return undefined;
+      host.requireCompatibleBuild(
+        host.build,
+        descriptor.build,
+        "supervision",
+        `Chief ${descriptor.piSessionId}`,
+      );
       return descriptor;
     }
-    if ((activeLeadRole(state) !== "lead" && activeLeadRole(state) !== "manager") || state.chiefMode !== "inactive") return undefined;
+    if (
+      (activeLeadRole(state) !== "lead" &&
+        activeLeadRole(state) !== "manager") ||
+      state.chiefMode !== "inactive"
+    )
+      return undefined;
     if (!host.chiefLeaseIsHeld(runtime)) {
-      if (failOnVerificationError && chiefLeaseMayExist()) throw new Error("Unable to verify Chief supervision lease");
+      if (failOnVerificationError && chiefLeaseMayExist())
+        throw new Error("Unable to verify Chief supervision lease");
       return undefined;
     }
     try {
       if (!(await host.remoteChiefAgent(ctx, descriptor))) return undefined;
-      host.requireCompatibleBuild(host.build, descriptor.build, "supervision", `Chief ${descriptor.piSessionId}`);
+      host.requireCompatibleBuild(
+        host.build,
+        descriptor.build,
+        "supervision",
+        `Chief ${descriptor.piSessionId}`,
+      );
       return descriptor;
     } catch (error) {
-      if (error instanceof OperationError && error.detail.category === "incompatible_build") throw error;
+      if (
+        error instanceof OperationError &&
+        error.detail.category === "incompatible_build"
+      )
+        throw error;
       if (failOnVerificationError) throw error;
       return undefined;
     }
@@ -5362,34 +6266,66 @@ export function createLeadRoleTransitions(
     signal: AbortSignal,
   ): Promise<void> => {
     const runtime = host.supervisionRuntime();
-    const observed = host.readProjectAssignment(runtime, removed.repoKey, removed.branch);
+    const observed = host.readProjectAssignment(
+      runtime,
+      removed.repoKey,
+      removed.branch,
+    );
     if (!observed) return;
     const expectedId = observed.id;
     const scope = await currentWorktreeScope(ctx);
     if (!scope || scope.repoKey !== removed.repoKey) return;
-    await withProjectWorkLock(`${removed.repoKey}\0${removed.branch}`, async () => {
-      const deadline = Date.now() + 30_000;
-      for (;;) {
-        if (signal.aborted) throw signal.reason ?? new Error("operation aborted");
-        try {
-          await withProjectAssignmentLock(removed.repoKey, removed.branch, async () => {
-            const current = host.readProjectAssignment(runtime, removed.repoKey, removed.branch);
-            if (!current || current.id !== expectedId) return;
-            host.removeProjectAssignment(runtime, removed.repoKey, removed.branch);
-            try {
-              host.removeProjectMessages(runtime, removed.repoKey, removed.branch);
-            } catch (error) {
-              host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
-            }
-          });
-          return;
-        } catch (error) {
-          if (!(error instanceof ProcessLockOccupiedError) || Date.now() >= deadline)
-            throw error;
-          await host.delay(50, undefined, { signal });
+    await withProjectWorkLock(
+      `${removed.repoKey}\0${removed.branch}`,
+      async () => {
+        const deadline = Date.now() + 30_000;
+        for (;;) {
+          if (signal.aborted)
+            throw signal.reason ?? new Error("operation aborted");
+          try {
+            await withProjectAssignmentLock(
+              removed.repoKey,
+              removed.branch,
+              async () => {
+                const current = host.readProjectAssignment(
+                  runtime,
+                  removed.repoKey,
+                  removed.branch,
+                );
+                if (!current || current.id !== expectedId) return;
+                host.removeProjectAssignment(
+                  runtime,
+                  removed.repoKey,
+                  removed.branch,
+                );
+                try {
+                  host.removeProjectMessages(
+                    runtime,
+                    removed.repoKey,
+                    removed.branch,
+                  );
+                } catch (error) {
+                  host.appendDurableError(
+                    host.pi,
+                    ctx,
+                    "pi_herdsman_state_error",
+                    error,
+                  );
+                }
+              },
+            );
+            return;
+          } catch (error) {
+            if (
+              !(error instanceof ProcessLockOccupiedError) ||
+              Date.now() >= deadline
+            )
+              throw error;
+            await host.delay(50, undefined, { signal });
+          }
         }
-      }
-    });
+      },
+    );
   };
   const beginShutdownRole = (): void => {
     state.sessionGeneration++;
@@ -5414,7 +6350,12 @@ export function createLeadRoleTransitions(
         state.managerLease?.release();
       } catch (error) {
         if (state.leadContext)
-          host.appendDurableError(host.pi, state.leadContext, "pi_herdsman_role_error", error);
+          host.appendDurableError(
+            host.pi,
+            state.leadContext,
+            "pi_herdsman_role_error",
+            error,
+          );
       }
       state.managerLease = undefined;
       state.roleSuspended = true;
@@ -5430,7 +6371,12 @@ export function createLeadRoleTransitions(
           );
       } catch (error) {
         if (state.leadContext)
-          host.appendDurableError(host.pi, state.leadContext, "pi_herdsman_state_error", error);
+          host.appendDurableError(
+            host.pi,
+            state.leadContext,
+            "pi_herdsman_state_error",
+            error,
+          );
       }
       host.enterLead(undefined, false);
     }
@@ -5448,20 +6394,30 @@ export function createLeadRoleTransitions(
       state.controllerRole = "lead";
       state.roleSuspended = false;
       let lifecycleError: unknown;
-      try { state.chiefLease?.release(); } catch (error) { lifecycleError = error; }
+      try {
+        state.chiefLease?.release();
+      } catch (error) {
+        lifecycleError = error;
+      }
       state.chiefLease = undefined;
-      try { state.managerLease?.release(); } catch (error) { lifecycleError ??= error; }
+      try {
+        state.managerLease?.release();
+      } catch (error) {
+        lifecycleError ??= error;
+      }
       state.managerLease = undefined;
       host.setLeadTools(undefined);
       host.resetSupervisionSnapshot();
       return { previousChiefMode, previousControllerRole, lifecycleError };
     };
     if (previousChiefMode === "active" && previousLeadContext)
-      return Promise.resolve(host.publishLeadRole(
-        previousLeadContext,
-        "suspended",
-        state.chiefModeGeneration,
-      )).then(finish);
+      return Promise.resolve(
+        host.publishLeadRole(
+          previousLeadContext,
+          "suspended",
+          state.chiefModeGeneration,
+        ),
+      ).then(finish);
     return finish();
   };
   const activateChief = async (
@@ -5499,7 +6455,12 @@ export function createLeadRoleTransitions(
               host.leadInstanceId(),
             );
           } catch (invalidationError) {
-            host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", invalidationError);
+            host.appendDurableError(
+              host.pi,
+              ctx,
+              "pi_herdsman_state_error",
+              invalidationError,
+            );
           }
           host.enterSuspended(ctx);
         } else if (ctx.mode === "tui" && ctx.hasUI)
@@ -5509,14 +6470,17 @@ export function createLeadRoleTransitions(
       throw error;
     }
     if (generation !== state.chiefModeGeneration) {
-      try { lease.release(); } catch (error) {
+      try {
+        lease.release();
+      } catch (error) {
         host.appendDurableError(host.pi, ctx, "pi_herdsman_role_error", error);
       }
       return "Chief activation cancelled.";
     }
     let enteredChief = false;
     try {
-      if (!resumed) host.setLeadTools(host.normalizeLeadTools(host.pi.getActiveTools()));
+      if (!resumed)
+        host.setLeadTools(host.normalizeLeadTools(host.pi.getActiveTools()));
       try {
         host.unlinkLeadCoordinationState(host.supervisionRuntime(), sessionId);
       } catch (error) {
@@ -5529,9 +6493,13 @@ export function createLeadRoleTransitions(
       host.startSupervisionUI(ctx);
     } catch (error) {
       state.chiefActivationRollback = true;
-      try { host.clearSupervisionUI(); } catch {}
+      try {
+        host.clearSupervisionUI();
+      } catch {}
       if (enteredChief) {
-        try { host.startNormalUI(ctx); } catch {}
+        try {
+          host.startNormalUI(ctx);
+        } catch {}
       }
       host.resetSupervisionSnapshot();
       state.chiefMode = "inactive";
@@ -5543,18 +6511,37 @@ export function createLeadRoleTransitions(
         try {
           host.pi.setActiveTools(host.getLeadTools() ?? []);
         } catch (restoreError) {
-          host.appendDurableError(host.pi, ctx, "pi_herdsman_role_error", restoreError);
+          host.appendDurableError(
+            host.pi,
+            ctx,
+            "pi_herdsman_role_error",
+            restoreError,
+          );
           try {
             host.pi.setActiveTools(
-              (host.getLeadTools() ?? []).filter((name: string) => !host.ownedTools().has(name)),
+              (host.getLeadTools() ?? []).filter(
+                (name: string) => !host.ownedTools().has(name),
+              ),
             );
           } catch (failClosedError) {
-            host.appendDurableError(host.pi, ctx, "pi_herdsman_role_error", failClosedError);
+            host.appendDurableError(
+              host.pi,
+              ctx,
+              "pi_herdsman_role_error",
+              failClosedError,
+            );
           }
         }
       }
-      try { lease.release(); } catch (releaseError) {
-        host.appendDurableError(host.pi, ctx, "pi_herdsman_role_error", releaseError);
+      try {
+        lease.release();
+      } catch (releaseError) {
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_role_error",
+          releaseError,
+        );
       }
       try {
         host.persistRole("lead");
@@ -5620,8 +6607,12 @@ export function createLeadRoleTransitions(
       state.controllerRole = "lead";
       state.managerLease = undefined;
       host.setLeadTools(previousTools);
-      try { lease.release(); } catch {}
-      try { host.persistRole("lead"); } catch {}
+      try {
+        lease.release();
+      } catch {}
+      try {
+        host.persistRole("lead");
+      } catch {}
       host.persistLeadCoordination();
       host.reconcileRoleTools();
       host.clearSupervisionUI();
@@ -5648,7 +6639,12 @@ export function createLeadRoleTransitions(
       } catch (rollbackError) {
         state.roleSuspended = true;
         host.markLeadCoordinationUnhealthy(ctx);
-        host.appendDurableError(host.pi, ctx, "pi_herdsman_role_error", rollbackError);
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_role_error",
+          rollbackError,
+        );
         host.reconcileRoleTools();
       }
       throw error;
@@ -5678,7 +6674,11 @@ export function createLeadRoleTransitions(
     host.clearChiefInboxTimer();
     host.clearSupervisionUI?.();
     if (state.leadContext)
-      await host.publishLeadRole(state.leadContext, "suspended", state.chiefModeGeneration);
+      await host.publishLeadRole(
+        state.leadContext,
+        "suspended",
+        state.chiefModeGeneration,
+      );
     host.enterLead(ctx);
     await host.waitForPeerPresence();
     if (process.env.HERDR_SOCKET_PATH) host.startChiefInbox(ctx);
@@ -5706,14 +6706,24 @@ export function createLeadRoleTransitions(
     try {
       host.persistRole("lead");
     } catch (persistError) {
-      host.appendDurableError(host.pi, ctx, "pi_herdsman_role_error", persistError);
+      host.appendDurableError(
+        host.pi,
+        ctx,
+        "pi_herdsman_role_error",
+        persistError,
+      );
     }
     host.markLeadCoordinationUnhealthy(ctx);
     if (state.chiefMode !== "inactive") {
       try {
         await deactivateChief(ctx);
       } catch (transitionError) {
-        host.appendDurableError(host.pi, ctx, "pi_herdsman_role_error", transitionError);
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_role_error",
+          transitionError,
+        );
         host.enterLead(ctx, false);
       }
     } else host.enterLead(ctx, false);
@@ -5743,7 +6753,12 @@ export function createLeadRoleTransitions(
       } catch (error) {
         if (error instanceof ProcessLockOccupiedError) host.enterSuspended(ctx);
         else {
-          host.appendDurableError(host.pi, ctx, "pi_herdsman_role_error", error);
+          host.appendDurableError(
+            host.pi,
+            ctx,
+            "pi_herdsman_role_error",
+            error,
+          );
           if (state.chiefActivationRollback)
             state.chiefActivationRollback = false;
           else host.enterLead(ctx);
@@ -5760,11 +6775,15 @@ export function createLeadRoleTransitions(
     if (state.controllerRole === "manager" && !state.roleSuspended) {
       let held = false;
       try {
-        const descriptor = state.managerLease && host.readManagerDescriptor(
-          host.supervisionRuntime(),
-          state.managerLease.descriptor.workspaceId,
-        );
-        held = !!descriptor && !!state.managerLease &&
+        const descriptor =
+          state.managerLease &&
+          host.readManagerDescriptor(
+            host.supervisionRuntime(),
+            state.managerLease.descriptor.workspaceId,
+          );
+        held =
+          !!descriptor &&
+          !!state.managerLease &&
           host.sameManagerDescriptor(descriptor, state.managerLease.descriptor);
       } catch {}
       if (!held) {
@@ -5780,7 +6799,11 @@ export function createLeadRoleTransitions(
       }
     }
     if (state.roleSuspended || state.chiefMode === "suspended") {
-      host.pi.setActiveTools(host.normalizeBaseTools(host.getLeadTools() ?? host.pi.getActiveTools()));
+      host.pi.setActiveTools(
+        host.normalizeBaseTools(
+          host.getLeadTools() ?? host.pi.getActiveTools(),
+        ),
+      );
       return;
     }
     if (activeLeadRole(state) === "chief") {
@@ -5788,30 +6811,37 @@ export function createLeadRoleTransitions(
       return;
     }
     const current = host.pi.getActiveTools();
-    const source = current.some((name: string) => host.ownedTools().has(name)) &&
-        host.getLeadTools()
-      ? host.getLeadTools()
-      : current;
+    const source =
+      current.some((name: string) => host.ownedTools().has(name)) &&
+      host.getLeadTools()
+        ? host.getLeadTools()
+        : current;
     host.pi.setActiveTools(
       activeLeadRole(state) === "manager"
-        ? host.appendRegisteredTools(host.normalizeBaseTools(source), host.managerTools)
+        ? host.appendRegisteredTools(
+            host.normalizeBaseTools(source),
+            host.managerTools,
+          )
         : host.normalizeLeadTools(source),
     );
   };
   const resolveControllerRole = (
     ctx: ExtensionContext,
     requestedRole: SessionRole,
-  ): Promise<void> => resolveLeadControllerRole(state, ctx, requestedRole, {
-    identity: host.identity,
-    build: host.build,
-    worktreeGroupScope: (workspaceId, signal) =>
-      host.worktreeGroupScope(ctx, workspaceId, signal),
-    claimManagerLease: host.claimManagerLease,
-    persistLeadRole: () => host.persistRole("lead"),
-  });
+  ): Promise<void> =>
+    resolveLeadControllerRole(state, ctx, requestedRole, {
+      identity: host.identity,
+      build: host.build,
+      worktreeGroupScope: (workspaceId, signal) =>
+        host.worktreeGroupScope(ctx, workspaceId, signal),
+      claimManagerLease: host.claimManagerLease,
+      persistLeadRole: () => host.persistRole("lead"),
+    });
   const suspendMalformedRole = (ctx: ExtensionContext): void => {
     state.roleSuspended = true;
-    try { state.managerLease?.release(); } catch (error) {
+    try {
+      state.managerLease?.release();
+    } catch (error) {
       host.appendDurableError(host.pi, ctx, "pi_herdsman_role_error", error);
     }
     state.managerLease = undefined;
@@ -5834,19 +6864,25 @@ export function createLeadRoleTransitions(
     reconcileBranchRole,
     reconcileRoleTools,
     resolveControllerRole,
-    restoreChiefState: (ctx: ExtensionContext) => restoreLeadChiefState(ctx, host),
+    restoreChiefState: (ctx: ExtensionContext) =>
+      restoreLeadChiefState(ctx, host),
     suspendMalformedRole,
     shouldRestoreChief: (persistedRole: SessionRole) =>
-      persistedRole === "chief" && state.controllerRole === "lead" && !state.roleSuspended,
+      persistedRole === "chief" &&
+      state.controllerRole === "lead" &&
+      !state.roleSuspended,
     activeChiefGeneration: () =>
       state.chiefMode === "active" ? state.chiefModeGeneration : undefined,
     mayPublishLeadPresence: () =>
-      state.chiefMode === "inactive" && !state.roleSuspended && host.coordinationHealthy(),
+      state.chiefMode === "inactive" &&
+      !state.roleSuspended &&
+      host.coordinationHealthy(),
     canStartChiefInbox: () =>
       !state.roleSuspended &&
       (state.chiefMode === "inactive" || state.chiefMode === "active") &&
       (state.chiefMode === "active" || host.coordinationHealthy()),
-    activeManager: () => state.controllerRole === "manager" && !state.roleSuspended,
+    activeManager: () =>
+      state.controllerRole === "manager" && !state.roleSuspended,
     canRestoreChiefState: () => !state.roleSuspended,
     chiefModeInactive: () => state.chiefMode === "inactive",
     chiefModeActive: () => state.chiefMode === "active",
@@ -5868,6 +6904,8 @@ export function createLeadRoleTransitions(
     currentChiefAuthority,
     currentSupervisor,
     retireRemovedProjectWork,
-    clearLeadContext: () => { state.leadContext = undefined; },
+    clearLeadContext: () => {
+      state.leadContext = undefined;
+    },
   };
 }

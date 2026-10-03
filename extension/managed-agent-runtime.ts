@@ -53,7 +53,11 @@ import { displayIdentity, prepareMessageInput } from "./core.ts";
 import { collapseDisplayText, createStatusWidget } from "./presentation.ts";
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
-import { sameRuntimeBuild, formatRuntimeBuild, type RuntimeBuild } from "./compatibility.ts";
+import {
+  sameRuntimeBuild,
+  formatRuntimeBuild,
+  type RuntimeBuild,
+} from "./compatibility.ts";
 import { taskAcceptanceAllowed, steerAcceptanceAllowed } from "./core.ts";
 import { importResultBindings } from "./agent-controller.ts";
 import { fail, OperationError } from "./errors.ts";
@@ -70,12 +74,13 @@ import {
 
 function currentTurnIsSoleToolCall(message: unknown, name: string): boolean {
   const turn = message as { role?: unknown; content?: unknown } | undefined;
-  if (turn?.role !== "assistant" || !Array.isArray(turn.content))
-    return false;
+  if (turn?.role !== "assistant" || !Array.isArray(turn.content)) return false;
   const toolCalls = turn.content.filter(
     (part) => (part as { type?: unknown }).type === "toolCall",
   );
-  return toolCalls.length === 1 && (toolCalls[0] as { name?: unknown }).name === name;
+  return (
+    toolCalls.length === 1 && (toolCalls[0] as { name?: unknown }).name === name
+  );
 }
 
 function askRecordBytes(
@@ -118,8 +123,9 @@ function managedAgentDefinitionRoster(
 ): Record<string, unknown>[] {
   return definitions
     .map((definition) => agentDefinitionMetadata(definition, "leaf"))
-    .filter((definition) =>
-      allowed.includes(definition.name) && definition.enabled !== false
+    .filter(
+      (definition) =>
+        allowed.includes(definition.name) && definition.enabled !== false,
     );
 }
 
@@ -130,7 +136,10 @@ export function ensureManagedAgentIdentity(
   label: string,
 ): void {
   const sessionId = ctx.sessionManager.getSessionId();
-  const identity = sessionAgentIdentity(ctx.sessionManager.getEntries(), sessionId);
+  const identity = sessionAgentIdentity(
+    ctx.sessionManager.getEntries(),
+    sessionId,
+  );
   if (identity) {
     if (identity.definition !== definition || identity.label !== label)
       throw new Error("agent session identity does not match environment");
@@ -161,30 +170,53 @@ export function managedAgentEnvironmentIdentity(
   };
 }
 
-export function sameManagedAgentIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean {
-  return left.runId === right.runId && left.ownerSessionId === right.ownerSessionId &&
-    left.workspaceId === right.workspaceId && left.agentLabel === right.agentLabel &&
-    left.paneId === right.paneId && left.piSessionId === right.piSessionId &&
-    sameSessionPath(left.piSessionFile, right.piSessionFile) && sameCwd(left.cwd, right.cwd);
+export function sameManagedAgentIdentity(
+  left: ManagedAgentState,
+  right: ManagedAgentState,
+): boolean {
+  return (
+    left.runId === right.runId &&
+    left.ownerSessionId === right.ownerSessionId &&
+    left.workspaceId === right.workspaceId &&
+    left.agentLabel === right.agentLabel &&
+    left.paneId === right.paneId &&
+    left.piSessionId === right.piSessionId &&
+    sameSessionPath(left.piSessionFile, right.piSessionFile) &&
+    sameCwd(left.cwd, right.cwd)
+  );
 }
 
-function sameSessionPath(left: string | undefined, right: string | undefined): boolean {
+function sameSessionPath(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
   if (left === right) return true;
   if (!left || !right) return false;
   const canonical = (path: string) => {
-    try { return realpathSync(path); }
-    catch (error) { throw new Error(`could not canonicalize exact Pi session path ${path}: ${String(error)}`); }
+    try {
+      return realpathSync(path);
+    } catch (error) {
+      throw new Error(
+        `could not canonicalize exact Pi session path ${path}: ${String(error)}`,
+      );
+    }
   };
   return canonical(left) === canonical(right);
 }
 
-export function sameManagedAgentDurableState(left: ManagedAgentState, right: ManagedAgentState): boolean {
+export function sameManagedAgentDurableState(
+  left: ManagedAgentState,
+  right: ManagedAgentState,
+): boolean {
   const { updatedAt: _leftUpdatedAt, ...leftDurable } = left;
   const { updatedAt: _rightUpdatedAt, ...rightDurable } = right;
   return isDeepStrictEqual(leftDurable, rightDurable);
 }
 
-export function runtimeIdentityState(runtime: Runtime, build: RuntimeBuild): ManagedAgentState {
+export function runtimeIdentityState(
+  runtime: Runtime,
+  build: RuntimeBuild,
+): ManagedAgentState {
   return {
     version: 5,
     build,
@@ -212,17 +244,34 @@ export function validateManagedAgentIdentity(input: {
 }): ManagedAgentState {
   const { state, mailbox, env } = input;
   if (input.stateError !== undefined)
-    fail("internal_failure", `Agent mailbox state is malformed or oversized: ${String(input.stateError)}`, "controller", {
-      ids: { label: env.PI_HERDSMAN_LABEL, paneId: env.HERDR_PANE_ID },
-    });
-  if (!state || !mailbox || state.workspaceId !== env.PI_HERDSMAN_WORKSPACE_ID ||
-    state.agentLabel !== env.PI_HERDSMAN_LABEL || state.paneId !== env.HERDR_PANE_ID ||
-    state.ownerSessionId !== env.PI_HERDSMAN_OWNER_SESSION_ID || state.piSessionId !== input.sessionId ||
+    fail(
+      "internal_failure",
+      `Agent mailbox state is malformed or oversized: ${String(input.stateError)}`,
+      "controller",
+      {
+        ids: { label: env.PI_HERDSMAN_LABEL, paneId: env.HERDR_PANE_ID },
+      },
+    );
+  if (
+    !state ||
+    !mailbox ||
+    state.workspaceId !== env.PI_HERDSMAN_WORKSPACE_ID ||
+    state.agentLabel !== env.PI_HERDSMAN_LABEL ||
+    state.paneId !== env.HERDR_PANE_ID ||
+    state.ownerSessionId !== env.PI_HERDSMAN_OWNER_SESSION_ID ||
+    state.piSessionId !== input.sessionId ||
     !input.sameSessionPath(state.piSessionFile, input.sessionFile) ||
-    resolve(state.cwd) !== resolve(input.cwd) || state.runId !== env.PI_HERDSMAN_RUN_ID)
-    fail("target_not_found", "Delegation controller identity is not a valid managed agent", "controller", {
-      ids: { label: env.PI_HERDSMAN_LABEL, paneId: env.HERDR_PANE_ID },
-    });
+    resolve(state.cwd) !== resolve(input.cwd) ||
+    state.runId !== env.PI_HERDSMAN_RUN_ID
+  )
+    fail(
+      "target_not_found",
+      "Delegation controller identity is not a valid managed agent",
+      "controller",
+      {
+        ids: { label: env.PI_HERDSMAN_LABEL, paneId: env.HERDR_PANE_ID },
+      },
+    );
   return state;
 }
 
@@ -231,8 +280,11 @@ function managedAgentIdentity(ctx: ExtensionContext): ManagedAgentState {
   const mailbox = env.PI_HERDSMAN_MAILBOX;
   let state: ManagedAgentState | undefined;
   let stateError: unknown;
-  try { state = mailbox ? readAgentState(mailbox) : undefined; }
-  catch (error) { stateError = error; }
+  try {
+    state = mailbox ? readAgentState(mailbox) : undefined;
+  } catch (error) {
+    stateError = error;
+  }
   return validateManagedAgentIdentity({
     state,
     stateError,
@@ -245,7 +297,9 @@ function managedAgentIdentity(ctx: ExtensionContext): ManagedAgentState {
   });
 }
 
-function managedAgentControllerIdentity(ctx: ExtensionContext): ManagedAgentState {
+function managedAgentControllerIdentity(
+  ctx: ExtensionContext,
+): ManagedAgentState {
   const state = managedAgentIdentity(ctx);
   return validateManagedAgentControllerIdentity(ctx, state);
 }
@@ -353,7 +407,10 @@ export function createManagedAgentMetadataPublisher(pi: ExtensionAPI) {
     abortController = undefined;
     invalidate();
   };
-  const reset = (runtime: MetadataRuntime, patch: ManagedAgentMetadataPatch) => {
+  const reset = (
+    runtime: MetadataRuntime,
+    patch: ManagedAgentMetadataPatch,
+  ) => {
     generation++;
     desired = {
       generation,
@@ -375,7 +432,10 @@ export function createManagedAgentMetadataPublisher(pi: ExtensionAPI) {
     };
     dirty = true;
   };
-  const update = (runtime: MetadataRuntime, patch: ManagedAgentMetadataPatch) => {
+  const update = (
+    runtime: MetadataRuntime,
+    patch: ManagedAgentMetadataPatch,
+  ) => {
     if (!desired) return;
     let changed = false;
     if (JSON.stringify(desired.runtime) !== JSON.stringify(runtime)) {
@@ -390,15 +450,19 @@ export function createManagedAgentMetadataPublisher(pi: ExtensionAPI) {
       }
     }
     if (patch.context !== undefined) {
-      const next = patch.context === null
-        ? undefined
-        : Math.max(0, Math.min(100, Math.round(patch.context)));
+      const next =
+        patch.context === null
+          ? undefined
+          : Math.max(0, Math.min(100, Math.round(patch.context)));
       if (desired.context !== next) {
         desired.context = next;
         changed = true;
       }
     }
-    if (patch.model !== undefined && desired.model !== (patch.model ?? undefined)) {
+    if (
+      patch.model !== undefined &&
+      desired.model !== (patch.model ?? undefined)
+    ) {
       desired.model = patch.model ?? undefined;
       changed = true;
     }
@@ -430,9 +494,17 @@ export function createManagedAgentMetadataPublisher(pi: ExtensionAPI) {
           await runHerdr(
             pi,
             ctx,
-            ["pane", "report-metadata", attempted.runtime.paneId,
-              ...metadataArgs(attempted, published)],
-            { timeout: 10_000, signal: abortController?.signal, noResult: true },
+            [
+              "pane",
+              "report-metadata",
+              attempted.runtime.paneId,
+              ...metadataArgs(attempted, published),
+            ],
+            {
+              timeout: 10_000,
+              signal: abortController?.signal,
+              noResult: true,
+            },
           );
           succeeded = true;
         } catch {}
@@ -444,8 +516,14 @@ export function createManagedAgentMetadataPublisher(pi: ExtensionAPI) {
           break;
         }
         const generationChanged = published.generation !== attempted.generation;
-        const modelChanged = generationChanged || !published.modelKnown || attempted.model !== published.model;
-        const thinkingChanged = generationChanged || !published.thinkingKnown || attempted.thinking !== published.thinking;
+        const modelChanged =
+          generationChanged ||
+          !published.modelKnown ||
+          attempted.model !== published.model;
+        const thinkingChanged =
+          generationChanged ||
+          !published.thinkingKnown ||
+          attempted.thinking !== published.thinking;
         published = {
           generation: attempted.generation,
           activityKnown: true,
@@ -453,9 +531,12 @@ export function createManagedAgentMetadataPublisher(pi: ExtensionAPI) {
           contextKnown: true,
           context: attempted.context,
           modelKnown: true,
-          model: attempted.model ?? (modelChanged ? undefined : published.model),
+          model:
+            attempted.model ?? (modelChanged ? undefined : published.model),
           thinkingKnown: true,
-          thinking: attempted.thinking ?? (thinkingChanged ? undefined : published.thinking),
+          thinking:
+            attempted.thinking ??
+            (thinkingChanged ? undefined : published.thinking),
         };
         if (current.revision !== attempted.revision) dirty = true;
       }
@@ -464,7 +545,9 @@ export function createManagedAgentMetadataPublisher(pi: ExtensionAPI) {
     }
   };
   return {
-    get signal() { return abortController?.signal; },
+    get signal() {
+      return abortController?.signal;
+    },
     beginSession,
     abort,
     invalidate,
@@ -488,8 +571,15 @@ export function createManagedAgentMetadataPublisher(pi: ExtensionAPI) {
   };
 }
 
-function sameActivity(left?: MetadataActivity, right?: MetadataActivity): boolean {
-  return left?.requestId === right?.requestId && left?.task === right?.task && left?.startedAt === right?.startedAt;
+function sameActivity(
+  left?: MetadataActivity,
+  right?: MetadataActivity,
+): boolean {
+  return (
+    left?.requestId === right?.requestId &&
+    left?.task === right?.task &&
+    left?.startedAt === right?.startedAt
+  );
 }
 
 function metadataArgs(
@@ -497,31 +587,85 @@ function metadataArgs(
   published: MetadataPublishedState,
 ): string[] {
   const { runtime, activity } = desired;
-  const title = collapseDisplayText(
-    activity ? `${runtime.label} · ${activity.task}` : runtime.label,
-    80,
-  ) ?? runtime.label.slice(0, 80);
-  const args = ["--source", `pi-herdsman:${runtime.runId}`, "--title", title,
-    "--display-agent", runtime.agentDefinition, "--token", "managed=1",
-    "--token", `role=${runtime.agentDefinition}`];
+  const title =
+    collapseDisplayText(
+      activity ? `${runtime.label} · ${activity.task}` : runtime.label,
+      80,
+    ) ?? runtime.label.slice(0, 80);
+  const args = [
+    "--source",
+    `pi-herdsman:${runtime.runId}`,
+    "--title",
+    title,
+    "--display-agent",
+    runtime.agentDefinition,
+    "--token",
+    "managed=1",
+    "--token",
+    `role=${runtime.agentDefinition}`,
+  ];
   const generationChanged = published.generation !== desired.generation;
-  if (generationChanged || !published.activityKnown || !sameActivity(published.activity, activity)) {
-    if (activity) args.push("--token", `request=${activity.requestId}`, "--token", `task=${collapseDisplayText(activity.task) ?? ""}`, "--token", `started=${activity.startedAt}`);
-    else args.push("--clear-token", "request", "--clear-token", "task", "--clear-token", "started");
+  if (
+    generationChanged ||
+    !published.activityKnown ||
+    !sameActivity(published.activity, activity)
+  ) {
+    if (activity)
+      args.push(
+        "--token",
+        `request=${activity.requestId}`,
+        "--token",
+        `task=${collapseDisplayText(activity.task) ?? ""}`,
+        "--token",
+        `started=${activity.startedAt}`,
+      );
+    else
+      args.push(
+        "--clear-token",
+        "request",
+        "--clear-token",
+        "task",
+        "--clear-token",
+        "started",
+      );
   }
-  if (generationChanged || !published.contextKnown || published.context !== desired.context) {
-    if (activity && desired.context !== undefined) args.push("--token", `ctx=${desired.context}`);
+  if (
+    generationChanged ||
+    !published.contextKnown ||
+    published.context !== desired.context
+  ) {
+    if (activity && desired.context !== undefined)
+      args.push("--token", `ctx=${desired.context}`);
     else args.push("--clear-token", "ctx");
   }
-  if (generationChanged || !published.modelKnown || desired.model !== published.model)
-    args.push(desired.model !== undefined ? "--token" : "--clear-token", desired.model !== undefined ? `model=${desired.model}` : "model");
-  if (generationChanged || !published.thinkingKnown || desired.thinking !== published.thinking)
-    args.push(desired.thinking !== undefined ? "--token" : "--clear-token", desired.thinking !== undefined ? `thinking=${desired.thinking}` : "thinking");
+  if (
+    generationChanged ||
+    !published.modelKnown ||
+    desired.model !== published.model
+  )
+    args.push(
+      desired.model !== undefined ? "--token" : "--clear-token",
+      desired.model !== undefined ? `model=${desired.model}` : "model",
+    );
+  if (
+    generationChanged ||
+    !published.thinkingKnown ||
+    desired.thinking !== published.thinking
+  )
+    args.push(
+      desired.thinking !== undefined ? "--token" : "--clear-token",
+      desired.thinking !== undefined
+        ? `thinking=${desired.thinking}`
+        : "thinking",
+    );
   return args;
 }
 
 export function createManagedAgentLeafStatus(options: {
-  snapshot(ctx: ExtensionContext, signal?: AbortSignal): Promise<ManagedAgentSnapshotCollection>;
+  snapshot(
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ): Promise<ManagedAgentSnapshotCollection>;
   identity(ctx: ExtensionContext): ManagedAgentState | undefined;
   sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
   signal(): AbortSignal | undefined;
@@ -533,7 +677,7 @@ export function createManagedAgentLeafStatus(options: {
   let inFlight = false;
   let breadcrumb: string[] | undefined;
   let ownTools: string[] | undefined;
-  const ownToolsSnapshot = () => ownTools ? { ownTools } : {};
+  const ownToolsSnapshot = () => (ownTools ? { ownTools } : {});
   const reset = () => {
     generation++;
     if (timer) clearInterval(timer);
@@ -552,36 +696,74 @@ export function createManagedAgentLeafStatus(options: {
     try {
       const snapshot = await options.snapshot(ctx, options.signal());
       if (activeGeneration !== generation || ctx !== context) return;
-      breadcrumb = statusBreadcrumb(snapshot, options.identity(ctx), {
-        definition: process.env.PI_HERDSMAN_AGENT_DEFINITION,
-        label: process.env.PI_HERDSMAN_LABEL,
-      }, options.sameIdentity);
-      widget?.setSnapshot({ agents: [], stale: false, unavailable: false,
-        breadcrumb, ...ownToolsSnapshot(), identityOnly: true, refreshedAt: Date.now() });
+      breadcrumb = statusBreadcrumb(
+        snapshot,
+        options.identity(ctx),
+        {
+          definition: process.env.PI_HERDSMAN_AGENT_DEFINITION,
+          label: process.env.PI_HERDSMAN_LABEL,
+        },
+        options.sameIdentity,
+      );
+      widget?.setSnapshot({
+        agents: [],
+        stale: false,
+        unavailable: false,
+        breadcrumb,
+        ...ownToolsSnapshot(),
+        identityOnly: true,
+        refreshedAt: Date.now(),
+      });
     } catch {
       if (activeGeneration === generation && ctx === context)
-        widget?.setSnapshot({ agents: [], stale: false, unavailable: true,
-          breadcrumb: breadcrumb ?? ["?", process.env.PI_HERDSMAN_AGENT_DEFINITION && process.env.PI_HERDSMAN_LABEL
-            ? displayIdentity(process.env.PI_HERDSMAN_AGENT_DEFINITION, process.env.PI_HERDSMAN_LABEL)
-            : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?")],
-          ...ownToolsSnapshot(), identityOnly: true });
+        widget?.setSnapshot({
+          agents: [],
+          stale: false,
+          unavailable: true,
+          breadcrumb: breadcrumb ?? [
+            "?",
+            process.env.PI_HERDSMAN_AGENT_DEFINITION &&
+            process.env.PI_HERDSMAN_LABEL
+              ? displayIdentity(
+                  process.env.PI_HERDSMAN_AGENT_DEFINITION,
+                  process.env.PI_HERDSMAN_LABEL,
+                )
+              : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?"),
+          ],
+          ...ownToolsSnapshot(),
+          identityOnly: true,
+        });
     } finally {
       if (activeGeneration === generation && ctx === context) inFlight = false;
     }
   };
   return {
     reset,
-    captureOwnTools(tools: string[] | undefined) { ownTools = tools; },
+    captureOwnTools(tools: string[] | undefined) {
+      ownTools = tools;
+    },
     start(ctx: ExtensionContext) {
       const activeGeneration = generation;
       context = ctx;
       ctx.ui.setWidget("pi-herdsman", (tui, theme) => {
         const next = createStatusWidget(() => tui.requestRender(), theme);
-        next.setSnapshot({ agents: [], stale: false, unavailable: true,
-          breadcrumb: ["?", process.env.PI_HERDSMAN_AGENT_DEFINITION && process.env.PI_HERDSMAN_LABEL
-            ? displayIdentity(process.env.PI_HERDSMAN_AGENT_DEFINITION, process.env.PI_HERDSMAN_LABEL)
-            : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?")],
-          ...ownToolsSnapshot(), identityOnly: true });
+        next.setSnapshot({
+          agents: [],
+          stale: false,
+          unavailable: true,
+          breadcrumb: [
+            "?",
+            process.env.PI_HERDSMAN_AGENT_DEFINITION &&
+            process.env.PI_HERDSMAN_LABEL
+              ? displayIdentity(
+                  process.env.PI_HERDSMAN_AGENT_DEFINITION,
+                  process.env.PI_HERDSMAN_LABEL,
+                )
+              : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?"),
+          ],
+          ...ownToolsSnapshot(),
+          identityOnly: true,
+        });
         if (activeGeneration === generation && ctx === context) widget = next;
         else next.dispose();
         return next;
@@ -638,7 +820,9 @@ export function createManagedAgentAskOwnerHandler(options: {
     if (!state || !options.sameIdentity(state, managed))
       throw new Error("Agent identity is not eligible to ask its owner");
     if (!options.eligible())
-      throw new Error(`Agent cannot ask its owner: ${options.rejectionReason()}`);
+      throw new Error(
+        `Agent cannot ask its owner: ${options.rejectionReason()}`,
+      );
     const askId = randomUUID();
     const askCreatedAt = Date.now();
     const limits = await options.messageLimits(ctx);
@@ -688,12 +872,14 @@ export function createManagedAgentAskOwnerHandler(options: {
     }
     options.latest("");
     return {
-      content: [{
-        type: "text" as const,
-        text:
-          "Question sent to your owner. This assignment is blocked until the reply; " +
-          "the reply will resume it automatically.",
-      }],
+      content: [
+        {
+          type: "text" as const,
+          text:
+            "Question sent to your owner. This assignment is blocked until the reply; " +
+            "the reply will resume it automatically.",
+        },
+      ],
       details: { askId, assignmentRequestId: ask.requestId },
       terminate: true,
     };
@@ -704,22 +890,40 @@ export function registerManagedAgentAskOwnerTool(
   pi: ExtensionAPI,
   execute: ReturnType<typeof createManagedAgentAskOwnerHandler>,
 ): void {
-  const files = Type.Optional(Type.Array(Type.String({ minLength: 1,
-    description: 'Readable regular local file path or exact result ref such as "result:researcher#1".',
-  }), { description: "File or result evidence transferred to the recipient. Copy result refs exactly. Files do not grant runtime capabilities." }));
+  const files = Type.Optional(
+    Type.Array(
+      Type.String({
+        minLength: 1,
+        description:
+          'Readable regular local file path or exact result ref such as "result:researcher#1".',
+      }),
+      {
+        description:
+          "File or result evidence transferred to the recipient. Copy result refs exactly. Files do not grant runtime capabilities.",
+      },
+    ),
+  );
   pi.registerTool({
     name: "ask_owner",
     label: "Ask owner",
     exposure: "model-only",
-    promptSnippet: "Ask this managed agent's direct owner for a required decision",
+    promptSnippet:
+      "Ask this managed agent's direct owner for a required decision",
     promptGuidelines: [FILE_HANDOFF_GUIDANCE],
-    description: "Ask your direct owner for a decision that is required to continue. Call this alone as the final tool call of the turn, then stop and wait for the reply. Only one question may be outstanding.",
+    description:
+      "Ask your direct owner for a decision that is required to continue. Call this alone as the final tool call of the turn, then stop and wait for the reply. Only one question may be outstanding.",
     executionMode: "sequential",
     constrainedSampling: { type: "json_schema", strict: "prefer" },
-    parameters: Type.Object({
-      question: Type.String({ minLength: 1, description: "Non-empty decision question required to continue." }),
-      files,
-    }, { additionalProperties: false }),
+    parameters: Type.Object(
+      {
+        question: Type.String({
+          minLength: 1,
+          description: "Non-empty decision question required to continue.",
+        }),
+        files,
+      },
+      { additionalProperties: false },
+    ),
     execute,
   });
 }
@@ -736,13 +940,22 @@ export function registerManagedAgentInputHandlers(
     setPendingInterruptReplacement(value: string | undefined): void;
     build: RuntimeBuild;
     sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
-    mutateState(update: (state: ManagedAgentState) => ManagedAgentState): ManagedAgentState | undefined;
+    mutateState(
+      update: (state: ManagedAgentState) => ManagedAgentState,
+    ): ManagedAgentState | undefined;
     requestState: ReturnType<typeof createManagedAgentRequestState>;
     tryClaimAssignmentLock(mailbox: string): (() => void) | undefined;
     hasPendingDirectChildWork(state: ManagedAgentState): boolean;
-    hasUndeliveredDirectChildWork(state: ManagedAgentState, entries: readonly unknown[]): boolean;
+    hasUndeliveredDirectChildWork(
+      state: ManagedAgentState,
+      entries: readonly unknown[],
+    ): boolean;
     reportError(ctx: ExtensionContext, error: unknown): void;
-    reportMetadata(state: ManagedAgentState, ctx: ExtensionContext, patch: ManagedAgentMetadataPatch): void;
+    reportMetadata(
+      state: ManagedAgentState,
+      ctx: ExtensionContext,
+      patch: ManagedAgentMetadataPatch,
+    ): void;
     setLatest(value: string): void;
     startAgent(): number;
   },
@@ -758,7 +971,11 @@ export function registerManagedAgentInputHandlers(
       request = readRequest(process.env.PI_HERDSMAN_MAILBOX!, id);
     } catch {
       options.requestState.acknowledgeAndDiscard(
-        id, false, ctx, "invalid", "Malformed or oversized request",
+        id,
+        false,
+        ctx,
+        "invalid",
+        "Malformed or oversized request",
       );
       return { action: "handled" };
     }
@@ -774,7 +991,11 @@ export function registerManagedAgentInputHandlers(
       request.paneId !== state.paneId
     ) {
       options.requestState.acknowledgeAndDiscard(
-        id, false, ctx, "identity", "Request identity did not match agent state",
+        id,
+        false,
+        ctx,
+        "identity",
+        "Request identity did not match agent state",
       );
       return { action: "handled" };
     }
@@ -797,33 +1018,48 @@ export function registerManagedAgentInputHandlers(
       } catch (error) {
         options.reportError(ctx, error);
         options.requestState.acknowledgeAndDiscard(
-          id, false, ctx, "identity", "Malformed or oversized owner ask",
+          id,
+          false,
+          ctx,
+          "identity",
+          "Malformed or oversized owner ask",
         );
         return { action: "handled" };
       }
       if (
-        !state.activeRequestId || !state.pendingAskId ||
-        request.askId !== state.pendingAskId || !ask ||
+        !state.activeRequestId ||
+        !state.pendingAskId ||
+        request.askId !== state.pendingAskId ||
+        !ask ||
         ask.askId !== state.pendingAskId ||
         ask.requestId !== state.activeRequestId ||
         ask.runId !== state.runId ||
         ask.ownerSessionId !== state.ownerSessionId ||
         ask.workspaceId !== state.workspaceId ||
-        ask.agentLabel !== state.agentLabel || ask.paneId !== state.paneId ||
+        ask.agentLabel !== state.agentLabel ||
+        ask.paneId !== state.paneId ||
         ask.piSessionId !== state.piSessionId
       ) {
         options.requestState.acknowledgeAndDiscard(
-          id, false, ctx, "identity", "Owner reply did not match the pending ask",
+          id,
+          false,
+          ctx,
+          "identity",
+          "Owner reply did not match the pending ask",
         );
         return { action: "handled" };
       }
       try {
         importResultBindings(pi, ctx, request.resultBindings, "reply");
       } catch (error) {
-        const ambiguous = error instanceof OperationError &&
+        const ambiguous =
+          error instanceof OperationError &&
           error.detail.category === "target_ambiguous";
         options.requestState.acknowledgeAndDiscard(
-          id, false, ctx, ambiguous ? "ambiguous" : "delivery",
+          id,
+          false,
+          ctx,
+          ambiguous ? "ambiguous" : "delivery",
           error instanceof Error ? error.message : String(error),
         );
         return { action: "handled" };
@@ -840,9 +1076,11 @@ export function registerManagedAgentInputHandlers(
       try {
         const current = readAgentState(mailbox);
         if (
-          !current || !options.sameIdentity(current, state) ||
+          !current ||
+          !options.sameIdentity(current, state) ||
           current.pendingAskId !== state.pendingAskId
-        ) return { action: "handled" };
+        )
+          return { action: "handled" };
         writeAgentState(mailbox, candidate);
         removeMailboxAsk(mailbox);
       } catch (error) {
@@ -859,16 +1097,25 @@ export function registerManagedAgentInputHandlers(
         text: `Owner reply:\n\n${request.text}\n\nContinue the original assignment using this answer.`,
       };
     }
-    const controlRequest = request.kind === "steer" || request.kind === "interrupt";
+    const controlRequest =
+      request.kind === "steer" || request.kind === "interrupt";
     if (controlRequest && state.pendingAskId) {
       options.requestState.acknowledgeAndDiscard(
-        id, false, ctx, "busy", "Agent is waiting for an owner reply",
+        id,
+        false,
+        ctx,
+        "busy",
+        "Agent is waiting for an owner reply",
       );
       return { action: "handled" };
     }
     if (request.kind === "task" && state.resultError) {
       options.requestState.acknowledgeAndDiscard(
-        id, false, ctx, "busy", state.resultError.nextAction,
+        id,
+        false,
+        ctx,
+        "busy",
+        state.resultError.nextAction,
       );
       return { action: "handled" };
     }
@@ -876,12 +1123,16 @@ export function registerManagedAgentInputHandlers(
       request.kind === "task" &&
       (state.completedRequestId !== undefined ||
         !taskAcceptanceAllowed(
-          ctx.isIdle(), state.activeRequestId,
+          ctx.isIdle(),
+          state.activeRequestId,
           options.pendingResult() || options.pendingStateTransition(),
         ))
     ) {
       options.requestState.acknowledgeAndDiscard(
-        id, false, ctx, "busy",
+        id,
+        false,
+        ctx,
+        "busy",
         state.completedRequestId
           ? "Agent assignment is already complete"
           : "Agent already has an active assignment",
@@ -890,42 +1141,70 @@ export function registerManagedAgentInputHandlers(
     }
     if (controlRequest && options.pendingInterruptReplacement()) {
       options.requestState.acknowledgeAndDiscard(
-        id, false, ctx, "busy", "Agent interrupt is still settling",
+        id,
+        false,
+        ctx,
+        "busy",
+        "Agent interrupt is still settling",
       );
       return { action: "handled" };
     }
-    if (controlRequest && (options.pendingResult() || options.pendingStateTransition())) {
+    if (
+      controlRequest &&
+      (options.pendingResult() || options.pendingStateTransition())
+    ) {
       options.requestState.acknowledgeAndDiscard(
-        id, false, ctx, "busy", "Agent completion is being published",
+        id,
+        false,
+        ctx,
+        "busy",
+        "Agent completion is being published",
       );
       return { action: "handled" };
     }
     const isIdle = ctx.isIdle();
-    if (request.kind === "interrupt" &&
-      (!state.activeRequestId || isIdle || ctx.signal?.aborted)) {
+    if (
+      request.kind === "interrupt" &&
+      (!state.activeRequestId || isIdle || ctx.signal?.aborted)
+    ) {
       options.requestState.acknowledgeAndDiscard(
-        id, false, ctx, "idle", "Agent has no active Pi operation to interrupt",
+        id,
+        false,
+        ctx,
+        "idle",
+        "Agent has no active Pi operation to interrupt",
       );
       return { action: "handled" };
     }
-    if (request.kind === "steer" && !steerAcceptanceAllowed(
-      isIdle,
-      state.activeRequestId,
-      options.pendingStateTransition(),
-      isIdle && options.hasPendingDirectChildWork(state),
-    )) {
+    if (
+      request.kind === "steer" &&
+      !steerAcceptanceAllowed(
+        isIdle,
+        state.activeRequestId,
+        options.pendingStateTransition(),
+        isIdle && options.hasPendingDirectChildWork(state),
+      )
+    ) {
       options.requestState.acknowledgeAndDiscard(
-        id, false, ctx, "idle", "Agent is not accepting steering",
+        id,
+        false,
+        ctx,
+        "idle",
+        "Agent is not accepting steering",
       );
       return { action: "handled" };
     }
     try {
       importResultBindings(pi, ctx, request.resultBindings, request.kind);
     } catch (error) {
-      const ambiguous = error instanceof OperationError &&
+      const ambiguous =
+        error instanceof OperationError &&
         error.detail.category === "target_ambiguous";
       options.requestState.acknowledgeAndDiscard(
-        id, false, ctx, ambiguous ? "ambiguous" : "delivery",
+        id,
+        false,
+        ctx,
+        ambiguous ? "ambiguous" : "delivery",
         error instanceof Error ? error.message : String(error),
       );
       return { action: "handled" };
@@ -942,7 +1221,9 @@ export function registerManagedAgentInputHandlers(
       if (!candidate) return { action: "handled" };
       options.requestState.reset();
       const startedAt = options.startAgent();
-      const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
       const thinking = ctx.thinkingLevel;
       options.reportMetadata(options.state()!, ctx, {
         activity: { requestId: id, task: request.text, startedAt },
@@ -952,10 +1233,12 @@ export function registerManagedAgentInputHandlers(
       });
     }
     if (request.kind === "steer" || request.kind === "interrupt") {
-      if (!options.requestState.acknowledge(id, true)) return { action: "handled" };
+      if (!options.requestState.acknowledge(id, true))
+        return { action: "handled" };
       options.setLatest("");
       if (request.kind === "interrupt") {
-        const editorText = ctx.mode === "tui" ? ctx.ui.getEditorText() : undefined;
+        const editorText =
+          ctx.mode === "tui" ? ctx.ui.getEditorText() : undefined;
         options.setPendingInterruptReplacement(
           `Owner interrupt:\n\n${request.text}\n\nThe previous in-flight operation was intentionally aborted. Continue the original assignment using this replacement instruction.`,
         );
@@ -976,7 +1259,10 @@ export function registerManagedAgentResultCapture(
     state(): ManagedAgentState | undefined;
     pendingResult(): boolean;
     delegationEnabled: boolean;
-    hasUndeliveredDirectChildWork(state: ManagedAgentState, entries: readonly unknown[]): boolean;
+    hasUndeliveredDirectChildWork(
+      state: ManagedAgentState,
+      entries: readonly unknown[],
+    ): boolean;
     setLatest(value: string): void;
   },
 ): void {
@@ -987,8 +1273,12 @@ export function registerManagedAgentResultCapture(
     if (message?.role !== "assistant") return;
     if (
       options.delegationEnabled &&
-      options.hasUndeliveredDirectChildWork(state, ctx.sessionManager.getEntries())
-    ) return;
+      options.hasUndeliveredDirectChildWork(
+        state,
+        ctx.sessionManager.getEntries(),
+      )
+    )
+      return;
     options.setLatest(contentText(message.content, "").trim());
   });
 }
@@ -999,15 +1289,22 @@ export function registerManagedAgentActivityHandlers(
   options: {
     touchActivity(): void;
     resetAssignmentGuidance(): void;
-    reportMetadata(state: ManagedAgentState, ctx: ExtensionContext, patch: ManagedAgentMetadataPatch): void;
+    reportMetadata(
+      state: ManagedAgentState,
+      ctx: ExtensionContext,
+      patch: ManagedAgentMetadataPatch,
+    ): void;
   },
 ): void {
   pi.on("turn_end", (_event: unknown, ctx: ExtensionContext) => {
     options.touchActivity();
     if (!execution.assignment?.activeRequestId) return;
     const usage = ctx.getContextUsage();
-    const percent = usage?.percent == null ? undefined : Math.round(usage.percent);
-    const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+    const percent =
+      usage?.percent == null ? undefined : Math.round(usage.percent);
+    const model = ctx.model
+      ? `${ctx.model.provider}/${ctx.model.id}`
+      : undefined;
     const thinking = ctx.thinkingLevel;
     options.reportMetadata(execution.assignment, ctx, {
       context: percent ?? null,
@@ -1019,7 +1316,11 @@ export function registerManagedAgentActivityHandlers(
     options.resetAssignmentGuidance();
     options.touchActivity();
   });
-  for (const event of ["message_update", "tool_execution_start", "tool_execution_end"])
+  for (const event of [
+    "message_update",
+    "tool_execution_start",
+    "tool_execution_end",
+  ])
     pi.on(event, () => options.touchActivity());
   pi.on("model_select", (event: ModelSelectEvent, ctx: ExtensionContext) => {
     if (!execution.assignment) return;
@@ -1030,14 +1331,19 @@ export function registerManagedAgentActivityHandlers(
       ...(thinking ? { thinking } : {}),
     });
   });
-  pi.on("thinking_level_select", (event: ThinkingLevelSelectEvent, ctx: ExtensionContext) => {
-    if (!execution.assignment) return;
-    const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-    options.reportMetadata(execution.assignment, ctx, {
-      thinking: event.level,
-      ...(model ? { model } : {}),
-    });
-  });
+  pi.on(
+    "thinking_level_select",
+    (event: ThinkingLevelSelectEvent, ctx: ExtensionContext) => {
+      if (!execution.assignment) return;
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
+      options.reportMetadata(execution.assignment, ctx, {
+        thinking: event.level,
+        ...(model ? { model } : {}),
+      });
+    },
+  );
 }
 
 export function registerManagedAgentSettlementHandlers(
@@ -1047,8 +1353,15 @@ export function registerManagedAgentSettlementHandlers(
     delegationEnabled: boolean;
     tryClaimAssignmentLock(mailbox: string): (() => void) | undefined;
     sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
-    hasUndeliveredDirectChildWork(state: ManagedAgentState, entries: readonly unknown[]): boolean;
-    reportMetadata(state: ManagedAgentState, ctx: ExtensionContext, patch: ManagedAgentMetadataPatch): void;
+    hasUndeliveredDirectChildWork(
+      state: ManagedAgentState,
+      entries: readonly unknown[],
+    ): boolean;
+    reportMetadata(
+      state: ManagedAgentState,
+      ctx: ExtensionContext,
+      patch: ManagedAgentMetadataPatch,
+    ): void;
     appendStateError(ctx: ExtensionContext, error: unknown): void;
     appendResultError(ctx: ExtensionContext, error: unknown): void;
     resultWriteMaxAttempts: number;
@@ -1064,11 +1377,14 @@ export function registerManagedAgentSettlementHandlers(
     let release: (() => void) | undefined;
     try {
       if (!assignmentLockHeld) {
-        release = options.tryClaimAssignmentLock(process.env.PI_HERDSMAN_MAILBOX!);
+        release = options.tryClaimAssignmentLock(
+          process.env.PI_HERDSMAN_MAILBOX!,
+        );
         if (!release) {
           if (!execution.stateRetryTimer)
             execution.stateRetryTimer = setInterval(
-              () => finalizeStateTransition(ctx), 250,
+              () => finalizeStateTransition(ctx),
+              250,
             );
           return;
         }
@@ -1076,7 +1392,8 @@ export function registerManagedAgentSettlementHandlers(
       const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
       const current = readAgentState(mailbox);
       if (
-        !current || !options.sameIdentity(current, execution.assignment) ||
+        !current ||
+        !options.sameIdentity(current, execution.assignment) ||
         !current.activeRequestId
       ) {
         if (execution.stateRetryTimer) clearInterval(execution.stateRetryTimer);
@@ -1093,7 +1410,9 @@ export function registerManagedAgentSettlementHandlers(
       writeAgentState(mailbox, nextState);
       execution.assignment = nextState;
       execution.agentStartedAt = undefined;
-      const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
       const thinking = ctx.thinkingLevel;
       execution.pendingStateTransition = false;
       execution.stateErrorReported = false;
@@ -1113,7 +1432,8 @@ export function registerManagedAgentSettlementHandlers(
       }
       if (!execution.stateRetryTimer)
         execution.stateRetryTimer = setInterval(
-          () => finalizeStateTransition(ctx), 250,
+          () => finalizeStateTransition(ctx),
+          250,
         );
     } finally {
       release?.();
@@ -1122,13 +1442,20 @@ export function registerManagedAgentSettlementHandlers(
   const settleCurrentAgent = (ctx: ExtensionContext): void => {
     const state = execution.assignment;
     if (
-      !state?.activeRequestId || state.pendingAskId || execution.pendingResult ||
+      !state?.activeRequestId ||
+      state.pendingAskId ||
+      execution.pendingResult ||
       execution.pendingStateTransition
-    ) return;
+    )
+      return;
     if (
       options.delegationEnabled &&
-      options.hasUndeliveredDirectChildWork(state, ctx.sessionManager.getEntries())
-    ) return;
+      options.hasUndeliveredDirectChildWork(
+        state,
+        ctx.sessionManager.getEntries(),
+      )
+    )
+      return;
     const result: ResultRecord = {
       version: 5,
       runId: state.runId,
@@ -1140,7 +1467,12 @@ export function registerManagedAgentSettlementHandlers(
       status: execution.latest ? "completed" : "failed",
       ...(execution.latest
         ? { text: execution.latest }
-        : { error: { code: "empty_result", message: "Agent produced no assistant text" } }),
+        : {
+            error: {
+              code: "empty_result",
+              message: "Agent produced no assistant text",
+            },
+          }),
       contextUsage: ctx.getContextUsage(),
       completedAt: Date.now(),
     };
@@ -1159,7 +1491,8 @@ export function registerManagedAgentSettlementHandlers(
         }
         const currentState = readAgentState(mailbox);
         if (
-          !currentState || !execution.assignment ||
+          !currentState ||
+          !execution.assignment ||
           !options.sameIdentity(currentState, execution.assignment) ||
           currentState.activeRequestId !== current.requestId
         ) {
@@ -1175,14 +1508,18 @@ export function registerManagedAgentSettlementHandlers(
         execution.retryTimer = undefined;
         finalizeStateTransition(ctx, true);
       } catch (error) {
-        if (current.status === "completed" && String(error).toLowerCase().includes("too large")) {
+        if (
+          current.status === "completed" &&
+          String(error).toLowerCase().includes("too large")
+        ) {
           execution.pendingResult = {
             ...current,
             status: "failed",
             text: undefined,
             error: {
               code: "result_too_large",
-              message: "Agent assistant response exceeded the mailbox result limit",
+              message:
+                "Agent assistant response exceeded the mailbox result limit",
             },
           };
           execution.resultWriteAttempts = 0;
@@ -1204,7 +1541,8 @@ export function registerManagedAgentSettlementHandlers(
             failedAt: Date.now(),
             retrySafe: false,
             cleanupSafe: true,
-            nextAction: "Resolve the mailbox persistence failure described by result_error, then use agent_close before starting another assignment.",
+            nextAction:
+              "Resolve the mailbox persistence failure described by result_error, then use agent_close before starting another assignment.",
           };
           try {
             const currentAssignment = execution.assignment;
@@ -1224,9 +1562,18 @@ export function registerManagedAgentSettlementHandlers(
             execution.retryTimer = undefined;
             execution.agentStartedAt = undefined;
             execution.latest = "";
-            options.reportMetadata(nextState, ctx, { activity: null, context: null });
+            options.reportMetadata(nextState, ctx, {
+              activity: null,
+              context: null,
+            });
           } catch (recoveryError) {
-            options.appendResultError(ctx, JSON.stringify({ recovery, recoveryError: String(recoveryError) }));
+            options.appendResultError(
+              ctx,
+              JSON.stringify({
+                recovery,
+                recoveryError: String(recoveryError),
+              }),
+            );
             if (execution.retryTimer) clearInterval(execution.retryTimer);
             execution.retryTimer = undefined;
           }
@@ -1301,9 +1648,19 @@ export function registerManagedAgentRuntime(
     activityWriteMinMs: number;
     resultWriteMaxAttempts: number;
     tryClaimAssignmentLock(mailbox: string): (() => void) | undefined;
-    claimAssignmentLock(mailbox: string, operation: string, ids: { label?: string; paneId?: string }): () => void;
-    messageLimits(ctx: ExtensionContext): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }>;
-    resolveMessageFiles(ctx: ExtensionContext, files: string[] | undefined, operation: string): any;
+    claimAssignmentLock(
+      mailbox: string,
+      operation: string,
+      ids: { label?: string; paneId?: string },
+    ): () => void;
+    messageLimits(
+      ctx: ExtensionContext,
+    ): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }>;
+    resolveMessageFiles(
+      ctx: ExtensionContext,
+      files: string[] | undefined,
+      operation: string,
+    ): any;
     currentTurnMessage(ctx: ExtensionContext): unknown;
     appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
     getAgentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
@@ -1311,21 +1668,29 @@ export function registerManagedAgentRuntime(
 ): void {
   pi.on("tool_call", (event: any) => {
     if (event.toolName !== "bash" && event.toolName !== "powershell") return;
-    const tool = pi.getAllTools().find((candidate) => candidate.name === event.toolName);
+    const tool = pi
+      .getAllTools()
+      .find((candidate) => candidate.name === event.toolName);
     const properties = (tool?.parameters as any)?.properties;
     if (
-      tool?.sourceInfo?.source === "builtin" && properties &&
+      tool?.sourceInfo?.source === "builtin" &&
+      properties &&
       Object.prototype.hasOwnProperty.call(properties, "timeout") &&
       !Object.prototype.hasOwnProperty.call(event.input, "timeout")
-    ) event.input.timeout = options.shellTimeoutSeconds;
+    )
+      event.input.timeout = options.shellTimeoutSeconds;
   });
   const allowedAgentDefinitions = allowedAgentDefinitionsFromEnv();
   const delegationEnabled = allowedAgentDefinitions.length > 0;
-  let startupDefinitionRoster: { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
+  let startupDefinitionRoster:
+    { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
   const controller = delegationEnabled
     ? createAgentController(pi, {
         ...options.controllerOptions,
-        scope: { kind: "managed-agent", allowedAgentDefinitions: new Set(allowedAgentDefinitions) },
+        scope: {
+          kind: "managed-agent",
+          allowedAgentDefinitions: new Set(allowedAgentDefinitions),
+        },
         build: options.build,
       })
     : undefined;
@@ -1333,9 +1698,11 @@ export function registerManagedAgentRuntime(
   if (delegationEnabled)
     pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
       const roster = startupDefinitionRoster;
-      if (!roster || roster.sessionId !== ctx.sessionManager.getSessionId()) return;
+      if (!roster || roster.sessionId !== ctx.sessionManager.getSessionId())
+        return;
       return {
-        systemPrompt: `${event.systemPrompt}\n\n## Available agent definitions\n\n` +
+        systemPrompt:
+          `${event.systemPrompt}\n\n## Available agent definitions\n\n` +
           `<agent_definitions>\n${JSON.stringify(roster.definitions, null, 2)}\n</agent_definitions>\n\n` +
           `This is the session-start definition snapshot. Use agent_list for live Agent state or to refresh Agent definitions after configuration changes.`,
       };
@@ -1343,9 +1710,17 @@ export function registerManagedAgentRuntime(
   const execution = createManagedAgentExecutionState();
   const metadataPublisher = createManagedAgentMetadataPublisher(pi);
   const leafStatus = createManagedAgentLeafStatus({
-    snapshot: (ctx, signal) => managedAgentSnapshots(
-      pi, ctx, options.controllerOptions.snapshotDependencies, signal, true, false, undefined, false,
-    ),
+    snapshot: (ctx, signal) =>
+      managedAgentSnapshots(
+        pi,
+        ctx,
+        options.controllerOptions.snapshotDependencies,
+        signal,
+        true,
+        false,
+        undefined,
+        false,
+      ),
     identity: (ctx) => managedAgentEnvironmentIdentity(ctx, options.build),
     sameIdentity: sameManagedAgentIdentity,
     signal: () => metadataPublisher.signal,
@@ -1360,7 +1735,8 @@ export function registerManagedAgentRuntime(
     if (!release) return undefined;
     try {
       const current = readAgentState(mailbox);
-      if (!current || !sameManagedAgentIdentity(current, state)) return undefined;
+      if (!current || !sameManagedAgentIdentity(current, state))
+        return undefined;
       const next = update(current);
       writeAgentState(mailbox, next);
       execution.assignment = next;
@@ -1368,7 +1744,11 @@ export function registerManagedAgentRuntime(
       return next;
     } catch (error) {
       if (execution.agentContext && !execution.mutationErrorReported)
-        options.appendError(execution.agentContext, "pi_herdsman_state_error", error);
+        options.appendError(
+          execution.agentContext,
+          "pi_herdsman_state_error",
+          error,
+        );
       execution.mutationErrorReported = true;
       return undefined;
     } finally {
@@ -1377,24 +1757,38 @@ export function registerManagedAgentRuntime(
   };
   const requestState = createManagedAgentRequestState(pi, {
     state: () => execution.assignment,
-    setState: (state) => { execution.assignment = state; },
+    setState: (state) => {
+      execution.assignment = state;
+    },
     initialized: () => execution.initialized,
     mutateState: mutateAgentState,
     pendingResult: () => !!execution.pendingResult,
     pendingStateTransition: () => execution.pendingStateTransition,
     allDirectChildrenAskBlocked: (state) =>
-      (controller?.allDirectChildrenAskBlocked ?? allDirectChildrenAskBlocked)(state),
+      (controller?.allDirectChildrenAskBlocked ?? allDirectChildrenAskBlocked)(
+        state,
+      ),
     tryClaimAssignmentLock: options.tryClaimAssignmentLock,
     sameIdentity: sameManagedAgentIdentity,
     activeContext: () => execution.agentContext,
-    appendError: (ctx, error) => options.appendError(ctx, "pi_herdsman_state_error", error),
+    appendError: (ctx, error) =>
+      options.appendError(ctx, "pi_herdsman_state_error", error),
   });
   const touchActivity = (now = Date.now(), force = false): void => {
     const state = execution.assignment;
     if (!state?.activeRequestId || execution.pendingResult) return;
-    if (!force && state.lastActivityAt !== undefined && now >= state.lastActivityAt &&
-      now - state.lastActivityAt < options.activityWriteMinMs) return;
-    mutateAgentState((current) => ({ ...current, lastActivityAt: now, updatedAt: now }));
+    if (
+      !force &&
+      state.lastActivityAt !== undefined &&
+      now >= state.lastActivityAt &&
+      now - state.lastActivityAt < options.activityWriteMinMs
+    )
+      return;
+    mutateAgentState((current) => ({
+      ...current,
+      lastActivityAt: now,
+      updatedAt: now,
+    }));
   };
   const resetRequestPump = (): void => {
     if (execution.requestPumpTimer) clearInterval(execution.requestPumpTimer);
@@ -1408,36 +1802,61 @@ export function registerManagedAgentRuntime(
         controller.sessionTreeChanged(ctx, controller.sessionSignal());
     });
   }
-  registerManagedAgentAskOwnerTool(pi, createManagedAgentAskOwnerHandler({
-    state: () => execution.assignment,
-    setState: (state) => { execution.assignment = state; },
-    sameIdentity: sameManagedAgentIdentity,
-    eligible: requestState.eligibleToAsk,
-    rejectionReason: requestState.askRejectionReason,
-    isSoleToolCall: (ctx) => currentTurnIsSoleToolCall(options.currentTurnMessage(ctx), "ask_owner"),
-    messageLimits: options.messageLimits,
-    prepare: (ctx, question, files, state, askId, createdAt, limits) => prepareMessageInput(
-      question,
-      options.resolveMessageFiles(ctx, files, "ask_owner"),
-      state.cwd,
-      "ask_owner",
-      "Question",
-      {
-        inlineLimitBytes: limits.inline.bytes,
-        mailboxLimitBytes: limits.mailbox.bytes,
-        serializedBytes: (text, bindings) => askRecordBytes(state, askId, text, createdAt, bindings as ResultBinding[]),
+  registerManagedAgentAskOwnerTool(
+    pi,
+    createManagedAgentAskOwnerHandler({
+      state: () => execution.assignment,
+      setState: (state) => {
+        execution.assignment = state;
       },
-    ),
-    checkMailboxSize: (bytes, limit) => {
-      if (bytes > limit) fail("invalid_request", `Mailbox payload is ${bytes} bytes; configured limit is ${limit} bytes`, "ask_owner");
-    },
-    claimLock: (mailbox, state) => options.claimAssignmentLock(mailbox, "ask_owner", { label: state.agentLabel, paneId: state.paneId }),
-    readState: readAgentState,
-    writeState: writeAgentState,
-    writeAsk,
-    removeAsk: removeMailboxAsk,
-    latest: (value) => { execution.latest = value; },
-  }));
+      sameIdentity: sameManagedAgentIdentity,
+      eligible: requestState.eligibleToAsk,
+      rejectionReason: requestState.askRejectionReason,
+      isSoleToolCall: (ctx) =>
+        currentTurnIsSoleToolCall(options.currentTurnMessage(ctx), "ask_owner"),
+      messageLimits: options.messageLimits,
+      prepare: (ctx, question, files, state, askId, createdAt, limits) =>
+        prepareMessageInput(
+          question,
+          options.resolveMessageFiles(ctx, files, "ask_owner"),
+          state.cwd,
+          "ask_owner",
+          "Question",
+          {
+            inlineLimitBytes: limits.inline.bytes,
+            mailboxLimitBytes: limits.mailbox.bytes,
+            serializedBytes: (text, bindings) =>
+              askRecordBytes(
+                state,
+                askId,
+                text,
+                createdAt,
+                bindings as ResultBinding[],
+              ),
+          },
+        ),
+      checkMailboxSize: (bytes, limit) => {
+        if (bytes > limit)
+          fail(
+            "invalid_request",
+            `Mailbox payload is ${bytes} bytes; configured limit is ${limit} bytes`,
+            "ask_owner",
+          );
+      },
+      claimLock: (mailbox, state) =>
+        options.claimAssignmentLock(mailbox, "ask_owner", {
+          label: state.agentLabel,
+          paneId: state.paneId,
+        }),
+      readState: readAgentState,
+      writeState: writeAgentState,
+      writeAsk,
+      removeAsk: removeMailboxAsk,
+      latest: (value) => {
+        execution.latest = value;
+      },
+    }),
+  );
   registerManagedAgentContextHandlers(pi, {
     contextRetirementEnabled: () => readConfig().contextRetirement,
     hasActiveAssignment: () => !!execution.assignment?.activeRequestId,
@@ -1458,21 +1877,30 @@ export function registerManagedAgentRuntime(
     clearControllerRuntimes: clearAgentRuntimes,
     setControllerReady: (ready) => controller?.setReady(ready),
     beginMetadataSession: metadataPublisher.beginSession,
-    reportMetadata: (state, ctx, patch, reset) => metadataPublisher.report(state, ctx, patch, reset),
-    environmentIdentity: (ctx) => managedAgentEnvironmentIdentity(ctx, options.build),
-    ensureAgentIdentity: (ctx) => ensureManagedAgentIdentity(
-      pi, ctx, process.env.PI_HERDSMAN_AGENT_DEFINITION!, process.env.PI_HERDSMAN_LABEL!,
-    ),
+    reportMetadata: (state, ctx, patch, reset) =>
+      metadataPublisher.report(state, ctx, patch, reset),
+    environmentIdentity: (ctx) =>
+      managedAgentEnvironmentIdentity(ctx, options.build),
+    ensureAgentIdentity: (ctx) =>
+      ensureManagedAgentIdentity(
+        pi,
+        ctx,
+        process.env.PI_HERDSMAN_AGENT_DEFINITION!,
+        process.env.PI_HERDSMAN_LABEL!,
+      ),
     getAgentDefinitions: options.getAgentDefinitions,
     sameIdentity: sameManagedAgentIdentity,
     sameDurableState: sameManagedAgentDurableState,
     claimAssignmentLock: options.claimAssignmentLock,
-    recoverControllerRuntimes: (ctx, signal) => controller!.recoverRuntimes(ctx, signal),
-    startControllerHealthScanner: (ctx, signal) => controller!.startHealthScanner(ctx, signal),
+    recoverControllerRuntimes: (ctx, signal) =>
+      controller!.recoverRuntimes(ctx, signal),
+    startControllerHealthScanner: (ctx, signal) =>
+      controller!.startHealthScanner(ctx, signal),
     touchActivity,
     pumpRequest: requestState.pump,
     startLeafStatus: leafStatus.start,
-    appendError: (ctx, error) => options.appendError(ctx, "pi_herdsman_state_error", error),
+    appendError: (ctx, error) =>
+      options.appendError(ctx, "pi_herdsman_state_error", error),
   });
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     startupDefinitionRoster = undefined;
@@ -1491,53 +1919,83 @@ export function registerManagedAgentRuntime(
   });
   registerManagedAgentInputHandlers(pi, {
     state: () => execution.assignment,
-    setState: (state) => { execution.assignment = state; },
+    setState: (state) => {
+      execution.assignment = state;
+    },
     initialized: () => execution.initialized,
     pendingResult: () => !!execution.pendingResult,
     pendingStateTransition: () => execution.pendingStateTransition,
     pendingInterruptReplacement: () => execution.pendingInterruptReplacement,
-    setPendingInterruptReplacement: (value) => { execution.pendingInterruptReplacement = value; },
+    setPendingInterruptReplacement: (value) => {
+      execution.pendingInterruptReplacement = value;
+    },
     build: options.build,
     sameIdentity: sameManagedAgentIdentity,
     mutateState: mutateAgentState,
     requestState,
     tryClaimAssignmentLock: options.tryClaimAssignmentLock,
     hasPendingDirectChildWork: (state) =>
-      (controller?.hasPendingDirectChildWork ?? hasPendingDirectChildWork)(state),
+      (controller?.hasPendingDirectChildWork ?? hasPendingDirectChildWork)(
+        state,
+      ),
     hasUndeliveredDirectChildWork: (state, entries) =>
-      (controller?.hasUndeliveredDirectChildWork ?? hasUndeliveredDirectChildWork)(state, entries),
-    reportError: (ctx, error) => options.appendError(ctx, "pi_herdsman_state_error", error),
-    reportMetadata: (state, ctx, patch) => metadataPublisher.report(state, ctx, patch),
-    setLatest: (value) => { execution.latest = value; },
-    startAgent: () => execution.agentStartedAt = Date.now(),
+      (
+        controller?.hasUndeliveredDirectChildWork ??
+        hasUndeliveredDirectChildWork
+      )(state, entries),
+    reportError: (ctx, error) =>
+      options.appendError(ctx, "pi_herdsman_state_error", error),
+    reportMetadata: (state, ctx, patch) =>
+      metadataPublisher.report(state, ctx, patch),
+    setLatest: (value) => {
+      execution.latest = value;
+    },
+    startAgent: () => (execution.agentStartedAt = Date.now()),
   });
   registerManagedAgentResultCapture(pi, {
     state: () => execution.assignment,
     pendingResult: () => !!execution.pendingResult,
     delegationEnabled,
     hasUndeliveredDirectChildWork: (state, entries) =>
-      (controller?.hasUndeliveredDirectChildWork ?? hasUndeliveredDirectChildWork)(state, entries),
-    setLatest: (value) => { execution.latest = value; },
+      (
+        controller?.hasUndeliveredDirectChildWork ??
+        hasUndeliveredDirectChildWork
+      )(state, entries),
+    setLatest: (value) => {
+      execution.latest = value;
+    },
   });
   registerManagedAgentActivityHandlers(pi, execution, {
     touchActivity,
     resetAssignmentGuidance: () => controller?.resetAssignmentGuidance(),
-    reportMetadata: (state, ctx, patch) => metadataPublisher.report(state, ctx, patch),
+    reportMetadata: (state, ctx, patch) =>
+      metadataPublisher.report(state, ctx, patch),
   });
-  const resultLifecycle = registerManagedAgentSettlementHandlers(pi, execution, {
-    delegationEnabled,
-    tryClaimAssignmentLock: options.tryClaimAssignmentLock,
-    sameIdentity: sameManagedAgentIdentity,
-    hasUndeliveredDirectChildWork: (state, entries) =>
-      (controller?.hasUndeliveredDirectChildWork ?? hasUndeliveredDirectChildWork)(state, entries),
-    reportMetadata: (state, ctx, patch) => metadataPublisher.report(state, ctx, patch),
-    appendStateError: (ctx, error) => options.appendError(ctx, "pi_herdsman_state_error", error),
-    appendResultError: (ctx, error) => options.appendError(ctx, "pi_herdsman_result_error", error),
-    resultWriteMaxAttempts: options.resultWriteMaxAttempts,
-    settleControllerResults: (ctx) => controller
-      ? controller.settleResults(ctx, controller.sessionSignal())
-      : Promise.resolve(),
-  });
+  const resultLifecycle = registerManagedAgentSettlementHandlers(
+    pi,
+    execution,
+    {
+      delegationEnabled,
+      tryClaimAssignmentLock: options.tryClaimAssignmentLock,
+      sameIdentity: sameManagedAgentIdentity,
+      hasUndeliveredDirectChildWork: (state, entries) =>
+        (
+          controller?.hasUndeliveredDirectChildWork ??
+          hasUndeliveredDirectChildWork
+        )(state, entries),
+      reportMetadata: (state, ctx, patch) =>
+        metadataPublisher.report(state, ctx, patch),
+      appendStateError: (ctx, error) =>
+        options.appendError(ctx, "pi_herdsman_state_error", error),
+      appendResultError: (ctx, error) =>
+        options.appendError(ctx, "pi_herdsman_result_error", error),
+      resultWriteMaxAttempts: options.resultWriteMaxAttempts,
+      settleControllerResults: (ctx) =>
+        controller
+          ? controller.settleResults(ctx, controller.sessionSignal())
+          : Promise.resolve(),
+    },
+  );
   registerManagedAgentShutdownHandler(pi, execution, {
     resetRequestPump,
     resetLeafStatus: leafStatus.reset,
@@ -1556,42 +2014,52 @@ export function registerManagedAgentRuntime(
   });
 }
 
-export function createManagedAgentRequestState(pi: ExtensionAPI, options: {
-  state(): ManagedAgentState | undefined;
-  setState(state: ManagedAgentState): void;
-  initialized(): boolean;
-  mutateState(
-    update: (state: ManagedAgentState) => ManagedAgentState,
-  ): ManagedAgentState | undefined;
-  pendingResult(): boolean;
-  pendingStateTransition(): boolean;
-  allDirectChildrenAskBlocked(state: ManagedAgentState): boolean;
-  tryClaimAssignmentLock(mailbox: string): (() => void) | undefined;
-  sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
-  appendError(ctx: ExtensionContext, error: unknown): void;
-  activeContext(): ExtensionContext | undefined;
-}) {
+export function createManagedAgentRequestState(
+  pi: ExtensionAPI,
+  options: {
+    state(): ManagedAgentState | undefined;
+    setState(state: ManagedAgentState): void;
+    initialized(): boolean;
+    mutateState(
+      update: (state: ManagedAgentState) => ManagedAgentState,
+    ): ManagedAgentState | undefined;
+    pendingResult(): boolean;
+    pendingStateTransition(): boolean;
+    allDirectChildrenAskBlocked(state: ManagedAgentState): boolean;
+    tryClaimAssignmentLock(mailbox: string): (() => void) | undefined;
+    sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
+    appendError(ctx: ExtensionContext, error: unknown): void;
+    activeContext(): ExtensionContext | undefined;
+  },
+) {
   let requestPumpErrorReported = false;
   let acknowledgementErrorReported = false;
   const acknowledge = (
     requestId: string,
     accepted: boolean,
-    code?: "busy" | "idle" | "invalid" | "identity" | "delivery" | "incompatible" | "ambiguous",
+    code?:
+      | "busy"
+      | "idle"
+      | "invalid"
+      | "identity"
+      | "delivery"
+      | "incompatible"
+      | "ambiguous",
     message?: string,
   ): boolean => {
     const state = options.state();
     if (!state) return false;
     const next = options.mutateState((current) => ({
-        ...current,
-        lastAck: {
-          requestId,
-          accepted,
-          ...(code ? { code } : {}),
-          ...(message ? { message } : {}),
-          acknowledgedAt: Date.now(),
-        },
-        updatedAt: Date.now(),
-      }));
+      ...current,
+      lastAck: {
+        requestId,
+        accepted,
+        ...(code ? { code } : {}),
+        ...(message ? { message } : {}),
+        acknowledgedAt: Date.now(),
+      },
+      updatedAt: Date.now(),
+    }));
     if (next) {
       acknowledgementErrorReported = false;
       return true;
@@ -1602,7 +2070,14 @@ export function createManagedAgentRequestState(pi: ExtensionAPI, options: {
     requestId: string,
     accepted: boolean,
     ctx: ExtensionContext,
-    code?: "busy" | "idle" | "invalid" | "identity" | "delivery" | "incompatible" | "ambiguous",
+    code?:
+      | "busy"
+      | "idle"
+      | "invalid"
+      | "identity"
+      | "delivery"
+      | "incompatible"
+      | "ambiguous",
     message?: string,
   ): void => {
     const state = options.state();
@@ -1647,7 +2122,9 @@ export function createManagedAgentRequestState(pi: ExtensionAPI, options: {
         acknowledgementErrorReported = false;
         return;
       }
-      pi.sendUserMessage(controlMarker(request.requestId), { deliverAs: "steer" });
+      pi.sendUserMessage(controlMarker(request.requestId), {
+        deliverAs: "steer",
+      });
     } catch (error) {
       if (!requestPumpErrorReported) {
         requestPumpErrorReported = true;
@@ -1657,13 +2134,15 @@ export function createManagedAgentRequestState(pi: ExtensionAPI, options: {
   };
   const eligibleToAsk = (): boolean => {
     const state = options.state();
-    return !!state?.activeRequestId &&
+    return (
+      !!state?.activeRequestId &&
       !state.pendingAskId &&
       !state.completedRequestId &&
       !options.pendingResult() &&
       !options.pendingStateTransition() &&
       !unacknowledgedRequestExists(process.env.PI_HERDSMAN_MAILBOX!, state) &&
-      options.allDirectChildrenAskBlocked(state);
+      options.allDirectChildrenAskBlocked(state)
+    );
   };
   const askRejectionReason = (): string => {
     const state = options.state();
@@ -1827,15 +2306,33 @@ export function registerManagedAgentSessionStartHandler(
     clearControllerRuntimes(): void;
     setControllerReady(ready: boolean): void;
     beginMetadataSession(): AbortSignal;
-    reportMetadata(state: ManagedAgentState, ctx: ExtensionContext, patch: ManagedAgentMetadataPatch, reset?: boolean): void;
+    reportMetadata(
+      state: ManagedAgentState,
+      ctx: ExtensionContext,
+      patch: ManagedAgentMetadataPatch,
+      reset?: boolean,
+    ): void;
     environmentIdentity(ctx: ExtensionContext): ManagedAgentState | undefined;
     ensureAgentIdentity(ctx: ExtensionContext): void;
     getAgentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
     sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
-    sameDurableState(left: ManagedAgentState, right: ManagedAgentState): boolean;
-    claimAssignmentLock(mailbox: string, operation: string, ids: { label?: string; paneId?: string }): () => void;
-    recoverControllerRuntimes(ctx: ExtensionContext, signal: AbortSignal): Promise<void>;
-    startControllerHealthScanner(ctx: ExtensionContext, signal: AbortSignal): void;
+    sameDurableState(
+      left: ManagedAgentState,
+      right: ManagedAgentState,
+    ): boolean;
+    claimAssignmentLock(
+      mailbox: string,
+      operation: string,
+      ids: { label?: string; paneId?: string },
+    ): () => void;
+    recoverControllerRuntimes(
+      ctx: ExtensionContext,
+      signal: AbortSignal,
+    ): Promise<void>;
+    startControllerHealthScanner(
+      ctx: ExtensionContext,
+      signal: AbortSignal,
+    ): void;
     touchActivity(now?: number, force?: boolean): void;
     pumpRequest(ctx: ExtensionContext): void;
     startLeafStatus(ctx: ExtensionContext): void;
@@ -1858,7 +2355,8 @@ export function registerManagedAgentSessionStartHandler(
       execution.agentContext = ctx;
       const candidate = options.environmentIdentity(ctx);
       if (!candidate) throw new Error("invalid agent environment");
-      if (!options.delegationEnabled) options.captureOwnTools(options.getActiveTools());
+      if (!options.delegationEnabled)
+        options.captureOwnTools(options.getActiveTools());
       options.ensureAgentIdentity(ctx);
       const mailbox = process.env.PI_HERDSMAN_MAILBOX!;
       const existing = readAgentState(mailbox);
@@ -1873,11 +2371,18 @@ export function registerManagedAgentSessionStartHandler(
           updatedAt: Date.now(),
         };
         forceActivityTouch = !!execution.assignment.activeRequestId;
-        if (execution.assignment.activeRequestId && !execution.assignment.pendingAskId) {
+        if (
+          execution.assignment.activeRequestId &&
+          !execution.assignment.pendingAskId
+        ) {
           try {
-            const result = readResult(mailbox, execution.assignment.activeRequestId);
+            const result = readResult(
+              mailbox,
+              execution.assignment.activeRequestId,
+            );
             if (
-              result && result.runId === execution.assignment.runId &&
+              result &&
+              result.runId === execution.assignment.runId &&
               result.ownerSessionId === execution.assignment.ownerSessionId &&
               result.workspaceId === execution.assignment.workspaceId &&
               result.agentLabel === execution.assignment.agentLabel &&
@@ -1893,7 +2398,10 @@ export function registerManagedAgentSessionStartHandler(
               };
               forceActivityTouch = false;
             } else if (result) {
-              options.appendError(ctx, new Error("active agent result identity did not match state"));
+              options.appendError(
+                ctx,
+                new Error("active agent result identity did not match state"),
+              );
             }
           } catch (error) {
             options.appendError(ctx, error);
@@ -1913,11 +2421,20 @@ export function registerManagedAgentSessionStartHandler(
         if (existing !== undefined && current === undefined)
           throw new Error("agent mailbox disappeared while state existed");
         if (
-          existing !== undefined && current !== undefined &&
+          existing !== undefined &&
+          current !== undefined &&
           !options.sameDurableState(current, existing)
-        ) throw new Error("agent mailbox changed while session start was preparing");
+        )
+          throw new Error(
+            "agent mailbox changed while session start was preparing",
+          );
         if (existing === undefined && current !== undefined)
-          execution.assignment = { ...candidate, ...current, build: options.build, updatedAt: Date.now() };
+          execution.assignment = {
+            ...candidate,
+            ...current,
+            build: options.build,
+            updatedAt: Date.now(),
+          };
         writeAgentState(mailbox, execution.assignment);
       } finally {
         release();
@@ -1933,18 +2450,28 @@ export function registerManagedAgentSessionStartHandler(
         options.startControllerHealthScanner(ctx, metadataSignal);
       execution.initialized = true;
       options.pumpRequest(ctx);
-      execution.requestPumpTimer = setInterval(() => options.pumpRequest(ctx), 250);
+      execution.requestPumpTimer = setInterval(
+        () => options.pumpRequest(ctx),
+        250,
+      );
       execution.requestPumpTimer.unref?.();
       if (!options.delegationEnabled && ctx.mode === "tui" && ctx.hasUI)
         options.startLeafStatus(ctx);
-      const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const model = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : undefined;
       const thinking = ctx.thinkingLevel;
-      options.reportMetadata(execution.assignment, ctx, {
-        activity: null,
-        context: null,
-        model: model || null,
-        thinking: thinking || null,
-      }, true);
+      options.reportMetadata(
+        execution.assignment,
+        ctx,
+        {
+          activity: null,
+          context: null,
+          model: model || null,
+          thinking: thinking || null,
+        },
+        true,
+      );
     } catch (error) {
       execution.initialized = false;
       options.setControllerReady(false);
