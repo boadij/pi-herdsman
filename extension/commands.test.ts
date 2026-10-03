@@ -44,7 +44,6 @@ import {
   writePeerLeadRecord as writePeerLeadRecordRaw,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
-import { AGENT_COORDINATION_TOOLS } from "./agent-definitions.ts";
 import { resultPath } from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
@@ -1364,10 +1363,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         "ls",
         "find",
         "grep",
-        ...AGENT_COORDINATION_TOOLS,
-        "supervisor_message",
-        "peer_list",
-        "peer_message",
+        ...leadTools,
       ]);
       for (const tool of ["bash", "powershell", "edit", "write"])
         assert.equal(args[toolsIndex + 1]!.split(",").includes(tool), false);

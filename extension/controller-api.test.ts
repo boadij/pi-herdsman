@@ -1648,7 +1648,7 @@ for (const scenario of [
         assert.ok(Buffer.byteLength(delivered[0].content, "utf8") > 8 * 1024);
         assert.ok(
           delivered[0].content.includes(
-            `${"evidence\n".repeat(4096)}\n\nYou are the project Lead`,
+            `${"evidence\n".repeat(4096)}\n\nWhen a delegated herd run settles`,
           ),
         );
         assert.equal(delivered[0].content.includes(sessionId), false);
