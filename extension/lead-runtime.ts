@@ -448,6 +448,9 @@ type LeadInboxBaseHost = {
     typeof createLeadIdentityRuntime
   >["remoteChiefAgent"];
   liveLead: ReturnType<typeof createLeadIdentityRuntime>["liveLead"];
+  livePeerLead: ReturnType<
+    typeof createLeadCoordinationRuntime
+  >["livePeerLead"];
   readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
   runHerdr: typeof import("./herdr.ts").runHerdr;
   sameRuntimeBuild: typeof import("./compatibility.ts").sameRuntimeBuild;
@@ -1911,6 +1914,7 @@ export function registerLeadRuntime(
         ctx.sessionManager.getSessionId(),
     prepareSupervisionMessage: (ctx: ExtensionContext) =>
       supervisionUiRuntime.prepareMessage(ctx),
+    livePeerLead: (...args) => coordinationRuntime.livePeerLead(...args),
     authorizePeerRecord: (record: ChiefMessageRecord, ctx: ExtensionContext) =>
       coordinationRuntime.authorizePeerRecord(record, ctx),
     assertCurrentLeadCoordination: (ctx: ExtensionContext) =>
@@ -5499,6 +5503,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     listManagerDescriptors,
     remoteChiefAgent,
     liveLead,
+    livePeerLead,
     readLeadCoordinationState,
     runHerdr,
     sameRuntimeBuild,
@@ -5908,6 +5913,55 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                 content:
                   `Project assignment for branch ${assignment.branch}:\n\n` +
                   projectAssignmentInstruction(assignment),
+              };
+            }
+            if (
+              typeof message === "object" &&
+              message !== null &&
+              (record.kind === "chief_message" ||
+                record.kind === "manager_message" ||
+                record.kind === "lead_message")
+            ) {
+              const toRole = activeRole();
+              let sender: PeerLeadRecord | undefined;
+              let recipient: PeerLeadRecord | undefined;
+              try {
+                [sender, recipient] = await Promise.all([
+                  livePeerLead(ctx, record.fromSessionId),
+                  livePeerLead(ctx, record.toSessionId),
+                ]);
+              } catch {
+                // Presentation metadata is best-effort; delivery remains authoritative.
+              }
+              const peerDisplayName = (
+                peer: PeerLeadRecord | undefined,
+              ): string | undefined =>
+                peer?.name?.trim() ||
+                peer?.workspaceLabel?.trim() ||
+                peer?.repo?.trim() ||
+                peer?.branch?.trim();
+              const fromDisplayName = peerDisplayName(sender);
+              let toDisplayName = peerDisplayName(recipient);
+              if (!toDisplayName && toRole !== "chief") {
+                try {
+                  toDisplayName =
+                    pi.getSessionName()?.trim() ||
+                    ctx.sessionManager.getSessionName()?.trim();
+                } catch {
+                  // Session names are optional presentation metadata.
+                }
+              }
+              const current = message as {
+                details?: Record<string, unknown>;
+              };
+              payload = {
+                ...(message as object),
+                details: {
+                  ...current.details,
+                  toRole,
+                  ...(fromDisplayName ? { fromDisplayName } : {}),
+                  ...(toDisplayName ? { toDisplayName } : {}),
+                },
               };
             }
             importResultBindings(pi, ctx, resultBindings, record.kind);

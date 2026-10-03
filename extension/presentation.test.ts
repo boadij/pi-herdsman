@@ -4634,7 +4634,7 @@ test("Chief tree shows project and branch without internal paths or zero counts"
   const rows = renderSupervisionLeads(snapshot, 120);
   assert.equal(rows[0], "● chief · 1 manager");
   assert.equal(rows[1], "└─ ○ pi-herdsman · 1 lead");
-  assert.equal(rows[2], "   feat/session-usage-stats · idle");
+  assert.equal(rows[2], "   └─ feat/session-usage-stats · idle");
   assert.doesNotMatch(
     rows.join("\n"),
     /\.git|0 agents|0 leads|manager-session|lead-12345678/,
@@ -4646,6 +4646,48 @@ test("Chief tree shows project and branch without internal paths or zero counts"
     )[0],
     "● chief · 1 manager · 2 direct leads",
   );
+});
+
+test("Chief tree connects nested Manager Leads without nesting direct Leads", () => {
+  const manager = (displayName: string, branches: string[]) => ({
+    session: `${displayName}-session`,
+    displayName,
+    runtimeState: "working" as const,
+    agentCounts: { active: 0, blocked: 0, total: 0 },
+    leadCounts: { active: 0, blocked: 0, total: branches.length },
+    availableActions: [],
+    leads: branches.map((branch) => ({
+      session: `${branch}-session`,
+      branch,
+      displayName: branch,
+      runtimeState: branch.endsWith("a2")
+        ? ("working" as const)
+        : ("done" as const),
+      agentCounts: { active: 0, blocked: 0, total: 0 },
+    })),
+  });
+  const snapshot = {
+    managers: [
+      manager("project-a", ["child-a1", "child-a2"]),
+      manager("project-b", ["child-b1"]),
+    ],
+    leads: [lead({ lead: "direct", displayName: "unrelated-direct-lead" })],
+  };
+  assert.deepEqual(renderSupervisionLeads(snapshot, 120).slice(1), [
+    "├─ ● project-a · 2 leads",
+    "│  ├─ child-a1 · done",
+    "│  └─ child-a2 · working",
+    "├─ ● project-b · 1 lead",
+    "│  └─ child-b1 · done",
+    "└─ ○ unrelated-direct-lead",
+  ]);
+  for (let width = 1; width <= 120; width++)
+    assert.ok(
+      renderSupervisionLeads(snapshot, width).every(
+        (line) => visibleWidth(line) <= width,
+      ),
+      `width ${width}`,
+    );
 });
 
 test("Manager widget shares one bounded work/Lead tree and context includes project work", () => {
@@ -4979,6 +5021,77 @@ test("coordination messages render compact semantic headings and strip only know
         ),
       ).includes(content),
     );
+});
+
+test("hierarchical coordination messages show semantic endpoints and exact expanded sessions", () => {
+  const cases = [
+    ["chief_message", "chief", "lead"],
+    ["chief_message", "chief", "manager"],
+    ["manager_message", "manager", "chief"],
+    ["manager_message", "manager", "lead"],
+    ["lead_message", "lead", "chief"],
+    ["lead_message", "lead", "manager"],
+  ] as const;
+  for (const [kind, fromRole, toRole] of cases) {
+    const details = {
+      fromSessionId: "exact-sender-session",
+      toSessionId: "exact-recipient-session",
+      toRole,
+      fromDisplayName: "feature-auth",
+      toDisplayName: "pi-herdsman",
+    };
+    const title = (role: string) =>
+      `${role === "chief" ? "Chief" : role === "manager" ? "Manager" : "Lead"}`;
+    const heading = `${title(fromRole)} · feature-auth → ${title(toRole)} · pi-herdsman`;
+    const envelope = `From ${fromRole} exact-sender-session: `;
+    const body = "Coordination body is kept intact.";
+    const compact = renderCoordinationMessage(
+      kind,
+      { content: envelope + body, details },
+      {},
+      presentationTheme,
+    );
+    const compactText = renderedText(compact);
+    assert.ok(compactText.includes(heading), heading);
+    assert.match(compactText, /Coordination body is kept intact/);
+    assert.doesNotMatch(
+      compactText,
+      /exact-(?:sender|recipient)-session|From /,
+    );
+    for (let width = 1; width <= 80; width++)
+      assert.ok(
+        compact.render(width).every((line) => visibleWidth(line) <= width),
+      );
+    const expanded = renderedText(
+      renderCoordinationMessage(
+        kind,
+        { content: envelope + body, details },
+        { expanded: true },
+        presentationTheme,
+      ),
+    );
+    assert.ok(expanded.includes(heading), heading);
+    assert.match(expanded, /from session: exact-sender-session/);
+    assert.match(expanded, /to session: exact-recipient-session/);
+    assert.match(expanded, /Coordination body is kept intact/);
+    assert.doesNotMatch(expanded, /From lead exact-sender-session:/);
+  }
+  const unsafe = renderedText(
+    renderCoordinationMessage(
+      "lead_message",
+      {
+        content: "safe body",
+        details: {
+          toRole: "manager",
+          fromDisplayName: "api\u001b[31m\nlead",
+        },
+      },
+      {},
+      presentationTheme,
+    ),
+  );
+  assert.doesNotMatch(unsafe, /\u001b|\nlead/);
+  assert.match(unsafe, /Lead · api lead → Manager/);
 });
 
 test("project messages have semantic compact and expanded presentation", () => {
