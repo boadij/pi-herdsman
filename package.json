@@ -48,7 +48,7 @@
   },
   "piHerdsman": {
     "runtime": {
-      "pi": "1.0.0",
+      "pi": "1.0.1",
       "herdr": {
         "version": "0.9.3",
         "sha256": {
@@ -77,9 +77,9 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.0.0",
-    "@earendil-works/pi-coding-agent": "1.0.0",
-    "@earendil-works/pi-tui": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.1",
+    "@earendil-works/pi-coding-agent": "1.0.1",
+    "@earendil-works/pi-tui": "1.0.1",
     "esbuild": "^0.28.2",
     "typebox": "^1.3.7"
   },

@@ -9,8 +9,8 @@ You do not need to call structured coordination tools yourself.
 
 You need:
 
-- [herdr](https://github.com/herdrdev/herdr) `>=0.9.1`
-- Pi `1.0.0` (tested runtime)
+- [herdr](https://github.com/herdrdev/herdr) `>=0.9.3` (tested baseline: `0.9.3`)
+- Pi `>=1.0.1` (tested baseline: `1.0.1`)
 - Node `>=22.19.0`
 
 On Linux or macOS, install the released, tested stack:
@@ -18,6 +18,19 @@ On Linux or macOS, install the released, tested stack:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
 ```
+
+The released package publishes the Pi and herdr versions tested for that
+Herdsman release. On mutable host installs, the bootstrap treats those versions
+as minimums and never downgrades a newer runtime.
+
+For Pi, a missing or older installation is handed to Pi's official managed
+installer and the result must meet the tested minimum. Pi's installer chooses
+its current managed release, so the installed Pi may be newer than Herdsman's
+tested baseline. Afterward, Pi remains natively updateable with `pi update`.
+
+For herdr, a missing or older installation receives the exact checksum-verified
+tested release. Existing newer installations are left untouched, and subsequent
+updates remain native through `herdr update`.
 
 If you already manage Pi and herdr yourself:
 

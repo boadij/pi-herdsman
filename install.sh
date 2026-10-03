@@ -2,7 +2,6 @@
 set -eu
 
 PACKAGE=pi-herdsman
-PI_PACKAGE=@earendil-works/pi-coding-agent
 INSTALL_DIR="${HERDR_INSTALL_DIR:-$HOME/.local/bin}"
 
 log() { printf '  > %s\n' "$1"; }
@@ -25,6 +24,23 @@ process.stdout.write(value);
 
 current_version() {
   "$1" --version 2>/dev/null | awk '{ print $NF }'
+}
+
+version_compare() {
+  node -e '
+const parse = (value) => {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value);
+  if (!match) throw new Error(`invalid stable version: ${value}`);
+  return match.slice(1).map(Number);
+};
+const [left, right] = process.argv.slice(1).map(parse);
+let result = 0;
+for (let i = 0; i < 3; i++) {
+  if (left[i] < right[i]) { result = -1; break; }
+  if (left[i] > right[i]) { result = 1; break; }
+}
+process.stdout.write(String(result));
+' "$1" "$2"
 }
 
 main() {
@@ -73,26 +89,47 @@ if (major < 22 || (major === 22 && minor < 19)) process.exit(1);
   herdr_sha256="$(package_field "piHerdsman.runtime.herdr.sha256.$target")" ||
     err "$PACKAGE@$herdsman_version does not support $target"
 
-  case "$pi_version:$herdr_version" in
-    *[!0-9A-Za-z.+:-]*) err "released runtime metadata contains an invalid version" ;;
-  esac
+  version_compare "$pi_version" "$pi_version" >/dev/null ||
+    err "released runtime metadata contains an invalid Pi version"
+  version_compare "$herdr_version" "$herdr_version" >/dev/null ||
+    err "released runtime metadata contains an invalid Herdr version"
   [ "${#herdr_sha256}" -eq 64 ] ||
     err "released runtime metadata contains an invalid Herdr checksum for $target"
   printf '%s\n' "$herdr_sha256" | awk '/[^0-9A-Fa-f]/ { exit 1 }' ||
     err "released runtime metadata contains an invalid Herdr checksum for $target"
 
-  if command -v pi >/dev/null 2>&1 && [ "$(current_version pi)" = "$pi_version" ]; then
-    log "Pi $pi_version already installed"
+  if command -v pi >/dev/null 2>&1; then
+    installed_pi="$(current_version pi)"
+    pi_cmp="$(version_compare "$installed_pi" "$pi_version")" ||
+      err "installed Pi reports an invalid version: $installed_pi"
   else
-    log "installing Pi $pi_version"
-    npm install -g --ignore-scripts "$PI_PACKAGE@$pi_version"
-    [ "$(current_version pi)" = "$pi_version" ] ||
-      err "Pi $pi_version was installed but is not the Pi resolved on PATH"
+    installed_pi=
+    pi_cmp=-1
   fi
 
-  if command -v herdr >/dev/null 2>&1 && [ "$(current_version herdr)" = "$herdr_version" ]; then
-    log "Herdr $herdr_version already installed"
+  if [ "$pi_cmp" -lt 0 ]; then
+    log "installing Pi via upstream installer (minimum $pi_version)"
+    curl -fsSL https://pi.dev/install.sh | sh
+    hash -r 2>/dev/null || true
+    command -v pi >/dev/null 2>&1 ||
+      err "Pi installer completed but 'pi' is not on PATH"
+    installed_pi="$(current_version pi)"
+    [ "$(version_compare "$installed_pi" "$pi_version")" -ge 0 ] ||
+      err "Pi $installed_pi is older than the required minimum $pi_version"
   else
+    log "Pi $installed_pi already satisfies tested baseline $pi_version"
+  fi
+
+  if command -v herdr >/dev/null 2>&1; then
+    installed_herdr="$(current_version herdr)"
+    herdr_cmp="$(version_compare "$installed_herdr" "$herdr_version")" ||
+      err "installed Herdr reports an invalid version: $installed_herdr"
+  else
+    installed_herdr=
+    herdr_cmp=-1
+  fi
+
+  if [ "$herdr_cmp" -lt 0 ]; then
     case "$target" in
       linux-x86_64) asset=herdr-linux-x86_64 ;;
       linux-aarch64) asset=herdr-linux-aarch64 ;;
@@ -131,6 +168,9 @@ if (major < 22 || (major === 22 && minor < 19)) process.exit(1);
       [ "$(current_version herdr)" != "$herdr_version" ]; then
       err "Herdr $herdr_version was installed to $INSTALL_DIR/herdr but is not the Herdr resolved on PATH"
     fi
+    installed_herdr="$herdr_version"
+  else
+    log "Herdr $installed_herdr already satisfies tested baseline $herdr_version"
   fi
 
   if pi list --no-approve 2>/dev/null |
@@ -147,7 +187,7 @@ if (major < 22 || (major === 22 && minor < 19)) process.exit(1);
   herdr integration status >/dev/null
 
   printf '\nPi Herdsman %s ready with Pi %s and Herdr %s.\n' \
-    "$herdsman_version" "$pi_version" "$herdr_version"
+    "$herdsman_version" "$installed_pi" "$installed_herdr"
 }
 
 main "$@"
