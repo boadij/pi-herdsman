@@ -972,22 +972,30 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     runtimeForLabel: (label: string) => controller.runtimeForLabel(label),
   });
   let projectRuntime: ReturnType<typeof createLeadProjectRuntime>;
-  projectRuntime = createLeadProjectRuntime({
-    ...options.projectServices,
-    stopOwnedAgentsForSession: (...args: any[]) =>
-      controller.stopOwnedAgentsForSession(...args),
+  const projectHost = options.projectHost;
+  const projectServices = {
+    ...projectHost,
+    liveAgent,
+    liveLead,
     currentManager: (...args: any[]) => roleTransitions.currentManager(...args),
-    managerLease: () => options.leadRuntime.managerLease,
+    sameManagerDescriptor: projectHost.sameManagerDescriptor,
     withProjectWorkLock: (...args: any[]) => roleTransitions.withProjectWorkLock(...args),
-    pi,
-    leadRuntime: options.leadRuntime,
-    HERDSMAN_BUILD: options.build,
-    HERDSMAN_EXTENSION_PATH: options.projectServices.extensionPath,
-    SessionManager: options.projectServices.SessionManager,
     activeRole: () => activeLeadRole(options.leadRuntime),
+    managerLease: () => options.leadRuntime.managerLease,
     currentChiefAuthority: (...args: any[]) => roleTransitions.currentChiefAuthority(...args),
     directReports: (...args: any[]) => supervisionUiRuntime.directReports(...args),
     loadSupervisionSnapshot: (...args: any[]) => supervisionUiRuntime.loadSnapshot(...args),
+    prepareCoordinationInput: (...args: any[]) => coordinationRuntime.prepareCoordinationInput(...args),
+  };
+  projectRuntime = createLeadProjectRuntime({
+    ...projectServices,
+    stopOwnedAgentsForSession: (...args: any[]) =>
+      controller.stopOwnedAgentsForSession(...args),
+    pi,
+    leadRuntime: options.leadRuntime,
+    HERDSMAN_BUILD: options.build,
+    HERDSMAN_EXTENSION_PATH: projectHost.extensionPath,
+    SessionManager: projectHost.SessionManager,
     stopProjectLead: (...args: any[]) => projectRuntime.stop(...args),
   });
   herdRunRuntime = createLeadHerdRunRuntime({

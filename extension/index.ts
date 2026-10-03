@@ -89,7 +89,6 @@ import {
   agentControlState,
   isSpawnPlacement,
   type SpawnPlacement,
-  type MessageFileInput,
 } from "./core.ts";
 import {
   AGENT_COORDINATION_TOOLS,
@@ -213,8 +212,6 @@ import {
   type SessionRole,
   type ManagerLease,
   type ManagerDescriptor,
-  type ProjectAssignment,
-  type ProjectMessage,
   claimManagerLease,
   readManagerDescriptor,
   readManagerDescriptorStatus,
@@ -1043,9 +1040,6 @@ export default function (pi: ExtensionAPI): void {
     renderSupervisionPeek,
     inspectHerdrAgent,
   };
-  const withProjectWorkLock = <T>(
-    key: string, operation: () => Promise<T>,
-  ): Promise<T> => roleTransitions.withProjectWorkLock(key, operation);
   const resetSupervisionSnapshot = (): void => leadRuntimes?.supervisionUiRuntime?.reset();
   const clearChiefStartPreflight = (): void => leadRuntimes.inboxRuntime!.clearStartPreflight();
   let prepareSupervisionMessage: (
@@ -1124,19 +1118,6 @@ export default function (pi: ExtensionAPI): void {
     roleTransitions.managerForScope(scope);
   const currentWorktreeScope = (ctx: ExtensionContext) =>
     roleTransitions.currentWorktreeScope(ctx);
-  const projectAssignmentForScope = (scope: any, sessionId: string): ProjectAssignment | undefined =>
-    roleTransitions.projectAssignmentForScope(scope, sessionId);
-  const withProjectAssignmentLock = <T>(
-    repoKey: string, branch: string, operation: () => Promise<T> | T,
-  ): Promise<T> => roleTransitions.withProjectAssignmentLock(repoKey, branch, operation);
-  const publishProjectMessage = (
-    ctx: ExtensionContext,
-    assignment: ProjectAssignment,
-    message: string,
-    files: readonly MessageFileInput[] = [],
-    operation = "supervisor_message",
-  ): Promise<ProjectMessage | undefined> =>
-    roleTransitions.publishProjectMessage(ctx, assignment, message, files, operation);
   const currentManager = (
     ctx: ExtensionContext,
     scope: Awaited<ReturnType<typeof worktreeGroupScope>> | undefined | null = null,
@@ -1238,14 +1219,13 @@ export default function (pi: ExtensionAPI): void {
         ...(percent == null ? {} : { contextPercent: Math.round(percent) }),
       });
     };
-    const projectServices = {
+    const projectHost = {
       stopProjectLeadPane: (ctx: ExtensionContext, target: any, session: string, signal?: AbortSignal) =>
         stopHerdrAgentPreservingPane(pi, ctx, target.pane_id, {
           paneId: target.pane_id, tabId: target.tab_id,
           workspaceId: target.workspace_id, cwd: target.cwd,
           session: expectedSession(session),
         }, signal),
-      liveLead,
       sameManagerDescriptor,
       worktreeGroupScope: (_pi: any, ctx: ExtensionContext, workspaceId: string, signal?: AbortSignal) =>
         worktreeGroupScope(pi, ctx, workspaceId, signal),
@@ -1253,7 +1233,6 @@ export default function (pi: ExtensionAPI): void {
       supervisionRuntime,
       readProjectAssignment,
       runHerdr,
-      liveAgent,
       readLeadCoordinationState,
       requireCompatibleBuild,
       scanAgentStates,
@@ -1282,8 +1261,6 @@ export default function (pi: ExtensionAPI): void {
         const file = statSync(path, { throwIfNoEntry: false });
         return !!file?.isFile() && file.size > 0;
       }),
-      prepareCoordinationInput: (...args: any[]) =>
-        leadRuntimes.coordinationRuntime!.prepareCoordinationInput(...args),
     };
     prepareSupervisionMessage = (ctx) => leadRuntimes.supervisionUiRuntime!.prepareMessage(ctx);
     const leadAgentEventOptions = {
@@ -1991,7 +1968,7 @@ export default function (pi: ExtensionAPI): void {
         importResultBindings,
       },
       build: HERDSMAN_BUILD,
-      projectServices,
+      projectHost,
       commandServices: leadCommandServices,
       supervisionHost,
       herdRunEntryName: HERD_RUN_ENTRY,
