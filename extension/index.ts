@@ -2029,6 +2029,5 @@ export default function (pi: ExtensionAPI): void {
     getAgentDefinitions: async (ctx) =>
       (await contextAgentDefinitions(ctx)).definitions,
     appendError: (ctx, kind, error) => appendDurableError(pi, ctx, kind, error),
-    contentText: (content) => contentText(content, ""),
   });
 }

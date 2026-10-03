@@ -757,7 +757,16 @@ test("registered agent writes state, handles input, and settles one result", asy
     context,
   );
   agent.events.get("message_end")![0](
-    { message: { role: "assistant", content: "done" } },
+    {
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "done" },
+          { type: "image", data: "ignored" },
+          { type: "toolCall", name: "ask_owner" },
+        ],
+      },
+    },
     context,
   );
   await agent.events.get("agent_settled")![0](undefined, context);

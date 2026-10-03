@@ -30,6 +30,7 @@ import {
   type ResultPersistenceError,
   type RequestRecord,
 } from "./mailbox.ts";
+import { contentText } from "@earendil-works/pi-ai";
 import {
   AGENT_DEFINITION_ENTRY,
   sessionAgentIdentity,
@@ -977,7 +978,6 @@ export function registerManagedAgentResultCapture(
     delegationEnabled: boolean;
     hasUndeliveredDirectChildWork(state: ManagedAgentState, entries: readonly unknown[]): boolean;
     setLatest(value: string): void;
-    contentText(content: unknown): string;
   },
 ): void {
   pi.on("message_end", (event: any, ctx: ExtensionContext) => {
@@ -989,7 +989,7 @@ export function registerManagedAgentResultCapture(
       options.delegationEnabled &&
       options.hasUndeliveredDirectChildWork(state, ctx.sessionManager.getEntries())
     ) return;
-    options.setLatest(options.contentText(message.content).trim());
+    options.setLatest(contentText(message.content, "").trim());
   });
 }
 
@@ -1306,7 +1306,6 @@ export function registerManagedAgentRuntime(
     resolveMessageFiles(ctx: ExtensionContext, files: string[] | undefined, operation: string): any;
     currentTurnMessage(ctx: ExtensionContext): unknown;
     appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
-    contentText(content: unknown): string;
     getAgentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
   },
 ): void {
@@ -1519,7 +1518,6 @@ export function registerManagedAgentRuntime(
     hasUndeliveredDirectChildWork: (state, entries) =>
       (controller?.hasUndeliveredDirectChildWork ?? hasUndeliveredDirectChildWork)(state, entries),
     setLatest: (value) => { execution.latest = value; },
-    contentText: options.contentText,
   });
   registerManagedAgentActivityHandlers(pi, execution, {
     touchActivity,
