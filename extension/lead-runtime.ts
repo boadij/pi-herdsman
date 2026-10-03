@@ -27,15 +27,15 @@ import { contentText, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { prepareMessageInput } from "./core.ts";
 import {
   createAgentController,
-  parsePresentationTokens,
-  statusBreadcrumb,
+  buildAgentStatusSnapshot,
+  createAgentStatusRuntime,
   type AgentControllerOptions,
+  type AgentStatusSnapshotHost,
   type PendingStart,
   type Runtime,
   type ControllerScope,
   type ManagedAgentSnapshotCollection,
   type ManagedAgentSnapshotView,
-  type VisibleManagedAgentSnapshot,
 } from "./agent-controller.ts";
 import type {
   ExpectedSession,
@@ -49,12 +49,10 @@ import type { AgentDefinition } from "./agent-definitions.ts";
 import type { MessageFileInput } from "./core.ts";
 import type { ManagedAgentState, ResultBinding } from "./mailbox.ts";
 import {
-  collapseDisplayText,
   compactModelToken,
   buildStatusRows,
   renderRunningOptions,
   formatStatusCounts,
-  createStatusWidget,
   createSupervisionWidget,
   padVisible,
   type StatusSnapshot,
@@ -79,18 +77,6 @@ type LeadIdentityHost = {
     ReturnType<typeof createAgentController>,
     "managedAgentSnapshots"
   >;
-};
-
-type AgentStatusSnapshotHost = {
-  scope: ControllerScope;
-  hasStateIssues?(): boolean;
-  listedAgentRecord: LeadController["listedAgentRecord"];
-  runtimeForLabel(label: string): Runtime | undefined;
-  herdStartedAt?(): number | undefined;
-  environmentIdentity(ctx: ExtensionContext): ManagedAgentState | undefined;
-  identityFromEnvironment(): { definition?: string; label?: string };
-  sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
-  ownToolsSnapshot(): { ownTools?: string[] };
 };
 
 type LeadTransitionHost = {
@@ -252,7 +238,7 @@ type LeadCommandHost = {
     items: readonly { value: string; label: string; searchText?: string }[],
     selectedValue?: string,
   ): Promise<string | undefined>;
-  readConfig(): unknown;
+  readConfig: typeof import("./config.ts").readConfig;
   contextAgentDefinitions(
     ctx: ExtensionContext,
   ): Promise<{ definitions: AgentDefinition[] }>;
@@ -581,82 +567,6 @@ type LeadSupervisionHost = {
 };
 const LEAD_INSTANCE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
-export function buildAgentStatusSnapshot(
-  view: ManagedAgentSnapshotView,
-  ctx: ExtensionContext,
-  host: AgentStatusSnapshotHost,
-): StatusSnapshot {
-  const ownerSessionId = ctx.sessionManager.getSessionId();
-  const unresolvedMailboxState =
-    host.scope.kind === "lead" && host.hasStateIssues?.();
-  const listed = view.visible.map((snapshot: VisibleManagedAgentSnapshot) =>
-    host.listedAgentRecord(
-      view,
-      snapshot,
-      ownerSessionId,
-      host.scope,
-      unresolvedMailboxState,
-    ),
-  );
-  const agents = listed.map((agent) => {
-    const runtime = host.runtimeForLabel(agent.agent as string);
-    const tokens = agent.tokens ?? {};
-    const presentation = parsePresentationTokens(tokens);
-    return {
-      label: agent.agent as string,
-      state: agent.state,
-      definition: collapseDisplayText(
-        typeof agent.agent_definition === "string" &&
-          agent.agent_definition.trim()
-          ? agent.agent_definition
-          : typeof tokens.role === "string"
-            ? tokens.role
-            : undefined,
-      ),
-      paneId: agent.pane_id,
-      sessionId: agent.pi_session_id,
-      task: typeof tokens.task === "string" ? tokens.task : runtime?.task,
-      startedAt: presentation.startedAt ?? runtime?.startedAt,
-      model:
-        presentation.model !== undefined ? presentation.model : runtime?.model,
-      thinking:
-        presentation.thinking !== undefined
-          ? presentation.thinking
-          : runtime?.thinking,
-      contextPercent: presentation.contextPercent,
-      ...(agent.stale
-        ? {
-            stale: true,
-            inactiveMs:
-              typeof agent.inactive_ms === "number"
-                ? agent.inactive_ms
-                : undefined,
-          }
-        : {}),
-      ...(agent.parent_label ? { parentLabel: agent.parent_label } : {}),
-    };
-  });
-  const herdStartedAt =
-    host.scope.kind === "lead" ? host.herdStartedAt() : undefined;
-  return {
-    agents,
-    stale: false,
-    unavailable: false,
-    ...(herdStartedAt !== undefined ? { herdRunStartedAt: herdStartedAt } : {}),
-    breadcrumb:
-      host.scope.kind === "lead"
-        ? ["herd"]
-        : statusBreadcrumb(
-            view,
-            host.environmentIdentity(ctx),
-            host.identityFromEnvironment(),
-            host.sameIdentity,
-          ),
-    ...host.ownToolsSnapshot(),
-    refreshedAt: Date.now(),
-  };
-}
 
 export type LeadRuntimeState = {
   instanceId: string;
@@ -2345,203 +2255,6 @@ export function createLeadIdentityRuntime(host: LeadIdentityHost) {
     );
   };
   return { liveAgent, remoteChiefAgent, liveLead };
-}
-
-export function createAgentStatusRuntime() {
-  let options:
-    | {
-        loadSnapshot(ctx: ExtensionContext): Promise<StatusSnapshot>;
-        pendingStartEntries(): readonly PendingStart[];
-        hasPendingStart(label: string): boolean;
-        clearPendingStart(label: string, expected: PendingStart): boolean;
-        runtimeForLabel(label: string): Runtime | undefined;
-        ownToolsSnapshot(): { ownTools?: string[] };
-        initialWidgetSnapshot?(): StatusSnapshot | undefined;
-      }
-    | undefined;
-  let statusWidget: ReturnType<typeof createStatusWidget> | undefined;
-  let statusTimer: ReturnType<typeof setInterval> | undefined;
-  let statusContext: ExtensionContext | undefined;
-  let statusGeneration = 0;
-  let statusWidgetGeneration = 0;
-  let statusRefresh = false;
-  let statusInFlight = false;
-  let requestActive = false;
-  let lastValidStatus: StatusSnapshot = {
-    agents: [],
-    stale: false,
-    unavailable: true,
-    breadcrumb: ["herd"],
-  };
-  const widgetSnapshot = (snapshot: StatusSnapshot): StatusSnapshot => {
-    const pendingStarts = options?.pendingStartEntries() ?? [];
-    if (!pendingStarts.length) return snapshot;
-    const agents = snapshot.agents.map((agent) =>
-      options!.hasPendingStart(agent.label) && agent.state === "settling"
-        ? { ...agent, state: "starting" as const }
-        : agent,
-    );
-    const pendingAgents = pendingStarts
-      .filter(
-        ({ label }) => !snapshot.agents.some((agent) => agent.label === label),
-      )
-      .map(({ label, definition, task, startedAt, parentLabel }) => ({
-        label,
-        definition,
-        state: "starting" as const,
-        ...(task !== undefined ? { task } : {}),
-        startedAt,
-        ...(parentLabel ? { parentLabel } : {}),
-      }));
-    return {
-      ...snapshot,
-      unavailable: false,
-      agents: [...agents, ...pendingAgents],
-    };
-  };
-  const reconcilePendingStarts = (snapshot: StatusSnapshot): void => {
-    if (!options) return;
-    for (const pending of options.pendingStartEntries()) {
-      const { label } = pending;
-      const agent = snapshot.agents.find((item) => item.label === label);
-      const runtime = options.runtimeForLabel(label);
-      const resolved =
-        pending.requestId !== undefined &&
-        (agent?.state === "working" ||
-          agent?.state === "blocked" ||
-          (runtime?.activeRequestId === pending.requestId &&
-            agent !== undefined &&
-            agent.state !== "settling") ||
-          runtime?.completedRequestId === pending.requestId);
-      if (resolved) options.clearPendingStart(label, pending);
-    }
-  };
-  const refresh = async (
-    ctx = statusContext,
-    generation = statusGeneration,
-  ): Promise<void> => {
-    const configured = options;
-    if (
-      !configured ||
-      !ctx ||
-      generation !== statusGeneration ||
-      ctx !== statusContext
-    )
-      return;
-    if (statusInFlight) {
-      statusRefresh = true;
-      return;
-    }
-    statusInFlight = true;
-    try {
-      lastValidStatus = await configured.loadSnapshot(ctx);
-      if (generation !== statusGeneration || ctx !== statusContext) return;
-      reconcilePendingStarts(lastValidStatus);
-      if (
-        generation === statusGeneration &&
-        ctx === statusContext &&
-        statusWidgetGeneration === generation
-      )
-        statusWidget?.setSnapshot(widgetSnapshot(lastValidStatus));
-    } catch {
-      if (generation === statusGeneration && ctx === statusContext)
-        statusWidget?.setSnapshot(
-          widgetSnapshot(
-            lastValidStatus.unavailable
-              ? {
-                  agents: [],
-                  stale: false,
-                  unavailable: true,
-                  breadcrumb: lastValidStatus.breadcrumb,
-                  ...configured.ownToolsSnapshot(),
-                }
-              : {
-                  ...lastValidStatus,
-                  stale: true,
-                  ...configured.ownToolsSnapshot(),
-                },
-          ),
-        );
-    } finally {
-      if (generation === statusGeneration && ctx === statusContext) {
-        statusInFlight = false;
-        if (statusRefresh) {
-          statusRefresh = false;
-          void refresh(ctx, generation);
-        }
-      }
-    }
-  };
-  const clearTimer = (): void => {
-    if (statusTimer) clearInterval(statusTimer);
-    statusTimer = undefined;
-  };
-  const removeWidget = (): void => {
-    if (statusWidget) {
-      statusContext?.ui.setWidget("pi-herdsman", undefined);
-      statusWidget.dispose();
-      statusWidget = undefined;
-    }
-  };
-  return {
-    configure: (value: NonNullable<typeof options>) => {
-      options = value;
-    },
-    requestRefresh: () => {
-      if (requestActive && statusContext)
-        void refresh(statusContext, statusGeneration);
-    },
-    start: (ctx: ExtensionContext) => {
-      if (ctx.mode !== "tui" || !ctx.hasUI) return;
-      const generation = ++statusGeneration;
-      statusContext = ctx;
-      ctx.ui.setWidget("pi-herdsman", (tui: any, theme: any) => {
-        const widget = createStatusWidget(() => tui.requestRender(), theme);
-        const initial = options?.initialWidgetSnapshot?.();
-        if (initial) widget.setSnapshot(initial);
-        if (generation === statusGeneration && ctx === statusContext) {
-          statusWidget = widget;
-          statusWidgetGeneration = generation;
-        } else widget.dispose();
-        return widget;
-      });
-      requestActive = true;
-      statusTimer = setInterval(() => void refresh(ctx, generation), 2000);
-      void refresh(ctx, generation);
-    },
-    clear: () => {
-      clearTimer();
-      if (statusContext) statusContext.ui.setWidget("pi-herdsman", undefined);
-      statusWidget?.dispose();
-      statusWidget = undefined;
-      requestActive = false;
-    },
-    prepareSession: (ctx: ExtensionContext, beforeActivate?: () => void) => {
-      clearTimer();
-      statusRefresh = false;
-      statusInFlight = false;
-      removeWidget();
-      statusWidgetGeneration = 0;
-      statusContext = undefined;
-      requestActive = false;
-      beforeActivate?.();
-      statusContext = ctx;
-      return ++statusGeneration;
-    },
-    setSnapshot: (snapshot: StatusSnapshot) => {
-      lastValidStatus = snapshot;
-    },
-    shutdown: () => {
-      ++statusGeneration;
-      clearTimer();
-      statusRefresh = false;
-      statusInFlight = false;
-      removeWidget();
-      statusWidgetGeneration = 0;
-      statusContext = undefined;
-      requestActive = false;
-    },
-  };
 }
 
 export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {

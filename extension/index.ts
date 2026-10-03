@@ -140,6 +140,7 @@ import {
   AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
   AGENT_UNRESOLVED_GUIDANCE,
   canonicalSessionPath,
+  createAgentStatusRuntime,
   importResultBindings,
   agentResultDetails,
   hasDeliveredAsk as controllerHasDeliveredAsk,
@@ -250,7 +251,6 @@ import {
 } from "./config.ts";
 import {
   activeLeadRole,
-  createAgentStatusRuntime,
   createLeadToolState,
   type LeadRuntimeState,
   registerLeadRuntime,

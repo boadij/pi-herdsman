@@ -3423,8 +3423,10 @@ test("leaf status proves its Lead boundary from coordination state without openi
   context.mode = "tui";
   context.hasUI = true;
   let widget: any;
+  let registrations = 0;
   context.ui.setWidget = (_key: string, content: any) => {
-    if (typeof content === "function")
+    if (typeof content === "function") {
+      registrations++;
       widget = content(
         { requestRender: () => undefined },
         {
@@ -3432,6 +3434,7 @@ test("leaf status proves its Lead boundary from coordination state without openi
           bold: (value: string) => value,
         },
       );
+    }
   };
   const { SessionManager } = await import("@earendil-works/pi-coding-agent");
   const sessionManager = SessionManager as any;
@@ -3470,6 +3473,7 @@ test("leaf status proves its Lead boundary from coordination state without openi
   } finally {
     globalThis.setInterval = originalSetInterval;
   }
+  assert.equal(registrations, 1);
   await t.waitFor(() => assert.match(widget.render(120)[0], /herd/));
   assert.equal(openCalls, 0);
 

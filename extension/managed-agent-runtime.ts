@@ -39,8 +39,10 @@ import {
   type Runtime,
 } from "./agent-controller.ts";
 import {
+  buildAgentStatusSnapshot,
   statusBreadcrumb,
   createAgentController,
+  createAgentStatusRuntime,
   hasPendingDirectChildWork,
   allDirectChildrenAskBlocked,
   hasUndeliveredDirectChildWork,
@@ -49,10 +51,6 @@ import {
   type ManagedAgentSnapshotCollection,
 } from "./agent-controller.ts";
 import { runHerdr, sameCwd } from "./herdr.ts";
-import {
-  buildAgentStatusSnapshot,
-  createAgentStatusRuntime,
-} from "./lead-runtime.ts";
 import { displayIdentity, prepareMessageInput } from "./core.ts";
 import { collapseDisplayText, createStatusWidget } from "./presentation.ts";
 import { randomUUID } from "node:crypto";
@@ -2494,7 +2492,7 @@ export function registerManagedAgentSessionStartHandler(
       if (options.delegationEnabled)
         options.startControllerHealthScanner(ctx, metadataSignal);
       execution.initialized = true;
-      options.statusRuntime.start(ctx);
+      if (options.delegationEnabled) options.statusRuntime.start(ctx);
       options.pumpRequest(ctx);
       execution.requestPumpTimer = setInterval(
         () => options.pumpRequest(ctx),
