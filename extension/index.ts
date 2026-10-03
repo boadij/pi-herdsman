@@ -90,7 +90,6 @@ import {
   configuredModel,
   contextAgentDefinitions,
   discoverManagedLeadDefinition,
-  discoverAgent,
   discoverAgentDefinitions,
   expandAgentBodyFiles,
   projectAgentDefinition,
@@ -98,7 +97,6 @@ import {
   updateAgentOverride,
   validateAgentDefinitionReferences,
   VALID_THINKING_LEVELS,
-  MANAGED_LEAD_DEFINITION_NAME,
   writePrivatePromptSnapshots,
 } from "./agent-definitions.ts";
 import {
@@ -1679,7 +1677,6 @@ export default function (pi: ExtensionAPI): void {
       readConfig,
       contextAgentDefinitions,
       discoverManagedLeadDefinition,
-      managedLeadDefinitionName: MANAGED_LEAD_DEFINITION_NAME,
       agentDefinitionEnabled,
       agentDefinitionMetadata,
       expandAgentBodyFiles,
@@ -1688,7 +1685,6 @@ export default function (pi: ExtensionAPI): void {
       formatAgentDefinitions,
       validThinkingLevels: VALID_THINKING_LEVELS,
       updateAgentOverride,
-      discoverAgent,
       isSpawnPlacement,
       placementSettings,
       messageLimits,

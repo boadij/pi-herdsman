@@ -57,6 +57,7 @@ import {
   configuredModel,
   discoverManagedLeadDefinition,
   expandAgentBodyFiles,
+  MANAGED_LEAD_DEFINITION_NAME,
   resolveChildModel,
   writePrivatePromptSnapshots,
   type AgentDefinition,
@@ -262,7 +263,6 @@ type LeadCommandHost = {
   discoverManagedLeadDefinition(options?: {
     projectRoot?: string;
   }): AgentDefinition;
-  managedLeadDefinitionName: string;
   agentDefinitionEnabled(definition: AgentDefinition): boolean;
   agentDefinitionMetadata(definition: AgentDefinition): Record<string, unknown>;
   expandAgentBodyFiles(
@@ -280,10 +280,6 @@ type LeadCommandHost = {
     field: string,
     value: unknown,
   ): { changed: boolean; path?: string };
-  discoverAgent(
-    name: string,
-    options?: { projectRoot?: string },
-  ): AgentDefinition | undefined;
   placementSettings(ctx: ExtensionContext): Promise<{ effective: string }>;
   updateSpawnPlacement(placement: string): void;
   messageLimits(
@@ -1187,7 +1183,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       };
       const resolveDefinition = async (name: string) => {
         const loaded = await loadDefinitions();
-        return name === host.managedLeadDefinitionName
+        return name === MANAGED_LEAD_DEFINITION_NAME
           ? loaded.managedLead
           : loaded.definitions.find((candidate) => candidate.name === name);
       };
@@ -1249,7 +1245,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         while (true) {
           const { model, thinking } = this.executionSettings(ctx, definition);
           const managedDefinition =
-            definition.name === host.managedLeadDefinitionName;
+            definition.name === MANAGED_LEAD_DEFINITION_NAME;
           const action = await host.selectMenu(
             ctx,
             definition.name,
