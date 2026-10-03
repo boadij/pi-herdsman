@@ -57,6 +57,7 @@ import {
   configuredModel,
   discoverManagedLeadDefinition,
   expandAgentBodyFiles,
+  MANAGED_LEAD_DEFINITION_NAME,
   resolveChildModel,
   writePrivatePromptSnapshots,
   type AgentDefinition,
@@ -258,7 +259,10 @@ type LeadCommandHost = {
   readConfig: typeof import("./config.ts").readConfig;
   contextAgentDefinitions(
     ctx: ExtensionContext,
-  ): Promise<{ definitions: AgentDefinition[] }>;
+  ): Promise<{ definitions: AgentDefinition[]; projectTrusted: boolean }>;
+  discoverManagedLeadDefinition(options?: {
+    projectRoot?: string;
+  }): AgentDefinition;
   agentDefinitionEnabled(definition: AgentDefinition): boolean;
   agentDefinitionMetadata(definition: AgentDefinition): Record<string, unknown>;
   expandAgentBodyFiles(
@@ -276,10 +280,6 @@ type LeadCommandHost = {
     field: string,
     value: unknown,
   ): { changed: boolean; path?: string };
-  discoverAgent(
-    name: string,
-    options?: { projectRoot?: string },
-  ): AgentDefinition | undefined;
   placementSettings(ctx: ExtensionContext): Promise<{ effective: string }>;
   updateSpawnPlacement(placement: string): void;
   messageLimits(
@@ -1171,9 +1171,26 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     },
     async openDefinitionsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedDefinition: string | undefined;
+      const loadDefinitions = async () => {
+        const { definitions, projectTrusted } =
+          await host.contextAgentDefinitions(ctx);
+        return {
+          definitions,
+          managedLead: projectTrusted
+            ? host.discoverManagedLeadDefinition({ projectRoot: ctx.cwd })
+            : host.discoverManagedLeadDefinition(),
+        };
+      };
+      const resolveDefinition = async (name: string) => {
+        const loaded = await loadDefinitions();
+        return name === MANAGED_LEAD_DEFINITION_NAME
+          ? loaded.managedLead
+          : loaded.definitions.find((candidate) => candidate.name === name);
+      };
       while (true) {
-        const definitions = (await host.contextAgentDefinitions(ctx))
-          .definitions;
+        const loaded = await loadDefinitions();
+        const definitions = loaded.definitions;
+        const managedLead = loaded.managedLead;
         const bundled = definitions.filter(
           (definition: AgentDefinition) => definition.extensionSource,
         );
@@ -1185,7 +1202,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           const name = `${definition.name}${definition.projectSource ? " [project]" : ""}${definition.overrideSource && (definition.extensionSource || definition.projectSource) ? " *" : ""}`;
           return { name, model, thinking, definition };
         };
-        const entries = [...bundled, ...custom].map(format);
+        const managed = [managedLead];
+        const entries = [...managed, ...bundled, ...custom].map(format);
         const nameWidth = Math.max(
           0,
           ...entries.map(({ name }) => visibleWidth(name)),
@@ -1205,6 +1223,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             })),
           );
         };
+        addGroup("Managed Lead", managed.map(format));
         addGroup("Bundled (* overridden)", bundled.map(format));
         addGroup("Custom", custom.map(format));
         const selected = await host.selectMenu(
@@ -1225,16 +1244,22 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         let selectedAction = "model";
         while (true) {
           const { model, thinking } = this.executionSettings(ctx, definition);
+          const managedDefinition =
+            definition.name === MANAGED_LEAD_DEFINITION_NAME;
           const action = await host.selectMenu(
             ctx,
             definition.name,
             [
               { value: "model", label: `Model       ${model}` },
               { value: "thinking", label: `Thinking    ${thinking}` },
-              {
-                value: "enabled",
-                label: `Enabled     ${host.agentDefinitionEnabled(definition) ? "yes" : "no"}`,
-              },
+              ...(!managedDefinition
+                ? [
+                    {
+                      value: "enabled",
+                      label: `Enabled     ${host.agentDefinitionEnabled(definition) ? "yes" : "no"}`,
+                    },
+                  ]
+                : []),
               { value: "details", label: "Details…" },
             ],
             selectedAction,
@@ -1244,11 +1269,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           if (action === "details") {
             let current;
             try {
-              current = (
-                await host.contextAgentDefinitions(ctx)
-              ).definitions.find(
-                (candidate: AgentDefinition) => candidate.name === selectedName,
-              );
+              current = await resolveDefinition(selectedName);
             } catch (error) {
               ctx.ui.notify(String(error), "error");
               break;
@@ -1383,10 +1404,11 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             value = !host.agentDefinitionEnabled(definition);
           } else continue;
           const result = host.updateAgentOverride(definition, field, value);
-          const verified = host.discoverAgent(
-            definition.name,
-            definition.projectSource ? { projectRoot: ctx.cwd } : {},
-          );
+          const verified = await resolveDefinition(definition.name);
+          if (!verified)
+            throw new Error(
+              `definition ${definition.name} is no longer available`,
+            );
           if (result.changed && verified.overrideSource !== result.path)
             throw new Error(
               `agent ${definition.name} override verification failed`,
@@ -3942,11 +3964,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           const definition = discoverManagedLeadDefinition(
             projectTrusted ? { projectRoot: cwd! } : {},
           );
-          const body = expandAgentBodyFiles(
-            definition.body,
-            [],
-            operationName,
-          );
+          const body = expandAgentBodyFiles(definition.body, [], operationName);
           const effectiveDefinition =
             body === definition.body ? definition : { ...definition, body };
           if (body) promptPaths.push(...writePrivatePromptSnapshots([body]));

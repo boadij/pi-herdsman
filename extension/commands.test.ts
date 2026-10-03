@@ -64,6 +64,7 @@ import support, {
   cascadeExecutor,
   defaultFixtureIdentity,
   discoverAgent,
+  discoverAgentDefinitions,
   fakeContext,
   fakePi,
   fakeAgentContext,
@@ -5440,6 +5441,73 @@ test("Definitions edits standalone definitions through the shared override write
   }
 });
 
+test("Definitions exposes managed Lead settings without Agent discovery", async () => {
+  setLeadEnvironment();
+  const overridePath = join(PI_AGENTS_DIR, "managed-lead.md");
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const prompts: { label: string; options: string[] }[] = [];
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "rpc";
+  context.modelRegistry = {
+    refresh: async () => undefined,
+    getAll: () => [{ provider: "new", id: "model", reasoning: true }],
+    getAvailable: () => [{ provider: "new", id: "model", reasoning: true }],
+  };
+  const visits = new Map<string, number>();
+  context.ui.select = async (label: string, options: string[]) => {
+    prompts.push({ label, options });
+    const visit = visits.get(label) ?? 0;
+    visits.set(label, visit + 1);
+    if (label === "Definitions")
+      return visit === 0
+        ? options.find((option) => option.includes("managed-lead"))
+        : undefined;
+    if (label === "managed-lead")
+      return visit < 2
+        ? options.find((option) =>
+            option.startsWith(visit === 0 ? "Model" : "Thinking"),
+          )
+        : undefined;
+    if (label === "Model") return options.find((option) => option === "model");
+    if (label === "Thinking")
+      return options.find((option) => option === "high");
+    return undefined;
+  };
+  try {
+    await command.handler("definitions", context);
+    const definitionMenu = prompts.find(({ label }) => label === "Definitions");
+    assert.ok(
+      definitionMenu?.options.some((option) => option.includes("Managed Lead")),
+      JSON.stringify(definitionMenu),
+    );
+    assert.ok(
+      prompts
+        .filter(({ label }) => label === "managed-lead")
+        .every(
+          ({ options }) =>
+            !options.some((option) => option.startsWith("Enabled")),
+        ),
+    );
+    assert.match(
+      realFs.readFileSync(overridePath, "utf8"),
+      /model: new\/model/u,
+    );
+    assert.match(realFs.readFileSync(overridePath, "utf8"), /thinking: high/u);
+    assert.doesNotMatch(realFs.readFileSync(overridePath, "utf8"), /enabled:/u);
+    assert.ok(
+      !discoverAgentDefinitions().some(
+        (definition) => definition.name === "managed-lead",
+      ),
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(overridePath, { force: true });
+  }
+});
+
 test("Definitions Details snapshots effective append and replace instructions", async () => {
   setLeadEnvironment();
   const definitionPath = join(PI_AGENTS_DIR, "scout.md");
@@ -5995,7 +6063,7 @@ test("Definitions separators are ignored and reopen the list", async () => {
   try {
     await command.handler("definitions", context);
     assert.equal(prompts.length, 2);
-    assert.equal(prompts[0]![0], "--- Bundled (* overridden) ---");
+    assert.equal(prompts[0]![0], "--- Managed Lead ---");
     assert.ok(prompts[0]?.includes("--- Custom ---"));
     assert.deepEqual(prompts[0], prompts[1]);
   } finally {
