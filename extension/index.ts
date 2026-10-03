@@ -127,7 +127,7 @@ import {
   inspectHerdrAgent,
   stopHerdrAgentPreservingPane,
   HerdrStartFailure,
-  parseHerdrVersion,
+  validateHerdrStatus,
   type ExpectedSession,
   type StartedHerdrAgent,
   type HerdrStartPlacement,
@@ -510,11 +510,6 @@ function appendDurableError(
     ctx.ui.notify(type, "error");
   }
 }
-function settingRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 async function messageLimits(
   _ctx: ExtensionContext,
 ): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }> {
@@ -551,30 +546,7 @@ async function herdrVersion(
     signal,
     timeout: 10_000,
   });
-  const value = settingRecord(status);
-  const client = settingRecord(value.client);
-  const server = settingRecord(value.server);
-  const clientVersion =
-    typeof client.version === "string" ? client.version : undefined;
-  const clientMatch = clientVersion
-    ? parseHerdrVersion(clientVersion)
-    : undefined;
-  const supported = (match: RegExpMatchArray | undefined): boolean =>
-    !!match &&
-    (Number(match[1]) > 0 ||
-      Number(match[2]) > 9 ||
-      (Number(match[2]) === 9 && Number(match[3]) >= 1));
-  if (
-    !supported(clientMatch) ||
-    server.running !== true ||
-    server.compatible !== true
-  ) {
-    fail(
-      "invalid_request",
-      "Herdr status is unavailable or incompatible; Herdr >=0.9.1 with a running compatible server is required",
-      "preflight",
-    );
-  }
+  validateHerdrStatus(status);
 }
 function expectedSession(id?: string, path?: string): ExpectedSession {
   return { id, path };

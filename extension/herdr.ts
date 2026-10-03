@@ -18,7 +18,7 @@ import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
-import { OperationError } from "./errors.ts";
+import { fail, OperationError } from "./errors.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 
 const HERDR_VERSION_PATTERN =
@@ -27,6 +27,40 @@ const HERDR_VERSION_PATTERN =
 export function parseHerdrVersion(value: string): RegExpMatchArray | undefined {
   const match = value.match(HERDR_VERSION_PATTERN);
   return match?.[0] === value ? match : undefined;
+}
+
+function settingRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+export function validateHerdrStatus(status: unknown): void {
+  const value = settingRecord(status);
+  const client = settingRecord(value.client);
+  const server = settingRecord(value.server);
+  const clientVersion =
+    typeof client.version === "string" ? client.version : undefined;
+  const clientMatch = clientVersion
+    ? parseHerdrVersion(clientVersion)
+    : undefined;
+  const supported = (match: RegExpMatchArray | undefined): boolean =>
+    !!match &&
+    (Number(match[1]) > 0 ||
+      Number(match[2]) > 9 ||
+      (Number(match[2]) === 9 && Number(match[3]) >= 1));
+
+  if (
+    !supported(clientMatch) ||
+    server.running !== true ||
+    server.compatible !== true
+  ) {
+    fail(
+      "invalid_request",
+      "Herdr status is unavailable or incompatible; Herdr >=0.9.1 with a running compatible server is required",
+      "preflight",
+    );
+  }
 }
 
 export type HerdrRecord = Record<string, any>;
