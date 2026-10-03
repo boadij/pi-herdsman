@@ -706,6 +706,10 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
   options.leadToolState = leadToolState;
   options.onLeadRuntimeReady?.(leadRuntime, leadToolState);
   let roleTransitions!: ReturnType<typeof createLeadRoleTransitions>;
+  let identityRuntime!: ReturnType<typeof createLeadIdentityRuntime>;
+  const liveAgent = (...args: any[]) => identityRuntime.liveAgent(...args);
+  const remoteChiefAgent = (...args: any[]) => identityRuntime.remoteChiefAgent(...args);
+  const liveLead = (...args: any[]) => identityRuntime.liveLead(...args);
   const coordinationServices = {
     ...options.coordinationHost,
     currentManager: (...args: any[]) => roleTransitions.currentManager(...args),
@@ -898,6 +902,11 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
       );
     },
   });
+  identityRuntime = createLeadIdentityRuntime({
+    ...options.identityHost,
+    leadController: controller,
+    hasLeadCoordination: options.identityHost.hasLeadCoordination,
+  });
   statusRuntime.configure({
     ...options.statusServices,
     loadSnapshot: (ctx: ExtensionContext) =>
@@ -1039,7 +1048,85 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     inboxRuntime,
     projectRuntime,
     herdRunRuntime,
+    liveAgent,
+    remoteChiefAgent,
+    liveLead,
   };
+}
+
+export function createLeadIdentityRuntime(host: any) {
+  const liveAgent = async (
+    ctx: ExtensionContext,
+    sessionId: string,
+    sessionPath?: string,
+  ) => {
+    const expected = host.expectedSession(sessionId, sessionPath);
+    return (await host.listAgents(ctx)).agents.filter(
+      (agent: any) =>
+        host.isPiAgent(agent) &&
+        host.matchesExpectedSession(agent.agent_session, expected) &&
+        typeof agent.pane_id === "string" &&
+        typeof agent.tab_id === "string" &&
+        typeof agent.workspace_id === "string",
+    );
+  };
+  const remoteChiefAgent = async (
+    ctx: ExtensionContext,
+    descriptor: ChiefDescriptor,
+  ): Promise<any | undefined> => {
+    const inventory = (await host.listAgents(ctx)).agents;
+    const expected = host.expectedSession(
+      descriptor.piSessionId,
+      descriptor.piSessionFile,
+    );
+    const matches = inventory.filter(
+      (agent: any) =>
+        host.isPiAgent(agent) &&
+        host.matchesExpectedSession(agent.agent_session, expected),
+    );
+    if (
+      matches.length !== 1 ||
+      !matches[0] ||
+      typeof matches[0].pane_id !== "string" ||
+      typeof matches[0].tab_id !== "string" ||
+      typeof matches[0].workspace_id !== "string" ||
+      matches[0].pane_id !== descriptor.paneId ||
+      matches[0].tab_id !== descriptor.tabId ||
+      matches[0].workspace_id !== descriptor.workspaceId
+    ) return undefined;
+    try {
+      const alias = (await host.getAgent(ctx, descriptor.paneId))?.agent;
+      if (
+        !host.isPiAgent(alias) ||
+        !host.matchesExpectedSession(alias.agent_session, expected)
+      ) return undefined;
+    } catch {
+      // A failed alias lookup is not identity proof.
+      return undefined;
+    }
+    return matches[0];
+  };
+  const liveLead = async (
+    ctx: ExtensionContext,
+    sessionId: string,
+    sessionPath?: string,
+  ) => {
+    const expected = host.expectedSession(sessionId, sessionPath);
+    const matches = await liveAgent(ctx, sessionId, sessionPath);
+    const snapshot = await host.leadController.managedAgentSnapshots(
+      ctx, ctx.signal, false, true,
+    );
+    const hasManagedAgent = snapshot.agents.some(
+      ({ state }: any) => state.piSessionId === sessionId,
+    );
+    return matches.filter(
+      (agent: any) =>
+        !hasManagedAgent &&
+        host.matchesExpectedSession(agent.agent_session, expected) &&
+        host.hasLeadCoordination(sessionId),
+    );
+  };
+  return { liveAgent, remoteChiefAgent, liveLead };
 }
 
 export function createLeadStatusRuntime() {

@@ -1042,7 +1042,7 @@ export default function (pi: ExtensionAPI): void {
     herdrSessionId,
     runHerdr,
     readChiefDescriptor,
-    remoteChiefAgent: (...args: any[]) => remoteChiefAgent(...args),
+    remoteChiefAgent: (...args: any[]) => leadRuntimes.remoteChiefAgent(...args),
     sameChiefDescriptor,
     formatContext: formatSupervisionContext,
     contextType: SUPERVISION_CONTEXT_TYPE,
@@ -1250,86 +1250,9 @@ export default function (pi: ExtensionAPI): void {
   ): Promise<ManagerDescriptor | undefined> => roleTransitions.currentManager(ctx, scope);
   const currentSupervisor = (ctx: ExtensionContext) =>
     roleTransitions.currentSupervisor(ctx);
-  const liveAgent = async (
-    ctx: ExtensionContext,
-    sessionId: string,
-    sessionPath?: string,
-  ) => {
-    const expected = expectedSession(sessionId, sessionPath);
-    return (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents.filter(
-      (agent: any) =>
-        isPiAgent(agent) &&
-        matchesExpectedSession(agent.agent_session, expected) &&
-        typeof agent.pane_id === "string" &&
-        typeof agent.tab_id === "string" &&
-        typeof agent.workspace_id === "string",
-    );
-  };
-  const remoteChiefAgent = async (
-    ctx: ExtensionContext,
-    descriptor: ChiefDescriptor,
-  ): Promise<any | undefined> => {
-    const inventory = (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents;
-    const expected = expectedSession(
-      descriptor.piSessionId,
-      descriptor.piSessionFile,
-    );
-    const matches = inventory.filter(
-      (agent: any) =>
-        isPiAgent(agent) &&
-        matchesExpectedSession(agent.agent_session, expected),
-    );
-    if (
-      matches.length !== 1 ||
-      !matches[0] ||
-      typeof matches[0].pane_id !== "string" ||
-      typeof matches[0].tab_id !== "string" ||
-      typeof matches[0].workspace_id !== "string" ||
-      matches[0].pane_id !== descriptor.paneId ||
-      matches[0].tab_id !== descriptor.tabId ||
-      matches[0].workspace_id !== descriptor.workspaceId
-    )
-      return undefined;
-    const current = matches[0];
-    try {
-      const result = await runHerdr(
-        pi,
-        ctx,
-        ["agent", "get", descriptor.paneId],
-        { signal: ctx.signal },
-      );
-      const alias = result?.agent;
-      if (
-        !isPiAgent(alias) ||
-        !matchesExpectedSession(alias.agent_session, expected)
-      )
-        return undefined;
-    } catch {
-      // A failed alias lookup is not identity proof.
-      return undefined;
-    }
-    return current;
-  };
-  const liveLead = async (
-    ctx: ExtensionContext,
-    sessionId: string,
-    sessionPath?: string,
-  ) => {
-    const expected = expectedSession(sessionId, sessionPath);
-    const matches = await liveAgent(ctx, sessionId, sessionPath);
-    const agentSnapshot = await leadRuntimes.controller!.managedAgentSnapshots(
-      ctx, ctx.signal, false, true,
-    );
-    const agents = agentSnapshot.agents.some(
-      ({ state }) => state.piSessionId === sessionId,
-    );
-    return matches.filter(
-      (agent: any) =>
-        !agents &&
-        matchesExpectedSession(agent.agent_session, expected) &&
-        !!readLeadCoordinationState(supervisionRuntime(), sessionId),
-    );
-  };
+  const liveAgent = (...args: any[]) => leadRuntimes.liveAgent(...args);
+  const remoteChiefAgent = (...args: any[]) => leadRuntimes.remoteChiefAgent(...args);
+  const liveLead = (...args: any[]) => leadRuntimes.liveLead(...args);
   const currentChiefAuthority = (
     ctx: ExtensionContext,
     failOnVerificationError = false,
@@ -2123,6 +2046,16 @@ export default function (pi: ExtensionAPI): void {
         leadToolState = tools;
       },
       controllerServices,
+      identityHost: {
+        listAgents: (ctx: ExtensionContext) => listAllHerdrAgents(pi, ctx, ctx.signal),
+        isPiAgent,
+        expectedSession,
+        matchesExpectedSession,
+        getAgent: (ctx: ExtensionContext, paneId: string) =>
+          runHerdr(pi, ctx, ["agent", "get", paneId], { signal: ctx.signal }),
+        hasLeadCoordination: (sessionId: string) =>
+          !!readLeadCoordinationState(supervisionRuntime(), sessionId),
+      },
       roleTransitionHost,
       coordinationHost: {
         supervisionRuntime,
