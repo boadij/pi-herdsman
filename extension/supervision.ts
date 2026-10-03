@@ -27,6 +27,7 @@ import {
   type ResultBinding,
 } from "./storage.ts";
 import { isRuntimeBuild, type RuntimeBuild } from "./compatibility.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 // Authority edges are deliberately asymmetric: Chief -> Manager -> Lead -> Agent.
 // Staff and supervisor cross one edge; only Lead/Manager sessions may be peers.
@@ -2034,6 +2035,103 @@ export type CoordinatorState = {
   updatedAt: number;
 };
 export type LeadCoordinationState = CoordinatorState;
+
+export function verifyManagerCoordinationAuthority(
+  descriptor: ManagerDescriptor,
+  coordinator: LeadCoordinationState | undefined,
+  build: RuntimeBuild,
+  requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild,
+): void {
+  if (
+    !coordinator ||
+    coordinator.role !== "manager" ||
+    coordinator.piSessionId !== descriptor.piSessionId
+  )
+    throw new Error(
+      "Manager authority exists but its coordination state could not be verified",
+    );
+  requireCompatibleBuild(
+    build,
+    descriptor.build,
+    "supervision",
+    `Manager ${descriptor.piSessionId}`,
+  );
+  requireCompatibleBuild(
+    build,
+    coordinator.build,
+    "supervision",
+    `Manager ${descriptor.piSessionId}`,
+  );
+}
+
+export async function verifyRemoteChiefAuthority(
+  descriptor: ChiefDescriptor,
+  options: {
+    remoteIdentity(): Promise<unknown | undefined>;
+    requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild;
+    build: RuntimeBuild;
+  },
+): Promise<boolean> {
+  if (!(await options.remoteIdentity())) return false;
+  options.requireCompatibleBuild(
+    options.build,
+    descriptor.build,
+    "supervision",
+    `Chief ${descriptor.piSessionId}`,
+  );
+  return true;
+}
+
+export async function leadSupervisorState<S, A>(
+  ctx: ExtensionContext,
+  host: {
+    currentWorktreeScope(ctx: ExtensionContext): Promise<S | undefined>;
+    projectAssignmentForScope(scope: S, sessionId: string): A | undefined;
+    currentManager(
+      ctx: ExtensionContext,
+      scope?: S | null,
+    ): Promise<unknown | undefined>;
+    currentChiefAuthority(
+      ctx: ExtensionContext,
+      failOnVerificationError?: boolean,
+    ): Promise<unknown | undefined>;
+  },
+): Promise<string> {
+  try {
+    const scope = await host.currentWorktreeScope(ctx);
+    const assignment = scope
+      ? host.projectAssignmentForScope(scope, ctx.sessionManager.getSessionId())
+      : undefined;
+    if (assignment) {
+      try {
+        if (await host.currentManager(ctx, scope))
+          return `<supervisor_state>\nsupervisor: manager\navailability: available\nproject_messages: retained across Manager turnover\n</supervisor_state>`;
+      } catch {
+        return `<supervisor_state>\nsupervisor: manager\navailability: unknown\nproject_messages: retained for the Manager role\n</supervisor_state>`;
+      }
+      return `<supervisor_state>\nsupervisor: manager\navailability: unavailable\nproject_messages: retained for the Manager role\n</supervisor_state>`;
+    }
+    const manager = await host.currentManager(ctx, scope);
+    if (manager)
+      return `<supervisor_state>\nsupervisor: manager\navailability: available\n</supervisor_state>`;
+    const chief = await host.currentChiefAuthority(ctx, true);
+    if (chief)
+      return `<supervisor_state>\nsupervisor: chief\navailability: available\n</supervisor_state>`;
+    return `<supervisor_state>\nsupervisor: none\navailability: unavailable\nguidance: continue independently; do not use supervisor_message until a supervisor is available\n</supervisor_state>`;
+  } catch {
+    return `<supervisor_state>\nsupervisor: unverified\navailability: unknown\nguidance: continue independently; do not use supervisor_message until a supervisor is verified\n</supervisor_state>`;
+  }
+}
+
+export function supervisorStateMessage(
+  customType: string,
+  content: string,
+  latestContent: string | undefined,
+): { customType: string; content: string; display: false } | undefined {
+  return latestContent === content
+    ? undefined
+    : { customType, content, display: false };
+}
 
 export type SupervisedLead = {
   lead: string;

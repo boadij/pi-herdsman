@@ -21,7 +21,14 @@ import type {
   PeerRuntime,
   SupervisionSnapshot,
 } from "./supervision.ts";
+import {
+  leadSupervisorState as resolveLeadSupervisorState,
+  supervisorStateMessage,
+  verifyManagerCoordinationAuthority,
+  verifyRemoteChiefAuthority,
+} from "./supervision.ts";
 import { OperationError } from "./errors.ts";
+import { verifiedHerdrAgent } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
 import { contentText, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { prepareMessageInput } from "./core.ts";
@@ -2196,41 +2203,14 @@ export function createLeadIdentityRuntime(host: LeadIdentityHost) {
   const remoteChiefAgent = async (
     ctx: ExtensionContext,
     descriptor: ChiefDescriptor,
-  ): Promise<HerdrRecord | undefined> => {
-    const inventory = (await host.listAgents(ctx)).agents;
-    const expected = host.expectedSession(
-      descriptor.piSessionId,
-      descriptor.piSessionFile,
-    );
-    const matches = inventory.filter(
-      (agent: HerdrRecord) =>
-        host.isPiAgent(agent) &&
-        host.matchesExpectedSession(agent.agent_session, expected),
-    );
-    if (
-      matches.length !== 1 ||
-      !matches[0] ||
-      typeof matches[0].pane_id !== "string" ||
-      typeof matches[0].tab_id !== "string" ||
-      typeof matches[0].workspace_id !== "string" ||
-      matches[0].pane_id !== descriptor.paneId ||
-      matches[0].tab_id !== descriptor.tabId ||
-      matches[0].workspace_id !== descriptor.workspaceId
-    )
-      return undefined;
-    try {
-      const alias = (await host.getAgent(ctx, descriptor.paneId))?.agent;
-      if (
-        !host.isPiAgent(alias) ||
-        !host.matchesExpectedSession(alias.agent_session, expected)
-      )
-        return undefined;
-    } catch {
-      // A failed alias lookup is not identity proof.
-      return undefined;
-    }
-    return matches[0];
-  };
+  ): Promise<HerdrRecord | undefined> =>
+    verifiedHerdrAgent(descriptor, {
+      listAgents: async () => (await host.listAgents(ctx)).agents,
+      getAgent: async (paneId) => (await host.getAgent(ctx, paneId))?.agent,
+      expectedSession: host.expectedSession,
+      isPiAgent: host.isPiAgent,
+      matchesExpectedSession: host.matchesExpectedSession,
+    });
   const liveLead = async (
     ctx: ExtensionContext,
     sessionId: string,
@@ -4841,34 +4821,13 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       throw new Error("Lead coordination state changed; retry the action");
   };
 
-  const leadSupervisorState = async (
-    ctx: ExtensionContext,
-  ): Promise<string> => {
-    try {
-      const scope = await currentWorktreeScope(ctx);
-      const assignment = scope
-        ? projectAssignmentForScope(scope, ctx.sessionManager.getSessionId())
-        : undefined;
-      if (assignment) {
-        try {
-          if (await currentManager(ctx, scope))
-            return `<supervisor_state>\nsupervisor: manager\navailability: available\nproject_messages: retained across Manager turnover\n</supervisor_state>`;
-        } catch {
-          return `<supervisor_state>\nsupervisor: manager\navailability: unknown\nproject_messages: retained for the Manager role\n</supervisor_state>`;
-        }
-        return `<supervisor_state>\nsupervisor: manager\navailability: unavailable\nproject_messages: retained for the Manager role\n</supervisor_state>`;
-      }
-      const manager = await currentManager(ctx, scope);
-      if (manager)
-        return `<supervisor_state>\nsupervisor: manager\navailability: available\n</supervisor_state>`;
-      const chief = await currentChiefAuthority(ctx, true);
-      if (chief)
-        return `<supervisor_state>\nsupervisor: chief\navailability: available\n</supervisor_state>`;
-      return `<supervisor_state>\nsupervisor: none\navailability: unavailable\nguidance: continue independently; do not use supervisor_message until a supervisor is available\n</supervisor_state>`;
-    } catch {
-      return `<supervisor_state>\nsupervisor: unverified\navailability: unknown\nguidance: continue independently; do not use supervisor_message until a supervisor is verified\n</supervisor_state>`;
-    }
-  };
+  const leadSupervisorState = (ctx: ExtensionContext): Promise<string> =>
+    resolveLeadSupervisorState(ctx, {
+      currentWorktreeScope,
+      projectAssignmentForScope,
+      currentManager,
+      currentChiefAuthority,
+    });
 
   const livePeerLead = async (
     _ctx: ExtensionContext,
@@ -5132,8 +5091,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   };
   const prepareLeadSupervisorStateMessage = async (ctx: ExtensionContext) => {
     const content = await leadSupervisorState(ctx);
-    if (latestCustomMessageText(ctx, supervisorStateType) === content) return;
-    return { customType: supervisorStateType, content, display: false };
+    return supervisorStateMessage(
+      supervisorStateType,
+      content,
+      latestCustomMessageText(ctx, supervisorStateType),
+    );
   };
   type PeerOperation =
     | { action: "list" }
@@ -6538,29 +6500,14 @@ export function createLeadRoleTransitions(
         : scope,
     );
     if (!descriptor) return undefined;
-    const coordinator = host.readLeadCoordinationState(
-      host.supervisionRuntime(),
-      descriptor.piSessionId,
-    );
-    if (
-      !coordinator ||
-      coordinator.role !== "manager" ||
-      coordinator.piSessionId !== descriptor.piSessionId
-    )
-      throw new Error(
-        "Manager authority exists but its coordination state could not be verified",
-      );
-    host.requireCompatibleBuild(
+    verifyManagerCoordinationAuthority(
+      descriptor,
+      host.readLeadCoordinationState(
+        host.supervisionRuntime(),
+        descriptor.piSessionId,
+      ),
       host.build,
-      descriptor.build,
-      "supervision",
-      `Manager ${descriptor.piSessionId}`,
-    );
-    host.requireCompatibleBuild(
-      host.build,
-      coordinator.build,
-      "supervision",
-      `Manager ${descriptor.piSessionId}`,
+      host.requireCompatibleBuild,
     );
     if (activeLeadRole(state) === "manager" && !state.roleSuspended) {
       return state.managerLease &&
@@ -6656,13 +6603,12 @@ export function createLeadRoleTransitions(
       return undefined;
     }
     try {
-      if (!(await host.remoteChiefAgent(ctx, descriptor))) return undefined;
-      host.requireCompatibleBuild(
-        host.build,
-        descriptor.build,
-        "supervision",
-        `Chief ${descriptor.piSessionId}`,
-      );
+      const verified = await verifyRemoteChiefAuthority(descriptor, {
+        remoteIdentity: () => host.remoteChiefAgent(ctx, descriptor),
+        requireCompatibleBuild: host.requireCompatibleBuild,
+        build: host.build,
+      });
+      if (!verified) return undefined;
       return descriptor;
     } catch (error) {
       if (

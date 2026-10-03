@@ -68,6 +68,54 @@ export type HerdrSessionSnapshot = {
   panes: HerdrRecord[];
   agents: HerdrRecord[];
 };
+export async function verifiedHerdrAgent(
+  descriptor: {
+    piSessionId: string;
+    piSessionFile?: string;
+    paneId: string;
+    tabId: string;
+    workspaceId: string;
+  },
+  options: {
+    listAgents(): Promise<HerdrRecord[]>;
+    getAgent(paneId: string): Promise<HerdrRecord | undefined>;
+    expectedSession(id: string, path?: string): unknown;
+    isPiAgent(agent: HerdrRecord | undefined): boolean;
+    matchesExpectedSession(session: unknown, expected: unknown): boolean;
+  },
+): Promise<HerdrRecord | undefined> {
+  const inventory = await options.listAgents();
+  const expected = options.expectedSession(
+    descriptor.piSessionId,
+    descriptor.piSessionFile,
+  );
+  const matches = inventory.filter(
+    (agent) =>
+      options.isPiAgent(agent) &&
+      options.matchesExpectedSession(agent.agent_session, expected),
+  );
+  const agent = matches[0];
+  if (
+    matches.length !== 1 ||
+    !agent ||
+    typeof agent.pane_id !== "string" ||
+    typeof agent.tab_id !== "string" ||
+    typeof agent.workspace_id !== "string" ||
+    agent.pane_id !== descriptor.paneId ||
+    agent.tab_id !== descriptor.tabId ||
+    agent.workspace_id !== descriptor.workspaceId
+  )
+    return undefined;
+  try {
+    const alias = await options.getAgent(descriptor.paneId);
+    return options.isPiAgent(alias) &&
+      options.matchesExpectedSession(alias?.agent_session, expected)
+      ? agent
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 export type HerdrContext = {
   workspaceId: string;
   tabId?: string;

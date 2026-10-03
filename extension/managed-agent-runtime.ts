@@ -1669,6 +1669,14 @@ export function registerManagedAgentRuntime(
     currentTurnMessage(ctx: ExtensionContext): unknown;
     appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
     getAgentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
+    prepareDelegatingStart(ctx: ExtensionContext): Promise<{
+      roleCharter: string;
+      supervisorStateMessage?: {
+        customType: string;
+        content: string;
+        display: boolean;
+      };
+    }>;
   },
 ): void {
   pi.on("tool_call", (event: any) => {
@@ -1735,15 +1743,25 @@ export function registerManagedAgentRuntime(
   }
   controller?.registerTools(new Map());
   if (delegationEnabled)
-    pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
+    pi.on("before_agent_start", async (event: any, ctx: ExtensionContext) => {
+      const projection = await options.prepareDelegatingStart(ctx);
+      if (projection.supervisorStateMessage)
+        pi.sendMessage(projection.supervisorStateMessage, {
+          triggerTurn: false,
+        });
       const roster = startupDefinitionRoster;
-      if (!roster || roster.sessionId !== ctx.sessionManager.getSessionId())
-        return;
+      const availableRoster =
+        roster?.sessionId === ctx.sessionManager.getSessionId()
+          ? roster
+          : undefined;
       return {
         systemPrompt:
-          `${event.systemPrompt}\n\n## Available agent definitions\n\n` +
-          `<agent_definitions>\n${JSON.stringify(roster.definitions, null, 2)}\n</agent_definitions>\n\n` +
-          `This is the session-start definition snapshot. Use agent_list for live Agent state or to refresh Agent definitions after configuration changes.`,
+          `${event.systemPrompt}\n\n${projection.roleCharter}\n\n` +
+          (availableRoster
+            ? `## Available agent definitions\n\n` +
+              `<agent_definitions>\n${JSON.stringify(availableRoster.definitions, null, 2)}\n</agent_definitions>\n\n` +
+              `This is the session-start definition snapshot. Use agent_list for live Agent state or to refresh Agent definitions after configuration changes.`
+            : ""),
       };
     });
   const execution = createManagedAgentExecutionState();
@@ -1900,6 +1918,23 @@ export function registerManagedAgentRuntime(
     contextRetirementEnabled: () => readConfig().contextRetirement,
     hasActiveAssignment: () => !!execution.assignment?.activeRequestId,
   });
+  const prepareDelegatingRoster = async (
+    ctx: ExtensionContext,
+  ): Promise<void> => {
+    startupDefinitionRoster = undefined;
+    if (!delegationEnabled) return;
+    try {
+      startupDefinitionRoster = {
+        sessionId: ctx.sessionManager.getSessionId(),
+        definitions: managedAgentDefinitionRoster(
+          await options.getAgentDefinitions(ctx),
+          allowedAgentDefinitions,
+        ),
+      };
+    } catch (error) {
+      options.appendError(ctx, "pi_herdsman_definition_error", error);
+    }
+  };
   registerManagedAgentSessionStartHandler(pi, execution, {
     build: options.build,
     delegationEnabled,
@@ -1917,6 +1952,7 @@ export function registerManagedAgentRuntime(
     clearControllerRuntimes: clearAgentRuntimes,
     setControllerReady: (ready) => controller?.setReady(ready),
     beginMetadataSession: metadataPublisher.beginSession,
+    prepareDelegatingRoster,
     reportMetadata: (state, ctx, patch, reset) =>
       metadataPublisher.report(state, ctx, patch, reset),
     environmentIdentity: (ctx) =>
@@ -1941,21 +1977,6 @@ export function registerManagedAgentRuntime(
     startLeafStatus: leafStatus.start,
     appendError: (ctx, error) =>
       options.appendError(ctx, "pi_herdsman_state_error", error),
-  });
-  pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
-    startupDefinitionRoster = undefined;
-    if (!delegationEnabled) return;
-    try {
-      startupDefinitionRoster = {
-        sessionId: ctx.sessionManager.getSessionId(),
-        definitions: managedAgentDefinitionRoster(
-          await options.getAgentDefinitions(ctx),
-          allowedAgentDefinitions,
-        ),
-      };
-    } catch (error) {
-      options.appendError(ctx, "pi_herdsman_definition_error", error);
-    }
   });
   registerManagedAgentInputHandlers(pi, {
     state: () => execution.assignment,
@@ -2347,6 +2368,7 @@ export function registerManagedAgentSessionStartHandler(
     clearControllerRuntimes(): void;
     setControllerReady(ready: boolean): void;
     beginMetadataSession(): AbortSignal;
+    prepareDelegatingRoster(ctx: ExtensionContext): Promise<void>;
     reportMetadata(
       state: ManagedAgentState,
       ctx: ExtensionContext,
@@ -2393,7 +2415,9 @@ export function registerManagedAgentSessionStartHandler(
     execution.assignment = undefined;
     execution.agentStartedAt = undefined;
     const metadataSignal = options.beginMetadataSession();
+    if (options.delegationEnabled) await options.prepareDelegatingRoster(ctx);
     try {
+      if (options.delegationEnabled) options.statusRuntime.start(ctx);
       let forceActivityTouch = false;
       execution.agentContext = ctx;
       const candidate = options.environmentIdentity(ctx);
@@ -2492,7 +2516,6 @@ export function registerManagedAgentSessionStartHandler(
       if (options.delegationEnabled)
         options.startControllerHealthScanner(ctx, metadataSignal);
       execution.initialized = true;
-      if (options.delegationEnabled) options.statusRuntime.start(ctx);
       options.pumpRequest(ctx);
       execution.requestPumpTimer = setInterval(
         () => options.pumpRequest(ctx),
