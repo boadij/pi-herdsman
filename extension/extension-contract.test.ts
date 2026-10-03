@@ -28,6 +28,7 @@ import {
   readChiefDescriptor,
   readPeerLeadRecord,
   removePeerLeadRecord,
+  removeProjectAssignment,
   removeChiefMessage,
   readChiefMessage,
   writeChiefMessage,
@@ -37,6 +38,7 @@ import {
   peerLeadLockPath,
   peerRuntime,
   writePeerLeadRecord,
+  writeProjectAssignment,
 } from "./supervision.ts";
 import type {
   AskRecord,
@@ -66,6 +68,7 @@ import support, {
   HERDSMAN_BUILD,
   nativeSessions,
   agentControllerExecutor,
+  delegatedLifecycleExecutor,
   leadExec,
   readAgentState,
   realFs,
@@ -83,6 +86,7 @@ import support, {
   writeAsk,
   writeAgentState,
 } from "./support.ts";
+import { parseHerdrVersion } from "./herdr.ts";
 
 test("runtime build identity includes exact executable bytes", () => {
   const path = join(tmpdir(), `herdsman-build-${randomUUID()}.js`);
@@ -481,7 +485,6 @@ test("Chief activation exposes only semantic staff tools", async () => {
 });
 
 test("Herdr version parsing accepts preview suffixes but rejects trailing text", async () => {
-  const { parseHerdrVersion } = await import("./index.ts");
   for (const version of [
     "0.9.0",
     "0.9.0-preview",
@@ -2788,14 +2791,23 @@ test("delegating agents receive only their allowed definition roster", async () 
   });
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext(entries) as any;
-  for (const handler of pi.events.get("session_start") ?? [])
-    await handler(undefined, context);
+  const sessionStartHandlers = pi.events.get("session_start") ?? [];
+  assert.equal(sessionStartHandlers.length, 1);
+  await sessionStartHandlers[0](undefined, context);
   assert.equal(pi.events.has("context"), true);
   const prompt = await pi.events.get("before_agent_start")![0](
     { systemPrompt: "base" },
     context,
   );
+  assert.match(prompt?.systemPrompt ?? "", /## Lead role/);
   assert.match(prompt?.systemPrompt ?? "", /<agent_definitions>/);
+  const supervisorState = pi.sentMessageCalls.find(
+    ({ message }: any) =>
+      message?.customType === "pi-herdsman-supervisor-state",
+  );
+  assert.ok(supervisorState);
+  assert.equal((supervisorState?.message as any).display, false);
+  assert.deepEqual(supervisorState?.options, { triggerTurn: false });
   const roster = JSON.parse(
     prompt.systemPrompt.match(
       /<agent_definitions>\n([\s\S]*?)\n<\/agent_definitions>/,
@@ -2926,6 +2938,239 @@ test("delegating agents receive only their allowed definition roster", async () 
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
   setLeadEnvironment();
+});
+
+test("delegating agents receive the verified Manager supervisor projection", async () => {
+  const mailbox = setAgentEnvironment("manager-projection-agent", ["scout"]);
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `managed-supervisor-state-${randomUUID()}.sock`,
+  );
+  const runtime = supervisionRuntime();
+  const sessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const managerId = randomUUID();
+  const branch = "smoke/managed-supervisor-state";
+  process.env.HERDR_WORKSPACE_ID = "linked-workspace";
+  const manager = claimManagerLease({
+    build: HERDSMAN_BUILD,
+    piSessionId: managerId,
+    paneId: "manager-pane",
+    tabId: "manager-tab",
+    workspaceId: WORKSPACE,
+    repoKey: "repo-key",
+  });
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: sessionId,
+    repoKey: "repo-key",
+    branch,
+    text: "assigned project",
+  });
+  writeLeadCoordinationState(runtime, {
+    version: 1,
+    role: "manager",
+    instanceId: randomUUID(),
+    piSessionId: managerId,
+    build: HERDSMAN_BUILD,
+    updatedAt: Date.now(),
+  });
+  const managerAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: managerId,
+    },
+    pane_id: "manager-pane",
+    tab_id: "manager-tab",
+    workspace_id: WORKSPACE,
+  };
+  const delegateAgent = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: sessionId,
+    },
+    pane_id: "registered-pane",
+    tab_id: "registered-tab",
+    workspace_id: "linked-workspace",
+  };
+  const controllerState = {
+    ...managedState("manager-projection-agent"),
+    piSessionId: sessionId,
+    piSessionFile: "/tmp/registered-agent.jsonl",
+  };
+  const baseExec = agentControllerExecutor(controllerState);
+  const pi = fakePi({
+    exec: (command, args) => {
+      if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              workspace: {
+                worktree: { repo_key: "repo-key", is_linked_worktree: true },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [{ branch, open_workspace_id: "linked-workspace" }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (command === "herdr" && isAgentList(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [managerAgent, delegateAgent] },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              agent: [managerAgent, delegateAgent].find(
+                (a) => a.pane_id === args[2],
+              ),
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return baseExec(command, args);
+    },
+  });
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: {
+        sessionId,
+        definition: "agent",
+        label: "manager-projection-agent",
+      },
+    },
+  ];
+  registerExtension!(pi.pi as never);
+  const context = fakeAgentContext(entries) as any;
+  try {
+    const sessionStartHandlers = pi.events.get("session_start") ?? [];
+    assert.equal(sessionStartHandlers.length, 1);
+    await sessionStartHandlers[0](undefined, context);
+    const prompt = await pi.events.get("before_agent_start")![0](
+      { systemPrompt: "base" },
+      context,
+    );
+    assert.match(prompt?.systemPrompt ?? "", /## Lead role/);
+    const message = pi.sentMessageCalls.find(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervisor-state",
+    );
+    assert.ok(message);
+    assert.match((message!.message as any).content, /supervisor: manager/);
+    assert.match((message!.message as any).content, /availability: available/);
+    assert.match(
+      (message!.message as any).content,
+      /project_messages: retained across Manager turnover/,
+    );
+    assert.equal((message!.message as any).display, false);
+    assert.deepEqual(message!.options, { triggerTurn: false });
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    manager.release();
+    invalidateLeadCoordinationState(runtime, managerId);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    delete process.env.HERDR_WORKSPACE_ID;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    resetAgentMailbox(mailbox);
+  }
+});
+
+test("delegating roster discovery failure does not abort managed startup", async () => {
+  const mailbox = setAgentEnvironment("roster-failure-agent", ["scout"]);
+  const state = managedState("roster-failure-agent");
+  writeAgentState(mailbox, state);
+  const malformed = join(PI_AGENTS_DIR, "malformed-roster.md");
+  writeFileSync(
+    malformed,
+    "---\nname: malformed-roster\nmodel: {not valid json\n---\nbad\n",
+  );
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "agent",
+        label: "roster-failure-agent",
+      },
+    },
+  ];
+  const pi = fakePi({ entries });
+  registerExtension!(pi.pi as never);
+  const context = fakeAgentContext(entries) as any;
+  try {
+    const sessionStartHandlers = pi.events.get("session_start") ?? [];
+    assert.equal(sessionStartHandlers.length, 1);
+    await sessionStartHandlers[0](undefined, context);
+    assert.ok(
+      entries.some(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_definition_error" &&
+          /malformed-roster/.test(entry.data?.error),
+      ),
+    );
+    assert.equal(
+      entries.some(
+        (entry: any) => entry.customType === "pi_herdsman_state_error",
+      ),
+      false,
+    );
+    assert.ok(readAgentState(mailbox));
+
+    pi.events.get("session_shutdown")?.[0]();
+    writeAgentState(mailbox, { ...state, agentLabel: "conflicting-label" });
+    const firstNewEntry = entries.length;
+    await sessionStartHandlers[0](undefined, context);
+    const startupErrors = entries
+      .slice(firstNewEntry)
+      .filter(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_definition_error" ||
+          entry.customType === "pi_herdsman_state_error",
+      );
+    assert.ok(
+      startupErrors.findIndex(
+        (entry: any) => entry.customType === "pi_herdsman_definition_error",
+      ) <
+        startupErrors.findIndex(
+          (entry: any) => entry.customType === "pi_herdsman_state_error",
+        ),
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(malformed, { force: true });
+    delete process.env.HERDR_PANE_ID;
+  }
 });
 
 test("leaf agents and active Chiefs do not receive agent definition rosters", async () => {
@@ -3236,6 +3481,103 @@ test("managed non-TUI agents do not receive the widget", async () => {
   setLeadEnvironment();
 });
 
+test("delegating managed agents refresh their status widget after controller changes", async (t) => {
+  const label = "status-delegating-agent";
+  const mailbox = setAgentEnvironment(label, ["child"]);
+  const sessionFile = join(
+    testTmpRoot,
+    `status-delegating-${randomUUID()}.jsonl`,
+  );
+  writeFileSync(
+    sessionFile,
+    JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      timestamp: new Date().toISOString(),
+      cwd: "/tmp",
+    }) + "\n",
+  );
+  const parent = {
+    ...managedState(label),
+    ownerSessionId: process.env.PI_HERDSMAN_OWNER_SESSION_ID!,
+    runId: process.env.PI_HERDSMAN_RUN_ID!,
+    paneId: process.env.HERDR_PANE_ID!,
+    piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    piSessionFile: sessionFile,
+  };
+  writeAgentState(mailbox, parent);
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: {
+        sessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        definition: "agent",
+        label,
+      },
+    },
+  ];
+  const lifecycle = delegatedLifecycleExecutor(parent);
+  const pi = fakePi({
+    entries,
+    exec: (command, args, options) =>
+      command === "herdr" && args[0] === "pane" && args[1] === "split"
+        ? { stdout: "", stderr: "intentional test launch failure", code: 1 }
+        : lifecycle.exec(command, args, options),
+  });
+  const context = fakeAgentContext(entries) as any;
+  context.sessionManager.getSessionFile = () => sessionFile;
+  context.mode = "tui";
+  context.hasUI = true;
+  let registrations = 0;
+  let renders = 0;
+  const notifications: string[] = [];
+  context.ui.notify = (message: string) => notifications.push(message);
+  context.ui.setWidget = (_key: string, content: any) => {
+    if (typeof content !== "function") return;
+    registrations++;
+    content(
+      { requestRender: () => renders++ },
+      {
+        fg: (_color: string, value: string) => value,
+        bold: (value: string) => value,
+      },
+    );
+  };
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (() =>
+    ({}) as ReturnType<typeof setInterval>) as typeof setInterval;
+  t.after(() => {
+    globalThis.setInterval = originalSetInterval;
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(sessionFile, { force: true });
+    setLeadEnvironment();
+  });
+  registerExtension!(pi.pi as never);
+  for (const start of pi.events.get("session_start") ?? [])
+    await start(undefined, context);
+  assert.equal(registrations, 1, notifications.join("\n"));
+  await t.waitFor(() => assert.ok(renders > 0));
+  const initialRenders = renders;
+  const delegated = pi.tools
+    .find((tool) => tool.name === "agent_delegate")!
+    .execute(
+      "status-change",
+      { definition: "child", label: "status-child", task: "refresh" },
+      undefined,
+      undefined,
+      context,
+    );
+  await t.waitFor(() => {
+    assert.ok(renders > initialRenders);
+  });
+  const result = await delegated;
+  assert.equal(result.details.ok, false);
+  assert.match(result.details.error.message, /intentional test launch failure/);
+});
+
 test("leaf status proves its Lead boundary from coordination state without opening transcripts", async (t) => {
   const label = "status-lead-boundary";
   const mailbox = setAgentEnvironment(label);
@@ -3325,8 +3667,10 @@ test("leaf status proves its Lead boundary from coordination state without openi
   context.mode = "tui";
   context.hasUI = true;
   let widget: any;
+  let registrations = 0;
   context.ui.setWidget = (_key: string, content: any) => {
-    if (typeof content === "function")
+    if (typeof content === "function") {
+      registrations++;
       widget = content(
         { requestRender: () => undefined },
         {
@@ -3334,6 +3678,7 @@ test("leaf status proves its Lead boundary from coordination state without openi
           bold: (value: string) => value,
         },
       );
+    }
   };
   const { SessionManager } = await import("@earendil-works/pi-coding-agent");
   const sessionManager = SessionManager as any;
@@ -3372,6 +3717,7 @@ test("leaf status proves its Lead boundary from coordination state without openi
   } finally {
     globalThis.setInterval = originalSetInterval;
   }
+  assert.equal(registrations, 1);
   await t.waitFor(() => assert.match(widget.render(120)[0], /herd/));
   assert.equal(openCalls, 0);
 

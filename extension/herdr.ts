@@ -18,14 +18,104 @@ import { join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
-import { OperationError } from "./errors.ts";
+import { fail, OperationError } from "./errors.ts";
 import { herdsmanTempRoot } from "./storage.ts";
+
+const HERDR_VERSION_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview(?:\.[0-9A-Za-z-]+)?)?$/;
+
+export function parseHerdrVersion(value: string): RegExpMatchArray | undefined {
+  const match = value.match(HERDR_VERSION_PATTERN);
+  return match?.[0] === value ? match : undefined;
+}
+
+function settingRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+export function validateHerdrStatus(status: unknown): void {
+  const value = settingRecord(status);
+  const client = settingRecord(value.client);
+  const server = settingRecord(value.server);
+  const clientVersion =
+    typeof client.version === "string" ? client.version : undefined;
+  const clientMatch = clientVersion
+    ? parseHerdrVersion(clientVersion)
+    : undefined;
+  const supported = (match: RegExpMatchArray | undefined): boolean =>
+    !!match &&
+    (Number(match[1]) > 0 ||
+      Number(match[2]) > 9 ||
+      (Number(match[2]) === 9 && Number(match[3]) >= 1));
+
+  if (
+    !supported(clientMatch) ||
+    server.running !== true ||
+    server.compatible !== true
+  ) {
+    fail(
+      "invalid_request",
+      "Herdr status is unavailable or incompatible; Herdr >=0.9.1 with a running compatible server is required",
+      "preflight",
+    );
+  }
+}
 
 export type HerdrRecord = Record<string, any>;
 export type HerdrSessionSnapshot = {
   panes: HerdrRecord[];
   agents: HerdrRecord[];
 };
+export async function verifiedHerdrAgent(
+  descriptor: {
+    piSessionId: string;
+    piSessionFile?: string;
+    paneId: string;
+    tabId?: string;
+    workspaceId: string;
+  },
+  options: {
+    listAgents(): Promise<HerdrRecord[]>;
+    getAgent(paneId: string): Promise<HerdrRecord | undefined>;
+    expectedSession(id: string, path?: string): unknown;
+    isPiAgent(agent: HerdrRecord | undefined): boolean;
+    matchesExpectedSession(session: unknown, expected: unknown): boolean;
+  },
+): Promise<HerdrRecord | undefined> {
+  const inventory = await options.listAgents();
+  const expected = options.expectedSession(
+    descriptor.piSessionId,
+    descriptor.piSessionFile,
+  );
+  const matches = inventory.filter(
+    (agent) =>
+      options.isPiAgent(agent) &&
+      options.matchesExpectedSession(agent.agent_session, expected),
+  );
+  const agent = matches[0];
+  if (
+    matches.length !== 1 ||
+    !agent ||
+    typeof agent.pane_id !== "string" ||
+    typeof agent.tab_id !== "string" ||
+    typeof agent.workspace_id !== "string" ||
+    agent.pane_id !== descriptor.paneId ||
+    agent.tab_id !== descriptor.tabId ||
+    agent.workspace_id !== descriptor.workspaceId
+  )
+    return undefined;
+  try {
+    const alias = await options.getAgent(descriptor.paneId);
+    return options.isPiAgent(alias) &&
+      options.matchesExpectedSession(alias?.agent_session, expected)
+      ? agent
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 export type HerdrContext = {
   workspaceId: string;
   tabId?: string;
@@ -1950,6 +2040,32 @@ export function sessionIdentity(
     sessionValue.length > 0
     ? { kind, value: sessionValue }
     : undefined;
+}
+export function herdrSessionId(agent: any): string | undefined {
+  const session = sessionIdentity(agent?.agent_session);
+  if (!session) return undefined;
+  if (session.kind === "id") return session.value;
+  try {
+    return readPiSessionHeaderId(session.value);
+  } catch {
+    return undefined;
+  }
+}
+export function supervisedSessionFile(
+  agent: any,
+  sessionId: string,
+  findSessionById: (cwd: string, sessionId: string) => string | undefined,
+): string | undefined {
+  const session = sessionIdentity(agent?.agent_session);
+  if (!session) return undefined;
+  try {
+    if (session.kind === "path") return realpathSync(session.value);
+    if (typeof agent?.cwd !== "string" || !agent.cwd) return undefined;
+    const path = findSessionById(agent.cwd, sessionId);
+    return path ? realpathSync(path) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 export function sameObservedSessionPath(left: string, right: string): boolean {
   if (left === right) return true;

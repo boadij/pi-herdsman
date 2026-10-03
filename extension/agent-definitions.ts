@@ -18,6 +18,7 @@ import {
   loadProjectContextFiles,
   parseFrontmatter as parsePiFrontmatter,
 } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { snapshotTextFiles } from "./core.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 
@@ -372,6 +373,16 @@ export function discoverAgentDefinitions(
       enabled: definition.frontmatter.enabled ?? true,
     },
   }));
+}
+
+export async function contextAgentDefinitions(ctx: ExtensionContext) {
+  const projectTrusted = ctx.isProjectTrusted();
+  return {
+    projectTrusted,
+    definitions: discoverAgentDefinitions(
+      projectTrusted ? { projectRoot: ctx.cwd } : {},
+    ),
+  };
 }
 
 export function discoverAgent(
