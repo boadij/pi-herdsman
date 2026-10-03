@@ -148,6 +148,7 @@ type LeadTransitionHost = {
   remoteChiefAgent: LeadIdentityRuntime["remoteChiefAgent"];
   persistCoordinatorState(): boolean;
   persistLeadCoordination(): boolean;
+  assertCurrentLeadCoordination(ctx: ExtensionContext): void;
   prepareCoordinationInput: ReturnType<
     typeof createLeadCoordinationRuntime
   >["prepareCoordinationInput"];
@@ -822,17 +823,27 @@ export function createLeadSessionStartRuntime(host: {
           malformedRole = true;
           await host.failClosedRole(ctx, error);
         }
+        const optionalManager =
+          !hasPersistedRole && !malformedRole && host.autoActivateManager();
+        let leadStateRestored = false;
+        let leadStateValid = !optionalManager;
+        if (optionalManager && host.roleTransitions.canRestoreChiefState()) {
+          leadStateValid = host.roleTransitions.restoreChiefState(ctx);
+          leadStateRestored = true;
+        }
         try {
           await host.roleTransitions.resolveControllerRole(
             ctx,
             persistedRole,
-            !hasPersistedRole && !malformedRole && host.autoActivateManager(),
+            optionalManager && leadStateValid,
           );
         } catch (error) {
           host.appendRoleError(ctx, error);
         }
+        if (optionalManager && leadStateValid)
+          host.roleTransitions.finalizeOptionalManagerStartup(ctx);
         if (malformedRole) host.roleTransitions.suspendMalformedRole(ctx);
-        if (host.roleTransitions.canRestoreChiefState())
+        if (!leadStateRestored && host.roleTransitions.canRestoreChiefState())
           host.roleTransitions.restoreChiefState(ctx);
         if (host.roleTransitions.shouldRestoreChief(persistedRole)) {
           try {
@@ -1879,6 +1890,8 @@ export function registerLeadRuntime(
     persistRole,
     persistLeadCoordination: () =>
       coordinationRuntime.persistLeadCoordination(),
+    assertCurrentLeadCoordination: (ctx: ExtensionContext) =>
+      coordinationRuntime.assertCurrentLeadCoordination(ctx),
     coordinationHealthy: () => coordinationRuntime.coordinationHealthy(),
     schedulePeerPresence: (ctx: ExtensionContext) =>
       coordinationRuntime.schedulePeerPresence(ctx),
@@ -6316,7 +6329,7 @@ export function enterSuspendedRole(
 export function restoreLeadChiefState(
   ctx: ExtensionContext,
   host: LeadTransitionHost,
-): void {
+): boolean {
   host.setLeadInstanceId(randomUUID());
   host.setCoordinationHealthy(true);
   const entry = [...ctx.sessionManager.getEntries()]
@@ -6353,10 +6366,11 @@ export function restoreLeadChiefState(
       "pi_herdsman_state_error",
       new Error("invalid pi-herdsman-lead-state entry"),
     );
-    return;
+    return false;
   }
   if (hasRetiredPendingAsk) host.persistCoordinatorState();
   else host.persistLeadCoordination();
+  return true;
 }
 
 export async function resolveLeadControllerRole(
@@ -6373,6 +6387,10 @@ export async function resolveLeadControllerRole(
       signal: AbortSignal,
     ) => Promise<{ primaryWorkspaceId: string; repoKey: string }>;
     claimManagerLease: typeof import("./supervision.ts").claimManagerLease;
+    coordinationHealthy(): boolean;
+    verifyManagerIdentity(
+      descriptor: import("./supervision.ts").ManagerDescriptor,
+    ): Promise<unknown>;
     activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
     persistLeadRole: () => void;
   },
@@ -6418,6 +6436,23 @@ export async function resolveLeadControllerRole(
       workspaceId,
       repoKey: scope.repoKey,
     });
+    if (optional) {
+      let verified: unknown;
+      try {
+        verified = await deps.verifyManagerIdentity(lease.descriptor);
+      } catch (error) {
+        lease.release();
+        throw error;
+      }
+      if (!verified) {
+        lease.release();
+        return;
+      }
+      if (!deps.coordinationHealthy()) {
+        lease.release();
+        return;
+      }
+    }
     state.managerLease = lease;
     state.controllerRole = "manager";
   } catch (error) {
@@ -7295,11 +7330,59 @@ export function createLeadRoleTransitions(
         worktreeGroupScope: (workspaceId, signal) =>
           host.worktreeGroupScope(ctx, workspaceId, signal),
         claimManagerLease: host.claimManagerLease,
+        coordinationHealthy: host.coordinationHealthy,
+        verifyManagerIdentity: (descriptor) =>
+          host.remoteChiefAgent(ctx, descriptor),
         activationGuard: host.activationGuard,
         persistLeadRole: () => host.persistRole("lead"),
       },
       optional,
     );
+  const finalizeOptionalManagerStartup = (ctx: ExtensionContext): void => {
+    if (state.controllerRole !== "manager" || !state.managerLease) return;
+    try {
+      if (!host.persistLeadCoordination())
+        throw new Error("Manager coordination state could not be published");
+      host.assertCurrentLeadCoordination(ctx);
+      return;
+    } catch (error) {
+      const lease = state.managerLease;
+      state.managerLease = undefined;
+      state.controllerRole = "lead";
+      try {
+        lease.release();
+      } catch (releaseError) {
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_role_error",
+          releaseError,
+        );
+      }
+      try {
+        reconcileRoleTools();
+      } catch (toolsError) {
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_role_error",
+          toolsError,
+        );
+      }
+      host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+      if (!host.persistLeadCoordination()) return;
+      try {
+        host.assertCurrentLeadCoordination(ctx);
+      } catch (leadError) {
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_state_error",
+          leadError,
+        );
+      }
+    }
+  };
   const suspendMalformedRole = (ctx: ExtensionContext): void => {
     state.roleSuspended = true;
     try {
@@ -7327,6 +7410,7 @@ export function createLeadRoleTransitions(
     reconcileBranchRole,
     reconcileRoleTools,
     resolveControllerRole,
+    finalizeOptionalManagerStartup,
     restoreChiefState: (ctx: ExtensionContext) =>
       restoreLeadChiefState(ctx, host),
     suspendMalformedRole,
