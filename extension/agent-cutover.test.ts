@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { Value } from "typebox/value";
 import { parseControlMarker } from "./mailbox.ts";
 import {
@@ -218,7 +217,7 @@ test("current error codes replace the legacy label and busy codes", async () => 
   }
 });
 
-test("each Agent operation has its own strict schema without projection", () => {
+test("each Agent operation has its own schema without projection", () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -291,11 +290,6 @@ test("each Agent operation has its own strict schema without projection", () => 
       false,
       `${name} rejects cross-operation fields`,
     );
-    assert.doesNotThrow(() => makeStrictJsonSchema(schema), name);
-    assert.deepEqual(tool.constrainedSampling, {
-      type: "json_schema",
-      strict: "prefer",
-    });
     assert.equal(
       tool.prepareArguments,
       undefined,

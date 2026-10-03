@@ -9,7 +9,6 @@ import {
   buildSessionProjection,
   convertToLlm,
 } from "@earendil-works/pi-coding-agent";
-import { makeStrictJsonSchema } from "@earendil-works/pi-ai/api/constrained-sampling";
 import { Value } from "typebox/value";
 import { acquireProcessLock } from "./lock.ts";
 import { resultPath, resultRef } from "./storage.ts";
@@ -121,7 +120,6 @@ function assertPortableToolSchema(tool: any): void {
   assert.equal(tool.parameters?.anyOf, undefined);
   assert.equal(tool.parameters?.oneOf, undefined);
   assert.equal(tool.parameters?.allOf, undefined);
-  assert.doesNotThrow(() => makeStrictJsonSchema(tool.parameters));
   assert.equal(tool.parameters.required?.includes("files") ?? false, false);
   if (tool.parameters.properties.files) {
     const guidance = tool.promptGuidelines?.join(" ") ?? "";
@@ -139,10 +137,8 @@ function assertPortableToolSchema(tool: any): void {
     assert.match(guidance, /omit unrelated evidence/, tool.name);
   }
   assert.equal(tool.parameters.properties.action, undefined, tool.name);
-  assert.deepEqual(tool.constrainedSampling, {
-    type: "json_schema",
-    strict: "prefer",
-  });
+  // Provider constrained-sampling policy belongs to Pi, not Herdsman.
+  assert.equal(tool.constrainedSampling, undefined, tool.name);
 }
 
 const REGISTERED_ROLE_TOOLS = [

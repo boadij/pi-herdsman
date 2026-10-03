@@ -915,7 +915,6 @@ export function registerManagedAgentAskOwnerTool(
     description:
       "Ask your direct owner for a decision that is required to continue. Call this alone as the final tool call of the turn, then stop and wait for the reply. Only one question may be outstanding.",
     executionMode: "sequential",
-    constrainedSampling: { type: "json_schema", strict: "prefer" },
     parameters: Type.Object(
       {
         question: Type.String({

@@ -1739,7 +1739,6 @@ export default function (pi: ExtensionAPI): void {
           "Send material coordination when a supervisor must decide or act, or when a blocker, warning, scope change, risk, or explicit evidence needs attention. Assigned project messages are retained for the Manager role across Manager absence.",
         executionMode: "sequential",
         parameters: supervisorMessageParameters,
-        constrainedSampling: { type: "json_schema", strict: "prefer" },
         execute: (...args: any[]) =>
           leadRuntimes.coordinationRuntime!.supervisorMessage(...args),
         renderCall: (args: unknown, theme: any, context: any) =>
@@ -1763,7 +1762,6 @@ export default function (pi: ExtensionAPI): void {
           "Send a message to another live same-role Lead or Manager session by exact session ID.",
         executionMode: "sequential",
         parameters: peerMessageParameters,
-        constrainedSampling: { type: "json_schema", strict: "prefer" },
         execute: (...args: any[]) =>
           leadRuntimes.coordinationRuntime!.peerMessage(...args),
         renderCall: (args: unknown, theme: any, context: any) =>
@@ -1787,7 +1785,6 @@ export default function (pi: ExtensionAPI): void {
           "Supervise direct reports; Managers may delegate new linked-worktree Leads",
         executionMode: "sequential",
         parameters: staffMessageParameters,
-        constrainedSampling: { type: "json_schema", strict: "prefer" },
         execute: (...args: any[]) => projectRuntime.executeStaff(...args),
         renderCall: (args: unknown, theme: any, context: any) =>
           renderCoordinationCall("staff", "message", args, theme, context),
@@ -1809,7 +1806,6 @@ export default function (pi: ExtensionAPI): void {
           description: "List direct-report supervision state.",
           parameters: emptyParameters,
           promptSnippet: undefined,
-          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
             _p: unknown,
@@ -1830,7 +1826,6 @@ export default function (pi: ExtensionAPI): void {
             "Read bounded live terminal/process evidence for a direct report.",
           parameters: staffTargetParameters,
           promptSnippet: undefined,
-          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
             p: any,
@@ -1858,7 +1853,6 @@ export default function (pi: ExtensionAPI): void {
             "Read bounded persisted Pi conversation/tool evidence for a direct report.",
           parameters: staffTargetParameters,
           promptSnippet: undefined,
-          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
             p: any,
@@ -1886,7 +1880,6 @@ export default function (pi: ExtensionAPI): void {
           parameters: staffMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
-          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
             p: any,
@@ -1915,7 +1908,6 @@ export default function (pi: ExtensionAPI): void {
           parameters: staffDelegateParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
-          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
             p: any,
@@ -1943,7 +1935,6 @@ export default function (pi: ExtensionAPI): void {
             "Resume existing unresolved project work by its exact Git branch.",
           parameters: staffBranchParameters,
           promptSnippet: undefined,
-          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
             p: any,
@@ -1971,7 +1962,6 @@ export default function (pi: ExtensionAPI): void {
             "Stop an exact direct Lead and its owned execution tree while preserving project work, Pi session, branch, and worktree.",
           parameters: staffTargetParameters,
           promptSnippet: undefined,
-          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
             p: any,
@@ -2197,7 +2187,6 @@ export default function (pi: ExtensionAPI): void {
           parameters: supervisorMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
-          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
             p: any,
@@ -2218,7 +2207,6 @@ export default function (pi: ExtensionAPI): void {
             "List other live ordinary Lead sessions. Do not use for progress polling.",
           parameters: emptyParameters,
           promptSnippet: undefined,
-          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
             _p: unknown,
@@ -2237,7 +2225,6 @@ export default function (pi: ExtensionAPI): void {
           parameters: peerMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
-          constrainedSampling: { type: "json_schema", strict: "prefer" },
           execute: (
             id: string,
             p: any,

@@ -6052,7 +6052,6 @@ export function createAgentController(
         "List current owned Agent state and refresh the Agent-definition roster. Do not use for progress polling.",
       executionMode: "sequential",
       parameters: agentListParameters,
-      constrainedSampling: { type: "json_schema", strict: "prefer" },
       execute: async (
         _id: string,
         raw: unknown,
