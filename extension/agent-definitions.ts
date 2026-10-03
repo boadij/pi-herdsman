@@ -76,6 +76,8 @@ const BUILTIN_AGENT_DIR = fileURLToPath(
   new URL("./agent-definitions", import.meta.url),
 );
 
+export const MANAGED_LEAD_DEFINITION_NAME = "managed-lead";
+
 export type FrontmatterValue =
   string | boolean | string[] | { [key: string]: unknown };
 export type Frontmatter = {
@@ -335,7 +337,31 @@ function applyDefinitionLayer(
 
 export type DiscoverAgentDefinitionsOptions = { projectRoot?: string };
 
-export function discoverAgentDefinitions(
+function validateEffectiveAgentReferences(
+  definitions: readonly AgentDefinition[],
+): void {
+  const agents = definitions.filter(
+    (definition) => definition.name !== MANAGED_LEAD_DEFINITION_NAME,
+  );
+  const names = new Set(agents.map((definition) => definition.name));
+  for (const definition of agents)
+    for (const reference of definition.frontmatter.agents ?? [])
+      if (!names.has(reference))
+        throw new Error(
+          `agent ${definition.name} references missing agent definition ${reference}`,
+        );
+}
+
+function validateManagedLeadLayer(definition: AgentDefinition): void {
+  if (definition.name !== MANAGED_LEAD_DEFINITION_NAME) return;
+  for (const field of ["enabled", "agents", "permission"] as const)
+    if (definition.frontmatter[field] !== undefined)
+      throw new Error(
+        `${definition.path} managed Lead field ${field}: is not supported`,
+      );
+}
+
+function discoverEffectiveDefinitions(
   options: DiscoverAgentDefinitionsOptions = {},
 ): AgentDefinition[] {
   const bundled = readAgentDefinitions(BUILTIN_AGENT_DIR);
@@ -353,26 +379,42 @@ export function discoverAgentDefinitions(
       definition.extensionSource = definition.path;
     validateDefinition(definition);
   }
+  for (const definition of [...bundled, ...project, ...user])
+    validateManagedLeadLayer(definition);
   applyDefinitionLayer(definitions, project, "projectSource");
   applyDefinitionLayer(definitions, user, "overrideSource");
-
   const effective = [...definitions.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
   );
-  const names = new Set(effective.map((definition) => definition.name));
-  for (const definition of effective)
-    for (const reference of definition.frontmatter.agents ?? [])
-      if (!names.has(reference))
-        throw new Error(
-          `agent ${definition.name} references missing agent definition ${reference}`,
-        );
-  return effective.map((definition) => ({
-    ...definition,
-    frontmatter: {
-      ...definition.frontmatter,
-      enabled: definition.frontmatter.enabled ?? true,
-    },
-  }));
+  validateEffectiveAgentReferences(effective);
+  return effective;
+}
+
+export function discoverAgentDefinitions(
+  options: DiscoverAgentDefinitionsOptions = {},
+): AgentDefinition[] {
+  return discoverEffectiveDefinitions(options)
+    .filter((definition) => definition.name !== MANAGED_LEAD_DEFINITION_NAME)
+    .map((definition) => ({
+      ...definition,
+      frontmatter: {
+        ...definition.frontmatter,
+        enabled: definition.frontmatter.enabled ?? true,
+      },
+    }));
+}
+
+export function discoverManagedLeadDefinition(
+  options: DiscoverAgentDefinitionsOptions = {},
+): AgentDefinition {
+  const definition = discoverEffectiveDefinitions(options).find(
+    (candidate) => candidate.name === MANAGED_LEAD_DEFINITION_NAME,
+  );
+  if (!definition)
+    throw new Error(
+      `managed Lead definition ${MANAGED_LEAD_DEFINITION_NAME} not found`,
+    );
+  return definition;
 }
 
 export async function contextAgentDefinitions(ctx: ExtensionContext) {
@@ -718,6 +760,7 @@ export type AgentLaunchOptions = {
   approveProject?: boolean;
   inheritedModel?: string;
   inheritedThinking?: string;
+  requiredTools?: readonly string[];
   /**
    * Pre-computed model decision for this child. When omitted, the requested
    * model (configured, else inherited) is passed through unchanged.
@@ -810,25 +853,26 @@ export function agentLaunchArgs(
     frontmatter.noTools || (explicitTools && frontmatter.tools.length === 0);
   if (noTools) args.push("--no-tools");
   if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");
-  if (managedAgent) {
-    if (noTools || explicitTools) {
-      const requiredTools = agentDefinitionDelegationEnabled(agent)
+  const requiredTools = [
+    ...(managedAgent
+      ? agentDefinitionDelegationEnabled(agent)
         ? [...AGENT_COORDINATION_TOOLS, "ask_owner"]
-        : ["ask_owner"];
+        : ["ask_owner"]
+      : []),
+    ...(options.requiredTools ?? []),
+  ].filter((tool, index, all) => all.indexOf(tool) === index);
+  if (managedAgent || requiredTools.length) {
+    if (noTools || explicitTools) {
       const configuredTools = normalizedToolNames(frontmatter.tools).filter(
-        (tool) => tool !== "agent" && !requiredTools.includes(tool),
+        (tool) =>
+          (!managedAgent || tool !== "agent") && !requiredTools.includes(tool),
       );
       const tools = [...new Set([...configuredTools, ...requiredTools])];
-      args.push("--tools", tools.join(","));
+      if (tools.length) args.push("--tools", tools.join(","));
     }
-    const requiredTools = new Set([
-      "ask_owner",
-      ...(agentDefinitionDelegationEnabled(agent)
-        ? AGENT_COORDINATION_TOOLS
-        : []),
-    ]);
+    const requiredToolSet = new Set(requiredTools);
     const excluded = normalizedToolNames(frontmatter.excludeTools)
-      .filter((tool) => !requiredTools.has(tool))
+      .filter((tool) => !requiredToolSet.has(tool))
       .filter((tool, index, all) => all.indexOf(tool) === index);
     if (excluded.length) args.push("--exclude-tools", excluded.join(","));
   } else {

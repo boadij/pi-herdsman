@@ -8,10 +8,13 @@ branches instead of more Agents inside one Lead's worktree.
 Manager coordinates project assignments. Project Leads orchestrate and
 integrate execution through their Agent trees.
 
-A project Lead is orchestration-first for substantial bounded execution an
-appropriate Agent can reasonably own, while retaining architecture, scope,
-integration, conflict resolution, acceptance of Agent outputs, and technical
-decisions.
+Manager-created project Leads are launched from the reserved `managed-lead`
+definition. The bundled default keeps direct Lead work read-only and delegates
+executable project work to managed Agents while the Lead retains decomposition,
+architecture, scope, technical direction, integration, conflict resolution,
+acceptance, and final technical decisions. Project and global overlays can
+deliberately customize that launch policy; see
+[Customizing bundled agents](customizing-agents.md#managed-project-lead).
 
 ## Enter Manager mode
 
@@ -54,6 +57,12 @@ Start new work with `staff_delegate`. Resume existing work with
 it from the existing branch and resumes the exact persisted Pi session when
 available. The saved session cwd is used when history exists; if the branch
 itself is unavailable, recreation fails closed.
+
+Whenever Herdsman actually launches the project Lead process, it resolves the
+current `managed-lead` definition from the target worktree plus the global
+overlay. A trusted project may therefore configure the Lead that works on its
+branch. A Lead that is already live is not hot-reconfigured; changed launch
+policy takes effect on its next start.
 
 See [`staff_delegate`](../reference/staff.md#staff_delegate) and
 [`staff_resume`](../reference/staff.md#staff_resume).

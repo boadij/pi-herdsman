@@ -8,6 +8,40 @@ roles, in the order `bundled < project < global`.
 This allows local customization while continuing to inherit future bundled
 changes for omitted fields.
 
+## Managed project Lead
+
+`managed-lead` is the reserved definition for Manager-created project Leads.
+It follows the same `bundled < project < global` precedence, but it is launch
+configuration rather than an Agent role: it does not appear in the Agent roster
+or Definitions UI and cannot be delegated to.
+
+The bundled default gives the Lead read-only inspection tools plus mandatory
+Herdsman coordination tools. Executable project work is delegated to managed
+Agents by default. Override the same name when a project or user deliberately
+needs a different prompt, model, thinking level, tool policy, skill policy, or
+extension policy:
+
+```markdown
+---
+name: managed-lead
+model: openai-codex/gpt-5.6-luna
+thinking: high
+bodyMode: append
+---
+
+Also require an independent reviewer before accepting implementation output.
+```
+
+A project override lives at `<project>/.pi/agents/managed-lead.md` and is
+resolved from the delegated worktree when the project is trusted. The global
+override remains `~/.pi/agent/agents/managed-lead.md`.
+
+`managed-lead` does not support `enabled`, `agents`, or `permission`.
+Its ordinary tool policy may be overridden, but Herdsman's mandatory Lead
+coordination tools cannot be removed. Definition changes apply the next time
+Herdsman launches the Lead; use `staff_stop` followed by `staff_resume` when
+a running project Lead must restart with changed launch policy.
+
 ## Minimal model override
 
 ```markdown
@@ -98,7 +132,9 @@ prompt.
 
 Managed agents additionally receive shared herdr agent guidance at launch,
 including the `ask_owner` contract. This shared guidance is infrastructure and
-is not copied into every bundled role body.
+is not copied into every bundled role body. Managed project Leads instead use
+the effective `managed-lead` body plus the ordinary Lead runtime charter and
+dynamic project coordination context.
 
 ## Add local body files
 
@@ -160,12 +196,15 @@ setting.
 
 An explicit `tools` list controls selection even when `noTools` or
 `noBuiltinTools` also selects restrictive defaults, while `excludeTools` wins
-over the list. Managed agents retain `ask_owner` as mandatory infrastructure
-and remove it from explicit exclusions; this exception does not apply to
-unmanaged Pi launches. Same-named tools cannot be permissioned by source, and
-collision winner ordering is not promised. Launcher-injected agent and
-Herdr-state extensions are separate from definition extensions and remain
-available when `noExtensions` disables ordinary discovery.
+over ordinary names. Managed agents retain `ask_owner` and, when applicable,
+Agent coordination tools as mandatory infrastructure. Managed project Leads
+retain their required Agent, supervisor, and peer coordination tools. These
+role-required names are restored to explicit allowlists and removed from
+exclusions; unmanaged Pi launches receive no such exception. Same-named tools
+cannot be permissioned by source, and collision winner ordering is not promised.
+Launcher-injected agent and Herdr-state extensions are separate from definition
+extensions and remain available when `noExtensions` disables ordinary
+discovery.
 
 For an integration-level smoke check, load the repository's
 `scripts/tool-policy-diagnostic.mjs` extension and set `POLICY_EVIDENCE`,

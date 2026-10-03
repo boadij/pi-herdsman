@@ -52,7 +52,15 @@ import type {
   WorktreeGroupScope,
 } from "./herdr.ts";
 import type { RuntimeBuild } from "./compatibility.ts";
-import type { AgentDefinition } from "./agent-definitions.ts";
+import {
+  agentLaunchArgs,
+  configuredModel,
+  discoverManagedLeadDefinition,
+  expandAgentBodyFiles,
+  resolveChildModel,
+  writePrivatePromptSnapshots,
+  type AgentDefinition,
+} from "./agent-definitions.ts";
 import type { MessageFileInput } from "./core.ts";
 import type { ManagedAgentState, ResultBinding } from "./mailbox.ts";
 import {
@@ -67,7 +75,7 @@ import {
 } from "./presentation.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { statSync, unlinkSync } from "node:fs";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
 
 type LeadIdentityHost = {
@@ -364,6 +372,7 @@ type LeadProjectHost = {
     signal?: AbortSignal,
   ): Promise<void>;
   withProjectWorkLock: LeadRoleTransitionRuntime["withProjectWorkLock"];
+  leadCoordinationTools: readonly string[];
   pi: ExtensionAPI;
 };
 
@@ -2062,6 +2071,7 @@ export function registerLeadRuntime(
     HERDSMAN_BUILD: options.build,
     HERDSMAN_EXTENSION_PATH: projectHost.extensionPath,
     SessionManager: projectHost.SessionManager,
+    leadCoordinationTools: options.leadCoordinationToolNames,
     stopProjectLead: (...args: Parameters<typeof projectRuntime.stop>) =>
       projectRuntime.stop(...args),
   });
@@ -3774,6 +3784,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       };
       writeProjectAssignment(runtime, assignment);
     }
+    const promptPaths: string[] = [];
     try {
       let workspaceId: string | undefined;
       let paneId: string | undefined;
@@ -3927,6 +3938,42 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             }));
         if (!piAlreadyRunning) {
           await assertUnoccupied(workspaceId!);
+          const projectTrusted = ctx.isProjectTrusted();
+          const definition = discoverManagedLeadDefinition(
+            projectTrusted ? { projectRoot: cwd! } : {},
+          );
+          const body = expandAgentBodyFiles(
+            definition.body,
+            [],
+            operationName,
+          );
+          const effectiveDefinition =
+            body === definition.body ? definition : { ...definition, body };
+          if (body) promptPaths.push(...writePrivatePromptSnapshots([body]));
+          const registeredProviderIds = new Set(
+            ctx.modelRegistry?.getRegisteredProviderIds?.() ?? [],
+          );
+          const modelDecision = resolveChildModel({
+            configured: configuredModel(effectiveDefinition.frontmatter),
+            inherited:
+              operation.action === "delegate" && ctx.model
+                ? {
+                    provider: ctx.model.provider,
+                    token: `${ctx.model.provider}/${ctx.model.id}`,
+                  }
+                : undefined,
+            isForeignProvider: (providerId) =>
+              registeredProviderIds.has(providerId),
+          });
+          const launchArgs = agentLaunchArgs(effectiveDefinition, {
+            ...(body ? { bodyPromptPath: promptPaths.at(-1)! } : {}),
+            cwd: cwd!,
+            requiredTools: host.leadCoordinationTools,
+            ...(operation.action === "delegate"
+              ? { inheritedThinking: pi.getThinkingLevel() }
+              : {}),
+            modelDecision,
+          });
           await startHerdrAgentInPane(pi, ctx, {
             primaryWorkspaceId,
             workspaceId,
@@ -3937,9 +3984,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             runId: id,
             extensionPath: HERDSMAN_EXTENSION_PATH,
             agentArgs: [
+              ...launchArgs,
               "--session-id",
               assignment.id,
-              ctx.isProjectTrusted() ? "--approve" : "--no-approve",
+              projectTrusted ? "--approve" : "--no-approve",
             ],
             signal,
           });
@@ -4151,6 +4199,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     } catch (error) {
       appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
       throw error;
+    } finally {
+      for (const promptPath of promptPaths)
+        if (statSync(promptPath, { throwIfNoEntry: false }))
+          unlinkSync(promptPath);
     }
   };
   const executeStaff = async (
@@ -5476,20 +5528,6 @@ function projectAssignmentInstruction(
   assignment: Pick<ProjectAssignment, "text">,
 ): string {
   return `${assignment.text}
-
-You are the project Lead for this branch. Be orchestration-first: delegate
-substantial bounded execution work to the narrowest capable managed Agent when
-it can reasonably own that work. This includes investigation, implementation,
-debugging, test and validation execution, review, documentation, and similar
-execution work.
-
-Work directly when the work is trivial, inseparable from your branch-level
-coordination or integration responsibility, otherwise unsuitable for an Agent,
-or delegation would add more coordination than value.
-
-Retain decomposition, architecture, approved scope, technical direction,
-integration, conflict resolution, acceptance of Agent outputs, and final
-technical decisions within the assignment.
 
 When a delegated herd run settles, summarize its outcome, validation, and
 important unresolved points in your normal response. Herdsman handles the
