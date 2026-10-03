@@ -270,9 +270,6 @@ import {
   type LeadRuntimeState,
   registerLeadRuntime,
   buildLeadStatusSnapshot,
-  enterChiefRole,
-  enterLeadRole,
-  enterSuspendedRole,
   createLeadRoleTransitions,
   resolveLeadControllerRole,
   readLeadSessionIds,
@@ -763,26 +760,6 @@ export default function (pi: ExtensionAPI): void {
   let leadStatusRuntime: ReturnType<typeof registerLeadRuntime>["statusRuntime"];
   let leadHerdRunRuntime!: NonNullable<ReturnType<typeof registerLeadRuntime>["herdRunRuntime"]>;
 
-  let leadMetadataQueue = Promise.resolve();
-  const queueLeadMetadata = (
-    ctx: ExtensionContext,
-    metadata: Parameters<typeof reportLeadMetadata>[2],
-  ): void => {
-    if (leadRuntime.controllerRole === "manager") {
-      void publishLeadRole(
-        ctx,
-        leadRuntime.roleSuspended ? "suspended" : "inactive",
-        leadRuntime.chiefModeGeneration,
-      );
-      return;
-    }
-    leadMetadataQueue = leadMetadataQueue
-      .catch(() => {})
-      .then(() => reportLeadMetadata(pi, ctx, metadata))
-      .catch(() => {
-        // Lead metadata is display-only and best effort.
-      });
-  };
   const agentEnvError =
     process.env.PI_HERDSMAN_MAILBOX !== undefined
       ? managedAgentEnvironmentError()
@@ -1134,96 +1111,13 @@ export default function (pi: ExtensionAPI): void {
       .filter((section): section is string => section !== undefined)
       .join("\n\n");
   };
-  const publishLeadRole = (
-    ctx: ExtensionContext,
-    mode: "inactive" | "active" | "suspended",
-    generation: number,
-  ): Promise<void> => {
-    const paneId = process.env.HERDR_PANE_ID;
-    if (!paneId) return Promise.resolve();
-    const leadName =
-      mode === "inactive" && activeRole() === "lead"
-        ? pi.getSessionName()?.trim()
-        : undefined;
-    const args = [
-      "pane",
-      "report-metadata",
-      paneId,
-      "--source",
-      "pi-herdsman:lead",
-      "--title",
-      mode === "active"
-        ? "chief"
-        : activeRole() === "manager"
-          ? "Pi Herdsman manager"
-          : leadName || "Pi Herdsman lead",
-      ...(mode === "active"
-        ? ["--token", "pi_herdsman_role=chief"]
-        : mode === "inactive"
-          ? ["--token", `pi_herdsman_role=${activeRole()}`]
-          : ["--clear-token", "pi_herdsman_role"]),
-    ];
-    if (mode === "inactive" && activeRole() === "lead") {
-      args.push(
-        leadName ? "--token" : "--clear-token",
-        leadName ? `pi_herdsman_name=${leadName}` : "pi_herdsman_name",
-      );
-    }
-    if (mode !== "inactive" || activeRole() !== "lead")
-      args.push(
-        "--clear-token",
-        "pi_herdsman_herd_run_started_at",
-        "--clear-token",
-        "pi_herdsman_context_percent",
-      );
-    leadMetadataQueue = leadMetadataQueue
-      .catch(() => {})
-      .then(async () => {
-        if (generation !== leadRuntime.chiefModeGeneration) return;
-        await runHerdr(pi, ctx, args, { noResult: true, timeout: 10_000 });
-      })
-      .catch(() => {
-        // Metadata is display-only and best effort.
-      });
-    return leadMetadataQueue;
-  };
-  const persistRole = (role: SessionRole): void => {
-    const leadTools = leadToolState.getLeadTools();
-    if (!leadTools) throw new Error("Lead tool baseline is unavailable");
-    pi.appendEntry("pi-herdsman-role", { role, leadTools: [...leadTools] });
-  };
-  const persistCoordinatorState = (): boolean => leadRuntimes.coordinationRuntime!.persistCoordinatorState();
-  const persistLeadCoordination = (): boolean => leadRuntimes.coordinationRuntime!.persistLeadCoordination();
-  const removePeerPresence = (): void => leadRuntimes.coordinationRuntime!.removePeerPresence();
   const markLeadCoordinationUnhealthy = (ctx?: ExtensionContext): void => leadRuntimes.coordinationRuntime!.markLeadCoordinationUnhealthy(ctx);
   const schedulePeerPresence = (ctx: ExtensionContext): Promise<void> => leadRuntimes.coordinationRuntime!.schedulePeerPresence(ctx);
-  const leadEntryEffects = {
-    advancePresenceGeneration: () => leadRuntimes.coordinationRuntime!.advancePresenceGeneration(),
-    clearChiefStartPreflight,
-    resetSupervisionSnapshot,
-    removePeerPresence,
-    reconcileRoleTools,
-    persistRole,
-    persistCoordinatorState,
-    coordinationHealthy: () => leadRuntimes.coordinationRuntime!.coordinationHealthy(),
-    schedulePeerPresence: (ctx: ExtensionContext) => void schedulePeerPresence(ctx),
-    publishLeadRole: (
-      ctx: ExtensionContext,
-      mode: "inactive" | "active" | "suspended",
-      generation: number,
-    ) => void publishLeadRole(ctx, mode, generation),
-    appendRoleError: (ctx: ExtensionContext, error: unknown) =>
-      appendDurableError(pi, ctx, "pi_herdsman_role_error", error),
-  };
-  const enterLead = (ctx?: ExtensionContext, persist = true): void =>
-    enterLeadRole(leadRuntime, leadEntryEffects, ctx, persist);
-  const enterChief = (
-    ctx: ExtensionContext,
-    lease: ChiefLease,
-    generation: number,
-  ): void => enterChiefRole(leadRuntime, leadEntryEffects, ctx, lease, generation);
-  const enterSuspended = (ctx?: ExtensionContext): void =>
-    enterSuspendedRole(leadRuntime, leadEntryEffects, ctx);
+  const publishLeadRole = (...args: Parameters<typeof leadRuntimes.publishLeadRole>) => leadRuntimes.publishLeadRole(...args);
+  const queueLeadMetadata = (...args: Parameters<typeof leadRuntimes.queueLeadMetadata>) => leadRuntimes.queueLeadMetadata(...args);
+  const enterLead = (...args: Parameters<typeof leadRuntimes.enterLead>) => leadRuntimes.enterLead(...args);
+  const enterChief = (...args: Parameters<typeof leadRuntimes.enterChief>) => leadRuntimes.enterChief(...args);
+  const enterSuspended = (...args: Parameters<typeof leadRuntimes.enterSuspended>) => leadRuntimes.enterSuspended(...args);
   const assertCurrentLeadCoordination = (ctx: ExtensionContext): void => leadRuntimes.coordinationRuntime!.assertCurrentLeadCoordination(ctx);
   const currentChief = (failOnVerificationError = false): ChiefDescriptor | undefined =>
     roleTransitions.currentChief(failOnVerificationError);
@@ -1264,6 +1158,10 @@ export default function (pi: ExtensionAPI): void {
   const roleTransitionHost = {
     processRole,
     build: HERDSMAN_BUILD,
+    paneId: () => process.env.HERDR_PANE_ID,
+    getSessionName: () => pi.getSessionName(),
+    runHerdr,
+    reportLeadMetadata,
     workspaceId: () => process.env.HERDR_WORKSPACE_ID,
     identity: {
       paneId: process.env.HERDR_PANE_ID,
@@ -1312,7 +1210,7 @@ export default function (pi: ExtensionAPI): void {
     scanAgentStates,
     enterLead,
     enterSuspended,
-    activation: { activateChief, publishLeadRole, schedulePeerPresence },
+    activation: { activateChief },
   };
   const deactivateChief = (...args: any[]) => roleTransitions.deactivateChief(...args);
   const leaveChief = (...args: any[]) => roleTransitions.leaveChief(...args);
