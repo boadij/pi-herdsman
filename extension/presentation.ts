@@ -36,8 +36,69 @@ import type {
   SupervisionSnapshot,
   SupervisionPresentationSnapshot,
   SupervisedManager,
+  WorkspaceProvenance,
 } from "./supervision.ts";
 import { herdsmanTempRoot, resultPath, resultRef } from "./storage.ts";
+
+export function hasWorkspaceWorktree(workspace: any): boolean {
+  const worktree =
+    workspace?.worktree &&
+    typeof workspace.worktree === "object" &&
+    (typeof workspace.worktree.checkout_path === "string" ||
+      typeof workspace.worktree.repo_name === "string")
+      ? workspace.worktree
+      : undefined;
+  return !!worktree;
+}
+
+export function projectWorkspaceProvenance(
+  workspaceId: string,
+  workspace: any,
+  worktreeInfo: any,
+  fallbackCwd?: string,
+  worktreeLookupFailed = false,
+): WorkspaceProvenance {
+  const worktree = hasWorkspaceWorktree(workspace)
+    ? workspace.worktree
+    : undefined;
+  const workspaceLabel =
+    typeof workspace?.label === "string" ? workspace.label : undefined;
+  const fallback = {
+    ...(workspaceLabel ? { workspaceLabel } : {}),
+    ...(typeof worktree?.checkout_path === "string"
+      ? { workspaceCwd: worktree.checkout_path }
+      : fallbackCwd
+        ? { workspaceCwd: fallbackCwd }
+        : {}),
+  } satisfies WorkspaceProvenance;
+  if (!worktree || worktreeLookupFailed) return fallback;
+  const worktrees = Array.isArray(worktreeInfo?.worktrees)
+    ? worktreeInfo.worktrees
+    : [];
+  const currentWorktree = worktrees.find(
+    (candidate: any) => candidate?.open_workspace_id === workspaceId,
+  );
+  const repoName =
+    typeof worktree.repo_name === "string"
+      ? worktree.repo_name
+      : typeof worktreeInfo?.source?.repo_name === "string"
+        ? worktreeInfo.source.repo_name
+        : undefined;
+  const branch =
+    typeof currentWorktree?.branch === "string"
+      ? currentWorktree.branch
+      : undefined;
+  const workspaceCwd =
+    typeof worktreeInfo?.source?.source_checkout_path === "string"
+      ? worktreeInfo.source.source_checkout_path
+      : fallbackCwd;
+  return {
+    ...(workspaceLabel ? { workspaceLabel } : {}),
+    ...(workspaceCwd ? { workspaceCwd } : {}),
+    ...(repoName ? { repoName } : {}),
+    ...(branch ? { branch } : {}),
+  };
+}
 
 export type AgentLifecycleState =
   "working" | "blocked" | "settling" | "starting" | "unknown" | "lost";

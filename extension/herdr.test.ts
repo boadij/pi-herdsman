@@ -40,6 +40,8 @@ import {
   readPiSessionHeaderId,
   sameObservedSessionPath,
   sessionIdentity,
+  herdrSessionId,
+  supervisedSessionFile,
   STARTUP_TIMEOUT_MAX,
   STARTUP_TIMEOUT_MIN,
   startupTimeoutBudget,
@@ -3582,6 +3584,40 @@ test("session identity requires the native Pi AgentSessionInfo", () => {
     sessionIdentity({ ...valid, kind: "path", value: "/tmp/session.jsonl" }),
     { kind: "path", value: "/tmp/session.jsonl" },
   );
+});
+
+test("Herdr session helpers preserve native IDs and canonical exact paths", () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-session-helpers-"));
+  try {
+    const path = join(root, "session.jsonl");
+    writeFileSync(path, '{"type":"session","id":"header-id"}\n');
+    const pathAgent = {
+      agent_session: {
+        source: "herdr:pi",
+        agent: "pi",
+        kind: "path",
+        value: path,
+      },
+    };
+    assert.equal(herdrSessionId(pathAgent), "header-id");
+    assert.equal(
+      supervisedSessionFile(pathAgent, "ignored", () => undefined),
+      realpathSync(path),
+    );
+    assert.equal(
+      herdrSessionId({
+        agent_session: {
+          source: "herdr:pi",
+          agent: "pi",
+          kind: "id",
+          value: "native-id",
+        },
+      }),
+      "native-id",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("close accepts a same-workspace tab move without historical tab identity", async () => {

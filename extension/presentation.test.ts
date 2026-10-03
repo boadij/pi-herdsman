@@ -46,6 +46,7 @@ import {
   renderCoordinationMessage,
   renderAgentDefinitionsOverview,
   renderHerdRunEntry,
+  projectWorkspaceProvenance,
   renderStopSummary,
   StatusWidget,
   Text,
@@ -56,6 +57,54 @@ import { herdsmanDataRoot, herdsmanTempRoot, resultPath } from "./storage.ts";
 import { COORDINATION_MESSAGE_KINDS } from "./supervision.ts";
 
 initTheme("dark");
+
+test("workspace presentation provenance projects acquired Herdr records", () => {
+  assert.deepEqual(
+    projectWorkspaceProvenance(
+      "workspace-1",
+      {
+        label: "Feature",
+        worktree: { repo_name: "repo" },
+      },
+      {
+        source: { source_checkout_path: "/repo", repo_name: "source-repo" },
+        worktrees: [
+          { open_workspace_id: "workspace-1", branch: "feature/one" },
+        ],
+      },
+      "/fallback",
+    ),
+    {
+      workspaceLabel: "Feature",
+      workspaceCwd: "/repo",
+      repoName: "repo",
+      branch: "feature/one",
+    },
+  );
+  assert.deepEqual(
+    projectWorkspaceProvenance("workspace-2", {}, undefined, "/fallback"),
+    { workspaceCwd: "/fallback" },
+  );
+  assert.deepEqual(
+    projectWorkspaceProvenance(
+      "workspace-1",
+      { worktree: { checkout_path: "/checkout" } },
+      undefined,
+      "/fallback",
+    ),
+    { workspaceCwd: "/fallback" },
+  );
+  assert.deepEqual(
+    projectWorkspaceProvenance(
+      "workspace-1",
+      { worktree: { checkout_path: "/checkout" } },
+      undefined,
+      "/fallback",
+      true,
+    ),
+    { workspaceCwd: "/checkout" },
+  );
+});
 
 test("session usage presents Pi input breakdown and cost-ordered models", () => {
   const text = formatSessionUsage(

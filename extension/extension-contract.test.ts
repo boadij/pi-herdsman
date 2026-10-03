@@ -83,6 +83,7 @@ import support, {
   writeAsk,
   writeAgentState,
 } from "./support.ts";
+import { parseHerdrVersion } from "./herdr.ts";
 
 test("runtime build identity includes exact executable bytes", () => {
   const path = join(tmpdir(), `herdsman-build-${randomUUID()}.js`);
@@ -481,7 +482,6 @@ test("Chief activation exposes only semantic staff tools", async () => {
 });
 
 test("Herdr version parsing accepts preview suffixes but rejects trailing text", async () => {
-  const { parseHerdrVersion } = await import("./index.ts");
   for (const version of [
     "0.9.0",
     "0.9.0-preview",

@@ -4,6 +4,8 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { after, mock, test } from "node:test";
+import { fileURLToPath } from "node:url";
+import packageMetadata from "../package.json" with { type: "json" };
 import { Value } from "typebox/value";
 import type {
   AskRecord,
@@ -11,8 +13,9 @@ import type {
   ResultRecord,
   ManagedAgentState,
 } from "./mailbox.ts";
-import { claimProcessLock } from "./lock.ts";
+import { assignmentLockPath, claimProcessLock } from "./lock.ts";
 import { OperationError } from "./errors.ts";
+import { runtimeBuild } from "./compatibility.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 
 export const watchedResultPaths = new Map<string, Function>();
@@ -487,14 +490,34 @@ mock.module("typebox", {
   },
 });
 
-const extension = await import("./index.ts");
-export const registerExtension = extension.default;
-export const {
+const {
+  resolveAssignmentSession: resolveOwnedAssignmentSession,
   sessionAgentIdentity,
-  sessionContextRetired,
-  resolveAssignmentSession,
-  HERDSMAN_BUILD,
-} = extension;
+} = await import(
+  "./agent-controller.ts"
+);
+const { sessionContextRetired } = await import(
+  "./managed-agent-runtime.ts"
+);
+const { default: registerExtension } = await import("./index.ts");
+const { readConfig } = await import("./config.ts");
+export function resolveAssignmentSession(
+  ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,
+  raw: string,
+) {
+  return resolveOwnedAssignmentSession(ctx, raw, {
+    contextRetirement: readConfig().contextRetirement,
+    isContextRetired: (manager) =>
+      sessionContextRetired(manager.getEntries(), manager.getSessionId()),
+  });
+}
+export { sessionAgentIdentity };
+export { registerExtension };
+export { sessionContextRetired };
+export const HERDSMAN_BUILD = runtimeBuild(
+  packageMetadata.version,
+  fileURLToPath(new URL("./index.ts", import.meta.url)),
+);
 export const OTHER_HERDSMAN_BUILD = {
   ...HERDSMAN_BUILD,
   sha256:
@@ -619,11 +642,7 @@ export function delegationLockPathForTest(
 }
 
 export function assignmentLockPathForTest(mailbox: string): string {
-  return join(
-    herdsmanTempRoot(),
-    "locks",
-    "assignment-" + createHash("sha256").update(mailbox).digest("hex"),
-  );
+  return assignmentLockPath(mailbox);
 }
 
 export function fakeContext(

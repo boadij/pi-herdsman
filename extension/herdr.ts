@@ -21,6 +21,14 @@ import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { OperationError } from "./errors.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 
+const HERDR_VERSION_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview(?:\.[0-9A-Za-z-]+)?)?$/;
+
+export function parseHerdrVersion(value: string): RegExpMatchArray | undefined {
+  const match = value.match(HERDR_VERSION_PATTERN);
+  return match?.[0] === value ? match : undefined;
+}
+
 export type HerdrRecord = Record<string, any>;
 export type HerdrSessionSnapshot = {
   panes: HerdrRecord[];
@@ -1950,6 +1958,32 @@ export function sessionIdentity(
     sessionValue.length > 0
     ? { kind, value: sessionValue }
     : undefined;
+}
+export function herdrSessionId(agent: any): string | undefined {
+  const session = sessionIdentity(agent?.agent_session);
+  if (!session) return undefined;
+  if (session.kind === "id") return session.value;
+  try {
+    return readPiSessionHeaderId(session.value);
+  } catch {
+    return undefined;
+  }
+}
+export function supervisedSessionFile(
+  agent: any,
+  sessionId: string,
+  findSessionById: (cwd: string, sessionId: string) => string | undefined,
+): string | undefined {
+  const session = sessionIdentity(agent?.agent_session);
+  if (!session) return undefined;
+  try {
+    if (session.kind === "path") return realpathSync(session.value);
+    if (typeof agent?.cwd !== "string" || !agent.cwd) return undefined;
+    const path = findSessionById(agent.cwd, sessionId);
+    return path ? realpathSync(path) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 export function sameObservedSessionPath(left: string, right: string): boolean {
   if (left === right) return true;

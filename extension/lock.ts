@@ -1,12 +1,52 @@
 import * as fs from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
+import { herdsmanTempRoot } from "./storage.ts";
 
 export class ProcessLockOccupiedError extends Error {
   readonly code = "PROCESS_LOCK_OCCUPIED";
 }
 
 export type ProcessLockClaim = { pid: number; id: string };
+
+export function assignmentLockPath(mailbox: string): string {
+  return join(
+    herdsmanTempRoot(),
+    "locks",
+    `assignment-${createHash("sha256").update(mailbox).digest("hex")}`,
+  );
+}
+
+export function sessionActivationLockPath(canonicalSessionPath: string): string {
+  return join(
+    herdsmanTempRoot(),
+    "locks",
+    `session-${createHash("sha256").update(canonicalSessionPath).digest("hex")}`,
+  );
+}
+
+export function claimAssignmentLock(mailbox: string): () => void {
+  return claimProcessLock(assignmentLockPath(mailbox), {
+    name: "managed assignment",
+    occupiedMessage: "Managed assignment is already changing",
+  });
+}
+
+export function tryClaimAssignmentLock(mailbox: string): (() => void) | undefined {
+  try {
+    return claimAssignmentLock(mailbox);
+  } catch (error) {
+    if (error instanceof ProcessLockOccupiedError) return undefined;
+    throw error;
+  }
+}
+
+export function claimSessionActivationLock(canonicalSessionPath: string): () => void {
+  return claimProcessLock(sessionActivationLockPath(canonicalSessionPath), {
+    name: "session activation",
+    occupiedMessage: "The exact Pi session is already being activated",
+  });
+}
 
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
