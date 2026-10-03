@@ -68,6 +68,11 @@ enter Manager mode; a Lead in a linked-worktree workspace remains a Lead. An
 ordinary Git primary workspace does not need an existing linked worktree before
 Manager activation; the first project delegation can create one.
 
+An optional user-wide auto-start preference can attempt the same Manager startup
+for a session with no persisted role intent in the primary workspace. Explicit
+session intent takes precedence, and automatic activation does not persist a
+Manager role.
+
 Workspace membership is physical placement, not assignment ownership. Multiple
 Leads can share a workspace, and a branch can have a worktree without implying
 that every session in that workspace owns its work.

@@ -30,7 +30,8 @@ diagnostic that includes the running Pi Herdsman package version.
 
 The plain command opens a native Pi selection menu titled with the running
 Pi Herdsman package version for both `/agents` and `/herdsman`, with `Running`,
-`Session stats`, `Definitions`, `Layout`, `Context retirement  on|off`, `Message limits`,
+`Session stats`, `Definitions`, `Layout`, `Context retirement  on|off`,
+`Manager auto-start  on|off`, `Message limits`,
 and `Stop all…` destinations. The
 Message limits view edits the user-wide inline attachment and mailbox payload
 limits. It is available only to a lead Pi session with UI. Current
@@ -159,7 +160,7 @@ Use ordinary `agent_close` for normal targeted model-driven control.
 
 ## Project Manager and Chief
 
-Every session starts as a Lead. A Lead in an ordinary Git primary Herdr
+By default, a session starts as a Lead. A Lead in an ordinary Git primary Herdr
 workspace can use `/manager` to claim the exclusive Manager lease for its
 Herdsman project scope and enter the Manager profile. No prior chat turn or
 existing linked worktree is required; the first project delegation can create
@@ -176,6 +177,13 @@ relinquishes the lease and restores the exact Lead tool baseline, including
 `agent`, and Lead instruction profile. Invoking `/manager` while already active
 opens the overview without changing the role or lease. See
 [Coordination](../concepts/coordination.md) for the role and project boundaries.
+
+The `/agents` Manager auto-start setting optionally makes a new session attempt
+that same Manager startup when it has no persisted role intent and starts in the
+project's primary workspace. Explicit persisted Lead, Manager, or Chief intent
+takes precedence. Ineligible or contended optional startup remains an ordinary
+Lead; successful automatic startup does not persist Manager intent. Changing
+the setting affects only a later `session_start`, not the running role.
 The Manager overview lists branch-based work, including paused work whose Lead
 is no longer running. It offers resume for paused work and focus or stop for a
 live Lead. Project retirement follows successful Herdr worktree removal; a

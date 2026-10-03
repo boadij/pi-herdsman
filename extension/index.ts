@@ -1698,7 +1698,7 @@ export default function (pi: ExtensionAPI): void {
         updateConfig(key as any, value),
       updateConfig: (key: string, value: unknown) =>
         updateConfig(
-          key as "spawnPlacement" | "contextRetirement",
+          key as "spawnPlacement" | "contextRetirement" | "autoActivateManager",
           value as any,
         ),
       collectOwnedSessionUsage,
@@ -2021,6 +2021,7 @@ export default function (pi: ExtensionAPI): void {
           appendDurableError(pi, ctx, "pi_herdsman_role_error", error),
       };
       const sessionStartOptions = {
+        autoActivateManager: () => readConfig().autoActivateManager,
         clearDefinitionRoster: () => {
           startupDefinitionRoster = undefined;
         },

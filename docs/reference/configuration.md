@@ -27,6 +27,7 @@ schema is:
 {
   "spawnPlacement": "subtree",
   "contextRetirement": true,
+  "autoActivateManager": false,
   "inlineAttachmentLimitBytes": 131072,
   "mailboxPayloadLimitBytes": 131072
 }
@@ -38,6 +39,7 @@ An absent file means these defaults:
 | ---------------------------- | -----------------: | ------------------------------------------------- |
 | `spawnPlacement`             |          `subtree` | `tab`, `subtree`, `split`                         |
 | `contextRetirement`          |               true | boolean                                           |
+| `autoActivateManager`        |              false | boolean                                           |
 | `inlineAttachmentLimitBytes` | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB) |
 | `mailboxPayloadLimitBytes`   | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB) |
 
@@ -61,6 +63,12 @@ The session receives a finalization instruction, and its result requires a
 fresh agent for follow-up. Disabling it bypasses retirement completely,
 including existing retirement markers, and leaves Pi's native compaction and
 session reuse behavior untouched.
+
+When `autoActivateManager` is enabled, a session without a persisted
+`pi-herdsman-role` entry attempts Manager startup only from its Herdr primary
+workspace. Linked workspaces, unavailable eligibility evidence, or an existing
+Manager leave it as an ordinary Lead. The preference does not persist Manager
+role intent and changing it does not affect the current session.
 
 Placement affects future starts, not existing agents. `tab` uses one lead-owned
 agents tab, `subtree` gives each lead-direct agent its own tab, and `split`

@@ -113,6 +113,7 @@ type LeadTransitionHost = {
   ): void;
   ownedTools(): ReadonlySet<string>;
   claimManagerLease: typeof import("./supervision.ts").claimManagerLease;
+  activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
   reportLeadMetadata: typeof import("./herdr.ts").reportLeadMetadata;
   delay: typeof import("node:timers/promises").setTimeout;
   removeProjectAssignment: typeof import("./supervision.ts").removeProjectAssignment;
@@ -147,6 +148,7 @@ type LeadTransitionHost = {
   remoteChiefAgent: LeadIdentityRuntime["remoteChiefAgent"];
   persistCoordinatorState(): boolean;
   persistLeadCoordination(): boolean;
+  assertCurrentLeadCoordination(ctx: ExtensionContext): void;
   prepareCoordinationInput: ReturnType<
     typeof createLeadCoordinationRuntime
   >["prepareCoordinationInput"];
@@ -738,6 +740,7 @@ export function createLeadSessionTreeRuntime(host: {
 
 export function createLeadSessionStartRuntime(host: {
   diagnostic(): void;
+  autoActivateManager(): boolean;
   clearDefinitionRoster(): void;
   clearChiefStartPreflight(): void;
   roleTransitions: LeadRoleTransitionRuntime;
@@ -796,11 +799,13 @@ export function createLeadSessionStartRuntime(host: {
         host.herdRun.restoreSession(ctx.sessionManager.getEntries(), sessionId);
         let persistedRole: SessionRole = "lead";
         let malformedRole = false;
+        let hasPersistedRole = false;
         try {
           const persisted = host.sessionLeadRoleState(
             ctx.sessionManager.getEntries(),
           );
           if (persisted) {
+            hasPersistedRole = true;
             persistedRole = persisted.role;
             const activeBaseline = host.normalizeLeadTools(host.activeTools());
             host.setLeadTools(
@@ -818,13 +823,27 @@ export function createLeadSessionStartRuntime(host: {
           malformedRole = true;
           await host.failClosedRole(ctx, error);
         }
+        const optionalManager =
+          !hasPersistedRole && !malformedRole && host.autoActivateManager();
+        let leadStateRestored = false;
+        let leadStateValid = !optionalManager;
+        if (optionalManager && host.roleTransitions.canRestoreChiefState()) {
+          leadStateValid = host.roleTransitions.restoreChiefState(ctx);
+          leadStateRestored = true;
+        }
         try {
-          await host.roleTransitions.resolveControllerRole(ctx, persistedRole);
+          await host.roleTransitions.resolveControllerRole(
+            ctx,
+            persistedRole,
+            optionalManager && leadStateValid,
+          );
         } catch (error) {
           host.appendRoleError(ctx, error);
         }
+        if (optionalManager && leadStateValid)
+          host.roleTransitions.finalizeOptionalManagerStartup(ctx);
         if (malformedRole) host.roleTransitions.suspendMalformedRole(ctx);
-        if (host.roleTransitions.canRestoreChiefState())
+        if (!leadStateRestored && host.roleTransitions.canRestoreChiefState())
           host.roleTransitions.restoreChiefState(ctx);
         if (host.roleTransitions.shouldRestoreChief(persistedRole)) {
           try {
@@ -1490,6 +1509,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               value: "context-retirement",
               label: `Context retirement  ${host.readConfig().contextRetirement ? "on" : "off"}`,
             },
+            {
+              value: "auto-activate-manager",
+              label: `Manager auto-start  ${host.readConfig().autoActivateManager ? "on" : "off"}`,
+            },
             { value: "message-limits", label: "Message limits" },
             { value: "stop-all", label: "Stop all…" },
           ],
@@ -1506,6 +1529,10 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           const enabled = !host.readConfig().contextRetirement;
           host.updateConfig("contextRetirement", enabled);
           ctx.ui.notify(`context retirement: ${enabled ? "on" : "off"}`);
+        } else if (selected === "auto-activate-manager") {
+          const enabled = !host.readConfig().autoActivateManager;
+          host.updateConfig("autoActivateManager", enabled);
+          ctx.ui.notify(`Manager auto-start: ${enabled ? "on" : "off"}`);
         } else if (selected === "message-limits")
           await this.openMessageLimitsMenu(ctx);
         else if (selected === "stop-all") await this.confirmAndStopAll(ctx);
@@ -1863,6 +1890,8 @@ export function registerLeadRuntime(
     persistRole,
     persistLeadCoordination: () =>
       coordinationRuntime.persistLeadCoordination(),
+    assertCurrentLeadCoordination: (ctx: ExtensionContext) =>
+      coordinationRuntime.assertCurrentLeadCoordination(ctx),
     coordinationHealthy: () => coordinationRuntime.coordinationHealthy(),
     schedulePeerPresence: (ctx: ExtensionContext) =>
       coordinationRuntime.schedulePeerPresence(ctx),
@@ -6300,7 +6329,7 @@ export function enterSuspendedRole(
 export function restoreLeadChiefState(
   ctx: ExtensionContext,
   host: LeadTransitionHost,
-): void {
+): boolean {
   host.setLeadInstanceId(randomUUID());
   host.setCoordinationHealthy(true);
   const entry = [...ctx.sessionManager.getEntries()]
@@ -6337,10 +6366,11 @@ export function restoreLeadChiefState(
       "pi_herdsman_state_error",
       new Error("invalid pi-herdsman-lead-state entry"),
     );
-    return;
+    return false;
   }
   if (hasRetiredPendingAsk) host.persistCoordinatorState();
   else host.persistLeadCoordination();
+  return true;
 }
 
 export async function resolveLeadControllerRole(
@@ -6357,13 +6387,28 @@ export async function resolveLeadControllerRole(
       signal: AbortSignal,
     ) => Promise<{ primaryWorkspaceId: string; repoKey: string }>;
     claimManagerLease: typeof import("./supervision.ts").claimManagerLease;
+    coordinationHealthy(): boolean;
+    verifyManagerIdentity(
+      descriptor: import("./supervision.ts").ManagerDescriptor,
+    ): Promise<unknown>;
+    unresolvedManagerLease(): void;
+    activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
     persistLeadRole: () => void;
   },
+  optional = false,
 ): Promise<void> {
   state.controllerRole = "lead";
   state.roleSuspended = false;
   const { paneId, tabId, workspaceId } = deps.identity;
-  if (requestedRole !== "manager" || !paneId || !tabId || !workspaceId) return;
+  if (
+    (requestedRole !== "manager" && !optional) ||
+    !paneId ||
+    !tabId ||
+    !workspaceId
+  )
+    return;
+  if (optional)
+    deps.activationGuard(ctx.sessionManager.getSessionId(), "Manager");
   let scope;
   try {
     scope = await deps.worktreeGroupScope(workspaceId, ctx.signal);
@@ -6372,19 +6417,18 @@ export async function resolveLeadControllerRole(
       error instanceof OperationError &&
       error.detail.details?.herdrCode === "not_git_worktree"
     ) {
-      deps.persistLeadRole();
+      if (!optional) deps.persistLeadRole();
       return;
     }
-    state.roleSuspended = true;
+    if (!optional) state.roleSuspended = true;
     throw error;
   }
   if (scope.primaryWorkspaceId !== workspaceId) {
-    deps.persistLeadRole();
+    if (!optional) deps.persistLeadRole();
     return;
   }
-  state.controllerRole = "manager";
   try {
-    state.managerLease = deps.claimManagerLease({
+    const lease = deps.claimManagerLease({
       build: deps.build,
       piSessionId: ctx.sessionManager.getSessionId(),
       piSessionFile: ctx.sessionManager.getSessionFile(),
@@ -6393,9 +6437,60 @@ export async function resolveLeadControllerRole(
       workspaceId,
       repoKey: scope.repoKey,
     });
+    if (optional) {
+      let verified: unknown;
+      try {
+        verified = await deps.verifyManagerIdentity(lease.descriptor);
+      } catch (error) {
+        try {
+          lease.release();
+        } catch (releaseError) {
+          state.managerLease = lease;
+          state.controllerRole = "manager";
+          state.roleSuspended = true;
+          deps.unresolvedManagerLease();
+          throw releaseError;
+        }
+        throw error;
+      }
+      if (!verified) {
+        try {
+          lease.release();
+        } catch (error) {
+          state.managerLease = lease;
+          state.controllerRole = "manager";
+          state.roleSuspended = true;
+          deps.unresolvedManagerLease();
+          throw error;
+        }
+        return;
+      }
+      if (!deps.coordinationHealthy()) {
+        try {
+          lease.release();
+        } catch (error) {
+          state.managerLease = lease;
+          state.controllerRole = "manager";
+          state.roleSuspended = true;
+          deps.unresolvedManagerLease();
+          throw error;
+        }
+        return;
+      }
+    }
+    state.managerLease = lease;
+    state.controllerRole = "manager";
   } catch (error) {
-    state.managerLease = undefined;
+    if (!state.roleSuspended) state.managerLease = undefined;
     if (!(error instanceof ProcessLockOccupiedError)) throw error;
+    if (optional) {
+      ctx.ui.notify(
+        "Manager auto-start skipped: this project already has an active Manager.",
+        "warning",
+      );
+      return;
+    }
+    state.controllerRole = "manager";
     state.roleSuspended = true;
     ctx.ui.notify(
       "Manager unavailable: this project already has an active Manager. Manager mode is suspended.",
@@ -7248,15 +7343,91 @@ export function createLeadRoleTransitions(
   const resolveControllerRole = (
     ctx: ExtensionContext,
     requestedRole: SessionRole,
+    optional = false,
   ): Promise<void> =>
-    resolveLeadControllerRole(state, ctx, requestedRole, {
-      identity: host.identity,
-      build: host.build,
-      worktreeGroupScope: (workspaceId, signal) =>
-        host.worktreeGroupScope(ctx, workspaceId, signal),
-      claimManagerLease: host.claimManagerLease,
-      persistLeadRole: () => host.persistRole("lead"),
-    });
+    resolveLeadControllerRole(
+      state,
+      ctx,
+      requestedRole,
+      {
+        identity: host.identity,
+        build: host.build,
+        worktreeGroupScope: (workspaceId, signal) =>
+          host.worktreeGroupScope(ctx, workspaceId, signal),
+        claimManagerLease: host.claimManagerLease,
+        coordinationHealthy: host.coordinationHealthy,
+        verifyManagerIdentity: (descriptor) =>
+          host.remoteChiefAgent(ctx, descriptor),
+        unresolvedManagerLease: () => {
+          host.markLeadCoordinationUnhealthy(ctx);
+          reconcileRoleTools();
+        },
+        activationGuard: host.activationGuard,
+        persistLeadRole: () => host.persistRole("lead"),
+      },
+      optional,
+    );
+  const finalizeOptionalManagerStartup = (ctx: ExtensionContext): void => {
+    if (state.controllerRole !== "manager" || !state.managerLease) return;
+    try {
+      if (!host.persistLeadCoordination())
+        throw new Error("Manager coordination state could not be published");
+      host.assertCurrentLeadCoordination(ctx);
+      return;
+    } catch (error) {
+      const lease = state.managerLease;
+      state.managerLease = undefined;
+      state.controllerRole = "lead";
+      try {
+        lease.release();
+      } catch (releaseError) {
+        state.managerLease = lease;
+        state.controllerRole = "manager";
+        state.roleSuspended = true;
+        host.markLeadCoordinationUnhealthy(ctx);
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_role_error",
+          releaseError,
+        );
+        try {
+          reconcileRoleTools();
+        } catch (toolsError) {
+          host.appendDurableError(
+            host.pi,
+            ctx,
+            "pi_herdsman_role_error",
+            toolsError,
+          );
+        }
+        host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+        return;
+      }
+      try {
+        reconcileRoleTools();
+      } catch (toolsError) {
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_role_error",
+          toolsError,
+        );
+      }
+      host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+      if (!host.persistLeadCoordination()) return;
+      try {
+        host.assertCurrentLeadCoordination(ctx);
+      } catch (leadError) {
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_state_error",
+          leadError,
+        );
+      }
+    }
+  };
   const suspendMalformedRole = (ctx: ExtensionContext): void => {
     state.roleSuspended = true;
     try {
@@ -7284,6 +7455,7 @@ export function createLeadRoleTransitions(
     reconcileBranchRole,
     reconcileRoleTools,
     resolveControllerRole,
+    finalizeOptionalManagerStartup,
     restoreChiefState: (ctx: ExtensionContext) =>
       restoreLeadChiefState(ctx, host),
     suspendMalformedRole,

@@ -21,6 +21,7 @@ export const MAX_BYTE_LIMIT = 1024 * 1024;
 export type HerdsmanConfig = {
   spawnPlacement: SpawnPlacement;
   contextRetirement: boolean;
+  autoActivateManager: boolean;
   inlineAttachmentLimitBytes: number;
   mailboxPayloadLimitBytes: number;
 };
@@ -28,6 +29,7 @@ export type HerdsmanConfig = {
 export const DEFAULT_CONFIG: HerdsmanConfig = {
   spawnPlacement: "subtree",
   contextRetirement: true,
+  autoActivateManager: false,
   inlineAttachmentLimitBytes: DEFAULT_BYTE_LIMIT,
   mailboxPayloadLimitBytes: DEFAULT_BYTE_LIMIT,
 };
@@ -45,6 +47,7 @@ type ConfigKey = keyof HerdsmanConfig;
 const CONFIG_KEYS = new Set<ConfigKey>([
   "spawnPlacement",
   "contextRetirement",
+  "autoActivateManager",
   "inlineAttachmentLimitBytes",
   "mailboxPayloadLimitBytes",
 ]);
@@ -74,6 +77,11 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
     if (typeof record.contextRetirement !== "boolean")
       throw new Error("Invalid Pi Herdsman config field contextRetirement");
     result.contextRetirement = record.contextRetirement;
+  }
+  if ("autoActivateManager" in record) {
+    if (typeof record.autoActivateManager !== "boolean")
+      throw new Error("Invalid Pi Herdsman config field autoActivateManager");
+    result.autoActivateManager = record.autoActivateManager;
   }
   for (const key of [
     "inlineAttachmentLimitBytes",
@@ -141,9 +149,12 @@ export function updateConfig<K extends ConfigKey>(
         throw new Error("Invalid Pi Herdsman config field spawnPlacement");
       if (key === "contextRetirement" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field contextRetirement");
+      if (key === "autoActivateManager" && typeof value !== "boolean")
+        throw new Error("Invalid Pi Herdsman config field autoActivateManager");
       if (
         key !== "spawnPlacement" &&
         key !== "contextRetirement" &&
+        key !== "autoActivateManager" &&
         !validByteLimit(value)
       )
         throw new Error(`Invalid Pi Herdsman config field ${key}`);

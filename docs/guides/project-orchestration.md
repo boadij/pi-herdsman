@@ -21,6 +21,12 @@ Start Pi in the primary workspace of the Herdr worktree group and run:
 /manager
 ```
 
+Optionally, enable `Manager auto-start` in `/agents` to have a session with no
+persisted role intent attempt the existing Manager startup path when it starts
+in the project's primary workspace. The preference does not persist Manager
+intent; explicit session roles take precedence, and an ineligible or contended
+attempt remains an ordinary Lead.
+
 The current Lead must be eligible for Manager mode and must not still own
 unresolved Agent work. Only one live Manager can hold authority for a project
 scope at a time. No prior chat turn or existing linked worktree is required in
