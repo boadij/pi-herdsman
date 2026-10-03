@@ -11,6 +11,16 @@ behavior.
   guidance for removed behavior.
 - Document only verified current semantics and known limitations.
 
+## Product philosophy
+
+Repository changes must follow the scope and ownership principles in
+[Product philosophy](docs/development/product-philosophy.md).
+
+Keep Herdsman focused on the orchestration problems it owns. Prefer the
+smallest integration-agnostic capability supported by demonstrated need, and
+leave provider-, model-, extension-, tool-, storage-, and service-specific
+semantics to their owners.
+
 ## Instruction and interface design
 
 Repository changes must follow the principles in
