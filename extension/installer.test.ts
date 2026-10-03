@@ -28,7 +28,7 @@ test("released runtime metadata matches the locked Pi and has Herdr checksums", 
   );
   assert.match(
     runtime?.herdr?.version ?? "",
-    /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u,
+    /^\d+\.\d+\.\d+$/u,
   );
   assert.deepEqual(Object.keys(runtime?.herdr?.sha256 ?? {}).sort(), [
     "linux-aarch64",
@@ -46,7 +46,12 @@ function executable(path, content) {
   chmodSync(path, 0o755);
 }
 
-function fixture({ badChecksum = false } = {}) {
+function fixture({
+  badChecksum = false,
+  initialPiVersion = "0.1.0",
+  initialHerdrVersion = "0.1.0",
+  piInstallerVersion = packageJson.piHerdsman.runtime.pi,
+} = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-install-"));
   const bin = join(root, "bin");
   const home = join(root, "home");
@@ -61,8 +66,8 @@ function fixture({ badChecksum = false } = {}) {
   const herdrAsset = join(root, "herdr-asset");
 
   writeFileSync(log, "");
-  writeFileSync(piVersion, "0.1.0\n");
-  writeFileSync(herdrVersion, "0.1.0\n");
+  writeFileSync(piVersion, `${initialPiVersion}\n`);
+  writeFileSync(herdrVersion, `${initialHerdrVersion}\n`);
   writeFileSync(piList, `  npm:pi-herdsman@${packageJson.version}\n`);
 
   executable(
@@ -114,7 +119,6 @@ exec "$REAL_NODE" "$@"
 printf 'npm %s\\n' "$*" >> "$FAKE_LOG"
 case "\${1:-}" in
   view) cat "$FAKE_MANIFEST" ;;
-  install) printf '%s\\n' "$FAKE_PI_TARGET" > "$FAKE_PI_VERSION" ;;
 esac
 `,
   );
@@ -144,6 +148,15 @@ esac
     join(bin, "curl"),
     `#!/bin/sh
 printf 'curl %s\\n' "$*" >> "$FAKE_LOG"
+case "$*" in
+  *https://pi.dev/install.sh*)
+    cat <<'SH'
+#!/bin/sh
+printf '%s\\n' "$FAKE_PI_INSTALLER_TARGET" > "$FAKE_PI_VERSION"
+SH
+    exit 0
+    ;;
+esac
 out=
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then
@@ -186,14 +199,14 @@ process.stdin.on("end", () => {
       FAKE_HERDR_VERSION: herdrVersion,
       FAKE_PI_LIST: piList,
       FAKE_HERDR_ASSET: herdrAsset,
-      FAKE_PI_TARGET: packageJson.piHerdsman.runtime.pi,
+      FAKE_PI_INSTALLER_TARGET: piInstallerVersion,
       FAKE_HERDR_TARGET: packageJson.piHerdsman.runtime.herdr.version,
     },
   };
 }
 
 test(
-  "installer migrates a pinned Herdsman source and repeat runs skip matching components",
+  "installer raises older runtimes to tested baselines and repeat runs leave them alone",
   { skip: process.platform === "win32" },
   () => {
     const setup = fixture();
@@ -212,13 +225,7 @@ test(
       );
 
       const firstLog = readFileSync(setup.log, "utf8");
-      assert.match(
-        firstLog,
-        new RegExp(
-          `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${packageJson.piHerdsman.runtime.pi}`,
-          "u",
-        ),
-      );
+      assert.match(firstLog, /curl .*https:\/\/pi\.dev\/install\.sh/u);
       assert.match(firstLog, /pi install npm:pi-herdsman --no-approve/u);
       assert.match(firstLog, /herdr integration install pi/u);
       assert.match(
@@ -237,12 +244,12 @@ test(
       assert.equal(second.status, 0, second.stderr);
       assert.ok(
         second.stdout.includes(
-          `Pi ${packageJson.piHerdsman.runtime.pi} already installed`,
+          `Pi ${packageJson.piHerdsman.runtime.pi} already satisfies tested baseline ${packageJson.piHerdsman.runtime.pi}`,
         ),
       );
       assert.ok(
         second.stdout.includes(
-          `Herdr ${packageJson.piHerdsman.runtime.herdr.version} already installed`,
+          `Herdr ${packageJson.piHerdsman.runtime.herdr.version} already satisfies tested baseline ${packageJson.piHerdsman.runtime.herdr.version}`,
         ),
       );
       assert.ok(
@@ -252,10 +259,74 @@ test(
       );
 
       const secondLog = readFileSync(setup.log, "utf8");
-      assert.doesNotMatch(secondLog, /npm install -g/u);
-      assert.doesNotMatch(secondLog, /^curl /mu);
+      assert.doesNotMatch(secondLog, /https:\/\/pi\.dev\/install\.sh/u);
+      assert.doesNotMatch(secondLog, /releases\/download\/v/u);
       assert.doesNotMatch(secondLog, /^pi install /mu);
       assert.match(secondLog, /herdr integration install pi/u);
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "installer accepts a newer Pi selected by the upstream managed installer",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture({
+      initialHerdrVersion: packageJson.piHerdsman.runtime.herdr.version,
+      piInstallerVersion: "9.0.0",
+    });
+    try {
+      const result = spawnSync("sh", [installer], {
+        env: setup.env,
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(
+        result.stdout.includes(
+          `Pi Herdsman ${packageJson.version} ready with Pi 9.0.0 and Herdr ${packageJson.piHerdsman.runtime.herdr.version}`,
+        ),
+      );
+      assert.match(
+        readFileSync(setup.log, "utf8"),
+        /curl .*https:\/\/pi\.dev\/install\.sh/u,
+      );
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "installer does not downgrade newer Pi or Herdr runtimes",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture({
+      initialPiVersion: "9.0.0",
+      initialHerdrVersion: "9.0.0",
+    });
+    try {
+      const result = spawnSync("sh", [installer], {
+        env: setup.env,
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(
+        result.stdout.includes(
+          `Pi 9.0.0 already satisfies tested baseline ${packageJson.piHerdsman.runtime.pi}`,
+        ),
+      );
+      assert.ok(
+        result.stdout.includes(
+          `Herdr 9.0.0 already satisfies tested baseline ${packageJson.piHerdsman.runtime.herdr.version}`,
+        ),
+      );
+
+      const log = readFileSync(setup.log, "utf8");
+      assert.doesNotMatch(log, /https:\/\/pi\.dev\/install\.sh/u);
+      assert.doesNotMatch(log, /releases\/download\/v/u);
+      assert.match(log, /herdr integration install pi/u);
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
     }

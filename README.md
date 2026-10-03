@@ -38,6 +38,9 @@ On Linux or macOS, install the released Pi, herdr, and Pi Herdsman stack:
 curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
 ```
 
+See [Getting started](docs/getting-started.md) for the tested runtime baselines
+and how the bootstrap handles newer Pi and herdr versions.
+
 If you already manage Pi and herdr yourself:
 
 ```sh
