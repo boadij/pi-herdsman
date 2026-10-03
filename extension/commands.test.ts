@@ -551,6 +551,7 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
 
 test("root Lead explicitly enters Manager; a competing root session stays Lead", async () => {
   setLeadEnvironment();
+  updateConfig("autoActivateManager", true);
   process.env.HERDR_PANE_ID = "root-pane";
   process.env.HERDR_TAB_ID = "root-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -594,12 +595,19 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     return respond({});
   };
   const first = fakeChiefPi({
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        data: { role: "lead", leadTools: ["read"] },
+      },
+    ],
     activeTools: ["read"],
     exec,
     sessionName: "current lead name",
   });
   const second = fakeChiefPi({ activeTools: ["read"], exec });
-  const ctx1 = fakeContext() as any;
+  const ctx1 = fakeContext(first.entries) as any;
   const managerNotices: string[] = [];
   ctx1.ui.notify = (message: string, level?: string) => {
     if (level === "error") managerNotices.push(message);
@@ -785,10 +793,21 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       ),
     );
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...managerTools]);
-    await second.events.get("session_start")![0](undefined, ctx2);
-    assert.deepEqual(second.pi.getActiveTools(), ["read", ...leadTools]);
     const collisionNotices: string[] = [];
     ctx2.ui.notify = (message: string) => collisionNotices.push(message);
+    await second.events.get("session_start")![0](undefined, ctx2);
+    assert.deepEqual(second.pi.getActiveTools(), ["read", ...leadTools]);
+    assert.ok(
+      collisionNotices.some((message) =>
+        message.includes(
+          "Manager auto-start skipped: this project already has an active Manager.",
+        ),
+      ),
+    );
+    assert.equal(
+      sessionLeadRoleState(ctx2.sessionManager.getEntries()),
+      undefined,
+    );
     await second.commandOptions.get("manager").handler("", ctx2);
     assert.deepEqual(second.pi.getActiveTools(), ["read", ...leadTools]);
     assert.ok(
@@ -796,6 +815,49 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
         /already has an active Manager/.test(message),
       ),
     );
+
+    const persistedManager = fakeChiefPi({
+      activeTools: ["read"],
+      entries: [
+        {
+          type: "custom",
+          customType: "pi-herdsman-role",
+          data: { role: "manager", leadTools: ["read"] },
+        },
+      ],
+      exec,
+    });
+    registerExtension!(persistedManager.pi as never);
+    const persistedManagerContext = fakeContext(
+      persistedManager.entries,
+    ) as any;
+    persistedManagerContext.sessionManager.getSessionId = () =>
+      `restored-manager-${randomUUID()}`;
+    const restorationNotices: string[] = [];
+    persistedManagerContext.ui.notify = (message: string) =>
+      restorationNotices.push(message);
+    await persistedManager.events.get("session_start")![0](
+      undefined,
+      persistedManagerContext,
+    );
+    assert.equal(
+      persistedManager.pi.getActiveTools().includes("staff_delegate"),
+      false,
+    );
+    assert.equal(
+      sessionLeadRoleState(persistedManagerContext.sessionManager.getEntries())
+        ?.role,
+      "manager",
+    );
+    assert.ok(
+      restorationNotices.some((message) =>
+        /Manager unavailable: this project already has an active Manager\. Manager mode is suspended\./.test(
+          message,
+        ),
+      ),
+    );
+    await persistedManager.events.get("session_shutdown")?.[0]();
+    updateConfig("autoActivateManager", undefined);
     assert.equal(
       readLeadCoordinationState(supervisionRuntime(), LEAD_SESSION_ID)?.role,
       "manager",
@@ -868,6 +930,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       await replacement.events.get("session_shutdown")![0]();
     }
   } finally {
+    updateConfig("autoActivateManager", undefined);
     await second.events.get("session_shutdown")?.[0]();
     await first.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -1075,6 +1138,7 @@ test("Manager leave suspends authority when lease release fails", async () => {
 
 test("restored Manager registers supervision tools and restores Manager tools", async () => {
   setLeadEnvironment();
+  updateConfig("autoActivateManager", true);
   process.env.HERDR_PANE_ID = "manager-pane";
   process.env.HERDR_TAB_ID = "manager-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -1138,6 +1202,70 @@ test("restored Manager registers supervision tools and restores Manager tools", 
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
+    updateConfig("autoActivateManager", undefined);
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("Manager auto-start activates without persisting Manager role intent", async () => {
+  setLeadEnvironment();
+  updateConfig("autoActivateManager", true);
+  process.env.HERDR_PANE_ID = "auto-manager-pane";
+  process.env.HERDR_TAB_ID = "auto-manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `auto-manager-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    exec: (command, args) => {
+      if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: {
+            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+          },
+        });
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            source_workspace_id: WORKSPACE,
+            repo_key: "repo-key",
+            repo_name: "project",
+          },
+          worktrees: [],
+        });
+      if (command === "herdr" && isAgentList(args))
+        return respond({ agents: [] });
+      if (command === "herdr" && isApiSnapshot(args))
+        return respond({ snapshot: { agents: [], panes: [] } });
+      return respond({});
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    const context = fakeContext(pi.entries) as any;
+    context.sessionManager.getSessionId = () => `auto-manager-${randomUUID()}`;
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
+    assert.equal(
+      pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-role" &&
+          entry.data?.role === "manager",
+      ),
+      false,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    updateConfig("autoActivateManager", undefined);
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
@@ -3981,6 +4109,7 @@ test("plain agents opens the native management menu", async () => {
       "Definitions",
       "Layout",
       "Context",
+      "Manager",
       "Message",
       "Stop",
     ],
@@ -4340,6 +4469,34 @@ test("main agents menu toggles context retirement", async () => {
   }
 });
 
+test("Manager auto-start menu toggle does not change the running role", async () => {
+  setLeadEnvironment();
+  updateConfig("autoActivateManager", undefined);
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "rpc";
+  const activeTools = pi.pi.getActiveTools();
+  const notices: string[] = [];
+  let selected = false;
+  context.ui.select = async (_title: string, options: string[]) => {
+    if (selected) return undefined;
+    selected = true;
+    return options.find((option) => option.includes("Manager auto-start"));
+  };
+  context.ui.notify = (message: string) => notices.push(message);
+  try {
+    await pi.commandOptions.get("agents").handler("", context);
+    assert.equal(readConfig().autoActivateManager, true);
+    assert.deepEqual(pi.pi.getActiveTools(), activeTools);
+    assert.deepEqual(notices, ["Manager auto-start: on"]);
+  } finally {
+    updateConfig("autoActivateManager", undefined);
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
 test("message limit edits stay in the submenu with the edited field selected", async () => {
   setLeadEnvironment();
   const pi = fakePi();
@@ -4363,7 +4520,7 @@ test("message limit edits stay in the submenu with the edited field selected", a
       renders.push(component.render(200));
       switch (customCalls++) {
         case 0:
-          for (let i = 0; i < 4; i++) component.handleInput("\u001b[B");
+          for (let i = 0; i < 5; i++) component.handleInput("\u001b[B");
           component.handleInput("\r");
           break;
         case 1:
