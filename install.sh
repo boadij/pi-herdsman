@@ -108,14 +108,14 @@ if (major < 22 || (major === 22 && minor < 19)) process.exit(1);
   fi
 
   if [ "$pi_cmp" -lt 0 ]; then
-    log "installing Pi (tested baseline $pi_version)"
+    log "installing Pi via upstream installer (minimum $pi_version)"
     curl -fsSL https://pi.dev/install.sh | sh
     hash -r 2>/dev/null || true
     command -v pi >/dev/null 2>&1 ||
       err "Pi installer completed but 'pi' is not on PATH"
     installed_pi="$(current_version pi)"
     [ "$(version_compare "$installed_pi" "$pi_version")" -ge 0 ] ||
-      err "Pi $installed_pi is older than the tested baseline $pi_version"
+      err "Pi $installed_pi is older than the required minimum $pi_version"
   else
     log "Pi $installed_pi already satisfies tested baseline $pi_version"
   fi

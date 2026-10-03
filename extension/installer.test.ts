@@ -50,6 +50,7 @@ function fixture({
   badChecksum = false,
   initialPiVersion = "0.1.0",
   initialHerdrVersion = "0.1.0",
+  piInstallerVersion = packageJson.piHerdsman.runtime.pi,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-install-"));
   const bin = join(root, "bin");
@@ -118,7 +119,6 @@ exec "$REAL_NODE" "$@"
 printf 'npm %s\\n' "$*" >> "$FAKE_LOG"
 case "\${1:-}" in
   view) cat "$FAKE_MANIFEST" ;;
-  install) printf '%s\\n' "$FAKE_PI_TARGET" > "$FAKE_PI_VERSION" ;;
 esac
 `,
   );
@@ -152,7 +152,7 @@ case "$*" in
   *https://pi.dev/install.sh*)
     cat <<'SH'
 #!/bin/sh
-printf '%s\\n' "$FAKE_PI_TARGET" > "$FAKE_PI_VERSION"
+printf '%s\\n' "$FAKE_PI_INSTALLER_TARGET" > "$FAKE_PI_VERSION"
 SH
     exit 0
     ;;
@@ -199,7 +199,7 @@ process.stdin.on("end", () => {
       FAKE_HERDR_VERSION: herdrVersion,
       FAKE_PI_LIST: piList,
       FAKE_HERDR_ASSET: herdrAsset,
-      FAKE_PI_TARGET: packageJson.piHerdsman.runtime.pi,
+      FAKE_PI_INSTALLER_TARGET: piInstallerVersion,
       FAKE_HERDR_TARGET: packageJson.piHerdsman.runtime.herdr.version,
     },
   };
@@ -263,6 +263,35 @@ test(
       assert.doesNotMatch(secondLog, /releases\/download\/v/u);
       assert.doesNotMatch(secondLog, /^pi install /mu);
       assert.match(secondLog, /herdr integration install pi/u);
+    } finally {
+      rmSync(setup.root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "installer accepts a newer Pi selected by the upstream managed installer",
+  { skip: process.platform === "win32" },
+  () => {
+    const setup = fixture({
+      initialHerdrVersion: packageJson.piHerdsman.runtime.herdr.version,
+      piInstallerVersion: "9.0.0",
+    });
+    try {
+      const result = spawnSync("sh", [installer], {
+        env: setup.env,
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(
+        result.stdout.includes(
+          `Pi Herdsman ${packageJson.version} ready with Pi 9.0.0 and Herdr ${packageJson.piHerdsman.runtime.herdr.version}`,
+        ),
+      );
+      assert.match(
+        readFileSync(setup.log, "utf8"),
+        /curl .*https:\/\/pi\.dev\/install\.sh/u,
+      );
     } finally {
       rmSync(setup.root, { recursive: true, force: true });
     }
