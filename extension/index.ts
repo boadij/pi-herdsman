@@ -171,9 +171,6 @@ import {
   validateAssignmentCwd,
   herdrSessionsMatch,
   validateIdentity,
-  hasPendingDirectChildWork,
-  allDirectChildrenAskBlocked,
-  hasUndeliveredDirectChildWork,
   validateAssignmentRequest,
 } from "./agent-controller.ts";
 import {
@@ -2026,9 +2023,6 @@ export default function (pi: ExtensionAPI): void {
     resultWriteMaxAttempts: RESULT_WRITE_MAX_ATTEMPTS,
     tryClaimAssignmentLock,
     claimAssignmentLock,
-    hasPendingDirectChildWork,
-    allDirectChildrenAskBlocked,
-    hasUndeliveredDirectChildWork,
     messageLimits,
     resolveMessageFiles: controllerResolveMessageFiles,
     currentTurnMessage,

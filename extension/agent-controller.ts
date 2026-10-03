@@ -4934,6 +4934,9 @@ const actionUnsafe = async (
     managedAgentSnapshots: snapshot,
     agentSnapshotView: snapshotView,
     listedAgentRecord: listRecord,
+    hasPendingDirectChildWork,
+    allDirectChildrenAskBlocked,
+    hasUndeliveredDirectChildWork,
     listedAgents(context: ExtensionContext, scope: ControllerScope | undefined, signal?: AbortSignal) {
       return snapshotView(context, scope, signal).then((view) => view.visible.map(({ listed }) => listed));
     },

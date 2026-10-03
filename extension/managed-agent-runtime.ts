@@ -40,6 +40,9 @@ import {
 import {
   statusBreadcrumb,
   createAgentController,
+  hasPendingDirectChildWork,
+  allDirectChildrenAskBlocked,
+  hasUndeliveredDirectChildWork,
   managedAgentSnapshots,
   type AgentControllerOptions,
   type ManagedAgentSnapshotCollection,
@@ -1299,9 +1302,6 @@ export function registerManagedAgentRuntime(
     resultWriteMaxAttempts: number;
     tryClaimAssignmentLock(mailbox: string): (() => void) | undefined;
     claimAssignmentLock(mailbox: string, operation: string, ids: { label?: string; paneId?: string }): () => void;
-    hasPendingDirectChildWork(state: ManagedAgentState): boolean;
-    allDirectChildrenAskBlocked(state: ManagedAgentState): boolean;
-    hasUndeliveredDirectChildWork(state: ManagedAgentState, entries: readonly unknown[]): boolean;
     messageLimits(ctx: ExtensionContext): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }>;
     resolveMessageFiles(ctx: ExtensionContext, files: string[] | undefined, operation: string): any;
     currentTurnMessage(ctx: ExtensionContext): unknown;
@@ -1383,7 +1383,8 @@ export function registerManagedAgentRuntime(
     mutateState: mutateAgentState,
     pendingResult: () => !!execution.pendingResult,
     pendingStateTransition: () => execution.pendingStateTransition,
-    allDirectChildrenAskBlocked: options.allDirectChildrenAskBlocked,
+    allDirectChildrenAskBlocked: (state) =>
+      (controller?.allDirectChildrenAskBlocked ?? allDirectChildrenAskBlocked)(state),
     tryClaimAssignmentLock: options.tryClaimAssignmentLock,
     sameIdentity: sameManagedAgentIdentity,
     activeContext: () => execution.agentContext,
@@ -1502,8 +1503,10 @@ export function registerManagedAgentRuntime(
     mutateState: mutateAgentState,
     requestState,
     tryClaimAssignmentLock: options.tryClaimAssignmentLock,
-    hasPendingDirectChildWork: options.hasPendingDirectChildWork,
-    hasUndeliveredDirectChildWork: options.hasUndeliveredDirectChildWork,
+    hasPendingDirectChildWork: (state) =>
+      (controller?.hasPendingDirectChildWork ?? hasPendingDirectChildWork)(state),
+    hasUndeliveredDirectChildWork: (state, entries) =>
+      (controller?.hasUndeliveredDirectChildWork ?? hasUndeliveredDirectChildWork)(state, entries),
     reportError: (ctx, error) => options.appendError(ctx, "pi_herdsman_state_error", error),
     reportMetadata: (state, ctx, patch) => metadataPublisher.report(state, ctx, patch),
     setLatest: (value) => { execution.latest = value; },
@@ -1513,7 +1516,8 @@ export function registerManagedAgentRuntime(
     state: () => execution.assignment,
     pendingResult: () => !!execution.pendingResult,
     delegationEnabled,
-    hasUndeliveredDirectChildWork: options.hasUndeliveredDirectChildWork,
+    hasUndeliveredDirectChildWork: (state, entries) =>
+      (controller?.hasUndeliveredDirectChildWork ?? hasUndeliveredDirectChildWork)(state, entries),
     setLatest: (value) => { execution.latest = value; },
     contentText: options.contentText,
   });
@@ -1526,7 +1530,8 @@ export function registerManagedAgentRuntime(
     delegationEnabled,
     tryClaimAssignmentLock: options.tryClaimAssignmentLock,
     sameIdentity: sameManagedAgentIdentity,
-    hasUndeliveredDirectChildWork: options.hasUndeliveredDirectChildWork,
+    hasUndeliveredDirectChildWork: (state, entries) =>
+      (controller?.hasUndeliveredDirectChildWork ?? hasUndeliveredDirectChildWork)(state, entries),
     reportMetadata: (state, ctx, patch) => metadataPublisher.report(state, ctx, patch),
     appendStateError: (ctx, error) => options.appendError(ctx, "pi_herdsman_state_error", error),
     appendResultError: (ctx, error) => options.appendError(ctx, "pi_herdsman_result_error", error),
