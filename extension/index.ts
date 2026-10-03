@@ -168,7 +168,6 @@ import {
   type ManagedAgentPresence,
   type ControllerScope,
   type Params,
-  type Runtime,
   requestRecordBytesFor,
   prospectiveAssignmentFits,
   validateAssignmentCwd,
@@ -265,7 +264,6 @@ import {
   createLeadToolState,
   type LeadRuntimeState,
   registerLeadRuntime,
-  buildLeadStatusSnapshot,
   createLeadRoleTransitions,
   resolveLeadControllerRole,
   readLeadSessionIds,
@@ -286,10 +284,7 @@ import {
   renderCoordinationCall,
   renderCoordinationResult,
   truncateModelText,
-  formatStatusCounts,
   formatSessionUsage,
-  buildStatusRows,
-  renderRunningOptions,
   formatSupervisionNotification,
   formatSupervisionContext,
   orderedSupervisionLeads,
@@ -1297,31 +1292,6 @@ export default function (pi: ExtensionAPI): void {
     let ownTools: string[] | undefined;
     const ownToolsSnapshot = (): { ownTools?: string[] } =>
       ownTools ? { ownTools } : {};
-    const loadStatusSnapshot = async (
-      ctx: ExtensionContext,
-      signal?: AbortSignal,
-      allowTranscriptDefinitionFallback = true,
-      runtimeForLabel: (label: string) => Runtime | undefined = () => undefined,
-    ): Promise<import("./presentation.ts").StatusSnapshot> => {
-      const controller = leadRuntimes.controller!;
-      const view = await controller.agentSnapshotView(
-        ctx, controllerScope, signal, true, allowTranscriptDefinitionFallback,
-      );
-      return buildLeadStatusSnapshot(view, ctx, {
-        scope: controllerScope,
-        hasStateIssues: () => listAgentStateIssues().length > 0,
-        listedAgentRecord: controller.listedAgentRecord,
-        runtimeForLabel,
-        herdStartedAt: () => leadHerdRunRuntime?.startedAt(),
-        environmentIdentity: (ctx) => managedAgentEnvironmentIdentity(ctx, HERDSMAN_BUILD),
-        identityFromEnvironment: () => ({
-          definition: process.env.PI_HERDSMAN_AGENT_DEFINITION,
-          label: process.env.PI_HERDSMAN_LABEL,
-        }),
-        sameIdentity: sameManagedAgentIdentity,
-        ownToolsSnapshot,
-      });
-    };
     type MenuItem = { value: string; label: string };
     type ModelMenuItem = MenuItem & { searchText: string };
     const selectTheme = (theme: any) => ({
@@ -1524,14 +1494,9 @@ export default function (pi: ExtensionAPI): void {
       );
     };
     let leadCommandRuntime: any;
-    const leadCommandServices = {
-      isLead: () => controllerScope.kind === "lead",
-      loadStatusSnapshot,
-      buildStatusRows,
-      renderRunningOptions,
+    const leadCommandHost = {
       runHerdr,
       presentStopSummary,
-      formatStatusCounts,
       version: HERDSMAN_VERSION,
       selectMenu,
       selectModelMenu,
@@ -1969,17 +1934,21 @@ export default function (pi: ExtensionAPI): void {
       },
       build: HERDSMAN_BUILD,
       projectHost,
-      commandServices: leadCommandServices,
+      commandHost: leadCommandHost,
       supervisionHost,
       herdRunEntryName: HERD_RUN_ENTRY,
       herdRunServices: {
         appendDurableError,
       },
-      statusServices: {
-        loadSnapshot: (ctx: ExtensionContext, signal: AbortSignal | undefined, runtimeForLabel: (label: string) => Runtime | undefined) =>
-          loadStatusSnapshot(ctx, signal, false, runtimeForLabel),
+      statusSnapshotHost: {
+        hasStateIssues: () => listAgentStateIssues().length > 0,
+        environmentIdentity: (ctx: ExtensionContext) => managedAgentEnvironmentIdentity(ctx, HERDSMAN_BUILD),
+        identityFromEnvironment: () => ({
+          definition: process.env.PI_HERDSMAN_AGENT_DEFINITION,
+          label: process.env.PI_HERDSMAN_LABEL,
+        }),
+        sameIdentity: sameManagedAgentIdentity,
         ownToolsSnapshot,
-        initialWidgetSnapshot: () => undefined,
       },
       inboxHost: {
         supervisionRuntime,

@@ -22,6 +22,9 @@ import type { ManagedAgentState, ResultBinding } from "./mailbox.ts";
 import {
   collapseDisplayText,
   compactModelToken,
+  buildStatusRows,
+  renderRunningOptions,
+  formatStatusCounts,
   createStatusWidget,
   createSupervisionWidget,
   padVisible,
@@ -957,18 +960,31 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     leadController: controller,
     hasLeadCoordination: options.identityHost.hasLeadCoordination,
   });
+  const loadStatusSnapshot = async (
+    ctx: ExtensionContext,
+    signal = controller.sessionSignal(),
+    allowTranscriptDefinitionFallback = true,
+    runtimeForLabel: (label: string) => any = (label) => controller.runtimeForLabel(label),
+  ): Promise<StatusSnapshot> => {
+    const view = await controller.agentSnapshotView(
+      ctx, { kind: "lead" }, signal, true, allowTranscriptDefinitionFallback,
+    );
+    return buildLeadStatusSnapshot(view, ctx, {
+      ...options.statusSnapshotHost,
+      scope: { kind: "lead" },
+      listedAgentRecord: controller.listedAgentRecord,
+      runtimeForLabel,
+      herdStartedAt: () => herdRunRuntime?.startedAt(),
+    });
+  };
   statusRuntime.configure({
-    ...options.statusServices,
+    ...options.statusSnapshotHost,
     pendingStartEntries: () => controller.pendingStartEntries(),
     hasPendingStart: (label: string) => controller.hasPendingStart(label),
     clearPendingStart: (label: string, expected: any) =>
       controller.clearPendingStart(label, expected),
     loadSnapshot: (ctx: ExtensionContext) =>
-      options.statusServices.loadSnapshot(
-        ctx,
-        controller.sessionSignal(),
-        (label: string) => controller.runtimeForLabel(label),
-      ),
+      loadStatusSnapshot(ctx, controller.sessionSignal(), false),
     runtimeForLabel: (label: string) => controller.runtimeForLabel(label),
   });
   let projectRuntime: ReturnType<typeof createLeadProjectRuntime>;
@@ -1014,22 +1030,21 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     appendDurableError: options.herdRunServices.appendDurableError,
   });
   const commandRuntime = createLeadCommandRuntime({
-    ...options.commandServices,
+    ...options.commandHost,
+    isLead: () => true,
+    buildStatusRows,
+    renderRunningOptions,
+    formatStatusCounts,
     openSupervisionOverview: (ctx: ExtensionCommandContext) =>
       supervisionUiRuntime.openOverview(ctx, {
         focusLead: (...args: any[]) => supervisionUiRuntime.focusLead(...args),
         stopProjectLead: (...args: any[]) => projectRuntime.stop(...args),
         activateProjectLead: (...args: any[]) => projectRuntime.activateProjectLead(...args),
-        selectMenu: options.commandServices.selectMenu,
+        selectMenu: options.commandHost.selectMenu,
       }),
     controller,
     loadStatusSnapshot: (ctx: ExtensionContext) =>
-      options.commandServices.loadStatusSnapshot(
-        ctx,
-        controller.sessionSignal(),
-        true,
-        (label: string) => controller.runtimeForLabel(label),
-      ),
+      loadStatusSnapshot(ctx, controller.sessionSignal(), true),
     roleActive: (role: "manager" | "chief") => role === "manager"
       ? activeLeadRole(options.leadRuntime) === "manager" && !options.leadRuntime.roleSuspended
       : options.leadRuntime.chiefMode === "active",
@@ -1038,7 +1053,7 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
         ? leave ? roleTransitions.leaveManager(ctx) : roleTransitions.activateManager(ctx)
         : leave ? roleTransitions.leaveChief(ctx) : roleTransitions.activateChief(ctx),
     runHerdr: (ctx: ExtensionContext, args: string[], runOptions: any) =>
-      options.commandServices.runHerdr(pi, ctx, args, runOptions),
+      options.commandHost.runHerdr(pi, ctx, args, runOptions),
     maybeFinishHerdRun: (ctx: ExtensionContext) => herdRunRuntime!.maybeFinish(ctx),
     getThinkingLevel: () => pi.getThinkingLevel(),
   });
