@@ -89,6 +89,7 @@ import {
   agentDefinitionMetadata,
   configuredModel,
   contextAgentDefinitions,
+  discoverManagedLeadDefinition,
   discoverAgent,
   discoverAgentDefinitions,
   expandAgentBodyFiles,
@@ -97,6 +98,7 @@ import {
   updateAgentOverride,
   validateAgentDefinitionReferences,
   VALID_THINKING_LEVELS,
+  MANAGED_LEAD_DEFINITION_NAME,
   writePrivatePromptSnapshots,
 } from "./agent-definitions.ts";
 import {
@@ -1676,6 +1678,8 @@ export default function (pi: ExtensionAPI): void {
       selectModelMenu,
       readConfig,
       contextAgentDefinitions,
+      discoverManagedLeadDefinition,
+      managedLeadDefinitionName: MANAGED_LEAD_DEFINITION_NAME,
       agentDefinitionEnabled,
       agentDefinitionMetadata,
       expandAgentBodyFiles,

@@ -68,8 +68,9 @@ every `agents` reference.
 `managed-lead` is a reserved definition used only when Manager starts or
 resumes a project Lead. It uses the same bundled, project, and global overlay
 engine, but it is excluded from the Agent roster: it cannot be selected by
-`agent_delegate`, referenced from `agents`, disabled, or edited through the
-Agent Definitions UI.
+`agent_delegate`, referenced from `agents`, or disabled. The Definitions UI
+shows it separately from Agent definitions and supports editing only its
+`model` and `thinking` settings; it has no `Enabled` action.
 
 For project work, the project layer is resolved from the delegated worktree when
 that project is trusted. The effective definition is launch configuration only;

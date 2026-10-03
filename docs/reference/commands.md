@@ -62,10 +62,16 @@ coverage incomplete instead of guessing or scanning global sessions.
 ## `/agents definitions`
 
 Opens the native Definitions menu for the effective bundled, project, and
-global roster. Project definitions are included when Pi considers the project
-trusted. Project participation is marked `[project]`; a global override adds
-`*` (so `[project] *` means both layers contribute). Edits write global
-overrides only.
+global Agent definitions, plus a separate `Managed Lead` group. Project
+definitions are included when Pi considers the project trusted. Project
+participation is marked `[project]`; a global override adds `*` (so
+`[project] *` means both layers contribute). Edits write global overrides
+only.
+
+The reserved managed Lead is shown separately from Agents. It supports `Model`,
+`Thinking`, and `Details`; it has no `Enabled` action. It remains excluded from
+Agent discovery and delegation. Global override edits affect future Lead
+launches, not Leads already running.
 
 The details view can show:
 
@@ -85,7 +91,7 @@ source and skill paths when available.
 
 `/agents definitions` does not probe runtime tool availability.
 
-Selecting a definition opens:
+Selecting an ordinary Agent definition opens:
 
 ```text
 Model
@@ -99,6 +105,9 @@ token. `Inherit current session` removes the selected field. Unset model and
 thinking rows display `inherit · <current session value>` when the current
 value is available. Thinking uses Pi's supported levels when the selected
 model is known.
+
+Selecting the managed Lead opens the same Model, Thinking, and Details actions,
+without `Enabled`.
 
 When Pi provides an explicit scoped-model list, that scope is used. Otherwise
 available models are offered.

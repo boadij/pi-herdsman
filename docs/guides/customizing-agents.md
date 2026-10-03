@@ -12,8 +12,10 @@ changes for omitted fields.
 
 `managed-lead` is the reserved definition for Manager-created project Leads.
 It follows the same `bundled < project < global` precedence, but it is launch
-configuration rather than an Agent role: it does not appear in the Agent roster
-or Definitions UI and cannot be delegated to.
+configuration rather than an Agent role: it is excluded from the Agent roster
+and cannot be delegated to. The Definitions UI exposes it in a separate Managed Lead
+group for Model, Thinking, and Details settings, without an `Enabled` action.
+These settings do not add it to Agent discovery or delegation.
 
 The bundled default gives the Lead read-only inspection tools plus mandatory
 Herdsman coordination tools. Executable project work is delegated to managed
@@ -38,9 +40,10 @@ override remains `~/.pi/agent/agents/managed-lead.md`.
 
 `managed-lead` does not support `enabled`, `agents`, or `permission`.
 Its ordinary tool policy may be overridden, but Herdsman's mandatory Lead
-coordination tools cannot be removed. Definition changes apply the next time
-Herdsman launches the Lead; use `staff_stop` followed by `staff_resume` when
-a running project Lead must restart with changed launch policy.
+coordination tools cannot be removed. Definition changes apply to future Lead
+launches, not already-running Leads. Use `staff_stop` followed by
+`staff_resume` when a running project Lead must restart with changed launch
+policy.
 
 ## Minimal model override
 

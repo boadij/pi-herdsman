@@ -55,7 +55,8 @@ definition overlays it. An unmatched definition is standalone.
 
 `managed-lead` is the one reserved exception: it uses the same source and
 overlay engine to configure Manager-created project Leads, but it is not an
-Agent definition that can be selected or delegated to. See
+Agent available through discovery or delegation. The Definitions UI can show
+it separately for Model, Thinking, and Details settings. See
 [Customizing bundled agents](customizing-agents.md#managed-project-lead).
 
 ### Permission-aware extensions
