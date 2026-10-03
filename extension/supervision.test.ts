@@ -2375,6 +2375,7 @@ test("project assignment uses durable project transport, not Manager message fra
     id: record.id,
     leaseId: record.leaseId,
     fromSessionId: record.fromSessionId,
+    toSessionId: record.toSessionId,
     leadSessionId: session,
     branch: record.branch,
   });

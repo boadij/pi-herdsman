@@ -20,6 +20,8 @@ import {
   readChiefMessage,
   readChiefDescriptor,
   supervisionRuntime,
+  peerRuntime,
+  readPeerLeadRecord,
   claimChiefLease as claimChiefLeaseRaw,
   claimManagerLease as claimManagerLeaseRaw,
   managerDescriptorPath,
@@ -1105,6 +1107,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
   ctx.isIdle = () => true;
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
+    assert.equal(readPeerLeadRecord(peerRuntime(), senderId), undefined);
     await pi.commandOptions.get("chief").handler("", ctx);
     const descriptor = readChiefDescriptor(supervisionRuntime().descriptor);
     writeChiefMessage(
@@ -1155,6 +1158,19 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
           ),
         ),
       ),
+    );
+    const delivered = pi.sent.find(
+      (message: any) =>
+        message.customType === "pi-herdsman-lead_message" &&
+        String(message.content).includes("queued until the turn starts"),
+    );
+    assert.deepEqual(
+      {
+        fromSessionId: delivered.details.fromSessionId,
+        toSessionId: delivered.details.toSessionId,
+        toRole: delivered.details.toRole,
+      },
+      { fromSessionId: senderId, toSessionId: sessionId, toRole: "chief" },
     );
     assert.equal(
       listChiefMessagePaths(supervisionRuntime(), sessionId).length,

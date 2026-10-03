@@ -15,13 +15,34 @@ ordinary Lead Agent widget. Chief's complete overview, peek, and focus behavior
 is documented in the [command reference](commands.md#project-manager-and-chief). Supervision and
 Agent widgets are never combined.
 
-The Chief supervision rows use `├─` for non-final visible reports and `└─` for the
-final visible report. Selection and lifecycle remain separate: `>` means
+The Chief supervision tree uses `├─` for non-final visible reports and `└─` for the
+final visible report. A Manager's observational Lead/project work appears as
+second-level children; these children do not become Chief control targets.
+Chief direct reports and their nested Manager work follow this shape:
+
+```text
+Chief direct report
+├─ Manager
+│  ├─ observational Lead/project work
+│  └─ observational Lead/project work
+└─ direct Lead
+```
+
+Selection and lifecycle remain separate: `>` means
 selected, `●` means working, `◐` means blocked,
 `◌` means settling or starting, `○` means idle or done, `?` means unknown, and
 `×` means lost. An idle or done lead with active delegated descendants uses
 `◉`. Workspace labels are presentation text inside each lead row, not
-additional hierarchy nodes. The widget caps ordinary reports and shows omitted reports in a final
+additional hierarchy nodes. For example, a Manager with one Lead child appears
+as:
+
+```text
+● chief · 1 manager
+└─ ○ pi-herdsman · 1 lead
+   └─ worktree/silver-stone-21b7 · done
+```
+
+The widget caps ordinary reports and shows omitted reports in a final
 `└─ … N more · /chief` or `└─ … N more · /manager` row, according to the active role.
 
 Chief's header shows only nonzero categories (`manager`, `direct lead`), or

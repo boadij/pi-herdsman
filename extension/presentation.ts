@@ -1057,16 +1057,17 @@ export function renderSupervisionLeads(
         `${themed(options.theme, lifecycleColor(lead.runtimeState), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", `${lead.displayName}${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`)}`,
         width,
       );
+      const children = (lead.leads ?? []).slice(0, 3);
+      const childIndent = branch === "└─" ? "   " : "│  ";
       return [
         row,
-        ...(lead.leads ?? [])
-          .slice(0, 3)
-          .map((child) =>
-            safeLine(
-              `${themed(options.theme, "muted", `   ${child.branch ?? child.display_name} · `)}${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
-              width,
-            ),
-          ),
+        ...children.map((child, childIndex) => {
+          const childBranch = childIndex === children.length - 1 ? "└─" : "├─";
+          return safeLine(
+            `${themed(options.theme, "muted", `${childIndent}${childBranch} ${child.branch ?? child.display_name} · `)}${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
+            width,
+          );
+        }),
       ];
     }),
     ...(hidden > 0 ? [safeLine(`└─ … ${hidden} more · /${role}`, width)] : []),
@@ -1409,7 +1410,7 @@ function tailTruncate(value: string, width: number): string {
   return truncateToWidth(value, width, "");
 }
 
-function safeBreadcrumbSegment(value: string): string {
+function safeDisplaySegment(value: string): string {
   return value
     .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/gu, "")
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, "")
@@ -1420,7 +1421,7 @@ function safeBreadcrumbSegment(value: string): string {
 
 function renderBreadcrumb(segments: string[], width: number): string {
   if (width <= 0) return "";
-  const names = segments.map(safeBreadcrumbSegment).filter(Boolean);
+  const names = segments.map(safeDisplaySegment).filter(Boolean);
   const current = names.at(-1) ?? "?";
   const marker = "●";
   if (width <= visibleWidth(marker)) return truncateToWidth(marker, width, "");
@@ -3003,8 +3004,12 @@ export function renderCoordinationMessage(
     content?: string;
     details?: {
       fromSessionId?: string;
+      toSessionId?: string;
       leadSessionId?: string;
       branch?: string;
+      toRole?: "chief" | "manager" | "lead";
+      fromDisplayName?: string;
+      toDisplayName?: string;
     };
   },
   options: { expanded?: boolean; outputPad?: number },
@@ -3014,45 +3019,62 @@ export function renderCoordinationMessage(
   const branch = d?.branch ?? "project work";
   let heading: string;
   let prefix: string | undefined;
-  switch (kind) {
-    case "lead_message":
-      heading = "Lead message";
-      if (d?.fromSessionId) prefix = `From lead ${d.fromSessionId}: `;
-      break;
-    case "chief_message":
-      heading = "Chief message";
-      if (d?.fromSessionId) prefix = `From chief ${d.fromSessionId}: `;
-      break;
-    case "manager_message":
-      heading = "Manager message";
-      if (d?.fromSessionId) prefix = `From manager ${d.fromSessionId}: `;
-      break;
-    case "peer_message":
-      heading = "Peer message";
-      if (d?.fromSessionId) prefix = `Peer message from ${d.fromSessionId}: `;
-      break;
-    case "project_assignment":
-      heading = statusLine(theme, "accent", "→", `${branch} assigned`);
-      if (d?.branch) prefix = `Project assignment for branch ${d.branch}:\n\n`;
-      break;
-    case "project_message":
-      heading = d?.branch ? `Project message · ${d.branch}` : "Project message";
-      if (d?.branch && d?.fromSessionId)
-        prefix = `Project ${d.branch} from lead ${d.fromSessionId}:\n\n`;
-      break;
+  type CoordinationRole = "chief" | "manager" | "lead";
+  const senderRole: CoordinationRole | undefined =
+    kind === "chief_message"
+      ? "chief"
+      : kind === "manager_message"
+        ? "manager"
+        : kind === "lead_message"
+          ? "lead"
+          : undefined;
+  const endpoint = (role: CoordinationRole, displayName?: string): string => {
+    const label =
+      role === "chief" ? "Chief" : role === "manager" ? "Manager" : "Lead";
+    const name = displayName ? safeDisplaySegment(displayName) : "";
+    return name ? `${label} · ${name}` : label;
+  };
+  if (senderRole) {
+    heading = d?.toRole
+      ? `${endpoint(senderRole, d.fromDisplayName)} → ${endpoint(d.toRole, d.toDisplayName)}`
+      : `${endpoint(senderRole, d?.fromDisplayName)} message`;
+    if (d?.fromSessionId) prefix = `From ${senderRole} ${d.fromSessionId}: `;
+  } else {
+    switch (kind) {
+      case "peer_message":
+        heading = "Peer message";
+        if (d?.fromSessionId) prefix = `Peer message from ${d.fromSessionId}: `;
+        break;
+      case "project_assignment":
+        heading = statusLine(theme, "accent", "→", `${branch} assigned`);
+        if (d?.branch)
+          prefix = `Project assignment for branch ${d.branch}:\n\n`;
+        break;
+      case "project_message":
+        heading = d?.branch
+          ? `Project message · ${d.branch}`
+          : "Project message";
+        if (d?.branch && d?.fromSessionId)
+          prefix = `Project ${d.branch} from lead ${d.fromSessionId}:\n\n`;
+        break;
+    }
   }
   let body = message.content ?? "";
   if (prefix && body.startsWith(prefix)) body = body.slice(prefix.length);
   const content = new Container();
   content.addChild(new WidthSafeText(heading, 0, 0));
   if (options.expanded) {
-    const session =
-      kind === "project_assignment"
-        ? undefined
-        : (d?.fromSessionId ?? d?.leadSessionId);
     const metadata = [
       ...(d?.branch ? [`branch: ${d.branch}`] : []),
-      ...(session ? [`session: ${session}`] : []),
+      ...(senderRole && d?.fromSessionId
+        ? [`from session: ${d.fromSessionId}`]
+        : []),
+      ...(senderRole && d?.toSessionId ? [`to session: ${d.toSessionId}`] : []),
+      ...(!senderRole &&
+      kind !== "project_assignment" &&
+      (d?.fromSessionId ?? d?.leadSessionId)
+        ? [`session: ${d?.fromSessionId ?? d?.leadSessionId}`]
+        : []),
     ];
     if (metadata.length) {
       content.addChild(new Spacer(1));

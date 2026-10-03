@@ -842,6 +842,7 @@ export async function drainCoordinationInbox(
               id: record.id,
               leaseId: record.leaseId,
               fromSessionId: record.fromSessionId,
+              toSessionId: record.toSessionId,
               leadSessionId: record.leadSessionId,
               ...(record.branch ? { branch: record.branch } : {}),
             },
