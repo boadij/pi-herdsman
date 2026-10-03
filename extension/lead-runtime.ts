@@ -1,7 +1,9 @@
 import type {
+  BuildSystemPromptOptions,
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type { Model } from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import type {
   ChiefLease,
@@ -11,10 +13,13 @@ import type {
   ProjectAssignment,
   ProjectMessage,
   ChiefMessageRecord,
+  ChiefInboxDrainOptions,
   ChiefMessageKind,
   PeerLeadRecord,
   WorkspaceProvenance,
   SessionRole,
+  PeerRuntime,
+  SupervisionSnapshot,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
@@ -24,7 +29,24 @@ import {
   createAgentController,
   parsePresentationTokens,
   statusBreadcrumb,
+  type AgentControllerOptions,
+  type PendingStart,
+  type Runtime,
+  type ControllerScope,
+  type ManagedAgentSnapshotCollection,
+  type ManagedAgentSnapshotView,
+  type VisibleManagedAgentSnapshot,
 } from "./agent-controller.ts";
+import type {
+  ExpectedSession,
+  HerdrRecord,
+  HerdrSessionSnapshot,
+  RemovedHerdrWorktree,
+  WorktreeGroupScope,
+} from "./herdr.ts";
+import type { RuntimeBuild } from "./compatibility.ts";
+import type { AgentDefinition } from "./agent-definitions.ts";
+import type { MessageFileInput } from "./core.ts";
 import type { ManagedAgentState, ResultBinding } from "./mailbox.ts";
 import {
   collapseDisplayText,
@@ -43,29 +65,541 @@ import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
 
-type LeadTransitionHost = any;
+type LeadIdentityHost = {
+  expectedSession(id: string, path?: string): ExpectedSession;
+  listAgents(ctx: ExtensionContext): Promise<{ agents: HerdrRecord[] }>;
+  isPiAgent(agent: HerdrRecord): boolean;
+  matchesExpectedSession(session: unknown, expected: ExpectedSession): boolean;
+  getAgent(
+    ctx: ExtensionContext,
+    paneId: string,
+  ): Promise<{ agent?: HerdrRecord }>;
+  hasLeadCoordination(sessionId: string): boolean;
+  leadController: Pick<
+    ReturnType<typeof createAgentController>,
+    "managedAgentSnapshots"
+  >;
+};
+
+type AgentStatusSnapshotHost = {
+  scope: ControllerScope;
+  hasStateIssues?(): boolean;
+  listedAgentRecord: LeadController["listedAgentRecord"];
+  runtimeForLabel(label: string): Runtime | undefined;
+  herdStartedAt?(): number | undefined;
+  environmentIdentity(ctx: ExtensionContext): ManagedAgentState | undefined;
+  identityFromEnvironment(): { definition?: string; label?: string };
+  sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
+  ownToolsSnapshot(): { ownTools?: string[] };
+};
+
+type LeadTransitionHost = {
+  processRole: string;
+  paneId(): string | undefined;
+  getSessionName(): string;
+  identity: { paneId?: string; tabId?: string; workspaceId?: string };
+  statSync: typeof statSync;
+  readChiefDescriptor: typeof import("./supervision.ts").readChiefDescriptor;
+  chiefLeaseIsHeld: typeof import("./supervision.ts").chiefLeaseIsHeld;
+  sameChiefDescriptor: typeof import("./supervision.ts").sameChiefDescriptor;
+  claimChiefLease: typeof import("./supervision.ts").claimChiefLease;
+  chiefTools: readonly string[];
+  managerTools: readonly string[];
+  invalidateLeadCoordinationState: typeof import("./supervision.ts").invalidateLeadCoordinationState;
+  enterChief(
+    ctx: ExtensionContext,
+    lease: ChiefLease,
+    generation: number,
+  ): void;
+  enterLead(ctx?: ExtensionContext, persist?: boolean): void;
+  enterSuspended(ctx?: ExtensionContext): void;
+  resetSupervisionSnapshot(): void;
+  unlinkLeadCoordinationState(
+    runtime: ReturnType<typeof import("./supervision.ts").supervisionRuntime>,
+    sessionId: string,
+  ): void;
+  ownedTools(): ReadonlySet<string>;
+  claimManagerLease: typeof import("./supervision.ts").claimManagerLease;
+  reportLeadMetadata: typeof import("./herdr.ts").reportLeadMetadata;
+  delay: typeof import("node:timers/promises").setTimeout;
+  removeProjectAssignment: typeof import("./supervision.ts").removeProjectAssignment;
+  removeProjectMessages: typeof import("./supervision.ts").removeProjectMessages;
+  sameManagerDescriptor: typeof import("./supervision.ts").sameManagerDescriptor;
+  workspaceId(): string | undefined;
+  worktreeGroupScope(
+    ctx: ExtensionContext,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<WorktreeGroupScope | undefined>;
+  supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
+  findProjectAssignmentBySession: typeof import("./supervision.ts").findProjectAssignmentBySession;
+  acquireProcessLock: typeof import("./lock.ts").acquireProcessLock;
+  projectAssignmentPath: typeof import("./supervision.ts").projectAssignmentPath;
+  readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
+  readManagerDescriptorStatus: typeof import("./supervision.ts").readManagerDescriptorStatus;
+  readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
+  requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild;
+  build: RuntimeBuild;
+  currentManager: LeadRoleTransitionRuntime["currentManager"];
+  setLeadInstanceId(value: string): void;
+  setCoordinationHealthy(value: boolean): void;
+  markLeadCoordinationUnhealthy(ctx: ExtensionContext): void;
+  appendDurableError(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    kind: string,
+    error: unknown,
+  ): void;
+  pi: ExtensionAPI;
+  remoteChiefAgent: LeadIdentityRuntime["remoteChiefAgent"];
+  persistCoordinatorState(): boolean;
+  persistLeadCoordination(): boolean;
+  prepareCoordinationInput: ReturnType<
+    typeof createLeadCoordinationRuntime
+  >["prepareCoordinationInput"];
+  projectMessageBytes: typeof import("./supervision.ts").projectMessageBytes;
+  writeProjectMessage: typeof import("./supervision.ts").writeProjectMessage;
+  currentChiefAuthority: LeadRoleTransitionRuntime["currentChiefAuthority"];
+};
+
+type LeadRuntimeOptions = {
+  leadRuntime?: LeadRuntimeState;
+  leadToolState?: ReturnType<typeof createLeadToolState>;
+  ownedToolNames: readonly string[];
+  leadCoordinationToolNames: readonly string[];
+  onLeadRuntimeReady?(
+    runtime: LeadRuntimeState,
+    tools: ReturnType<typeof createLeadToolState>,
+  ): void;
+  controllerServices: Omit<
+    AgentControllerOptions,
+    "scope" | "build" | "onWorkChanged" | "onWorktreeRemoved"
+  >;
+  identityHost: LeadIdentityHost;
+  roleTransitionHost: LeadTransitionHost;
+  coordinationHost: LeadCoordinationBaseHost;
+  projectHost: Omit<
+    LeadProjectHost,
+    | "currentManager"
+    | "liveLead"
+    | "managerLease"
+    | "pi"
+    | "stopOwnedAgentsForSession"
+    | "withProjectWorkLock"
+  > & { extensionPath: string; SessionManager: object };
+  commandHost: LeadCommandBaseHost;
+  supervisionHost: Omit<
+    LeadSupervisionHost,
+    | "activeRole"
+    | "currentChief"
+    | "currentChiefAuthority"
+    | "currentManager"
+    | "isCurrentChief"
+    | "latestMessageText"
+    | "pi"
+    | "state"
+  >;
+  build: RuntimeBuild;
+  herdRunEntryName: string;
+  herdRunServices: Pick<LeadHerdRunHost, "appendDurableError">;
+  statusSnapshotHost: Omit<
+    AgentStatusSnapshotHost,
+    "scope" | "listedAgentRecord" | "runtimeForLabel" | "herdStartedAt"
+  >;
+  inboxHost: LeadInboxBaseHost;
+  agentEventOptions: Omit<
+    Parameters<typeof createLeadAgentEventRuntime>[0],
+    "controller" | "herdRun" | "leadInboxRuntime" | "consumeChiefStartPreflight"
+  >;
+  sessionStartOptions: Omit<
+    Parameters<typeof createLeadSessionStartRuntime>[0],
+    | "controller"
+    | "herdRun"
+    | "leadInboxRuntime"
+    | "leadStatusRuntime"
+    | "roleTransitions"
+  >;
+  sessionTreeOptions: Omit<
+    Parameters<typeof createLeadSessionTreeRuntime>[0],
+    "controller" | "roleTransitions"
+  >;
+  shutdownOptions: Omit<
+    Parameters<typeof createLeadShutdownRuntime>[0],
+    | "controller"
+    | "herdRun"
+    | "leadInboxRuntime"
+    | "leadStatusRuntime"
+    | "roleTransitions"
+    | "clearSupervisionUI"
+  >;
+  hasPane(): boolean;
+  sessionName(): string;
+  queueLeadPresentation(ctx: ExtensionContext, name: string): void;
+};
+
+type LeadCommandHost = {
+  runHerdr: typeof runHerdr;
+  presentStopSummary(summary: string): void;
+  version: string;
+  selectMenu(
+    ctx: ExtensionContext,
+    title: string,
+    items: readonly SelectItem[],
+    selectedValue?: string,
+  ): Promise<string | undefined>;
+  selectModelMenu(
+    ctx: ExtensionContext,
+    items: readonly { value: string; label: string; searchText?: string }[],
+    selectedValue?: string,
+  ): Promise<string | undefined>;
+  readConfig(): unknown;
+  contextAgentDefinitions(
+    ctx: ExtensionContext,
+  ): Promise<{ definitions: AgentDefinition[] }>;
+  agentDefinitionEnabled(definition: AgentDefinition): boolean;
+  agentDefinitionMetadata(definition: AgentDefinition): Record<string, unknown>;
+  expandAgentBodyFiles(
+    body: string,
+    files: readonly string[],
+    operation: string,
+  ): string;
+  appendDefinitionsEntry(data: unknown): void;
+  formatAgentDefinitions(
+    definitions: readonly Record<string, unknown>[],
+  ): string[];
+  validThinkingLevels: readonly string[];
+  updateAgentOverride(
+    definition: AgentDefinition,
+    field: string,
+    value: unknown,
+  ): { changed: boolean; path?: string };
+  discoverAgent(
+    name: string,
+    options?: { projectRoot?: string },
+  ): AgentDefinition | undefined;
+  placementSettings(ctx: ExtensionContext): Promise<{ effective: string }>;
+  updateSpawnPlacement(placement: string): void;
+  messageLimits(
+    ctx: ExtensionContext,
+  ): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }>;
+  formatMessageLimit(bytes: number): string;
+  validByteLimit(bytes: number): boolean;
+  input(
+    ctx: ExtensionCommandContext,
+    label: string,
+  ): Promise<string | undefined>;
+  updateMessageLimit(key: string, value: number | undefined): void;
+  isSpawnPlacement(value: string): boolean;
+  isLead(): boolean;
+  buildStatusRows: typeof buildStatusRows;
+  renderRunningOptions: typeof renderRunningOptions;
+  formatStatusCounts: typeof formatStatusCounts;
+  openSupervisionOverview(ctx: ExtensionCommandContext): Promise<void>;
+  controller: LeadController;
+  loadStatusSnapshot(ctx: ExtensionContext): Promise<StatusSnapshot>;
+  roleActive(role: "manager" | "chief"): boolean;
+  transitionRole(
+    role: "manager" | "chief",
+    leave: boolean,
+    ctx: ExtensionCommandContext,
+  ): Promise<unknown>;
+  maybeFinishHerdRun(ctx: ExtensionContext): Promise<void>;
+  getThinkingLevel(): string;
+};
+type LeadCommandBaseHost = Omit<
+  LeadCommandHost,
+  | "isLead"
+  | "buildStatusRows"
+  | "renderRunningOptions"
+  | "formatStatusCounts"
+  | "openSupervisionOverview"
+  | "controller"
+  | "loadStatusSnapshot"
+  | "roleActive"
+  | "transitionRole"
+  | "maybeFinishHerdRun"
+  | "getThinkingLevel"
+>;
+
+type LeadHerdRunHost = {
+  pi: ExtensionAPI;
+  entryName: string;
+  hasPendingStarts(): boolean;
+  listAgentStates(): ReturnType<LeadController["listAgentStates"]>;
+  currentWorktreeScope(
+    ctx: ExtensionContext,
+  ): Promise<WorktreeGroupScope | undefined>;
+  projectAssignmentForScope(
+    scope: WorktreeGroupScope,
+    sessionId: string,
+  ): ProjectAssignment | undefined;
+  publishProjectMessage(
+    ctx: ExtensionContext,
+    assignment: ProjectAssignment,
+    message: string,
+    files?: readonly string[],
+    operation?: string,
+  ): Promise<ProjectMessage | undefined>;
+  requestStatusRefresh(): void;
+  queueLeadPresentation(ctx: ExtensionContext, name: string): void;
+  appendDurableError(ctx: ExtensionContext, kind: string, error: unknown): void;
+};
+
+type LeadProjectHost = {
+  currentManager(ctx: ExtensionContext): Promise<ManagerDescriptor | undefined>;
+  managerLease(): ManagerLease | undefined;
+  sameManagerDescriptor(
+    left: ManagerDescriptor,
+    right: ManagerDescriptor,
+  ): boolean;
+  worktreeGroupScope: typeof import("./herdr.ts").worktreeGroupScope;
+  findProjectAssignmentBySession: typeof import("./supervision.ts").findProjectAssignmentBySession;
+  supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
+  readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
+  liveLead(ctx: ExtensionContext, sessionId: string): Promise<HerdrRecord[]>;
+  stopOwnedAgentsForSession(
+    ctx: ExtensionContext,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<string>;
+  stopProjectLeadPane(
+    ctx: ExtensionContext,
+    target: HerdrRecord,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  withProjectWorkLock: LeadRoleTransitionRuntime["withProjectWorkLock"];
+  pi: ExtensionAPI;
+};
+
+type LeadCoordinationBaseHost = {
+  supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
+  writeLeadCoordinationState: typeof import("./supervision.ts").writeLeadCoordinationState;
+  appendDurableError(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    kind: string,
+    error: unknown,
+  ): void;
+  peerRuntime: PeerRuntime;
+  listPeerLeadRecords: typeof import("./supervision.ts").listPeerLeadRecords;
+  removePeerLeadRecord: typeof import("./supervision.ts").removePeerLeadRecord;
+  acquireProcessLock: typeof import("./lock.ts").acquireProcessLock;
+  peerLeadLockPath: typeof import("./supervision.ts").peerLeadLockPath;
+  workspacePresentationProvenance(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    workspaceIds: readonly string[],
+    workspaceCwds: ReadonlyMap<string, string>,
+    signal?: AbortSignal,
+  ): Promise<ReadonlyMap<string, WorkspaceProvenance>>;
+  basename: typeof import("node:path").basename;
+  readPeerLeadRecord: typeof import("./supervision.ts").readPeerLeadRecord;
+  samePeerLeadRecord: typeof import("./supervision.ts").samePeerLeadRecord;
+  writePeerLeadRecord: typeof import("./supervision.ts").writePeerLeadRecord;
+  invalidateLeadCoordinationState: typeof import("./supervision.ts").invalidateLeadCoordinationState;
+  runHerdr: typeof import("./herdr.ts").runHerdr;
+  resolveMessageFiles: typeof import("./agent-controller.ts").resolveMessageFiles;
+  messageLimits(
+    ctx: ExtensionContext,
+  ): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }>;
+  chiefMessageBytes: typeof import("./supervision.ts").chiefMessageBytes;
+  coordinationMessageMaxBytes: number;
+  buildSessionProjection: typeof import("@earendil-works/pi-coding-agent").buildSessionProjection;
+  contentText: typeof import("@earendil-works/pi-ai").contentText;
+  supervisorStateType: string;
+  sameManagerDescriptor: typeof import("./supervision.ts").sameManagerDescriptor;
+  requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild;
+  sameRuntimeBuild: typeof import("./compatibility.ts").sameRuntimeBuild;
+  samePeerLeadGeneration: typeof import("./supervision.ts").samePeerLeadGeneration;
+  writeCoordinationMessage: typeof import("./supervision.ts").writeCoordinationMessage;
+  writeChiefMessage: typeof import("./supervision.ts").writeChiefMessage;
+  removeChiefMessage: typeof import("./supervision.ts").removeChiefMessage;
+  quarantineChiefMessage: typeof import("./supervision.ts").quarantineChiefMessage;
+  readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
+  matchesExpectedSession: typeof import("./herdr.ts").matchesExpectedSession;
+  isPiAgent(agent: HerdrRecord): boolean;
+  listProjectAssignments: typeof import("./supervision.ts").listProjectAssignments;
+  listProjectMessages: typeof import("./supervision.ts").listProjectMessages;
+  readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
+  importResultBindings: typeof import("./agent-controller.ts").importResultBindings;
+};
+
+type LeadCoordinationHost = LeadCoordinationBaseHost & {
+  pi: ExtensionAPI;
+  leadRuntime: LeadRuntimeState;
+  processRole: "lead";
+  controllerScope: { kind: "lead" };
+  activeRole(): SessionRole;
+  HERDSMAN_BUILD: RuntimeBuild;
+  leadInstanceId(): string;
+  currentManager: LeadRoleTransitionRuntime["currentManager"];
+  currentWorktreeScope: LeadRoleTransitionRuntime["currentWorktreeScope"];
+  projectAssignmentForScope: LeadRoleTransitionRuntime["projectAssignmentForScope"];
+  publishProjectMessage: LeadRoleTransitionRuntime["publishProjectMessage"];
+  currentChiefAuthority: LeadRoleTransitionRuntime["currentChiefAuthority"];
+  currentSupervisor: LeadRoleTransitionRuntime["currentSupervisor"];
+};
+
+type LeadInboxBaseHost = {
+  supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
+  peerRuntime: PeerRuntime;
+  appendDurableError(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    kind: string,
+    error: unknown,
+  ): void;
+  listManagerDescriptors: typeof import("./supervision.ts").listManagerDescriptors;
+  remoteChiefAgent: ReturnType<
+    typeof createLeadIdentityRuntime
+  >["remoteChiefAgent"];
+  liveLead: ReturnType<typeof createLeadIdentityRuntime>["liveLead"];
+  readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
+  runHerdr: typeof import("./herdr.ts").runHerdr;
+  sameRuntimeBuild: typeof import("./compatibility.ts").sameRuntimeBuild;
+  worktreeGroupScope: (
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ) => Promise<WorktreeGroupScope>;
+  readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
+  importResultBindings: typeof import("./agent-controller.ts").importResultBindings;
+  HERDSMAN_BUILD: RuntimeBuild;
+  formatRuntimeBuild: typeof import("./compatibility.ts").formatRuntimeBuild;
+  listChiefMessagePaths: typeof import("./supervision.ts").listChiefMessagePaths;
+  chiefMessageQuarantined: typeof import("./supervision.ts").chiefMessageQuarantined;
+  drainCoordinationInbox: typeof import("./supervision.ts").drainCoordinationInbox;
+  basename: typeof import("node:path").basename;
+};
+
+type LeadInboxHost = LeadInboxBaseHost & {
+  projectAssignmentInstruction(
+    assignment: Pick<ProjectAssignment, "text">,
+  ): string;
+  leadRuntime: LeadRuntimeState;
+  leadInstanceId(): string;
+  controllerScope: ControllerScope;
+  activeRole(): SessionRole;
+  pi: ExtensionAPI;
+  coordinationHealthy(): boolean;
+  managerDiagnostic(event: string, details?: Record<string, unknown>): void;
+  managerDiagnosticEvents: ReadonlySet<string>;
+  isCurrentChief(ctx: ExtensionContext): boolean;
+  prepareSupervisionMessage(
+    ctx: ExtensionContext,
+  ): Promise<
+    { customType: string; content: string; display: boolean } | undefined
+  >;
+  authorizePeerRecord(
+    record: PeerLeadRecord,
+    ctx: ExtensionContext,
+  ): Promise<boolean>;
+  assertCurrentLeadCoordination(ctx: ExtensionContext): void;
+  currentChiefAuthority: LeadRoleTransitionRuntime["currentChiefAuthority"];
+  currentManager: LeadRoleTransitionRuntime["currentManager"];
+  managerForScope: LeadRoleTransitionRuntime["managerForScope"];
+  currentPeerPresenceValid(ctx: ExtensionContext): Promise<boolean>;
+  drainProjectMessages(ctx: ExtensionContext): Promise<number>;
+};
+
+type LeadSupervisionHost = {
+  activeRole(): SessionRole;
+  appendDurableError(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    kind: string,
+    error: unknown,
+  ): void;
+  contextType: string;
+  currentChief: LeadRoleTransitionRuntime["currentChief"];
+  currentChiefAuthority: LeadRoleTransitionRuntime["currentChiefAuthority"];
+  currentManager: LeadRoleTransitionRuntime["currentManager"];
+  formatContext: typeof import("./presentation.ts").formatSupervisionContext;
+  formatSupervisionNotification: typeof import("./presentation.ts").formatSupervisionNotification;
+  herdrSessionId: typeof import("./herdr.ts").herdrSessionId;
+  herdrSessionSnapshot: typeof import("./herdr.ts").herdrSessionSnapshot;
+  isCurrentChief(ctx: ExtensionContext): boolean;
+  isPiAgent(agent: HerdrRecord): boolean;
+  latestMessageText(ctx: ExtensionContext): Promise<string | undefined>;
+  listAllHerdrAgents: typeof import("./herdr.ts").listAllHerdrAgents;
+  listManagerDescriptors: typeof import("./supervision.ts").listManagerDescriptors;
+  listProjectAssignments: typeof import("./supervision.ts").listProjectAssignments;
+  loadSnapshot?(
+    ctx: ExtensionContext,
+    inventory?: HerdrSessionSnapshot,
+    agents?: ManagedAgentSnapshotCollection,
+    includeAll?: boolean,
+  ): Promise<SupervisionSnapshot>;
+  managedAgentSnapshots(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+    proveLead?: boolean,
+    allWorkspaces?: boolean,
+    inventory?: HerdrSessionSnapshot,
+    allowTranscriptDefinitionFallback?: boolean,
+  ): Promise<ManagedAgentSnapshotCollection>;
+  managerSupervisionItems: typeof import("./presentation.ts").managerSupervisionItems;
+  normalizeHerdrLifecycleState: typeof import("./supervision.ts").normalizeHerdrLifecycleState;
+  orderedSupervisionLeads: typeof import("./presentation.ts").orderedSupervisionLeads;
+  persistedTranscriptReady(state: ManagedAgentState): boolean;
+  pi: ExtensionAPI;
+  presentationReports: typeof import("./presentation.ts").supervisionPresentationReports;
+  projectSupervision: typeof import("./supervision.ts").projectSupervision;
+  projectWorkSnapshot: typeof import("./supervision.ts").projectWorkSnapshot;
+  readChiefDescriptor: typeof import("./supervision.ts").readChiefDescriptor;
+  readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
+  remoteChiefAgent: LeadIdentityRuntime["remoteChiefAgent"];
+  runHerdr: typeof runHerdr;
+  sameChiefDescriptor: typeof import("./supervision.ts").sameChiefDescriptor;
+  sameManagerDescriptor: typeof import("./supervision.ts").sameManagerDescriptor;
+  state: LeadRuntimeState;
+  supervisedSessionFile(
+    agent: HerdrRecord,
+    sessionId: string,
+  ): string | undefined;
+  supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
+  statSync: typeof statSync;
+  tui: {
+    Container: typeof import("@earendil-works/pi-tui").Container;
+    DynamicBorder: typeof import("@earendil-works/pi-tui").DynamicBorder;
+    Key: typeof import("@earendil-works/pi-tui").Key;
+    matchesKey: typeof import("@earendil-works/pi-tui").matchesKey;
+    SelectList: typeof import("@earendil-works/pi-tui").SelectList;
+    Text: typeof import("@earendil-works/pi-tui").Text;
+  };
+  workspacePresentationProvenance(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    workspaceIds: readonly string[],
+    workspaceCwds: ReadonlyMap<string, string>,
+    signal?: AbortSignal,
+  ): Promise<ReadonlyMap<string, WorkspaceProvenance>>;
+  worktreeGroupScope: typeof import("./herdr.ts").worktreeGroupScope;
+};
 const LEAD_INSTANCE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-export function buildLeadStatusSnapshot(
-  view: any,
+export function buildAgentStatusSnapshot(
+  view: ManagedAgentSnapshotView,
   ctx: ExtensionContext,
-  host: any,
+  host: AgentStatusSnapshotHost,
 ): StatusSnapshot {
   const ownerSessionId = ctx.sessionManager.getSessionId();
   const unresolvedMailboxState =
-    host.scope.kind === "lead" && host.hasStateIssues();
-  const listed = view.visible.map((snapshot: any) =>
+    host.scope.kind === "lead" && host.hasStateIssues?.();
+  const listed = view.visible.map((snapshot: VisibleManagedAgentSnapshot) =>
     host.listedAgentRecord(
       view,
       snapshot,
       ownerSessionId,
       host.scope,
       unresolvedMailboxState,
-      host.runtimeForLabel,
     ),
   );
-  const agents = listed.map((agent: any) => {
+  const agents = listed.map((agent) => {
     const runtime = host.runtimeForLabel(agent.agent as string);
     const tokens = agent.tokens ?? {};
     const presentation = parsePresentationTokens(tokens);
@@ -193,7 +727,35 @@ export function createLeadToolState(
   };
 }
 
-export function createLeadShutdownRuntime(host: any) {
+type LeadController = ReturnType<typeof createAgentController>;
+type LeadRoleTransitionRuntime = ReturnType<typeof createLeadRoleTransitions>;
+type LeadInboxRuntime = ReturnType<typeof createLeadInboxRuntime>;
+type LeadStatusRuntime = ReturnType<typeof createAgentStatusRuntime>;
+type LeadHerdRunRuntime = ReturnType<typeof createLeadHerdRunRuntime>;
+type LeadProjectRuntime = ReturnType<typeof createLeadProjectRuntime>;
+type LeadSupervisionRuntime = ReturnType<typeof createLeadSupervisionRuntime>;
+
+export function createLeadShutdownRuntime(host: {
+  roleTransitions: Pick<
+    LeadRoleTransitionRuntime,
+    "beginShutdownRole" | "shutdownRole" | "clearLeadContext"
+  >;
+  clearStartupDefinitionRoster(): void;
+  leadInboxRuntime: Pick<LeadInboxRuntime, "beginShutdown" | "shutdown">;
+  controller: Pick<
+    LeadController,
+    | "abortSession"
+    | "clearPendingStarts"
+    | "clearSession"
+    | "markSessionInactive"
+    | "stopHealthScanner"
+    | "shutdown"
+  >;
+  leadStatusRuntime: Pick<LeadStatusRuntime, "shutdown">;
+  clearSupervisionUI(): void;
+  isLead(): boolean;
+  herdRun: Pick<LeadHerdRunRuntime, "shutdown">;
+}) {
   let shutDown = false;
   return {
     shutdown(_ctx: ExtensionContext): void {
@@ -218,7 +780,18 @@ export function createLeadShutdownRuntime(host: any) {
   };
 }
 
-export function createLeadSessionTreeRuntime(host: any) {
+export function createLeadSessionTreeRuntime(host: {
+  controller: Pick<
+    LeadController,
+    "sessionActive" | "sessionTreeChanged" | "sessionSignal"
+  >;
+  roleTransitions: Pick<
+    LeadRoleTransitionRuntime,
+    "branchRoleObservation" | "reconcileBranchRole"
+  >;
+  isLead(): boolean;
+  appendRoleError(ctx: ExtensionContext, error: unknown): void;
+}) {
   return {
     async sessionTree(ctx: ExtensionContext): Promise<void> {
       if (!host.controller.sessionActive()) return;
@@ -243,7 +816,52 @@ export function createLeadSessionTreeRuntime(host: any) {
   };
 }
 
-export function createLeadSessionStartRuntime(host: any) {
+export function createLeadSessionStartRuntime(host: {
+  diagnostic(): void;
+  clearDefinitionRoster(): void;
+  clearChiefStartPreflight(): void;
+  roleTransitions: LeadRoleTransitionRuntime;
+  isLead(): boolean;
+  isManagedAgent(): boolean;
+  appendRoleError(ctx: ExtensionContext, error: unknown): void;
+  sessionLeadRoleState(
+    entries: readonly any[],
+  ): { role: SessionRole; leadTools: string[] } | undefined;
+  normalizeLeadTools(tools: readonly string[]): string[];
+  setLeadTools(tools: string[] | undefined): void;
+  activeTools(): string[];
+  failClosedRole(ctx: ExtensionContext, error: unknown): Promise<void>;
+  publishLeadRole(
+    ctx: ExtensionContext,
+    mode: "active",
+    generation: number,
+  ): void;
+  activateChief(ctx: ExtensionContext, resumed: boolean): Promise<void>;
+  enterSuspended(ctx: ExtensionContext): void;
+  enterLead(ctx: ExtensionContext): void;
+  schedulePeerPresence(ctx: ExtensionContext): Promise<void>;
+  controller: LeadController;
+  leadInboxRuntime: LeadInboxRuntime;
+  herdRun: Pick<LeadHerdRunRuntime, "restoreSession" | "finishIfIdle">;
+  leadStatusRuntime: Pick<
+    LeadStatusRuntime,
+    "prepareSession" | "setSnapshot" | "start" | "requestRefresh"
+  >;
+  clearSupervisionUI(reset?: boolean): void;
+  queueLeadPresentation(ctx: ExtensionContext): void;
+  setOwnTools(tools: string[] | undefined): void;
+  initialStatusBreadcrumb(): string[];
+  ownToolsSnapshot(): { ownTools?: string[] };
+  startSupervisionUI(ctx: ExtensionContext): void;
+  setDefinitionRoster(roster: {
+    sessionId: string;
+    definitions: Record<string, unknown>[];
+  }): void;
+  visibleAgentDefinitionMetadata(
+    ctx: ExtensionContext,
+  ): Promise<Record<string, unknown>[]>;
+  appendDefinitionError(ctx: ExtensionContext, error: unknown): void;
+}) {
   return {
     async sessionStart(ctx: ExtensionContext): Promise<void> {
       host.diagnostic();
@@ -378,9 +996,45 @@ export function createLeadSessionStartRuntime(host: any) {
   };
 }
 
-export function createLeadAgentEventRuntime(host: any) {
+export function createLeadAgentEventRuntime(host: {
+  isCurrentChief(ctx: ExtensionContext): boolean;
+  setActiveTools(tools: readonly string[]): void;
+  chiefTools: readonly string[];
+  leadInboxRuntime: Pick<LeadInboxRuntime, "holdStartPreflight">;
+  prepareSupervisionMessage(
+    ctx: ExtensionContext,
+  ): Promise<
+    { customType: string; content: string; display: boolean } | undefined
+  >;
+  sendMessage(message: {
+    customType: string;
+    content: string;
+    display: boolean;
+  }): void;
+  chiefSystemPrompt(options: BuildSystemPromptOptions): string;
+  isActiveManager(): boolean;
+  roleCharter(): string;
+  isActiveLead(): boolean;
+  prepareLeadSupervisorStateMessage(
+    ctx: ExtensionContext,
+  ): Promise<
+    { customType: string; content: string; display: boolean } | undefined
+  >;
+  definitionRoster():
+    { sessionId: string; definitions: Record<string, unknown>[] } | undefined;
+  consumeChiefStartPreflight(ctx: ExtensionContext): void;
+  herdRun: Pick<LeadHerdRunRuntime, "agentStarted" | "agentSettled">;
+  controller: Pick<
+    LeadController,
+    "settleAsks" | "sessionSignal" | "settleResults"
+  >;
+  isStaffTool(name: string): boolean;
+}) {
   return {
-    async beforeAgentStart(event: any, ctx: ExtensionContext): Promise<any> {
+    async beforeAgentStart(
+      event: any,
+      ctx: ExtensionContext,
+    ): Promise<{ systemPrompt: string } | undefined> {
       if (host.isCurrentChief(ctx)) {
         host.setActiveTools(host.chiefTools);
         host.leadInboxRuntime.holdStartPreflight(ctx);
@@ -435,7 +1089,7 @@ export function createLeadAgentEventRuntime(host: any) {
   };
 }
 
-export function createLeadCommandRuntime(host: any) {
+export function createLeadCommandRuntime(host: LeadCommandHost) {
   const modelToken = (model: { provider: string; id: string }): string =>
     `${model.provider}/${model.id}`;
   return {
@@ -535,7 +1189,7 @@ export function createLeadCommandRuntime(host: any) {
     },
     executionSettings(
       ctx: ExtensionContext,
-      definition: any,
+      definition: AgentDefinition,
     ): { model: string; thinking: string } {
       return {
         model:
@@ -552,14 +1206,17 @@ export function createLeadCommandRuntime(host: any) {
               : `inherit · ${host.getThinkingLevel()}`,
       };
     },
-    resolveConfiguredModel(ctx: ExtensionContext, configured: string): any {
+    resolveConfiguredModel(
+      ctx: ExtensionContext,
+      configured: string,
+    ): Model | undefined {
       const models = ctx.modelRegistry.getAll();
       const canonical = models.find(
-        (candidate: any) => modelToken(candidate) === configured,
+        (candidate: Model) => modelToken(candidate) === configured,
       );
       if (canonical) return canonical;
       const compactMatches = models.filter(
-        (candidate: any) =>
+        (candidate: Model) =>
           compactModelToken(modelToken(candidate)) === configured,
       );
       return compactMatches.length === 1 ? compactMatches[0] : undefined;
@@ -570,12 +1227,12 @@ export function createLeadCommandRuntime(host: any) {
         const definitions = (await host.contextAgentDefinitions(ctx))
           .definitions;
         const bundled = definitions.filter(
-          (definition: any) => definition.extensionSource,
+          (definition: AgentDefinition) => definition.extensionSource,
         );
         const custom = definitions.filter(
-          (definition: any) => !definition.extensionSource,
+          (definition: AgentDefinition) => !definition.extensionSource,
         );
-        const format = (definition: any) => {
+        const format = (definition: AgentDefinition) => {
           const { model, thinking } = this.executionSettings(ctx, definition);
           const name = `${definition.name}${definition.projectSource ? " [project]" : ""}${definition.overrideSource && (definition.extensionSource || definition.projectSource) ? " *" : ""}`;
           return { name, model, thinking, definition };
@@ -583,14 +1240,14 @@ export function createLeadCommandRuntime(host: any) {
         const entries = [...bundled, ...custom].map(format);
         const nameWidth = Math.max(
           0,
-          ...entries.map(({ name }: any) => visibleWidth(name)),
+          ...entries.map(({ name }) => visibleWidth(name)),
         );
         const modelWidth = Math.max(
           0,
-          ...entries.map(({ model }: any) => visibleWidth(model)),
+          ...entries.map(({ model }) => visibleWidth(model)),
         );
         const options: { value: string; label: string }[] = [];
-        const addGroup = (title: string, group: any[]) => {
+        const addGroup = (title: string, group: typeof entries) => {
           if (!group.length) return;
           options.push({ value: "", label: `--- ${title} ---` });
           options.push(
@@ -611,7 +1268,7 @@ export function createLeadCommandRuntime(host: any) {
         if (selected === undefined) return;
         if (!selected) continue;
         const selectedEntry = entries.find(
-          ({ definition }: any) => definition.name === selected,
+          ({ definition }) => definition.name === selected,
         );
         if (!selectedEntry) continue;
         selectedDefinition = selectedEntry.definition.name;
@@ -642,7 +1299,7 @@ export function createLeadCommandRuntime(host: any) {
               current = (
                 await host.contextAgentDefinitions(ctx)
               ).definitions.find(
-                (candidate: any) => candidate.name === selectedName,
+                (candidate: AgentDefinition) => candidate.name === selectedName,
               );
             } catch (error) {
               ctx.ui.notify(String(error), "error");
@@ -678,7 +1335,7 @@ export function createLeadCommandRuntime(host: any) {
             await ctx.modelRegistry.refresh();
             const models = ctx.modelRegistry.getAvailable();
             const tokens = [
-              ...new Set(models.map((item: any) => modelToken(item))),
+              ...new Set(models.map((item: Model) => modelToken(item))),
             ].sort();
             const configured =
               typeof definition.frontmatter.model === "string"
@@ -700,7 +1357,7 @@ export function createLeadCommandRuntime(host: any) {
               ? this.resolveConfiguredModel(ctx, configured)
               : undefined;
             const modelsByToken = new Map(
-              models.map((item: any) => [modelToken(item), item]),
+              models.map((item: Model) => [modelToken(item), item]),
             );
             if (resolvedConfigured)
               modelsByToken.set(
@@ -802,7 +1459,7 @@ export function createLeadCommandRuntime(host: any) {
       const snapshot = await host.loadStatusSnapshot(ctx, signal);
       const rows = host.buildStatusRows(
         snapshot.agents.filter(
-          (agent: any) => agent.state !== "lost" && agent.state !== "unknown",
+          (agent) => agent.state !== "lost" && agent.state !== "unknown",
         ),
         { now: Date.now() },
       );
@@ -837,7 +1494,7 @@ export function createLeadCommandRuntime(host: any) {
         host.controller.sessionSignal(),
       );
       const target = fresh.agents.find(
-        (agent: any) =>
+        (agent) =>
           agent.label === selectedRow.label &&
           agent.paneId === selectedRow.paneId &&
           agent.sessionId === selectedRow.sessionId,
@@ -995,24 +1652,11 @@ export function createLeadCommandRuntime(host: any) {
   };
 }
 
-export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
-  const statusRuntime = createLeadStatusRuntime();
-  if (options.statusOnly)
-    return {
-      controller: undefined,
-      statusRuntime,
-      leadRuntime: createLeadRuntimeState(),
-      leadToolState: createLeadToolState(
-        () => pi.getAllTools(),
-        options.ownedToolNames ?? [],
-        options.leadCoordinationToolNames ?? [],
-      ),
-      supervisionUiRuntime: undefined,
-      coordinationRuntime: undefined,
-      inboxRuntime: undefined,
-      projectRuntime: undefined,
-      herdRunRuntime: undefined,
-    };
+export function registerLeadRuntime(
+  pi: ExtensionAPI,
+  options: LeadRuntimeOptions,
+) {
+  const statusRuntime = createAgentStatusRuntime();
   const leadRuntime = options.leadRuntime ?? createLeadRuntimeState();
   const leadToolState =
     options.leadToolState ??
@@ -1026,23 +1670,31 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
   options.onLeadRuntimeReady?.(leadRuntime, leadToolState);
   let roleTransitions!: ReturnType<typeof createLeadRoleTransitions>;
   let identityRuntime!: ReturnType<typeof createLeadIdentityRuntime>;
-  const liveAgent = (...args: any[]) => identityRuntime.liveAgent(...args);
-  const remoteChiefAgent = (...args: any[]) =>
+  const liveAgent: typeof identityRuntime.liveAgent = (...args) =>
+    identityRuntime.liveAgent(...args);
+  const remoteChiefAgent: typeof identityRuntime.remoteChiefAgent = (...args) =>
     identityRuntime.remoteChiefAgent(...args);
-  const liveLead = (...args: any[]) => identityRuntime.liveLead(...args);
+  const liveLead: typeof identityRuntime.liveLead = (...args) =>
+    identityRuntime.liveLead(...args);
   const coordinationServices = {
     ...options.coordinationHost,
-    currentManager: (...args: any[]) => roleTransitions.currentManager(...args),
+    currentManager: (
+      ...args: Parameters<typeof roleTransitions.currentManager>
+    ) => roleTransitions.currentManager(...args),
     currentWorktreeScope: (ctx: ExtensionContext) =>
       roleTransitions.currentWorktreeScope(ctx),
-    projectAssignmentForScope: (...args: any[]) =>
-      roleTransitions.projectAssignmentForScope(...args),
-    publishProjectMessage: (...args: any[]) =>
-      roleTransitions.publishProjectMessage(...args),
-    currentChiefAuthority: (...args: any[]) =>
-      roleTransitions.currentChiefAuthority(...args),
-    currentSupervisor: (...args: any[]) =>
-      roleTransitions.currentSupervisor(...args),
+    projectAssignmentForScope: (
+      ...args: Parameters<typeof roleTransitions.projectAssignmentForScope>
+    ) => roleTransitions.projectAssignmentForScope(...args),
+    publishProjectMessage: (
+      ...args: Parameters<typeof roleTransitions.publishProjectMessage>
+    ) => roleTransitions.publishProjectMessage(...args),
+    currentChiefAuthority: (
+      ...args: Parameters<typeof roleTransitions.currentChiefAuthority>
+    ) => roleTransitions.currentChiefAuthority(...args),
+    currentSupervisor: (
+      ...args: Parameters<typeof roleTransitions.currentSupervisor>
+    ) => roleTransitions.currentSupervisor(...args),
   };
   const coordinationRuntime = createLeadCoordinationRuntime({
     ...coordinationServices,
@@ -1064,16 +1716,20 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
       !!options.leadRuntime.chiefLease &&
       options.leadRuntime.chiefLease.descriptor.piSessionId ===
         ctx.sessionManager.getSessionId(),
-    currentManager: (...args: any[]) => roleTransitions.currentManager(...args),
-    currentChief: (...args: any[]) => roleTransitions.currentChief(...args),
-    currentChiefAuthority: (...args: any[]) =>
-      roleTransitions.currentChiefAuthority(...args),
+    currentManager: (
+      ...args: Parameters<typeof roleTransitions.currentManager>
+    ) => roleTransitions.currentManager(...args),
+    currentChief: (...args: Parameters<typeof roleTransitions.currentChief>) =>
+      roleTransitions.currentChief(...args),
+    currentChiefAuthority: (
+      ...args: Parameters<typeof roleTransitions.currentChiefAuthority>
+    ) => roleTransitions.currentChiefAuthority(...args),
     latestMessageText: (ctx: ExtensionContext) =>
       coordinationRuntime.latestCustomMessageText(
         ctx,
         options.supervisionHost.contextType,
       ),
-    persistedTranscriptReady: (target: any) =>
+    persistedTranscriptReady: (target: ManagedAgentState) =>
       controllerPersistedTranscriptReady(target, (path) => {
         const file = (options.supervisionHost.statSync ?? statSync)(path, {
           throwIfNoEntry: false,
@@ -1193,7 +1849,15 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
       .catch(() => {});
     return leadMetadataQueue;
   };
-  const queueLeadMetadata = (ctx: ExtensionContext, metadata: any): void => {
+  const queueLeadMetadata = (
+    ctx: ExtensionContext,
+    metadata: {
+      paneId: string;
+      name: string;
+      herdRunStartedAt?: number;
+      contextPercent?: number;
+    },
+  ): void => {
     if (leadRuntime.controllerRole === "manager") {
       void publishLeadRole(
         ctx,
@@ -1253,7 +1917,7 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
       throw new Error(
         `Cannot activate ${role} while managed mailbox state is unresolved`,
       );
-    if (states.some(({ state }: any) => state.ownerSessionId === sessionId))
+    if (states.some(({ state }) => state.ownerSessionId === sessionId))
       throw new Error(`Cannot activate ${role} while owned agent work exists`);
   };
   const roleTransitionServices = {
@@ -1271,8 +1935,9 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     getLeadTools: () => leadToolState.getLeadTools(),
     setLeadTools: (tools: string[] | undefined) =>
       leadToolState.setLeadTools(tools),
-    currentChiefAuthority: (...args: any[]) =>
-      roleTransitions.currentChiefAuthority(...args),
+    currentChiefAuthority: (
+      ...args: Parameters<typeof roleTransitions.currentChiefAuthority>
+    ) => roleTransitions.currentChiefAuthority(...args),
     persistCoordinatorState: () =>
       coordinationRuntime.persistCoordinatorState(),
     persistRole,
@@ -1337,9 +2002,12 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
       ctx: ExtensionContext,
       failOnVerificationError = false,
     ) => roleTransitions.currentChiefAuthority(ctx, failOnVerificationError),
-    currentManager: (...args: any[]) => roleTransitions.currentManager(...args),
-    managerForScope: (...args: any[]) =>
-      roleTransitions.managerForScope(...args),
+    currentManager: (
+      ...args: Parameters<typeof roleTransitions.currentManager>
+    ) => roleTransitions.currentManager(...args),
+    managerForScope: (
+      ...args: Parameters<typeof roleTransitions.managerForScope>
+    ) => roleTransitions.managerForScope(...args),
     currentPeerPresenceValid: (ctx: ExtensionContext) =>
       coordinationRuntime.currentPeerPresenceValid(ctx),
     drainProjectMessages: (ctx: ExtensionContext) =>
@@ -1354,7 +2022,7 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     onChanged: () => statusRuntime.requestRefresh(),
     onWorkChanged: (ctx: ExtensionContext) => herdRunRuntime?.maybeFinish(ctx),
     onWorktreeRemoved: (
-      removed: any,
+      removed: RemovedHerdrWorktree,
       ctx: ExtensionContext,
       signal: AbortSignal,
     ) => {
@@ -1378,7 +2046,7 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     ctx: ExtensionContext,
     signal = controller.sessionSignal(),
     allowTranscriptDefinitionFallback = true,
-    runtimeForLabel: (label: string) => any = (label) =>
+    runtimeForLabel: (label: string) => Runtime | undefined = (label) =>
       controller.runtimeForLabel(label),
   ): Promise<StatusSnapshot> => {
     const view = await controller.agentSnapshotView(
@@ -1388,7 +2056,7 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
       true,
       allowTranscriptDefinitionFallback,
     );
-    return buildLeadStatusSnapshot(view, ctx, {
+    return buildAgentStatusSnapshot(view, ctx, {
       ...options.statusSnapshotHost,
       scope: { kind: "lead" },
       listedAgentRecord: controller.listedAgentRecord,
@@ -1400,7 +2068,7 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     ...options.statusSnapshotHost,
     pendingStartEntries: () => controller.pendingStartEntries(),
     hasPendingStart: (label: string) => controller.hasPendingStart(label),
-    clearPendingStart: (label: string, expected: any) =>
+    clearPendingStart: (label: string, expected: PendingStart) =>
       controller.clearPendingStart(label, expected),
     loadSnapshot: (ctx: ExtensionContext) =>
       loadStatusSnapshot(ctx, controller.sessionSignal(), false),
@@ -1412,31 +2080,40 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     ...projectHost,
     liveAgent,
     liveLead,
-    currentManager: (...args: any[]) => roleTransitions.currentManager(...args),
+    currentManager: (
+      ...args: Parameters<typeof roleTransitions.currentManager>
+    ) => roleTransitions.currentManager(...args),
     sameManagerDescriptor: projectHost.sameManagerDescriptor,
-    withProjectWorkLock: (...args: any[]) =>
-      roleTransitions.withProjectWorkLock(...args),
+    withProjectWorkLock: (
+      ...args: Parameters<typeof roleTransitions.withProjectWorkLock>
+    ) => roleTransitions.withProjectWorkLock(...args),
     activeRole: () => activeLeadRole(options.leadRuntime),
     managerLease: () => options.leadRuntime.managerLease,
-    currentChiefAuthority: (...args: any[]) =>
-      roleTransitions.currentChiefAuthority(...args),
-    directReports: (...args: any[]) =>
-      supervisionUiRuntime.directReports(...args),
-    loadSupervisionSnapshot: (...args: any[]) =>
-      supervisionUiRuntime.loadSnapshot(...args),
-    prepareCoordinationInput: (...args: any[]) =>
-      coordinationRuntime.prepareCoordinationInput(...args),
+    currentChiefAuthority: (
+      ...args: Parameters<typeof roleTransitions.currentChiefAuthority>
+    ) => roleTransitions.currentChiefAuthority(...args),
+    directReports: (
+      ...args: Parameters<typeof supervisionUiRuntime.directReports>
+    ) => supervisionUiRuntime.directReports(...args),
+    loadSupervisionSnapshot: (
+      ...args: Parameters<typeof supervisionUiRuntime.loadSnapshot>
+    ) => supervisionUiRuntime.loadSnapshot(...args),
+    prepareCoordinationInput: (
+      ...args: Parameters<typeof coordinationRuntime.prepareCoordinationInput>
+    ) => coordinationRuntime.prepareCoordinationInput(...args),
   };
   projectRuntime = createLeadProjectRuntime({
     ...projectServices,
-    stopOwnedAgentsForSession: (...args: any[]) =>
-      controller.stopOwnedAgentsForSession(...args),
+    stopOwnedAgentsForSession: (
+      ...args: Parameters<typeof controller.stopOwnedAgentsForSession>
+    ) => controller.stopOwnedAgentsForSession(...args),
     pi,
     leadRuntime: options.leadRuntime,
     HERDSMAN_BUILD: options.build,
     HERDSMAN_EXTENSION_PATH: projectHost.extensionPath,
     SessionManager: projectHost.SessionManager,
-    stopProjectLead: (...args: any[]) => projectRuntime.stop(...args),
+    stopProjectLead: (...args: Parameters<typeof projectRuntime.stop>) =>
+      projectRuntime.stop(...args),
   });
   herdRunRuntime = createLeadHerdRunRuntime({
     pi,
@@ -1445,10 +2122,12 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     listAgentStates: () => controller.listAgentStates(),
     currentWorktreeScope: (ctx: ExtensionContext) =>
       roleTransitions.currentWorktreeScope(ctx),
-    projectAssignmentForScope: (...args: any[]) =>
-      roleTransitions.projectAssignmentForScope(...args),
-    publishProjectMessage: (...args: any[]) =>
-      roleTransitions.publishProjectMessage(...args),
+    projectAssignmentForScope: (
+      ...args: Parameters<typeof roleTransitions.projectAssignmentForScope>
+    ) => roleTransitions.projectAssignmentForScope(...args),
+    publishProjectMessage: (
+      ...args: Parameters<typeof roleTransitions.publishProjectMessage>
+    ) => roleTransitions.publishProjectMessage(...args),
     requestStatusRefresh: () => statusRuntime.requestRefresh(),
     queueLeadPresentation: options.queueLeadPresentation,
     appendDurableError: options.herdRunServices.appendDurableError,
@@ -1461,10 +2140,14 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
     formatStatusCounts,
     openSupervisionOverview: (ctx: ExtensionCommandContext) =>
       supervisionUiRuntime.openOverview(ctx, {
-        focusLead: (...args: any[]) => supervisionUiRuntime.focusLead(...args),
-        stopProjectLead: (...args: any[]) => projectRuntime.stop(...args),
-        activateProjectLead: (...args: any[]) =>
-          projectRuntime.activateProjectLead(...args),
+        focusLead: (
+          ...args: Parameters<typeof supervisionUiRuntime.focusLead>
+        ) => supervisionUiRuntime.focusLead(...args),
+        stopProjectLead: (...args: Parameters<typeof projectRuntime.stop>) =>
+          projectRuntime.stop(...args),
+        activateProjectLead: (
+          ...args: Parameters<typeof projectRuntime.activateProjectLead>
+        ) => projectRuntime.activateProjectLead(...args),
         selectMenu: options.commandHost.selectMenu,
       }),
     controller,
@@ -1487,8 +2170,11 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
         : leave
           ? roleTransitions.leaveChief(ctx)
           : roleTransitions.activateChief(ctx),
-    runHerdr: (ctx: ExtensionContext, args: string[], runOptions: any) =>
-      options.commandHost.runHerdr(pi, ctx, args, runOptions),
+    runHerdr: (
+      ctx: ExtensionContext,
+      args: string[],
+      runOptions: Parameters<typeof runHerdr>[3],
+    ) => options.commandHost.runHerdr(pi, ctx, args, runOptions),
     maybeFinishHerdRun: (ctx: ExtensionContext) =>
       herdRunRuntime!.maybeFinish(ctx),
     getThinkingLevel: () => pi.getThinkingLevel(),
@@ -1581,7 +2267,7 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
   };
 }
 
-export function createLeadIdentityRuntime(host: any) {
+export function createLeadIdentityRuntime(host: LeadIdentityHost) {
   const liveAgent = async (
     ctx: ExtensionContext,
     sessionId: string,
@@ -1589,7 +2275,7 @@ export function createLeadIdentityRuntime(host: any) {
   ) => {
     const expected = host.expectedSession(sessionId, sessionPath);
     return (await host.listAgents(ctx)).agents.filter(
-      (agent: any) =>
+      (agent: HerdrRecord) =>
         host.isPiAgent(agent) &&
         host.matchesExpectedSession(agent.agent_session, expected) &&
         typeof agent.pane_id === "string" &&
@@ -1600,14 +2286,14 @@ export function createLeadIdentityRuntime(host: any) {
   const remoteChiefAgent = async (
     ctx: ExtensionContext,
     descriptor: ChiefDescriptor,
-  ): Promise<any | undefined> => {
+  ): Promise<HerdrRecord | undefined> => {
     const inventory = (await host.listAgents(ctx)).agents;
     const expected = host.expectedSession(
       descriptor.piSessionId,
       descriptor.piSessionFile,
     );
     const matches = inventory.filter(
-      (agent: any) =>
+      (agent: HerdrRecord) =>
         host.isPiAgent(agent) &&
         host.matchesExpectedSession(agent.agent_session, expected),
     );
@@ -1649,10 +2335,10 @@ export function createLeadIdentityRuntime(host: any) {
       true,
     );
     const hasManagedAgent = snapshot.agents.some(
-      ({ state }: any) => state.piSessionId === sessionId,
+      ({ state }) => state.piSessionId === sessionId,
     );
     return matches.filter(
-      (agent: any) =>
+      (agent: HerdrRecord) =>
         !hasManagedAgent &&
         host.matchesExpectedSession(agent.agent_session, expected) &&
         host.hasLeadCoordination(sessionId),
@@ -1661,14 +2347,14 @@ export function createLeadIdentityRuntime(host: any) {
   return { liveAgent, remoteChiefAgent, liveLead };
 }
 
-export function createLeadStatusRuntime() {
+export function createAgentStatusRuntime() {
   let options:
     | {
         loadSnapshot(ctx: ExtensionContext): Promise<StatusSnapshot>;
-        pendingStartEntries(): readonly any[];
+        pendingStartEntries(): readonly PendingStart[];
         hasPendingStart(label: string): boolean;
-        clearPendingStart(label: string, expected: any): boolean;
-        runtimeForLabel(label: string): any;
+        clearPendingStart(label: string, expected: PendingStart): boolean;
+        runtimeForLabel(label: string): Runtime | undefined;
         ownToolsSnapshot(): { ownTools?: string[] };
         initialWidgetSnapshot?(): StatusSnapshot | undefined;
       }
@@ -1858,11 +2544,11 @@ export function createLeadStatusRuntime() {
   };
 }
 
-export function createLeadSupervisionRuntime(host: any) {
+export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
   const loadSupervisionSnapshot = async (
     ctx: ExtensionContext,
-    suppliedInventory?: any,
-    suppliedAgents?: any,
+    suppliedInventory?: HerdrSessionSnapshot,
+    suppliedAgents?: ManagedAgentSnapshotCollection,
     includeAll = false,
   ) => {
     if (host.activeRole() === "chief" && !includeAll) {
@@ -2037,8 +2723,8 @@ export function createLeadSupervisionRuntime(host: any) {
   };
   const directReports = async (
     ctx: ExtensionContext,
-    suppliedInventory?: any,
-    suppliedAgents?: any,
+    suppliedInventory?: HerdrSessionSnapshot,
+    suppliedAgents?: ManagedAgentSnapshotCollection,
   ) => {
     if (host.activeRole() === "manager" && !host.state.roleSuspended) {
       const manager = await host.currentManager(ctx);
@@ -2318,9 +3004,18 @@ export function createLeadSupervisionRuntime(host: any) {
     ctx: ExtensionCommandContext,
     uiActions: {
       focusLead(ctx: ExtensionContext, leadId: string): Promise<void>;
-      stopProjectLead(...args: any[]): Promise<any>;
-      activateProjectLead(...args: any[]): Promise<any>;
-      selectMenu(...args: any[]): Promise<string | undefined>;
+      stopProjectLead(
+        ...args: Parameters<LeadProjectRuntime["stop"]>
+      ): ReturnType<LeadProjectRuntime["stop"]>;
+      activateProjectLead(
+        ...args: Parameters<LeadProjectRuntime["activateProjectLead"]>
+      ): ReturnType<LeadProjectRuntime["activateProjectLead"]>;
+      selectMenu(
+        ctx: ExtensionContext,
+        title: string,
+        items: readonly SelectItem[],
+        selectedValue?: string,
+      ): Promise<string | undefined>;
     },
   ): Promise<void> => {
     if (ctx.mode !== "tui") {
@@ -2744,7 +3439,11 @@ export function createLeadSupervisionRuntime(host: any) {
         signal: ctx.signal,
       });
     },
-    prepareMessage: async (ctx: ExtensionContext): Promise<any> => {
+    prepareMessage: async (
+      ctx: ExtensionContext,
+    ): Promise<
+      { customType: string; content: string; display: boolean } | undefined
+    > => {
       if (!host.isCurrentChief(ctx) && host.activeRole() !== "manager") return;
       const currentGeneration = generation(ctx);
       const isCurrent = (): boolean =>
@@ -2809,7 +3508,7 @@ export function createLeadSupervisionRuntime(host: any) {
   };
 }
 
-export function createLeadHerdRunRuntime(host: any) {
+export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
   let leadAgentStartedAt: number | undefined;
   let herdRunStartedAt: number | undefined;
   let leadSettled = true;
@@ -2968,10 +3667,10 @@ function restoreHerdRunStartedAt(
   return active;
 }
 
-export function createLeadProjectRuntime(host: any) {
+export function createLeadProjectRuntime(host: LeadProjectHost) {
   const stopExecution = async (
     session: string,
-    target: any,
+    target: HerdrRecord,
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ) => {
@@ -4042,17 +4741,17 @@ export function createLeadProjectRuntime(host: any) {
 }
 
 export function readLeadSessionIds(
-  inventory: any,
-  mailboxes: readonly any[],
+  inventory: HerdrSessionSnapshot,
+  mailboxes: ReturnType<typeof import("./mailbox.ts").listAgentStates>,
   workspaceId: string,
   dependencies: {
     matchesExpectedSession: (
       session: unknown,
       expected: { id: string },
     ) => boolean;
-    isPiAgent: (agent: any) => boolean;
+    isPiAgent: (agent: HerdrRecord) => boolean;
     supervisionRuntime: () => unknown;
-    readLeadCoordinationState: (runtime: unknown, sessionId: string) => any;
+    readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
   },
 ): string[] {
   const panes = inventory.panes;
@@ -4062,7 +4761,7 @@ export function readLeadSessionIds(
     mailboxes.map(({ state }) => state.ownerSessionId),
   );
   for (const ownerSessionId of ownerSessionIds) {
-    const ownerAgents = inventory.agents.filter((agent: any) => {
+    const ownerAgents = inventory.agents.filter((agent: HerdrRecord) => {
       try {
         return dependencies.matchesExpectedSession(agent?.agent_session, {
           id: ownerSessionId,
@@ -4076,7 +4775,7 @@ export function readLeadSessionIds(
     if (typeof ownerAgent.pane_id !== "string" || !ownerAgent.pane_id.trim())
       continue;
     const ownerPanes = panes.filter(
-      (pane: any) =>
+      (pane: HerdrRecord) =>
         pane?.workspace_id === workspaceId &&
         pane?.pane_id === ownerAgent.pane_id,
     );
@@ -4100,7 +4799,7 @@ export function readLeadSessionIds(
   return leadSessionIds;
 }
 
-export function createLeadCoordinationRuntime(host: any) {
+export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
   let leadCoordinationHealthy = true;
   let peerPresenceLease: ReturnType<typeof host.acquireProcessLock> | undefined;
   let peerPresenceRecord: PeerLeadRecord | undefined;
@@ -4155,20 +4854,23 @@ export function createLeadCoordinationRuntime(host: any) {
     importResultBindings,
   } = host;
   const readLeadSessionIdsFromHost = (
-    inventory: any,
-    mailboxes: readonly any[],
+    inventory: HerdrSessionSnapshot,
+    mailboxes: ReturnType<typeof import("./mailbox.ts").listAgentStates>,
     workspaceId: string,
   ): string[] => readLeadSessionIds(inventory, mailboxes, workspaceId, host);
   const prepareCoordinationInput = async (
     ctx: ExtensionContext,
     text: string,
-    files: readonly any[],
+    files: readonly MessageFileInput[],
     operation: string,
     heading: "Message" | "Reply" | "Question",
     recordForInput: (
       text: string,
       resultBindings: readonly ResultBinding[],
-    ) => any,
+    ) =>
+      | number
+      | import("./supervision.ts").ChiefMessageRecord
+      | import("./supervision.ts").ProjectMessage,
   ) => {
     const limits = await host.messageLimits(ctx);
     return prepareMessageInput(text, files, ctx.cwd, operation, heading, {
@@ -5091,7 +5793,7 @@ attention. Routine status and acknowledgements stay local. Settling your herd is
 nonterminal; do not infer project closure from runtime state.`;
 }
 
-export function createLeadInboxRuntime(host: any) {
+export function createLeadInboxRuntime(host: LeadInboxHost) {
   let chiefInboxTimer: ReturnType<typeof setTimeout> | undefined;
   let chiefInboxGeneration = 0;
   let chiefInboxAbortController: AbortController | undefined;
@@ -5489,11 +6191,14 @@ export function createLeadInboxRuntime(host: any) {
         },
         sendMessage: async (
           message: unknown,
-          options: any,
+          options: Parameters<ChiefInboxDrainOptions["sendMessage"]>[1],
           record: ChiefMessageRecord,
         ) => {
           const projectAssignment =
-            (message as any)?.customType === "pi-herdsman-project_assignment";
+            typeof message === "object" &&
+            message !== null &&
+            "customType" in message &&
+            message.customType === "pi-herdsman-project_assignment";
           try {
             if (!ctx.isIdle())
               throw new Error(
@@ -6006,7 +6711,7 @@ export function createLeadRoleTransitions(
     }
   };
   const projectAssignmentForScope = (
-    scope: any,
+    scope: WorktreeGroupScope,
     sessionId: string,
   ): ProjectAssignment | undefined => {
     const assignments = host.findProjectAssignmentBySession(
@@ -6037,7 +6742,7 @@ export function createLeadRoleTransitions(
     ctx: ExtensionContext,
     assignment: ProjectAssignment,
     message: string,
-    files: readonly any[] = [],
+    files: readonly MessageFileInput[] = [],
     operation = "supervisor_message",
   ): Promise<ProjectMessage | undefined> => {
     const sessionId = ctx.sessionManager.getSessionId();
@@ -6056,7 +6761,7 @@ export function createLeadRoleTransitions(
       files,
       operation,
       "Message",
-      (candidate: string, resultBindings: readonly any[]) =>
+      (candidate: string, resultBindings: readonly ResultBinding[]) =>
         host.projectMessageBytes({
           version: 2,
           id,
@@ -6097,7 +6802,9 @@ export function createLeadRoleTransitions(
       },
     );
   };
-  const managerForScope = (scope: any): ManagerDescriptor | undefined => {
+  const managerForScope = (
+    scope: WorktreeGroupScope | undefined,
+  ): ManagerDescriptor | undefined => {
     if (!scope) return undefined;
     const status = host.readManagerDescriptorStatus(
       host.supervisionRuntime(),
@@ -6110,7 +6817,7 @@ export function createLeadRoleTransitions(
   };
   const currentManager = async (
     ctx: ExtensionContext,
-    scope?: any | null,
+    scope?: WorktreeGroupScope | null,
   ): Promise<ManagerDescriptor | undefined> => {
     const descriptor = managerForScope(
       scope === null || scope === undefined

@@ -49,6 +49,10 @@ import {
   type ManagedAgentSnapshotCollection,
 } from "./agent-controller.ts";
 import { runHerdr, sameCwd } from "./herdr.ts";
+import {
+  buildAgentStatusSnapshot,
+  createAgentStatusRuntime,
+} from "./lead-runtime.ts";
 import { displayIdentity, prepareMessageInput } from "./core.ts";
 import { collapseDisplayText, createStatusWidget } from "./presentation.ts";
 import { randomUUID } from "node:crypto";
@@ -1618,6 +1622,7 @@ export function registerManagedAgentShutdownHandler(
   options: {
     resetRequestPump(): void;
     resetLeafStatus(): void;
+    statusRuntime: ReturnType<typeof createAgentStatusRuntime>;
     abortMetadata(): void;
     setControllerReady(ready: boolean): void;
     clearControllerRuntimes(): void;
@@ -1627,6 +1632,7 @@ export function registerManagedAgentShutdownHandler(
 ): void {
   pi.on("session_shutdown", () => {
     options.shutdownController();
+    options.statusRuntime.shutdown();
     execution.pendingInterruptReplacement = undefined;
     options.resetLeafStatus();
     options.abortMetadata();
@@ -1644,6 +1650,7 @@ export function registerManagedAgentRuntime(
   options: {
     build: RuntimeBuild;
     shellTimeoutSeconds: number;
+    statusRuntime: ReturnType<typeof createAgentStatusRuntime>;
     controllerOptions: Omit<AgentControllerOptions, "scope" | "build">;
     activityWriteMinMs: number;
     resultWriteMaxAttempts: number;
@@ -1694,6 +1701,40 @@ export function registerManagedAgentRuntime(
         build: options.build,
       })
     : undefined;
+  if (controller) {
+    const scope = {
+      kind: "managed-agent" as const,
+      allowedAgentDefinitions: new Set(allowedAgentDefinitions),
+    };
+    options.statusRuntime.configure({
+      pendingStartEntries: () => controller.pendingStartEntries(),
+      hasPendingStart: (label) => controller.hasPendingStart(label),
+      clearPendingStart: (label, expected) =>
+        controller.clearPendingStart(label, expected),
+      runtimeForLabel: (label) => controller.runtimeForLabel(label),
+      ownToolsSnapshot: () => ({}),
+      loadSnapshot: async (ctx) => {
+        const view = await controller.agentSnapshotView(
+          ctx,
+          scope,
+          controller.sessionSignal(),
+        );
+        return buildAgentStatusSnapshot(view, ctx, {
+          scope,
+          listedAgentRecord: controller.listedAgentRecord,
+          runtimeForLabel: controller.runtimeForLabel,
+          environmentIdentity: (context: ExtensionContext) =>
+            managedAgentEnvironmentIdentity(context, options.build),
+          identityFromEnvironment: () => ({
+            definition: process.env.PI_HERDSMAN_AGENT_DEFINITION,
+            label: process.env.PI_HERDSMAN_LABEL,
+          }),
+          sameIdentity: sameManagedAgentIdentity,
+          ownToolsSnapshot: () => ({}),
+        });
+      },
+    });
+  }
   controller?.registerTools(new Map());
   if (delegationEnabled)
     pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
@@ -1864,6 +1905,7 @@ export function registerManagedAgentRuntime(
   registerManagedAgentSessionStartHandler(pi, execution, {
     build: options.build,
     delegationEnabled,
+    statusRuntime: options.statusRuntime,
     startControllerSession: () => {
       if (!controller) return;
       controller.abortSession();
@@ -1998,6 +2040,7 @@ export function registerManagedAgentRuntime(
   );
   registerManagedAgentShutdownHandler(pi, execution, {
     resetRequestPump,
+    statusRuntime: options.statusRuntime,
     resetLeafStatus: leafStatus.reset,
     abortMetadata: metadataPublisher.abort,
     setControllerReady: (ready) => controller?.setReady(ready),
@@ -2336,10 +2379,12 @@ export function registerManagedAgentSessionStartHandler(
     touchActivity(now?: number, force?: boolean): void;
     pumpRequest(ctx: ExtensionContext): void;
     startLeafStatus(ctx: ExtensionContext): void;
+    statusRuntime: ReturnType<typeof createAgentStatusRuntime>;
     appendError(ctx: ExtensionContext, error: unknown): void;
   },
 ): void {
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
+    options.statusRuntime.prepareSession(ctx);
     options.startControllerSession();
     options.resetRequestPump();
     options.resetLeafStatus();
@@ -2449,6 +2494,7 @@ export function registerManagedAgentSessionStartHandler(
       if (options.delegationEnabled)
         options.startControllerHealthScanner(ctx, metadataSignal);
       execution.initialized = true;
+      options.statusRuntime.start(ctx);
       options.pumpRequest(ctx);
       execution.requestPumpTimer = setInterval(
         () => options.pumpRequest(ctx),
@@ -2474,6 +2520,7 @@ export function registerManagedAgentSessionStartHandler(
       );
     } catch (error) {
       execution.initialized = false;
+      options.statusRuntime.clear();
       options.setControllerReady(false);
       execution.assignment = undefined;
       if (options.delegationEnabled) options.clearControllerRuntimes();

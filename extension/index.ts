@@ -250,6 +250,7 @@ import {
 } from "./config.ts";
 import {
   activeLeadRole,
+  createAgentStatusRuntime,
   createLeadToolState,
   type LeadRuntimeState,
   registerLeadRuntime,
@@ -1020,14 +1021,12 @@ export default function (pi: ExtensionAPI): void {
     "staff_stop",
   ];
   if (processRole === "managed-agent") {
-    const leadOnly = registerLeadRuntime(pi, {
-      statusOnly: true,
+    leadStatusRuntime = createAgentStatusRuntime();
+    leadToolState = createLeadToolState(
+      () => pi.getAllTools(),
       ownedToolNames,
-      leadCoordinationToolNames: LEAD_COORDINATION_TOOLS,
-    });
-    leadStatusRuntime = leadOnly.statusRuntime;
-    leadRuntime = leadOnly.leadRuntime;
-    leadToolState = leadOnly.leadToolState;
+      LEAD_COORDINATION_TOOLS,
+    );
   }
   const ownedTools = () => leadToolState.ownedTools;
   const normalizeBaseTools = (tools: readonly string[]): string[] =>
@@ -2107,6 +2106,7 @@ export default function (pi: ExtensionAPI): void {
   registerManagedAgentRuntime(pi, {
     build: HERDSMAN_BUILD,
     shellTimeoutSeconds: STALE_AFTER_MS / 1000,
+    statusRuntime: leadStatusRuntime!,
     controllerOptions: { ...controllerServices, onWorkChanged: () => {} },
     activityWriteMinMs: ACTIVITY_WRITE_MIN_MS,
     resultWriteMaxAttempts: RESULT_WRITE_MAX_ATTEMPTS,

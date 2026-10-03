@@ -63,7 +63,10 @@ in `AGENTS.md`.
 
 ## Code map
 
-- `extension/index.ts`: Extension integration and controller/agent lifecycle.
+- `extension/index.ts`: Pi extension composition, shared registration, and runtime selection.
+- `extension/agent-controller.ts`: Shared owner-side Agent delegation, control, recovery, and result lifecycle.
+- `extension/managed-agent-runtime.ts`: Managed-Agent request, result, context, metadata, and nested-delegation runtime.
+- `extension/lead-runtime.ts`: Lead, Manager, Chief, supervision, project, status, and role lifecycle.
 - `extension/agent-definitions.ts`: Agent-definition discovery, validation, overrides, and launch arguments.
 - `extension/herdr.ts`: Herdr topology, startup, shutdown, and process ownership.
 - `extension/mailbox.ts`: Durable mailbox protocol and record persistence.
