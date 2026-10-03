@@ -60,8 +60,8 @@ import type { ResultBinding } from "./storage.ts";
 import {
   agentDefinitionEnabled,
   agentDefinitionMetadata,
-  contextAgentDefinitions,
   validateAgentDefinitionReferences,
+  type AgentDefinition,
 } from "./agent-definitions.ts";
 
 function currentTurnIsSoleToolCall(message: unknown, name: string): boolean {
@@ -97,8 +97,7 @@ function askRecordBytes(
   });
 }
 
-async function validateManagedAgentDefinition(ctx: ExtensionContext): Promise<void> {
-  const { definitions } = await contextAgentDefinitions(ctx);
+function validateManagedAgentDefinition(definitions: AgentDefinition[]): void {
   const name = process.env.PI_HERDSMAN_AGENT_DEFINITION;
   const definition = definitions.find((item) => item.name === name);
   if (!definition) throw new Error(`agent ${name} not found`);
@@ -109,11 +108,10 @@ async function validateManagedAgentDefinition(ctx: ExtensionContext): Promise<vo
   validateAgentDefinitionReferences(definition, definitions);
 }
 
-async function managedAgentDefinitionRoster(
-  ctx: ExtensionContext,
+function managedAgentDefinitionRoster(
+  definitions: AgentDefinition[],
   allowed: string[],
-): Promise<Record<string, unknown>[]> {
-  const { definitions } = await contextAgentDefinitions(ctx);
+): Record<string, unknown>[] {
   return definitions
     .map((definition) => agentDefinitionMetadata(definition, "leaf"))
     .filter((definition) =>
@@ -1309,6 +1307,7 @@ export function registerManagedAgentRuntime(
     currentTurnMessage(ctx: ExtensionContext): unknown;
     appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
     contentText(content: unknown): string;
+    getAgentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
   },
 ): void {
   pi.on("tool_call", (event: any) => {
@@ -1464,7 +1463,7 @@ export function registerManagedAgentRuntime(
     ensureAgentIdentity: (ctx) => ensureManagedAgentIdentity(
       pi, ctx, process.env.PI_HERDSMAN_AGENT_DEFINITION!, process.env.PI_HERDSMAN_LABEL!,
     ),
-    validateDefinition: validateManagedAgentDefinition,
+    getAgentDefinitions: options.getAgentDefinitions,
     sameIdentity: sameManagedAgentIdentity,
     sameDurableState: sameManagedAgentDurableState,
     claimAssignmentLock: options.claimAssignmentLock,
@@ -1481,7 +1480,10 @@ export function registerManagedAgentRuntime(
     try {
       startupDefinitionRoster = {
         sessionId: ctx.sessionManager.getSessionId(),
-        definitions: await managedAgentDefinitionRoster(ctx, allowedAgentDefinitions),
+        definitions: managedAgentDefinitionRoster(
+          await options.getAgentDefinitions(ctx),
+          allowedAgentDefinitions,
+        ),
       };
     } catch (error) {
       options.appendError(ctx, "pi_herdsman_definition_error", error);
@@ -1825,7 +1827,7 @@ export function registerManagedAgentSessionStartHandler(
     reportMetadata(state: ManagedAgentState, ctx: ExtensionContext, patch: ManagedAgentMetadataPatch, reset?: boolean): void;
     environmentIdentity(ctx: ExtensionContext): ManagedAgentState | undefined;
     ensureAgentIdentity(ctx: ExtensionContext): void;
-    validateDefinition(ctx: ExtensionContext): Promise<void>;
+    getAgentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
     sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
     sameDurableState(left: ManagedAgentState, right: ManagedAgentState): boolean;
     claimAssignmentLock(mailbox: string, operation: string, ids: { label?: string; paneId?: string }): () => void;
@@ -1895,7 +1897,8 @@ export function registerManagedAgentSessionStartHandler(
           }
         }
       }
-      if (!existing) await options.validateDefinition(ctx);
+      if (!existing)
+        validateManagedAgentDefinition(await options.getAgentDefinitions(ctx));
       const release = options.claimAssignmentLock(mailbox, "session_start", {
         label: execution.assignment.agentLabel,
         paneId: execution.assignment.paneId,
