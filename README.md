@@ -39,8 +39,9 @@ curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh 
 ```
 
 The bootstrap enforces this Herdsman release's tested Pi and herdr minimums without
-downgrading newer installs. Pi is installed through Pi's managed installer so
-`pi update` remains native; herdr remains self-updateable with `herdr update`.
+downgrading newer installs. When Pi needs installation or an upgrade, Herdsman
+uses Pi's managed installer so `pi update` remains native; herdr remains
+self-updateable with `herdr update`.
 
 If you already manage Pi and herdr yourself:
 

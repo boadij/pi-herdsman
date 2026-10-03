@@ -28,7 +28,7 @@ test("released runtime metadata matches the locked Pi and has Herdr checksums", 
   );
   assert.match(
     runtime?.herdr?.version ?? "",
-    /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u,
+    /^\d+\.\d+\.\d+$/u,
   );
   assert.deepEqual(Object.keys(runtime?.herdr?.sha256 ?? {}).sort(), [
     "linux-aarch64",
@@ -48,8 +48,8 @@ function executable(path, content) {
 
 function fixture({
   badChecksum = false,
-  piVersion = "0.1.0",
-  herdrVersion = "0.1.0",
+  initialPiVersion = "0.1.0",
+  initialHerdrVersion = "0.1.0",
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-install-"));
   const bin = join(root, "bin");
@@ -65,8 +65,8 @@ function fixture({
   const herdrAsset = join(root, "herdr-asset");
 
   writeFileSync(log, "");
-  writeFileSync(piVersion, `${piVersion}\n`);
-  writeFileSync(herdrVersion, `${herdrVersion}\n`);
+  writeFileSync(piVersion, `${initialPiVersion}\n`);
+  writeFileSync(herdrVersion, `${initialHerdrVersion}\n`);
   writeFileSync(piList, `  npm:pi-herdsman@${packageJson.version}\n`);
 
   executable(
@@ -244,12 +244,12 @@ test(
       assert.equal(second.status, 0, second.stderr);
       assert.ok(
         second.stdout.includes(
-          `Pi ${packageJson.piHerdsman.runtime.pi} already installed`,
+          `Pi ${packageJson.piHerdsman.runtime.pi} already satisfies tested baseline ${packageJson.piHerdsman.runtime.pi}`,
         ),
       );
       assert.ok(
         second.stdout.includes(
-          `Herdr ${packageJson.piHerdsman.runtime.herdr.version} already installed`,
+          `Herdr ${packageJson.piHerdsman.runtime.herdr.version} already satisfies tested baseline ${packageJson.piHerdsman.runtime.herdr.version}`,
         ),
       );
       assert.ok(
@@ -273,7 +273,10 @@ test(
   "installer does not downgrade newer Pi or Herdr runtimes",
   { skip: process.platform === "win32" },
   () => {
-    const setup = fixture({ piVersion: "9.0.0", herdrVersion: "9.0.0" });
+    const setup = fixture({
+      initialPiVersion: "9.0.0",
+      initialHerdrVersion: "9.0.0",
+    });
     try {
       const result = spawnSync("sh", [installer], {
         env: setup.env,

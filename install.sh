@@ -29,7 +29,7 @@ current_version() {
 version_compare() {
   node -e '
 const parse = (value) => {
-  const match = /^(\\d+)\\.(\\d+)\\.(\\d+)$/.exec(value);
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value);
   if (!match) throw new Error(`invalid stable version: ${value}`);
   return match.slice(1).map(Number);
 };
