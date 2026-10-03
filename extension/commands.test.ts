@@ -44,6 +44,7 @@ import {
   writePeerLeadRecord as writePeerLeadRecordRaw,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
+import { AGENT_COORDINATION_TOOLS } from "./agent-definitions.ts";
 import { resultPath } from "./storage.ts";
 import support, {
   CHILD_SESSION_ID,
@@ -1217,6 +1218,8 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
     `delegate-project-${randomUUID()}.sock`,
   );
   const childWorkspace = `child-${randomUUID()}`;
+  const childCwd = mkdtempSync(join(tmpdir(), "pi-herdsman-manager-child-"));
+  t.after(() => rmSync(childCwd, { recursive: true, force: true }));
   let childSession = `lead-${randomUUID()}`;
   let primaryWorkspace = WORKSPACE;
   const childSessionPath = () => join(tmpdir(), `${childSession}.jsonl`);
@@ -1249,7 +1252,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
             is_linked_worktree: args[2] === childWorkspace,
             checkout_path:
               args[2] === childWorkspace
-                ? "/tmp/manager-child"
+                ? childCwd
                 : "/tmp/manager-root",
           },
         },
@@ -1278,7 +1281,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
                   supervisionRuntime(),
                   "repo-key",
                 )[0]?.branch,
-                path: "/tmp/manager-child",
+                path: childCwd,
                 is_linked_worktree: true,
               },
               {
@@ -1303,7 +1306,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         workspace: { workspace_id: childWorkspace },
         tab: { tab_id: "child-tab" },
         root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
-        worktree: { branch: assignment.branch, path: "/tmp/manager-child" },
+        worktree: { branch: assignment.branch, path: childCwd },
       });
     }
     if (command === "herdr" && args[0] === "pane" && args[1] === "list")
@@ -1314,7 +1317,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
             workspace_id: childWorkspace,
             tab_id: "child-tab",
             terminal_id: "child-terminal",
-            cwd: "/tmp/manager-child",
+            cwd: childCwd,
           },
         ],
       });
@@ -1325,7 +1328,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
           workspace_id: childWorkspace,
           tab_id: "child-tab",
           terminal_id: "child-terminal",
-          cwd: "/tmp/manager-child",
+          cwd: childCwd,
         },
       });
     if (command === "herdr" && args[0] === "pane" && args[1] === "process-info")
@@ -1354,6 +1357,28 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       assert.notEqual(sessionIdIndex, -1);
       childSession = args[sessionIdIndex + 1]!;
       assert.equal(childSession, assignment.id);
+      const toolsIndex = args.indexOf("--tools");
+      assert.notEqual(toolsIndex, -1);
+      assert.deepEqual(args[toolsIndex + 1]!.split(","), [
+        "read",
+        "ls",
+        "find",
+        "grep",
+        ...AGENT_COORDINATION_TOOLS,
+        "supervisor_message",
+        "peer_list",
+        "peer_message",
+      ]);
+      for (const tool of ["bash", "powershell", "edit", "write"])
+        assert.equal(args[toolsIndex + 1]!.split(",").includes(tool), false);
+      assert.equal(args.includes("--no-skills"), true);
+      assert.equal(args.includes("--no-extensions"), true);
+      const promptIndex = args.indexOf("--system-prompt");
+      assert.notEqual(promptIndex, -1);
+      assert.match(
+        readFileSync(args[promptIndex + 1]!, "utf8"),
+        /Delegate project execution.*Do not take executable work back/s,
+      );
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
         role: "lead",
@@ -1410,7 +1435,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
         nativeSessions.set(childSessionPath(), {
           id: childSession,
           path: childSessionPath(),
-          cwd: "/tmp/manager-child",
+          cwd: childCwd,
           entries: [],
         });
       }
@@ -1488,7 +1513,7 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       {
         workspace: childWorkspace,
         branch: assignment!.branch,
-        path: "/tmp/manager-child",
+        path: childCwd,
         linked: true,
       },
     ]);
@@ -1593,20 +1618,10 @@ test("Manager delegate persists an exact worktree Lead assignment", async (t) =>
       ) as { content?: string } | undefined;
       assert.ok(assignmentDelivery);
       assert.match(assignmentDelivery.content!, /Implement focused change/);
-      assert.match(assignmentDelivery.content!, /Be orchestration-first/);
-      assert.match(
+      assert.doesNotMatch(
         assignmentDelivery.content!,
-        /investigation,\s+implementation,\s+debugging,\s+test and validation execution,\s+review,\s+documentation/,
+        /Be orchestration-first|Work directly when the work is trivial|acceptance of Agent outputs/,
       );
-      assert.match(
-        assignmentDelivery.content!,
-        /delegation would add more coordination than value/,
-      );
-      assert.match(
-        assignmentDelivery.content!,
-        /Work directly when the work is trivial,\s+inseparable from your branch-level\s+coordination or integration responsibility, otherwise unsuitable for an Agent/,
-      );
-      assert.match(assignmentDelivery.content!, /acceptance of Agent outputs/);
       assert.match(
         assignmentDelivery.content!,
         /Settling your herd is\s+nonterminal; do not infer project closure from runtime state\./,

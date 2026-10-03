@@ -60,8 +60,26 @@ An unmatched project or global definition is standalone. Project definitions
 are loaded from `<cwd>/.pi/agents/` when Pi considers the project trusted.
 Precedence is `bundled < project < global`.
 
-All effective definitions are sorted and validated together, including every
-`agents` reference.
+All effective Agent definitions are sorted and validated together, including
+every `agents` reference.
+
+### Reserved managed Lead definition
+
+`managed-lead` is a reserved definition used only when Manager starts or
+resumes a project Lead. It uses the same bundled, project, and global overlay
+engine, but it is excluded from the Agent roster: it cannot be selected by
+`agent_delegate`, referenced from `agents`, disabled, or edited through the
+Agent Definitions UI.
+
+For project work, the project layer is resolved from the delegated worktree when
+that project is trusted. The effective definition is launch configuration only;
+it is not persisted into the project assignment. A running Lead is not
+hot-reconfigured when definition files change.
+
+`managed-lead` does not support `enabled`, `agents`, or `permission`.
+Other launch-policy fields in this schema retain their normal composition
+semantics. Herdsman always preserves the Lead coordination tools required by the
+runtime role even when an explicit tool allowlist or exclusion policy is used.
 
 ## Execution settings
 
@@ -73,6 +91,8 @@ inherited according to this precedence:
 | fresh `delegate`                                | current spawning controller session    |
 | nested fresh `delegate`                         | current spawning managed-agent session |
 | `continue`                                      | saved Pi session                       |
+| fresh managed Lead from `staff_delegate`        | current Manager session                |
+| restarted managed Lead from `staff_resume`      | saved Pi session                       |
 | any operation with an explicit definition field | explicit definition value              |
 
 Model and thinking resolve independently, so either field can be explicit while
@@ -81,11 +101,13 @@ the root lead. Pi clamps a thinking level to the selected model's capabilities.
 Fresh-delegation settings are snapshotted at launch; changing the controller
 does not change an active agent.
 
-`enabled` controls definition availability. A disabled definition remains in the
-lead roster so it can be enabled again, but owner-visible definition lists omit
-it. `delegate` and `continue` reject a disabled definition. An already
-active agent may finish and remains controllable according to its current
+`enabled` controls Agent-definition availability. A disabled definition remains
+in the lead roster so it can be enabled again, but owner-visible definition
+lists omit it. `delegate` and `continue` reject a disabled definition. An
+already active agent may finish and remains controllable according to its current
 available actions; disabling a definition does not mutate that assignment.
+`managed-lead` does not support `enabled`; its bundled definition is always
+the fallback.
 
 ## Fields
 
@@ -140,12 +162,12 @@ explicit `tools`.
 
 An explicit `tools` allowlist takes precedence over the default-selection
 switches `noTools` and `noBuiltinTools`; `excludeTools` removes matching
-ordinary tool names. Managed agents always retain role-required Herdsman tools,
-which are protected from exclusions. When `tools` is omitted, Pi Herdsman does
-not emit `--tools`, preserving Pi's configured/default tool selection. When
-`tools` is explicitly set, the selected allowlist is augmented with the
-managed agent's mandatory role tools. Unmanaged Pi launches do not receive
-these managed-agent exceptions.
+ordinary tool names. Managed agents and managed project Leads always retain their role-required
+Herdsman coordination tools, which are protected from exclusions. When `tools`
+is omitted, Pi Herdsman does not emit `--tools`, preserving Pi's
+configured/default tool selection. When `tools` is explicitly set, the
+selected allowlist is augmented with the runtime role's mandatory tools.
+Unmanaged Pi launches do not receive these managed-role exceptions.
 
 Loading extension code and exposing its tools are separate concerns. An
 extension listed in `extensions` is loaded, while its registered tools still

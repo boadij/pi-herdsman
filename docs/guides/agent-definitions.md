@@ -53,6 +53,11 @@ agent directory's `agents/` subdirectory.
 A project or global definition whose `name` matches a lower-precedence
 definition overlays it. An unmatched definition is standalone.
 
+`managed-lead` is the one reserved exception: it uses the same source and
+overlay engine to configure Manager-created project Leads, but it is not an
+Agent definition that can be selected or delegated to. See
+[Customizing bundled agents](customizing-agents.md#managed-project-lead).
+
 ### Permission-aware extensions
 
 Agent definitions may include a `permission:` mapping for compatible
@@ -236,9 +241,11 @@ path resolution rules.
 
 References are resolved from the Markdown file that declares them.
 
-The bundled definitions are `generalist`, `implementer`, `researcher`,
-`reviewer`, and `scout`. The session-start agent-definition roster and the
-`agent_list` result use the same metadata projection.
+The bundled Agent definitions are `generalist`, `implementer`,
+`researcher`, `reviewer`, and `scout`. The reserved bundled
+`managed-lead` definition is excluded from this roster. The session-start
+agent-definition roster and the `agent_list` result use the same metadata
+projection.
 
 For exact expansion, deduplication, and caller-file precedence, see
 [Handoffs and files](handoffs.md).

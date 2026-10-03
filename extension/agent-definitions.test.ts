@@ -19,6 +19,7 @@ import {
   AGENT_COORDINATION_TOOLS,
   discoverAgent,
   discoverAgentDefinitions,
+  discoverManagedLeadDefinition,
   expandAgentBodyFiles,
   mergeFrontmatter,
   projectAgentDefinition,
@@ -465,6 +466,83 @@ test("discovers the five portable bundled definitions without a user agents dire
   );
 });
 
+test("reserves the layered managed Lead definition outside the Agent roster", () => {
+  const project = mkdtempSync(join(tmpdir(), "pi-herdsman-managed-lead-project-"));
+  const projectAgents = join(project, ".pi", "agents");
+  const global = mkdtempSync(join(tmpdir(), "pi-herdsman-managed-lead-global-"));
+  const globalAgents = join(global, "agents");
+  mkdirSync(projectAgents, { recursive: true });
+  mkdirSync(globalAgents);
+
+  const bundled = withPiAgentDir(global, () =>
+    discoverManagedLeadDefinition(),
+  );
+  assert.equal(bundled.name, "managed-lead");
+  assert.deepEqual(bundled.frontmatter.tools, ["read", "ls", "find", "grep"]);
+  assert.equal(bundled.frontmatter.systemPromptMode, "replace");
+  assert.equal(bundled.frontmatter.inheritProjectContext, true);
+  assert.equal(bundled.frontmatter.inheritGlobalContext, true);
+  assert.equal(bundled.frontmatter.enabled, undefined);
+  assert.match(bundled.body, /Delegate project execution/);
+  assert.equal(
+    withPiAgentDir(global, () =>
+      discoverAgentDefinitions().some(({ name }) => name === "managed-lead"),
+    ),
+    false,
+  );
+  assert.throws(
+    () => withPiAgentDir(global, () => discoverAgent("managed-lead")),
+    /agent managed-lead not found/,
+  );
+
+  const projectPath = join(projectAgents, "managed-lead.md");
+  const globalPath = join(globalAgents, "managed-lead.md");
+  writeFileSync(
+    projectPath,
+    '---\nname: managed-lead\ntools: ["read", "grep"]\nbodyMode: append\n---\nProject policy',
+  );
+  writeFileSync(
+    globalPath,
+    '---\nname: managed-lead\nthinking: high\nbodyMode: append\n---\nGlobal policy',
+  );
+  const effective = withPiAgentDir(global, () =>
+    discoverManagedLeadDefinition({ projectRoot: project }),
+  );
+  assert.deepEqual(effective.frontmatter.tools, ["read", "grep"]);
+  assert.equal(effective.frontmatter.thinking, "high");
+  assert.equal(
+    effective.body,
+    `${bundled.body}\n\nProject policy\n\nGlobal policy`,
+  );
+  assert.equal(effective.projectSource, projectPath);
+  assert.equal(effective.overrideSource, globalPath);
+
+  writeFileSync(
+    join(globalAgents, "bad.md"),
+    '---\nname: bad\nagents: ["managed-lead"]\n---',
+  );
+  assert.throws(
+    () => withPiAgentDir(global, () => discoverAgentDefinitions()),
+    /agent bad references missing agent definition managed-lead/,
+  );
+  unlinkSync(join(globalAgents, "bad.md"));
+
+  for (const [field, value] of [
+    ["enabled", "false"],
+    ["agents", '["scout"]'],
+    ["permission", '{ "*": "deny" }'],
+  ] as const) {
+    writeFileSync(
+      globalPath,
+      `---\nname: managed-lead\n${field}: ${value}\n---`,
+    );
+    assert.throws(
+      () => withPiAgentDir(global, () => discoverManagedLeadDefinition()),
+      new RegExp(`managed Lead field ${field}: is not supported`),
+    );
+  }
+});
+
 test("bundled definitions carry portable capabilities and role contracts", () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-bundled-prompts-"));
   const definitions = withPiAgentDir(root, () => discoverAgentDefinitions());
@@ -781,6 +859,40 @@ test("project approval is emitted only when requested", () => {
     agentLaunchArgs(agent, { approveProject: true }).includes("--approve"),
     true,
   );
+});
+
+test("preserves role-required tools through native allowlists and exclusions", () => {
+  const definition = {
+    name: "managed-role",
+    path: "/managed-role.md",
+    frontmatter: {
+      tools: ["read"],
+      excludeTools: ["supervisor_message", "write"],
+    },
+    body: "",
+  };
+  const args = agentLaunchArgs(definition, {
+    requiredTools: ["supervisor_message", "peer_list"],
+  });
+  const tools = args.indexOf("--tools");
+  assert.deepEqual(args[tools + 1].split(","), [
+    "read",
+    "supervisor_message",
+    "peer_list",
+  ]);
+  const excluded = args.indexOf("--exclude-tools");
+  assert.equal(args[excluded + 1], "write");
+
+  const closed = agentLaunchArgs(
+    {
+      ...definition,
+      frontmatter: { noTools: true, tools: [] },
+    },
+    { requiredTools: ["supervisor_message"] },
+  );
+  assert.equal(closed.includes("--no-tools"), true);
+  const required = closed.indexOf("--tools");
+  assert.equal(closed[required + 1], "supervisor_message");
 });
 
 test("composes all definition layers with provenance and whole-array replacement", () => {
