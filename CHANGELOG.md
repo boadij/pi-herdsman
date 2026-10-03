@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.19.2](https://github.com/boadij/pi-herdsman/compare/v0.19.1...v0.19.2) (2026-10-03)
+
+
+### Fixes
+
+* **tools:** stop opting into provider strict sampling ([#239](https://github.com/boadij/pi-herdsman/issues/239)) ([71a4208](https://github.com/boadij/pi-herdsman/commit/71a4208e10f61fb517b3e5bf8c6c9c5d1f5d9491))
+
+
+### Refactoring
+
+* **runtime:** extract extension runtime boundaries ([#238](https://github.com/boadij/pi-herdsman/issues/238)) ([4b3747b](https://github.com/boadij/pi-herdsman/commit/4b3747bb9eaaf9e1410724627aa7ac86e09ffc6e))
+
+
+### Documentation
+
+* **adr:** use integration-agnostic orchestration primitives ([#234](https://github.com/boadij/pi-herdsman/issues/234)) ([6f166a6](https://github.com/boadij/pi-herdsman/commit/6f166a67e997791a6bc25d38cbcf4dcea14ce470))
+* define product philosophy ([#233](https://github.com/boadij/pi-herdsman/issues/233)) ([31e0865](https://github.com/boadij/pi-herdsman/commit/31e0865f242b936c3782a042693beb83cb5b8a94))
+
 ## [0.19.1](https://github.com/boadij/pi-herdsman/compare/v0.19.0...v0.19.1) (2026-10-02)
 
 
