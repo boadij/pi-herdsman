@@ -1407,6 +1407,138 @@ test("Manager auto-start rejects mismatched Herdr identity and releases its leas
   }
 });
 
+test("Manager auto-start suspends and invalidates Lead when identity cleanup release fails", async () => {
+  setLeadEnvironment();
+  updateConfig("autoActivateManager", true);
+  process.env.HERDR_PANE_ID = "manager-pane";
+  process.env.HERDR_TAB_ID = "manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `auto-manager-release-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const sessionId = `auto-manager-release-${randomUUID()}`;
+  const agent = {
+    ...managerAgentIdentity(),
+    pane_id: "different-pane",
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: sessionId,
+    },
+  };
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-lead-state",
+        data: { pendingAsk: {} },
+      },
+    ],
+    exec: (command, args) => {
+      if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+        return respond({ workspace: { worktree: { repo_key: "repo-key" } } });
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            source_workspace_id: WORKSPACE,
+            repo_key: "repo-key",
+            repo_name: "project",
+          },
+          worktrees: [],
+        });
+      if (command === "herdr" && isAgentList(args)) {
+        const lock = `${managerDescriptorPath(supervisionRuntime(), WORKSPACE)}.lock`;
+        const owner = realFs.readdirSync(lock)[0];
+        assert.ok(owner);
+        realFs.writeFileSync(join(lock, owner), "{}");
+        return respond({ agents: [agent] });
+      }
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+        return respond({ agent });
+      }
+      if (command === "herdr" && isApiSnapshot(args))
+        return respond({ snapshot: { agents: [], panes: [] } });
+      return respond({});
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const runtime = supervisionRuntime();
+  try {
+    const context = fakeContext(pi.entries) as any;
+    context.sessionManager.getSessionId = () => sessionId;
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
+    assert.equal(readLeadCoordinationState(runtime, sessionId), undefined);
+    assert.equal(
+      pi.entries.some(
+        (entry: any) =>
+          entry.customType === "pi-herdsman-role" &&
+          entry.data?.role === "manager",
+      ),
+      false,
+    );
+    assert.ok(
+      pi.entries.some((entry: any) =>
+        String(entry.customType).includes("error"),
+      ),
+      JSON.stringify(pi.entries.map((entry: any) => entry.customType)),
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(runtime.root, { recursive: true, force: true });
+    updateConfig("autoActivateManager", undefined);
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("Manager auto-start finalization suspends and invalidates Lead when rollback release fails", async () => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  const pi = fakePi({ activeTools: ["read", "agent_list"] });
+  const releaseError = new Error("lease release failed");
+  const state: any = {
+    controllerRole: "manager",
+    managerLease: {
+      release: () => {
+        throw releaseError;
+      },
+    },
+    roleSuspended: false,
+    chiefMode: "inactive",
+    chiefModeGeneration: 0,
+  };
+  let invalidated = false;
+  const host: any = {
+    controllerScope: { kind: "lead" },
+    pi: pi.pi,
+    persistLeadCoordination: () => false,
+    markLeadCoordinationUnhealthy: () => {
+      invalidated = true;
+    },
+    appendDurableError: () => {},
+    getLeadTools: () => ["read", "agent_list"],
+    normalizeBaseTools: (tools: string[]) =>
+      tools.filter((tool) => tool === "read"),
+  };
+  const transitions = createLeadRoleTransitions(state, host);
+  transitions.finalizeOptionalManagerStartup(fakeContext() as any);
+
+  assert.equal(state.controllerRole, "manager");
+  assert.ok(state.managerLease);
+  assert.equal(state.roleSuspended, true);
+  assert.equal(invalidated, true);
+  assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
+});
+
 test("malformed Lead coordination blocks Manager auto-start", async () => {
   setLeadEnvironment();
   updateConfig("autoActivateManager", true);

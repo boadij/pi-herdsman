@@ -6391,6 +6391,7 @@ export async function resolveLeadControllerRole(
     verifyManagerIdentity(
       descriptor: import("./supervision.ts").ManagerDescriptor,
     ): Promise<unknown>;
+    unresolvedManagerLease(): void;
     activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
     persistLeadRole: () => void;
   },
@@ -6441,22 +6442,46 @@ export async function resolveLeadControllerRole(
       try {
         verified = await deps.verifyManagerIdentity(lease.descriptor);
       } catch (error) {
-        lease.release();
+        try {
+          lease.release();
+        } catch (releaseError) {
+          state.managerLease = lease;
+          state.controllerRole = "manager";
+          state.roleSuspended = true;
+          deps.unresolvedManagerLease();
+          throw releaseError;
+        }
         throw error;
       }
       if (!verified) {
-        lease.release();
+        try {
+          lease.release();
+        } catch (error) {
+          state.managerLease = lease;
+          state.controllerRole = "manager";
+          state.roleSuspended = true;
+          deps.unresolvedManagerLease();
+          throw error;
+        }
         return;
       }
       if (!deps.coordinationHealthy()) {
-        lease.release();
+        try {
+          lease.release();
+        } catch (error) {
+          state.managerLease = lease;
+          state.controllerRole = "manager";
+          state.roleSuspended = true;
+          deps.unresolvedManagerLease();
+          throw error;
+        }
         return;
       }
     }
     state.managerLease = lease;
     state.controllerRole = "manager";
   } catch (error) {
-    state.managerLease = undefined;
+    if (!state.roleSuspended) state.managerLease = undefined;
     if (!(error instanceof ProcessLockOccupiedError)) throw error;
     if (optional) {
       ctx.ui.notify(
@@ -7333,6 +7358,10 @@ export function createLeadRoleTransitions(
         coordinationHealthy: host.coordinationHealthy,
         verifyManagerIdentity: (descriptor) =>
           host.remoteChiefAgent(ctx, descriptor),
+        unresolvedManagerLease: () => {
+          host.markLeadCoordinationUnhealthy(ctx);
+          reconcileRoleTools();
+        },
         activationGuard: host.activationGuard,
         persistLeadRole: () => host.persistRole("lead"),
       },
@@ -7352,12 +7381,28 @@ export function createLeadRoleTransitions(
       try {
         lease.release();
       } catch (releaseError) {
+        state.managerLease = lease;
+        state.controllerRole = "manager";
+        state.roleSuspended = true;
+        host.markLeadCoordinationUnhealthy(ctx);
         host.appendDurableError(
           host.pi,
           ctx,
           "pi_herdsman_role_error",
           releaseError,
         );
+        try {
+          reconcileRoleTools();
+        } catch (toolsError) {
+          host.appendDurableError(
+            host.pi,
+            ctx,
+            "pi_herdsman_role_error",
+            toolsError,
+          );
+        }
+        host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+        return;
       }
       try {
         reconcileRoleTools();
