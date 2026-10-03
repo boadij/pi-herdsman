@@ -37,7 +37,6 @@ import {
   parseSemanticResultRef,
   reserveSemanticResultRef,
   isResultBinding,
-  type ResultBinding,
 } from "./storage.ts";
 import { Type } from "typebox";
 import {
@@ -72,7 +71,6 @@ import {
   writeRequest,
   writeResult,
   writeAgentState,
-  mailboxRecordBytes,
   type RequestRecord,
   type AskRecord,
   type ResultPersistenceError,
@@ -584,6 +582,11 @@ async function herdrVersion(
 function expectedSession(id?: string, path?: string): ExpectedSession {
   return { id, path };
 }
+function currentTurnMessage(ctx: ExtensionContext): unknown {
+  const entry = ctx.sessionManager.getBranch().at(-1) as
+    { message?: unknown } | undefined;
+  return entry?.message;
+}
 function isPiAgent(agent: any): boolean {
   return sessionIdentity(agent?.agent_session) !== undefined;
 }
@@ -647,23 +650,6 @@ async function workspacePresentationProvenance(
   );
   return new Map(entries);
 }
-function currentTurnIsSoleToolCall(
-  ctx: ExtensionContext,
-  name: string,
-): boolean {
-  const branch = ctx.sessionManager.getBranch();
-  const entry = branch.at(-1) as { message?: unknown } | undefined;
-  const message = entry?.message as
-    { role?: unknown; content?: unknown } | undefined;
-  if (message?.role !== "assistant" || !Array.isArray(message.content))
-    return false;
-  const toolCalls = message.content.filter(
-    (part) => (part as { type?: unknown }).type === "toolCall",
-  );
-  return (
-    toolCalls.length === 1 && (toolCalls[0] as { name?: unknown }).name === name
-  );
-}
 function resultPath(runtime: Runtime, requestId: string): string {
   return `${runtime.mailboxPath}/result-${requestId}.json`;
 }
@@ -720,31 +706,6 @@ type StopReportCallbacks = {
   onClosed?: (label: string) => void;
   onCleanupFailure?: (label: string, message: string) => void;
 };
-
-function askRecordBytesFor(
-  state: ManagedAgentState,
-  askId: string,
-  text: string,
-  createdAt: number,
-  resultBindings: readonly ResultBinding[],
-): number {
-  return mailboxRecordBytes({
-    version: 5,
-    askId,
-    requestId: state.activeRequestId!,
-    runId: state.runId,
-    ownerSessionId: state.ownerSessionId,
-    workspaceId: state.workspaceId,
-    agentLabel: state.agentLabel,
-    paneId: state.paneId,
-    piSessionId: state.piSessionId,
-    question: text,
-    ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
-    createdAt,
-  });
-}
-
-
 
 export default function (pi: ExtensionAPI): void {
   let leadRuntimes!: ReturnType<typeof registerLeadRuntime>;
@@ -2087,8 +2048,7 @@ export default function (pi: ExtensionAPI): void {
     hasUndeliveredDirectChildWork,
     messageLimits,
     resolveMessageFiles: controllerResolveMessageFiles,
-    askRecordBytes: askRecordBytesFor,
-    isSoleToolCall: currentTurnIsSoleToolCall,
+    currentTurnMessage,
     appendError: (ctx, kind, error) => appendDurableError(pi, ctx, kind, error),
     contentText: (content) => contentText(content, ""),
   });

@@ -56,6 +56,40 @@ import { fail, OperationError } from "./errors.ts";
 import { FILE_HANDOFF_GUIDANCE } from "./core.ts";
 import { readConfig } from "./config.ts";
 import { isDeepStrictEqual } from "node:util";
+import type { ResultBinding } from "./storage.ts";
+
+function currentTurnIsSoleToolCall(message: unknown, name: string): boolean {
+  const turn = message as { role?: unknown; content?: unknown } | undefined;
+  if (turn?.role !== "assistant" || !Array.isArray(turn.content))
+    return false;
+  const toolCalls = turn.content.filter(
+    (part) => (part as { type?: unknown }).type === "toolCall",
+  );
+  return toolCalls.length === 1 && (toolCalls[0] as { name?: unknown }).name === name;
+}
+
+function askRecordBytes(
+  state: ManagedAgentState,
+  askId: string,
+  text: string,
+  createdAt: number,
+  resultBindings: readonly ResultBinding[],
+): number {
+  return mailboxRecordBytes({
+    version: 5,
+    askId,
+    requestId: state.activeRequestId!,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    piSessionId: state.piSessionId,
+    question: text,
+    ...(resultBindings.length ? { resultBindings: [...resultBindings] } : {}),
+    createdAt,
+  });
+}
 
 export function ensureManagedAgentIdentity(
   pi: ExtensionAPI,
@@ -1244,8 +1278,7 @@ export function registerManagedAgentRuntime(
     hasUndeliveredDirectChildWork(state: ManagedAgentState, entries: readonly unknown[]): boolean;
     messageLimits(ctx: ExtensionContext): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }>;
     resolveMessageFiles(ctx: ExtensionContext, files: string[] | undefined, operation: string): any;
-    askRecordBytes(state: ManagedAgentState, askId: string, text: string, createdAt: number, bindings: unknown[]): number;
-    isSoleToolCall(ctx: ExtensionContext, name: string): boolean;
+    currentTurnMessage(ctx: ExtensionContext): unknown;
     appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
     contentText(content: unknown): string;
   },
@@ -1354,7 +1387,7 @@ export function registerManagedAgentRuntime(
     sameIdentity: sameManagedAgentIdentity,
     eligible: requestState.eligibleToAsk,
     rejectionReason: requestState.askRejectionReason,
-    isSoleToolCall: (ctx) => options.isSoleToolCall(ctx, "ask_owner"),
+    isSoleToolCall: (ctx) => currentTurnIsSoleToolCall(options.currentTurnMessage(ctx), "ask_owner"),
     messageLimits: options.messageLimits,
     prepare: (ctx, question, files, state, askId, createdAt, limits) => prepareMessageInput(
       question,
@@ -1365,7 +1398,7 @@ export function registerManagedAgentRuntime(
       {
         inlineLimitBytes: limits.inline.bytes,
         mailboxLimitBytes: limits.mailbox.bytes,
-        serializedBytes: (text, bindings) => options.askRecordBytes(state, askId, text, createdAt, bindings),
+        serializedBytes: (text, bindings) => askRecordBytes(state, askId, text, createdAt, bindings as ResultBinding[]),
       },
     ),
     checkMailboxSize: (bytes, limit) => {
