@@ -5503,6 +5503,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     listManagerDescriptors,
     remoteChiefAgent,
     liveLead,
+    livePeerLead,
     readLeadCoordinationState,
     runHerdr,
     sameRuntimeBuild,
