@@ -467,16 +467,18 @@ test("discovers the five portable bundled definitions without a user agents dire
 });
 
 test("reserves the layered managed Lead definition outside the Agent roster", () => {
-  const project = mkdtempSync(join(tmpdir(), "pi-herdsman-managed-lead-project-"));
+  const project = mkdtempSync(
+    join(tmpdir(), "pi-herdsman-managed-lead-project-"),
+  );
   const projectAgents = join(project, ".pi", "agents");
-  const global = mkdtempSync(join(tmpdir(), "pi-herdsman-managed-lead-global-"));
+  const global = mkdtempSync(
+    join(tmpdir(), "pi-herdsman-managed-lead-global-"),
+  );
   const globalAgents = join(global, "agents");
   mkdirSync(projectAgents, { recursive: true });
   mkdirSync(globalAgents);
 
-  const bundled = withPiAgentDir(global, () =>
-    discoverManagedLeadDefinition(),
-  );
+  const bundled = withPiAgentDir(global, () => discoverManagedLeadDefinition());
   assert.equal(bundled.name, "managed-lead");
   assert.deepEqual(bundled.frontmatter.tools, ["read", "ls", "find", "grep"]);
   assert.equal(bundled.frontmatter.systemPromptMode, "replace");
@@ -503,7 +505,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   );
   writeFileSync(
     globalPath,
-    '---\nname: managed-lead\nthinking: high\nbodyMode: append\n---\nGlobal policy',
+    "---\nname: managed-lead\nthinking: high\nbodyMode: append\n---\nGlobal policy",
   );
   const effective = withPiAgentDir(global, () =>
     discoverManagedLeadDefinition({ projectRoot: project }),
@@ -516,6 +518,16 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   );
   assert.equal(effective.projectSource, projectPath);
   assert.equal(effective.overrideSource, globalPath);
+
+  writeFileSync(projectPath, "---\nname: managed-lead\nenabled: false\n---");
+  writeFileSync(globalPath, "---\nname: managed-lead\nthinking: high\n---");
+  assert.throws(
+    () =>
+      withPiAgentDir(global, () =>
+        discoverManagedLeadDefinition({ projectRoot: project }),
+      ),
+    new RegExp(projectPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+  );
 
   writeFileSync(
     join(globalAgents, "bad.md"),

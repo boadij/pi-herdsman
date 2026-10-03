@@ -352,18 +352,12 @@ function validateEffectiveAgentReferences(
         );
 }
 
-function validateManagedLeadDefinition(
-  definition: AgentDefinition,
-): void {
-  const source =
-    definition.overrideSource ??
-    definition.projectSource ??
-    definition.extensionSource ??
-    definition.path;
+function validateManagedLeadLayer(definition: AgentDefinition): void {
+  if (definition.name !== MANAGED_LEAD_DEFINITION_NAME) return;
   for (const field of ["enabled", "agents", "permission"] as const)
     if (definition.frontmatter[field] !== undefined)
       throw new Error(
-        `${source} managed Lead field ${field}: is not supported`,
+        `${definition.path} managed Lead field ${field}: is not supported`,
       );
 }
 
@@ -385,16 +379,14 @@ function discoverEffectiveDefinitions(
       definition.extensionSource = definition.path;
     validateDefinition(definition);
   }
+  for (const definition of [...bundled, ...project, ...user])
+    validateManagedLeadLayer(definition);
   applyDefinitionLayer(definitions, project, "projectSource");
   applyDefinitionLayer(definitions, user, "overrideSource");
   const effective = [...definitions.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
   );
   validateEffectiveAgentReferences(effective);
-  const managedLead = effective.find(
-    (definition) => definition.name === MANAGED_LEAD_DEFINITION_NAME,
-  );
-  if (managedLead) validateManagedLeadDefinition(managedLead);
   return effective;
 }
 
