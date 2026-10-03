@@ -73,7 +73,7 @@ export async function verifiedHerdrAgent(
     piSessionId: string;
     piSessionFile?: string;
     paneId: string;
-    tabId: string;
+    tabId?: string;
     workspaceId: string;
   },
   options: {

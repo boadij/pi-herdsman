@@ -1118,7 +1118,7 @@ export default function (pi: ExtensionAPI): void {
       piSessionId: string;
       piSessionFile?: string;
       paneId: string;
-      tabId: string;
+      tabId?: string;
       workspaceId: string;
     },
   ) =>
