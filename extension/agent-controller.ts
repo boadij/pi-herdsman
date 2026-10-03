@@ -1577,6 +1577,7 @@ export function createAgentController(
   let healthGeneration = 0;
   const attentionReminders = new Map<string, { episode: string; intervalMs: number; nextAt: number }>();
   const runtimes = new Map<string, Runtime>();
+  const pendingStarts = new Map<string, PendingStart>();
   const resultWatchers = new Map<string, (curr: Stats, prev: Stats) => void>();
   const resultWatchRetries = new Map<string, ReturnType<typeof setTimeout>>();
   const askWatchers = new Map<string, (curr: Stats, prev: Stats) => void>();
@@ -3026,7 +3027,6 @@ const actionUnsafe = async (
   ctx: ExtensionContext,
   p: Params,
   signal?: AbortSignal,
-  pendingStarts?: Map<string, PendingStart>,
 ): Promise<Record<string, unknown>> => {
   const scope = options.scope;
   validateAssignmentRequest(p);
@@ -3328,7 +3328,7 @@ const actionUnsafe = async (
         ? { parentLabel: process.env.PI_HERDSMAN_LABEL }
         : {}),
     };
-    pendingStarts?.set(label, pendingStart);
+    pendingStarts.set(label, pendingStart);
     options.onChanged();
     let promptPaths: string[] = [];
     let promptWriteFailed = false;
@@ -3728,7 +3728,7 @@ const actionUnsafe = async (
         ...(startupFailure ? { details: { stage: startupFailure.stage } } : {}),
       });
     } finally {
-      if (!accepted && pendingStarts?.get(label) === pendingStart) {
+      if (!accepted && pendingStarts.get(label) === pendingStart) {
         pendingStarts.delete(label);
         options.onChanged();
       }
@@ -3747,7 +3747,6 @@ const actionUnsafe = async (
 
 
   const registerTools = (
-    pendingStarts: Map<string, PendingStart>,
     onAssignmentStarted?: (ctx: ExtensionContext) => void,
   ): void => {
     const controllerScope = options.scope;
@@ -3857,7 +3856,7 @@ const actionUnsafe = async (
       try {
         p = raw as Params;
         presentationAction = p.action;
-        const value = await action(ctx, p, signal, pendingStarts);
+        const value = await action(ctx, p, signal);
         options.onChanged();
         if (
           controllerScope.kind === "lead" &&
@@ -4197,7 +4196,6 @@ const actionUnsafe = async (
     ctx: ExtensionContext,
     params: Params,
     signal?: AbortSignal,
-    pendingStarts?: Map<string, PendingStart>,
   ): Promise<Record<string, unknown>> => {
     const scope = options.scope;
     if (!scope)
@@ -4216,7 +4214,7 @@ const actionUnsafe = async (
       if (params.action === "transcript") return transcriptAction(ctx, params.agent, signal);
       if (params.action === "steer" || params.action === "interrupt" || params.action === "reply" || params.action === "inspect")
         return controlAction(ctx, params, signal);
-      return actionUnsafe(ctx, params, signal, pendingStarts);
+      return actionUnsafe(ctx, params, signal);
     }
     if (!ready)
       fail(
@@ -4239,7 +4237,7 @@ const actionUnsafe = async (
       if (params.action === "close") return await closeAction(ctx, params.agent, signal);
       if (params.action === "steer" || params.action === "interrupt" || params.action === "reply")
         return await controlAction(ctx, params, signal);
-      return await actionUnsafe(ctx, params, signal, pendingStarts);
+      return await actionUnsafe(ctx, params, signal);
     } finally {
       release();
     }
@@ -4939,6 +4937,14 @@ const actionUnsafe = async (
     listedAgents(context: ExtensionContext, scope: ControllerScope | undefined, signal?: AbortSignal) {
       return snapshotView(context, scope, signal).then((view) => view.visible.map(({ listed }) => listed));
     },
+    pendingStartEntries: () => [...pendingStarts.values()],
+    hasPendingStart: (label: string) => pendingStarts.has(label),
+    hasPendingStarts: () => pendingStarts.size > 0,
+    clearPendingStart(label: string, expected: PendingStart): boolean {
+      if (pendingStarts.get(label) !== expected) return false;
+      return pendingStarts.delete(label);
+    },
+    clearPendingStarts: () => pendingStarts.clear(),
     startHealthScanner: runAgentHealthScanner,
     stopHealthScanner() { if (healthTimer) clearTimeout(healthTimer); healthTimer = undefined; ++healthGeneration; attentionReminders.clear(); },
     registerTools,

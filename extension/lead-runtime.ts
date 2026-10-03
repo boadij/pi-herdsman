@@ -144,7 +144,7 @@ export function createLeadShutdownRuntime(host: any) {
       host.roleTransitions.shutdownRole();
       host.controller.abortSession();
       host.leadInboxRuntime.shutdown();
-      host.pendingStarts.clear();
+      host.controller.clearPendingStarts();
       host.controller.clearSession();
       host.leadStatusRuntime.shutdown();
       host.controller.markSessionInactive();
@@ -247,7 +247,7 @@ export function createLeadSessionStartRuntime(host: any) {
       }
       host.controller.abortSession();
       host.leadInboxRuntime.beginSession();
-      host.pendingStarts.clear();
+      host.controller.clearPendingStarts();
       const sessionSignal = host.controller.beginSession();
       host.controller.sessionStart();
       if (
@@ -959,6 +959,10 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
   });
   statusRuntime.configure({
     ...options.statusServices,
+    pendingStartEntries: () => controller.pendingStartEntries(),
+    hasPendingStart: (label: string) => controller.hasPendingStart(label),
+    clearPendingStart: (label: string, expected: any) =>
+      controller.clearPendingStart(label, expected),
     loadSnapshot: (ctx: ExtensionContext) =>
       options.statusServices.loadSnapshot(
         ctx,
@@ -989,7 +993,7 @@ export function registerLeadRuntime(pi: ExtensionAPI, options: any) {
   herdRunRuntime = createLeadHerdRunRuntime({
     pi,
     entryName: options.herdRunEntryName,
-    pendingStarts: options.pendingStarts,
+    hasPendingStarts: () => controller.hasPendingStarts(),
     listAgentStates: () => controller.listAgentStates(),
     currentWorktreeScope: (ctx: ExtensionContext) =>
       roleTransitions.currentWorktreeScope(ctx),
@@ -1187,7 +1191,9 @@ export function createLeadIdentityRuntime(host: any) {
 export function createLeadStatusRuntime() {
   let options: {
     loadSnapshot(ctx: ExtensionContext): Promise<StatusSnapshot>;
-    pendingStarts: Map<string, any>;
+    pendingStartEntries(): readonly any[];
+    hasPendingStart(label: string): boolean;
+    clearPendingStart(label: string, expected: any): boolean;
     runtimeForLabel(label: string): any;
     ownToolsSnapshot(): { ownTools?: string[] };
     initialWidgetSnapshot?(): StatusSnapshot | undefined;
@@ -1204,13 +1210,14 @@ export function createLeadStatusRuntime() {
     agents: [], stale: false, unavailable: true, breadcrumb: ["herd"],
   };
   const widgetSnapshot = (snapshot: StatusSnapshot): StatusSnapshot => {
-    if (!options?.pendingStarts.size) return snapshot;
+    const pendingStarts = options?.pendingStartEntries() ?? [];
+    if (!pendingStarts.length) return snapshot;
     const agents = snapshot.agents.map((agent) =>
-      options!.pendingStarts.has(agent.label) && agent.state === "settling"
+      options!.hasPendingStart(agent.label) && agent.state === "settling"
         ? { ...agent, state: "starting" as const }
         : agent,
     );
-    const pendingAgents = [...options.pendingStarts.values()]
+    const pendingAgents = pendingStarts
       .filter(({ label }) => !snapshot.agents.some((agent) => agent.label === label))
       .map(({ label, definition, task, startedAt, parentLabel }) => ({
         label, definition, state: "starting" as const,
@@ -1221,14 +1228,15 @@ export function createLeadStatusRuntime() {
   };
   const reconcilePendingStarts = (snapshot: StatusSnapshot): void => {
     if (!options) return;
-    for (const [label, pending] of options.pendingStarts) {
+    for (const pending of options.pendingStartEntries()) {
+      const { label } = pending;
       const agent = snapshot.agents.find((item) => item.label === label);
       const runtime = options.runtimeForLabel(label);
       const resolved = pending.requestId !== undefined &&
         (agent?.state === "working" || agent?.state === "blocked" ||
           (runtime?.activeRequestId === pending.requestId && agent !== undefined && agent.state !== "settling") ||
           runtime?.completedRequestId === pending.requestId);
-      if (resolved && options.pendingStarts.get(label) === pending) options.pendingStarts.delete(label);
+      if (resolved) options.clearPendingStart(label, pending);
     }
   };
   const refresh = async (
@@ -2253,7 +2261,7 @@ export function createLeadHerdRunRuntime(host: any) {
     if (herdRunStartedAt === undefined || !leadSettled) return;
     const sessionId = ctx.sessionManager.getSessionId();
     if (
-      host.pendingStarts.size > 0 ||
+      host.hasPendingStarts() ||
       host.listAgentStates().some(
         ({ state }: { state: ManagedAgentState }) => state.ownerSessionId === sessionId,
       )

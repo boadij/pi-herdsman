@@ -169,7 +169,6 @@ import {
   type ManagedAgentPresence,
   type ControllerScope,
   type Params,
-  type PendingStart,
   type Runtime,
   requestRecordBytesFor,
   prospectiveAssignmentFits,
@@ -1218,7 +1217,6 @@ export default function (pi: ExtensionAPI): void {
   const activateManager = (...args: any[]) => roleTransitions.activateManager(...args);
   const leaveManager = (...args: any[]) => roleTransitions.leaveManager(...args);
   if (controllerScope) {
-    const pendingStarts = new Map<string, PendingStart>();
     let projectRuntime: NonNullable<ReturnType<typeof registerLeadRuntime>["projectRuntime"]>;
     const queueLeadPresentation = (
       ctx: ExtensionContext,
@@ -1898,7 +1896,6 @@ export default function (pi: ExtensionAPI): void {
   if (processRole === "lead") {
     const shutdownOptions = {
       clearStartupDefinitionRoster: () => { startupDefinitionRoster = undefined; },
-      pendingStarts,
       isLead: () => controllerScope.kind === "lead",
     };
     const sessionTreeOptions = {
@@ -1924,7 +1921,6 @@ export default function (pi: ExtensionAPI): void {
       enterSuspended,
       enterLead,
       schedulePeerPresence,
-      pendingStarts,
       queueLeadPresentation,
       setOwnTools: (tools: string[] | undefined) => { ownTools = tools; },
       initialStatusBreadcrumb: () => initialStatusBreadcrumb,
@@ -1998,7 +1994,6 @@ export default function (pi: ExtensionAPI): void {
       projectServices,
       commandServices: leadCommandServices,
       supervisionHost,
-      pendingStarts,
       herdRunEntryName: HERD_RUN_ENTRY,
       herdRunServices: {
         appendDurableError,
@@ -2006,7 +2001,6 @@ export default function (pi: ExtensionAPI): void {
       statusServices: {
         loadSnapshot: (ctx: ExtensionContext, signal: AbortSignal | undefined, runtimeForLabel: (label: string) => Runtime | undefined) =>
           loadStatusSnapshot(ctx, signal, false, runtimeForLabel),
-        pendingStarts,
         ownToolsSnapshot,
         initialWidgetSnapshot: () => undefined,
       },
@@ -2044,7 +2038,6 @@ export default function (pi: ExtensionAPI): void {
     projectRuntime = leadRuntimes.projectRuntime!;
     leadHerdRunRuntime = leadRuntimes.herdRunRuntime!;
     leadRuntimes.controller!.registerTools(
-      pendingStarts,
       controllerScope.kind === "lead" ? leadHerdRunRuntime.begin : undefined,
     );
     if (controllerScope.kind === "lead") {
