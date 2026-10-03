@@ -2026,23 +2026,6 @@ export default function (pi: ExtensionAPI): void {
     resultWriteMaxAttempts: RESULT_WRITE_MAX_ATTEMPTS,
     tryClaimAssignmentLock,
     claimAssignmentLock,
-    validateDefinition: async (ctx) => {
-      const { definitions } = await contextAgentDefinitions(ctx);
-      const definition = definitions.find((item) =>
-        item.name === process.env.PI_HERDSMAN_AGENT_DEFINITION,
-      );
-      if (!definition)
-        throw new Error(`agent ${process.env.PI_HERDSMAN_AGENT_DEFINITION} not found`);
-      if (!agentDefinitionEnabled(definition))
-        throw new Error(
-          `agent ${definition.name} is disabled; enable it through /agents → Definitions before starting a new agent`,
-        );
-      validateAgentDefinitionReferences(definition, definitions);
-    },
-    definitionRoster: (ctx, allowed) => visibleAgentDefinitionMetadata(ctx, {
-      kind: "managed-agent",
-      allowedAgentDefinitions: new Set(allowed),
-    }),
     hasPendingDirectChildWork,
     allDirectChildrenAskBlocked,
     hasUndeliveredDirectChildWork,
