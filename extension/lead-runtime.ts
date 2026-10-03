@@ -5363,7 +5363,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       )) {
         if (record.fromSessionId !== assignment.id) continue;
         const delivered = ctx.sessionManager
-          .getBranch()
+          .getEntries()
           .some(
             (entry: any) =>
               entry?.customType === "pi-herdsman-project_message" &&
