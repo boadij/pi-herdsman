@@ -83,7 +83,20 @@ import {
   type RemovedHerdrWorktree,
 } from "./herdr.ts";
 import { fileURLToPath } from "node:url";
-import { contextAgentDefinitions, agentLaunchArgs, agentDefinitionEnabled, agentDefinitionDelegationEnabled, expandAgentBodyFiles, projectAgentDefinition, resolveChildModel, configuredModel, validateAgentDefinitionReferences, writePrivatePromptSnapshots } from "./agent-definitions.ts";
+import {
+  contextAgentDefinitions,
+  agentLaunchArgs,
+  agentDefinitionEnabled,
+  agentDefinitionDelegationEnabled,
+  agentDefinitionMetadata,
+  expandAgentBodyFiles,
+  projectAgentDefinition,
+  resolveChildModel,
+  configuredModel,
+  validateAgentDefinitionReferences,
+  writePrivatePromptSnapshots,
+  type AgentDefinition,
+} from "./agent-definitions.ts";
 
 export const SHARED_AGENT_INSTRUCTIONS = `Work only on the assigned objective and preserve its stated scope, constraints,
 authority, and acceptance criteria.
@@ -1000,6 +1013,24 @@ export type ControllerScope =
       allowedAgentDefinitions: ReadonlySet<string>;
     };
 
+export function visibleAgentDefinitionMetadata(
+  definitions: AgentDefinition[],
+  scope: ControllerScope,
+): Record<string, unknown>[] {
+  const metadata = definitions.map((definition) =>
+    agentDefinitionMetadata(
+      definition,
+      scope.kind === "managed-agent" ? "leaf" : "delegating",
+    ),
+  );
+  return scope.kind === "managed-agent"
+    ? metadata.filter((definition) =>
+        scope.allowedAgentDefinitions.has(definition.name as string) &&
+        definition.enabled !== false,
+      )
+    : metadata;
+}
+
 export type Params =
   | { action: "list" }
   | {
@@ -1547,7 +1578,7 @@ export type AgentControllerOptions = {
     isContextRetired(manager: Pick<SessionManager, "getEntries" | "getSessionId">): boolean;
     snapshotDependencies: AgentSnapshotDependencies;
     persistedTranscriptReady(state: ManagedAgentState): boolean;
-    agentDefinitionMetadata(ctx: ExtensionContext, scope: ControllerScope): Promise<Record<string, unknown>[]>;
+    agentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
     readTranscript(state: ManagedAgentState): { transcript: string; truncated: boolean };
     workspaceId: () => string;
     sendResultMessage(
@@ -2234,7 +2265,9 @@ export function createAgentController(
     return {
       ok: true,
       agents: [...agents, ...unknown],
-      agent_definitions: scope ? await options.agentDefinitionMetadata(context, scope) : [],
+      agent_definitions: scope
+        ? visibleAgentDefinitionMetadata(await options.agentDefinitions(context), scope)
+        : [],
     };
   };
   const closeAction = async (
