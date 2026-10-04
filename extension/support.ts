@@ -251,6 +251,10 @@ mock.module("@earendil-works/pi-coding-agent", {
       return [];
     },
     SessionManager: {
+      findById: (cwd: string, id: string) =>
+        [...nativeSessions.values()].find(
+          (session) => session.id === id && session.cwd === cwd,
+        )?.path,
       listAll: async () =>
         [...nativeSessions.values()].map((session) => ({
           id: session.id,

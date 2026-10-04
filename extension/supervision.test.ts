@@ -2017,6 +2017,8 @@ test("project assignments are scoped by repository and branch, strict, and remov
   );
   for (const invalid of [
     { branch: undefined },
+    { piSessionFile: 42 },
+    { piSessionFile: "" },
     {
       resultBindings: [
         { ref: "result:implementation#01", canonicalRef: `result:${id()}` },
@@ -2054,6 +2056,37 @@ test("project assignments are scoped by repository and branch, strict, and remov
     readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     largerAssignment,
   );
+  const nearLimitAssignment = {
+    ...assignment,
+    text: "x".repeat(PROJECT_ASSIGNMENT_MAX_BYTES - 512),
+  };
+  assert.ok(
+    projectAssignmentBytes(nearLimitAssignment) < PROJECT_ASSIGNMENT_MAX_BYTES,
+  );
+  assert.equal(
+    projectAssignmentBytes({
+      ...nearLimitAssignment,
+      piSessionFile: "/custom/pi/sessions/lead.jsonl",
+    }),
+    projectAssignmentBytes(nearLimitAssignment),
+  );
+  writeProjectAssignment(runtime, {
+    ...nearLimitAssignment,
+    piSessionFile: "/custom/pi/sessions/lead.jsonl",
+  });
+  assert.equal(
+    readProjectAssignment(runtime, assignment.repoKey, assignment.branch)
+      ?.piSessionFile,
+    "/custom/pi/sessions/lead.jsonl",
+  );
+  assert.throws(
+    () =>
+      writeProjectAssignment(runtime, {
+        ...assignment,
+        piSessionFile: "p".repeat(PROJECT_ASSIGNMENT_MAX_BYTES * 2),
+      }),
+    /Project assignment is too large/,
+  );
   assert.throws(
     () =>
       writeProjectAssignment(runtime, {
@@ -2061,6 +2094,26 @@ test("project assignments are scoped by repository and branch, strict, and remov
         text: "é".repeat(PROJECT_ASSIGNMENT_MAX_BYTES),
       }),
     /Project assignment is too large/,
+  );
+  const oversizedPersistedAssignment = {
+    ...assignment,
+    text: "x".repeat(PROJECT_ASSIGNMENT_MAX_BYTES),
+    piSessionFile: "/custom/pi/sessions/lead.jsonl",
+  };
+  const oversizedPersistedContent = `${JSON.stringify(oversizedPersistedAssignment)}\n`;
+  assert.ok(
+    Buffer.byteLength(oversizedPersistedContent, "utf8") <
+      PROJECT_ASSIGNMENT_MAX_BYTES * 2,
+  );
+  writeFileSync(path, oversizedPersistedContent);
+  assert.throws(
+    () => readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
+    (error) => {
+      assert.ok(
+        error.message.includes(`${path}: assignment payload is too large`),
+      );
+      return true;
+    },
   );
   writeFileSync(
     path,
@@ -2116,7 +2169,7 @@ test("project assignments are scoped by repository and branch, strict, and remov
       return true;
     },
   );
-  writeFileSync(path, "x".repeat(PROJECT_ASSIGNMENT_MAX_BYTES + 1));
+  writeFileSync(path, "x".repeat(PROJECT_ASSIGNMENT_MAX_BYTES * 2 + 1));
   assert.throws(
     () => readProjectAssignment(runtime, assignment.repoKey, assignment.branch),
     (error) => {

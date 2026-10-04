@@ -2916,9 +2916,11 @@ async function runManagerRecoverySmoke(ctx) {
   assert.equal(record.branch, branch);
   assert.equal(record.repoKey, repoKey);
   assert.doesNotMatch(record.text, new RegExp(contextMarker));
+  assert.equal(typeof record.piSessionFile, "string");
+  assert.ok(record.piSessionFile.length > 0);
   assert.deepEqual(
     Object.keys(record).sort(),
-    ["branch", "id", "repoKey", "text", "version"].sort(),
+    ["branch", "id", "piSessionFile", "repoKey", "text", "version"].sort(),
   );
   const assertUnchangedAssignment = async () =>
     assert.equal(
