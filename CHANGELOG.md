@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.20.0](https://github.com/boadij/pi-herdsman/compare/v0.19.1...v0.20.0) (2026-10-04)
+
+
+### Features
+
+* **config:** expose managed Lead settings in Definitions ([#249](https://github.com/boadij/pi-herdsman/issues/249)) ([df361e0](https://github.com/boadij/pi-herdsman/commit/df361e010941cb310446cb374bf91fb14ea29b4c))
+* **config:** make managed project Leads definition-driven ([#247](https://github.com/boadij/pi-herdsman/issues/247)) ([e489fe0](https://github.com/boadij/pi-herdsman/commit/e489fe05bc9664c6739103ac91eb4278763d2496))
+* **manager:** support optional automatic activation ([#245](https://github.com/boadij/pi-herdsman/issues/245)) ([1405eb4](https://github.com/boadij/pi-herdsman/commit/1405eb460bb5dc2a0ee44945de20bc5fe79fbc2a))
+* **stats:** include managed Lead trees in Manager session stats ([#255](https://github.com/boadij/pi-herdsman/issues/255)) ([0152a93](https://github.com/boadij/pi-herdsman/commit/0152a9348c6375728707bb1c9b28e3f0ae12ec1d))
+* **ui:** unify Herdsman management menus ([#254](https://github.com/boadij/pi-herdsman/issues/254)) ([900f585](https://github.com/boadij/pi-herdsman/commit/900f585fd7a6bc32db4341580dcb0aea6c17cb8a))
+
+
+### Fixes
+
+* **installer:** preserve native runtime update paths ([#240](https://github.com/boadij/pi-herdsman/issues/240)) ([bf5d7c2](https://github.com/boadij/pi-herdsman/commit/bf5d7c23ccc204a54a03398def40f4dd33397546))
+* **manager:** hand off project Lead responses without Agent runs ([#252](https://github.com/boadij/pi-herdsman/issues/252)) ([99a8843](https://github.com/boadij/pi-herdsman/commit/99a884324f97b900980a88c91b69dedf0fe0d5b8))
+* **manager:** prevent project message replay after tree navigation ([#241](https://github.com/boadij/pi-herdsman/issues/241)) ([387d232](https://github.com/boadij/pi-herdsman/commit/387d23261482d3d59f00233159968343f61d79bb))
+* **presentation:** clarify coordination identity and Chief hierarchy ([#244](https://github.com/boadij/pi-herdsman/issues/244)) ([335d195](https://github.com/boadij/pi-herdsman/commit/335d195a38d360fb3789e711af014f36e550527b))
+* **smoke:** enforce package runtime baselines ([#251](https://github.com/boadij/pi-herdsman/issues/251)) ([1094a43](https://github.com/boadij/pi-herdsman/commit/1094a43b9e1272953d30ec9638c1ea9366c3a625))
+* **tools:** stop opting into provider strict sampling ([#239](https://github.com/boadij/pi-herdsman/issues/239)) ([71a4208](https://github.com/boadij/pi-herdsman/commit/71a4208e10f61fb517b3e5bf8c6c9c5d1f5d9491))
+
+
+### Refactoring
+
+* **coordination:** harden Lead runtime contract ([#253](https://github.com/boadij/pi-herdsman/issues/253)) ([9e5bbd7](https://github.com/boadij/pi-herdsman/commit/9e5bbd7bc81afedbd95623a4ca4b2af89487a25e))
+* **runtime:** extract extension runtime boundaries ([#238](https://github.com/boadij/pi-herdsman/issues/238)) ([4b3747b](https://github.com/boadij/pi-herdsman/commit/4b3747bb9eaaf9e1410724627aa7ac86e09ffc6e))
+
+
+### Documentation
+
+* **adr:** use integration-agnostic orchestration primitives ([#234](https://github.com/boadij/pi-herdsman/issues/234)) ([6f166a6](https://github.com/boadij/pi-herdsman/commit/6f166a67e997791a6bc25d38cbcf4dcea14ce470))
+* define product philosophy ([#233](https://github.com/boadij/pi-herdsman/issues/233)) ([31e0865](https://github.com/boadij/pi-herdsman/commit/31e0865f242b936c3782a042693beb83cb5b8a94))
+
 ## [0.19.1](https://github.com/boadij/pi-herdsman/compare/v0.19.0...v0.19.1) (2026-10-02)
 
 
