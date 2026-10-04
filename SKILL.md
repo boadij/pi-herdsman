@@ -430,7 +430,8 @@ Pi Herdsman uses one durable vocabulary:
   worktree group: its primary workspace and linked-worktree workspaces;
 - a **Manager** explicitly assumes dedicated project coordination from that
   group's primary workspace, has no `agent` capability, and does not own Leads'
-  Agents; project execution belongs to Leads and their Agent trees;
+  Agents. Manager supervises project scope and assignment boundaries; Leads own
+  technical decisions and orchestrate execution through their Agent trees;
 - project work belongs to the project, not a Manager session. The project
   assignment represents open work and its Git branch is the work handle. A
   Manager uses `staff_delegate` with a task and optional branch to start new

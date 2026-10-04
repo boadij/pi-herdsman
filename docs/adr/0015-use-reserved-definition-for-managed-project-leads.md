@@ -16,6 +16,13 @@ still owns and enforces project identity, supervision, durable Agent ownership,
 mandatory Lead coordination tools, handoff behavior, and project/worktree
 lifecycle.
 
+At the project boundary, Manager owns project supervision and assignment
+boundaries; the assigned Lead owns technical decisions and execution
+orchestration. Herdsman's assignment handoff is automatic: when the Lead
+successfully delegates or continues managed Agent work, it waits for that herd
+run to settle before reporting outcome, validation, and unresolved points.
+Settlement and Manager review do not close the assignment.
+
 The effective definition is resolved when Herdsman launches the Lead. It is not
 persisted into `ProjectAssignment`, and a live Lead is not hot-reconfigured
 when definition files change.

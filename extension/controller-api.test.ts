@@ -1647,9 +1647,11 @@ for (const scenario of [
         assert.ok(delivered[0].content.includes(assignment.text));
         assert.ok(Buffer.byteLength(delivered[0].content, "utf8") > 8 * 1024);
         assert.ok(
-          delivered[0].content.includes(
-            `${"evidence\n".repeat(4096)}\n\nHerdsman automatically hands your normal assignment response to the Manager.`,
-          ),
+          delivered[0].content.includes(`${"evidence\n".repeat(4096)}`),
+        );
+        assert.match(
+          delivered[0].content,
+          /automatically hands your\s+normal assignment response to the current or a replacement Manager/,
         );
         assert.equal(delivered[0].content.includes(sessionId), false);
         assert.ok(

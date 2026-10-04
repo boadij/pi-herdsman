@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Read-only codebase reconnaissance for unfamiliar areas; use to find entry points, trace flows, dependencies, constraints, and risks before deciding or editing
-systemPromptMode: replace
+systemPromptMode: append
 inheritProjectContext: true
 inheritGlobalContext: false
 noSkills: true

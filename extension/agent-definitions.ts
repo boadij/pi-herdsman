@@ -354,6 +354,10 @@ function validateEffectiveAgentReferences(
 
 function validateManagedLeadLayer(definition: AgentDefinition): void {
   if (definition.name !== MANAGED_LEAD_DEFINITION_NAME) return;
+  if (definition.frontmatter.systemPromptMode === "replace")
+    throw new Error(
+      `${definition.path} managed Lead field systemPromptMode: must be append`,
+    );
   for (const field of ["enabled", "agents", "permission"] as const)
     if (definition.frontmatter[field] !== undefined)
       throw new Error(
@@ -814,9 +818,7 @@ export function agentLaunchArgs(
     args.push("--thinking", thinking);
   }
 
-  const mode =
-    frontmatter.systemPromptMode ??
-    (agent.name === "delegate" ? "append" : "replace");
+  const mode = frontmatter.systemPromptMode ?? "append";
   if (!SYSTEM_PROMPT_MODES.has(mode))
     throw new Error(
       `agent ${agent.name} has invalid systemPromptMode: ${JSON.stringify(mode)}`,

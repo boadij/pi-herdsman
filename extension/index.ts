@@ -140,6 +140,8 @@ import {
 import {
   AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
   AGENT_UNRESOLVED_GUIDANCE,
+  DELEGATING_AGENT_SCOPE_DESCRIPTION,
+  LEAD_SCOPE_DESCRIPTION,
   canonicalSessionPath,
   createAgentStatusRuntime,
   importResultBindings,
@@ -331,18 +333,15 @@ const LEAD_COORDINATION_TOOLS = [
   ...PEER_TOOLS,
 ] as const;
 const CHIEF_TOOLS = STAFF_TOOLS;
+const LEAD_SUPERVISOR_PEER_GUIDANCE =
+  "Use supervisor_message when your direct supervisor must decide or act, and only for material coordination requiring their attention, decision, or action; use peer_list/peer_message for peer coordination.";
 const LEAD_ROLE_CHARTER = `## Lead role
-Own the assigned objective and any Agents you delegate to. Use
-supervisor_message when your direct supervisor must decide or act, and only for
-material coordination requiring their attention, decision, or action; use
-peer_list/peer_message for peer coordination. For an assigned project,
-Herdsman automatically records your normal response to each project-assignment
-delivery as a project message for the current or replacement Manager. If you
-successfully delegate or continue managed Agent work, the herd run owns that
-handoff until it settles; an unsuccessful delegation leaves the local
-assignment-response path available. Later conversational replies, including
-routine acknowledgments, stay local and are not automatically promoted. Keep
-work inside your assigned scope.`;
+${LEAD_SCOPE_DESCRIPTION}
+${LEAD_SUPERVISOR_PEER_GUIDANCE}
+${FILE_HANDOFF_GUIDANCE}`;
+const DELEGATING_AGENT_ROLE_CHARTER = `## Delegating agent role
+${DELEGATING_AGENT_SCOPE_DESCRIPTION}
+${FILE_HANDOFF_GUIDANCE}`;
 const MANAGER_ROLE_CHARTER = `## Manager role
 Manage project work by branch. Use staff_delegate with a task and optional branch
 to start new project work. Use staff_resume with its branch to resume existing
@@ -2277,7 +2276,7 @@ export default function (pi: ExtensionAPI): void {
     getAgentDefinitions: async (ctx) =>
       (await contextAgentDefinitions(ctx)).definitions,
     prepareDelegatingStart: async (ctx) => ({
-      roleCharter: LEAD_ROLE_CHARTER,
+      roleCharter: DELEGATING_AGENT_ROLE_CHARTER,
       supervisorStateMessage: await prepareManagedSupervisorState(ctx),
     }),
     appendError: (ctx, kind, error) => appendDurableError(pi, ctx, kind, error),
