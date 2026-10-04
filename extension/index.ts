@@ -533,11 +533,12 @@ async function collectOwnedSessionUsage(
       openOwnedAssignmentSession,
     );
   const wanted = new Set(managedLeadIds);
+  const signal = ctx.signal;
   let sessions;
   try {
-    sessions = await SessionManager.listAll(undefined, ctx.signal);
+    sessions = await SessionManager.listAll(undefined, signal);
   } catch (error) {
-    if (ctx.signal?.aborted) throw error;
+    if (signal?.aborted) throw error;
     return collectSessionUsage(
       ctx,
       ownedAssignmentChildren,

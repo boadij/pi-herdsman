@@ -440,6 +440,24 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       context.signal = originalSignal;
     }
 
+    const abortController = new AbortController();
+    context.signal = abortController.signal;
+    SessionManager.listAll = async (_progress, signal) => {
+      assert.equal(signal, abortController.signal);
+      abortController.abort();
+      context.signal = undefined;
+      signal?.throwIfAborted();
+      return [];
+    };
+    try {
+      await manager.commandOptions.get("agents").handler("stats", context);
+      assert.doesNotMatch(notices.at(-1)!, /^Session usage/);
+      assert.match(notices.at(-1)!, /abort/i);
+    } finally {
+      SessionManager.listAll = originalListAll;
+      context.signal = originalSignal;
+    }
+
     nativeSessions.set(paths[leadB]!, {
       id: leadB,
       path: paths[leadB]!,
