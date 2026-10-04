@@ -7474,15 +7474,50 @@ export function collectSessionUsage(
     definition: string;
     label: string;
   }) => SessionManager | undefined,
+  leadRoots: readonly SessionManager[] = [],
+  leadCoverageComplete = true,
 ) {
   const rootId = ctx.sessionManager.getSessionId();
   const entries = ctx.sessionManager.getEntries();
   const breakdown: UsageBreakdown = new Map();
   const current = sessionUsageTotals(entries, breakdown);
+  const leads = emptyUsageTotals();
   const agents = emptyUsageTotals();
   const visited = new Set([rootId]);
+  const roots: { id: string; entries: SessionEntry[] }[] = [];
+  let leadSessions = 0;
   let agentSessions = 0;
-  let complete = true;
+  let complete = leadCoverageComplete;
+  const addUsageTotals = (target: UsageTotals, source: UsageTotals) => {
+    target.input += source.input;
+    target.output += source.output;
+    target.cacheRead += source.cacheRead;
+    target.cacheWrite += source.cacheWrite;
+    target.cost += source.cost;
+  };
+  for (const manager of leadRoots) {
+    let id: string;
+    try {
+      id = manager.getSessionId();
+    } catch {
+      complete = false;
+      continue;
+    }
+    if (id === rootId) {
+      complete = false;
+      continue;
+    }
+    if (visited.has(id)) continue;
+    try {
+      const leadEntries = manager.getEntries();
+      visited.add(id);
+      roots.push({ id, entries: leadEntries });
+      leadSessions++;
+      addUsageTotals(leads, sessionUsageTotals(leadEntries, breakdown));
+    } catch {
+      complete = false;
+    }
+  }
   const walk = (
     ownerId: string,
     ownerEntries: readonly SessionEntry[],
@@ -7512,14 +7547,19 @@ export function collectSessionUsage(
       visited.add(child.id);
       agentSessions++;
       const usage = sessionUsageTotals(childEntries, breakdown);
-      agents.input += usage.input;
-      agents.output += usage.output;
-      agents.cacheRead += usage.cacheRead;
-      agents.cacheWrite += usage.cacheWrite;
-      agents.cost += usage.cost;
+      addUsageTotals(agents, usage);
       walk(child.id, childEntries);
     }
   };
   walk(rootId, entries);
-  return { current, agents, agentSessions, complete, breakdown };
+  for (const root of roots) walk(root.id, root.entries);
+  return {
+    current,
+    leads,
+    leadSessions,
+    agents,
+    agentSessions,
+    complete,
+    breakdown,
+  };
 }

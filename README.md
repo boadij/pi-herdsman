@@ -27,7 +27,7 @@ _Concept animation, not a live recording._
 - **Parallel and nested delegation.** Run independent work concurrently and let explicitly enabled Agents delegate their own bounded subtasks.
 - **Project orchestration.** A Manager coordinates durable branch-based work across independent Leads and their Agent trees.
 - **Direct supervision.** Chief, Manager, Lead, and Agent responsibilities stay explicit instead of collapsing into one global controller.
-- **Owned usage visibility.** Inspect Pi-native token usage and cost for the current session plus transitively owned managed-Agent sessions.
+- **Owned usage visibility.** Inspect Pi-native token usage and cost for the current session and its transitively owned managed Agents. An active Manager also sees the Leads in its current durable project assignments and their owned Agent trees.
 - **Your workflow stays yours.** Bring your own Agent definitions, models, tools, skills, extensions, and development process.
 
 ## Quick start
@@ -68,7 +68,7 @@ Open the human Agent-management surface at any time with:
 /agents
 ```
 
-It also exposes `Session stats` for the current Pi session and its owned Agent sessions.
+It also exposes `Session stats` for the current Pi session and its owned Agent sessions; in active Manager mode, it includes current assigned project Leads and their owned Agent trees.
 
 See [Getting started](docs/getting-started.md) for prerequisites, configuration,
 observability, and the complete first-use path.

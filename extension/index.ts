@@ -519,11 +519,65 @@ function retiredManagedSession(
     sessionContextRetired(entries, sessionId)
   );
 }
-function collectOwnedSessionUsage(ctx: ExtensionContext) {
+async function collectOwnedSessionUsage(
+  ctx: ExtensionContext,
+  managerScopeOrLeadIds?: boolean | readonly string[],
+) {
+  const managedLeadIds = Array.isArray(managerScopeOrLeadIds)
+    ? managerScopeOrLeadIds
+    : undefined;
+  if (!managedLeadIds?.length)
+    return collectSessionUsage(
+      ctx,
+      ownedAssignmentChildren,
+      openOwnedAssignmentSession,
+    );
+  const wanted = new Set(managedLeadIds);
+  let sessions;
+  try {
+    sessions = await SessionManager.listAll(undefined, ctx.signal);
+  } catch (error) {
+    if (ctx.signal.aborted) throw error;
+    return collectSessionUsage(
+      ctx,
+      ownedAssignmentChildren,
+      openOwnedAssignmentSession,
+      [],
+      false,
+    );
+  }
+  const matches = new Map<string, string[]>();
+  for (const session of sessions) {
+    if (!wanted.has(session.id)) continue;
+    const paths = matches.get(session.id) ?? [];
+    paths.push(session.path);
+    matches.set(session.id, paths);
+  }
+  const roots: SessionManager[] = [];
+  let complete = true;
+  for (const id of wanted) {
+    const paths = matches.get(id) ?? [];
+    if (paths.length !== 1) {
+      complete = false;
+      continue;
+    }
+    try {
+      const manager = SessionManager.open(paths[0]!);
+      if (manager.getSessionId() !== id) {
+        complete = false;
+        continue;
+      }
+      roots.push(manager);
+    } catch {
+      complete = false;
+    }
+  }
   return collectSessionUsage(
     ctx,
     ownedAssignmentChildren,
     openOwnedAssignmentSession,
+    roots,
+    complete,
   );
 }
 

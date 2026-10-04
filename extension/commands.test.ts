@@ -39,6 +39,7 @@ import {
   readLeadCoordinationState,
   sessionLeadRoleState,
   writeLeadCoordinationState as writeLeadCoordinationStateRaw,
+  writeProjectAssignment,
   writeChiefMessage as writeChiefMessageRaw,
   writeCoordinationMessage as writeCoordinationMessageRaw,
   writePeerLeadRecord as writePeerLeadRecordRaw,
@@ -254,6 +255,178 @@ test("session stats sums Pi usage entries and proven nested sessions once", asyn
     nativeSessions.delete(nestedPath);
     rmSync(dir, { recursive: true, force: true });
     await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("active Manager stats aggregates unique assigned Lead trees and omits unavailable Leads", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "stats-manager-pane";
+  process.env.HERDR_TAB_ID = "stats-manager-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `stats-manager-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const exec = (_command: string, args: string[]) => {
+    if (args[0] === "workspace" && args[1] === "get")
+      return respond({ workspace: { worktree: { repo_key: "repo-key" } } });
+    if (args[0] === "worktree" && args[1] === "list")
+      return respond({
+        source: {
+          source_workspace_id: WORKSPACE,
+          repo_key: "repo-key",
+          repo_name: "project",
+        },
+        worktrees: [],
+      });
+    if (isAgentList(args)) return respond({ agents: [managerAgentIdentity()] });
+    if (args[0] === "agent" && args[1] === "get")
+      return respond({ agent: managerAgentIdentity() });
+    if (isApiSnapshot(args))
+      return respond({ snapshot: { agents: [], panes: [] } });
+    return respond({});
+  };
+  const currentUsage = (amount: number) => ({
+    input: amount,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: amount,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+  const manager = fakeChiefPi({ activeTools: ["read"], exec });
+  const context = fakeContext([
+    {
+      type: "usage",
+      provider: "test",
+      model: "manager",
+      usage: currentUsage(2),
+    },
+  ]) as any;
+  context.hasUI = true;
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  const dir = mkdtempSync(join(tmpdir(), "herdsman-manager-usage-"));
+  const leadA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const leadB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const agentX = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const agentY = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const paths = Object.fromEntries(
+    [leadA, leadB, agentX, agentY].map((id) => [id, join(dir, `${id}.jsonl`)]),
+  ) as Record<string, string>;
+  for (const path of Object.values(paths)) writeFileSync(path, "");
+  const usage = (amount: number) => ({
+    input: amount,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: amount,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: amount },
+  });
+  const identity = (id: string, label: string) => ({
+    type: "custom",
+    customType: "pi-herdsman-agent-definition",
+    data: { sessionId: id, label, definition: "scout" },
+  });
+  const receipt = (owner: string, id: string, label: string) => ({
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolName: "agent_delegate",
+      details: {
+        ok: true,
+        owner_session_id: owner,
+        session_id: id,
+        session_path: paths[id],
+        agent: label,
+        definition: "scout",
+      },
+    },
+  });
+  nativeSessions.set(paths[leadA]!, {
+    id: leadA,
+    path: paths[leadA]!,
+    entries: [
+      { type: "usage", provider: "test", model: "lead", usage: usage(5) },
+      receipt(leadA, agentX, "x"),
+      receipt(leadA, agentX, "x"),
+    ],
+  });
+  nativeSessions.set(paths[leadB]!, {
+    id: leadB,
+    path: paths[leadB]!,
+    entries: [
+      { type: "usage", provider: "test", model: "lead", usage: usage(11) },
+      receipt(leadB, agentY, "y"),
+    ],
+  });
+  nativeSessions.set(paths[agentX]!, {
+    id: agentX,
+    path: paths[agentX]!,
+    entries: [
+      identity(agentX, "x"),
+      { type: "usage", provider: "test", model: "agent", usage: usage(7) },
+    ],
+  });
+  nativeSessions.set(paths[agentY]!, {
+    id: agentY,
+    path: paths[agentY]!,
+    entries: [
+      identity(agentY, "y"),
+      { type: "usage", provider: "test", model: "agent", usage: usage(13) },
+    ],
+  });
+  try {
+    registerExtension!(manager.pi as never);
+    await manager.events.get("session_start")![0](undefined, context);
+    await manager.commandOptions.get("manager").handler("", context);
+    for (const [branch, id] of [
+      ["branch-a", leadA],
+      ["branch-a-alias", leadA],
+      ["branch-b", leadB],
+    ])
+      writeProjectAssignment(supervisionRuntime(), {
+        version: 2,
+        id,
+        repoKey: "repo-key",
+        branch,
+        text: branch,
+      });
+    assert.deepEqual(
+      listProjectAssignments(supervisionRuntime(), "repo-key").map(
+        (item) => item.id,
+      ),
+      [leadA, leadA, leadB],
+    );
+    await manager.commandOptions.get("agents").handler("stats", context);
+    assert.match(notices[1]!, /Managed Leads · 2 sessions[\s\S]*Input\s+16/);
+    assert.match(notices[1]!, /Managed agents · 2 sessions[\s\S]*Input\s+20/);
+    assert.match(notices[1]!, /Total\s+38/);
+    assert.match(
+      notices[1]!,
+      /test\/agent\s+20\s+\$20\.000[\s\S]*test\/lead\s+16\s+\$16\.000[\s\S]*test\/manager\s+2\s+\$0\.000/,
+    );
+    assert.doesNotMatch(notices[1]!, /Coverage incomplete/);
+    nativeSessions.delete(paths[leadB]!);
+    await manager.commandOptions.get("agents").handler("stats", context);
+    assert.match(notices[2]!, /Managed Leads · 1 session[\s\S]*Input\s+5/);
+    assert.match(notices[2]!, /Managed agents · 1 session[\s\S]*Input\s+7/);
+    assert.match(
+      notices[2]!,
+      /Coverage incomplete: some managed project session usage is unavailable\./,
+    );
+    assert.doesNotMatch(notices[2]!, /Input\s+16/);
+  } finally {
+    for (const path of Object.values(paths)) nativeSessions.delete(path);
+    rmSync(dir, { recursive: true, force: true });
+    await manager.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
   }
 });
 
