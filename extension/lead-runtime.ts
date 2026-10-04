@@ -5,7 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
-import type { SelectItem } from "@earendil-works/pi-tui";
+import { visibleWidth, type SelectItem } from "@earendil-works/pi-tui";
 import type {
   ChiefLease,
   ChiefDescriptor,
@@ -2948,7 +2948,14 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
                 }));
           if (!items.some((item) => item.value === selected))
             selected = items[0]?.value;
-          list = new host.tui.SelectList(items, 8, selectTheme);
+          const maxPrimaryColumnWidth = Math.max(
+            12,
+            ...items.map((item) => visibleWidth(item.label) + 2),
+          );
+          list = new host.tui.SelectList(items, 8, selectTheme, {
+            minPrimaryColumnWidth: 12,
+            maxPrimaryColumnWidth,
+          });
           const index = items.findIndex((item) => item.value === selected);
           if (index >= 0) list.setSelectedIndex(index);
           list.onSelectionChange = (item) => {

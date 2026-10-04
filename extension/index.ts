@@ -1509,7 +1509,10 @@ export default function (pi: ExtensionAPI): void {
           });
           const help = new TuiText("", 1, 1);
           const updateHelp = (item: SelectItem | null): void => {
-            const text = (item as MenuItem | null)?.help;
+            const text = collapseDisplayText(
+              (item as MenuItem | null)?.help,
+              160,
+            );
             help.setText(text ? theme.fg("dim", text) : "");
           };
           const index = items.findIndex((item) => item.value === selectedValue);
