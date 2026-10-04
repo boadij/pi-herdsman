@@ -345,7 +345,12 @@ type LeadHerdRunHost = {
   ): Promise<ProjectMessage | undefined>;
   requestStatusRefresh(): void;
   queueLeadPresentation(ctx: ExtensionContext, name: string): void;
-  appendDurableError(ctx: ExtensionContext, kind: string, error: unknown): void;
+  appendDurableError(
+    pi: ExtensionAPI,
+    ctx: ExtensionContext,
+    kind: string,
+    error: unknown,
+  ): void;
 };
 
 type LeadProjectHost = {
@@ -2202,6 +2207,11 @@ export function registerLeadRuntime(
   pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) =>
     agentEvents.agentStart(ctx),
   );
+  pi.on("message_start", (event: any) => {
+    const message = event?.message;
+    if (message?.customType === "pi-herdsman-project_assignment")
+      herdRunRuntime?.projectAssignmentStarted(message.timestamp);
+  });
   pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) =>
     agentEvents.agentSettled(ctx),
   );
@@ -3269,10 +3279,25 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
 export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
   let leadAgentStartedAt: number | undefined;
   let herdRunStartedAt: number | undefined;
+  let projectAssignmentStartedAt: number | undefined;
   let leadSettled = true;
-  const publishSettledProjectHandoff = async (
+  const latestMeaningfulAssistantResponse = (
     ctx: ExtensionContext,
     startedAt: number,
+  ): string | undefined => {
+    const entries = ctx.sessionManager.getBranch();
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i] as any;
+      if (entry.type !== "message" || entry.message.role !== "assistant")
+        continue;
+      if ((entry.message.timestamp ?? 0) < startedAt) continue;
+      const text = contentText(entry.message.content, "").trim();
+      if (text) return text;
+    }
+  };
+  const publishProjectHandoff = async (
+    ctx: ExtensionContext,
+    message: string,
   ): Promise<void> => {
     const scope = await host.currentWorktreeScope(ctx);
     if (!scope) return;
@@ -3281,25 +3306,16 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
       ctx.sessionManager.getSessionId(),
     );
     if (!assignment) return;
-    const entries = ctx.sessionManager.getBranch();
-    let summary: string | undefined;
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i] as any;
-      if (entry.type !== "message" || entry.message.role !== "assistant")
-        continue;
-      if ((entry.message.timestamp ?? 0) < startedAt) continue;
-      const text = contentText(entry.message.content, "").trim();
-      if (text) {
-        summary = text;
-        break;
-      }
-    }
-    await host.publishProjectMessage(
+    await host.publishProjectMessage(ctx, assignment, message, [], "herd_run");
+  };
+  const publishSettledProjectHandoff = async (
+    ctx: ExtensionContext,
+    startedAt: number,
+  ): Promise<void> => {
+    const summary = latestMeaningfulAssistantResponse(ctx, startedAt);
+    await publishProjectHandoff(
       ctx,
-      assignment,
       summary ? `Herd run settled.\n\n${summary}` : "Herd run settled.",
-      [],
-      "herd_run",
     );
   };
   const maybeFinish = (ctx: ExtensionContext): void => {
@@ -3335,6 +3351,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     }
   };
   const begin = (ctx: ExtensionContext): void => {
+    projectAssignmentStartedAt = undefined;
     if (herdRunStartedAt !== undefined) return;
     const startedAt = leadAgentStartedAt ?? Date.now();
     herdRunStartedAt = startedAt;
@@ -3353,16 +3370,37 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
   return {
     begin,
     maybeFinish,
+    projectAssignmentStarted: (startedAt: number) => {
+      projectAssignmentStartedAt = startedAt;
+    },
     agentStarted: () => {
       leadAgentStartedAt = Date.now();
       leadSettled = false;
     },
     agentSettled: (ctx: ExtensionContext) => {
+      const assignmentStartedAt = projectAssignmentStartedAt;
+      projectAssignmentStartedAt = undefined;
       leadSettled = true;
       maybeFinish(ctx);
+      if (assignmentStartedAt !== undefined) {
+        const response = latestMeaningfulAssistantResponse(
+          ctx,
+          assignmentStartedAt,
+        );
+        if (response)
+          void publishProjectHandoff(ctx, response).catch((error) =>
+            host.appendDurableError(
+              host.pi,
+              ctx,
+              "pi_herdsman_state_error",
+              error,
+            ),
+          );
+      }
     },
     restoreSession: (entries: unknown[], sessionId: string) => {
       leadAgentStartedAt = undefined;
+      projectAssignmentStartedAt = undefined;
       herdRunStartedAt = restoreHerdRunStartedAt(
         entries,
         sessionId,
@@ -3380,6 +3418,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     shutdown: () => {
       leadAgentStartedAt = undefined;
       herdRunStartedAt = undefined;
+      projectAssignmentStartedAt = undefined;
       leadSettled = true;
     },
   };
@@ -5547,14 +5586,14 @@ function projectAssignmentInstruction(
 ): string {
   return `${assignment.text}
 
-When a delegated herd run settles, summarize its outcome, validation, and
-important unresolved points in your normal response. Herdsman handles the
-normal Manager handoff automatically.
+Herdsman automatically hands your normal assignment response to the Manager.
+If you start delegated Agent work, the handoff is deferred until that herd run
+settles; then summarize its outcome, validation, and important unresolved
+points in your normal response.
 
-Use supervisor_message when the Manager must decide or act before normal
-settlement, or when material scope, assumptions, risks, or evidence need
-attention. Routine status and acknowledgements stay local. Settling your herd is
-nonterminal; do not infer project closure from runtime state.`;
+Use supervisor_message only when the Manager must give material attention,
+decide, or act. Routine status and acknowledgements stay local. Settling your
+herd is nonterminal; do not infer project closure from runtime state.`;
 }
 
 export function createLeadInboxRuntime(host: LeadInboxHost) {

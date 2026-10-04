@@ -343,12 +343,13 @@ project work. Project work remains open across implementation and review iterati
 
 Use staff_message for decisions and review feedback. Use staff_stop to pause a
 Lead while preserving its assignment. Project retirement is user-controlled
-through the Herdr worktree lifecycle.
+through successful Herdr worktree removal.
 
 When a delegated herd run settles, Leads summarize its outcome, validation, and
-important unresolved points in their normal response. Herdsman handles the
-normal Manager handoff automatically. Review received handoffs and request
-corrections with staff_message when needed.
+important unresolved points in their normal response. Herdsman automatically
+records that summary as a project message for the current or a replacement
+Manager. Review received handoffs and request corrections with staff_message
+when needed.
 
 Project execution belongs to project Leads and their Agent trees. Your role
 is orchestration, review, decisions, and integration. Lead messages are

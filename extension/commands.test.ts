@@ -2095,11 +2095,11 @@ async function managerDelegateAssignmentTest(
       );
       assert.match(
         assignmentDelivery.content!,
-        /Settling your herd is\s+nonterminal; do not infer project closure from runtime state\./,
+        /Settling your\s+herd is\s+nonterminal; do not infer project closure from runtime state\./,
       );
       assert.match(
         assignmentDelivery.content!,
-        /Herdsman handles the\s+normal Manager handoff automatically\./,
+        /Herdsman automatically hands your normal assignment response to the Manager\./,
       );
       const message = await lead.tools
         .find((tool) => tool.name === "supervisor_message")!
