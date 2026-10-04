@@ -13,9 +13,9 @@ changes for omitted fields.
 `managed-lead` is the reserved definition for Manager-created project Leads.
 It follows the same `bundled < project < global` precedence, but it is launch
 configuration rather than an Agent role: it is excluded from the Agent roster
-and cannot be delegated to. The Definitions UI exposes it in a separate Managed Lead
-group for Model, Thinking, and Details settings, without an `Enabled` action.
-These settings do not add it to Agent discovery or delegation.
+and cannot be delegated to. It appears first in the flat Definitions list, with
+Model, Thinking, and Details settings but no `Enabled` action. These settings
+do not add it to Agent discovery or delegation.
 
 The bundled default gives the Lead read-only inspection tools plus mandatory
 Herdsman coordination tools. Executable project work is delegated to managed
@@ -249,10 +249,9 @@ Lead Pi sessions with UI can use:
 /agents definitions
 ```
 
-The native Definitions menu lists bundled, project, and global participation.
-Project participation is marked `[project]`; a global override adds `*`, so
-`[project] *` means both layers contribute. Select a
-definition to open:
+The native Definitions menu is a flat list, with `managed-lead` first. Each
+definition identifies its contributing source or sources as `bundled`,
+`project`, and/or `global`. Select a definition to open:
 
 ```text
 Model

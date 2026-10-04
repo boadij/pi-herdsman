@@ -3800,9 +3800,17 @@ test("project agent discovery is gated by Pi project trust", async () => {
     await command.handler("definitions", context);
     const options = selections.at(-1) ?? [];
     assert.ok(
-      options.some((value) => value.startsWith("project-only [project] *")),
+      options.some(
+        (value) =>
+          value.includes("project-only") && value.includes("project + global"),
+      ),
     );
-    assert.ok(options.some((value) => value.startsWith("scout *")));
+    assert.ok(
+      options.some(
+        (value) =>
+          value.includes("scout") && value.includes("bundled + global"),
+      ),
+    );
     assert.ok(options.some((value) => value.startsWith("standalone-global")));
     assert.equal(
       options.some((value) => value.startsWith("standalone-global *")),

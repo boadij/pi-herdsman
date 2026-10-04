@@ -88,16 +88,16 @@ Run:
 /agents
 ```
 
-The native menu provides the live Agent inventory, session usage, Agent definitions,
-layout, message limits, context-retirement configuration, and emergency cleanup.
+The native menu provides Running, Session stats, Definitions, Settings, and Stop all.
 
 Use `Running` to focus a verified live Agent. Use `Session stats` to inspect
 Pi-native token usage and cost for the current Pi session plus transitively
 owned managed-Agent sessions. In active Manager mode, it also includes the Lead
 sessions in current durable project assignments and each Lead's transitively
-owned Agent sessions. Use `Definitions` to inspect or override the
-effective bundled, project, and global roster. Use `Layout` to choose placement
-for future Lead-direct Agents.
+owned Agent sessions. Use `Definitions` to inspect or override the effective
+bundled, project, and global roster. Use `Settings` for Manager auto-start,
+Layout, context retirement, and message limits; `Layout` controls placement for
+future Lead-direct Agents.
 
 See [Commands](reference/commands.md) for the exact human-facing behavior.
 

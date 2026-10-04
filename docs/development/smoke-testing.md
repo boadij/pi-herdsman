@@ -261,16 +261,24 @@ In a lead session with UI:
 
 ### `/agents definitions`
 
-Verify the native Definitions selector shows:
+Verify the root `/agents` menu has exactly five destinations: `Running`,
+`Session stats`, `Definitions`, `Settings`, and `Stop all…`. Counts and setting
+values are secondary row metadata, and selected-row contextual help updates in
+the TUI. Verify Settings contains Manager auto-start, Layout, Context
+retirement, and Message limits.
 
-- bundled, project (when trusted project discovery is enabled), and global
-  definitions in the effective roster;
-- project participation marked `[project]`, with `*` for a global override
-  (`[project] *` means both layers contribute);
-- compact, aligned name/model/thinking columns, including Unicode names;
+Verify the native Definitions list shows:
+
+- actionable definitions in one flat list, with `managed-lead` first;
+- contributing source words `bundled`, `project`, and `global`, including
+  combinations where multiple sources contribute;
+- unpadded definition-name labels, with model, thinking, and provenance as
+  secondary metadata, including Unicode names;
 - model, thinking, enabled, and details actions for a selected definition;
 - `Inherit current session` for model and thinking;
-- narrow panes remain width-safe.
+- selected-row contextual help and width-safe layout in narrow panes.
+
+The reserved `managed-lead` remains non-Agent and has no Enabled action.
 
 Structured `agent_list` should still retain exact deterministic metadata.
 
