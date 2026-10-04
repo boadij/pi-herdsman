@@ -141,14 +141,25 @@ intermediate coordinators.
 
 ## Usage follows ownership
 
-Session usage accounting follows the Agent ownership graph, not the supervision
-graph. `/agents stats` starts with the current Pi session and walks only
-transitively owned managed-Agent sessions whose exact persisted identity can be
-verified.
+Session usage uses Pi's native token and cost records. In ordinary sessions,
+`/agents stats` covers the current Pi session and transitively owned managed
+Agents whose exact persisted identities can be verified.
 
-Manager/Chief staff, peer Leads, other worktrees, and unrelated Pi sessions are
-not attributed through supervision relationships. This keeps usage accounting
-aligned with the same durable ownership boundary used for Agent control.
+When the current session is an active Manager, stats additionally cover the
+Lead sessions named by its current durable project assignments, along with each
+included Lead's transitively owned managed-Agent sessions. The Manager's own
+directly owned Agents remain included as well. Durable assignment identity
+selects managed Leads; live herdr topology is not required, so a paused Lead or
+missing worktree does not by itself exclude a still-assigned project. Retired
+assignments no longer contribute to current Manager stats.
+
+Known assignment IDs may be resolved through Pi's native global session
+inventory. That discovery locates the exact assigned session but never
+establishes ownership or scope by itself: project assignments select Leads,
+and durable Agent ownership determines their Agent trees. Usage that cannot be
+verified within the in-scope sessions is omitted and reported as incomplete
+coverage rather than guessed. Chief staff, peer Leads, and unrelated sessions
+remain outside the accounting scope.
 
 See [Commands](../reference/commands.md#agents-stats) for the exact presentation
 and coverage rules.

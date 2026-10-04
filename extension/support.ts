@@ -255,6 +255,7 @@ mock.module("@earendil-works/pi-coding-agent", {
         [...nativeSessions.values()].map((session) => ({
           id: session.id,
           cwd: session.cwd,
+          path: session.path,
         })),
       open: (path: string) => {
         if (sessionOpenError !== undefined) throw sessionOpenError;

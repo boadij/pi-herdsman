@@ -241,6 +241,13 @@ type LeadRuntimeOptions = {
 };
 
 type LeadCommandHost = {
+  collectOwnedSessionUsage(
+    ctx: ExtensionContext,
+    managerScopeOrLeadIds?: boolean | readonly string[],
+  ): Promise<
+    ReturnType<typeof import("./agent-controller.ts").collectSessionUsage>
+  >;
+  formatSessionUsage: typeof import("./presentation.ts").formatSessionUsage;
   runHerdr: typeof runHerdr;
   presentStopSummary(summary: string): void;
   version: string;
@@ -1514,8 +1521,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         signal: host.controller.sessionSignal(),
       });
     },
-    showSessionStats(ctx: ExtensionCommandContext): void {
-      const stats = host.collectOwnedSessionUsage(ctx);
+    async showSessionStats(ctx: ExtensionCommandContext): Promise<void> {
+      const managerActive = host.roleActive("manager");
+      const stats = await host.collectOwnedSessionUsage(ctx, managerActive);
       ctx.ui.notify(
         host.formatSessionUsage(
           stats.current,
@@ -1523,6 +1531,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           stats.agentSessions,
           stats.complete,
           stats.breakdown,
+          managerActive
+            ? {
+                usage: stats.leads,
+                sessions: stats.leadSessions,
+              }
+            : undefined,
         ),
       );
     },
@@ -1649,7 +1663,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         if (!selected) return;
         selectedSection = selected;
         if (selected === "running") await this.openRunningAgentsMenu(ctx);
-        else if (selected === "stats") this.showSessionStats(ctx);
+        else if (selected === "stats") await this.showSessionStats(ctx);
         else if (selected === "definitions")
           await this.openDefinitionsMenu(ctx);
         else if (selected === "settings") await this.openSettingsMenu(ctx);
@@ -1691,7 +1705,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       try {
         if (!args.length) return void (await this.openAgentsMenu(ctx));
         if (args[0] === "stats" && args.length === 1)
-          return void this.showSessionStats(ctx);
+          return void (await this.showSessionStats(ctx));
         if (args[0] === "definitions" && args.length === 1)
           return void (await this.openDefinitionsMenu(ctx));
         if (args[0] === "placement") {
@@ -2203,6 +2217,25 @@ export function registerLeadRuntime(
   });
   const commandRuntime = createLeadCommandRuntime({
     ...options.commandHost,
+    collectOwnedSessionUsage: async (ctx, managerScopeOrLeadIds) => {
+      const managerActive =
+        typeof managerScopeOrLeadIds === "boolean"
+          ? managerScopeOrLeadIds
+          : activeLeadRole(options.leadRuntime) === "manager" &&
+            !options.leadRuntime.roleSuspended;
+      if (!managerActive)
+        return options.commandHost.collectOwnedSessionUsage(ctx);
+      const lease = options.leadRuntime.managerLease;
+      if (!lease) throw new Error("Manager authority is unavailable");
+      const assignments = options.coordinationHost.listProjectAssignments(
+        options.coordinationHost.supervisionRuntime(),
+        lease.descriptor.repoKey,
+      );
+      return options.commandHost.collectOwnedSessionUsage(
+        ctx,
+        assignments.map((assignment) => assignment.id),
+      );
+    },
     isLead: () => true,
     buildStatusRows,
     renderRunningOptions,
