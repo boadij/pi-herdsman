@@ -420,6 +420,55 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       /Coverage incomplete: some managed project session usage is unavailable\./,
     );
     assert.doesNotMatch(notices[2]!, /Input\s+16/);
+
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const originalListAll = SessionManager.listAll;
+    const originalSignal = context.signal;
+    context.signal = undefined;
+    SessionManager.listAll = async () => {
+      throw new Error("inventory unavailable");
+    };
+    try {
+      await manager.commandOptions.get("agents").handler("stats", context);
+      assert.match(notices.at(-1)!, /Current session[\s\S]*Input\s+2/);
+      assert.match(
+        notices.at(-1)!,
+        /Coverage incomplete: some managed project session usage is unavailable\./,
+      );
+    } finally {
+      SessionManager.listAll = originalListAll;
+      context.signal = originalSignal;
+    }
+
+    nativeSessions.set(paths[leadB]!, {
+      id: leadB,
+      path: paths[leadB]!,
+      entries: [
+        { type: "usage", provider: "test", model: "lead", usage: usage(11) },
+        receipt(leadB, agentY, "y"),
+      ],
+    });
+    const pending = Promise.withResolvers<any[]>();
+    SessionManager.listAll = async () => pending.promise;
+    try {
+      const managerScopedStats = manager.commandOptions
+        .get("agents")
+        .handler("stats", context);
+      await manager.commandOptions.get("manager").handler("leave", context);
+      pending.resolve(
+        [...nativeSessions.values()].map((session) => ({
+          id: session.id,
+          cwd: session.cwd,
+          path: session.path,
+        })),
+      );
+      await managerScopedStats;
+      assert.match(notices.at(-1)!, /Managed Leads · 2 sessions/);
+      await manager.commandOptions.get("agents").handler("stats", context);
+      assert.doesNotMatch(notices.at(-1)!, /Managed Leads/);
+    } finally {
+      SessionManager.listAll = originalListAll;
+    }
   } finally {
     for (const path of Object.values(paths)) nativeSessions.delete(path);
     rmSync(dir, { recursive: true, force: true });

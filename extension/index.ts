@@ -537,7 +537,7 @@ async function collectOwnedSessionUsage(
   try {
     sessions = await SessionManager.listAll(undefined, ctx.signal);
   } catch (error) {
-    if (ctx.signal.aborted) throw error;
+    if (ctx.signal?.aborted) throw error;
     return collectSessionUsage(
       ctx,
       ownedAssignmentChildren,
