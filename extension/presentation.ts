@@ -157,12 +157,18 @@ export type UsageDisplayTotals = {
   cost: number;
 };
 
+export type ManagedLeadUsageDisplay = {
+  usage: UsageDisplayTotals;
+  sessions: number;
+};
+
 export function formatSessionUsage(
   current: UsageDisplayTotals,
   agents: UsageDisplayTotals,
   agentSessions: number,
   complete: boolean,
   breakdown: Map<string, UsageDisplayTotals> = new Map(),
+  managedLeads?: ManagedLeadUsageDisplay,
 ): string {
   const row = (label: string, value: string) =>
     `  ${label.padEnd(12)} ${value}`;
@@ -186,15 +192,29 @@ export function formatSessionUsage(
     ].join("\n");
   };
   const total = {
-    input: current.input + agents.input,
-    output: current.output + agents.output,
-    cacheRead: current.cacheRead + agents.cacheRead,
-    cacheWrite: current.cacheWrite + agents.cacheWrite,
-    cost: current.cost + agents.cost,
+    input: current.input + agents.input + (managedLeads?.usage.input ?? 0),
+    output: current.output + agents.output + (managedLeads?.usage.output ?? 0),
+    cacheRead:
+      current.cacheRead +
+      agents.cacheRead +
+      (managedLeads?.usage.cacheRead ?? 0),
+    cacheWrite:
+      current.cacheWrite +
+      agents.cacheWrite +
+      (managedLeads?.usage.cacheWrite ?? 0),
+    cost: current.cost + agents.cost + (managedLeads?.usage.cost ?? 0),
   };
   return [
     "Session usage",
     section("Current session", current),
+    ...(managedLeads
+      ? [
+          section(
+            `Managed Leads · ${managedLeads.sessions} ${managedLeads.sessions === 1 ? "session" : "sessions"}`,
+            managedLeads.usage,
+          ),
+        ]
+      : []),
     section(
       `Managed agents · ${agentSessions} ${agentSessions === 1 ? "session" : "sessions"}`,
       agents,
@@ -215,7 +235,11 @@ export function formatSessionUsage(
         ),
     ].join("\n"),
     ...(!complete
-      ? ["Coverage incomplete: some owned session usage is unavailable."]
+      ? [
+          managedLeads
+            ? "Coverage incomplete: some managed project session usage is unavailable."
+            : "Coverage incomplete: some owned session usage is unavailable.",
+        ]
       : []),
   ].join("\n\n");
 }

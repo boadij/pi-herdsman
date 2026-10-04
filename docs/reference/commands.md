@@ -42,7 +42,10 @@ token. The enforced limits are bytes, not tokens.
 
 Shows accumulated Pi-native token usage and cost for the current Pi session plus
 transitively owned managed-Agent Pi sessions whose exact persisted identity can
-be verified.
+be verified. In an active Manager session, it additionally includes the Lead
+sessions named by current durable project assignments and each included Lead's
+transitively owned managed-Agent sessions. The Manager's directly owned Agents
+remain included.
 
 Usage follows Pi's session accounting across the whole session history,
 including assistant responses, model-attributed usage entries, tool-result model
@@ -53,11 +56,15 @@ The Models section attributes assistant responses to their response model,
 usage entries to their recorded model, and tool/summary usage to
 `Tools/summaries`, sorted by cost.
 
-Repeated continuations of the same Pi session are counted once. Peer Leads,
-Manager/Chief staff, supervised Leads, and unrelated Pi sessions are excluded.
-A Manager or Chief still sees usage for its own current Pi session. Missing,
-malformed, or identity-mismatched owned-session evidence is skipped and marks
-coverage incomplete instead of guessing or scanning global sessions.
+Repeated references to the same Pi session are counted once. Project assignment
+identity selects managed Leads; live Herdr topology is not required, and
+retiring an assignment removes it from current Manager stats. Pi's native global
+session inventory may locate an exact assigned Lead ID, but discovery never
+establishes ownership. Durable Agent ownership determines each Lead's Agent
+tree. Missing, ambiguous, or identity-mismatched in-scope usage is omitted and
+marks coverage incomplete rather than guessed. Manager aggregation uses the
+scope-specific warning `Coverage incomplete: some managed project session
+usage is unavailable.` Ordinary usage retains its owned-session warning.
 
 ## `/agents definitions`
 
