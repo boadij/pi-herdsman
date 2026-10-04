@@ -42,6 +42,8 @@ import {
   writeRequest,
   writeAsk,
   writeAgentState,
+  writeAgentBootstrap,
+  readAgentBootstrap,
   agentMailboxPath,
   type RequestRecord,
   type AskRecord,
@@ -992,4 +994,30 @@ test("state waiter removes its abort listener after resolution", async () => {
   writeAgentState(path, state);
   await waiting;
   assert.equal(listeners.size, 0);
+});
+
+test("bootstrap sidecar round-trips atomically, rejects duplicates, and resets", () => {
+  const path = mkdtempSync(join(tmpdir(), "pi-herdsman-bootstrap-test-"));
+  const bootstrap = {
+    version: 5 as const,
+    build: state.build!,
+    runId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    participants: [{ id: "pi-test/bridge", payload: "opaque" }],
+  };
+  writeAgentBootstrap(path, bootstrap);
+  assert.deepEqual(readAgentBootstrap(path), bootstrap);
+  assertPosixMode(join(path, "bootstrap.json"), 0o600);
+  assert.throws(
+    () =>
+      writeAgentBootstrap(path, {
+        ...bootstrap,
+        participants: [...bootstrap.participants, ...bootstrap.participants],
+      }),
+    /duplicate bootstrap participant/,
+  );
+  resetAgentMailbox(path);
+  assert.equal(readAgentBootstrap(path), undefined);
 });

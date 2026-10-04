@@ -18,6 +18,9 @@ import { OperationError } from "./errors.ts";
 import { runtimeBuild } from "./compatibility.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 
+export const MANAGED_AGENT_BOOTSTRAP_EVENT =
+  "pi-herdsman:managed-agent-bootstrap";
+
 export const watchedResultPaths = new Map<string, Function>();
 export const projectContextCwds: string[] = [];
 export const nativeSessions = new Map<
@@ -181,6 +184,9 @@ export const {
   readRequest,
   readResult,
   readAgentState,
+  readAgentBootstrap,
+  removeAgentBootstrap,
+  writeAgentBootstrap,
   removeAsk,
   removeRequest,
   removeResult,
@@ -752,6 +758,14 @@ export function fakePi(
       ? undefined
       : [...(options.activeTools ?? [])];
   const pi = {
+    events: {
+      on(name: string, handler: (event: any) => unknown) {
+        events.set(name, [...(events.get(name) ?? []), handler]);
+      },
+      emit(name: string, event: any) {
+        for (const handler of events.get(name) ?? []) handler(event);
+      },
+    },
     on(name: string, handler: (event: any, ctx: Context) => unknown) {
       events.set(name, [...(events.get(name) ?? []), handler]);
     },

@@ -23,6 +23,7 @@ import { Type } from "typebox";
 import { fail, markRetryAttempted, OperationError } from "./errors.ts";
 import {
   agentMailboxPath,
+  writeAgentBootstrap,
   claimAgentMailbox,
   MailboxClaimOccupiedError,
   agentStatePath,
@@ -80,6 +81,7 @@ import {
   agentControlState,
   displayIdentity,
   FILE_HANDOFF_GUIDANCE,
+  MANAGED_AGENT_BOOTSTRAP_EVENT,
   prepareMessageInput,
   chooseLabel,
 } from "./core.ts";
@@ -2382,6 +2384,15 @@ export type AgentControllerOptions = {
     signal: AbortSignal,
   ): void;
 };
+
+type ManagedAgentBootstrapPreparation = {
+  payload: string;
+  commit?: () => void | Promise<void>;
+};
+type ManagedAgentBootstrapPrepare = () =>
+  | ManagedAgentBootstrapPreparation
+  | undefined
+  | Promise<ManagedAgentBootstrapPreparation | undefined>;
 
 export function createAgentController(
   pi: ExtensionAPI,
@@ -5534,6 +5545,10 @@ export function createAgentController(
       let promptWriteFailed = false;
       let started: StartedHerdrAgent | undefined;
       let accepted = false;
+      const preparedBootstrap: Array<{
+        id: string;
+        commit?: () => void | Promise<void>;
+      }> = [];
       try {
         try {
           promptPaths = writePrivatePromptSnapshots([
@@ -5550,6 +5565,66 @@ export function createAgentController(
           resetAgentMailbox(mailbox);
         } finally {
           resetRelease();
+        }
+        if (p.action === "delegate") {
+          const registrations = new Map<string, ManagedAgentBootstrapPrepare>();
+          let open = true;
+          pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
+            protocol: 1,
+            phase: "prepare",
+            context: ctx,
+            agent: label,
+            register(id: string, prepare: ManagedAgentBootstrapPrepare) {
+              if (!open)
+                throw new Error(
+                  "Managed-agent bootstrap registration is closed",
+                );
+              if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(id))
+                throw new Error(
+                  "Invalid managed-agent bootstrap participant ID",
+                );
+              if (registrations.has(id))
+                throw new Error(
+                  `Duplicate managed-agent bootstrap participant ID: ${id}`,
+                );
+              if (typeof prepare !== "function")
+                throw new Error(
+                  "Invalid managed-agent bootstrap prepare callback",
+                );
+              registrations.set(id, prepare);
+            },
+          });
+          open = false;
+          const participants: Array<{ id: string; payload: string }> = [];
+          for (const [id, prepare] of registrations) {
+            const result = await prepare();
+            if (result !== undefined) {
+              if (
+                !result ||
+                typeof result.payload !== "string" ||
+                (result.commit !== undefined &&
+                  typeof result.commit !== "function")
+              )
+                throw new Error(
+                  `Invalid preparation from managed-agent bootstrap participant "${id}"`,
+                );
+              participants.push({ id, payload: result.payload });
+              preparedBootstrap.push({
+                id,
+                ...(result.commit ? { commit: result.commit } : {}),
+              });
+            }
+          }
+          if (participants.length)
+            writeAgentBootstrap(mailbox, {
+              version: 5,
+              build: options.build,
+              runId,
+              ownerSessionId: owner,
+              workspaceId,
+              agentLabel: label,
+              participants,
+            });
         }
         const env = [
           `PI_HERDSMAN_MAILBOX=${mailbox}`,
@@ -5762,6 +5837,8 @@ export function createAgentController(
           signal,
           waitForSession: true,
         });
+        for (const participant of preparedBootstrap)
+          await participant.commit?.();
         runtimes.set(label, runtime);
         options.onChanged();
         const requestId = await submit(

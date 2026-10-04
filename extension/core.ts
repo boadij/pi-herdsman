@@ -15,6 +15,9 @@ import { TextDecoder } from "node:util";
 import type { ResultBinding } from "./storage.ts";
 import { resolveResultRef } from "./storage.ts";
 
+export const MANAGED_AGENT_BOOTSTRAP_EVENT =
+  "pi-herdsman:managed-agent-bootstrap";
+
 export const FILE_HANDOFF_GUIDANCE =
   "Pass every user-supplied or already-available artifact relevant to the " +
   "recipient's assignment, decisions, integration, validation, or onward " +

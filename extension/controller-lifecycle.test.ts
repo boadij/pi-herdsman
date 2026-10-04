@@ -11,6 +11,7 @@ import type {
   ResultRecord,
   ManagedAgentState,
 } from "./mailbox.ts";
+
 import { claimProcessLock } from "./lock.ts";
 import {
   listProjectAssignments,
@@ -66,6 +67,10 @@ import {
   readRequest,
   readResult,
   readAgentState,
+  MANAGED_AGENT_BOOTSTRAP_EVENT,
+  readAgentBootstrap,
+  removeAgentBootstrap,
+  writeAgentBootstrap,
   realFs,
   recoveryIdentity,
   registerExtension,
@@ -131,13 +136,63 @@ test("parent delegates two same-definition children with exact ownership", async
     realFs.writeFileSync(join(PI_AGENTS_DIR, name), content, "utf8");
   const lifecycle = delegatedLifecycleExecutor(parent);
   const starts: string[][] = [];
-  const pi = fakePi({
+  const order: string[] = [];
+  let pi: ReturnType<typeof fakePi>;
+  pi = fakePi({
     thinkingLevel: "high",
     exec: (command, args) => {
-      if (command === "herdr" && args[0] === "agent" && args[1] === "start")
+      const starting =
+        command === "herdr" && args[0] === "agent" && args[1] === "start";
+      if (starting) {
         starts.push([...args]);
-      return lifecycle.exec(command, args);
+        const label = lifecycle.paneEnvironment.PI_HERDSMAN_LABEL;
+        const mailbox = agentMailboxPath(WORKSPACE, label);
+        const record = readAgentBootstrap(mailbox);
+        if (record) {
+          order.push("child initialize");
+          pi.pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
+            protocol: 1,
+            phase: "initialize",
+            context: fakeAgentContext([]),
+            agent: label,
+            participant: record.participants[0],
+            accept(initialize: () => void) {
+              initialize();
+            },
+          });
+          removeAgentBootstrap(mailbox);
+        }
+      }
+      const result = lifecycle.exec(command, args);
+      if (starting) {
+        assert.equal(
+          readAgentBootstrap(
+            agentMailboxPath(
+              WORKSPACE,
+              lifecycle.paneEnvironment.PI_HERDSMAN_LABEL,
+            ),
+          ),
+          undefined,
+        );
+        order.push("child readiness");
+      }
+      return result;
     },
+  });
+  pi.pi.events.on(MANAGED_AGENT_BOOTSTRAP_EVENT, (event: any) => {
+    if (event.phase === "prepare") {
+      order.push("prepare");
+      event.register("test/participant", async () => ({
+        payload: "opaque",
+        commit: () => {
+          order.push("parent commit");
+        },
+      }));
+    } else if (event.phase === "initialize") {
+      event.accept(() => {
+        order.push("child initializer");
+      });
+    }
   });
   registerExtension!(pi.pi as never);
   const context = fakeAgentContext([
@@ -171,9 +226,23 @@ test("parent delegates two same-definition children with exact ownership", async
           context,
         );
       assert.equal(started.details.ok, true, JSON.stringify(started.details));
-      mailboxes.push(
-        agentMailboxPath(WORKSPACE, started.details.agent as string),
+      const childMailbox = agentMailboxPath(
+        WORKSPACE,
+        started.details.agent as string,
       );
+      if (task === "first child") {
+        order.push("first task delivered");
+        assert.deepEqual(order, [
+          "prepare",
+          "child initialize",
+          "child initializer",
+          "child readiness",
+          "parent commit",
+          "first task delivered",
+        ]);
+      }
+      assert.equal(readAgentBootstrap(childMailbox), undefined);
+      mailboxes.push(childMailbox);
     }
     const guidance = pi.sentMessageCalls.filter(
       ({ message }) =>
@@ -3916,6 +3985,10 @@ test("session continuation starts a new agent generation with current prompt con
     },
   );
   const pi = fakePi({ exec: startup.exec });
+  let bootstrapPrepares = 0;
+  pi.pi.events.on(MANAGED_AGENT_BOOTSTRAP_EVENT, (event: any) => {
+    if (event.phase === "prepare") bootstrapPrepares++;
+  });
   registerExtension!(pi.pi as never);
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
@@ -3929,6 +4002,7 @@ test("session continuation starts a new agent generation with current prompt con
       ownedSessionContext(session.id, name),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(bootstrapPrepares, 0);
     assert.equal(launched[0].contents.length, 3);
     assert.equal(result.details.session_id, session.id);
     assert.equal(result.details.owner_session_id, LEAD_SESSION_ID);
@@ -5419,4 +5493,73 @@ test("assignment integration grace aborts without a later lookup or timer", asyn
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(startup.getCount(), 1);
   pi.events.get("session_shutdown")?.[0]();
+});
+
+test("missing child bootstrap initializer prevents managed readiness", async () => {
+  const label = `bootstrap-missing-child-${randomUUID().slice(0, 8)}`;
+  const envKeys = [
+    "HERDR_ENV",
+    "HERDR_WORKSPACE_ID",
+    "PI_HERDSMAN_MAILBOX",
+    "PI_HERDSMAN_RUN_ID",
+    "PI_HERDSMAN_OWNER_SESSION_ID",
+    "PI_HERDSMAN_LABEL",
+    "PI_HERDSMAN_WORKSPACE_ID",
+    "PI_HERDSMAN_AGENT_DEFINITION",
+    "PI_HERDSMAN_ALLOWED_AGENT_DEFINITIONS",
+    "HERDR_PANE_ID",
+  ];
+  const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  process.env.HERDR_ENV = "1";
+  process.env.HERDR_WORKSPACE_ID = WORKSPACE;
+  process.env.PI_HERDSMAN_MAILBOX = mailbox;
+  process.env.PI_HERDSMAN_RUN_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  process.env.PI_HERDSMAN_OWNER_SESSION_ID =
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  process.env.PI_HERDSMAN_LABEL = label;
+  process.env.PI_HERDSMAN_WORKSPACE_ID = WORKSPACE;
+  process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
+  process.env.HERDR_PANE_ID = "registered-pane";
+  const runId = process.env.PI_HERDSMAN_RUN_ID!;
+  const ownerSessionId = process.env.PI_HERDSMAN_OWNER_SESSION_ID!;
+  resetAgentMailbox(mailbox);
+  writeAgentBootstrap(mailbox, {
+    version: 5,
+    build: HERDSMAN_BUILD,
+    runId,
+    ownerSessionId,
+    workspaceId: WORKSPACE,
+    agentLabel: label,
+    participants: [{ id: "test/required", payload: "opaque" }],
+  });
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeAgentContext([]);
+  try {
+    for (const handler of pi.events.get("session_start") ?? [])
+      await handler(undefined, context);
+    assert.equal(readAgentState(mailbox), undefined);
+    assert.deepEqual(
+      realFs
+        .readdirSync(mailbox)
+        .filter((name) => /^request-.*\.json$/.test(name)),
+      [],
+    );
+    assert.equal(
+      pi.sent.some(
+        (message: any) => message.customType === "pi-herdsman-agent-result",
+      ),
+      false,
+    );
+    assert.ok(readAgentBootstrap(mailbox));
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    for (const key of envKeys) {
+      const value = previousEnv.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
