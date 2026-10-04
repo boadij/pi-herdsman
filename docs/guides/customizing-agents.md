@@ -131,8 +131,8 @@ effective definition body
 Pi base system prompt
 ```
 
-`systemPromptMode: replace` sends the effective body as Pi's replacement system
-prompt.
+Omitting `systemPromptMode` defaults to `append`. `systemPromptMode: replace`
+sends the effective body as Pi's replacement system prompt.
 
 `systemPromptMode: append` appends the effective body to Pi's normal system
 prompt.

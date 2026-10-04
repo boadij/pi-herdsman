@@ -124,7 +124,7 @@ the fallback.
 | `description`           | string                                                                | absent                                                                                                              | Display/selection description.                                                                                                                                                                                        |
 | `model`                 | non-empty string                                                      | spawning controller for fresh `delegate`; saved session for `continue`                                              | Explicit value is passed as Pi model selection.                                                                                                                                                                       |
 | `thinking`              | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `false` | spawning controller for fresh `delegate`; saved session for `continue`                                              | Explicit value wins; `false` launches as `off`.                                                                                                                                                                       |
-| `systemPromptMode`      | `append` or `replace`                                                 | `append` for bundled definitions; otherwise `append` only for definition name `delegate`, `replace` for other names | Controls whether the effective body is appended to or replaces Pi's base system prompt. Bundled definitions use `append`; `managed-lead` rejects `replace`. Ordinary custom definitions may explicitly use `replace`. |
+| `systemPromptMode`      | `append` or `replace`                                                 | `append`                                                                                                           | Controls whether the effective body is appended to or replaces Pi's base system prompt. `replace` is an explicit escape hatch for ordinary custom definitions; `managed-lead` rejects it.                                    |
 | `bodyMode`              | `append` or `replace`                                                 | `replace` for non-empty matching overlay body                                                                       | Valid only when overlaying an existing lower-precedence definition; consumed during body composition.                                                                                                                 |
 | `noTools`               | boolean                                                               | Pi normal tool policy                                                                                               | `true` emits `--no-tools`; managed `ask_owner` remains infrastructure.                                                                                                                                                |
 | `noBuiltinTools`        | boolean                                                               | Pi normal built-in tool policy                                                                                      | `true` emits `--no-builtin-tools`.                                                                                                                                                                                    |
@@ -301,9 +301,9 @@ shared herdr agent guidance
 <active_agent name="<definition>"/>
 ```
 
-All bundled definitions use `systemPromptMode: append`, preserving Pi's normal
-system prompt and runtime/tool guidance alongside the role-specific body.
-Ordinary custom definitions may explicitly select `replace`; the reserved
+Omitting `systemPromptMode` defaults to `append`, preserving Pi's normal system
+prompt and runtime/tool guidance alongside the role-specific body. Ordinary
+custom definitions may explicitly select `replace`; the reserved
 `managed-lead` role is append-only and rejects that setting.
 
 The final effective body and shared guidance are delivered through private

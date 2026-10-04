@@ -3509,7 +3509,11 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
       launched[0].args.filter(
         (arg) => arg === "--system-prompt" || arg === "--append-system-prompt",
       ),
-      ["--system-prompt", "--append-system-prompt", "--append-system-prompt"],
+      [
+        "--append-system-prompt",
+        "--append-system-prompt",
+        "--append-system-prompt",
+      ],
     );
     assert.equal(launched[0].contents.length, 3);
     assert.match(launched[0].contents[0]!, /definition body/);
@@ -3648,7 +3652,11 @@ test("caller assignment files suppress canonical-overlapping automatic prompts",
       launched[0].args.filter(
         (arg) => arg === "--system-prompt" || arg === "--append-system-prompt",
       ),
-      ["--system-prompt", "--append-system-prompt", "--append-system-prompt"],
+      [
+        "--append-system-prompt",
+        "--append-system-prompt",
+        "--append-system-prompt",
+      ],
     );
     assert.match(assignedText, /caller wins canonical overlap/);
   } finally {

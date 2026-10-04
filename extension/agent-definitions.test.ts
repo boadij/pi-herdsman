@@ -413,7 +413,7 @@ test("selects global and project context independently in native order", () => {
     const noSkills = ["--no-skills"];
 
     assert.deepEqual(launch("agent", {}), [
-      "--system-prompt",
+      "--append-system-prompt",
       "/prompt",
       ...noContext,
       ...noSkills,
