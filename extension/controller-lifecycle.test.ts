@@ -1860,15 +1860,27 @@ test("assigned project herd settlement publishes one nonterminal current-run han
     pi.entries.filter(
       (entry: any) => entry.customType === "pi-herdsman-herd-run",
     ) as any[];
-  const emit = async (name: string) => {
+  const emit = async (name: string, event?: unknown) => {
     for (const handler of pi.events.get(name) ?? [])
-      await handler(undefined, context);
+      await handler(event, context);
   };
 
   registerExtension!(pi.pi as never);
   try {
     await emit("session_start");
     await emit("agent_start");
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: "Project assignment for branch\nImplement the assigned project",
+    };
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    await emit("message_start", { message: assignmentMessage });
     const delegated = await registeredAgentTool(pi, "delegate").execute(
       "project-handoff",
       { definition: "agent", label, task: "implement the project" },
@@ -1939,6 +1951,118 @@ test("assigned project herd settlement publishes one nonterminal current-run han
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
     removeProjectAssignment(runtime, "repo-key", branch);
+    delete process.env.HERDR_SOCKET_PATH;
+  }
+});
+
+test("zero-Agent response ignores manager acknowledgement", async () => {
+  setLeadEnvironment();
+  const socket = join(tmpdir(), `project-zero-agent-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `zero-agent-${randomUUID()}`;
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+  });
+  const pi = fakePi({
+    exec: async (command: string, args: string[]) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                repo_key: "repo-key",
+                repo_name: "project",
+                source_workspace_id: WORKSPACE,
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  const context = fakeContext(pi.entries);
+  const branchEntries: any[] = (
+    context.sessionManager.getBranch as () => any[]
+  )();
+  const emit = async (name: string, event?: unknown) => {
+    for (const handler of pi.events.get(name) ?? [])
+      await handler(event, context);
+  };
+  registerExtension!(pi.pi as never);
+  try {
+    await emit("session_start");
+    const assignmentMessage = {
+      customType: "pi-herdsman-project_assignment",
+      details: { id: LEAD_SESSION_ID, branch },
+      timestamp: Date.now(),
+      content: "Project assignment for branch\nImplement the assigned project",
+    };
+    branchEntries.push({
+      type: "custom_message",
+      customType: assignmentMessage.customType,
+      message: assignmentMessage,
+    });
+    await emit("message_start", { message: assignmentMessage });
+    await emit("agent_start");
+    branchEntries.push({
+      type: "message",
+      message: {
+        role: "assistant",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "The assigned work is complete." }],
+      },
+    });
+    await emit("agent_settled");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const [response] = listProjectMessages(runtime, "repo-key", branch);
+    assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 1);
+    assert.equal(response.text, "The assigned work is complete.");
+
+    const acknowledgement = {
+      customType: "pi-herdsman-manager_message",
+      details: { id: randomUUID() },
+      timestamp: Date.now(),
+      content: "Acknowledged; thank you.",
+    };
+    branchEntries.push({
+      type: "custom_message",
+      customType: acknowledgement.customType,
+      message: acknowledgement,
+    });
+    await emit("message_start", { message: acknowledgement });
+    await emit("agent_start");
+    branchEntries.push({
+      type: "message",
+      message: {
+        role: "assistant",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "You're welcome." }],
+      },
+    });
+    await emit("agent_settled");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", branch).length,
+      1,
+      "a later manager acknowledgement must not produce another handoff",
+    );
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", branch)[0].text,
+      response.text,
+    );
+  } finally {
+    pi.events.get("session_shutdown")?.[0]();
+    removeProjectAssignment(runtime, "repo-key", branch);
+    removeProjectMessages(runtime, "repo-key", branch);
     delete process.env.HERDR_SOCKET_PATH;
   }
 });
