@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.20.1](https://github.com/boadij/pi-herdsman/compare/v0.20.0...v0.20.1) (2026-10-04)
+
+
+### Fixes
+
+* **stats:** avoid global session discovery for Manager stats ([#258](https://github.com/boadij/pi-herdsman/issues/258)) ([7dcc10e](https://github.com/boadij/pi-herdsman/commit/7dcc10ecae85aeb49abd2d28bc6151c8f98d74ec))
+* **ui:** identify Lead role in status widget ([#259](https://github.com/boadij/pi-herdsman/issues/259)) ([a819aeb](https://github.com/boadij/pi-herdsman/commit/a819aebbe003ba3e4df189fc5ba68bc1496f5121))
+
 ## [0.20.0](https://github.com/boadij/pi-herdsman/compare/v0.19.1...v0.20.0) (2026-10-04)
 
 
