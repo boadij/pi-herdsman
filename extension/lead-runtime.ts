@@ -1263,13 +1263,13 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 value: "model",
                 label: "Model",
                 description: model,
-                help: "Model used for fresh starts. An unset value inherits from the spawning controller; continuation restores the saved session setting.",
+                help: "Model for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session model.",
               },
               {
                 value: "thinking",
                 label: "Thinking",
                 description: thinking,
-                help: "Thinking level used for fresh starts. An unset value inherits from the spawning controller; continuation restores the saved session setting.",
+                help: "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
               },
               ...(!managedDefinition
                 ? [

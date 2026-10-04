@@ -1498,7 +1498,10 @@ export default function (pi: ExtensionAPI): void {
       }
       return (await ctx.ui.custom(
         (tui: any, theme: any, _keys: any, done: (value: unknown) => void) => {
-          const list = new SelectList(items, 8, getSelectListTheme());
+          const list = new SelectList(items, 8, getSelectListTheme(), {
+            minPrimaryColumnWidth: 12,
+            maxPrimaryColumnWidth: 32,
+          });
           const help = new TuiText("", 1, 0);
           const updateHelp = (item: SelectItem | null): void => {
             const text = (item as MenuItem | null)?.help;
@@ -1522,7 +1525,7 @@ export default function (pi: ExtensionAPI): void {
           container.addChild(help);
           container.addChild(
             new TuiText(
-              theme.fg("dim", "↑↓ navigate · Enter select · Esc back"),
+              theme.fg("dim", "↑↓ navigate · Enter select · Esc close"),
               1,
               0,
             ),
