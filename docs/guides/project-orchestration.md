@@ -84,9 +84,9 @@ independent enough to justify separate branch and execution boundaries.
 
 ## Coordinate and review
 
-The assigned Lead's normal response to the initial project assignment is the
-automatic handoff: Herdsman records it as a project message for the current or
-a replacement Manager. If the Lead successfully delegates or continues
+Each project-assignment delivery to a Lead is an automatic handoff: Herdsman
+records the Lead's normal response as a project message for the current or a
+replacement Manager. If the Lead successfully delegates or continues
 managed Agent work, the herd run owns that handoff until it settles, and the
 settled response should summarize outcome, validation, and important unresolved
 points. An unsuccessful delegation leaves the local assignment-response path

@@ -27,7 +27,7 @@ Available to ordinary Leads and Managers.
 Use it only when material coordination needs a supervisor's attention,
 decision, or action, such as a blocker, warning, scope change, risk, or
 important evidence. For an assigned project, Herdsman automatically records
-the Lead's normal response to the initial project assignment as a project
+the Lead's normal response to each project-assignment delivery as a project
 message for the current or a replacement Manager. If the Lead successfully
 delegates or continues managed Agent work, the herd run owns that handoff until
 it settles, and the settled response should summarize outcome, validation, and

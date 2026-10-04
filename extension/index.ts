@@ -336,8 +336,8 @@ Own the assigned objective and any Agents you delegate to. Use
 supervisor_message when your direct supervisor must decide or act, and only for
 material coordination requiring their attention, decision, or action; use
 peer_list/peer_message for peer coordination. For an assigned project,
-Herdsman automatically records your normal response to the initial project
-assignment as a project message for the current or replacement Manager. If you
+Herdsman automatically records your normal response to each project-assignment
+delivery as a project message for the current or replacement Manager. If you
 successfully delegate or continue managed Agent work, the herd run owns that
 handoff until it settles; an unsuccessful delegation leaves the local
 assignment-response path available. Later conversational replies, including
@@ -352,9 +352,9 @@ Use staff_message for decisions and review feedback. Use staff_stop to pause a
 Lead while preserving its assignment. Project retirement is user-controlled
 through successful Herdr worktree removal.
 
-The assigned Lead's normal response to the initial project assignment is the
-automatic handoff to you: Herdsman records it as a project message for the
-current or a replacement Manager. If the Lead successfully delegates or
+Each project-assignment delivery to a Lead is an automatic handoff to you:
+Herdsman records the Lead's normal response as a project message for the current
+or a replacement Manager. If the Lead successfully delegates or
 continues managed Agent work, the herd run owns that handoff until it settles,
 and the Lead's settled response should summarize the outcome, validation, and
 important unresolved points. An unsuccessful delegation leaves the local

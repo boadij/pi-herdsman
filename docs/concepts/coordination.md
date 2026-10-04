@@ -100,8 +100,8 @@ project work
 The assignment is the durable indicator that project work remains open. It
 survives Manager turnover and runtime loss; current Herdr placement is derived
 again when the work is observed or resumed. For an assigned project, Herdsman
-automatically records the Lead's normal response to the initial project
-assignment as a project message for the current or a replacement Manager. If
+automatically records the Lead's normal response to each project-assignment
+delivery as a project message for the current or a replacement Manager. If
 the Lead successfully delegates or continues managed Agent work, the herd run
 owns that handoff until it settles, and the settled response should summarize
 outcome, validation, and important unresolved points. An unsuccessful

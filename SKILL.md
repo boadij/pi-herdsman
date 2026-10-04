@@ -377,7 +377,7 @@ change, risk, or important evidence. Ordinary Leads without a verified
 supervisor continue independently; assigned project Leads may message the
 Manager role while its process is unavailable, and those messages remain
 retained with the project. For an assigned project, Herdsman automatically
-records the Lead's normal response to the initial project assignment as a
+records the Lead's normal response to each project-assignment delivery as a
 project message for the current or a replacement Manager. If the Lead
 successfully delegates or continues managed Agent work, the herd run owns that
 handoff until it settles; summarize the outcome, validation, and important
@@ -437,7 +437,7 @@ Pi Herdsman uses one durable vocabulary:
   project work, and `staff_resume` with its branch to resume an existing
   assignment. Missing worktrees are reconstructed from the same branch,
   resuming the exact saved Pi session when available;
-- the assigned Lead's normal response to the initial project assignment is
+- the assigned Lead's normal response to each project-assignment delivery is
   automatically recorded as a project message for the current or a replacement
   Manager; if the Lead successfully delegates or continues managed Agent work,
   the herd run owns the handoff until it settles, and the settled response
