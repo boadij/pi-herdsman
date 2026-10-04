@@ -19,17 +19,21 @@ const packageLock = JSON.parse(
 );
 const installer = resolve("install.sh");
 
-test("released runtime metadata matches the locked Pi and has Herdr checksums", () => {
+test("released runtime metadata matches locked Pi packages and has Herdr checksums", () => {
   const runtime = packageJson.piHerdsman?.runtime;
-  assert.equal(
-    runtime?.pi,
-    packageLock.packages["node_modules/@earendil-works/pi-coding-agent"]
-      ?.version,
-  );
-  assert.match(
-    runtime?.herdr?.version ?? "",
-    /^\d+\.\d+\.\d+$/u,
-  );
+  const piPackages = [
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-tui",
+  ];
+  for (const name of piPackages) {
+    assert.equal(packageJson.devDependencies[name], runtime?.pi);
+    assert.equal(
+      packageLock.packages[`node_modules/${name}`]?.version,
+      runtime?.pi,
+    );
+  }
+  assert.match(runtime?.herdr?.version ?? "", /^\d+\.\d+\.\d+$/u);
   assert.deepEqual(Object.keys(runtime?.herdr?.sha256 ?? {}).sort(), [
     "linux-aarch64",
     "linux-x86_64",

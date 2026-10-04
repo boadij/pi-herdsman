@@ -82,9 +82,16 @@ Herdsman, copy normal Pi settings or extensions, or run as part of
 `npm run validate`. Run selected scenarios according to the change being
 verified; `npm run smoke` defaults to `core`.
 
-## Preconditions
+## Runtime preflight
 
-Verify:
+Before creating isolated smoke resources, the harness validates the current
+runtime against the released package contract: Node uses `engines.node`, Pi
+uses `piHerdsman.runtime.pi`, and Herdr uses
+`piHerdsman.runtime.herdr.version` from `package.json`. A mutable host Pi or
+Herdr installation may be newer than its baseline. Smoke also requires a
+running Herdr server and a compatible Herdr client/server session.
+
+For troubleshooting, inspect the host runtime and integration status:
 
 ```sh
 node --version
@@ -93,15 +100,8 @@ herdr status --json
 herdr integration status
 ```
 
-The `herdr status --json` output is the Herdr 0.9 CLI protocol compatibility
-preflight. It must report a Herdr client version of `>=0.9.1`,
-`server.running` as `true`, and `server.compatible` as `true`.
-
-The supported repository contract requires:
-
-- Node `>=22.19.0`
-- Pi `1.0.0`
-- herdr `>=0.9.1`
+These commands help diagnose the environment; integration status is not a
+separate version contract.
 
 Run focused tests and other intermediate checks before this smoke suite. Do
 not format during smoke testing; complete smoke testing and review before the

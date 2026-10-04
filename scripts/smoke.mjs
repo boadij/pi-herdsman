@@ -1388,19 +1388,53 @@ export function candidateStartObservationError(observed, paneId) {
   return { done: false, observationError: observed.error };
 }
 
-async function preflight() {
+export function requireTestedBaseline(name, actualVersion, baselineVersion) {
+  const parse = (version) => {
+    const match =
+      typeof version === "string" && /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+    if (!match) throw new Error(`smoke: invalid ${name} version: ${version}`);
+    return match.slice(1).map(Number);
+  };
+  const actual = parse(actualVersion);
+  const minimum = parse(baselineVersion);
+  for (let i = 0; i < 3; i++) {
+    if (actual[i] !== minimum[i]) {
+      if (actual[i] < minimum[i])
+        throw new Error(
+          `smoke: ${name} ${actualVersion} is below tested baseline ${baselineVersion}`,
+        );
+      return;
+    }
+  }
+}
+
+async function preflight(pkg) {
   if (process.env.HERDR_ENV !== "1" || !process.env.HERDR_WORKSPACE_ID)
     throw new Error("smoke must run from a Herdr-managed Pi session");
+  const nodeEngine = pkg?.engines?.node;
+  const nodeBaseline =
+    typeof nodeEngine === "string"
+      ? /^>=(\d+\.\d+\.\d+)$/.exec(nodeEngine)?.[1]
+      : undefined;
+  const piBaseline = pkg?.piHerdsman?.runtime?.pi;
+  const herdrBaseline = pkg?.piHerdsman?.runtime?.herdr?.version;
+  requireTestedBaseline("Node", process.versions.node, nodeBaseline);
   const [{ stdout: piVersion }, status] = await Promise.all([
     run("pi", ["--version"], { timeout: OBSERVATION_TIMEOUT_MS }),
     herdr(["status", "--json"], { timeout: OBSERVATION_TIMEOUT_MS }),
   ]);
+  const actualPiVersion = piVersion.trim();
+  requireTestedBaseline("Pi", actualPiVersion, piBaseline);
   if (!status?.server?.running) throw new Error("Herdr server is not running");
   if (!status?.server?.compatible)
     throw new Error("Herdr client/server are incompatible");
+  const herdrClientVersion = status.client?.version;
+  if (typeof herdrClientVersion !== "string")
+    throw new Error("Herdr client version is unavailable or invalid");
+  requireTestedBaseline("Herdr", herdrClientVersion, herdrBaseline);
   return {
-    piVersion: piVersion.trim(),
-    herdrClientVersion: status.client?.version ?? null,
+    piVersion: actualPiVersion,
+    herdrClientVersion,
   };
 }
 
@@ -3986,15 +4020,15 @@ function cleanupEvidence(owned) {
 
 async function main() {
   const args = parseSmokeArgs(process.argv.slice(2));
-  const preflightEvidence = await preflight();
+  const pkg = JSON.parse(
+    await readFile(join(repoRoot, "package.json"), "utf8"),
+  );
+  const preflightEvidence = await preflight(pkg);
   const model = await resolveSmokeModel(args.model);
   const scenario = args.scenario;
   await run("npm", ["run", "build"], { cwd: repoRoot });
   const paths = await createIsolation();
   const owned = {};
-  const pkg = JSON.parse(
-    await readFile(join(repoRoot, "package.json"), "utf8"),
-  );
   const ctx = {
     repoRoot,
     candidateExtension: join(repoRoot, "dist", "index.js"),
