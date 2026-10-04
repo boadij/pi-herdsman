@@ -522,51 +522,35 @@ function retiredManagedSession(
     sessionContextRetired(entries, sessionId)
   );
 }
-async function collectOwnedSessionUsage(
+function collectOwnedSessionUsage(
   ctx: ExtensionContext,
-  managerScopeOrLeadIds?: boolean | readonly string[],
+  managedLeads?: readonly { id: string; piSessionFile?: string }[],
 ) {
-  const managedLeadIds = Array.isArray(managerScopeOrLeadIds)
-    ? managerScopeOrLeadIds
-    : undefined;
-  if (!managedLeadIds?.length)
+  if (managedLeads === undefined)
     return collectSessionUsage(
       ctx,
       ownedAssignmentChildren,
       openOwnedAssignmentSession,
     );
-  const wanted = new Set(managedLeadIds);
-  const signal = ctx.signal;
-  let sessions;
-  try {
-    sessions = await SessionManager.listAll(undefined, signal);
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    return collectSessionUsage(
-      ctx,
-      ownedAssignmentChildren,
-      openOwnedAssignmentSession,
-      [],
-      false,
-    );
-  }
-  const matches = new Map<string, string[]>();
-  for (const session of sessions) {
-    if (!wanted.has(session.id)) continue;
-    const paths = matches.get(session.id) ?? [];
-    paths.push(session.path);
-    matches.set(session.id, paths);
+  const pathsById = new Map<string, Set<string>>();
+  for (const { id, piSessionFile } of managedLeads) {
+    if (!pathsById.has(id)) pathsById.set(id, new Set());
+    if (!piSessionFile) continue;
+    try {
+      pathsById.get(id)!.add(canonicalSessionPath(piSessionFile));
+    } catch {
+      // This ID remains unresolved unless another exact path proves it.
+    }
   }
   const roots: SessionManager[] = [];
   let complete = true;
-  for (const id of wanted) {
-    const paths = matches.get(id) ?? [];
-    if (paths.length !== 1) {
+  for (const [id, paths] of pathsById) {
+    if (paths.size !== 1) {
       complete = false;
       continue;
     }
     try {
-      const manager = SessionManager.open(paths[0]!);
+      const manager = SessionManager.open(paths.values().next().value!);
       if (manager.getSessionId() !== id) {
         complete = false;
         continue;

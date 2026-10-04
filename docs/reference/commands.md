@@ -60,13 +60,14 @@ usage entries to their recorded model, and tool/summary usage to
 
 Repeated references to the same Pi session are counted once. Project assignment
 identity selects managed Leads; live Herdr topology is not required, and
-retiring an assignment removes it from current Manager stats. Pi's native global
-session inventory may locate an exact assigned Lead ID, but discovery never
-establishes ownership. Durable Agent ownership determines each Lead's Agent
-tree. Missing, ambiguous, or identity-mismatched in-scope usage is omitted and
-marks coverage incomplete rather than guessed. Manager aggregation uses the
-scope-specific warning `Coverage incomplete: some managed project session
-usage is unavailable.` Ordinary usage retains its owned-session warning.
+retiring an assignment removes it from current Manager stats. When exact
+persisted Lead session-file evidence is available, Manager stats open only those
+assigned sessions and their durable Agent trees. Missing, conflicting, or
+identity-mismatched in-scope evidence marks coverage incomplete rather than
+triggering global Pi session discovery. Durable Agent ownership determines each
+Lead's Agent tree. Manager aggregation uses the scope-specific warning
+`Coverage incomplete: some managed project session usage is unavailable.`
+Ordinary usage retains its owned-session warning.
 
 ## `/agents definitions`
 

@@ -2219,6 +2219,8 @@ async function runManagerStartupScenario(
     | "active-live-mismatch"
     | "active-missing"
     | "active-missing-no-session"
+    | "active-missing-legacy"
+    | "active-missing-ambiguous"
     | "active-closed"
     | "close-resume"
     | "close-failure"
@@ -2387,7 +2389,7 @@ async function runManagerStartupScenario(
           "--base",
           branch,
           "--path",
-          "/old/exact/worktree",
+          resolve("/old/exact/worktree"),
         ]);
       if (mode === "active-missing-no-session")
         assert.deepEqual(args, [
@@ -2572,6 +2574,18 @@ async function runManagerStartupScenario(
         assert.match(starting.text, /\nTask:\ndeliver the fresh assignment/);
       }
       childSession = starting.id;
+      if (mode === "success") {
+        writeFileSync(
+          childSessionPath,
+          JSON.stringify({ type: "session", id: childSession }),
+        );
+        nativeSessions.set(childSession, {
+          id: childSession,
+          path: childSessionPath,
+          cwd: childPath,
+          entries: [],
+        });
+      }
       assert.equal(args[args.indexOf("--session-id") + 1], starting.id);
       assert.deepEqual(
         args.slice(
@@ -2583,6 +2597,9 @@ async function runManagerStartupScenario(
       assert.deepEqual(Object.keys(starting).sort(), [
         "branch",
         "id",
+        ...(["active-missing", "active-missing-legacy"].includes(mode)
+          ? ["piSessionFile"]
+          : []),
         "repoKey",
         "text",
         "version",
@@ -2900,6 +2917,8 @@ async function runManagerStartupScenario(
       "active-live-mismatch",
       "active-missing",
       "active-missing-no-session",
+      "active-missing-legacy",
+      "active-missing-ambiguous",
       "active-closed",
       "close-resume",
       "close-failure",
@@ -2907,7 +2926,12 @@ async function runManagerStartupScenario(
     const resumeMode = activeMode || mode === "invalid-topology";
     if (activeMode) {
       childSession = staleId;
-      created = !["active-missing", "active-missing-no-session"].includes(mode);
+      created = ![
+        "active-missing",
+        "active-missing-no-session",
+        "active-missing-legacy",
+        "active-missing-ambiguous",
+      ].includes(mode);
       if (created) createdBranch = "smoke/recover";
       writeProjectAssignment(supervisionRuntime(), {
         version: 2,
@@ -2915,6 +2939,9 @@ async function runManagerStartupScenario(
         repoKey: "repo-key",
         branch: "smoke/recover",
         text: "recover exact Lead",
+        ...(mode === "active-missing"
+          ? { piSessionFile: `/tmp/${staleId}.jsonl` }
+          : {}),
       });
       if (mode === "active-missing")
         nativeSessions.set(staleId, {
@@ -2923,6 +2950,45 @@ async function runManagerStartupScenario(
           cwd: "/old/exact/worktree",
           entries: [],
         });
+      if (
+        ["active-missing-legacy", "active-missing-ambiguous"].includes(mode)
+      ) {
+        writeFileSync(
+          childSessionPath,
+          JSON.stringify({ type: "session", id: staleId }),
+        );
+        nativeSessions.set(staleId, {
+          id: staleId,
+          path: childSessionPath,
+          cwd: "/old/exact/worktree",
+          entries: [],
+        });
+        if (mode === "active-missing-ambiguous") {
+          const duplicatePath = `${childSessionPath}.duplicate`;
+          writeFileSync(
+            duplicatePath,
+            JSON.stringify({ type: "session", id: staleId }),
+          );
+          nativeSessions.set(`${staleId}-duplicate`, {
+            id: staleId,
+            path: duplicatePath,
+            cwd: "/old/exact/worktree",
+            entries: [],
+          });
+        }
+      }
+      if (mode === "active-live") {
+        writeFileSync(
+          childSessionPath,
+          JSON.stringify({ type: "session", id: staleId }),
+        );
+        nativeSessions.set(staleId, {
+          id: staleId,
+          path: childSessionPath,
+          cwd: childPath,
+          entries: [],
+        });
+      }
       if (mode === "active-live" || mode === "active-live-mismatch")
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
@@ -3096,12 +3162,31 @@ async function runManagerStartupScenario(
         const stillRunning = await execute();
         assert.equal(stillRunning.details.action, "resume");
         assert.equal(stillRunning.details.already_running, true);
+        const assignment = listProjectAssignments(
+          supervisionRuntime(),
+          "repo-key",
+        )[0]!;
+        assert.equal(
+          assignment.piSessionFile,
+          realFs.realpathSync(childSessionPath),
+        );
         assert.deepEqual(
           messages().map((message) => message.id),
           [staleId],
         );
         assert.equal(await drain(), 0);
         assert.equal(delivered.length, 1);
+        const conflictingPath = join(tmpdir(), `conflicting-${staleId}.jsonl`);
+        writeFileSync(conflictingPath, "");
+        writeProjectAssignment(supervisionRuntime(), {
+          ...assignment,
+          piSessionFile: conflictingPath,
+        });
+        await assert.rejects(
+          execute(),
+          /conflicts with persisted project identity/,
+        );
+        realFs.rmSync(conflictingPath, { force: true });
       } else if (["close-resume", "close-failure"].includes(mode)) {
         const control = (name: string, value: unknown) =>
           pi.tools
@@ -3137,10 +3222,39 @@ async function runManagerStartupScenario(
           );
         }
         return;
+      } else if (mode === "active-missing-ambiguous") {
+        await assert.rejects(execute(), /ambiguous/);
+        assert.equal(createCalls, 0);
+        assert.equal(startCalls, 0);
+        assert.equal(
+          listProjectAssignments(supervisionRuntime(), "repo-key")[0]
+            ?.piSessionFile,
+          undefined,
+        );
+        return;
       } else if (
-        ["active-missing", "active-missing-no-session"].includes(mode)
+        [
+          "active-missing",
+          "active-missing-no-session",
+          "active-missing-legacy",
+        ].includes(mode)
       ) {
-        const resumed = await execute();
+        const { SessionManager } =
+          await import("@earendil-works/pi-coding-agent");
+        const originalListAll = SessionManager.listAll;
+        let resumed: any;
+        if (mode === "active-missing") {
+          SessionManager.listAll = async () => {
+            throw new Error(
+              "global inventory must not be used for exact resume",
+            );
+          };
+        }
+        try {
+          resumed = await execute();
+        } finally {
+          SessionManager.listAll = originalListAll;
+        }
         assert.equal(resumed.details.action, "resume");
         assert.equal(resumed.details.session, staleId);
         assert.equal(resumed.details.branch, "smoke/recover");
@@ -3150,6 +3264,31 @@ async function runManagerStartupScenario(
           listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
           staleId,
         );
+        if (["active-missing", "active-missing-legacy"].includes(mode))
+          assert.equal(
+            listProjectAssignments(supervisionRuntime(), "repo-key")[0]
+              ?.piSessionFile,
+            mode === "active-missing"
+              ? `/tmp/${staleId}.jsonl`
+              : realFs.realpathSync(childSessionPath),
+          );
+        if (mode === "active-missing-legacy") {
+          created = false;
+          started = false;
+          startupObservations = 0;
+          const originalListAll = SessionManager.listAll;
+          SessionManager.listAll = async () => {
+            throw new Error("self-healed resume must not use global inventory");
+          };
+          try {
+            const resumedAgain = await execute();
+            assert.equal(resumedAgain.details.action, "resume");
+          } finally {
+            SessionManager.listAll = originalListAll;
+          }
+          assert.equal(createCalls, 2);
+          assert.equal(startCalls, 2);
+        }
       } else {
         const recovered = await execute();
         assert.equal(recovered.details.action, "resume");
@@ -3163,7 +3302,16 @@ async function runManagerStartupScenario(
       }
       assert.equal(
         createCalls,
-        ["active-missing", "active-missing-no-session"].includes(mode) ? 1 : 0,
+        [
+          "active-missing",
+          "active-missing-no-session",
+          "active-missing-legacy",
+          "active-missing-ambiguous",
+        ].includes(mode) && mode !== "active-missing-ambiguous"
+          ? mode === "active-missing-legacy"
+            ? 2
+            : 1
+          : 0,
       );
       assert.equal(
         startCalls,
@@ -3172,8 +3320,12 @@ async function runManagerStartupScenario(
           "active-closed",
           "active-missing",
           "active-missing-no-session",
+          "active-missing-legacy",
+          "active-missing-ambiguous",
         ].includes(mode)
-          ? 1
+          ? mode === "active-missing-legacy"
+            ? 2
+            : 1
           : 0,
       );
       assert.equal(
@@ -3497,10 +3649,18 @@ async function runManagerStartupScenario(
     assert.deepEqual(Object.keys(assignment).sort(), [
       "branch",
       "id",
+      ...(["success", "unmaterialized-path"].includes(mode)
+        ? ["piSessionFile"]
+        : []),
       "repoKey",
       "text",
       "version",
     ]);
+    if (["success", "unmaterialized-path"].includes(mode))
+      assert.equal(
+        assignment.piSessionFile,
+        realFs.realpathSync(childSessionPath),
+      );
     assert.equal(createCalls, 1);
     assert.equal(startCalls, mode === "recovery" ? 0 : 1);
     assert.equal(openCalls, 0);
@@ -3643,7 +3803,9 @@ async function runManagerStartupScenario(
     else realFs.rmSync(configPath, { force: true });
     Date.now = originalNow;
     nativeSessions.delete(childSession);
+    nativeSessions.delete(`${childSession}-duplicate`);
     realFs.rmSync(childSessionPath, { force: true });
+    realFs.rmSync(`${childSessionPath}.duplicate`, { force: true });
     support.sessionOpenError = undefined;
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -3726,7 +3888,18 @@ test("Manager recovery waits on existing exact Pi without restarting it", () =>
 for (const [mode, label] of [
   ["active-loss", "relaunches the exact lost Lead"],
   ["active-live", "returns a live exact Lead idempotently"],
-  ["active-missing", "reconstructs a vanished worktree with saved Pi cwd"],
+  [
+    "active-missing",
+    "resumes from the persisted exact session without global lookup",
+  ],
+  [
+    "active-missing-legacy",
+    "self-heals a pathless assignment from one legacy session",
+  ],
+  [
+    "active-missing-ambiguous",
+    "preserves a pathless assignment with ambiguous legacy sessions",
+  ],
   [
     "active-missing-no-session",
     "reconstructs a vanished worktree without saved Pi cwd",
