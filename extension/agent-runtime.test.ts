@@ -57,6 +57,33 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
+const { statusBreadcrumb } = await import("./agent-controller.ts");
+
+test("status breadcrumb trusts only validated Lead ancestry", () => {
+  const state = managedState("scout");
+  const agent = { state, agentDefinition: "scout" } as any;
+  const base = { agents: [agent], mailboxes: [] };
+  const sameIdentity = (left: ManagedAgentState, right: ManagedAgentState) =>
+    left.piSessionId === right.piSessionId;
+  assert.deepEqual(
+    statusBreadcrumb(
+      { ...base, leadSessionIds: [LEAD_SESSION_ID] },
+      state,
+      { definition: "scout", label: "scout" },
+      sameIdentity,
+    ),
+    ["lead", "scout:scout"],
+  );
+  assert.deepEqual(
+    statusBreadcrumb(
+      { ...base, leadSessionIds: [] },
+      state,
+      { definition: "scout", label: "scout" },
+      sameIdentity,
+    ),
+    ["?", "scout:scout"],
+  );
+});
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
   pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
 

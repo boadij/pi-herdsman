@@ -1522,7 +1522,7 @@ export default function (pi: ExtensionAPI): void {
     };
     const initialStatusBreadcrumb =
       controllerScope.kind === "lead"
-        ? ["herd"]
+        ? ["lead"]
         : [
             "?",
             process.env.PI_HERDSMAN_AGENT_DEFINITION &&

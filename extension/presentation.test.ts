@@ -1051,9 +1051,10 @@ test("status widget animates only moving states and collapses quiet trees", (t) 
       agents: [{ label: "settling", definition: "agent", state: "settling" }],
       stale: false,
       unavailable: false,
+      breadcrumb: ["lead"],
     });
     assert.deepEqual(widget.render(160), [
-      "● herd  1 settling",
+      "● lead  1 settling",
       "└─ ⠋ agent  settling  ◌ settling",
     ]);
   }
@@ -1094,8 +1095,9 @@ test("status widget projects active herd duration without changing counts", (t) 
     stale: false,
     unavailable: false,
     herdRunStartedAt: Date.now() - 2_000,
+    breadcrumb: ["lead"],
   });
-  assert.match(widget.render(160)[0]!, /herd · \d+s/);
+  assert.match(widget.render(160)[0]!, /lead · \d+s/);
 
   widget.setSnapshot({
     agents: [
@@ -1105,8 +1107,9 @@ test("status widget projects active herd duration without changing counts", (t) 
     stale: false,
     unavailable: false,
     herdRunStartedAt: Date.now() - 2_000,
+    breadcrumb: ["lead"],
   });
-  assert.match(widget.render(160)[0]!, /herd · \d+s/);
+  assert.match(widget.render(160)[0]!, /lead · \d+s/);
   assert.match(widget.render(160)[0]!, /1 working · 1 blocked/);
 });
 
@@ -2592,9 +2595,10 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
       ],
       stale: false,
       unavailable: false,
+      breadcrumb: ["lead"],
     });
     const rendered = widget.render(160).join("\n");
-    assert.match(rendered, /● herd/);
+    assert.match(rendered, /● lead/);
     assert.match(rendered, /one\s+◌ settling/);
     assert.match(rendered, /└─ ⠋ scout\s+scout:one/);
     assert.match(rendered, /gpt/);
@@ -2655,6 +2659,12 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
 });
 
 test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t) => {
+  {
+    const widget = new StatusWidget();
+    t.after(() => widget.dispose());
+    assert.match(widget.render(160)[0]!, /^● \?\s+unavailable$/);
+  }
+
   {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
