@@ -3734,7 +3734,7 @@ test("leaf status proves its Lead boundary from coordination state without openi
     globalThis.setInterval = originalSetInterval;
   }
   assert.equal(registrations, 1);
-  await t.waitFor(() => assert.match(widget.render(120)[0], /herd/));
+  await t.waitFor(() => assert.match(widget.render(120)[0], /lead/));
   assert.equal(openCalls, 0);
 
   invalidateLeadCoordinationState(supervisionRuntime(), ownerSessionId);

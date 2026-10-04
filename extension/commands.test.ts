@@ -7229,6 +7229,83 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
   setLeadEnvironment();
 });
 
+test("status session preparation drops the previous session snapshot", async (t) => {
+  const { createAgentStatusRuntime } = await import("./agent-controller.ts");
+  const runtime = createAgentStatusRuntime();
+  const pending: {
+    resolve(snapshot: any): void;
+    reject(error: Error): void;
+  }[] = [];
+  runtime.configure({
+    loadSnapshot: () =>
+      new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    pendingStartEntries: () => [],
+    hasPendingStart: () => false,
+    clearPendingStart: () => false,
+    runtimeForLabel: () => undefined,
+    ownToolsSnapshot: () => ({}),
+  });
+  const widgets: StatusWidget[] = [];
+  const context = () => {
+    const ctx = fakeContext() as any;
+    ctx.mode = "tui";
+    ctx.hasUI = true;
+    ctx.ui = {
+      setWidget: (_key: string, content: any) => {
+        if (typeof content !== "function") return;
+        widgets.push(
+          content(
+            { requestRender: () => undefined },
+            {
+              fg: (_color: string, value: string) => value,
+              bold: (value: string) => value,
+            },
+          ),
+        );
+      },
+    };
+    return ctx;
+  };
+  t.after(() => runtime.shutdown());
+
+  const firstContext = context();
+  runtime.prepareSession(firstContext);
+  runtime.start(firstContext);
+  pending[0]!.resolve({
+    agents: [{ label: "old-agent", definition: "scout", state: "working" }],
+    stale: false,
+    unavailable: false,
+    breadcrumb: ["lead", "scout:old-agent"],
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(widgets[0]!.render(160).join("\n"), /lead → scout:old-agent/);
+
+  runtime.requestRefresh();
+  assert.equal(pending.length, 2, "an older refresh remains in flight");
+
+  const nextContext = context();
+  runtime.prepareSession(nextContext);
+  runtime.start(nextContext);
+  assert.deepEqual(widgets[1]!.render(160), ["● ?  unavailable"]);
+  pending[1]!.resolve({
+    agents: [{ label: "stale-agent", definition: "scout", state: "working" }],
+    stale: false,
+    unavailable: false,
+    breadcrumb: ["lead", "scout:stale-agent"],
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(widgets[1]!.render(160), ["● ?  unavailable"]);
+
+  pending[2]!.reject(new Error("new session refresh failed"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(widgets[1]!.render(160), ["● ?  unavailable"]);
+  assert.equal(
+    pending.length,
+    3,
+    "the new session refresh stayed pending until failed",
+  );
+});
+
 test("TUI status widget is registered as a Pi component factory", async (t) => {
   setLeadEnvironment();
   let factory: unknown;
@@ -7263,7 +7340,7 @@ test("TUI status widget is registered as a Pi component factory", async (t) => {
     stale: false,
     unavailable: false,
   });
-  assert.equal(renderRequests, 1);
+  assert.equal(renderRequests, 2);
   assert.notEqual(factory, component);
   const leadSignal = pi.execOptions.find((options) => options.signal)?.signal;
   assert.ok(leadSignal);
@@ -7359,6 +7436,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     await Promise.resolve();
 
     assert.equal(widgets.length, 2);
+    assert.equal(widgets[1].render(120)[0], "● lead  unavailable");
     assert.equal(
       registrations,
       3,
@@ -7392,7 +7470,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
       });
     await Promise.resolve();
     await Promise.resolve();
-    assert.match(widgets[1].render(120)[0], /unavailable/);
+    assert.equal(widgets[1].render(120)[0], "● lead  unavailable");
     for (const pending of pendingLists.splice(0))
       pending.resolve({
         stdout: JSON.stringify({
@@ -7411,7 +7489,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     await pi.events.get("session_shutdown")?.[0]();
     assert.equal(activeTimers.size, 0);
     assert.equal(disposeCalls, 3, "the current widget is disposed on shutdown");
-    assert.equal(widgets[0].render(120)[0], "● herd  unavailable");
+    assert.equal(widgets[0].render(120)[0], "● lead  unavailable");
   } finally {
     StatusWidget.prototype.dispose = originalDispose;
     globalThis.setInterval = originalSetInterval;
@@ -8123,7 +8201,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
         "assignment did not reach integration validation",
       ),
     );
-    assert.match(widget!.render(160).join("\n"), /herd/);
+    assert.match(widget!.render(160).join("\n"), /lead/);
     resolveIntegration!({
       stdout: JSON.stringify({ id: AGENT_ID, result: { agent: herdrAgent } }),
       stderr: "",
@@ -8189,8 +8267,8 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
     );
     assert.equal(failed.details.ok, true, JSON.stringify(failed.details));
     assert.equal(pi.sentMessageCalls.length, 1);
-    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /herd/));
-    assert.match(widget!.render(160).join("\n"), /herd/);
+    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /lead/));
+    assert.match(widget!.render(160).join("\n"), /lead/);
 
     failValidation = true;
     live = false;
@@ -8207,8 +8285,8 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       context,
     );
     assert.equal(invalid.details.ok, false);
-    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /herd/));
-    assert.match(widget!.render(160).join("\n"), /herd/);
+    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /lead/));
+    assert.match(widget!.render(160).join("\n"), /lead/);
   } finally {
     updateConfig("spawnPlacement", previousPlacement);
     await pi.events.get("session_shutdown")?.[0]();

@@ -106,10 +106,10 @@ A refresh failure never mutates mailbox/control eligibility.
 Example:
 
 ```text
-● herd → implementer → scout
+● lead → implementer → scout
 ```
 
-The breadcrumb uses validated definition/agent ancestry.
+The breadcrumb uses validated definition/agent ancestry. The root is `lead` when the ownership boundary resolves to a validated Lead session; if that boundary cannot be proven, it is `?`.
 
 Delegating-agent and leaf panes can append a compact summary of their current
 Pi active tools as muted bracketed metadata after the current identity.
@@ -134,7 +134,7 @@ guessed:
 Example:
 
 ```text
-● herd  2 working · 1 blocked · 1 settling
+● lead  2 working · 1 blocked · 1 settling
 ```
 
 The header reports exact non-zero lifecycle states in the order `working`,

@@ -3489,10 +3489,7 @@ export class StatusWidget {
       ? "unavailable"
       : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
     const availableWidth = Math.max(0, width);
-    const breadcrumb = renderBreadcrumb(
-      s.breadcrumb ?? ["herd"],
-      availableWidth,
-    );
+    const breadcrumb = renderBreadcrumb(s.breadcrumb ?? ["?"], availableWidth);
     const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
     const run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
     const suffixText = s.identityOnly || !suffix ? "" : `  ${suffix}`;
