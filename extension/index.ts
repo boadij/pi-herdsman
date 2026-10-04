@@ -43,6 +43,7 @@ import {
   Spacer,
   Text as TuiText,
   type SelectItem,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
   controlMarker,
@@ -1498,9 +1499,13 @@ export default function (pi: ExtensionAPI): void {
       }
       return (await ctx.ui.custom(
         (tui: any, theme: any, _keys: any, done: (value: unknown) => void) => {
+          const maxPrimaryColumnWidth = Math.max(
+            12,
+            ...items.map((item) => visibleWidth(item.label) + 2),
+          );
           const list = new SelectList(items, 8, getSelectListTheme(), {
             minPrimaryColumnWidth: 12,
-            maxPrimaryColumnWidth: 32,
+            maxPrimaryColumnWidth,
           });
           const help = new TuiText("", 1, 1);
           const updateHelp = (item: SelectItem | null): void => {
