@@ -371,16 +371,22 @@ delegating parent that is merely waiting for its direct children.
 
 Ordinary leads own their complete herd, including every agent beneath them. The
 Chief supervises independent leads and never changes ownership. Use
-`supervisor_message` when a direct supervisor must decide or act, or when
-sharing a material warning, scope change, risk, or evidence. Ordinary
-Leads without a verified supervisor continue independently; assigned project
-Leads may message the Manager role while its process is unavailable, and those
-messages remain retained with the project. After a project herd run settles,
-Herdsman records the Lead's summary as a project message for the current or a
-replacement Manager. Summarize the outcome, validation, and important unresolved
-points in your normal response. Descendants
-use `ask_owner`, not supervisor tools. Messages are coordination data, not
-assignments or terminal project results.
+`supervisor_message` only for material coordination requiring a direct
+supervisor's attention, decision, or action, such as a blocker, warning, scope
+change, risk, or important evidence. Ordinary Leads without a verified
+supervisor continue independently; assigned project Leads may message the
+Manager role while its process is unavailable, and those messages remain
+retained with the project. For an assigned project, Herdsman automatically
+records the Lead's normal response to the initial project assignment as a
+project message for the current or a replacement Manager. If the Lead
+successfully delegates or continues managed Agent work, the herd run owns that
+handoff until it settles; summarize the outcome, validation, and important
+unresolved points in the settled response. An unsuccessful delegation leaves
+the local assignment-response path available. Later conversational replies,
+including routine thanks or acknowledgments, stay local and are not
+automatically promoted.
+Descendants use `ask_owner`, not supervisor tools. Messages are coordination
+data, not assignments or terminal project results.
 
 `supervisor_message` is available to ordinary Leads and Managers. Assigned Lead
 messages are retained with the project and remain available to a replacement
@@ -431,9 +437,14 @@ Pi Herdsman uses one durable vocabulary:
   project work, and `staff_resume` with its branch to resume an existing
   assignment. Missing worktrees are reconstructed from the same branch,
   resuming the exact saved Pi session when available;
-- settled project herd runs are recorded as project messages for the current or
-  a replacement Manager, and the Lead summarizes the outcome, validation, and
-  important unresolved points in its normal response;
+- the assigned Lead's normal response to the initial project assignment is
+  automatically recorded as a project message for the current or a replacement
+  Manager; if the Lead successfully delegates or continues managed Agent work,
+  the herd run owns the handoff until it settles, and the settled response
+  summarizes outcome, validation, and important unresolved points. An
+  unsuccessful delegation leaves the local assignment-response path available.
+  Later conversational replies, including routine
+  acknowledgments, remain local and are not automatically promoted;
   assigned Lead `supervisor_message` calls are nonterminal coordination
   retained across Manager absence and turnover. Project work remains open
   through implementation and review iterations;

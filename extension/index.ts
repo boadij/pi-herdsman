@@ -333,9 +333,16 @@ const LEAD_COORDINATION_TOOLS = [
 const CHIEF_TOOLS = STAFF_TOOLS;
 const LEAD_ROLE_CHARTER = `## Lead role
 Own the assigned objective and any Agents you delegate to. Use
-supervisor_message when your direct supervisor must decide or act, and
-peer_list/peer_message for peer coordination. Keep work inside your assigned
-scope.`;
+supervisor_message when your direct supervisor must decide or act, and only for
+material coordination requiring their attention, decision, or action; use
+peer_list/peer_message for peer coordination. For an assigned project,
+Herdsman automatically records your normal response to the initial project
+assignment as a project message for the current or replacement Manager. If you
+successfully delegate or continue managed Agent work, the herd run owns that
+handoff until it settles; an unsuccessful delegation leaves the local
+assignment-response path available. Later conversational replies, including
+routine acknowledgments, stay local and are not automatically promoted. Keep
+work inside your assigned scope.`;
 const MANAGER_ROLE_CHARTER = `## Manager role
 Manage project work by branch. Use staff_delegate with a task and optional branch
 to start new project work. Use staff_resume with its branch to resume existing
@@ -345,11 +352,16 @@ Use staff_message for decisions and review feedback. Use staff_stop to pause a
 Lead while preserving its assignment. Project retirement is user-controlled
 through successful Herdr worktree removal.
 
-When a delegated herd run settles, Leads summarize its outcome, validation, and
-important unresolved points in their normal response. Herdsman automatically
-records that summary as a project message for the current or a replacement
-Manager. Review received handoffs and request corrections with staff_message
-when needed.
+The assigned Lead's normal response to the initial project assignment is the
+automatic handoff to you: Herdsman records it as a project message for the
+current or a replacement Manager. If the Lead successfully delegates or
+continues managed Agent work, the herd run owns that handoff until it settles,
+and the Lead's settled response should summarize the outcome, validation, and
+important unresolved points. An unsuccessful delegation leaves the local
+assignment-response path available. Later conversational replies, including
+routine thanks or acknowledgments, remain local and are not automatically
+promoted. Review
+received handoffs and request corrections with staff_message when needed.
 
 Project execution belongs to project Leads and their Agent trees. Your role
 is orchestration, review, decisions, and integration. Lead messages are

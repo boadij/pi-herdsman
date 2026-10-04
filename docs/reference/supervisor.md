@@ -24,18 +24,23 @@ Available to ordinary Leads and Managers.
 }
 ```
 
-Use it when material coordination needs a supervisor decision or attention,
-such as a blocker, warning, scope change, risk, or important evidence. When a
-project herd run settles, Herdsman records the Lead's summary as a project
-message for the current or a replacement Manager; the Lead summarizes the
-outcome, validation, and important unresolved points in its normal response.
-For a Lead with a project
-assignment, messages are retained with that assignment and can be delivered
-to a current Manager even if no Manager is active when sent. A replacement
-Manager receives retained project messages; the same Manager session does not
-receive a message again once it appears in its Pi history. Both handoffs and
-messages are nonterminal; the project remains open until Herdr removes its
-worktree.
+Use it only when material coordination needs a supervisor's attention,
+decision, or action, such as a blocker, warning, scope change, risk, or
+important evidence. For an assigned project, Herdsman automatically records
+the Lead's normal response to the initial project assignment as a project
+message for the current or a replacement Manager. If the Lead successfully
+delegates or continues managed Agent work, the herd run owns that handoff until
+it settles, and the settled response should summarize outcome, validation, and
+important unresolved points. An unsuccessful delegation leaves the local
+assignment-response path available. Later conversational replies, including
+routine acknowledgments, remain local and are not automatically promoted. For a Lead
+with a project assignment, messages are retained with that assignment and can
+be delivered to a current Manager even if no Manager is active when sent. A
+replacement Manager receives retained project messages; the same Manager
+session does not receive a message again once it appears in its Pi history.
+Both handoffs and
+messages are nonterminal; the project remains open until successful Herdr
+worktree removal retires its assignment.
 
 An ordinary Lead without a verified supervisor should continue independently
 until a supervisor is available. An assigned project Lead remains Manager-owned
@@ -54,8 +59,8 @@ recipient to forward them.
 Direct-supervisor messages are queued for the exact current recipient and
 validated against current authority before delivery. Assigned project Lead
 messages are scoped by repository, branch, and exact Lead session and remain
-available while the assignment exists. Herdr worktree removal retires the
-assignment and removes its retained project messages.
+available while the assignment exists. Successful Herdr worktree removal
+retires the assignment and removes its retained project messages.
 
 ## See also
 
