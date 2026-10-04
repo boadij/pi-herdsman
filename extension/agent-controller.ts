@@ -608,7 +608,8 @@ export const AGENT_HANDOFF_GUIDANCE =
   "Skills are separate; attach SKILL.md only when the task needs it and the " +
   "selected definition does not already provide that skill.";
 export const LEAD_SCOPE_DESCRIPTION = `Own architecture, approved scope, acceptance of Agent outputs, integration, conflict resolution,
-and final technical decisions within your assigned objective. Decompose only as far as useful.
+and final technical decisions within your assigned objective. Integrate resolved Agent results and
+carry relevant evidence into onward handoffs. Decompose only as far as useful.
 Assign bounded execution work to the narrowest capable owner when delegation is useful and let
 delegation-enabled agents own their permitted supporting agents. Reuse adequate existing evidence
 instead of duplicating work.`;

@@ -666,7 +666,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.match(
       leadPrompt.systemPrompt,
-      /Own the assigned objective and any Agents/,
+      /Own architecture, approved scope, acceptance of Agent outputs, integration, conflict resolution/,
     );
     await first.commandOptions.get("manager").handler("", ctx1);
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...managerTools]);
@@ -1839,16 +1839,14 @@ async function managerDelegateAssignmentTest(
       assert.equal(args[thinkingIndex + 1] === "low", projectTrusted);
       assert.equal(args.includes("--approve"), projectTrusted);
       assert.equal(args.includes("--no-approve"), !projectTrusted);
-      const promptIndex = args.indexOf("--system-prompt");
-      assert.notEqual(promptIndex, -1);
-      assert.match(
-        readFileSync(args[promptIndex + 1]!, "utf8"),
-        /Delegate project execution.*Do not take executable work back/s,
-      );
-      const childPrompt = readFileSync(args[promptIndex + 1]!, "utf8");
-      if (projectTrusted)
+      const promptIndex = args.indexOf("--append-system-prompt");
+      if (projectTrusted) {
+        assert.notEqual(promptIndex, -1);
+        const childPrompt = readFileSync(args[promptIndex + 1]!, "utf8");
         assert.match(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
-      else assert.doesNotMatch(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
+      } else {
+        assert.equal(promptIndex, -1);
+      }
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
         role: "lead",
@@ -2095,11 +2093,11 @@ async function managerDelegateAssignmentTest(
       );
       assert.match(
         assignmentDelivery.content!,
-        /Settling your\s+herd is\s+nonterminal; do not infer project closure from runtime state\./,
+        /Settlement is\s+nonterminal; do not infer project closure from runtime state\./,
       );
       assert.match(
         assignmentDelivery.content!,
-        /Herdsman automatically hands your normal assignment response to the Manager\./,
+        /Herdsman automatically hands your\s+normal assignment response to the current or a replacement Manager\./,
       );
       const message = await lead.tools
         .find((tool) => tool.name === "supervisor_message")!

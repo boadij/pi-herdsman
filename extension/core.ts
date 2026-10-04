@@ -16,9 +16,10 @@ import type { ResultBinding } from "./storage.ts";
 import { resolveResultRef } from "./storage.ts";
 
 export const FILE_HANDOFF_GUIDANCE =
-  "Pass every user-supplied or already-available artifact relevant to what " +
-  "the recipient must do or decide through `files`; do not assume the " +
-  "recipient inherits the sender's conversation or attachments. Preserve " +
+  "Pass every user-supplied or already-available artifact relevant to the " +
+  "recipient's assignment, decisions, integration, validation, or onward " +
+  "handoff through `files`; do not assume the recipient inherits the " +
+  "sender's conversation or attachments. Preserve " +
   "exact supplied result refs when forwarding them and omit unrelated " +
   "evidence. `files` carries evidence, not runtime capability.";
 

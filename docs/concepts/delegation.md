@@ -121,6 +121,12 @@ the turn and waits for automatic result or attention delivery.
 After the assignment resolves, the delegator may integrate, validate,
 synthesize, or assign follow-up work from the result.
 
+For a project Lead, Herdsman propagates its normal assignment response to the
+Manager. Successfully delegated or continued managed Agent work delays that
+response until the herd settles, so it can report outcome, validation, and
+unresolved points. This is result propagation, not project closure; see
+[Project orchestration](../guides/project-orchestration.md).
+
 A useful parallel pattern is:
 
 ```text

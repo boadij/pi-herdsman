@@ -5586,14 +5586,18 @@ function projectAssignmentInstruction(
 ): string {
   return `${assignment.text}
 
-Herdsman automatically hands your normal assignment response to the Manager.
-If you start delegated Agent work, the handoff is deferred until that herd run
-settles; then summarize its outcome, validation, and important unresolved
-points in your normal response.
+Manager supervises project scope and assignment boundaries; you own technical
+decisions and orchestration of execution. Herdsman automatically hands your
+normal assignment response to the current or a replacement Manager. After
+successfully delegating or continuing managed Agent work, the herd run owns
+that handoff until it settles; summarize outcome, validation, and important
+unresolved points in your response. If delegation is unsuccessful, respond
+locally. Later conversational replies stay local.
 
-Use supervisor_message only when the Manager must give material attention,
-decide, or act. Routine status and acknowledgements stay local. Settling your
-herd is nonterminal; do not infer project closure from runtime state.`;
+Use supervisor_message only for material coordination requiring Manager
+attention, a decision, or action—not routine status or a duplicate handoff.
+Messages are retained with the project while Manager is absent. Settlement is
+nonterminal; do not infer project closure from runtime state.`;
 }
 
 export function createLeadInboxRuntime(host: LeadInboxHost) {

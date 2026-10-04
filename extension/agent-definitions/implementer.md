@@ -2,7 +2,7 @@
 name: implementer
 description: Focused implementation agent for a resolved change; use when the required behavior is already decided and the task is to edit, test, and report
 agents: ["scout"]
-systemPromptMode: replace
+systemPromptMode: append
 inheritProjectContext: true
 inheritGlobalContext: false
 noSkills: true

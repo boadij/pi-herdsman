@@ -19,9 +19,13 @@ These settings do not add it to Agent discovery or delegation.
 
 The bundled default gives the Lead read-only inspection tools plus mandatory
 Herdsman coordination tools. Executable project work is delegated to managed
-Agents by default. Override the same name when a project or user deliberately
-needs a different prompt, model, thinking level, tool policy, skill policy, or
-extension policy:
+Agents by default. Manager owns project supervision and assignment
+boundaries; the Lead owns technical decisions and execution orchestration.
+Herdsman automatically hands off the normal assignment response, deferring it
+until delegated Agent work settles. See [Project orchestration](project-orchestration.md)
+for the full handoff and `supervisor_message` contract. Override the same name
+when a project or user deliberately needs a different prompt, model, thinking
+level, tool policy, skill policy, or extension policy:
 
 ```markdown
 ---
@@ -132,6 +136,11 @@ prompt.
 
 `systemPromptMode: append` appends the effective body to Pi's normal system
 prompt.
+
+Bundled Herdsman definitions use `append` so their specialization does not
+replace Pi's normal prompt or runtime/tool guidance. Ordinary custom definitions
+may explicitly choose `replace`; the reserved `managed-lead` role is
+append-only and rejects `replace`.
 
 Managed agents additionally receive shared herdr agent guidance at launch,
 including the `ask_owner` contract. This shared guidance is infrastructure and

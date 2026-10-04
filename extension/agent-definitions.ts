@@ -354,6 +354,10 @@ function validateEffectiveAgentReferences(
 
 function validateManagedLeadLayer(definition: AgentDefinition): void {
   if (definition.name !== MANAGED_LEAD_DEFINITION_NAME) return;
+  if (definition.frontmatter.systemPromptMode === "replace")
+    throw new Error(
+      `${definition.path} managed Lead field systemPromptMode: must be append`,
+    );
   for (const field of ["enabled", "agents", "permission"] as const)
     if (definition.frontmatter[field] !== undefined)
       throw new Error(

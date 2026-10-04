@@ -481,11 +481,11 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   const bundled = withPiAgentDir(global, () => discoverManagedLeadDefinition());
   assert.equal(bundled.name, "managed-lead");
   assert.deepEqual(bundled.frontmatter.tools, ["read", "ls", "find", "grep"]);
-  assert.equal(bundled.frontmatter.systemPromptMode, "replace");
+  assert.equal(bundled.frontmatter.systemPromptMode, "append");
   assert.equal(bundled.frontmatter.inheritProjectContext, true);
   assert.equal(bundled.frontmatter.inheritGlobalContext, true);
   assert.equal(bundled.frontmatter.enabled, undefined);
-  assert.match(bundled.body, /Delegate project execution/);
+  assert.equal(bundled.body, "");
   assert.equal(
     withPiAgentDir(global, () =>
       discoverAgentDefinitions().some(({ name }) => name === "managed-lead"),
@@ -512,10 +512,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   );
   assert.deepEqual(effective.frontmatter.tools, ["read", "grep"]);
   assert.equal(effective.frontmatter.thinking, "high");
-  assert.equal(
-    effective.body,
-    `${bundled.body}\n\nProject policy\n\nGlobal policy`,
-  );
+  assert.equal(effective.body, "Project policy\n\nGlobal policy");
   assert.equal(effective.projectSource, projectPath);
   assert.equal(effective.overrideSource, globalPath);
 
@@ -553,6 +550,16 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
       new RegExp(`managed Lead field ${field}: is not supported`),
     );
   }
+  writeFileSync(
+    globalPath,
+    "---\nname: managed-lead\nsystemPromptMode: replace\n---",
+  );
+  assert.throws(
+    () => withPiAgentDir(global, () => discoverManagedLeadDefinition()),
+    new RegExp(
+      `${globalPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} managed Lead field systemPromptMode: must be append`,
+    ),
+  );
 });
 
 test("bundled definitions carry portable capabilities and role contracts", () => {
@@ -611,6 +618,13 @@ test("bundled definitions carry portable capabilities and role contracts", () =>
   );
   assert.equal(required.size, 5);
   for (const definition of definitions) {
+    assert.equal(definition.frontmatter.systemPromptMode, "append");
+    assert.notEqual(definition.body.trim(), "");
+    const launchArgs = agentLaunchArgs(definition, {
+      bodyPromptPath: "/tmp/bundled-agent-prompt.md",
+    });
+    assert.ok(launchArgs.includes("--append-system-prompt"));
+    assert.equal(launchArgs.includes("--system-prompt"), false);
     assert.equal(
       definition.frontmatter.description,
       expectedDescriptions.get(definition.name),

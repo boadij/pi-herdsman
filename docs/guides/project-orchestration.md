@@ -5,8 +5,8 @@
 Use Manager when independent project work deserves separate Leads and Git
 branches instead of more Agents inside one Lead's worktree.
 
-Manager coordinates project assignments. Project Leads orchestrate and
-integrate execution through their Agent trees.
+Manager supervises project scope and assignment boundaries. Project Leads own
+technical decisions and orchestrate execution through their Agent trees.
 
 Manager-created project Leads are launched from the reserved `managed-lead`
 definition. The bundled default keeps direct Lead work read-only and delegates
@@ -84,22 +84,18 @@ independent enough to justify separate branch and execution boundaries.
 
 ## Coordinate and review
 
-Each project-assignment delivery to a Lead is an automatic handoff: Herdsman
-records the Lead's normal response as a project message for the current or a
-replacement Manager. If the Lead successfully delegates or continues
-managed Agent work, the herd run owns that handoff until it settles, and the
-settled response should summarize outcome, validation, and important unresolved
-points. An unsuccessful delegation leaves the local assignment-response path
-available. Later conversational replies, including routine thanks or
-acknowledgments, stay local and are not automatically promoted. The handoff is
-advisory, not project
-completion: the assignment remains open through review and requested
+For each project-assignment delivery, Herdsman automatically records the
+Lead's normal response for the current or a replacement Manager. Successful
+delegation or continuation of managed Agent work defers that handoff until the
+herd run settles; the response summarizes outcome, validation, and important
+unresolved points. Unsuccessful delegation leaves the local response path
+available. Later conversational replies stay local. This handoff is not
+project completion: the assignment remains open through review and requested
 corrections. Leads use `supervisor_message` only for material coordination
-requiring the Manager's attention, decision, or action, not routine
-acknowledgment or a duplicate handoff. Messages sent with this tool are retained
-with the assignment, including when no Manager is active, and are available to
-a replacement Manager. Lead settlement and Manager review do not retire the
-assignment.
+requiring Manager attention, a decision, or action—not routine acknowledgment
+or a duplicate handoff. Such messages are retained with the assignment while
+Manager is absent and remain available to a replacement. Settlement and review
+do not retire the assignment.
 
 Use the current supervision state rather than repeatedly listing or inspecting
 reports to poll for progress. Inspect live terminal or persisted transcript

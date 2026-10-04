@@ -126,7 +126,7 @@ function assertPortableToolSchema(tool: any): void {
 
     assert.match(
       guidance,
-      /Pass every user-supplied or already-available artifact relevant to what the recipient must do or decide through `files`/,
+      /relevant to the recipient's assignment, decisions, integration, validation, or onward handoff through `files`/,
       tool.name,
     );
     assert.match(
@@ -2726,6 +2726,19 @@ test("definition roster matches live list and rejects stale sessions", async () 
     prompt?.systemPrompt ?? "",
     /Use\s+supervisor_message when your direct supervisor must decide or act/,
   );
+  assert.match(
+    prompt?.systemPrompt ?? "",
+    /integration, validation, or onward handoff/,
+  );
+  assert.match(
+    prompt?.systemPrompt ?? "",
+    /carry relevant evidence into onward handoffs/,
+  );
+  assert.match(prompt?.systemPrompt ?? "", /peer_list\/peer_message/);
+  assert.doesNotMatch(
+    prompt?.systemPrompt ?? "",
+    /project-assignment delivery/,
+  );
   assert.doesNotMatch(
     prompt?.systemPrompt ?? "",
     /available direct supervisor/,
@@ -2795,7 +2808,13 @@ test("delegating agents receive only their allowed definition roster", async () 
     { systemPrompt: "base" },
     context,
   );
-  assert.match(prompt?.systemPrompt ?? "", /## Lead role/);
+  assert.match(prompt?.systemPrompt ?? "", /## Delegating agent role/);
+  assert.doesNotMatch(prompt?.systemPrompt ?? "", /## Lead role/);
+  assert.match(
+    prompt?.systemPrompt ?? "",
+    /integration, validation, or onward handoff/,
+  );
+  assert.doesNotMatch(prompt?.systemPrompt ?? "", /supervisor_message/);
   assert.match(prompt?.systemPrompt ?? "", /<agent_definitions>/);
   const supervisorState = pi.sentMessageCalls.find(
     ({ message }: any) =>
@@ -3075,7 +3094,8 @@ test("delegating agents receive the verified Manager supervisor projection", asy
       { systemPrompt: "base" },
       context,
     );
-    assert.match(prompt?.systemPrompt ?? "", /## Lead role/);
+    assert.match(prompt?.systemPrompt ?? "", /## Delegating agent role/);
+    assert.doesNotMatch(prompt?.systemPrompt ?? "", /## Lead role/);
     const message = pi.sentMessageCalls.find(
       ({ message }: any) =>
         message?.customType === "pi-herdsman-supervisor-state",
