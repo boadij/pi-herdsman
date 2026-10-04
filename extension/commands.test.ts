@@ -5184,12 +5184,12 @@ test("Running explains how to delegate when no agents are running", async () => 
   );
 });
 
-test("Running rejects duplicate rendered labels before focus", async () => {
+test("Running rejects duplicate rendered labels before focus", async (t) => {
   setLeadEnvironment();
   const presentation = await import("./presentation.ts");
   const duplicateOptions = ["same running option", "same running option"];
   let renderedRunningOptions = 0;
-  mock.module("./presentation.ts", {
+  t.mock.module("./presentation.ts", {
     namedExports: {
       ...presentation,
       renderRunningOptions: () => {
@@ -5202,7 +5202,7 @@ test("Running rejects duplicate rendered labels before focus", async () => {
   const leadRuntime = await import(
     `./lead-runtime.ts?duplicate-test=${runtimeId}`
   );
-  mock.module("./lead-runtime.ts", { namedExports: leadRuntime });
+  t.mock.module("./lead-runtime.ts", { namedExports: leadRuntime });
   const { default: registerDuplicateTestExtension } = await import(
     `./index.ts?duplicate-test=${runtimeId}`
   );
@@ -5498,8 +5498,24 @@ test("Running warns when the selected agent is replaced before focus", async () 
   }
 });
 
-test("Running keeps colliding display labels distinct and focuses the selected pane", async () => {
+test("Running selects duplicate TUI labels by stable value and revalidates identity", async (t) => {
   setLeadEnvironment();
+  const presentation = await import("./presentation.ts");
+  t.mock.module("./presentation.ts", {
+    namedExports: {
+      ...presentation,
+      renderRunningOptions: (rows: readonly unknown[]) =>
+        rows.map(() => "same running option"),
+    },
+  });
+  const runtimeId = randomUUID();
+  const leadRuntime = await import(
+    `./lead-runtime.ts?duplicate-tui=${runtimeId}`
+  );
+  t.mock.module("./lead-runtime.ts", { namedExports: leadRuntime });
+  const { default: registerTuiDuplicateExtension } = await import(
+    `./index.ts?duplicate-tui=${runtimeId}`
+  );
   const states = [
     {
       label: "reviewer:task",
@@ -5545,10 +5561,12 @@ test("Running keeps colliding display labels distinct and focuses the selected p
     });
     return mailbox;
   });
+  let statusSnapshots = 0;
   const pi = fakePi({
     exec: (command, args) => {
       if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
-      if (isApiSnapshot(args))
+      if (isApiSnapshot(args)) {
+        statusSnapshots++;
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
@@ -5605,6 +5623,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
           stderr: "",
           code: 0,
         };
+      }
       if (isPaneList(args))
         return {
           stdout: JSON.stringify({
@@ -5627,27 +5646,57 @@ test("Running keeps colliding display labels distinct and focuses the selected p
       return { stdout: "{}", stderr: "", code: 0 };
     },
   });
-  registerExtension!(pi.pi as never);
+  registerTuiDuplicateExtension!(pi.pi as never);
   const command = pi.commandOptions.get("agents");
-  const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
-  context.mode = "rpc";
-  let selection = 0;
-  context.ui.select = async (label: string, options: string[]) => {
-    prompts.push({ label, options });
-    if (selection++ === 0)
-      return options.find((option) => option.startsWith("Running"));
-    if (selection === 2) {
-      assert.ok(options.some((option) => option.includes("reviewer:task")));
-      assert.ok(options.some((option) => option.includes("scout:task")));
-      assert.equal(new Set(options).size, 2);
-      return options.find((option) => option.includes("scout:task"));
-    }
-    return undefined;
-  };
+  context.mode = "tui";
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  let customCall = 0;
+  context.ui.custom = async (factory: any) =>
+    new Promise((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        {},
+        resolve,
+      );
+      const lines = () => component.render(200);
+      const call = customCall++;
+      if (call === 0 || call === 2) {
+        selectTuiItem(component, "Running");
+        component.handleInput("\r");
+        return;
+      }
+      const duplicateRows = lines()
+        .map((line, index) => ({ line, index }))
+        .filter(({ line }) => /^(?:→ |  )same running option$/u.test(line));
+      assert.equal(duplicateRows.length, 2);
+      const stableValue = call === 1 ? "0" : "1";
+      const targetIndex = duplicateRows[Number(stableValue)]!.index;
+      while (
+        lines().findIndex((line) => /^→ same running option$/u.test(line)) !==
+        targetIndex
+      )
+        component.handleInput("\u001b[B");
+      component.handleInput("\r");
+    });
   try {
     await command.handler("", context);
+    await command.handler("", context);
+    assert.equal(
+      notices.includes("Running list is ambiguous; reopen Running."),
+      false,
+    );
+    const focusedPanes = pi.calls
+      .filter((args) => args[0] === "agent" && args[1] === "focus")
+      .map((args) => args[2]);
+    assert.deepEqual(focusedPanes, ["reviewer-task-pane", "scout-task-pane"]);
+    assert.equal(customCall, 4);
     assert.ok(
       pi.calls.some(
         (args) =>
@@ -5656,15 +5705,7 @@ test("Running keeps colliding display labels distinct and focuses the selected p
           args[2] === "scout-task-pane",
       ),
     );
-    assert.equal(
-      pi.calls.some(
-        (args) =>
-          args[0] === "agent" &&
-          args[1] === "focus" &&
-          args[2] === "reviewer-task-pane",
-      ),
-      false,
-    );
+    assert.ok(statusSnapshots >= 4, "each selection is freshly revalidated");
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     for (const [index, mailbox] of mailboxes.entries()) {
@@ -5794,6 +5835,94 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     realFs.rmSync(overridePath, { force: true });
+  }
+});
+
+test("Definitions contextual help distinguishes managed Lead and Agent launches", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const command = pi.commandOptions.get("agents");
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "tui";
+  let customCall = 0;
+  context.ui.custom = async (factory: any) =>
+    new Promise((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        {},
+        resolve,
+      );
+      const lines = () => component.render(200);
+      const moveTo = (target: string) => {
+        for (let attempts = 0; attempts < 20; attempts++) {
+          if (
+            lines().some(
+              (line) =>
+                line.trimStart().startsWith("→") && line.includes(target),
+            )
+          )
+            return;
+          component.handleInput("\u001b[B");
+        }
+        throw new Error(`TUI item was not selected: ${target}`);
+      };
+      if (customCall === 0) {
+        customCall++;
+        selectTuiItem(component, "managed-lead");
+      } else if (customCall === 1) {
+        customCall++;
+        assert.ok(
+          lines().some((line) =>
+            line.includes(
+              "Model for future managed Lead launches. Changes do not affect a running Lead.",
+            ),
+          ),
+        );
+        moveTo("Thinking");
+        assert.ok(
+          lines().some((line) =>
+            line.includes(
+              "Thinking level for future managed Lead launches. Changes do not affect a running Lead.",
+            ),
+          ),
+        );
+        component.handleInput("\u001b");
+      } else if (customCall === 2) {
+        customCall++;
+        selectTuiItem(component, "generalist");
+      } else if (customCall === 3) {
+        customCall++;
+        assert.ok(
+          lines().some((line) =>
+            line.includes(
+              "Model for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session model.",
+            ),
+          ),
+        );
+        moveTo("Thinking");
+        assert.ok(
+          lines().some((line) =>
+            line.includes(
+              "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
+            ),
+          ),
+        );
+        component.handleInput("\u001b");
+      } else {
+        component.handleInput("\u001b");
+      }
+    });
+  try {
+    await command.handler("definitions", context);
+    assert.equal(customCall, 4);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
   }
 });
 

@@ -1502,7 +1502,7 @@ export default function (pi: ExtensionAPI): void {
             minPrimaryColumnWidth: 12,
             maxPrimaryColumnWidth: 32,
           });
-          const help = new TuiText("", 1, 0);
+          const help = new TuiText("", 1, 1);
           const updateHelp = (item: SelectItem | null): void => {
             const text = (item as MenuItem | null)?.help;
             help.setText(text ? theme.fg("dim", text) : "");

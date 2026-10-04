@@ -1263,13 +1263,17 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 value: "model",
                 label: "Model",
                 description: model,
-                help: "Model for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session model.",
+                help: managedDefinition
+                  ? "Model for future managed Lead launches. Changes do not affect a running Lead."
+                  : "Model for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session model.",
               },
               {
                 value: "thinking",
                 label: "Thinking",
                 description: thinking,
-                help: "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
+                help: managedDefinition
+                  ? "Thinking level for future managed Lead launches. Changes do not affect a running Lead."
+                  : "Thinking level for future Agent generations. When unset, fresh delegation inherits the spawning controller and continuation restores the saved session level.",
               },
               ...(!managedDefinition
                 ? [
@@ -1468,7 +1472,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         return;
       }
       const options = host.renderRunningOptions(rows);
-      if (new Set(options).size !== options.length) {
+      if (ctx.mode !== "tui" && new Set(options).size !== options.length) {
         ctx.ui.notify("Running list is ambiguous; reopen Running.", "warning");
         return;
       }
