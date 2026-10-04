@@ -1639,7 +1639,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             {
               value: "stats",
               label: "Session stats",
-              help: "Show accumulated Pi-native token usage and cost for this session and owned Agents.",
+              help: "Show Pi-native token usage and cost for this session and owned Agents. Manager mode also includes current assigned Leads and their owned Agent trees.",
             },
             {
               value: "definitions",

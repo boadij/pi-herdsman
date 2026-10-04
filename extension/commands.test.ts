@@ -4830,14 +4830,18 @@ test("agents root contextual help follows the selected row", async () => {
     await pi.commandOptions.get("agents").handler("", context);
     const help = (index: number) =>
       observed[index]?.find((line) =>
-        /Focus a live managed Agent|Show accumulated Pi-native token usage|Inspect effective Agent and managed Lead definitions and edit global overrides|Configure Manager startup, Agent placement, context retirement, and message limits/u.test(
+        /Focus a live managed Agent|Show Pi-native token usage|Inspect effective Agent and managed Lead definitions and edit global overrides|Configure Manager startup, Agent placement, context retirement, and message limits/u.test(
           line,
         ),
       ) ?? "";
     assert.match(help(0), /Focus a live managed Agent\./u);
     assert.match(
       help(1),
-      /Show accumulated Pi-native token usage and cost for this session and owned Agents\./u,
+      /Show Pi-native token usage and cost for this session and owned Agents\./u,
+    );
+    assert.match(
+      help(1),
+      /Manager mode also includes current assigned Leads and their owned Agent trees\./u,
     );
     assert.doesNotMatch(help(1), /Focus a live managed Agent/u);
     assert.match(
