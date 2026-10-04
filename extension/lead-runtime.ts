@@ -3,6 +3,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import type {
@@ -70,9 +71,7 @@ import {
   renderRunningOptions,
   formatStatusCounts,
   createSupervisionWidget,
-  padVisible,
   type StatusSnapshot,
-  visibleWidth,
 } from "./presentation.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
@@ -248,7 +247,7 @@ type LeadCommandHost = {
   selectMenu(
     ctx: ExtensionContext,
     title: string,
-    items: readonly SelectItem[],
+    items: readonly (SelectItem & { help?: string })[],
     selectedValue?: string,
   ): Promise<string | undefined>;
   selectModelMenu(
@@ -1054,24 +1053,22 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         [
           {
             value: "tab",
-            label:
-              current.effective === "tab"
-                ? "Lead agents tab (current)"
-                : "Lead agents tab",
+            label: "Lead agents tab",
+            description: current.effective === "tab" ? "current" : undefined,
+            help: "Place Lead-direct Agents in one lead-owned agents tab.",
           },
           {
             value: "subtree",
-            label:
-              current.effective === "subtree"
-                ? "Subtree tabs (current)"
-                : "Subtree tabs",
+            label: "Subtree tabs",
+            description:
+              current.effective === "subtree" ? "current" : undefined,
+            help: "Give each Lead-direct Agent its own tab. Nested delegation still splits in its owner's current tab.",
           },
           {
             value: "split",
-            label:
-              current.effective === "split"
-                ? "Split from caller (current)"
-                : "Split from caller",
+            label: "Split from caller",
+            description: current.effective === "split" ? "current" : undefined,
+            help: "Split Lead-direct Agents from the caller's pane. Nested delegation still splits in its owner's current tab.",
           },
         ],
         current.effective,
@@ -1099,11 +1096,15 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           [
             {
               value: "inlineAttachmentLimitBytes",
-              label: `Inline attachments   ${host.formatMessageLimit(limits.inline.bytes)}`,
+              label: "Inline attachments",
+              description: host.formatMessageLimit(limits.inline.bytes),
+              help: "Per-file limit for embedding complete strict UTF-8 file contents. Larger or ineligible files remain references.",
             },
             {
               value: "mailboxPayloadLimitBytes",
-              label: `Mailbox payload      ${host.formatMessageLimit(limits.mailbox.bytes)}`,
+              label: "Mailbox payload",
+              description: host.formatMessageLimit(limits.mailbox.bytes),
+              help: "Limit new managed-Agent request and ask payloads and new Manager project assignments.",
             },
           ],
           selectedLimit,
@@ -1115,8 +1116,16 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             value: String(bytes),
             label,
           })),
-          { value: "custom", label: "Custom…" },
-          { value: "reset", label: "Reset" },
+          {
+            value: "custom",
+            label: "Custom…",
+            help: "Enter a custom limit in KiB, from 1 through 1024.",
+          },
+          {
+            value: "reset",
+            label: "Reset",
+            help: "Remove the configured override and use the default.",
+          },
         ]);
         if (!choice) continue;
         let value: number | undefined;
@@ -1196,41 +1205,36 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         const loaded = await loadDefinitions();
         const definitions = loaded.definitions;
         const managedLead = loaded.managedLead;
-        const bundled = definitions.filter(
-          (definition: AgentDefinition) => definition.extensionSource,
-        );
-        const custom = definitions.filter(
-          (definition: AgentDefinition) => !definition.extensionSource,
-        );
-        const format = (definition: AgentDefinition) => {
+        const availableDefinitions = [managedLead, ...definitions];
+        const options = availableDefinitions.map((definition) => {
           const { model, thinking } = this.executionSettings(ctx, definition);
-          const name = `${definition.name}${definition.projectSource ? " [project]" : ""}${definition.overrideSource && (definition.extensionSource || definition.projectSource) ? " *" : ""}`;
-          return { name, model, thinking, definition };
-        };
-        const managed = [managedLead];
-        const entries = [...managed, ...bundled, ...custom].map(format);
-        const nameWidth = Math.max(
-          0,
-          ...entries.map(({ name }) => visibleWidth(name)),
-        );
-        const modelWidth = Math.max(
-          0,
-          ...entries.map(({ model }) => visibleWidth(model)),
-        );
-        const options: { value: string; label: string }[] = [];
-        const addGroup = (title: string, group: typeof entries) => {
-          if (!group.length) return;
-          options.push({ value: "", label: `--- ${title} ---` });
-          options.push(
-            ...group.map(({ name, model, thinking, definition }) => ({
-              value: definition.name,
-              label: `${padVisible(name, nameWidth)}  ${padVisible(model, modelWidth)}  ${thinking}`,
-            })),
-          );
-        };
-        addGroup("Managed Lead", managed.map(format));
-        addGroup("Bundled (* overridden)", bundled.map(format));
-        addGroup("Custom", custom.map(format));
+          const sources = [
+            definition.extensionSource ? "bundled" : undefined,
+            definition.projectSource ? "project" : undefined,
+            definition.overrideSource ? "global" : undefined,
+          ]
+            .filter(Boolean)
+            .join(" + ");
+          const managed = definition.name === MANAGED_LEAD_DEFINITION_NAME;
+          const description = [
+            model,
+            thinking,
+            sources,
+            ...(!managed && !host.agentDefinitionEnabled(definition)
+              ? ["disabled"]
+              : []),
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          return {
+            value: definition.name,
+            label: definition.name,
+            description,
+            ...(typeof definition.frontmatter.description === "string"
+              ? { help: definition.frontmatter.description }
+              : {}),
+          };
+        });
         const selected = await host.selectMenu(
           ctx,
           "Definitions",
@@ -1239,12 +1243,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         );
         if (selected === undefined) return;
         if (!selected) continue;
-        const selectedEntry = entries.find(
-          ({ definition }) => definition.name === selected,
+        const selectedEntry = availableDefinitions.find(
+          (definition) => definition.name === selected,
         );
         if (!selectedEntry) continue;
-        selectedDefinition = selectedEntry.definition.name;
-        let definition = selectedEntry.definition;
+        selectedDefinition = selectedEntry.name;
+        let definition = selectedEntry;
         const selectedName = definition.name;
         let selectedAction = "model";
         while (true) {
@@ -1255,17 +1259,35 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             ctx,
             definition.name,
             [
-              { value: "model", label: `Model       ${model}` },
-              { value: "thinking", label: `Thinking    ${thinking}` },
+              {
+                value: "model",
+                label: "Model",
+                description: model,
+                help: "Model used for fresh starts. An unset value inherits from the spawning controller; continuation restores the saved session setting.",
+              },
+              {
+                value: "thinking",
+                label: "Thinking",
+                description: thinking,
+                help: "Thinking level used for fresh starts. An unset value inherits from the spawning controller; continuation restores the saved session setting.",
+              },
               ...(!managedDefinition
                 ? [
                     {
                       value: "enabled",
-                      label: `Enabled     ${host.agentDefinitionEnabled(definition) ? "yes" : "no"}`,
+                      label: "Enabled",
+                      description: host.agentDefinitionEnabled(definition)
+                        ? "on"
+                        : "off",
+                      help: "Control whether this Agent definition is available for new assignments. Running Agents are unchanged.",
                     },
                   ]
                 : []),
-              { value: "details", label: "Details…" },
+              {
+                value: "details",
+                label: "Details…",
+                help: "Show effective definition metadata and expanded instructions.",
+              },
             ],
             selectedAction,
           );
@@ -1298,8 +1320,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                 definitions: [metadata],
                 instructions,
               });
-            } else
+            } else {
               ctx.ui.notify(host.formatAgentDefinitions([metadata]).join("\n"));
+            }
             continue;
           }
           let field: "model" | "thinking" | "enabled";
@@ -1445,22 +1468,27 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         return;
       }
       const options = host.renderRunningOptions(rows);
-      const optionRows = new Map<string, number>();
-      for (const [index, option] of options.entries()) {
-        if (optionRows.has(option)) {
-          ctx.ui.notify(
-            "Running list is ambiguous; reopen Running.",
-            "warning",
-          );
-          return;
-        }
-        optionRows.set(option, index);
+      if (new Set(options).size !== options.length) {
+        ctx.ui.notify("Running list is ambiguous; reopen Running.", "warning");
+        return;
       }
-      const selected = await ctx.ui.select("Running", options);
+      const selected = await host.selectMenu(
+        ctx,
+        "Running",
+        options.map((label, index) => ({
+          value: String(index),
+          label,
+          help: rows[index]?.task
+            ? `Task: ${rows[index]!.task}`
+            : "Focus this managed Agent.",
+        })),
+      );
       if (selected === undefined) return;
-      const selectedIndex = optionRows.get(selected);
+      const selectedIndex = Number(selected);
       const selectedRow =
-        selectedIndex === undefined || selectedIndex < 0
+        !Number.isInteger(selectedIndex) ||
+        selectedIndex < 0 ||
+        selectedIndex >= rows.length
           ? undefined
           : rows[selectedIndex];
       if (!selectedRow) return;
@@ -1517,6 +1545,59 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       host.presentStopSummary(summary);
       if (host.isLead()) host.maybeFinishHerdRun(ctx);
     },
+    async openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
+      let selectedSetting = "auto-activate-manager";
+      while (true) {
+        const config = host.readConfig();
+        const placement = await host.placementSettings(ctx);
+        const selected = await host.selectMenu(
+          ctx,
+          "Settings",
+          [
+            {
+              value: "auto-activate-manager",
+              label: "Manager auto-start",
+              description: config.autoActivateManager ? "on" : "off",
+              help: "Attempt Manager mode automatically on eligible future session starts. Changing this does not alter the current role.",
+            },
+            {
+              value: "layout",
+              label: "Layout",
+              description: placement.effective,
+              help: "Choose where newly delegated Lead-direct Agents are placed in Herdr.",
+            },
+            {
+              value: "context-retirement",
+              label: "Context retirement",
+              description: config.contextRetirement ? "on" : "off",
+              help: "Retire managed-Agent sessions at automatic context pressure instead of allowing normal threshold compaction.",
+            },
+            {
+              value: "message-limits",
+              label: "Message limits",
+              help: "Configure inline attachment and managed mailbox payload byte limits.",
+            },
+          ],
+          selectedSetting,
+        );
+        if (!selected) return;
+        selectedSetting = selected;
+        if (selected === "layout") await this.openPlacementMenu(ctx);
+        else if (selected === "message-limits")
+          await this.openMessageLimitsMenu(ctx);
+        else {
+          const key =
+            selected === "context-retirement"
+              ? "contextRetirement"
+              : "autoActivateManager";
+          const enabled = !host.readConfig()[key];
+          host.updateConfig(key, enabled);
+          ctx.ui.notify(
+            `${key === "contextRetirement" ? "Context retirement" : "Manager auto-start"}: ${enabled ? "on" : "off"}`,
+          );
+        }
+      }
+    },
     async openAgentsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedSection = "running";
       while (true) {
@@ -1531,26 +1612,33 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           ctx,
           `Pi Herdsman · v${host.version}`,
           [
-            { value: "running", label: `Running        ${running}` },
-            { value: "stats", label: "Session stats" },
+            {
+              value: "running",
+              label: "Running",
+              description: String(running),
+              help: "Focus a live managed Agent.",
+            },
+            {
+              value: "stats",
+              label: "Session stats",
+              help: "Show accumulated Pi-native token usage and cost for this session and owned Agents.",
+            },
             {
               value: "definitions",
-              label: `Definitions    ${definitions.length}`,
+              label: "Definitions",
+              description: String(definitions.length + 1),
+              help: "Inspect effective Agent and managed Lead definitions and edit global overrides.",
             },
             {
-              value: "layout",
-              label: `Layout         ${(await host.placementSettings(ctx)).effective}`,
+              value: "settings",
+              label: "Settings",
+              help: "Configure Manager startup, Agent placement, context retirement, and message limits.",
             },
             {
-              value: "context-retirement",
-              label: `Context retirement  ${host.readConfig().contextRetirement ? "on" : "off"}`,
+              value: "stop-all",
+              label: "Stop all…",
+              help: "Emergency stop for the owned Agent tree. Active work or pending results may be discarded.",
             },
-            {
-              value: "auto-activate-manager",
-              label: `Manager auto-start  ${host.readConfig().autoActivateManager ? "on" : "off"}`,
-            },
-            { value: "message-limits", label: "Message limits" },
-            { value: "stop-all", label: "Stop all…" },
           ],
           selectedSection,
         );
@@ -1560,17 +1648,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         else if (selected === "stats") this.showSessionStats(ctx);
         else if (selected === "definitions")
           await this.openDefinitionsMenu(ctx);
-        else if (selected === "layout") await this.openPlacementMenu(ctx);
-        else if (selected === "context-retirement") {
-          const enabled = !host.readConfig().contextRetirement;
-          host.updateConfig("contextRetirement", enabled);
-          ctx.ui.notify(`context retirement: ${enabled ? "on" : "off"}`);
-        } else if (selected === "auto-activate-manager") {
-          const enabled = !host.readConfig().autoActivateManager;
-          host.updateConfig("autoActivateManager", enabled);
-          ctx.ui.notify(`Manager auto-start: ${enabled ? "on" : "off"}`);
-        } else if (selected === "message-limits")
-          await this.openMessageLimitsMenu(ctx);
+        else if (selected === "settings") await this.openSettingsMenu(ctx);
         else if (selected === "stop-all") await this.confirmAndStopAll(ctx);
       }
     },
@@ -2804,13 +2882,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         let list: SelectList | undefined;
         let renderedLeads = "";
         const container = new host.tui.Container();
-        const selectTheme = {
-          selectedPrefix: (text: string) => theme.fg("accent", text),
-          selectedText: (text: string) => theme.fg("accent", text),
-          description: (text: string) => theme.fg("muted", text),
-          scrollInfo: (text: string) => theme.fg("muted", text),
-          noMatch: (text: string) => theme.fg("warning", text),
-        };
+        const selectTheme = getSelectListTheme();
         const isCurrentOverview = (): boolean =>
           viewGeneration === overviewGeneration &&
           generation(ctx) === supervisionGeneration &&
@@ -3192,8 +3264,11 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       });
     },
     focusChief: async (ctx: ExtensionCommandContext): Promise<void> => {
-      const choice = await ctx.ui.select("chief", ["Focus chief", "Cancel"]);
-      if (choice !== "Focus chief") return;
+      const confirmed = await ctx.ui.confirm(
+        "Focus Chief?",
+        "Focus the currently active Chief pane?",
+      );
+      if (!confirmed) return;
       const descriptor = host.readChiefDescriptor(
         host.supervisionRuntime().descriptor,
       );

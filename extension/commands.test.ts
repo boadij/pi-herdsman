@@ -2989,16 +2989,19 @@ test("competing Lead focuses Chief with an absent prospective session path", asy
   });
   const context = fakeContext() as any;
   context.hasUI = true;
-  context.ui.select = async (title: string, choices: string[]) => {
-    assert.equal(title, "chief");
-    assert.deepEqual(choices, ["Focus chief", "Cancel"]);
-    return "Focus chief";
+  const confirmations: string[][] = [];
+  context.ui.confirm = async (title: string, message: string) => {
+    confirmations.push([title, message]);
+    return true;
   };
   registerExtension!(pi.pi as never);
   try {
     assert.equal(realFs.existsSync(descriptor.piSessionFile), false);
     await pi.events.get("session_start")![0](undefined, context);
     await pi.commandOptions.get("chief").handler("", context);
+    assert.deepEqual(confirmations, [
+      ["Focus Chief?", "Focus the currently active Chief pane?"],
+    ]);
     assert.deepEqual(
       pi.calls.filter((args) => args[0] === "agent" && args[1] === "focus"),
       [["agent", "focus", descriptor.paneId]],
@@ -3124,7 +3127,11 @@ test("Chief leave cancellation preserves Chief tools", async () => {
   const pi = fakeChiefPi({ activeTools: ["read", "bash"] });
   const context = fakeContext() as any;
   context.hasUI = true;
-  context.ui.confirm = async () => false;
+  const confirmations: string[][] = [];
+  context.ui.confirm = async (title: string, message: string) => {
+    confirmations.push([title, message]);
+    return false;
+  };
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
@@ -3134,6 +3141,9 @@ test("Chief leave cancellation preserves Chief tools", async () => {
     const notices: string[] = [];
     context.ui.notify = (message: string) => notices.push(message);
     await pi.commandOptions.get("chief").handler("leave", context);
+    assert.deepEqual(confirmations, [
+      ["Leave chief mode?", "Supervised leads will not be changed."],
+    ]);
     assert.deepEqual(notices, ["Chief leave cancelled."]);
     assert.deepEqual(pi.pi.getActiveTools(), chiefToolsNow);
   } finally {
@@ -4453,32 +4463,41 @@ test("plain agents opens the native management menu", async () => {
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
+  const { contextAgentDefinitions } = await import("./agent-definitions.ts");
+  const selectableDefinitions = await contextAgentDefinitions(context);
+  assert.equal(
+    selectableDefinitions.definitions.some(
+      ({ name }) => name === "managed-lead",
+    ),
+    false,
+  );
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
     if (prompts.length === 1)
-      return options.find((option) => option.startsWith("Layout"));
+      return options.find((option) => option === "Settings");
     return undefined;
   };
   await command.handler("", context);
   assert.equal(prompts[0]?.label, `Pi Herdsman · v${packageMetadata.version}`);
   assert.deepEqual(
-    prompts[0]?.options.map((option) => option.replace(/\s+.*/u, "")),
-    [
-      "Running",
-      "Session",
-      "Definitions",
-      "Layout",
-      "Context",
-      "Manager",
-      "Message",
-      "Stop",
-    ],
+    prompts[0]?.options.map((option) =>
+      /^(Running|Definitions)\s/u.test(option)
+        ? option.replace(/\s+.*/u, "")
+        : option,
+    ),
+    ["Running", "Session stats", "Definitions", "Settings", "Stop all…"],
   );
-  assert.equal(prompts[1]?.label, "Layout");
+  assert.equal(prompts[0]?.options[0], "Running  0");
+  assert.equal(
+    prompts[0]?.options[2],
+    `Definitions  ${selectableDefinitions.definitions.length + 1}`,
+  );
+  assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
-    "Lead agents tab",
-    "Subtree tabs (current)",
-    "Split from caller",
+    "Manager auto-start  off",
+    "Layout  subtree",
+    "Context retirement  on",
+    "Message limits",
   ]);
   await pi.events.get("session_shutdown")?.[0]();
 });
@@ -4504,13 +4523,26 @@ test("agents TUI selectors use stable values and current preselection", async ()
         resolve,
       );
       renders.push(component.render(200));
-      if (customCalls++ === 0) {
-        component.handleInput("\u001b[B");
-        component.handleInput("\u001b[B");
-        component.handleInput("\u001b[B");
-        component.handleInput("\r");
-      } else if (customCalls === 2) component.handleInput("\r");
-      else component.handleInput("\u001b");
+      switch (customCalls++) {
+        case 0:
+          for (let i = 0; i < 3; i++) component.handleInput("\u001b[B");
+          component.handleInput("\r");
+          break;
+        case 1:
+          component.handleInput("\u001b[B");
+          component.handleInput("\r");
+          break;
+        case 2: {
+          component.handleInput("\u001b[B");
+          component.handleInput("\r");
+          break;
+        }
+        case 3:
+          component.handleInput("\u001b");
+          break;
+        default:
+          component.handleInput("\u001b");
+      }
     });
   try {
     await pi.commandOptions.get("agents").handler("", context);
@@ -4520,10 +4552,135 @@ test("agents TUI selectors use stable values and current preselection", async ()
       ),
     );
     assert.ok(
-      renders[1]?.some((line) => /Subtree tabs \(current\)/u.test(line)),
+      renders[2]?.some((line) => /^→ Subtree tabs\s+current/u.test(line)),
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("agents root contextual help follows the selected row", async () => {
+  setLeadEnvironment();
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "tui";
+  const observed: string[][] = [];
+  context.ui.custom = async (factory: any) =>
+    new Promise((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        {},
+        resolve,
+      );
+      const snapshot = () => component.render(200);
+      observed.push(snapshot());
+      for (let i = 0; i < 3; i++) {
+        component.handleInput("\u001b[B");
+        observed.push(snapshot());
+      }
+      component.handleInput("\u001b");
+    });
+  try {
+    await pi.commandOptions.get("agents").handler("", context);
+    const help = (index: number) =>
+      observed[index]?.find((line) =>
+        /Focus a live managed Agent|Show accumulated Pi-native token usage|Inspect effective Agent and managed Lead definitions and edit global overrides|Configure Manager startup, Agent placement, context retirement, and message limits/u.test(
+          line,
+        ),
+      ) ?? "";
+    assert.match(help(0), /Focus a live managed Agent\./u);
+    assert.match(
+      help(1),
+      /Show accumulated Pi-native token usage and cost for this session and owned Agents\./u,
+    );
+    assert.doesNotMatch(help(1), /Focus a live managed Agent/u);
+    assert.match(
+      help(2),
+      /Inspect effective Agent and managed Lead definitions and edit global overrides\./u,
+    );
+    assert.match(
+      help(3),
+      /Configure Manager startup, Agent placement, context retirement, and message limits\./u,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("Definitions contextual help uses the selected definition description", async () => {
+  setLeadEnvironment();
+  const definitionPath = join(PI_AGENTS_DIR, "help-agent.md");
+  const description = "Existing definition description for contextual help.";
+  realFs.writeFileSync(
+    definitionPath,
+    `---\nname: help-agent\ndescription: ${description}\n---\nInstructions.\n`,
+  );
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "tui";
+  const { contextAgentDefinitions } = await import("./agent-definitions.ts");
+  const definitions = await contextAgentDefinitions(context);
+  const expectedHelp = definitions.definitions.find(
+    ({ name }) => name === "help-agent",
+  )?.frontmatter.description;
+  assert.equal(expectedHelp, description);
+
+  const observed: string[][] = [];
+  let customCalls = 0;
+  context.ui.custom = async (factory: any) =>
+    new Promise((resolve) => {
+      const component = factory(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+        {},
+        resolve,
+      );
+      const call = customCalls++;
+      if (call === 0) {
+        component.handleInput("\u001b[B");
+        component.handleInput("\u001b[B");
+        component.handleInput("\r");
+        return;
+      }
+      if (call > 1) {
+        component.handleInput("\u001b");
+        return;
+      }
+      for (let attempts = 0; attempts < 100; attempts++) {
+        const rendered = component.render(200);
+        observed.push(rendered);
+        const selected = rendered.find((line: string) =>
+          line.trimStart().startsWith("→"),
+        );
+        if (selected?.includes("help-agent")) {
+          component.handleInput("\u001b");
+          return;
+        }
+        component.handleInput("\u001b[B");
+      }
+      throw new Error("TUI item was not selected: help-agent");
+    });
+  try {
+    await pi.commandOptions.get("agents").handler("", context);
+    assert.equal(typeof expectedHelp, "string");
+    assert.ok(
+      observed.some((rendered) => rendered.includes(expectedHelp as string)),
+      `Expected Definitions help to render ${JSON.stringify(expectedHelp)}`,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(definitionPath, { force: true });
   }
 });
 
@@ -4756,8 +4913,10 @@ test("TUI Model picker fuzzy-filters models and cancels in place", async () => {
   }
 });
 
-test("message limits use flat config and one rough token formatter", async () => {
+test("settings navigation exposes message limits and one rough token formatter", async () => {
   setLeadEnvironment();
+  const previousPlacement = readConfig().spawnPlacement;
+  updateConfig("spawnPlacement", "subtree");
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const command = pi.commandOptions.get("agents");
@@ -4769,30 +4928,47 @@ test("message limits use flat config and one rough token formatter", async () =>
   context.ui.notify = (message: string) => notices.push(message);
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
-    if (prompts.length === 1) return "Message limits";
-    if (prompts.length === 2) return options[0];
-    if (prompts.length === 3) return options[1];
+    if (prompts.length === 1)
+      return options.find((option) => option === "Settings");
+    if (prompts.length === 2)
+      return options.find((option) => option.startsWith("Message limits"));
+    if (prompts.length === 3) return options[0];
+    if (prompts.length === 4) return options[1];
     return undefined;
   };
-  await command.handler("", context);
-  assert.equal(prompts[1]?.label, "Message limits");
-  assert.match(prompts[1]?.options[0] ?? "", /≈32,768 tokens/);
-  assert.match(prompts[1]?.options[1] ?? "", /≈32,768 tokens/);
-  assert.ok(prompts.every(({ label }) => label !== "Scope"));
-  assert.deepEqual(prompts[2]?.options, [
-    "1 KiB · ≈256 tokens",
-    "4 KiB · ≈1,024 tokens",
-    "16 KiB · ≈4,096 tokens",
-    "64 KiB · ≈16,384 tokens",
-    "128 KiB · ≈32,768 tokens",
-    "Custom…",
-    "Reset",
-  ]);
-  assert.match(notices.at(-1) ?? "", /4 KiB · ≈1,024 tokens/);
-  await pi.events.get("session_shutdown")?.[0]();
+  try {
+    await command.handler("", context);
+    assert.equal(prompts[1]?.label, "Settings");
+    assert.deepEqual(prompts[1]?.options, [
+      "Manager auto-start  off",
+      "Layout  subtree",
+      "Context retirement  on",
+      "Message limits",
+    ]);
+    assert.equal(prompts[2]?.label, "Message limits");
+    assert.match(prompts[2]?.options[0] ?? "", /≈32,768 tokens/);
+    assert.match(prompts[2]?.options[1] ?? "", /≈32,768 tokens/);
+    assert.ok(prompts.every(({ label }) => label !== "Scope"));
+    assert.deepEqual(
+      prompts[2]?.options.map((option) => option.split("  ")[0]),
+      ["Inline attachments", "Mailbox payload"],
+    );
+    assert.match(
+      prompts[2]?.options[0] ?? "",
+      /Inline attachments  128 KiB · ≈32,768 tokens/u,
+    );
+    assert.match(
+      prompts[2]?.options[1] ?? "",
+      /Mailbox payload  128 KiB · ≈32,768 tokens/u,
+    );
+    assert.match(notices.at(-1) ?? "", /4 KiB · ≈1,024 tokens/);
+  } finally {
+    updateConfig("spawnPlacement", previousPlacement);
+    await pi.events.get("session_shutdown")?.[0]();
+  }
 });
 
-test("main agents menu toggles context retirement", async () => {
+test("settings toggles context retirement and retains its updated value", async () => {
   setLeadEnvironment();
   updateConfig("contextRetirement", undefined);
   const pi = fakePi();
@@ -4800,11 +4976,14 @@ test("main agents menu toggles context retirement", async () => {
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
-  const menus: string[][] = [];
+  const menus: { label: string; options: string[] }[] = [];
   const notices: string[] = [];
-  context.ui.select = async (_title: string, options: string[]) => {
-    menus.push(options);
-    return menus.length === 1
+  let rootSelections = 0;
+  context.ui.select = async (label: string, options: string[]) => {
+    menus.push({ label, options });
+    if (label.startsWith("Pi Herdsman"))
+      return rootSelections++ % 2 === 0 ? "Settings" : undefined;
+    return readConfig().contextRetirement !== false
       ? options.find((option) => option.includes("Context retirement"))
       : undefined;
   };
@@ -4812,16 +4991,20 @@ test("main agents menu toggles context retirement", async () => {
   try {
     await pi.commandOptions.get("agents").handler("", context);
     assert.match(
-      menus[0]?.find((option) => option.includes("Context retirement")) ?? "",
-      /Context retirement  on/,
+      menus[1]?.options.find((option) =>
+        option.includes("Context retirement"),
+      ) ?? "",
+      /Context retirement\s+on/,
     );
     assert.equal(readConfig().contextRetirement, false);
-    assert.deepEqual(notices, ["context retirement: off"]);
+    assert.deepEqual(notices, ["Context retirement: off"]);
     await pi.commandOptions.get("agents").handler("", context);
     assert.match(
-      menus.at(-1)?.find((option) => option.includes("Context retirement")) ??
-        "",
-      /Context retirement  off/,
+      menus
+        .filter(({ label }) => label === "Settings")
+        .at(-1)
+        ?.options.find((option) => option.includes("Context retirement")) ?? "",
+      /Context retirement\s+off/,
     );
   } finally {
     updateConfig("contextRetirement", undefined);
@@ -4839,11 +5022,12 @@ test("Manager auto-start menu toggle does not change the running role", async ()
   context.mode = "rpc";
   const activeTools = pi.pi.getActiveTools();
   const notices: string[] = [];
-  let selected = false;
+  let selection = 0;
   context.ui.select = async (_title: string, options: string[]) => {
-    if (selected) return undefined;
-    selected = true;
-    return options.find((option) => option.includes("Manager auto-start"));
+    if (selection++ === 0) return "Settings";
+    return selection === 2
+      ? options.find((option) => option.includes("Manager auto-start"))
+      : undefined;
   };
   context.ui.notify = (message: string) => notices.push(message);
   try {
@@ -4880,29 +5064,32 @@ test("message limit edits stay in the submenu with the edited field selected", a
       renders.push(component.render(200));
       switch (customCalls++) {
         case 0:
-          for (let i = 0; i < 5; i++) component.handleInput("\u001b[B");
+          for (let i = 0; i < 3; i++) component.handleInput("\u001b[B");
           component.handleInput("\r");
           break;
         case 1:
-        case 3:
+          for (let i = 0; i < 2; i++) component.handleInput("\u001b[B");
           component.handleInput("\r");
           break;
         case 2:
+          component.handleInput("\r");
+          break;
+        case 3:
           component.handleInput("\u001b[B");
           component.handleInput("\r");
           break;
         case 4:
-        case 5:
-        case 6:
           component.handleInput("\u001b");
           break;
+        default:
+          component.handleInput("\u001b");
       }
     });
   try {
     await pi.commandOptions.get("agents").handler("", context);
-    assert.ok(renders[3]?.some((line) => line.includes("Inline attachments")));
+    assert.ok(renders[4]?.some((line) => line.includes("Inline attachments")));
     assert.match(
-      renders[3]?.find((line) => line.includes("Inline attachments")) ?? "",
+      renders[4]?.find((line) => line.includes("Inline attachments")) ?? "",
       /^→/u,
     );
   } finally {
@@ -4928,7 +5115,7 @@ test("Running uses compact native options and focuses the freshly verified pane"
   context.ui.select = async (prompt: string, options: string[]) => {
     prompts.push({ label: prompt, options });
     if (prompts.length === 1) {
-      assert.equal(options[0], "Running        1 working");
+      assert.equal(options[0], "Running  1 working");
       return options.find((option) => option.startsWith("Running"));
     }
     if (prompts.length === 2) {
@@ -4995,6 +5182,102 @@ test("Running explains how to delegate when no agents are running", async () => 
         message.includes("Use scout to inspect this repository"),
     ),
   );
+});
+
+test("Running rejects duplicate rendered labels before focus", async () => {
+  setLeadEnvironment();
+  const presentation = await import("./presentation.ts");
+  const duplicateOptions = ["same running option", "same running option"];
+  let renderedRunningOptions = 0;
+  mock.module("./presentation.ts", {
+    namedExports: {
+      ...presentation,
+      renderRunningOptions: () => {
+        renderedRunningOptions++;
+        return duplicateOptions;
+      },
+    },
+  });
+  const runtimeId = randomUUID();
+  const leadRuntime = await import(
+    `./lead-runtime.ts?duplicate-test=${runtimeId}`
+  );
+  mock.module("./lead-runtime.ts", { namedExports: leadRuntime });
+  const { default: registerDuplicateTestExtension } = await import(
+    `./index.ts?duplicate-test=${runtimeId}`
+  );
+  const label = "duplicate-running-agent";
+  const identity = defaultFixtureIdentity;
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
+  const agent = JSON.parse(
+    listResponse(label, "working", identity.piSessionId, identity),
+  ).agents[0];
+  const pi = fakePi({
+    exec: (command, args) =>
+      command === "herdr" && isApiSnapshot(args)
+        ? {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                snapshot: {
+                  agents: [agent],
+                  panes: [
+                    {
+                      pane_id: identity.paneId,
+                      workspace_id: WORKSPACE,
+                      cwd: "/tmp",
+                      agent_session: {
+                        source: "herdr:pi",
+                        agent: "pi",
+                        kind: "id",
+                        value: identity.piSessionId,
+                      },
+                    },
+                  ],
+                },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          }
+        : { stdout: "{}", stderr: "", code: 0 },
+  });
+  registerDuplicateTestExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "rpc";
+  const notices: string[] = [];
+  let rootSelections = 0;
+  const runningSelections: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  context.ui.select = async (prompt: string, options: string[]) => {
+    if (prompt === "Running") {
+      runningSelections.push(prompt);
+      return options[0];
+    }
+    rootSelections++;
+    return rootSelections === 1
+      ? options.find((option) => option.startsWith("Running"))
+      : undefined;
+  };
+  try {
+    await pi.commandOptions.get("agents").handler("", context);
+    assert.equal(rootSelections, 2);
+    assert.equal(renderedRunningOptions, 1);
+    assert.deepEqual(runningSelections, []);
+    assert.equal(
+      notices.includes("Running list is ambiguous; reopen Running."),
+      true,
+    );
+    assert.equal(
+      pi.calls.some((args) => args[0] === "agent" && args[1] === "focus"),
+      false,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+  }
 });
 
 test("Running excludes lost and unknown durable generations", async () => {
@@ -5066,7 +5349,7 @@ test("Running excludes lost and unknown durable generations", async () => {
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
     assert.equal(label, `Pi Herdsman · v${packageMetadata.version}`);
-    assert.ok(options.includes("Running        1 unknown · 1 lost"));
+    assert.ok(options.includes("Running  1 unknown · 1 lost"));
     return prompts.length === 1
       ? options.find((option) => option.startsWith("Running"))
       : undefined;
@@ -5416,14 +5699,19 @@ test("Definitions edits standalone definitions through the shared override write
       return options.find((option) => option.includes("docs-reviewer"));
     if (selection === 2)
       return options.find((option) => option.startsWith("Model"));
-    if (selection === 3) return "Inherit current session";
+    if (selection === 3)
+      return options.find((option) =>
+        option.startsWith("Inherit current session"),
+      );
     return undefined;
   };
   try {
     await command.handler("definitions", context);
     assert.ok(
-      prompts.some(({ options }) =>
-        options.some((option) => option.includes("--- Custom ---")),
+      prompts.some(
+        ({ label, options }) =>
+          label === "Definitions" &&
+          options.some((option) => /docs-reviewer.*global/iu.test(option)),
       ),
     );
     assert.equal(
@@ -5469,7 +5757,8 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
             option.startsWith(visit === 0 ? "Model" : "Thinking"),
           )
         : undefined;
-    if (label === "Model") return options.find((option) => option === "model");
+    if (label === "Model")
+      return options.find((option) => option.startsWith("model"));
     if (label === "Thinking")
       return options.find((option) => option === "high");
     return undefined;
@@ -5478,7 +5767,9 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
     await command.handler("definitions", context);
     const definitionMenu = prompts.find(({ label }) => label === "Definitions");
     assert.ok(
-      definitionMenu?.options.some((option) => option.includes("Managed Lead")),
+      definitionMenu?.options.some((option) =>
+        /managed-lead.*bundled/iu.test(option),
+      ),
       JSON.stringify(definitionMenu),
     );
     assert.ok(
@@ -5654,6 +5945,40 @@ test("Definitions Details snapshots effective append and replace instructions", 
   }
 });
 
+test("Definitions Details in RPC reports metadata without expanding instructions", async () => {
+  setLeadEnvironment();
+  const definitionPath = join(PI_AGENTS_DIR, "details-rpc.md");
+  realFs.writeFileSync(
+    definitionPath,
+    "---\nname: details-rpc\ndescription: RPC details\n---\nRPC_PRIVATE_INSTRUCTIONS_SENTINEL\n",
+  );
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  context.mode = "rpc";
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  let selection = 0;
+  context.ui.select = async (label: string, options: string[]) => {
+    const currentSelection = selection++;
+    if (currentSelection === 0)
+      return options.find((option) => option.includes("details-rpc"));
+    if (label === "details-rpc" && currentSelection === 1)
+      return options.find((option) => option.startsWith("Details"));
+    return undefined;
+  };
+  try {
+    await pi.commandOptions.get("agents").handler("definitions", context);
+    assert.equal(notices.length, 1);
+    assert.match(notices[0] ?? "", /details-rpc/u);
+    assert.doesNotMatch(notices[0] ?? "", /RPC_PRIVATE_INSTRUCTIONS_SENTINEL/u);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    realFs.rmSync(definitionPath, { force: true });
+  }
+});
+
 test("Definitions cancellation navigates one menu level at a time", async () => {
   setLeadEnvironment();
   const pi = fakePi();
@@ -5741,7 +6066,7 @@ test("Definitions applies model and thinking overrides independently", async () 
         case 1:
           return options.find((option) => option.startsWith(scenario.field));
         case 2:
-          return scenario.selected;
+          return options.find((option) => option.startsWith(scenario.selected));
         case 3:
           assert.equal(
             discoverAgent("implementer").frontmatter[scenario.property],
@@ -5749,7 +6074,9 @@ test("Definitions applies model and thinking overrides independently", async () 
           );
           return options.find((option) => option.startsWith(scenario.field));
         case 4:
-          return "Inherit current session";
+          return options.find((option) =>
+            option.startsWith("Inherit current session"),
+          );
         default:
           return undefined;
       }
@@ -5780,14 +6107,17 @@ test("Definitions toggles enabled state for bundled definitions", async () => {
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
-  context.ui.select = async (_label: string, options: string[]) => {
+  context.ui.select = async (label: string, options: string[]) => {
     switch (selection++) {
       case 0:
         return options.find((option) => option.includes("implementer"));
       case 1:
+        assert.equal(label, "implementer");
+        assert.ok(options.some((option) => /^Enabled\s+on\b/u.test(option)));
         return options.find((option) => option.startsWith("Enabled"));
       case 2:
         assert.equal(discoverAgent("implementer").frontmatter.enabled, false);
+        assert.ok(options.some((option) => /^Enabled\s+off\b/u.test(option)));
         return options.find((option) => option.startsWith("Enabled"));
       case 3:
         assert.equal(discoverAgent("implementer").frontmatter.enabled, true);
@@ -5846,15 +6176,15 @@ test("Definitions refreshes the model registry before post-model thinking choice
       case 1:
         return options.find((option) => option.startsWith("Model"));
       case 2:
-        return "refresh-model";
+        return options.find((option) => option.startsWith("refresh-model"));
       case 3:
-        assert.ok(options.includes("Thinking    inherit · high"));
+        assert.ok(options.some((option) => option.startsWith("Thinking")));
         return options.find((option) => option.startsWith("Thinking"));
       case 4:
         assert.equal(registry.refreshes, 2);
-        assert.ok(options.includes("medium"));
+        assert.ok(options.some((option) => option.startsWith("medium")));
         assert.equal(options.includes("xhigh"), false);
-        return "medium";
+        return options.find((option) => option.startsWith("medium"));
       default:
         return undefined;
     }
@@ -5904,10 +6234,10 @@ test("Definitions uses the current model for inherited thinking choices", async 
         );
         return options.find((option) => option.includes("implementer"));
       case 1:
-        return "Thinking    inherit · medium";
+        return options.find((option) => option.startsWith("Thinking"));
       case 2:
         assert.equal(registry.refreshes, 1);
-        assert.ok(options.includes("medium"));
+        assert.ok(options.some((option) => option.startsWith("medium")));
         assert.equal(options.includes("xhigh"), false);
         return undefined;
       default:
@@ -5967,7 +6297,7 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
           assert.ok(options.some((option) => option.includes(scenario.model)));
           return options.find((option) => option.includes("implementer"));
         case 1:
-          return "Thinking    inherit · high";
+          return options.find((option) => option.startsWith("Thinking"));
         case 2:
           assert.deepEqual(options, [
             "Inherit current session",
@@ -5987,7 +6317,7 @@ test("Definitions resolves explicit compact model IDs for thinking choices", asy
   }
 });
 
-test("Definitions aligns Unicode names and models by display width", async () => {
+test("Definitions preserves Unicode names and model/thinking metadata", async () => {
   setLeadEnvironment();
   const definitionPaths = [
     join(PI_AGENTS_DIR, "unicode-reviewer-a.md"),
@@ -6019,17 +6349,12 @@ test("Definitions aligns Unicode names and models by display width", async () =>
     const rowB = options.find((option) => option.includes("長い名前"));
     assert.ok(rowA);
     assert.ok(rowB);
-    assert.notEqual("審査".length, visibleWidth("審査"));
-    assert.notEqual("設計確認".length, visibleWidth("設計確認"));
-    assert.notEqual("模型".length, visibleWidth("模型"));
-    assert.notEqual("長い名前".length, visibleWidth("長い名前"));
-    const column = (line: string, token: string) => {
-      const index = line.indexOf(token);
-      assert.notEqual(index, -1);
-      return visibleWidth(line.slice(0, index));
-    };
-    assert.equal(column(rowA, "模型"), column(rowB, "長い名前"));
-    assert.equal(column(rowA, "high"), column(rowB, "high"));
+    assert.match(rowA, /審査/u);
+    assert.match(rowA, /模型/u);
+    assert.match(rowA, /high/u);
+    assert.match(rowB, /設計確認/u);
+    assert.match(rowB, /長い名前/u);
+    assert.match(rowB, /high/u);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     for (const definitionPath of definitionPaths)
@@ -6037,36 +6362,57 @@ test("Definitions aligns Unicode names and models by display width", async () =>
   }
 });
 
-test("Definitions separators are ignored and reopen the list", async () => {
+test("Definitions is a flat provenance list and selection reopens the list", async () => {
   setLeadEnvironment();
-  const definitionPath = join(PI_AGENTS_DIR, "group-custom.md");
+  const definitionPaths = [
+    join(PI_AGENTS_DIR, "group-custom.md"),
+    join(PI_AGENTS_DIR, "implementer.md"),
+  ];
   realFs.writeFileSync(
-    definitionPath,
+    definitionPaths[0]!,
     "---\nname: group:Custom\n---\nCustom instructions\n",
+  );
+  realFs.writeFileSync(
+    definitionPaths[1]!,
+    "---\nname: implementer\nthinking: high\n---\n",
   );
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const command = pi.commandOptions.get("agents");
-  const prompts: string[][] = [];
+  const prompts: { label: string; options: string[] }[] = [];
   let selections = 0;
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
-  context.ui.select = async (_label: string, options: string[]) => {
-    prompts.push(options);
+  context.ui.select = async (label: string, options: string[]) => {
+    prompts.push({ label, options });
     return selections++ === 0
-      ? options.find((option) => option === "--- Custom ---")
+      ? options.find((option) => option.includes("group:Custom"))
       : undefined;
   };
   try {
     await command.handler("definitions", context);
-    assert.equal(prompts.length, 2);
-    assert.equal(prompts[0]![0], "--- Managed Lead ---");
-    assert.ok(prompts[0]?.includes("--- Custom ---"));
-    assert.deepEqual(prompts[0], prompts[1]);
+    assert.deepEqual(
+      prompts.map(({ label }) => label),
+      ["Definitions", "group:Custom", "Definitions"],
+    );
+    const definitions = prompts[0]!.options;
+    assert.match(definitions[0] ?? "", /^managed-lead\b.*bundled/iu);
+    assert.ok(
+      definitions.some((option) => /group:Custom.*global/u.test(option)),
+    );
+    assert.ok(
+      definitions.some((option) =>
+        /implementer.*bundled \+ global/u.test(option),
+      ),
+    );
+    assert.ok(definitions.every((option) => !/^---/u.test(option)));
+    assert.ok(definitions.every((option) => !/\[project\]|\*/u.test(option)));
+    assert.deepEqual(prompts[0], prompts[2]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
-    realFs.rmSync(definitionPath, { force: true });
+    for (const definitionPath of definitionPaths)
+      realFs.rmSync(definitionPath, { force: true });
   }
 });
 
@@ -6695,6 +7041,8 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
 
 test("TUI status refresh consumes the coherent Herdr session snapshot", async (t) => {
   setLeadEnvironment();
+  updateConfig("autoActivateManager", false);
+  t.after(() => updateConfig("autoActivateManager", undefined));
   const label = "sleep-smoke-a";
   const identity = {
     ...recoveryIdentity(label),
@@ -7025,6 +7373,8 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
 
 test("fresh assignment refreshes the widget after validation", async (t) => {
   setLeadEnvironment();
+  const previousPlacement = readConfig().spawnPlacement;
+  updateConfig("spawnPlacement", "subtree");
   const label = "fresh-start-widget-agent";
   const sessionPath = join(
     tmpdir(),
@@ -7480,6 +7830,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
     await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /herd/));
     assert.match(widget!.render(160).join("\n"), /herd/);
   } finally {
+    updateConfig("spawnPlacement", previousPlacement);
     await pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
     realFs.rmSync(sessionPath, { force: true });

@@ -9,6 +9,7 @@ import {
   buildSessionProjection,
   DynamicBorder,
   getAgentDir,
+  getSelectListTheme,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync, statSync, unlinkSync } from "node:fs";
@@ -39,6 +40,7 @@ import {
   Key,
   matchesKey,
   SelectList,
+  Spacer,
   Text as TuiText,
   type SelectItem,
 } from "@earendil-works/pi-tui";
@@ -1478,15 +1480,8 @@ export default function (pi: ExtensionAPI): void {
     let ownTools: string[] | undefined;
     const ownToolsSnapshot = (): { ownTools?: string[] } =>
       ownTools ? { ownTools } : {};
-    type MenuItem = { value: string; label: string };
+    type MenuItem = SelectItem & { help?: string };
     type ModelMenuItem = MenuItem & { searchText: string };
-    const selectTheme = (theme: any) => ({
-      selectedPrefix: (text: string) => theme.fg("accent", text),
-      selectedText: (text: string) => theme.fg("accent", text),
-      description: (text: string) => theme.fg("muted", text),
-      scrollInfo: (text: string) => theme.fg("muted", text),
-      noMatch: (text: string) => theme.fg("warning", text),
-    });
     const selectMenu = async (
       ctx: ExtensionContext,
       title: string,
@@ -1494,39 +1489,46 @@ export default function (pi: ExtensionAPI): void {
       selectedValue?: string,
     ): Promise<string | undefined> => {
       if (ctx.mode !== "tui") {
-        const selected = await ctx.ui.select(
-          title,
-          items.map((item) => item.label),
+        const options = items.map((item) =>
+          item.description ? `${item.label}  ${item.description}` : item.label,
         );
-        return items.find((item) => item.label === selected)?.value;
+        const selected = await ctx.ui.select(title, options);
+        const index = selected === undefined ? -1 : options.indexOf(selected);
+        return index >= 0 ? items[index]?.value : undefined;
       }
       return (await ctx.ui.custom(
         (tui: any, theme: any, _keys: any, done: (value: unknown) => void) => {
-          const list = new SelectList(items, 8, selectTheme(theme));
+          const list = new SelectList(items, 8, getSelectListTheme());
+          const help = new TuiText("", 1, 0);
+          const updateHelp = (item: SelectItem | null): void => {
+            const text = (item as MenuItem | null)?.help;
+            help.setText(text ? theme.fg("dim", text) : "");
+          };
           const index = items.findIndex((item) => item.value === selectedValue);
           if (index >= 0) list.setSelectedIndex(index);
+          updateHelp(items[index >= 0 ? index : 0] ?? null);
           list.onSelect = (item) => done(item.value);
           list.onCancel = () => done(undefined);
+          list.onSelectionChange = updateHelp;
           const container = new Container();
           container.addChild(
-            new DynamicBorder((line) => theme.fg("accent", line)),
+            new DynamicBorder((line) => theme.fg("border", line)),
           );
           container.addChild(
             new TuiText(theme.fg("accent", theme.bold(title)), 1, 0),
           );
+          container.addChild(new Spacer(1));
           container.addChild(list);
+          container.addChild(help);
           container.addChild(
             new TuiText(
-              theme.fg(
-                "dim",
-                "↑↓ navigate  enter select  escape/ctrl+c cancel",
-              ),
+              theme.fg("dim", "↑↓ navigate · Enter select · Esc back"),
               1,
               0,
             ),
           );
           container.addChild(
-            new DynamicBorder((line) => theme.fg("accent", line)),
+            new DynamicBorder((line) => theme.fg("border", line)),
           );
           return {
             render: (width: number) => container.render(width),
@@ -1572,7 +1574,7 @@ export default function (pi: ExtensionAPI): void {
               );
               return;
             }
-            list = new SelectList(filtered, 10, selectTheme(theme));
+            list = new SelectList(filtered, 10, getSelectListTheme());
             const index = filtering
               ? 0
               : filtered.findIndex((item) => item.value === selectedValue);
@@ -1589,25 +1591,26 @@ export default function (pi: ExtensionAPI): void {
           rebuildList();
           const container = new Container();
           container.addChild(
-            new DynamicBorder((line) => theme.fg("accent", line)),
+            new DynamicBorder((line) => theme.fg("border", line)),
           );
           container.addChild(
             new TuiText(theme.fg("accent", theme.bold("Model")), 1, 0),
           );
+          container.addChild(new Spacer(1));
           container.addChild(input);
           container.addChild(listContainer);
           container.addChild(
             new TuiText(
               theme.fg(
                 "dim",
-                "type to filter  ↑↓ navigate  enter select  escape/ctrl+c cancel",
+                "Type to filter · ↑↓ navigate · Enter select · Esc back",
               ),
               1,
               0,
             ),
           );
           container.addChild(
-            new DynamicBorder((line) => theme.fg("accent", line)),
+            new DynamicBorder((line) => theme.fg("border", line)),
           );
           return {
             get focused() {

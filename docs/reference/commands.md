@@ -29,14 +29,16 @@ diagnostic that includes the running Pi Herdsman package version.
 ```
 
 The plain command opens a native Pi selection menu titled with the running
-Pi Herdsman package version for both `/agents` and `/herdsman`, with `Running`,
-`Session stats`, `Definitions`, `Layout`, `Context retirement  on|off`,
-`Manager auto-start  on|off`, `Message limits`,
-and `Stop all…` destinations. The
-Message limits view edits the user-wide inline attachment and mailbox payload
-limits. It is available only to a lead Pi session with UI. Current
-values and presets show a rough token equivalent using four UTF-8 bytes per
-token. The enforced limits are bytes, not tokens.
+Pi Herdsman package version for both `/agents` and `/herdsman`. Its five
+destinations are `Running`, `Session stats`, `Definitions`, `Settings`, and
+`Stop all…`. Selection values such as counts and current settings are secondary
+metadata; the TUI updates contextual help for the selected row.
+
+`Settings` contains `Manager auto-start`, `Layout`, `Context retirement`, and
+`Message limits`. The Message limits view edits the user-wide inline attachment
+and mailbox payload limits. It is available only to a lead Pi session with UI.
+Current values and presets show a rough token equivalent using four UTF-8
+bytes per token. The enforced limits are bytes, not tokens.
 
 ## `/agents stats`
 
@@ -61,17 +63,15 @@ coverage incomplete instead of guessing or scanning global sessions.
 
 ## `/agents definitions`
 
-Opens the native Definitions menu for the effective bundled, project, and
-global Agent definitions, plus a separate `Managed Lead` group. Project
-definitions are included when Pi considers the project trusted. Project
-participation is marked `[project]`; a global override adds `*` (so
-`[project] *` means both layers contribute). Edits write global overrides
-only.
+Opens a flat native Definitions list of effective definitions, with reserved
+`managed-lead` first. Project definitions are included when Pi considers the
+project trusted. Each definition shows its contributing source or sources as
+`bundled`, `project`, and/or `global`. Edits write global overrides only.
 
-The reserved managed Lead is shown separately from Agents. It supports `Model`,
-`Thinking`, and `Details`; it has no `Enabled` action. It remains excluded from
-Agent discovery and delegation. Global override edits affect future Lead
-launches, not Leads already running.
+The reserved managed Lead is not an Agent and remains excluded from Agent
+discovery and delegation. It supports `Model`, `Thinking`, and `Details`, but
+has no `Enabled` action. Global override edits affect future Lead launches,
+not Leads already running.
 
 The details view can show:
 

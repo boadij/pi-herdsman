@@ -216,6 +216,13 @@ mock.module("@earendil-works/pi-coding-agent", {
     DEFAULT_MAX_LINES: 2000,
     formatSize: (n: number) => `${n} B`,
     getMarkdownTheme: () => ({}),
+    getSelectListTheme: () => ({
+      selectedPrefix: (text: string) => text,
+      selectedText: (text: string) => text,
+      description: (text: string) => text,
+      scrollInfo: (text: string) => text,
+      noMatch: (text: string) => text,
+    }),
     truncateHead: (
       text: string,
       options: { maxBytes?: number; maxLines?: number },
@@ -351,6 +358,9 @@ mock.module("@earendil-works/pi-tui", {
       constructor(text: string) {
         this.text = text;
       }
+      setText(text: string) {
+        this.text = text;
+      }
       render(_width: number) {
         return this.text.split("\n");
       }
@@ -415,7 +425,10 @@ mock.module("@earendil-works/pi-tui", {
       invalidate() {}
       render(_width: number) {
         return this.items.map(
-          (item, index) => `${index === this.index ? "→ " : "  "}${item.label}`,
+          (item, index) =>
+            `${index === this.index ? "→ " : "  "}${item.label}${
+              item.description ? `  ${item.description}` : ""
+            }`,
         );
       }
       handleInput(data: string) {

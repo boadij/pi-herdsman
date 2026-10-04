@@ -55,8 +55,8 @@ definition overlays it. An unmatched definition is standalone.
 
 `managed-lead` is the one reserved exception: it uses the same source and
 overlay engine to configure Manager-created project Leads, but it is not an
-Agent available through discovery or delegation. The Definitions UI can show
-it separately for Model, Thinking, and Details settings. See
+Agent available through discovery or delegation. It appears first in the flat
+Definitions list with Model, Thinking, and Details settings. See
 [Customizing bundled agents](customizing-agents.md#managed-project-lead).
 
 ### Permission-aware extensions
@@ -267,13 +267,14 @@ or the model can use:
 
 Both resolve the same effective roster.
 
-The human `Definitions` menu includes bundled, project, and global
-participation. Project participation is marked `[project]`; a global override
-adds `*`, so `[project] *` means both layers contribute. Model, thinking, and
-enabled settings can be changed through the menu, but edits always write global
+The human `Definitions` menu is a flat list of actionable definitions, with
+reserved `managed-lead` first. Each row identifies its contributing source or
+sources as `bundled`, `project`, and/or `global`. Model, thinking, and enabled
+settings can be changed through the menu, but edits always write global
 overrides. `Inherit current session` removes only that field. Unset model and
 thinking fields inherit the spawning controller for fresh delegation, while
-continuation restores the saved session's settings.
+continuation restores the saved session's settings. Contextual help updates for
+the selected row.
 
 ## Override an existing bundled role
 
