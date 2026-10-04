@@ -61,9 +61,28 @@ import {
   exactIsolatedSession,
   isolatedSessionDetails,
   preparePi,
+  requireTestedBaseline,
   resolveSmokeModel,
   runScenario,
 } from "../scripts/smoke.mjs";
+
+test("smoke runtime baseline accepts matching and newer stable versions", () => {
+  assert.doesNotThrow(() => requireTestedBaseline("Pi", "1.0.1", "1.0.1"));
+  assert.doesNotThrow(() => requireTestedBaseline("Pi", "1.0.2", "1.0.1"));
+  assert.doesNotThrow(() => requireTestedBaseline("Pi", "2.0.0", "1.0.1"));
+  assert.throws(
+    () => requireTestedBaseline("Pi", "1.0.0", "1.0.1"),
+    /below tested baseline 1\.0\.1/,
+  );
+  assert.throws(
+    () => requireTestedBaseline("Pi", "not-a-version", "1.0.1"),
+    /invalid Pi version/,
+  );
+  assert.throws(
+    () => requireTestedBaseline("Pi", "1.0.1", undefined),
+    /invalid Pi tested baseline/,
+  );
+});
 
 test("missing managed session file is not ready yet", async () => {
   const piSessions = await mkdtemp(join(tmpdir(), "pi-herdsman-smoke-"));

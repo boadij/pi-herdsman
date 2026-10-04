@@ -9,9 +9,10 @@ You do not need to call structured coordination tools yourself.
 
 You need:
 
-- [herdr](https://github.com/herdrdev/herdr) `>=0.9.3` (tested baseline: `0.9.3`)
-- Pi `>=1.0.1` (tested baseline: `1.0.1`)
-- Node `>=22.19.0`
+- Node satisfying the released package's `engines.node` requirement
+- Pi at least the released package's `piHerdsman.runtime.pi` baseline
+- herdr at least the released package's
+  `piHerdsman.runtime.herdr.version` baseline
 
 On Linux or macOS, install the released, tested stack:
 
@@ -19,9 +20,9 @@ On Linux or macOS, install the released, tested stack:
 curl -fsSL https://raw.githubusercontent.com/boadij/pi-herdsman/main/install.sh | sh
 ```
 
-The released package publishes the Pi and herdr versions tested for that
-Herdsman release. On mutable host installs, the bootstrap treats those versions
-as minimums and never downgrades a newer runtime.
+The released package publishes its Node, Pi, and herdr runtime requirements.
+On mutable host installs, Pi and herdr baselines are minimums; the bootstrap
+never downgrades a newer runtime.
 
 For Pi, a missing or older installation is handed to Pi's official managed
 installer and the result must meet the tested minimum. Pi's installer chooses
@@ -29,8 +30,8 @@ its current managed release, so the installed Pi may be newer than Herdsman's
 tested baseline. Afterward, Pi remains natively updateable with `pi update`.
 
 For herdr, a missing or older installation receives the exact checksum-verified
-tested release. Existing newer installations are left untouched, and subsequent
-updates remain native through `herdr update`.
+tested release from package metadata. Existing newer installations are left
+untouched, and subsequent updates remain native through `herdr update`.
 
 If you already manage Pi and herdr yourself:
 
@@ -40,7 +41,9 @@ herdr integration install pi
 ```
 
 For an SSH-ready Docker deployment, see
-[Container deployment](guides/container-deployment.md).
+[Container deployment](guides/container-deployment.md). The Docker image is a
+separate, deterministic deployment that installs exact Pi and herdr releases
+with checksum verification.
 
 ## 2. Start herdr and Pi
 
