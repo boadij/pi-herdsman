@@ -85,11 +85,11 @@ verified; `npm run smoke` defaults to `core`.
 ## Runtime preflight
 
 Before creating isolated smoke resources, the harness validates the current
-runtime against the released package contract: Node uses `engines.node`, Pi
-uses `piHerdsman.runtime.pi`, and Herdr uses
-`piHerdsman.runtime.herdr.version` from `package.json`. A mutable host Pi or
-Herdr installation may be newer than its baseline. Smoke also requires a
-running Herdr server and a compatible Herdr client/server session.
+checkout against the repository's `package.json` runtime contract: Node uses
+`engines.node`, Pi uses `piHerdsman.runtime.pi`, and Herdr uses
+`piHerdsman.runtime.herdr.version`. A mutable host Pi or Herdr installation may
+be newer than its baseline. Smoke also requires a running Herdr server and a
+compatible Herdr client/server session.
 
 For troubleshooting, inspect the host runtime and integration status:
 

@@ -1389,14 +1389,19 @@ export function candidateStartObservationError(observed, paneId) {
 }
 
 export function requireTestedBaseline(name, actualVersion, baselineVersion) {
-  const parse = (version) => {
+  const parse = (version, kind) => {
     const match =
       typeof version === "string" && /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-    if (!match) throw new Error(`smoke: invalid ${name} version: ${version}`);
+    if (!match)
+      throw new Error(
+        kind === "baseline"
+          ? `smoke: invalid ${name} tested baseline: ${version}`
+          : `smoke: invalid ${name} version: ${version}`,
+      );
     return match.slice(1).map(Number);
   };
-  const actual = parse(actualVersion);
-  const minimum = parse(baselineVersion);
+  const actual = parse(actualVersion, "actual");
+  const minimum = parse(baselineVersion, "baseline");
   for (let i = 0; i < 3; i++) {
     if (actual[i] !== minimum[i]) {
       if (actual[i] < minimum[i])

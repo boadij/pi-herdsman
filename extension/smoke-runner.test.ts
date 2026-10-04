@@ -78,6 +78,10 @@ test("smoke runtime baseline accepts matching and newer stable versions", () => 
     () => requireTestedBaseline("Pi", "not-a-version", "1.0.1"),
     /invalid Pi version/,
   );
+  assert.throws(
+    () => requireTestedBaseline("Pi", "1.0.1", undefined),
+    /invalid Pi tested baseline/,
+  );
 });
 
 test("missing managed session file is not ready yet", async () => {
