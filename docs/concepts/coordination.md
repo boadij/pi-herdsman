@@ -100,9 +100,10 @@ project work
 The assignment is the durable indicator that project work remains open. It
 survives Manager turnover and runtime loss; current Herdr placement is derived
 again when the work is observed or resumed. When a project herd run settles,
-Herdsman handles the normal Manager handoff automatically. Leads summarize the
-outcome, validation, and important unresolved points in their normal response;
-the handoff is advisory and does not resolve the assignment. Assigned Lead
+Herdsman records the Lead's summary as a project message for the current or a
+replacement Manager. Leads summarize the outcome, validation, and important
+unresolved points in their normal response; the handoff is advisory and does
+not resolve the assignment. Assigned Lead
 messages are also retained with the project and remain available to a
 replacement Manager. Project retirement follows the Herdr worktree lifecycle;
 see [Project orchestration](../guides/project-orchestration.md) for the

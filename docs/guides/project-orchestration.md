@@ -84,15 +84,16 @@ independent enough to justify separate branch and execution boundaries.
 
 ## Coordinate and review
 
-When a delegated herd run settles, Herdsman handles the normal Manager handoff
-automatically. Leads summarize the outcome, validation, and important
-unresolved points in their normal response. The handoff is advisory, not
-project completion: the assignment remains open for Manager review and any
-requested corrections. Leads use `supervisor_message` for material
-coordination when the Manager must decide or act, not to duplicate the normal
-handoff. Assigned project Lead messages are retained with the assignment,
-including when no Manager is active, and are available to a replacement
-Manager. Lead settlement and Manager review do not retire the assignment.
+When a delegated herd run settles, Herdsman records the Lead's summary as a
+project message for the current or a replacement Manager. Leads summarize the
+outcome, validation, and important unresolved points in their normal response.
+The handoff is advisory, not project completion: the assignment remains open
+through review and any requested corrections. Leads use `supervisor_message`
+for material coordination when the Manager must decide or act, not to duplicate
+the normal handoff. Assigned project Lead messages are retained with the
+assignment, including when no Manager is active, and are available to a
+replacement Manager. Lead settlement and Manager review do not retire the
+assignment.
 
 Use the current supervision state rather than repeatedly listing or inspecting
 reports to poll for progress. Inspect live terminal or persisted transcript
