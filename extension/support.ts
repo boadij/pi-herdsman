@@ -185,7 +185,6 @@ export const {
   readResult,
   readAgentState,
   readAgentBootstrap,
-  removeAgentBootstrap,
   writeAgentBootstrap,
   removeAsk,
   removeRequest,
@@ -760,10 +759,25 @@ export function fakePi(
   const pi = {
     events: {
       on(name: string, handler: (event: any) => unknown) {
-        events.set(name, [...(events.get(name) ?? []), handler]);
+        const safeHandler = async (event: any) => {
+          try {
+            await handler(event);
+          } catch {
+            // Pi catches listener failures; tests assert through side effects.
+          }
+        };
+        events.set(name, [...(events.get(name) ?? []), safeHandler]);
+        return () => {
+          events.set(
+            name,
+            (events.get(name) ?? []).filter(
+              (candidate) => candidate !== safeHandler,
+            ),
+          );
+        };
       },
       emit(name: string, event: any) {
-        for (const handler of events.get(name) ?? []) handler(event);
+        for (const handler of events.get(name) ?? []) void handler(event);
       },
     },
     on(name: string, handler: (event: any, ctx: Context) => unknown) {

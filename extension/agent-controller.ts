@@ -5569,6 +5569,7 @@ export function createAgentController(
         if (p.action === "delegate") {
           const registrations = new Map<string, ManagedAgentBootstrapPrepare>();
           let open = true;
+          let registrationError: Error | undefined;
           pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
             protocol: 1,
             phase: "prepare",
@@ -5579,22 +5580,29 @@ export function createAgentController(
                 throw new Error(
                   "Managed-agent bootstrap registration is closed",
                 );
-              if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(id))
-                throw new Error(
+              if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(id)) {
+                registrationError ??= new Error(
                   "Invalid managed-agent bootstrap participant ID",
                 );
-              if (registrations.has(id))
-                throw new Error(
+                return;
+              }
+              if (registrations.has(id)) {
+                registrationError ??= new Error(
                   `Duplicate managed-agent bootstrap participant ID: ${id}`,
                 );
-              if (typeof prepare !== "function")
-                throw new Error(
+                return;
+              }
+              if (typeof prepare !== "function") {
+                registrationError ??= new Error(
                   "Invalid managed-agent bootstrap prepare callback",
                 );
+                return;
+              }
               registrations.set(id, prepare);
             },
           });
           open = false;
+          if (registrationError) throw registrationError;
           const participants: Array<{ id: string; payload: string }> = [];
           for (const [id, prepare] of registrations) {
             const result = await prepare();

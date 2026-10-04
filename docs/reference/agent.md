@@ -57,17 +57,33 @@ registered callback. Return `undefined` to opt out, or return an opaque string
 payload and optional parent-side commit callback:
 
 ```ts
-pi.events.on("pi-herdsman:managed-agent-bootstrap", (event) => {
-  if (event.protocol !== 1 || event.phase !== "prepare") return;
-  event.register("example/child-state", async () => {
-    const prepared = await prepareChild(event.agent);
-    return {
-      payload: serialize(prepared),
-      commit: () => adoptChild(prepared),
-    };
-  });
+pi.events.on("pi-herdsman:managed-agent-bootstrap", (value) => {
+  // Pi types custom event payloads as unknown; narrow at this integration boundary.
+  const event = value as any;
+  if (event?.protocol !== 1) return;
+
+  if (event.phase === "prepare") {
+    event.register("example/child-state", async () => {
+      const prepared = await prepareChild(event.agent);
+      return {
+        payload: serialize(prepared),
+        commit: () => adoptChild(prepared),
+      };
+    });
+    return;
+  }
+
+  if (
+    event.phase === "initialize" &&
+    event.participant?.id === "example/child-state"
+  ) {
+    event.accept(() => initializeChild(deserialize(event.participant.payload)));
+  }
 });
 ```
+
+Preparation must be safe to abandon if launch fails; durable or irreversible
+parent-side finalization belongs in the optional `commit()` callback.
 
 For each prepared participant, the child receives an `initialize` event before
 Herdsman writes its normal `state.json` readiness record. Exactly one matching
