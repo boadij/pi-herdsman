@@ -1,10 +1,27 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { mock, test } from "node:test";
 import { fakeContext, fakePi } from "../support.ts";
-import register from "./pi-codex-context-sharing.ts";
+
+const services = new WeakMap<object, unknown>();
+
+mock.module("@howaboua/pi-codex-conversion/context-sharing", {
+  namedExports: {
+    connectCodexContextSharing(pi: object) {
+      return {
+        get service() {
+          return services.get(pi);
+        },
+        dispose() {
+          services.delete(pi);
+        },
+      };
+    },
+  },
+});
+
+const { default: register } = await import("./pi-codex-context-sharing.ts");
 
 const BOOTSTRAP_EVENT = "pi-herdsman:managed-agent-bootstrap";
-const PCC_AVAILABLE = "pi-codex:context-sharing:available";
 const PARTICIPANT_ID = "pi-codex/context-sharing";
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -59,8 +76,7 @@ function makeHarness(
       return adopted;
     },
     async exposeService() {
-      pi.pi.events.emit(PCC_AVAILABLE, service);
-      await tick();
+      services.set(pi.pi, service);
     },
   };
 }
