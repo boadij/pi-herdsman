@@ -70,7 +70,7 @@ test("PR preview publication isolates publish credentials from PR code", () => {
 
   assert.match(
     previewWorkflow,
-    /npm run release:check -- --tag "pr-\\$PR"/,
+    /npm run release:check -- --tag "pr-\$PR"/,
   );
   assert.match(previewWorkflow, /npm pack[\s\S]*--ignore-scripts/);
 
