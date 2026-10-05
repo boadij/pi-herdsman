@@ -2320,6 +2320,19 @@ test("project work derives active, paused, or conflict from runtime placement", 
       scenario.name,
     );
   }
+
+  const bounded = projectWorkSnapshot({
+    assignments: [
+      {
+        ...assignment,
+        text: `\u0001  ${"😀"}${"x".repeat(160)}\n  end  `,
+      },
+    ],
+    worktrees: [],
+    leads: [],
+  })[0]!.task!;
+  assert.equal(Array.from(bounded).length, 160);
+  assert.equal(bounded, `${"😀"}${"x".repeat(158)}…`);
 });
 
 test("project messages are durable, assignment-scoped, bounded, and removable", () => {

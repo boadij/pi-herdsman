@@ -1835,8 +1835,8 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
     assert.equal(listedLead.role, "lead");
     assert.equal("lead" in listedLead, false);
     assert.deepEqual(
-      listedLead?.available_actions,
-      ["inspect", "transcript", "message"],
+      listedLead?.available_tools,
+      ["staff_inspect", "staff_transcript", "staff_message"],
       JSON.stringify(listed.details),
     );
 
@@ -1910,7 +1910,7 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
         (report) => report.session === leadId,
       );
       assert.ok(mismatchedLead);
-      assert.ok(mismatchedLead.available_actions.includes("transcript"));
+      assert.ok(mismatchedLead.available_tools.includes("staff_transcript"));
       await assert.rejects(
         tool.execute(
           "transcript",
