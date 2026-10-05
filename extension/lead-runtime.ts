@@ -24,6 +24,7 @@ import type {
 } from "./supervision.ts";
 import {
   leadSupervisorState as resolveLeadSupervisorState,
+  projectTaskSummary,
   supervisorStateMessage,
   verifyManagerCoordinationAuthority,
   verifyRemoteChiefAuthority,
@@ -3868,6 +3869,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error(
         `No existing work was found on ${operation.branch}; start it with staff_delegate and a task.`,
       );
+    const presentationTask =
+      operation.action === "resume"
+        ? projectTaskSummary(existing!.text)
+        : undefined;
     const id = operation.action === "resume" ? existing!.id : operation.id;
     const branch = operation.branch;
     const topology = await runHerdr(
@@ -3948,6 +3953,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           session: id,
           status: "active",
           already_running: true,
+          ...(presentationTask ? { presentation_task: presentationTask } : {}),
         },
       };
     }
@@ -4465,6 +4471,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           workspace_id: workspaceId,
           branch: assignment.branch,
           ...(operation.action === "resume" ? { recovered: true } : {}),
+          ...(presentationTask ? { presentation_task: presentationTask } : {}),
         },
       };
     } catch (error) {
@@ -4575,7 +4582,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 leads: "leads" in report ? report.leads : [],
               }
             : {}),
-          available_actions: report.availableActions,
+          available_tools: report.availableActions.map(
+            (action: string) => `staff_${action}`,
+          ),
         })),
       });
     }

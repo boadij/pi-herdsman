@@ -1370,6 +1370,42 @@ test("staff project operations present their branch target", () => {
   assert.doesNotMatch(expanded, /task:|base:|session:/);
 });
 
+test("expanded staff project results show resolved branches and resume scope", () => {
+  for (const action of ["delegate", "resume", "stop"]) {
+    const output = renderedText(
+      renderCoordinationResult(
+        "staff",
+        action,
+        { details: { ok: true, branch: "feat/recovery", session: "lead-id" } },
+        { expanded: true },
+        presentationTheme,
+        { args: { action } },
+      ),
+    );
+    assert.match(output, /branch: feat\/recovery/);
+  }
+
+  const resumed = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "resume",
+      {
+        details: {
+          ok: true,
+          session: "lead-id",
+          branch: "feat/recovery",
+          presentation_task: "Recover the existing project work",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "resume" } },
+    ),
+  );
+  assert.match(resumed, /branch: feat\/recovery/);
+  assert.match(resumed, /task: Recover the existing project work/);
+});
+
 test("compact coordination calls show available agent definitions", () => {
   for (const [action, expected] of [
     ["steer", "agent steer  release-review · researcher"],
@@ -2210,6 +2246,21 @@ test("chief and staff coordination renderers share semantic status language", ()
       {
         details: {
           ok: true,
+          action: "list",
+          work: [
+            {
+              branch: "feat/api",
+              status: "active",
+              runtime_state: "working",
+              task: "Implement API recovery",
+            },
+            {
+              branch: "feat/db",
+              status: "conflict",
+              task: "Repair migrations",
+              issue: "another Lead is active in this worktree",
+            },
+          ],
           reports: [
             {
               session: "lead-opaque",
@@ -2228,8 +2279,14 @@ test("chief and staff coordination renderers share semantic status language", ()
     ),
   );
   for (const evidence of [
+    "feat/api · active · runtime=working",
+    "Implement API recovery",
+    "feat/db · conflict",
+    "Repair migrations",
+    "another Lead is active in this worktree",
     "session: lead-opaque",
     "agent counts: active=2 · blocked=1 · total=3",
+    "can: inspect, message",
   ])
     assert.ok(staffList.includes(evidence));
   assert.doesNotMatch(staffList, /last activity/);

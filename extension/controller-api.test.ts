@@ -2938,7 +2938,7 @@ async function runManagerStartupScenario(
         id: staleId,
         repoKey: "repo-key",
         branch: "smoke/recover",
-        text: "recover exact Lead",
+        text: "  recover\n exact Lead  ",
         ...(mode === "active-missing"
           ? { piSessionFile: `/tmp/${staleId}.jsonl` }
           : {}),
@@ -3131,6 +3131,11 @@ async function runManagerStartupScenario(
         assert.equal(running.details.action, "resume");
         assert.equal(running.details.already_running, true);
         assert.equal(running.details.session, staleId);
+        assert.equal(running.details.presentation_task, "recover exact Lead");
+        assert.doesNotMatch(
+          (running.content[0] as { text: string }).text,
+          /presentation_task/,
+        );
         const messages = () =>
           listChiefMessagePaths(supervisionRuntime(), staleId)
             .map((path) => readChiefMessage(path))
@@ -3294,6 +3299,11 @@ async function runManagerStartupScenario(
         assert.equal(recovered.details.action, "resume");
         assert.equal(recovered.details.session, staleId);
         assert.equal(recovered.details.branch, "smoke/recover");
+        assert.equal(recovered.details.presentation_task, "recover exact Lead");
+        assert.doesNotMatch(
+          (recovered.content[0] as { text: string }).text,
+          /presentation_task/,
+        );
         const persisted = listProjectAssignments(
           supervisionRuntime(),
           "repo-key",

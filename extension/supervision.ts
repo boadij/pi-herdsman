@@ -2209,6 +2209,19 @@ export type ProjectWorkSnapshot = Readonly<{
   task?: string;
   issue?: string;
 }>;
+export function projectTaskSummary(text: string): string | undefined {
+  const task = text
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+
+  if (!task) return undefined;
+
+  const characters = Array.from(task);
+  return characters.length <= 160
+    ? task
+    : `${characters.slice(0, 159).join("")}…`;
+}
 /** Derive work from one caller-validated Lead inventory and one Herdr worktree list. */
 export function projectWorkSnapshot(options: {
   assignments: readonly ProjectAssignment[];
@@ -2253,24 +2266,13 @@ export function projectWorkSnapshot(options: {
         status = "paused";
       }
     }
-    const task = assignment.text
-      .replace(/[\u0000-\u001f\u007f]/g, " ")
-      .replace(/\s+/gu, " ")
-      .trim();
-    const characters = Array.from(task);
+    const task = projectTaskSummary(assignment.text);
     return {
       branch: assignment.branch,
       session: assignment.id,
       status,
       ...(runtimeState ? { runtimeState } : {}),
-      ...(task
-        ? {
-            task:
-              characters.length <= 160
-                ? task
-                : `${characters.slice(0, 159).join("")}…`,
-          }
-        : {}),
+      ...(task ? { task } : {}),
       ...(issue ? { issue } : {}),
     };
   });
