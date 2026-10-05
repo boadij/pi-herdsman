@@ -201,6 +201,7 @@ import {
   projectMessageBytes,
   writeProjectMessage,
   listProjectMessages,
+  removeProjectMessage,
   removeProjectMessages,
   sessionLeadRoleState,
   type ChiefLease,
@@ -355,14 +356,16 @@ Lead while preserving its assignment. Project retirement is user-controlled
 through successful Herdr worktree removal.
 
 Each project-assignment delivery to a Lead is an automatic handoff to you:
-Herdsman records the Lead's normal response as a project message for the current
-or a replacement Manager. If the Lead successfully delegates or
+Herdsman automatically hands your normal assignment response to the Manager
+role. If no Manager is available, the handoff remains pending until a Manager
+can receive it. If the Lead successfully delegates or
 continues managed Agent work, the herd run owns that handoff until it settles,
 and the Lead's settled response should summarize the outcome, validation, and
 important unresolved points. An unsuccessful delegation leaves the local
 assignment-response path available. Later conversational replies, including
 routine thanks or acknowledgments, remain local and are not automatically
-promoted. Review
+promoted. Undelivered project handoffs survive Manager absence. Once a handoff
+has been delivered, it is not automatically replayed to later Managers. Review
 received handoffs and request corrections with staff_message when needed.
 
 Project execution belongs to project Leads and their Agent trees. Your role
@@ -2183,6 +2186,7 @@ export default function (pi: ExtensionAPI): void {
           writeChiefMessage,
           listProjectAssignments,
           listProjectMessages,
+          removeProjectMessage,
           readProjectAssignment,
           importResultBindings,
         },

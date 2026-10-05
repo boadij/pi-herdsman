@@ -28,6 +28,7 @@ import {
   claimChiefLease as claimChiefLeaseRaw,
   claimManagerLease as claimManagerLeaseRaw,
   managerDescriptorPath,
+  readManagerDescriptor,
   writeProjectAssignment,
   listProjectMessages,
   writeProjectMessage,
@@ -1241,7 +1242,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
 });
 
 for (const reachable of [true, false]) {
-  test(`fresh Manager activation ${reachable ? "is immediately reachable without chat" : "rolls back unproven remote identity"}`, async () => {
+  test(`fresh Manager activation ${reachable ? "is immediately reachable without chat" : "rolls back unproven remote identity"}`, async (t) => {
     setLeadEnvironment();
     process.env.HERDR_PANE_ID = "root-pane";
     process.env.HERDR_TAB_ID = "root-tab";
@@ -1323,62 +1324,64 @@ for (const reachable of [true, false]) {
         assert.ok(realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)));
         const leadId = randomUUID();
         const branch = "smoke/manager-replay";
-        const record = {
+        const managerA = readManagerDescriptor(runtime, WORKSPACE)!;
+        const liveRecord = {
           version: 2 as const,
           id: randomUUID(),
           repoKey: "repo-key",
           branch,
           fromSessionId: leadId,
-          text: "retained project review handoff",
-          createdAt: Date.now(),
+          text: "live project review handoff",
+          createdAt: managerA.createdAt + 1,
         };
         writeProjectAssignment(runtime, {
           version: 2,
           id: leadId,
           repoKey: "repo-key",
           branch,
-          text: "replay assignment",
+          text: "project assignment",
         });
-        writeProjectMessage(record, runtime);
-        const projectDeliveries = () =>
-          pi.sent.filter(
+        writeProjectMessage(liveRecord, runtime);
+        const projectDeliveries = (id: string) =>
+          managerHistory.filter(
             (message: any) =>
               message?.customType === "pi-herdsman-project_message" &&
-              message?.details?.id === record.id,
+              message?.details?.id === id,
           );
-        await new Promise((resolve) => setTimeout(resolve, 650));
-        assert.equal(projectDeliveries().length, 1);
-        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), [
-          record,
-        ]);
+        await t.waitFor(() =>
+          assert.equal(projectDeliveries(liveRecord.id).length, 1),
+        );
+        const liveSend = pi.sentMessageCalls.find(
+          ({ message }: any) => (message as any)?.details?.id === liveRecord.id,
+        )!;
+        assert.equal((liveSend.options as any).triggerTurn, true);
+        assert.equal((liveSend.options as any).deliverAs, "followUp");
         const deliveredIndex = managerHistory.findIndex(
           (entry: any) =>
             entry?.customType === "pi-herdsman-project_message" &&
-            entry?.details?.id === record.id,
+            entry?.details?.id === liveRecord.id,
         );
         assert.ok(deliveredIndex >= 0);
         managerBranch = managerHistory.slice(0, deliveredIndex);
-        assert.ok(
-          managerHistory.some(
-            (entry: any) =>
-              entry?.customType === "pi-herdsman-project_message" &&
-              entry?.details?.id === record.id,
-          ),
-        );
         assert.equal(
           managerBranch.some(
             (entry: any) =>
               entry?.customType === "pi-herdsman-project_message" &&
-              entry?.details?.id === record.id,
+              entry?.details?.id === liveRecord.id,
           ),
           false,
         );
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        assert.equal(
-          projectDeliveries().length,
-          1,
-          "same Manager tree navigation must not replay retained message",
+        ctx.isIdle = () => true;
+        await pi.events.get("before_agent_start")![0](
+          {
+            systemPrompt: "base",
+            systemPromptOptions: { contextFiles: [] },
+          },
+          ctx,
         );
+        await new Promise((resolve) => setTimeout(resolve, 650));
+        assert.equal(projectDeliveries(liveRecord.id).length, 1);
+        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), []);
 
         await pi.commandOptions.get("manager").handler("leave", ctx);
         const replacementId = randomUUID();
@@ -1393,22 +1396,50 @@ for (const reachable of [true, false]) {
           getEntries: () => managerHistory,
           getBranch: () => managerBranch,
         };
+        const backlogRecord = {
+          ...liveRecord,
+          id: randomUUID(),
+          text: "pending while Manager absent",
+          createdAt: 0,
+        };
+        writeProjectMessage(backlogRecord, runtime);
+        await pi.commandOptions.get("manager").handler("", ctx);
+        await t.waitFor(() =>
+          assert.equal(projectDeliveries(backlogRecord.id).length, 1),
+        );
+        assert.equal(projectDeliveries(liveRecord.id).length, 0);
+        const backlogSend = pi.sentMessageCalls.find(
+          ({ message }: any) =>
+            (message as any)?.details?.id === backlogRecord.id,
+        )!;
+        assert.equal((backlogSend.options as any).triggerTurn, false);
+        ctx.isIdle = () => true;
+        await new Promise((resolve) => setTimeout(resolve, 650));
+        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), []);
+
+        await pi.commandOptions.get("manager").handler("leave", ctx);
+        const managerCId = randomUUID();
+        managerSessionFile = join(tmpdir(), `${managerCId}.jsonl`);
+        managerAgent.agent_session.value = managerSessionFile;
+        managerHistory = [];
+        managerBranch = managerHistory;
+        ctx.sessionManager = {
+          ...ctx.sessionManager,
+          getSessionId: () => managerCId,
+          getSessionFile: () => managerSessionFile,
+          getEntries: () => managerHistory,
+          getBranch: () => managerBranch,
+        };
         await pi.commandOptions.get("manager").handler("", ctx);
         await new Promise((resolve) => setTimeout(resolve, 650));
+        assert.equal(projectDeliveries(liveRecord.id).length, 0);
+        assert.equal(projectDeliveries(backlogRecord.id).length, 0);
         assert.equal(
-          projectDeliveries().length,
-          2,
-          "replacement Manager receives retained message",
+          listProjectAssignments(runtime, "repo-key").some(
+            (assignment) => assignment.branch === branch,
+          ),
+          true,
         );
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        assert.equal(
-          projectDeliveries().length,
-          2,
-          "replacement Manager history suppresses replay duplicates",
-        );
-        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), [
-          record,
-        ]);
         process.env.HERDR_PANE_ID = "lead-pane";
         process.env.HERDR_TAB_ID = "lead-tab";
         const lead = fakeChiefPi({ exec });
@@ -1651,7 +1682,7 @@ for (const scenario of [
         );
         assert.match(
           delivered[0].content,
-          /automatically hands your\s+normal assignment response to the current or a replacement Manager/,
+          /automatically hands your\s+normal assignment response to the Manager role/,
         );
         assert.equal(delivered[0].content.includes(sessionId), false);
         assert.ok(

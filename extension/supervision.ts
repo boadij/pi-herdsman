@@ -2025,6 +2025,22 @@ export function listProjectMessages(
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
+export function removeProjectMessage(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+  id: string,
+): void {
+  if (!UUID.test(id)) throw new Error("Invalid project message ID");
+  const directory = projectMessageDirectory(runtime, repoKey, branch);
+  try {
+    unlinkSync(join(directory, `${id}.json`));
+    fsyncDirectory(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
 export function removeProjectMessages(
   runtime: SupervisionRuntime,
   repoKey: string,
