@@ -75,7 +75,7 @@ jobs:
           test "$(node -p "require('./package.json').name")" = "pi-herdsman"
 
           npm --no-git-tag-version version "$VERSION"
-          npm run release:check
+          npm run release:check -- --tag "pr-$PR"
 
           test "$(node -p "require('./package.json').name")" = "pi-herdsman"
           test "$(node -p "require('./package.json').version")" = "$VERSION"
