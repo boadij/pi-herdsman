@@ -148,10 +148,13 @@ export type ChiefInboxDrainOptions = {
   signal?: AbortSignal;
   isAuthorized: (record: ChiefMessageRecord) => boolean | Promise<boolean>;
   isDelivered: (id: string) => boolean;
+  deliveryMode?: (
+    record: ChiefMessageRecord,
+  ) => "steer" | "followUp" | undefined;
   sendMessage: (
     message: unknown,
     options: {
-      deliverAs: "followUp";
+      deliverAs: "steer" | "followUp";
       triggerTurn: true;
     },
     record: ChiefMessageRecord,
@@ -769,6 +772,10 @@ export async function drainCoordinationInbox(
       }
       continue;
     }
+    const deliverAs = options.deliveryMode
+      ? options.deliveryMode(record)
+      : "followUp";
+    if (!deliverAs) continue;
     let token: unknown;
     const clearTransaction = async (): Promise<void> => {
       if (token === undefined) return;
@@ -847,7 +854,7 @@ export async function drainCoordinationInbox(
               ...(record.branch ? { branch: record.branch } : {}),
             },
           },
-          { deliverAs: "followUp", triggerTurn: true },
+          { deliverAs, triggerTurn: true },
           record,
         );
         await options.transaction?.revalidate(token, "after-send");

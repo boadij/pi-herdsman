@@ -6202,6 +6202,17 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           managerDiagnostic("inbox_catch", { category: "cleanup" });
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         },
+        deliveryMode: (record: ChiefMessageRecord) => {
+          const role = activeRole();
+          const supervisorDownlink =
+            (role === "lead" &&
+              (record.kind === "chief_message" ||
+                record.kind === "manager_message")) ||
+            (role === "manager" && record.kind === "chief_message");
+
+          if (supervisorDownlink) return "steer";
+          return ctx.isIdle() ? "followUp" : undefined;
+        },
         isDelivered: (id: string) => {
           const record = transactions.get(id)?.record;
           return record ? messageDelivered(ctx, record) : false;
@@ -6252,10 +6263,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
             "customType" in message &&
             message.customType === "pi-herdsman-project_assignment";
           try {
-            if (!ctx.isIdle())
-              throw new Error(
-                "Coordination delivery deferred while recipient is active",
-              );
             let payload = message;
             let resultBindings = record.resultBindings;
             if (record.kind === "project_assignment") {
@@ -6406,7 +6413,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         });
         return count;
       };
-      if (!ctx.isIdle()) return complete(0);
       const held = chiefStartPreflightHeld(ctx);
       managerDiagnostic("inbox_preflight", { reason: held ? "held" : "pass" });
       if (held) return complete(0);

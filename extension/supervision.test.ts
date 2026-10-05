@@ -1421,6 +1421,45 @@ test("inbox rechecks quarantine before accepting an already-delivered record", a
   );
 });
 
+test("deferred inbox records skip authorization and remain pending", async () => {
+  const runtime = supervisionRuntime(socket());
+  const record = message();
+  const path = writeChiefMessage(record, runtime);
+
+  let begun = 0;
+  let authorized = 0;
+  let sent = 0;
+
+  assert.equal(
+    await drainCoordinationInbox({
+      runtime,
+      sessionId: record.toSessionId,
+      deliveryMode: () => undefined,
+      transaction: {
+        begin: () => {
+          begun++;
+        },
+        revalidate: () => {},
+        clear: () => {},
+      },
+      isAuthorized: () => {
+        authorized++;
+        return true;
+      },
+      isDelivered: () => false,
+      sendMessage: () => {
+        sent++;
+      },
+    }),
+    0,
+  );
+
+  assert.equal(begun, 0);
+  assert.equal(authorized, 0);
+  assert.equal(sent, 0);
+  assert.deepEqual(listChiefMessagePaths(runtime, record.toSessionId), [path]);
+});
+
 test("inbox orders valid records by createdAt and retains transient failures", async () => {
   const runtime = supervisionRuntime(socket());
   const records = [

@@ -158,7 +158,7 @@ const ownershipResult = (
   },
 });
 
-test("assigned Lead saves supervisor messages durably with or without a Manager", async () => {
+test("assigned Lead steers active Manager messages and saves supervisor messages durably", async (t) => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `manager-routing-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
@@ -246,6 +246,34 @@ test("assigned Lead saves supervisor messages durably with or without a Manager"
       updatedAt: Date.now(),
     });
     await pi.events.get("session_start")![0](undefined, ctx);
+    ctx.isIdle = () => false;
+    writeChiefMessage(
+      {
+        version: 2,
+        id: randomUUID(),
+        leaseId: manager.descriptor.leaseId,
+        kind: "manager_message",
+        fromSessionId: managerId,
+        toSessionId: leadId,
+        leadSessionId: leadId,
+        text: "change direction now",
+        createdAt: Date.now(),
+      },
+      runtime,
+    );
+    await t.waitFor(() => {
+      const call = pi.sentMessageCalls.find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-manager_message" &&
+          message?.content?.includes("change direction now"),
+      );
+      assert.ok(call);
+      assert.deepEqual(call.options, {
+        deliverAs: "steer",
+        triggerTurn: true,
+      });
+    });
+    assert.equal(listChiefMessagePaths(runtime, leadId).length, 0);
     const tool = pi.tools.find(
       (candidate) => candidate.name === "supervisor_message",
     )!;
