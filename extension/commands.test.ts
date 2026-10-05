@@ -311,6 +311,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
   const notices: string[] = [];
   context.ui.notify = (message: string) => notices.push(message);
   const dir = mkdtempSync(join(tmpdir(), "herdsman-manager-usage-"));
+  let restoreListAll: (() => void) | undefined;
   const leadA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   const leadB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   const agentX = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -395,6 +396,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
         repoKey: "repo-key",
         branch,
         text: branch,
+        ...(branch !== "branch-a-alias" ? { piSessionFile: paths[id]! } : {}),
       });
     assert.deepEqual(
       listProjectAssignments(supervisionRuntime(), "repo-key").map(
@@ -402,6 +404,12 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       ),
       [leadA, leadA, leadB],
     );
+    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    const originalListAll = SessionManager.listAll;
+    restoreListAll = () => (SessionManager.listAll = originalListAll);
+    SessionManager.listAll = async () => {
+      throw new Error("global inventory must not be touched by Manager stats");
+    };
     await manager.commandOptions.get("agents").handler("stats", context);
     assert.match(notices[1]!, /Managed Leads · 2 sessions[\s\S]*Input\s+16/);
     assert.match(notices[1]!, /Managed agents · 2 sessions[\s\S]*Input\s+20/);
@@ -411,83 +419,77 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       /test\/agent\s+20\s+\$20\.000[\s\S]*test\/lead\s+16\s+\$16\.000[\s\S]*test\/manager\s+2\s+\$0\.000/,
     );
     assert.doesNotMatch(notices[1]!, /Coverage incomplete/);
-    nativeSessions.delete(paths[leadB]!);
+
+    const conflictPath = join(dir, "conflict.jsonl");
+    writeFileSync(conflictPath, "");
+    nativeSessions.set(conflictPath, {
+      id: leadA,
+      path: conflictPath,
+      entries: [
+        { type: "usage", provider: "test", model: "lead", usage: usage(99) },
+      ],
+    });
+    writeProjectAssignment(supervisionRuntime(), {
+      version: 2,
+      id: leadA,
+      repoKey: "repo-key",
+      branch: "branch-a-alias",
+      text: "branch-a-alias",
+      piSessionFile: conflictPath,
+    });
     await manager.commandOptions.get("agents").handler("stats", context);
-    assert.match(notices[2]!, /Managed Leads · 1 session[\s\S]*Input\s+5/);
-    assert.match(notices[2]!, /Managed agents · 1 session[\s\S]*Input\s+7/);
+    assert.match(notices.at(-1)!, /Coverage incomplete/);
+    assert.doesNotMatch(notices.at(-1)!, /Input\s+99/);
+    nativeSessions.delete(conflictPath);
+    writeProjectAssignment(supervisionRuntime(), {
+      version: 2,
+      id: leadA,
+      repoKey: "repo-key",
+      branch: "branch-a-alias",
+      text: "branch-a-alias",
+      piSessionFile: paths[leadA]!,
+    });
+
+    writeProjectAssignment(supervisionRuntime(), {
+      version: 2,
+      id: leadB,
+      repoKey: "repo-key",
+      branch: "branch-b",
+      text: "branch-b",
+    });
+    await manager.commandOptions.get("agents").handler("stats", context);
+    assert.match(notices.at(-1)!, /Managed Leads · 1 session[\s\S]*Input\s+5/);
+    assert.match(notices.at(-1)!, /Managed agents · 1 session[\s\S]*Input\s+7/);
     assert.match(
-      notices[2]!,
+      notices.at(-1)!,
       /Coverage incomplete: some managed project session usage is unavailable\./,
     );
-    assert.doesNotMatch(notices[2]!, /Input\s+16/);
+    assert.doesNotMatch(notices.at(-1)!, /Input\s+16/);
 
-    const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-    const originalListAll = SessionManager.listAll;
-    const originalSignal = context.signal;
-    context.signal = undefined;
-    SessionManager.listAll = async () => {
-      throw new Error("inventory unavailable");
-    };
-    try {
-      await manager.commandOptions.get("agents").handler("stats", context);
-      assert.match(notices.at(-1)!, /Current session[\s\S]*Input\s+2/);
-      assert.match(
-        notices.at(-1)!,
-        /Coverage incomplete: some managed project session usage is unavailable\./,
-      );
-    } finally {
-      SessionManager.listAll = originalListAll;
-      context.signal = originalSignal;
-    }
-
-    const abortController = new AbortController();
-    context.signal = abortController.signal;
-    SessionManager.listAll = async (_progress, signal) => {
-      assert.equal(signal, abortController.signal);
-      abortController.abort();
-      context.signal = undefined;
-      signal?.throwIfAborted();
-      return [];
-    };
-    try {
-      await manager.commandOptions.get("agents").handler("stats", context);
-      assert.doesNotMatch(notices.at(-1)!, /^Session usage/);
-      assert.match(notices.at(-1)!, /abort/i);
-    } finally {
-      SessionManager.listAll = originalListAll;
-      context.signal = originalSignal;
-    }
-
-    nativeSessions.set(paths[leadB]!, {
+    writeProjectAssignment(supervisionRuntime(), {
+      version: 2,
       id: leadB,
+      repoKey: "repo-key",
+      branch: "branch-b",
+      text: "branch-b",
+      piSessionFile: paths[leadB]!,
+    });
+    nativeSessions.set(paths[leadB]!, {
+      id: leadA,
       path: paths[leadB]!,
       entries: [
         { type: "usage", provider: "test", model: "lead", usage: usage(11) },
         receipt(leadB, agentY, "y"),
       ],
     });
-    const pending = Promise.withResolvers<any[]>();
-    SessionManager.listAll = async () => pending.promise;
-    try {
-      const managerScopedStats = manager.commandOptions
-        .get("agents")
-        .handler("stats", context);
-      await manager.commandOptions.get("manager").handler("leave", context);
-      pending.resolve(
-        [...nativeSessions.values()].map((session) => ({
-          id: session.id,
-          cwd: session.cwd,
-          path: session.path,
-        })),
-      );
-      await managerScopedStats;
-      assert.match(notices.at(-1)!, /Managed Leads · 2 sessions/);
-      await manager.commandOptions.get("agents").handler("stats", context);
-      assert.doesNotMatch(notices.at(-1)!, /Managed Leads/);
-    } finally {
-      SessionManager.listAll = originalListAll;
-    }
+    await manager.commandOptions.get("agents").handler("stats", context);
+    assert.match(notices.at(-1)!, /Coverage incomplete/);
+    assert.doesNotMatch(notices.at(-1)!, /Managed Leads · 2 sessions/);
+
+    SessionManager.listAll = originalListAll;
+    restoreListAll = undefined;
   } finally {
+    restoreListAll?.();
     for (const path of Object.values(paths)) nativeSessions.delete(path);
     rmSync(dir, { recursive: true, force: true });
     await manager.events.get("session_shutdown")?.[0]();
@@ -2244,6 +2246,10 @@ async function managerDelegateAssignmentTest(
     assert.equal(assignment?.id, childSession);
     assert.match(assignment!.branch, /^herdsman\/work-[0-9a-f]{8}$/);
     assert.equal(assignment!.branch.includes(assignment!.id), false);
+    assert.equal(
+      assignment!.piSessionFile,
+      realFs.realpathSync(childSessionPath()),
+    );
     const assignmentBytes = readFileSync(
       projectAssignmentPath(
         supervisionRuntime(),
@@ -2255,6 +2261,7 @@ async function managerDelegateAssignmentTest(
     assert.deepEqual(Object.keys(JSON.parse(assignmentBytes)).sort(), [
       "branch",
       "id",
+      "piSessionFile",
       "repoKey",
       "text",
       "version",
@@ -2337,7 +2344,7 @@ async function managerDelegateAssignmentTest(
       );
       assert.match(
         assignmentDelivery.content!,
-        /Herdsman automatically hands your\s+normal assignment response to the current or a replacement Manager\./,
+        /Herdsman automatically hands your\s+normal assignment response to the Manager role\.\s+If no Manager is available,\s+the handoff remains pending until a Manager can receive it\./,
       );
       const message = await lead.tools
         .find((tool) => tool.name === "supervisor_message")!
@@ -7222,6 +7229,83 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
   setLeadEnvironment();
 });
 
+test("status session preparation drops the previous session snapshot", async (t) => {
+  const { createAgentStatusRuntime } = await import("./agent-controller.ts");
+  const runtime = createAgentStatusRuntime();
+  const pending: {
+    resolve(snapshot: any): void;
+    reject(error: Error): void;
+  }[] = [];
+  runtime.configure({
+    loadSnapshot: () =>
+      new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    pendingStartEntries: () => [],
+    hasPendingStart: () => false,
+    clearPendingStart: () => false,
+    runtimeForLabel: () => undefined,
+    ownToolsSnapshot: () => ({}),
+  });
+  const widgets: StatusWidget[] = [];
+  const context = () => {
+    const ctx = fakeContext() as any;
+    ctx.mode = "tui";
+    ctx.hasUI = true;
+    ctx.ui = {
+      setWidget: (_key: string, content: any) => {
+        if (typeof content !== "function") return;
+        widgets.push(
+          content(
+            { requestRender: () => undefined },
+            {
+              fg: (_color: string, value: string) => value,
+              bold: (value: string) => value,
+            },
+          ),
+        );
+      },
+    };
+    return ctx;
+  };
+  t.after(() => runtime.shutdown());
+
+  const firstContext = context();
+  runtime.prepareSession(firstContext);
+  runtime.start(firstContext);
+  pending[0]!.resolve({
+    agents: [{ label: "old-agent", definition: "scout", state: "working" }],
+    stale: false,
+    unavailable: false,
+    breadcrumb: ["lead", "scout:old-agent"],
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.match(widgets[0]!.render(160).join("\n"), /lead → scout:old-agent/);
+
+  runtime.requestRefresh();
+  assert.equal(pending.length, 2, "an older refresh remains in flight");
+
+  const nextContext = context();
+  runtime.prepareSession(nextContext);
+  runtime.start(nextContext);
+  assert.deepEqual(widgets[1]!.render(160), ["● ?  unavailable"]);
+  pending[1]!.resolve({
+    agents: [{ label: "stale-agent", definition: "scout", state: "working" }],
+    stale: false,
+    unavailable: false,
+    breadcrumb: ["lead", "scout:stale-agent"],
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(widgets[1]!.render(160), ["● ?  unavailable"]);
+
+  pending[2]!.reject(new Error("new session refresh failed"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(widgets[1]!.render(160), ["● ?  unavailable"]);
+  assert.equal(
+    pending.length,
+    3,
+    "the new session refresh stayed pending until failed",
+  );
+});
+
 test("TUI status widget is registered as a Pi component factory", async (t) => {
   setLeadEnvironment();
   let factory: unknown;
@@ -7256,7 +7340,7 @@ test("TUI status widget is registered as a Pi component factory", async (t) => {
     stale: false,
     unavailable: false,
   });
-  assert.equal(renderRequests, 1);
+  assert.equal(renderRequests, 2);
   assert.notEqual(factory, component);
   const leadSignal = pi.execOptions.find((options) => options.signal)?.signal;
   assert.ok(leadSignal);
@@ -7352,6 +7436,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     await Promise.resolve();
 
     assert.equal(widgets.length, 2);
+    assert.equal(widgets[1].render(120)[0], "● lead  unavailable");
     assert.equal(
       registrations,
       3,
@@ -7385,7 +7470,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
       });
     await Promise.resolve();
     await Promise.resolve();
-    assert.match(widgets[1].render(120)[0], /unavailable/);
+    assert.equal(widgets[1].render(120)[0], "● lead  unavailable");
     for (const pending of pendingLists.splice(0))
       pending.resolve({
         stdout: JSON.stringify({
@@ -7404,7 +7489,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     await pi.events.get("session_shutdown")?.[0]();
     assert.equal(activeTimers.size, 0);
     assert.equal(disposeCalls, 3, "the current widget is disposed on shutdown");
-    assert.equal(widgets[0].render(120)[0], "● herd  unavailable");
+    assert.equal(widgets[0].render(120)[0], "● lead  unavailable");
   } finally {
     StatusWidget.prototype.dispose = originalDispose;
     globalThis.setInterval = originalSetInterval;
@@ -8116,7 +8201,7 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
         "assignment did not reach integration validation",
       ),
     );
-    assert.match(widget!.render(160).join("\n"), /herd/);
+    assert.match(widget!.render(160).join("\n"), /lead/);
     resolveIntegration!({
       stdout: JSON.stringify({ id: AGENT_ID, result: { agent: herdrAgent } }),
       stderr: "",
@@ -8182,8 +8267,8 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
     );
     assert.equal(failed.details.ok, true, JSON.stringify(failed.details));
     assert.equal(pi.sentMessageCalls.length, 1);
-    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /herd/));
-    assert.match(widget!.render(160).join("\n"), /herd/);
+    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /lead/));
+    assert.match(widget!.render(160).join("\n"), /lead/);
 
     failValidation = true;
     live = false;
@@ -8200,8 +8285,8 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
       context,
     );
     assert.equal(invalid.details.ok, false);
-    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /herd/));
-    assert.match(widget!.render(160).join("\n"), /herd/);
+    await t.waitFor(() => assert.match(widget!.render(160).join("\n"), /lead/));
+    assert.match(widget!.render(160).join("\n"), /lead/);
   } finally {
     updateConfig("spawnPlacement", previousPlacement);
     await pi.events.get("session_shutdown")?.[0]();

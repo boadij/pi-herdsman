@@ -148,10 +148,13 @@ export type ChiefInboxDrainOptions = {
   signal?: AbortSignal;
   isAuthorized: (record: ChiefMessageRecord) => boolean | Promise<boolean>;
   isDelivered: (id: string) => boolean;
+  deliveryMode?: (
+    record: ChiefMessageRecord,
+  ) => "steer" | "followUp" | undefined;
   sendMessage: (
     message: unknown,
     options: {
-      deliverAs: "followUp";
+      deliverAs: "steer" | "followUp";
       triggerTurn: true;
     },
     record: ChiefMessageRecord,
@@ -769,6 +772,10 @@ export async function drainCoordinationInbox(
       }
       continue;
     }
+    const deliverAs = options.deliveryMode
+      ? options.deliveryMode(record)
+      : "followUp";
+    if (!deliverAs) continue;
     let token: unknown;
     const clearTransaction = async (): Promise<void> => {
       if (token === undefined) return;
@@ -847,7 +854,7 @@ export async function drainCoordinationInbox(
               ...(record.branch ? { branch: record.branch } : {}),
             },
           },
-          { deliverAs: "followUp", triggerTurn: true },
+          { deliverAs, triggerTurn: true },
           record,
         );
         await options.transaction?.revalidate(token, "after-send");
@@ -1681,12 +1688,15 @@ export type ProjectAssignment = Readonly<{
   repoKey: string;
   branch: string;
   text: string;
+  piSessionFile?: string;
   resultBindings?: ResultBinding[];
 }>;
 export const PROJECT_ASSIGNMENT_MAX_BYTES = 1024 * 1024;
+const PROJECT_ASSIGNMENT_FILE_MAX_BYTES = PROJECT_ASSIGNMENT_MAX_BYTES * 2;
 
 export function projectAssignmentBytes(assignment: ProjectAssignment): number {
-  return Buffer.byteLength(`${JSON.stringify(assignment)}\n`, "utf8");
+  const { piSessionFile: _, ...payload } = assignment;
+  return Buffer.byteLength(`${JSON.stringify(payload)}\n`, "utf8");
 }
 
 export function projectAssignmentPath(
@@ -1707,7 +1717,7 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const r = value as Record<string, unknown>;
   const required = ["version", "id", "repoKey", "branch", "text"];
-  const optional = ["resultBindings"];
+  const optional = ["piSessionFile", "resultBindings"];
   return (
     required.every((key) => Object.hasOwn(r, key)) &&
     Object.keys(r).every(
@@ -1720,6 +1730,8 @@ function validProjectAssignment(value: unknown): value is ProjectAssignment {
     validNativeIdentity(r.branch) &&
     typeof r.text === "string" &&
     r.text.length > 0 &&
+    (r.piSessionFile === undefined ||
+      (typeof r.piSessionFile === "string" && r.piSessionFile.length > 0)) &&
     (r.resultBindings === undefined ||
       (Array.isArray(r.resultBindings) &&
         r.resultBindings.every(isResultBinding)))
@@ -1733,7 +1745,10 @@ export function writeProjectAssignment(
   if (!validProjectAssignment(assignment))
     throw new Error("Invalid project assignment");
   const content = `${JSON.stringify(assignment)}\n`;
-  if (projectAssignmentBytes(assignment) > PROJECT_ASSIGNMENT_MAX_BYTES)
+  if (
+    projectAssignmentBytes(assignment) > PROJECT_ASSIGNMENT_MAX_BYTES ||
+    Buffer.byteLength(content, "utf8") > PROJECT_ASSIGNMENT_FILE_MAX_BYTES
+  )
     throw new Error("Project assignment is too large");
   const path = projectAssignmentPath(
     runtime,
@@ -1782,7 +1797,7 @@ function readProjectAssignmentFile(
 ): ProjectAssignment | undefined {
   let value: unknown;
   try {
-    if (statSync(path).size > PROJECT_ASSIGNMENT_MAX_BYTES)
+    if (statSync(path).size > PROJECT_ASSIGNMENT_FILE_MAX_BYTES)
       throw new Error("file is too large");
     value = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
@@ -1797,6 +1812,8 @@ function readProjectAssignmentFile(
   }
   if (!validProjectAssignment(value))
     throw projectAssignmentReadError(path, "invalid assignment schema");
+  if (projectAssignmentBytes(value) > PROJECT_ASSIGNMENT_MAX_BYTES)
+    throw projectAssignmentReadError(path, "assignment payload is too large");
   if (
     value.repoKey !== repoKey ||
     basename(dirname(path)) !==
@@ -2015,6 +2032,22 @@ export function listProjectMessages(
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
 }
 
+export function removeProjectMessage(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+  id: string,
+): void {
+  if (!UUID.test(id)) throw new Error("Invalid project message ID");
+  const directory = projectMessageDirectory(runtime, repoKey, branch);
+  try {
+    unlinkSync(join(directory, `${id}.json`));
+    fsyncDirectory(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
 export function removeProjectMessages(
   runtime: SupervisionRuntime,
   repoKey: string,
@@ -2199,6 +2232,19 @@ export type ProjectWorkSnapshot = Readonly<{
   task?: string;
   issue?: string;
 }>;
+export function projectTaskSummary(text: string): string | undefined {
+  const task = text
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+
+  if (!task) return undefined;
+
+  const characters = Array.from(task);
+  return characters.length <= 160
+    ? task
+    : `${characters.slice(0, 159).join("")}…`;
+}
 /** Derive work from one caller-validated Lead inventory and one Herdr worktree list. */
 export function projectWorkSnapshot(options: {
   assignments: readonly ProjectAssignment[];
@@ -2243,24 +2289,13 @@ export function projectWorkSnapshot(options: {
         status = "paused";
       }
     }
-    const task = assignment.text
-      .replace(/[\u0000-\u001f\u007f]/g, " ")
-      .replace(/\s+/gu, " ")
-      .trim();
-    const characters = Array.from(task);
+    const task = projectTaskSummary(assignment.text);
     return {
       branch: assignment.branch,
       session: assignment.id,
       status,
       ...(runtimeState ? { runtimeState } : {}),
-      ...(task
-        ? {
-            task:
-              characters.length <= 160
-                ? task
-                : `${characters.slice(0, 159).join("")}…`,
-          }
-        : {}),
+      ...(task ? { task } : {}),
       ...(issue ? { issue } : {}),
     };
   });

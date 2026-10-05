@@ -38,6 +38,7 @@ export let sessionOpenError: unknown;
 export let failNextMailboxWrite = false;
 export let failNextRequestRemoval = false;
 export let failNextResultRemoval = false;
+export let failProjectMessageRemoval = false;
 export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
 export let configReadHook: (() => void) | undefined;
@@ -145,6 +146,12 @@ mock.module("node:fs", {
     statSync: realFs.statSync,
     unlinkSync: (path: string) => {
       const name = basename(path);
+      if (
+        failProjectMessageRemoval &&
+        path.includes(".messages") &&
+        name.endsWith(".json")
+      )
+        throw new Error("injected project message removal failure");
       if (failNextRequestRemoval && name.startsWith("request-")) {
         failNextRequestRemoval = false;
         throw new Error("injected request removal failure");
@@ -256,6 +263,10 @@ mock.module("@earendil-works/pi-coding-agent", {
       return [];
     },
     SessionManager: {
+      findById: (cwd: string, id: string) =>
+        [...nativeSessions.values()].find(
+          (session) => session.id === id && session.cwd === cwd,
+        )?.path,
       listAll: async () =>
         [...nativeSessions.values()].map((session) => ({
           id: session.id,
@@ -2979,6 +2990,12 @@ export default {
   },
   set failNextResultRemoval(value: boolean) {
     failNextResultRemoval = value;
+  },
+  get failProjectMessageRemoval() {
+    return failProjectMessageRemoval;
+  },
+  set failProjectMessageRemoval(value: boolean) {
+    failProjectMessageRemoval = value;
   },
   get resultRemovalAttempts() {
     return resultRemovalAttempts;

@@ -1494,7 +1494,7 @@ test("active chief describes authoritative remote ask projection", async () => {
     [listTool, "List direct-report supervision state."],
     [inspectTool, "Read bounded live terminal/process evidence"],
     [transcriptTool, "Read bounded persisted Pi conversation/tool evidence"],
-    [tool, "Send a durable follow-up message"],
+    [tool, "Send a durable supervisor message to a direct report"],
   ] as const)
     assert.match(operation.description, new RegExp(phrase));
   assert.doesNotMatch(
@@ -1835,8 +1835,8 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
     assert.equal(listedLead.role, "lead");
     assert.equal("lead" in listedLead, false);
     assert.deepEqual(
-      listedLead?.available_actions,
-      ["inspect", "transcript", "message"],
+      listedLead?.available_tools,
+      ["staff_inspect", "staff_transcript", "staff_message"],
       JSON.stringify(listed.details),
     );
 
@@ -1910,7 +1910,7 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
         (report) => report.session === leadId,
       );
       assert.ok(mismatchedLead);
-      assert.ok(mismatchedLead.available_actions.includes("transcript"));
+      assert.ok(mismatchedLead.available_tools.includes("staff_transcript"));
       await assert.rejects(
         tool.execute(
           "transcript",
@@ -3734,7 +3734,7 @@ test("leaf status proves its Lead boundary from coordination state without openi
     globalThis.setInterval = originalSetInterval;
   }
   assert.equal(registrations, 1);
-  await t.waitFor(() => assert.match(widget.render(120)[0], /herd/));
+  await t.waitFor(() => assert.match(widget.render(120)[0], /lead/));
   assert.equal(openCalls, 0);
 
   invalidateLeadCoordinationState(supervisionRuntime(), ownerSessionId);

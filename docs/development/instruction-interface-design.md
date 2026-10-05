@@ -50,13 +50,15 @@ Instructions should describe semantics the system cannot make sufficiently obvio
 
 ## Prefer positive steering
 
-Steer models toward desired behavior before constraining against undesired behavior.
+Design for desired behavior before constraining against undesired behavior.
 
-Phrase guidance primarily as desired decisions, priorities, defaults, and actions. Prefer guidance such as "Use existing context before requesting additional information" or "Prefer the smallest durable solution" over enumerating unwanted behaviors.
+Make correct behavior structural when practical through capabilities, tool availability, schemas, state, defaults, lifecycle boundaries, and validation. The strongest positive steering often removes the need for an instruction by making the intended action the natural available action.
 
-Use negative constraints when they express a genuine boundary more clearly than affirmative guidance. Reserve absolute terms such as `never`, `must not`, and `forbidden` for true invariants, safety or security boundaries, destructive operations, or behavior that must categorically not occur.
+When model guidance is still necessary, phrase it primarily as desired decisions, priorities, defaults, and actions. Prefer guidance such as "Use existing context before requesting additional information" or "Prefer the smallest durable solution" over enumerating unwanted behaviors.
 
-When a prohibited behavior can be made impossible structurally, enforce it through tools, schemas, capabilities, state, or validation instead of relying on prose alone.
+Use negative constraints when the forbidden behavior is itself important to the contract or when a boundary is clearer in negative form. Reserve absolute terms such as `never`, `must not`, and `forbidden` for true invariants, authority, safety or security, integrity, destructive operations, or behavior that must categorically not occur.
+
+Do not accumulate prohibitions to compensate for an interface or contract that can express the desired behavior directly. When a prohibited behavior can be made impossible structurally, enforce it through tools, schemas, capabilities, state, or validation instead of relying on prose alone.
 
 ## Treat the model-facing contract as one system
 

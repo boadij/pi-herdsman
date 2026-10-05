@@ -85,7 +85,8 @@ independent enough to justify separate branch and execution boundaries.
 ## Coordinate and review
 
 For each project-assignment delivery, Herdsman automatically records the
-Lead's normal response for the current or a replacement Manager. Successful
+Lead's normal response to the Manager role. If no Manager is available, the
+handoff remains pending until a Manager can receive it. Successful
 delegation or continuation of managed Agent work defers that handoff until the
 herd run settles; the response summarizes outcome, validation, and important
 unresolved points. Unsuccessful delegation leaves the local response path
@@ -93,8 +94,9 @@ available. Later conversational replies stay local. This handoff is not
 project completion: the assignment remains open through review and requested
 corrections. Leads use `supervisor_message` only for material coordination
 requiring Manager attention, a decision, or action—not routine acknowledgment
-or a duplicate handoff. Such messages are retained with the assignment while
-Manager is absent and remain available to a replacement. Settlement and review
+or a duplicate handoff. Such messages remain pending while Manager is absent
+and are delivered to the next Manager that can receive them. Already-delivered messages are Pi
+conversation history, not pending Herdsman coordination. Settlement and review
 do not retire the assignment.
 
 Use the current supervision state rather than repeatedly listing or inspecting
@@ -113,7 +115,7 @@ See [`staff_stop`](../reference/staff.md#staff_stop) and
 ## Retire project work
 
 Successful Herdr worktree removal retires the matching project assignment and
-its retained messages; the Git branch remains. A worktree that is merely
+any still-pending messages; the Git branch remains. A worktree that is merely
 missing does not imply retirement, so the assignment remains recoverable with
 `staff_resume` when its branch is available.
 

@@ -201,6 +201,7 @@ import {
   projectMessageBytes,
   writeProjectMessage,
   listProjectMessages,
+  removeProjectMessage,
   removeProjectMessages,
   sessionLeadRoleState,
   type ChiefLease,
@@ -355,14 +356,16 @@ Lead while preserving its assignment. Project retirement is user-controlled
 through successful Herdr worktree removal.
 
 Each project-assignment delivery to a Lead is an automatic handoff to you:
-Herdsman records the Lead's normal response as a project message for the current
-or a replacement Manager. If the Lead successfully delegates or
+Herdsman automatically hands the Lead's normal assignment response to the
+Manager role. If no Manager is available, the handoff remains pending until a Manager
+can receive it. If the Lead successfully delegates or
 continues managed Agent work, the herd run owns that handoff until it settles,
 and the Lead's settled response should summarize the outcome, validation, and
 important unresolved points. An unsuccessful delegation leaves the local
 assignment-response path available. Later conversational replies, including
 routine thanks or acknowledgments, remain local and are not automatically
-promoted. Review
+promoted. Undelivered project handoffs survive Manager absence. Once a handoff
+has been delivered, it is not automatically replayed to later Managers. Review
 received handoffs and request corrections with staff_message when needed.
 
 Project execution belongs to project Leads and their Agent trees. Your role
@@ -522,51 +525,35 @@ function retiredManagedSession(
     sessionContextRetired(entries, sessionId)
   );
 }
-async function collectOwnedSessionUsage(
+function collectOwnedSessionUsage(
   ctx: ExtensionContext,
-  managerScopeOrLeadIds?: boolean | readonly string[],
+  managedLeads?: readonly { id: string; piSessionFile?: string }[],
 ) {
-  const managedLeadIds = Array.isArray(managerScopeOrLeadIds)
-    ? managerScopeOrLeadIds
-    : undefined;
-  if (!managedLeadIds?.length)
+  if (managedLeads === undefined)
     return collectSessionUsage(
       ctx,
       ownedAssignmentChildren,
       openOwnedAssignmentSession,
     );
-  const wanted = new Set(managedLeadIds);
-  const signal = ctx.signal;
-  let sessions;
-  try {
-    sessions = await SessionManager.listAll(undefined, signal);
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    return collectSessionUsage(
-      ctx,
-      ownedAssignmentChildren,
-      openOwnedAssignmentSession,
-      [],
-      false,
-    );
-  }
-  const matches = new Map<string, string[]>();
-  for (const session of sessions) {
-    if (!wanted.has(session.id)) continue;
-    const paths = matches.get(session.id) ?? [];
-    paths.push(session.path);
-    matches.set(session.id, paths);
+  const pathsById = new Map<string, Set<string>>();
+  for (const { id, piSessionFile } of managedLeads) {
+    if (!pathsById.has(id)) pathsById.set(id, new Set());
+    if (!piSessionFile) continue;
+    try {
+      pathsById.get(id)!.add(canonicalSessionPath(piSessionFile));
+    } catch {
+      // This ID remains unresolved unless another exact path proves it.
+    }
   }
   const roots: SessionManager[] = [];
   let complete = true;
-  for (const id of wanted) {
-    const paths = matches.get(id) ?? [];
-    if (paths.length !== 1) {
+  for (const [id, paths] of pathsById) {
+    if (paths.size !== 1) {
       complete = false;
       continue;
     }
     try {
-      const manager = SessionManager.open(paths[0]!);
+      const manager = SessionManager.open(paths.values().next().value!);
       if (manager.getSessionId() !== id) {
         complete = false;
         continue;
@@ -1522,7 +1509,7 @@ export default function (pi: ExtensionAPI): void {
     };
     const initialStatusBreadcrumb =
       controllerScope.kind === "lead"
-        ? ["herd"]
+        ? ["lead"]
         : [
             "?",
             process.env.PI_HERDSMAN_AGENT_DEFINITION &&
@@ -1957,7 +1944,8 @@ export default function (pi: ExtensionAPI): void {
           ...staffTool,
           name: "staff_message",
           label: "staff message",
-          description: "Send a durable follow-up message to a direct report.",
+          description:
+            "Send a durable supervisor message to a direct report; active work is steered cooperatively.",
           parameters: staffMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -2199,6 +2187,7 @@ export default function (pi: ExtensionAPI): void {
           writeChiefMessage,
           listProjectAssignments,
           listProjectMessages,
+          removeProjectMessage,
           readProjectAssignment,
           importResultBindings,
         },

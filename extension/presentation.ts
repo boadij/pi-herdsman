@@ -2544,6 +2544,13 @@ function expandedResultLines(
         details.pi_session_id ??
         details.chiefSessionId,
     ],
+    ["branch", tool === "staff" ? details.branch : undefined],
+    [
+      "task",
+      tool === "staff" && action === "resume"
+        ? details.presentation_task
+        : undefined,
+    ],
     ["request", details.request_id],
     ["assignment request", details.assignment_request_id],
     ["pane", details.pane_id],
@@ -2612,8 +2619,30 @@ function expandedResultLines(
       return lines;
     }
     const reports = Array.isArray(details.reports) ? details.reports : [];
+    const work = Array.isArray(details.work) ? details.work : [];
     lines.push(
       "",
+      ...(work.length
+        ? [
+            "project work:",
+            ...work.flatMap((item: any) => {
+              if (!item || typeof item !== "object") return [];
+
+              const branch = value(item.branch) || "unknown";
+              const status = value(item.status) || "unknown";
+              const runtime = value(item.runtime_state);
+              const task = value(item.task);
+              const issue = value(item.issue);
+
+              return [
+                `  ${branch} · ${status}${runtime ? ` · runtime=${runtime}` : ""}`,
+                ...(task ? [`    task: ${task}`] : []),
+                ...(issue ? [`    issue: ${issue}`] : []),
+              ];
+            }),
+            "",
+          ]
+        : []),
       ...reports.flatMap((lead: any) => {
         if (!lead || typeof lead !== "object") return [];
         const counts =
@@ -2637,17 +2666,11 @@ function expandedResultLines(
             : []),
           ...(Array.isArray(lead.available_tools)
             ? [
-                `  can: ${lead.available_tools.map((tool) => String(tool).replace(/^staff_/, "")).join(", ")}`,
+                `  can: ${lead.available_tools.map((tool) => String(tool).replace(/^staff_/, "")).join(", ") || "nothing"}`,
               ]
             : []),
         ];
       }),
-      ...(Array.isArray(details.assignments)
-        ? details.assignments.map(
-            (assignment: any) =>
-              `assignment: ${value(assignment?.id)} · ${value(assignment?.phase)}${value(assignment?.branch) ? ` · branch: ${value(assignment.branch)}` : ""}${value(assignment?.workspace_id) ? ` · workspace: ${value(assignment.workspace_id)}` : ""}${value(assignment?.pane_id) ? ` · pane: ${value(assignment.pane_id)}` : ""}${value(assignment?.session) ? ` · session: ${value(assignment.session)}` : ""}`,
-          )
-        : []),
     );
   }
   if (action === "inspect")
@@ -3489,10 +3512,7 @@ export class StatusWidget {
       ? "unavailable"
       : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
     const availableWidth = Math.max(0, width);
-    const breadcrumb = renderBreadcrumb(
-      s.breadcrumb ?? ["herd"],
-      availableWidth,
-    );
+    const breadcrumb = renderBreadcrumb(s.breadcrumb ?? ["?"], availableWidth);
     const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
     const run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
     const suffixText = s.identityOnly || !suffix ? "" : `  ${suffix}`;
