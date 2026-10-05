@@ -5732,17 +5732,15 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             entry?.details?.branch === record.branch &&
             entry?.details?.fromSessionId === record.fromSessionId,
         );
-    const consumeProjectMessage = (record: ProjectMessage): boolean => {
+    const consumeProjectMessage = (record: ProjectMessage): void => {
       try {
         removeProjectMessage(runtime, record.repoKey, record.branch, record.id);
         reportedProjectMessageCleanupErrors.delete(record.id);
-        return true;
       } catch (error) {
         if (!reportedProjectMessageCleanupErrors.has(record.id)) {
           reportedProjectMessageCleanupErrors.add(record.id);
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         }
-        return false;
       }
     };
     for (const assignment of listProjectAssignments(runtime, manager.repoKey)) {

@@ -14,32 +14,6 @@ import type {
 } from "./mailbox.ts";
 import { OperationError } from "./errors.ts";
 import { resultPath, resultRef } from "./storage.ts";
-import {
-  listProjectAssignments,
-  listChiefMessagePaths,
-  readChiefMessage,
-  readChiefDescriptor,
-  supervisionRuntime,
-  peerRuntime,
-  readPeerLeadRecord,
-  peerLeadLockPath,
-  writePeerLeadRecord,
-  removePeerLeadRecord,
-  claimChiefLease as claimChiefLeaseRaw,
-  claimManagerLease as claimManagerLeaseRaw,
-  managerDescriptorPath,
-  readManagerDescriptor,
-  writeProjectAssignment,
-  listProjectMessages,
-  writeProjectMessage,
-  projectAssignmentPath,
-  writeChiefMessage as writeChiefMessageRaw,
-  chiefMessageBytes,
-  COORDINATION_MESSAGE_MAX_BYTES,
-  writeLeadCoordinationState as writeLeadCoordinationStateRaw,
-  readLeadCoordinationState,
-  drainCoordinationInbox,
-} from "./supervision.ts";
 import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import support, {
   CHILD_SESSION_ID,
@@ -94,6 +68,32 @@ import support, {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
+const {
+  listProjectAssignments,
+  listChiefMessagePaths,
+  readChiefMessage,
+  readChiefDescriptor,
+  supervisionRuntime,
+  peerRuntime,
+  readPeerLeadRecord,
+  peerLeadLockPath,
+  writePeerLeadRecord,
+  removePeerLeadRecord,
+  claimChiefLease: claimChiefLeaseRaw,
+  claimManagerLease: claimManagerLeaseRaw,
+  managerDescriptorPath,
+  readManagerDescriptor,
+  writeProjectAssignment,
+  listProjectMessages,
+  writeProjectMessage,
+  projectAssignmentPath,
+  writeChiefMessage: writeChiefMessageRaw,
+  chiefMessageBytes,
+  COORDINATION_MESSAGE_MAX_BYTES,
+  writeLeadCoordinationState: writeLeadCoordinationStateRaw,
+  readLeadCoordinationState,
+  drainCoordinationInbox,
+} = await import("./supervision.ts");
 const claimChiefLease = (identity: any) =>
   claimChiefLeaseRaw({ ...identity, build: identity.build ?? HERDSMAN_BUILD });
 const claimManagerLease = (identity: any) =>
@@ -1382,6 +1382,38 @@ for (const reachable of [true, false]) {
         await new Promise((resolve) => setTimeout(resolve, 650));
         assert.equal(projectDeliveries(liveRecord.id).length, 1);
         assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), []);
+
+        const cleanupRecord = { ...liveRecord, id: randomUUID() };
+        const stateErrors = () =>
+          managerHistory.filter(
+            (entry: any) => entry?.customType === "pi_herdsman_state_error",
+          ).length;
+        const errorsBefore = stateErrors();
+        support.failProjectMessageRemoval = true;
+        try {
+          writeProjectMessage(cleanupRecord, runtime);
+          await t.waitFor(() =>
+            assert.equal(projectDeliveries(cleanupRecord.id).length, 1),
+          );
+          await t.waitFor(() => assert.equal(stateErrors(), errorsBefore + 1));
+          await new Promise((resolve) => setTimeout(resolve, 1_100));
+          assert.equal(
+            stateErrors(),
+            errorsBefore + 1,
+            "repeated cleanup retries report one durable error",
+          );
+          assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), [
+            cleanupRecord,
+          ]);
+        } finally {
+          support.failProjectMessageRemoval = false;
+        }
+        await t.waitFor(() =>
+          assert.deepEqual(
+            listProjectMessages(runtime, "repo-key", branch),
+            [],
+          ),
+        );
 
         await pi.commandOptions.get("manager").handler("leave", ctx);
         const replacementId = randomUUID();
