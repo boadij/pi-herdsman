@@ -101,22 +101,24 @@ The assignment is the durable indicator that project work remains open. It
 survives Manager turnover and runtime loss; current Herdr placement is derived
 again when the work is observed or resumed. For an assigned project, Herdsman
 automatically records the Lead's normal response to each project-assignment
-delivery as a project message for the current or a replacement Manager. If
+delivery as a project message for the Manager role. If
 the Lead successfully delegates or continues managed Agent work, the herd run
 owns that handoff until it settles, and the settled response should summarize
 outcome, validation, and important unresolved points. An unsuccessful
 delegation leaves the local assignment-response path available. Later
 conversational replies, including routine acknowledgments, stay local and are
 not automatically promoted. This handoff is advisory and does not resolve the
-assignment. Assigned
-Lead messages sent with `supervisor_message` are also retained with the project
-and remain available to a replacement Manager. Project retirement follows
-successful Herdr worktree removal; see
+assignment. Assigned Lead messages sent with `supervisor_message` remain pending
+while the Manager is absent and are delivered to the next Manager that can
+receive them. Already-delivered messages are Pi conversation history, not
+pending Herdsman coordination.
+Project retirement follows successful Herdr worktree removal; see
 [Project orchestration](../guides/project-orchestration.md) for the workflow.
 
 `staff_stop` pauses execution while preserving the assignment, Pi session,
 branch, and worktree. Successful Herdr worktree removal retires the matching
-assignment and its retained project messages while preserving the Git branch.
+assignment and any still-pending project messages while preserving the Git
+branch.
 A worktree that is merely missing does not retire the assignment; it remains
 recoverable through `staff_resume`.
 

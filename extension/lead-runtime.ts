@@ -460,6 +460,7 @@ type LeadCoordinationBaseHost = {
   isPiAgent(agent: HerdrRecord): boolean;
   listProjectAssignments: typeof import("./supervision.ts").listProjectAssignments;
   listProjectMessages: typeof import("./supervision.ts").listProjectMessages;
+  removeProjectMessage: typeof import("./supervision.ts").removeProjectMessage;
   readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
   importResultBindings: typeof import("./agent-controller.ts").importResultBindings;
 };
@@ -4908,9 +4909,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     quarantineChiefMessage,
     listProjectAssignments,
     listProjectMessages,
+    removeProjectMessage,
     readProjectAssignment,
     importResultBindings,
   } = host;
+  const reportedProjectMessageCleanupErrors = new Set<string>();
   const readLeadSessionIdsFromHost = (
     inventory: HerdrSessionSnapshot,
     mailboxes: ReturnType<typeof import("./mailbox.ts").listAgentStates>,
@@ -5710,6 +5713,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       !ctx.isIdle()
     )
       return 0;
+    const runtime = supervisionRuntime();
     const manager = await currentManager(ctx);
     if (
       !manager ||
@@ -5717,30 +5721,42 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)
     )
       return 0;
-    for (const assignment of listProjectAssignments(
-      supervisionRuntime(),
-      manager.repoKey,
-    )) {
+    const hasProjectMessageReceipt = (record: ProjectMessage): boolean =>
+      ctx.sessionManager
+        .getEntries()
+        .some(
+          (entry: any) =>
+            entry?.customType === "pi-herdsman-project_message" &&
+            entry?.details?.id === record.id &&
+            entry?.details?.repoKey === record.repoKey &&
+            entry?.details?.branch === record.branch &&
+            entry?.details?.fromSessionId === record.fromSessionId,
+        );
+    const consumeProjectMessage = (record: ProjectMessage): void => {
+      try {
+        removeProjectMessage(runtime, record.repoKey, record.branch, record.id);
+        reportedProjectMessageCleanupErrors.delete(record.id);
+      } catch (error) {
+        if (!reportedProjectMessageCleanupErrors.has(record.id)) {
+          reportedProjectMessageCleanupErrors.add(record.id);
+          appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        }
+      }
+    };
+    for (const assignment of listProjectAssignments(runtime, manager.repoKey)) {
       for (const record of listProjectMessages(
-        supervisionRuntime(),
+        runtime,
         manager.repoKey,
         assignment.branch,
       )) {
         if (record.fromSessionId !== assignment.id) continue;
-        const delivered = ctx.sessionManager
-          .getEntries()
-          .some(
-            (entry: any) =>
-              entry?.customType === "pi-herdsman-project_message" &&
-              entry?.details?.id === record.id &&
-              entry?.details?.repoKey === record.repoKey &&
-              entry?.details?.branch === record.branch &&
-              entry?.details?.fromSessionId === record.fromSessionId,
-          );
-        if (delivered) continue;
+        if (hasProjectMessageReceipt(record)) {
+          consumeProjectMessage(record);
+          continue;
+        }
         const current = await currentManager(ctx);
         const stillAssigned = readProjectAssignment(
-          supervisionRuntime(),
+          runtime,
           manager.repoKey,
           assignment.branch,
         );
@@ -5753,7 +5769,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         )
           return 0;
         importResultBindings(pi, ctx, record.resultBindings, "project_message");
-        await pi.sendMessage(
+        const backlog = record.createdAt < manager.createdAt;
+        pi.sendMessage(
           {
             customType: "pi-herdsman-project_message",
             content: `Project ${record.branch} from lead ${record.fromSessionId}:\n\n${record.text}`,
@@ -5765,8 +5782,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               fromSessionId: record.fromSessionId,
             },
           },
-          { deliverAs: "followUp", triggerTurn: true },
+          backlog
+            ? { triggerTurn: false }
+            : { deliverAs: "followUp", triggerTurn: true },
         );
+        if (hasProjectMessageReceipt(record)) consumeProjectMessage(record);
         return 1;
       }
     }
@@ -5811,16 +5831,17 @@ function projectAssignmentInstruction(
 
 Manager supervises project scope and assignment boundaries; you own technical
 decisions and orchestration of execution. Herdsman automatically hands your
-normal assignment response to the current or a replacement Manager. After
-successfully delegating or continuing managed Agent work, the herd run owns
-that handoff until it settles; summarize outcome, validation, and important
-unresolved points in your response. If delegation is unsuccessful, respond
+normal assignment response to the Manager role. If no Manager is available,
+the handoff remains pending until a Manager can receive it. After successfully
+delegating or continuing managed Agent work, the herd run owns that handoff
+until it settles; summarize outcome, validation, and important unresolved
+points in your response. If delegation is unsuccessful, respond
 locally. Later conversational replies stay local.
 
 Use supervisor_message only for material coordination requiring Manager
 attention, a decision, or action—not routine status or a duplicate handoff.
-Messages are retained with the project while Manager is absent. Settlement is
-nonterminal; do not infer project closure from runtime state.`;
+Undelivered project handoffs survive Manager absence. Once delivered, they
+are not automatically replayed to later Managers. Settlement is nonterminal; do not infer project closure from runtime state.`;
 }
 
 export function createLeadInboxRuntime(host: LeadInboxHost) {
