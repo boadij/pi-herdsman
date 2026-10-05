@@ -267,6 +267,11 @@ or the model can use:
 
 Both resolve the same effective roster.
 
+For model-assisted definition management, ask Pi directly or explicitly invoke
+`/skill:agent-definitions`. The bundled skill uses the same
+project/global Markdown definitions and existing Herdsman validation rather than
+a separate configuration interface.
+
 The human `Definitions` menu is a flat list of actionable definitions, with
 reserved `managed-lead` first. Each row identifies its contributing source or
 sources as `bundled`, `project`, and/or `global`. Model, thinking, and enabled

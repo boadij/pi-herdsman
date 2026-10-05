@@ -202,7 +202,7 @@ export function buildAgentStatusSnapshot(
     ...(herdStartedAt !== undefined ? { herdRunStartedAt: herdStartedAt } : {}),
     breadcrumb:
       host.scope.kind === "lead"
-        ? ["herd"]
+        ? ["lead"]
         : statusBreadcrumb(
             view,
             host.environmentIdentity(ctx),
@@ -223,7 +223,6 @@ export function createAgentStatusRuntime() {
         clearPendingStart(label: string, expected: PendingStart): boolean;
         runtimeForLabel(label: string): Runtime | undefined;
         ownToolsSnapshot(): { ownTools?: string[] };
-        initialWidgetSnapshot?(): StatusSnapshot | undefined;
       }
     | undefined;
   let statusWidget: ReturnType<typeof createStatusWidget> | undefined;
@@ -238,7 +237,6 @@ export function createAgentStatusRuntime() {
     agents: [],
     stale: false,
     unavailable: true,
-    breadcrumb: ["herd"],
   };
   const widgetSnapshot = (snapshot: StatusSnapshot): StatusSnapshot => {
     const pendingStarts = options?.pendingStartEntries() ?? [];
@@ -301,15 +299,16 @@ export function createAgentStatusRuntime() {
     }
     statusInFlight = true;
     try {
-      lastValidStatus = await configured.loadSnapshot(ctx);
+      const snapshot = await configured.loadSnapshot(ctx);
       if (generation !== statusGeneration || ctx !== statusContext) return;
-      reconcilePendingStarts(lastValidStatus);
+      lastValidStatus = snapshot;
+      reconcilePendingStarts(snapshot);
       if (
         generation === statusGeneration &&
         ctx === statusContext &&
         statusWidgetGeneration === generation
       )
-        statusWidget?.setSnapshot(widgetSnapshot(lastValidStatus));
+        statusWidget?.setSnapshot(widgetSnapshot(snapshot));
     } catch {
       if (generation === statusGeneration && ctx === statusContext)
         statusWidget?.setSnapshot(
@@ -364,8 +363,7 @@ export function createAgentStatusRuntime() {
       statusContext = ctx;
       ctx.ui.setWidget("pi-herdsman", (tui: any, theme: any) => {
         const widget = createStatusWidget(() => tui.requestRender(), theme);
-        const initial = options?.initialWidgetSnapshot?.();
-        if (initial) widget.setSnapshot(initial);
+        widget.setSnapshot(widgetSnapshot(lastValidStatus));
         if (generation === statusGeneration && ctx === statusContext) {
           statusWidget = widget;
           statusWidgetGeneration = generation;
@@ -391,6 +389,11 @@ export function createAgentStatusRuntime() {
       statusWidgetGeneration = 0;
       statusContext = undefined;
       requestActive = false;
+      lastValidStatus = {
+        agents: [],
+        stale: false,
+        unavailable: true,
+      };
       beforeActivate?.();
       statusContext = ctx;
       return ++statusGeneration;
@@ -946,7 +949,7 @@ export function statusBreadcrumb(
     )
       return ["?", ...definitions.reverse()];
     return snapshot.leadSessionIds.includes(ownerSessionId)
-      ? ["herd", ...definitions.reverse()]
+      ? ["lead", ...definitions.reverse()]
       : ["?", ...definitions.reverse()];
   }
 }

@@ -14,31 +14,6 @@ import type {
 } from "./mailbox.ts";
 import { OperationError } from "./errors.ts";
 import { resultPath, resultRef } from "./storage.ts";
-import {
-  listProjectAssignments,
-  listChiefMessagePaths,
-  readChiefMessage,
-  readChiefDescriptor,
-  supervisionRuntime,
-  peerRuntime,
-  readPeerLeadRecord,
-  peerLeadLockPath,
-  writePeerLeadRecord,
-  removePeerLeadRecord,
-  claimChiefLease as claimChiefLeaseRaw,
-  claimManagerLease as claimManagerLeaseRaw,
-  managerDescriptorPath,
-  writeProjectAssignment,
-  listProjectMessages,
-  writeProjectMessage,
-  projectAssignmentPath,
-  writeChiefMessage as writeChiefMessageRaw,
-  chiefMessageBytes,
-  COORDINATION_MESSAGE_MAX_BYTES,
-  writeLeadCoordinationState as writeLeadCoordinationStateRaw,
-  readLeadCoordinationState,
-  drainCoordinationInbox,
-} from "./supervision.ts";
 import { acquireProcessLock, claimProcessLock } from "./lock.ts";
 import support, {
   CHILD_SESSION_ID,
@@ -93,6 +68,32 @@ import support, {
   writeAgentState,
   testTmpRoot,
 } from "./support.ts";
+const {
+  listProjectAssignments,
+  listChiefMessagePaths,
+  readChiefMessage,
+  readChiefDescriptor,
+  supervisionRuntime,
+  peerRuntime,
+  readPeerLeadRecord,
+  peerLeadLockPath,
+  writePeerLeadRecord,
+  removePeerLeadRecord,
+  claimChiefLease: claimChiefLeaseRaw,
+  claimManagerLease: claimManagerLeaseRaw,
+  managerDescriptorPath,
+  readManagerDescriptor,
+  writeProjectAssignment,
+  listProjectMessages,
+  writeProjectMessage,
+  projectAssignmentPath,
+  writeChiefMessage: writeChiefMessageRaw,
+  chiefMessageBytes,
+  COORDINATION_MESSAGE_MAX_BYTES,
+  writeLeadCoordinationState: writeLeadCoordinationStateRaw,
+  readLeadCoordinationState,
+  drainCoordinationInbox,
+} = await import("./supervision.ts");
 const claimChiefLease = (identity: any) =>
   claimChiefLeaseRaw({ ...identity, build: identity.build ?? HERDSMAN_BUILD });
 const claimManagerLease = (identity: any) =>
@@ -157,7 +158,7 @@ const ownershipResult = (
   },
 });
 
-test("assigned Lead saves supervisor messages durably with or without a Manager", async () => {
+test("assigned Lead steers active Manager messages and saves supervisor messages durably", async (t) => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `manager-routing-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
@@ -245,6 +246,34 @@ test("assigned Lead saves supervisor messages durably with or without a Manager"
       updatedAt: Date.now(),
     });
     await pi.events.get("session_start")![0](undefined, ctx);
+    ctx.isIdle = () => false;
+    writeChiefMessage(
+      {
+        version: 2,
+        id: randomUUID(),
+        leaseId: manager.descriptor.leaseId,
+        kind: "manager_message",
+        fromSessionId: managerId,
+        toSessionId: leadId,
+        leadSessionId: leadId,
+        text: "change direction now",
+        createdAt: Date.now(),
+      },
+      runtime,
+    );
+    await t.waitFor(() => {
+      const call = pi.sentMessageCalls.find(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-manager_message" &&
+          message?.content?.includes("change direction now"),
+      );
+      assert.ok(call);
+      assert.deepEqual(call.options, {
+        deliverAs: "steer",
+        triggerTurn: true,
+      });
+    });
+    assert.equal(listChiefMessagePaths(runtime, leadId).length, 0);
     const tool = pi.tools.find(
       (candidate) => candidate.name === "supervisor_message",
     )!;
@@ -1241,7 +1270,7 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
 });
 
 for (const reachable of [true, false]) {
-  test(`fresh Manager activation ${reachable ? "is immediately reachable without chat" : "rolls back unproven remote identity"}`, async () => {
+  test(`fresh Manager activation ${reachable ? "is immediately reachable without chat" : "rolls back unproven remote identity"}`, async (t) => {
     setLeadEnvironment();
     process.env.HERDR_PANE_ID = "root-pane";
     process.env.HERDR_TAB_ID = "root-tab";
@@ -1323,61 +1352,95 @@ for (const reachable of [true, false]) {
         assert.ok(realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)));
         const leadId = randomUUID();
         const branch = "smoke/manager-replay";
-        const record = {
+        const managerA = readManagerDescriptor(runtime, WORKSPACE)!;
+        const liveRecord = {
           version: 2 as const,
           id: randomUUID(),
           repoKey: "repo-key",
           branch,
           fromSessionId: leadId,
-          text: "retained project review handoff",
-          createdAt: Date.now(),
+          text: "live project review handoff",
+          createdAt: managerA.createdAt + 1,
         };
         writeProjectAssignment(runtime, {
           version: 2,
           id: leadId,
           repoKey: "repo-key",
           branch,
-          text: "replay assignment",
+          text: "project assignment",
         });
-        writeProjectMessage(record, runtime);
-        const projectDeliveries = () =>
-          pi.sent.filter(
+        writeProjectMessage(liveRecord, runtime);
+        const projectDeliveries = (id: string) =>
+          managerHistory.filter(
             (message: any) =>
               message?.customType === "pi-herdsman-project_message" &&
-              message?.details?.id === record.id,
+              message?.details?.id === id,
           );
-        await new Promise((resolve) => setTimeout(resolve, 650));
-        assert.equal(projectDeliveries().length, 1);
-        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), [
-          record,
-        ]);
+        await t.waitFor(() =>
+          assert.equal(projectDeliveries(liveRecord.id).length, 1),
+        );
+        const liveSend = pi.sentMessageCalls.find(
+          ({ message }: any) => (message as any)?.details?.id === liveRecord.id,
+        )!;
+        assert.equal((liveSend.options as any).triggerTurn, true);
+        assert.equal((liveSend.options as any).deliverAs, "followUp");
         const deliveredIndex = managerHistory.findIndex(
           (entry: any) =>
             entry?.customType === "pi-herdsman-project_message" &&
-            entry?.details?.id === record.id,
+            entry?.details?.id === liveRecord.id,
         );
         assert.ok(deliveredIndex >= 0);
         managerBranch = managerHistory.slice(0, deliveredIndex);
-        assert.ok(
-          managerHistory.some(
-            (entry: any) =>
-              entry?.customType === "pi-herdsman-project_message" &&
-              entry?.details?.id === record.id,
-          ),
-        );
         assert.equal(
           managerBranch.some(
             (entry: any) =>
               entry?.customType === "pi-herdsman-project_message" &&
-              entry?.details?.id === record.id,
+              entry?.details?.id === liveRecord.id,
           ),
           false,
         );
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        assert.equal(
-          projectDeliveries().length,
-          1,
-          "same Manager tree navigation must not replay retained message",
+        ctx.isIdle = () => true;
+        await pi.events.get("before_agent_start")![0](
+          {
+            systemPrompt: "base",
+            systemPromptOptions: { contextFiles: [] },
+          },
+          ctx,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 650));
+        assert.equal(projectDeliveries(liveRecord.id).length, 1);
+        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), []);
+
+        const cleanupRecord = { ...liveRecord, id: randomUUID() };
+        const stateErrors = () =>
+          managerHistory.filter(
+            (entry: any) => entry?.customType === "pi_herdsman_state_error",
+          ).length;
+        const errorsBefore = stateErrors();
+        support.failProjectMessageRemoval = true;
+        try {
+          writeProjectMessage(cleanupRecord, runtime);
+          await t.waitFor(() =>
+            assert.equal(projectDeliveries(cleanupRecord.id).length, 1),
+          );
+          await t.waitFor(() => assert.equal(stateErrors(), errorsBefore + 1));
+          await new Promise((resolve) => setTimeout(resolve, 1_100));
+          assert.equal(
+            stateErrors(),
+            errorsBefore + 1,
+            "repeated cleanup retries report one durable error",
+          );
+          assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), [
+            cleanupRecord,
+          ]);
+        } finally {
+          support.failProjectMessageRemoval = false;
+        }
+        await t.waitFor(() =>
+          assert.deepEqual(
+            listProjectMessages(runtime, "repo-key", branch),
+            [],
+          ),
         );
 
         await pi.commandOptions.get("manager").handler("leave", ctx);
@@ -1393,22 +1456,48 @@ for (const reachable of [true, false]) {
           getEntries: () => managerHistory,
           getBranch: () => managerBranch,
         };
+        const backlogRecord = {
+          ...liveRecord,
+          id: randomUUID(),
+          text: "pending while Manager absent",
+          createdAt: 0,
+        };
+        writeProjectMessage(backlogRecord, runtime);
+        await pi.commandOptions.get("manager").handler("", ctx);
+        await t.waitFor(() =>
+          assert.equal(projectDeliveries(backlogRecord.id).length, 1),
+        );
+        assert.equal(projectDeliveries(liveRecord.id).length, 0);
+        const backlogSend = pi.sentMessageCalls.find(
+          ({ message }: any) =>
+            (message as any)?.details?.id === backlogRecord.id,
+        )!;
+        assert.equal((backlogSend.options as any).triggerTurn, false);
+        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), []);
+
+        await pi.commandOptions.get("manager").handler("leave", ctx);
+        const managerCId = randomUUID();
+        managerSessionFile = join(tmpdir(), `${managerCId}.jsonl`);
+        managerAgent.agent_session.value = managerSessionFile;
+        managerHistory = [];
+        managerBranch = managerHistory;
+        ctx.sessionManager = {
+          ...ctx.sessionManager,
+          getSessionId: () => managerCId,
+          getSessionFile: () => managerSessionFile,
+          getEntries: () => managerHistory,
+          getBranch: () => managerBranch,
+        };
         await pi.commandOptions.get("manager").handler("", ctx);
         await new Promise((resolve) => setTimeout(resolve, 650));
+        assert.equal(projectDeliveries(liveRecord.id).length, 0);
+        assert.equal(projectDeliveries(backlogRecord.id).length, 0);
         assert.equal(
-          projectDeliveries().length,
-          2,
-          "replacement Manager receives retained message",
+          listProjectAssignments(runtime, "repo-key").some(
+            (assignment) => assignment.branch === branch,
+          ),
+          true,
         );
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        assert.equal(
-          projectDeliveries().length,
-          2,
-          "replacement Manager history suppresses replay duplicates",
-        );
-        assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), [
-          record,
-        ]);
         process.env.HERDR_PANE_ID = "lead-pane";
         process.env.HERDR_TAB_ID = "lead-tab";
         const lead = fakeChiefPi({ exec });
@@ -1651,7 +1740,7 @@ for (const scenario of [
         );
         assert.match(
           delivered[0].content,
-          /automatically hands your\s+normal assignment response to the current or a replacement Manager/,
+          /automatically hands your\s+normal assignment response to the Manager role/,
         );
         assert.equal(delivered[0].content.includes(sessionId), false);
         assert.ok(
@@ -2219,6 +2308,8 @@ async function runManagerStartupScenario(
     | "active-live-mismatch"
     | "active-missing"
     | "active-missing-no-session"
+    | "active-missing-legacy"
+    | "active-missing-ambiguous"
     | "active-closed"
     | "close-resume"
     | "close-failure"
@@ -2387,7 +2478,7 @@ async function runManagerStartupScenario(
           "--base",
           branch,
           "--path",
-          "/old/exact/worktree",
+          resolve("/old/exact/worktree"),
         ]);
       if (mode === "active-missing-no-session")
         assert.deepEqual(args, [
@@ -2572,6 +2663,18 @@ async function runManagerStartupScenario(
         assert.match(starting.text, /\nTask:\ndeliver the fresh assignment/);
       }
       childSession = starting.id;
+      if (mode === "success") {
+        writeFileSync(
+          childSessionPath,
+          JSON.stringify({ type: "session", id: childSession }),
+        );
+        nativeSessions.set(childSession, {
+          id: childSession,
+          path: childSessionPath,
+          cwd: childPath,
+          entries: [],
+        });
+      }
       assert.equal(args[args.indexOf("--session-id") + 1], starting.id);
       assert.deepEqual(
         args.slice(
@@ -2583,6 +2686,9 @@ async function runManagerStartupScenario(
       assert.deepEqual(Object.keys(starting).sort(), [
         "branch",
         "id",
+        ...(["active-missing", "active-missing-legacy"].includes(mode)
+          ? ["piSessionFile"]
+          : []),
         "repoKey",
         "text",
         "version",
@@ -2900,6 +3006,8 @@ async function runManagerStartupScenario(
       "active-live-mismatch",
       "active-missing",
       "active-missing-no-session",
+      "active-missing-legacy",
+      "active-missing-ambiguous",
       "active-closed",
       "close-resume",
       "close-failure",
@@ -2907,14 +3015,22 @@ async function runManagerStartupScenario(
     const resumeMode = activeMode || mode === "invalid-topology";
     if (activeMode) {
       childSession = staleId;
-      created = !["active-missing", "active-missing-no-session"].includes(mode);
+      created = ![
+        "active-missing",
+        "active-missing-no-session",
+        "active-missing-legacy",
+        "active-missing-ambiguous",
+      ].includes(mode);
       if (created) createdBranch = "smoke/recover";
       writeProjectAssignment(supervisionRuntime(), {
         version: 2,
         id: staleId,
         repoKey: "repo-key",
         branch: "smoke/recover",
-        text: "recover exact Lead",
+        text: "  recover\n exact Lead  ",
+        ...(mode === "active-missing"
+          ? { piSessionFile: `/tmp/${staleId}.jsonl` }
+          : {}),
       });
       if (mode === "active-missing")
         nativeSessions.set(staleId, {
@@ -2923,6 +3039,45 @@ async function runManagerStartupScenario(
           cwd: "/old/exact/worktree",
           entries: [],
         });
+      if (
+        ["active-missing-legacy", "active-missing-ambiguous"].includes(mode)
+      ) {
+        writeFileSync(
+          childSessionPath,
+          JSON.stringify({ type: "session", id: staleId }),
+        );
+        nativeSessions.set(staleId, {
+          id: staleId,
+          path: childSessionPath,
+          cwd: "/old/exact/worktree",
+          entries: [],
+        });
+        if (mode === "active-missing-ambiguous") {
+          const duplicatePath = `${childSessionPath}.duplicate`;
+          writeFileSync(
+            duplicatePath,
+            JSON.stringify({ type: "session", id: staleId }),
+          );
+          nativeSessions.set(`${staleId}-duplicate`, {
+            id: staleId,
+            path: duplicatePath,
+            cwd: "/old/exact/worktree",
+            entries: [],
+          });
+        }
+      }
+      if (mode === "active-live") {
+        writeFileSync(
+          childSessionPath,
+          JSON.stringify({ type: "session", id: staleId }),
+        );
+        nativeSessions.set(staleId, {
+          id: staleId,
+          path: childSessionPath,
+          cwd: childPath,
+          entries: [],
+        });
+      }
       if (mode === "active-live" || mode === "active-live-mismatch")
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
@@ -3065,6 +3220,11 @@ async function runManagerStartupScenario(
         assert.equal(running.details.action, "resume");
         assert.equal(running.details.already_running, true);
         assert.equal(running.details.session, staleId);
+        assert.equal(running.details.presentation_task, "recover exact Lead");
+        assert.doesNotMatch(
+          (running.content[0] as { text: string }).text,
+          /presentation_task/,
+        );
         const messages = () =>
           listChiefMessagePaths(supervisionRuntime(), staleId)
             .map((path) => readChiefMessage(path))
@@ -3096,12 +3256,31 @@ async function runManagerStartupScenario(
         const stillRunning = await execute();
         assert.equal(stillRunning.details.action, "resume");
         assert.equal(stillRunning.details.already_running, true);
+        const assignment = listProjectAssignments(
+          supervisionRuntime(),
+          "repo-key",
+        )[0]!;
+        assert.equal(
+          assignment.piSessionFile,
+          realFs.realpathSync(childSessionPath),
+        );
         assert.deepEqual(
           messages().map((message) => message.id),
           [staleId],
         );
         assert.equal(await drain(), 0);
         assert.equal(delivered.length, 1);
+        const conflictingPath = join(tmpdir(), `conflicting-${staleId}.jsonl`);
+        writeFileSync(conflictingPath, "");
+        writeProjectAssignment(supervisionRuntime(), {
+          ...assignment,
+          piSessionFile: conflictingPath,
+        });
+        await assert.rejects(
+          execute(),
+          /conflicts with persisted project identity/,
+        );
+        realFs.rmSync(conflictingPath, { force: true });
       } else if (["close-resume", "close-failure"].includes(mode)) {
         const control = (name: string, value: unknown) =>
           pi.tools
@@ -3137,10 +3316,39 @@ async function runManagerStartupScenario(
           );
         }
         return;
+      } else if (mode === "active-missing-ambiguous") {
+        await assert.rejects(execute(), /ambiguous/);
+        assert.equal(createCalls, 0);
+        assert.equal(startCalls, 0);
+        assert.equal(
+          listProjectAssignments(supervisionRuntime(), "repo-key")[0]
+            ?.piSessionFile,
+          undefined,
+        );
+        return;
       } else if (
-        ["active-missing", "active-missing-no-session"].includes(mode)
+        [
+          "active-missing",
+          "active-missing-no-session",
+          "active-missing-legacy",
+        ].includes(mode)
       ) {
-        const resumed = await execute();
+        const { SessionManager } =
+          await import("@earendil-works/pi-coding-agent");
+        const originalListAll = SessionManager.listAll;
+        let resumed: any;
+        if (mode === "active-missing") {
+          SessionManager.listAll = async () => {
+            throw new Error(
+              "global inventory must not be used for exact resume",
+            );
+          };
+        }
+        try {
+          resumed = await execute();
+        } finally {
+          SessionManager.listAll = originalListAll;
+        }
         assert.equal(resumed.details.action, "resume");
         assert.equal(resumed.details.session, staleId);
         assert.equal(resumed.details.branch, "smoke/recover");
@@ -3150,11 +3358,41 @@ async function runManagerStartupScenario(
           listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
           staleId,
         );
+        if (["active-missing", "active-missing-legacy"].includes(mode))
+          assert.equal(
+            listProjectAssignments(supervisionRuntime(), "repo-key")[0]
+              ?.piSessionFile,
+            mode === "active-missing"
+              ? `/tmp/${staleId}.jsonl`
+              : realFs.realpathSync(childSessionPath),
+          );
+        if (mode === "active-missing-legacy") {
+          created = false;
+          started = false;
+          startupObservations = 0;
+          const originalListAll = SessionManager.listAll;
+          SessionManager.listAll = async () => {
+            throw new Error("self-healed resume must not use global inventory");
+          };
+          try {
+            const resumedAgain = await execute();
+            assert.equal(resumedAgain.details.action, "resume");
+          } finally {
+            SessionManager.listAll = originalListAll;
+          }
+          assert.equal(createCalls, 2);
+          assert.equal(startCalls, 2);
+        }
       } else {
         const recovered = await execute();
         assert.equal(recovered.details.action, "resume");
         assert.equal(recovered.details.session, staleId);
         assert.equal(recovered.details.branch, "smoke/recover");
+        assert.equal(recovered.details.presentation_task, "recover exact Lead");
+        assert.doesNotMatch(
+          (recovered.content[0] as { text: string }).text,
+          /presentation_task/,
+        );
         const persisted = listProjectAssignments(
           supervisionRuntime(),
           "repo-key",
@@ -3163,7 +3401,16 @@ async function runManagerStartupScenario(
       }
       assert.equal(
         createCalls,
-        ["active-missing", "active-missing-no-session"].includes(mode) ? 1 : 0,
+        [
+          "active-missing",
+          "active-missing-no-session",
+          "active-missing-legacy",
+          "active-missing-ambiguous",
+        ].includes(mode) && mode !== "active-missing-ambiguous"
+          ? mode === "active-missing-legacy"
+            ? 2
+            : 1
+          : 0,
       );
       assert.equal(
         startCalls,
@@ -3172,8 +3419,12 @@ async function runManagerStartupScenario(
           "active-closed",
           "active-missing",
           "active-missing-no-session",
+          "active-missing-legacy",
+          "active-missing-ambiguous",
         ].includes(mode)
-          ? 1
+          ? mode === "active-missing-legacy"
+            ? 2
+            : 1
           : 0,
       );
       assert.equal(
@@ -3497,10 +3748,18 @@ async function runManagerStartupScenario(
     assert.deepEqual(Object.keys(assignment).sort(), [
       "branch",
       "id",
+      ...(["success", "unmaterialized-path"].includes(mode)
+        ? ["piSessionFile"]
+        : []),
       "repoKey",
       "text",
       "version",
     ]);
+    if (["success", "unmaterialized-path"].includes(mode))
+      assert.equal(
+        assignment.piSessionFile,
+        realFs.realpathSync(childSessionPath),
+      );
     assert.equal(createCalls, 1);
     assert.equal(startCalls, mode === "recovery" ? 0 : 1);
     assert.equal(openCalls, 0);
@@ -3643,7 +3902,9 @@ async function runManagerStartupScenario(
     else realFs.rmSync(configPath, { force: true });
     Date.now = originalNow;
     nativeSessions.delete(childSession);
+    nativeSessions.delete(`${childSession}-duplicate`);
     realFs.rmSync(childSessionPath, { force: true });
+    realFs.rmSync(`${childSessionPath}.duplicate`, { force: true });
     support.sessionOpenError = undefined;
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
@@ -3726,7 +3987,18 @@ test("Manager recovery waits on existing exact Pi without restarting it", () =>
 for (const [mode, label] of [
   ["active-loss", "relaunches the exact lost Lead"],
   ["active-live", "returns a live exact Lead idempotently"],
-  ["active-missing", "reconstructs a vanished worktree with saved Pi cwd"],
+  [
+    "active-missing",
+    "resumes from the persisted exact session without global lookup",
+  ],
+  [
+    "active-missing-legacy",
+    "self-heals a pathless assignment from one legacy session",
+  ],
+  [
+    "active-missing-ambiguous",
+    "preserves a pathless assignment with ambiguous legacy sessions",
+  ],
   [
     "active-missing-no-session",
     "reconstructs a vanished worktree without saved Pi cwd",

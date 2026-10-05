@@ -1,6 +1,6 @@
 {
   "name": "pi-herdsman",
-  "version": "0.20.0",
+  "version": "0.20.1",
   "type": "module",
   "description": "Asynchronous Pi subagents and agent fleet orchestration for parallel coding agents with nested delegation, background work, and supervision in herdr.",
   "license": "Apache-2.0",
@@ -42,7 +42,8 @@
       "./dist/index.js"
     ],
     "skills": [
-      "."
+      "./SKILL.md",
+      "./skills"
     ],
     "image": "https://raw.githubusercontent.com/boadij/pi-herdsman/main/docs/assets/thumbnail.webp"
   },
@@ -93,7 +94,8 @@
     "SKILL.md",
     "LICENSE",
     "docs",
-    "dist"
+    "dist",
+    "skills"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"

@@ -24,12 +24,13 @@ import type {
 } from "./supervision.ts";
 import {
   leadSupervisorState as resolveLeadSupervisorState,
+  projectTaskSummary,
   supervisorStateMessage,
   verifyManagerCoordinationAuthority,
   verifyRemoteChiefAuthority,
 } from "./supervision.ts";
 import { OperationError } from "./errors.ts";
-import { verifiedHerdrAgent } from "./herdr.ts";
+import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
 import { contentText, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { prepareMessageInput } from "./core.ts";
@@ -75,7 +76,7 @@ import {
 } from "./presentation.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
-import { statSync, unlinkSync } from "node:fs";
+import { realpathSync, statSync, unlinkSync } from "node:fs";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
 
 type LeadIdentityHost = {
@@ -187,9 +188,19 @@ type LeadRuntimeOptions = {
     | "liveLead"
     | "managerLease"
     | "pi"
+    | "SessionManager"
     | "stopOwnedAgentsForSession"
     | "withProjectWorkLock"
-  > & { extensionPath: string; SessionManager: object };
+    | "supervisedSessionFile"
+    | "sameObservedSessionPath"
+    | "withProjectAssignmentLock"
+  > & {
+    extensionPath: string;
+    SessionManager: Pick<
+      typeof import("@earendil-works/pi-coding-agent").SessionManager,
+      "open" | "listAll"
+    >;
+  };
   commandHost: LeadCommandBaseHost;
   supervisionHost: Omit<
     LeadSupervisionHost,
@@ -243,10 +254,8 @@ type LeadRuntimeOptions = {
 type LeadCommandHost = {
   collectOwnedSessionUsage(
     ctx: ExtensionContext,
-    managerScopeOrLeadIds?: boolean | readonly string[],
-  ): Promise<
-    ReturnType<typeof import("./agent-controller.ts").collectSessionUsage>
-  >;
+    managedLeads?: readonly { id: string; piSessionFile?: string }[],
+  ): ReturnType<typeof import("./agent-controller.ts").collectSessionUsage>;
   formatSessionUsage: typeof import("./presentation.ts").formatSessionUsage;
   runHerdr: typeof runHerdr;
   presentStopSummary(summary: string): void;
@@ -370,7 +379,18 @@ type LeadProjectHost = {
   findProjectAssignmentBySession: typeof import("./supervision.ts").findProjectAssignmentBySession;
   supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
   readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
+  writeProjectAssignment: typeof import("./supervision.ts").writeProjectAssignment;
   liveLead(ctx: ExtensionContext, sessionId: string): Promise<HerdrRecord[]>;
+  supervisedSessionFile(
+    agent: HerdrRecord,
+    sessionId: string,
+  ): string | undefined;
+  sameObservedSessionPath: typeof sameObservedSessionPath;
+  withProjectAssignmentLock<T>(
+    repoKey: string,
+    branch: string,
+    operation: () => Promise<T> | T,
+  ): Promise<T>;
   stopOwnedAgentsForSession(
     ctx: ExtensionContext,
     sessionId: string,
@@ -385,6 +405,10 @@ type LeadProjectHost = {
   withProjectWorkLock: LeadRoleTransitionRuntime["withProjectWorkLock"];
   leadCoordinationTools: readonly string[];
   pi: ExtensionAPI;
+  SessionManager: Pick<
+    typeof import("@earendil-works/pi-coding-agent").SessionManager,
+    "open" | "listAll"
+  >;
 };
 
 type LeadCoordinationBaseHost = {
@@ -436,6 +460,7 @@ type LeadCoordinationBaseHost = {
   isPiAgent(agent: HerdrRecord): boolean;
   listProjectAssignments: typeof import("./supervision.ts").listProjectAssignments;
   listProjectMessages: typeof import("./supervision.ts").listProjectMessages;
+  removeProjectMessage: typeof import("./supervision.ts").removeProjectMessage;
   readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
   importResultBindings: typeof import("./agent-controller.ts").importResultBindings;
 };
@@ -1523,7 +1548,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     },
     async showSessionStats(ctx: ExtensionCommandContext): Promise<void> {
       const managerActive = host.roleActive("manager");
-      const stats = await host.collectOwnedSessionUsage(ctx, managerActive);
+      const stats = host.collectOwnedSessionUsage(ctx);
       ctx.ui.notify(
         host.formatSessionUsage(
           stats.current,
@@ -2169,6 +2194,12 @@ export function registerLeadRuntime(
     withProjectWorkLock: (
       ...args: Parameters<typeof roleTransitions.withProjectWorkLock>
     ) => roleTransitions.withProjectWorkLock(...args),
+    withProjectAssignmentLock: (
+      ...args: Parameters<typeof roleTransitions.withProjectAssignmentLock>
+    ) => roleTransitions.withProjectAssignmentLock(...args),
+    supervisedSessionFile: (agent: HerdrRecord, sessionId: string) =>
+      options.supervisionHost.supervisedSessionFile(agent, sessionId),
+    sameObservedSessionPath,
     activeRole: () => activeLeadRole(options.leadRuntime),
     managerLease: () => options.leadRuntime.managerLease,
     currentChiefAuthority: (
@@ -2217,12 +2248,10 @@ export function registerLeadRuntime(
   });
   const commandRuntime = createLeadCommandRuntime({
     ...options.commandHost,
-    collectOwnedSessionUsage: async (ctx, managerScopeOrLeadIds) => {
+    collectOwnedSessionUsage: (ctx) => {
       const managerActive =
-        typeof managerScopeOrLeadIds === "boolean"
-          ? managerScopeOrLeadIds
-          : activeLeadRole(options.leadRuntime) === "manager" &&
-            !options.leadRuntime.roleSuspended;
+        activeLeadRole(options.leadRuntime) === "manager" &&
+        !options.leadRuntime.roleSuspended;
       if (!managerActive)
         return options.commandHost.collectOwnedSessionUsage(ctx);
       const lease = options.leadRuntime.managerLease;
@@ -2233,7 +2262,7 @@ export function registerLeadRuntime(
       );
       return options.commandHost.collectOwnedSessionUsage(
         ctx,
-        assignments.map((assignment) => assignment.id),
+        assignments.map(({ id, piSessionFile }) => ({ id, piSessionFile })),
       );
     },
     isLead: () => true,
@@ -3668,6 +3697,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     HERDSMAN_BUILD,
     HERDSMAN_EXTENSION_PATH,
     SessionManager,
+    supervisedSessionFile,
+    sameObservedSessionPath,
     currentManager,
     sameManagerDescriptor,
     worktreeGroupScope,
@@ -3708,6 +3739,42 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     prepareCoordinationInput,
     stopProjectLead: projectStop,
   } = host;
+  const persistLeadSessionFile = async (
+    assignment: ProjectAssignment,
+    piSessionFile: string,
+  ): Promise<ProjectAssignment> =>
+    host.withProjectAssignmentLock(
+      assignment.repoKey,
+      assignment.branch,
+      () => {
+        const current = host.readProjectAssignment(
+          host.supervisionRuntime(),
+          assignment.repoKey,
+          assignment.branch,
+        );
+        if (!current || current.id !== assignment.id)
+          throw new Error("Project assignment changed during Lead activation");
+        if (current.piSessionFile) {
+          if (!sameObservedSessionPath(current.piSessionFile, piSessionFile))
+            throw new Error(
+              "Lead session path conflicts with persisted project identity",
+            );
+          return current;
+        }
+        const bound = { ...current, piSessionFile };
+        host.writeProjectAssignment(host.supervisionRuntime(), bound);
+        return bound;
+      },
+    );
+  const bindLeadSessionFile = async (
+    assignment: ProjectAssignment,
+    lead: HerdrRecord,
+  ): Promise<ProjectAssignment> => {
+    const piSessionFile = supervisedSessionFile(lead, assignment.id);
+    return piSessionFile
+      ? persistLeadSessionFile(assignment, piSessionFile)
+      : assignment;
+  };
   type ProjectLeadActivation =
     | {
         action: "delegate";
@@ -3803,6 +3870,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error(
         `No existing work was found on ${operation.branch}; start it with staff_delegate and a task.`,
       );
+    const presentationTask =
+      operation.action === "resume"
+        ? projectTaskSummary(existing!.text)
+        : undefined;
     const id = operation.action === "resume" ? existing!.id : operation.id;
     const branch = operation.branch;
     const topology = await runHerdr(
@@ -3855,6 +3926,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         operationName,
         `Lead ${id}`,
       );
+      await bindLeadSessionFile(existing!, live[0]);
       writeChiefMessage({
         version: 2,
         build: HERDSMAN_BUILD,
@@ -3882,6 +3954,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           session: id,
           status: "active",
           already_running: true,
+          ...(presentationTask ? { presentation_task: presentationTask } : {}),
         },
       };
     }
@@ -4022,15 +4095,42 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           "--no-focus",
         ];
         if (operation.action === "resume") {
-          const saved = (await SessionManager.listAll()).filter(
-            (session) => session.id === assignment.id,
-          );
-          if (saved.length > 1)
-            throw new Error(
-              `Pi session ${assignment.id} is ambiguous; project work was preserved.`,
+          let savedCwd: string | undefined;
+          if (assignment.piSessionFile) {
+            const saved = SessionManager.open(assignment.piSessionFile);
+            if (saved.getSessionId() !== assignment.id)
+              throw new Error(
+                "Persisted project session identity does not match",
+              );
+            savedCwd = saved.getCwd();
+          } else {
+            const saved = (await SessionManager.listAll()).filter(
+              (session) => session.id === assignment.id,
             );
+            if (saved.length > 1)
+              throw new Error(
+                `Pi session ${assignment.id} is ambiguous; project work was preserved.`,
+              );
+            if (saved.length === 1) {
+              const sessionFile = saved[0]!.path;
+              if (typeof sessionFile !== "string" || !sessionFile)
+                throw new Error(
+                  "Legacy project session has no exact file path",
+                );
+              const session = SessionManager.open(sessionFile);
+              if (session.getSessionId() !== assignment.id)
+                throw new Error(
+                  "Persisted project session identity does not match",
+                );
+              savedCwd = session.getCwd();
+              assignment = await persistLeadSessionFile(
+                assignment,
+                realpathSync(sessionFile),
+              );
+            }
+          }
           args.push("--base", assignment.branch);
-          if (saved[0]?.cwd) args.push("--path", saved[0].cwd);
+          if (savedCwd) args.push("--path", savedCwd);
         } else args.push("--base", operation.base ?? "HEAD");
         const created = await runHerdr(pi, ctx, args, { signal });
         workspaceId = created?.workspace?.workspace_id;
@@ -4286,6 +4386,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         operationName,
         `Lead ${assignment.id}`,
       );
+      assignment = await bindLeadSessionFile(assignment, lead);
       writeChiefMessage({
         version: 2,
         build: HERDSMAN_BUILD,
@@ -4349,6 +4450,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         );
       }
       await assertManagerCurrent();
+      await bindLeadSessionFile(assignment, rediscovered);
       return {
         content: [
           {
@@ -4370,6 +4472,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           workspace_id: workspaceId,
           branch: assignment.branch,
           ...(operation.action === "resume" ? { recovered: true } : {}),
+          ...(presentationTask ? { presentation_task: presentationTask } : {}),
         },
       };
     } catch (error) {
@@ -4480,7 +4583,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 leads: "leads" in report ? report.leads : [],
               }
             : {}),
-          available_actions: report.availableActions,
+          available_tools: report.availableActions.map(
+            (action: string) => `staff_${action}`,
+          ),
         })),
       });
     }
@@ -4804,9 +4909,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     quarantineChiefMessage,
     listProjectAssignments,
     listProjectMessages,
+    removeProjectMessage,
     readProjectAssignment,
     importResultBindings,
   } = host;
+  const reportedProjectMessageCleanupErrors = new Set<string>();
   const readLeadSessionIdsFromHost = (
     inventory: HerdrSessionSnapshot,
     mailboxes: ReturnType<typeof import("./mailbox.ts").listAgentStates>,
@@ -5606,6 +5713,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       !ctx.isIdle()
     )
       return 0;
+    const runtime = supervisionRuntime();
     const manager = await currentManager(ctx);
     if (
       !manager ||
@@ -5613,30 +5721,42 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)
     )
       return 0;
-    for (const assignment of listProjectAssignments(
-      supervisionRuntime(),
-      manager.repoKey,
-    )) {
+    const hasProjectMessageReceipt = (record: ProjectMessage): boolean =>
+      ctx.sessionManager
+        .getEntries()
+        .some(
+          (entry: any) =>
+            entry?.customType === "pi-herdsman-project_message" &&
+            entry?.details?.id === record.id &&
+            entry?.details?.repoKey === record.repoKey &&
+            entry?.details?.branch === record.branch &&
+            entry?.details?.fromSessionId === record.fromSessionId,
+        );
+    const consumeProjectMessage = (record: ProjectMessage): void => {
+      try {
+        removeProjectMessage(runtime, record.repoKey, record.branch, record.id);
+        reportedProjectMessageCleanupErrors.delete(record.id);
+      } catch (error) {
+        if (!reportedProjectMessageCleanupErrors.has(record.id)) {
+          reportedProjectMessageCleanupErrors.add(record.id);
+          appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        }
+      }
+    };
+    for (const assignment of listProjectAssignments(runtime, manager.repoKey)) {
       for (const record of listProjectMessages(
-        supervisionRuntime(),
+        runtime,
         manager.repoKey,
         assignment.branch,
       )) {
         if (record.fromSessionId !== assignment.id) continue;
-        const delivered = ctx.sessionManager
-          .getEntries()
-          .some(
-            (entry: any) =>
-              entry?.customType === "pi-herdsman-project_message" &&
-              entry?.details?.id === record.id &&
-              entry?.details?.repoKey === record.repoKey &&
-              entry?.details?.branch === record.branch &&
-              entry?.details?.fromSessionId === record.fromSessionId,
-          );
-        if (delivered) continue;
+        if (hasProjectMessageReceipt(record)) {
+          consumeProjectMessage(record);
+          continue;
+        }
         const current = await currentManager(ctx);
         const stillAssigned = readProjectAssignment(
-          supervisionRuntime(),
+          runtime,
           manager.repoKey,
           assignment.branch,
         );
@@ -5649,7 +5769,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         )
           return 0;
         importResultBindings(pi, ctx, record.resultBindings, "project_message");
-        await pi.sendMessage(
+        const backlog = record.createdAt < manager.createdAt;
+        pi.sendMessage(
           {
             customType: "pi-herdsman-project_message",
             content: `Project ${record.branch} from lead ${record.fromSessionId}:\n\n${record.text}`,
@@ -5661,8 +5782,11 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
               fromSessionId: record.fromSessionId,
             },
           },
-          { deliverAs: "followUp", triggerTurn: true },
+          backlog
+            ? { triggerTurn: false }
+            : { deliverAs: "followUp", triggerTurn: true },
         );
+        if (hasProjectMessageReceipt(record)) consumeProjectMessage(record);
         return 1;
       }
     }
@@ -5707,16 +5831,17 @@ function projectAssignmentInstruction(
 
 Manager supervises project scope and assignment boundaries; you own technical
 decisions and orchestration of execution. Herdsman automatically hands your
-normal assignment response to the current or a replacement Manager. After
-successfully delegating or continuing managed Agent work, the herd run owns
-that handoff until it settles; summarize outcome, validation, and important
-unresolved points in your response. If delegation is unsuccessful, respond
+normal assignment response to the Manager role. If no Manager is available,
+the handoff remains pending until a Manager can receive it. After successfully
+delegating or continuing managed Agent work, the herd run owns that handoff
+until it settles; summarize outcome, validation, and important unresolved
+points in your response. If delegation is unsuccessful, respond
 locally. Later conversational replies stay local.
 
 Use supervisor_message only for material coordination requiring Manager
 attention, a decision, or action—not routine status or a duplicate handoff.
-Messages are retained with the project while Manager is absent. Settlement is
-nonterminal; do not infer project closure from runtime state.`;
+Undelivered project handoffs survive Manager absence. Once delivered, they
+are not automatically replayed to later Managers. Settlement is nonterminal; do not infer project closure from runtime state.`;
 }
 
 export function createLeadInboxRuntime(host: LeadInboxHost) {
@@ -6077,6 +6202,17 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           managerDiagnostic("inbox_catch", { category: "cleanup" });
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         },
+        deliveryMode: (record: ChiefMessageRecord) => {
+          const role = activeRole();
+          const supervisorDownlink =
+            (role === "lead" &&
+              (record.kind === "chief_message" ||
+                record.kind === "manager_message")) ||
+            (role === "manager" && record.kind === "chief_message");
+
+          if (supervisorDownlink) return "steer";
+          return ctx.isIdle() ? "followUp" : undefined;
+        },
         isDelivered: (id: string) => {
           const record = transactions.get(id)?.record;
           return record ? messageDelivered(ctx, record) : false;
@@ -6127,10 +6263,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
             "customType" in message &&
             message.customType === "pi-herdsman-project_assignment";
           try {
-            if (!ctx.isIdle())
-              throw new Error(
-                "Coordination delivery deferred while recipient is active",
-              );
             let payload = message;
             let resultBindings = record.resultBindings;
             if (record.kind === "project_assignment") {
@@ -6281,7 +6413,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         });
         return count;
       };
-      if (!ctx.isIdle()) return complete(0);
       const held = chiefStartPreflightHeld(ctx);
       managerDiagnostic("inbox_preflight", { reason: held ? "held" : "pass" });
       if (held) return complete(0);

@@ -1051,9 +1051,10 @@ test("status widget animates only moving states and collapses quiet trees", (t) 
       agents: [{ label: "settling", definition: "agent", state: "settling" }],
       stale: false,
       unavailable: false,
+      breadcrumb: ["lead"],
     });
     assert.deepEqual(widget.render(160), [
-      "● herd  1 settling",
+      "● lead  1 settling",
       "└─ ⠋ agent  settling  ◌ settling",
     ]);
   }
@@ -1094,8 +1095,9 @@ test("status widget projects active herd duration without changing counts", (t) 
     stale: false,
     unavailable: false,
     herdRunStartedAt: Date.now() - 2_000,
+    breadcrumb: ["lead"],
   });
-  assert.match(widget.render(160)[0]!, /herd · \d+s/);
+  assert.match(widget.render(160)[0]!, /lead · \d+s/);
 
   widget.setSnapshot({
     agents: [
@@ -1105,8 +1107,9 @@ test("status widget projects active herd duration without changing counts", (t) 
     stale: false,
     unavailable: false,
     herdRunStartedAt: Date.now() - 2_000,
+    breadcrumb: ["lead"],
   });
-  assert.match(widget.render(160)[0]!, /herd · \d+s/);
+  assert.match(widget.render(160)[0]!, /lead · \d+s/);
   assert.match(widget.render(160)[0]!, /1 working · 1 blocked/);
 });
 
@@ -1365,6 +1368,42 @@ test("staff project operations present their branch target", () => {
   );
   assert.match(expanded, /branch: feat\/recovery/);
   assert.doesNotMatch(expanded, /task:|base:|session:/);
+});
+
+test("expanded staff project results show resolved branches and resume scope", () => {
+  for (const action of ["delegate", "resume", "stop"]) {
+    const output = renderedText(
+      renderCoordinationResult(
+        "staff",
+        action,
+        { details: { ok: true, branch: "feat/recovery", session: "lead-id" } },
+        { expanded: true },
+        presentationTheme,
+        { args: { action } },
+      ),
+    );
+    assert.match(output, /branch: feat\/recovery/);
+  }
+
+  const resumed = renderedText(
+    renderCoordinationResult(
+      "staff",
+      "resume",
+      {
+        details: {
+          ok: true,
+          session: "lead-id",
+          branch: "feat/recovery",
+          presentation_task: "Recover the existing project work",
+        },
+      },
+      { expanded: true },
+      presentationTheme,
+      { args: { action: "resume" } },
+    ),
+  );
+  assert.match(resumed, /branch: feat\/recovery/);
+  assert.match(resumed, /task: Recover the existing project work/);
 });
 
 test("compact coordination calls show available agent definitions", () => {
@@ -2207,6 +2246,21 @@ test("chief and staff coordination renderers share semantic status language", ()
       {
         details: {
           ok: true,
+          action: "list",
+          work: [
+            {
+              branch: "feat/api",
+              status: "active",
+              runtime_state: "working",
+              task: "Implement API recovery",
+            },
+            {
+              branch: "feat/db",
+              status: "conflict",
+              task: "Repair migrations",
+              issue: "another Lead is active in this worktree",
+            },
+          ],
           reports: [
             {
               session: "lead-opaque",
@@ -2225,8 +2279,14 @@ test("chief and staff coordination renderers share semantic status language", ()
     ),
   );
   for (const evidence of [
+    "feat/api · active · runtime=working",
+    "Implement API recovery",
+    "feat/db · conflict",
+    "Repair migrations",
+    "another Lead is active in this worktree",
     "session: lead-opaque",
     "agent counts: active=2 · blocked=1 · total=3",
+    "can: inspect, message",
   ])
     assert.ok(staffList.includes(evidence));
   assert.doesNotMatch(staffList, /last activity/);
@@ -2592,9 +2652,10 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
       ],
       stale: false,
       unavailable: false,
+      breadcrumb: ["lead"],
     });
     const rendered = widget.render(160).join("\n");
-    assert.match(rendered, /● herd/);
+    assert.match(rendered, /● lead/);
     assert.match(rendered, /one\s+◌ settling/);
     assert.match(rendered, /└─ ⠋ scout\s+scout:one/);
     assert.match(rendered, /gpt/);
@@ -2655,6 +2716,12 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
 });
 
 test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t) => {
+  {
+    const widget = new StatusWidget();
+    t.after(() => widget.dispose());
+    assert.match(widget.render(160)[0]!, /^● \?\s+unavailable$/);
+  }
+
   {
     const widget = new StatusWidget();
     t.after(() => widget.dispose());
