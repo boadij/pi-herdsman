@@ -1413,8 +1413,6 @@ for (const reachable of [true, false]) {
             (message as any)?.details?.id === backlogRecord.id,
         )!;
         assert.equal((backlogSend.options as any).triggerTurn, false);
-        ctx.isIdle = () => true;
-        await new Promise((resolve) => setTimeout(resolve, 650));
         assert.deepEqual(listProjectMessages(runtime, "repo-key", branch), []);
 
         await pi.commandOptions.get("manager").handler("leave", ctx);

@@ -5720,6 +5720,26 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       !sameManagerDescriptor(manager, leadRuntime.managerLease.descriptor)
     )
       return 0;
+    const hasProjectMessageReceipt = (record: ProjectMessage): boolean =>
+      ctx.sessionManager
+        .getEntries()
+        .some(
+          (entry: any) =>
+            entry?.customType === "pi-herdsman-project_message" &&
+            entry?.details?.id === record.id &&
+            entry?.details?.repoKey === record.repoKey &&
+            entry?.details?.branch === record.branch &&
+            entry?.details?.fromSessionId === record.fromSessionId,
+        );
+    const consumeProjectMessage = (record: ProjectMessage): boolean => {
+      try {
+        removeProjectMessage(runtime, record.repoKey, record.branch, record.id);
+        return true;
+      } catch (error) {
+        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        return false;
+      }
+    };
     for (const assignment of listProjectAssignments(runtime, manager.repoKey)) {
       for (const record of listProjectMessages(
         runtime,
@@ -5727,23 +5747,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
         assignment.branch,
       )) {
         if (record.fromSessionId !== assignment.id) continue;
-        const delivered = ctx.sessionManager
-          .getEntries()
-          .some(
-            (entry: any) =>
-              entry?.customType === "pi-herdsman-project_message" &&
-              entry?.details?.id === record.id &&
-              entry?.details?.repoKey === record.repoKey &&
-              entry?.details?.branch === record.branch &&
-              entry?.details?.fromSessionId === record.fromSessionId,
-          );
-        if (delivered) {
-          removeProjectMessage(
-            runtime,
-            record.repoKey,
-            record.branch,
-            record.id,
-          );
+        if (hasProjectMessageReceipt(record)) {
+          consumeProjectMessage(record);
           continue;
         }
         const current = await currentManager(ctx);
@@ -5778,6 +5783,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
             ? { triggerTurn: false }
             : { deliverAs: "followUp", triggerTurn: true },
         );
+        if (hasProjectMessageReceipt(record)) consumeProjectMessage(record);
         return 1;
       }
     }

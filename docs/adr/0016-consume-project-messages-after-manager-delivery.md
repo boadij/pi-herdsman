@@ -25,3 +25,8 @@ of message lifecycle: delivering a handoff does not retire its assignment.
 - Permanently replay messages to every Manager.
 - Persist per-Manager receipts or introduce a new queue schema.
 - Infer project completion from message delivery.
+
+Because Pi's extension sendMessage API is fire-and-forget, a turn-triggering
+message may remain pending until a later idle drain can prove its presence in
+Pi history. A Manager replaced during that interval may cause one replay; add
+durable receipt state only if this occurs in practice.
