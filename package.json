@@ -42,7 +42,8 @@
       "./dist/index.js"
     ],
     "skills": [
-      "."
+      "./SKILL.md",
+      "./skills"
     ],
     "image": "https://raw.githubusercontent.com/boadij/pi-herdsman/main/docs/assets/thumbnail.webp"
   },
@@ -91,7 +92,8 @@
     "SKILL.md",
     "LICENSE",
     "docs",
-    "dist"
+    "dist",
+    "skills"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
