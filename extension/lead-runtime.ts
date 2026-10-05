@@ -4913,6 +4913,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     readProjectAssignment,
     importResultBindings,
   } = host;
+  const reportedProjectMessageCleanupErrors = new Set<string>();
   const readLeadSessionIdsFromHost = (
     inventory: HerdrSessionSnapshot,
     mailboxes: ReturnType<typeof import("./mailbox.ts").listAgentStates>,
@@ -5734,9 +5735,13 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     const consumeProjectMessage = (record: ProjectMessage): boolean => {
       try {
         removeProjectMessage(runtime, record.repoKey, record.branch, record.id);
+        reportedProjectMessageCleanupErrors.delete(record.id);
         return true;
       } catch (error) {
-        appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        if (!reportedProjectMessageCleanupErrors.has(record.id)) {
+          reportedProjectMessageCleanupErrors.add(record.id);
+          appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
+        }
         return false;
       }
     };
