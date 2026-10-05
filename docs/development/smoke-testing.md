@@ -374,7 +374,7 @@ Automated live scenario results are separate and do not replace these checks.
 | An assigned Lead can retain a project message while no Manager is active; a replacement Manager receives it                                                                    | NOT RUN |
 | Metadata publication failure does not remove communication eligibility                                                                                                         | NOT RUN |
 | Ordinary lead messages leave lead coordination state unchanged                                                                                                                 | NOT RUN |
-| Follow-up delivery while the receiver is streaming, never steering                                                                                                             | NOT RUN |
+| Downward staff_message to an active direct report uses Pi steering; non-supervisor inbox traffic remains deferred                                                              | NOT RUN |
 | Receiver restart delivers each queued message once                                                                                                                             | NOT RUN |
 | Accepted-before-delete crash deduplicates without reinjection                                                                                                                  | NOT RUN |
 | Failed delivery/acceptance retains the queued record                                                                                                                           | NOT RUN |

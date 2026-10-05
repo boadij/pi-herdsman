@@ -1941,7 +1941,8 @@ export default function (pi: ExtensionAPI): void {
           ...staffTool,
           name: "staff_message",
           label: "staff message",
-          description: "Send a durable follow-up message to a direct report.",
+          description:
+            "Send a durable supervisor message to a direct report; active work is steered cooperatively.",
           parameters: staffMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],

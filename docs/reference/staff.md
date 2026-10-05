@@ -77,11 +77,14 @@ are excluded; the internal session-file path is not returned.
 }
 ```
 
-Queues one bounded follow-up to the exact direct report without waiting for
-completion. `files` accepts ordinary paths, reusable direct Agent refs, and
-canonical result refs already supplied as evidence. Attachments are prepared
-at submission; the coordination record carries the prepared text and any
-hidden semantic-result bindings needed for the recipient to forward them.
+Sends an asynchronous durable message to the exact current direct report. The
+message is queued by Herdsman before submission. If the report is actively
+running, supervisor direction uses Pi's cooperative steering lane; steering
+does not abort the current operation or interrupt an in-flight tool call.
+`files` accepts ordinary paths, reusable direct Agent refs, and canonical
+result refs already supplied as evidence. Attachments are prepared at
+submission; the coordination record carries the prepared text and any hidden
+semantic-result bindings needed for the recipient to forward them.
 
 ## `staff_delegate`
 

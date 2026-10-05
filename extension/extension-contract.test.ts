@@ -1494,7 +1494,7 @@ test("active chief describes authoritative remote ask projection", async () => {
     [listTool, "List direct-report supervision state."],
     [inspectTool, "Read bounded live terminal/process evidence"],
     [transcriptTool, "Read bounded persisted Pi conversation/tool evidence"],
-    [tool, "Send a durable follow-up message"],
+    [tool, "Send a durable supervisor message to a direct report"],
   ] as const)
     assert.match(operation.description, new RegExp(phrase));
   assert.doesNotMatch(
