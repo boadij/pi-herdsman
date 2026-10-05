@@ -9,8 +9,12 @@ const dist = resolve(root, "dist");
 rmSync(dist, { recursive: true, force: true });
 await build({
   absWorkingDir: root,
-  entryPoints: ["extension/index.ts"],
-  outfile: "dist/index.js",
+  entryPoints: {
+    index: "extension/index.ts",
+    "integrations/pi-codex-context-sharing":
+      "extension/integrations/pi-codex-context-sharing.ts",
+  },
+  outdir: "dist",
   bundle: true,
   platform: "node",
   format: "esm",
@@ -20,6 +24,7 @@ await build({
     "@earendil-works/pi-ai",
     "@earendil-works/pi-coding-agent",
     "@earendil-works/pi-tui",
+    "@howaboua/pi-codex-conversion/context-sharing",
     "typebox",
   ],
 });

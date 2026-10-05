@@ -33,6 +33,8 @@ const expectedDefinitions = readdirSync(
 const expectedDist = new Set([
   "dist/index.js",
   "dist/index.js.map",
+  "dist/integrations/pi-codex-context-sharing.js",
+  "dist/integrations/pi-codex-context-sharing.js.map",
   ...expectedDefinitions.map((name) => `dist/agent-definitions/${name}`),
 ]);
 for (const path of expectedRoot)
