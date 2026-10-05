@@ -772,6 +772,10 @@ export async function drainCoordinationInbox(
       }
       continue;
     }
+    const deliverAs = options.deliveryMode
+      ? options.deliveryMode(record)
+      : "followUp";
+    if (!deliverAs) continue;
     let token: unknown;
     const clearTransaction = async (): Promise<void> => {
       if (token === undefined) return;
@@ -825,13 +829,6 @@ export async function drainCoordinationInbox(
           await options.cleanupError?.(cleanupError);
         } catch {}
       }
-      await clearTransaction();
-      continue;
-    }
-    const deliverAs = options.deliveryMode
-      ? options.deliveryMode(record)
-      : "followUp";
-    if (!deliverAs) {
       await clearTransaction();
       continue;
     }
