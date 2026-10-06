@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.21.1](https://github.com/boadij/pi-herdsman/compare/v0.21.0...v0.21.1) (2026-10-06)
+
+
+### Fixes
+
+* **agent:** project direct ownership into managed Agent context ([#287](https://github.com/boadij/pi-herdsman/issues/287)) ([3fa80a6](https://github.com/boadij/pi-herdsman/commit/3fa80a6c74070efec418d22e0a0551070afde0b4))
+* **runtime:** adopt Pi 1.0.4 with closed tool policy ([#286](https://github.com/boadij/pi-herdsman/issues/286)) ([e92f58d](https://github.com/boadij/pi-herdsman/commit/e92f58dc418de5d2812d1a2de095b9e5525deab3))
+* **ui:** restore Lead ancestry in delegating Agent breadcrumbs ([#283](https://github.com/boadij/pi-herdsman/issues/283)) ([ce22333](https://github.com/boadij/pi-herdsman/commit/ce223336408ae11109e4a1315b98df2d0177e460))
+
 ## [0.21.0](https://github.com/boadij/pi-herdsman/compare/v0.20.1...v0.21.0) (2026-10-05)
 
 
