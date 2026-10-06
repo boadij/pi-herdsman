@@ -2606,6 +2606,8 @@ async function runManagerRecoverySmoke(ctx) {
                 }
               : [
                     "lead-context-acknowledgment",
+                    "direct-handoff-settled",
+                    "graceful-close",
                     "review-message",
                     "graceful-resume",
                     "recovery",
@@ -2626,6 +2628,8 @@ async function runManagerRecoverySmoke(ctx) {
           stallMs: [
             "ready",
             "lead-context-acknowledgment",
+            "direct-handoff-settled",
+            "graceful-close",
             "review-message",
             "graceful-resume",
             "recovery",
