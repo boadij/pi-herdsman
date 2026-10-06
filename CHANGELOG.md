@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.21.3](https://github.com/boadij/pi-herdsman/compare/v0.21.2...v0.21.3) (2026-10-06)
+
+
+### Fixes
+
+* **package:** update agent-definitions skill path ([#292](https://github.com/boadij/pi-herdsman/issues/292)) ([ef0b1a5](https://github.com/boadij/pi-herdsman/commit/ef0b1a5991e47a37e144fd6be709e13d202b201f))
+* **ui:** align custom message click expansion ([#290](https://github.com/boadij/pi-herdsman/issues/290)) ([bb08c0b](https://github.com/boadij/pi-herdsman/commit/bb08c0bce68f5c2cfb00262a53b3ae2c38bcfc66))
+
+
+### Refactoring
+
+* **skills:** rename pi-herdsman-agent-definitions to agent-definitions ([41d5c02](https://github.com/boadij/pi-herdsman/commit/41d5c02cb8837c791330c3dfbf2f11747b523528))
+
 ## [0.21.2](https://github.com/boadij/pi-herdsman/compare/v0.21.1...v0.21.2) (2026-10-06)
 
 
