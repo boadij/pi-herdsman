@@ -68,7 +68,6 @@ import {
 import { taskAcceptanceAllowed, steerAcceptanceAllowed } from "./core.ts";
 import { importResultBindings } from "./agent-controller.ts";
 import { fail, OperationError } from "./errors.ts";
-import { FILE_HANDOFF_GUIDANCE } from "./core.ts";
 import { readConfig } from "./config.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { ResultBinding } from "./storage.ts";

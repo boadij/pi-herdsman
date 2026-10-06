@@ -3525,13 +3525,9 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
       launched[0].args.filter(
         (arg) => arg === "--system-prompt" || arg === "--append-system-prompt",
       ),
-      [
-        "--append-system-prompt",
-        "--append-system-prompt",
-        "--append-system-prompt",
-      ],
+      ["--append-system-prompt", "--append-system-prompt"],
     );
-    assert.equal(launched[0].contents.length, 3);
+    assert.equal(launched[0].contents.length, 2);
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[0]!, /automatic prompt snapshot/);
     assert.match(launched[0].contents[1]!, /ask_owner/);
@@ -3661,18 +3657,14 @@ test("caller assignment files suppress canonical-overlapping automatic prompts",
       fakeContext(),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.equal(launched[0].contents.length, 3);
+    assert.equal(launched[0].contents.length, 2);
     assert.match(launched[0].contents[0]!, /definition body/);
     assert.match(launched[0].contents[1]!, /ask_owner/);
     assert.deepEqual(
       launched[0].args.filter(
         (arg) => arg === "--system-prompt" || arg === "--append-system-prompt",
       ),
-      [
-        "--append-system-prompt",
-        "--append-system-prompt",
-        "--append-system-prompt",
-      ],
+      ["--append-system-prompt", "--append-system-prompt"],
     );
     assert.match(assignedText, /caller wins canonical overlap/);
   } finally {
@@ -3921,6 +3913,7 @@ test("session continuation starts a new agent generation with current prompt con
     piSessionFile: join(PI_AGENT_ROOT, `${name}-deleted-session.jsonl`),
   });
   const launched: { args: string[]; contents: string[] }[] = [];
+  const launchedEnvironment: string[] = [];
   const startup = startupExecutor(
     label,
     () => session.id,
@@ -3931,7 +3924,16 @@ test("session continuation starts a new agent generation with current prompt con
       launched.push({ args: [...args], contents: promptLaunchContents(args) });
     },
   );
-  const pi = fakePi({ exec: startup.exec });
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (command === "herdr" && args[0] === "tab" && args[1] === "create") {
+        for (let index = 0; index < args.length - 1; index++)
+          if (args[index] === "--env")
+            launchedEnvironment.push(args[index + 1]!);
+      }
+      return startup.exec(command, args, options);
+    },
+  });
   registerExtension!(pi.pi as never);
   try {
     const result = await registeredAgentTool(pi, "continue").execute(
@@ -3945,13 +3947,15 @@ test("session continuation starts a new agent generation with current prompt con
       ownedSessionContext(session.id, name),
     );
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    assert.equal(launched[0].contents.length, 3);
+    assert.equal(launched[0].contents.length, 2);
     assert.equal(result.details.session_id, session.id);
     assert.equal(result.details.owner_session_id, LEAD_SESSION_ID);
     assert.ok(
-      startup.environmentCommands.includes("PI_HERDSMAN_OWNER_DISPLAY=lead"),
-      "continued generation must use its current Lead caller as direct owner",
+      launchedEnvironment.includes(
+        `PI_HERDSMAN_OWNER_SESSION_ID=${LEAD_SESSION_ID}`,
+      ),
     );
+    assert.ok(launchedEnvironment.includes("PI_HERDSMAN_OWNER_DISPLAY=lead"));
     assert.equal(result.details.session_path, "/tmp/registered-agent.jsonl");
     assert.ok(
       !JSON.stringify(result.content).includes("/tmp/registered-agent.jsonl"),
