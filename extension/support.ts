@@ -318,7 +318,7 @@ mock.module("@earendil-works/pi-tui", {
         return this.child.render(width);
       }
       handleMouse(event: any) {
-        return this.onMouse(event);
+        return this.child.handleMouse?.(event) ?? this.onMouse(event);
       }
       invalidate() {
         this.child.invalidate();

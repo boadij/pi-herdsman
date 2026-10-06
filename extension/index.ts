@@ -43,6 +43,7 @@ import {
   SelectList,
   Spacer,
   Text as TuiText,
+  type Component,
   type SelectItem,
   visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -301,23 +302,20 @@ import type { SupervisionContextStatus } from "./presentation.ts";
 const HERDSMAN_VERSION = packageMetadata.version;
 
 function expandableMessage(
-  message: any,
-  options: { expanded?: boolean; outputPad?: number },
-  theme: any,
-  render: (message: any, options: any, theme: any) => any,
+  initialExpanded: boolean,
+  render: (expanded: boolean) => Component,
 ): MouseRegion {
-  let expanded = options.expanded ?? false;
-  let component = render(message, { ...options, expanded }, theme);
-  const child = {
-    render: (width: number) => component.render(width),
-    invalidate: () => {
-      component = render(message, { ...options, expanded }, theme);
-    },
+  let expanded = initialExpanded;
+  const content = new Container();
+  const rebuild = () => {
+    content.clear();
+    content.addChild(render(expanded));
   };
-  return new MouseRegion(child, (event) => {
+  rebuild();
+  return new MouseRegion(content, (event) => {
     if (event.type !== "click" || event.button !== "left") return undefined;
     expanded = !expanded;
-    child.invalidate();
+    rebuild();
     return { handled: true };
   });
 }
@@ -794,22 +792,26 @@ export default function (pi: ExtensionAPI): void {
     pi.registerMessageRenderer(
       `pi-herdsman-${kind}`,
       (message, options, theme) =>
-        expandableMessage(
-          message,
-          options,
-          theme,
-          renderCoordinationMessage.bind(undefined, kind),
+        expandableMessage(options.expanded, (expanded) =>
+          renderCoordinationMessage(
+            kind,
+            message,
+            { ...options, expanded },
+            theme,
+          ),
         ),
     );
   }
   pi.registerMessageRenderer(
     "pi-herdsman-project_message",
     (message, options, theme) =>
-      expandableMessage(
-        message,
-        options,
-        theme,
-        renderCoordinationMessage.bind(undefined, "project_message"),
+      expandableMessage(options.expanded, (expanded) =>
+        renderCoordinationMessage(
+          "project_message",
+          message,
+          { ...options, expanded },
+          theme,
+        ),
       ),
   );
   pi.registerMessageRenderer(
@@ -819,27 +821,37 @@ export default function (pi: ExtensionAPI): void {
   pi.registerMessageRenderer(
     "pi-herdsman-agent-result",
     (message, options, theme) =>
-      expandableMessage(message, options, theme, renderCompletionMessage),
+      expandableMessage(options.expanded, (expanded) =>
+        renderCompletionMessage(message, { ...options, expanded }, theme),
+      ),
   );
   pi.registerMessageRenderer(
     "pi-herdsman-agent-ask",
     (message, options, theme) =>
-      expandableMessage(message, options, theme, renderAgentAskMessage),
+      expandableMessage(options.expanded, (expanded) =>
+        renderAgentAskMessage(message, { ...options, expanded }, theme),
+      ),
   );
   pi.registerMessageRenderer(
     "pi-herdsman-agent-stale",
     (message, options, theme) =>
-      expandableMessage(message, options, theme, renderAgentStaleMessage),
+      expandableMessage(options.expanded, (expanded) =>
+        renderAgentStaleMessage(message, { ...options, expanded }, theme),
+      ),
   );
   pi.registerMessageRenderer(
     "pi-herdsman-agent-lost",
     (message, options, theme) =>
-      expandableMessage(message, options, theme, renderAgentLostMessage),
+      expandableMessage(options.expanded, (expanded) =>
+        renderAgentLostMessage(message, { ...options, expanded }, theme),
+      ),
   );
   pi.registerMessageRenderer(
     "pi-herdsman-agent-attention",
     (message, options, theme) =>
-      expandableMessage(message, options, theme, renderAgentAttentionMessage),
+      expandableMessage(options.expanded, (expanded) =>
+        renderAgentAttentionMessage(message, { ...options, expanded }, theme),
+      ),
   );
   const processRole = role();
   if (processRole === "unmanaged") {
