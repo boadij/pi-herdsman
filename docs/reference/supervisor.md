@@ -19,18 +19,21 @@ Available to ordinary Leads and Managers.
 
 ```json
 {
-  "message": "The Agent is blocked pending an API contract decision.",
+  "message": "The API contract has a compatibility risk that needs Manager attention.",
   "files": ["result:reviewer#1"]
 }
 ```
 
-Use it for material coordination that should reach a supervisor before the
-normal result boundary, such as a blocker, warning, scope conflict, risk,
-decision request, or important evidence. While an assigned project remains
-active, Herdsman automatically returns each completed direct Lead response as a
-project message for the Manager role. If managed Agent work is active, the herd
-run owns that handoff until it settles; the settled response should summarize
-outcome, validation, and important unresolved points. These handoffs are
+Use it only for nonblocking material coordination that should reach a
+supervisor before the normal result boundary, such as a blocker, warning, scope
+conflict, risk, decision request, or important evidence. It queues coordination
+but does not wait for a supervisor reply or block project work. Do not use it
+for routine status or to duplicate an automatic result handoff. While an
+assigned project remains active, Herdsman automatically returns each completed
+direct Lead response as a project message for the Manager role. If managed
+Agent work is active, the herd run owns that handoff until it settles; the
+settled response should summarize outcome, validation, and important unresolved
+points. These handoffs are
 nonterminal. Do not send a duplicate message solely to report a result
 Herdsman will hand off automatically. Assigned Lead messages are persisted
 while pending when no Manager can receive them. The next verified Manager

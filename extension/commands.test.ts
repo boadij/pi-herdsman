@@ -2561,6 +2561,10 @@ async function managerDelegateAssignmentTest(
         assignmentDelivery.content!,
         /Herdsman automatically hands every completed\s+direct-work response to the Manager role while this assignment remains active\./,
       );
+      assert.match(
+        assignmentDelivery.content!,
+        /Use supervisor_message only for nonblocking material coordination[\s\S]*does not wait for a Manager reply\s+or block project work\./,
+      );
       const message = await lead.tools
         .find((tool) => tool.name === "supervisor_message")!
         .execute(

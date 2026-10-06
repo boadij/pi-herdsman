@@ -26,7 +26,9 @@ meaningful assistant response to the Manager role as a nonterminal project
 message. When a herd run owns the work, its settlement remains the single
 automatic handoff for that run; direct turn settlement does not produce a
 second handoff. These results do not resolve project work. `supervisor_message`
-is for material coordination before that normal result boundary.
+is for nonblocking material coordination before that normal result boundary;
+it queues the message without waiting for a Manager reply or blocking project
+work.
 
 The assigned Lead may explicitly release Manager authority with confirmed
 `/takeover`. Takeover removes the current project assignment and its pending

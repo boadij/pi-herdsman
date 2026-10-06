@@ -5934,8 +5934,10 @@ delegating or continuing managed Agent work, the herd run owns that handoff
 until it settles; summarize outcome, validation, and important unresolved
 points in your response.
 
-Use supervisor_message only for material coordination requiring Manager
-attention, a decision, or action—not routine status or a duplicate handoff.
+Use supervisor_message only for nonblocking material coordination that should
+reach Manager before the normal result boundary—not routine status or a
+duplicate handoff. It queues coordination but does not wait for a Manager reply
+or block project work.
 Undelivered project handoffs survive Manager absence. Once delivered, they
 are not automatically replayed to later Managers. Settlement is nonterminal; do not infer project closure from runtime state.`;
 }
