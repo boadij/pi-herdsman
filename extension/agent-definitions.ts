@@ -847,9 +847,6 @@ export function agentLaunchArgs(
     }
   }
   if (sharedPromptPath) args.push("--append-system-prompt", sharedPromptPath);
-  if (managedAgent)
-    args.push("--append-system-prompt", `<active_agent name="${agent.name}"/>`);
-
   const explicitTools = frontmatter.tools !== undefined;
   const noTools =
     frontmatter.noTools || (explicitTools && frontmatter.tools.length === 0);

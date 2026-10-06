@@ -1869,15 +1869,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
   );
   assert.deepEqual(
     agentLaunchArgs(delegationOnlyLeaf, { managedAgent: true }),
-    [
-      "--no-context-files",
-      "--append-system-prompt",
-      '<active_agent name="parent"/>',
-      "--no-tools",
-      "--tools",
-      "ask_owner",
-      "--no-skills",
-    ],
+    ["--no-context-files", "--no-tools", "--tools", "ask_owner", "--no-skills"],
   );
   const omittedToolsLeaf = projectAgentDefinition(
     {

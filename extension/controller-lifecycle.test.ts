@@ -237,6 +237,13 @@ test("parent delegates two same-definition children with exact ownership", async
     assert.equal(
       lifecycle.environmentCommands.filter(
         (command) =>
+          command === "PI_HERDSMAN_OWNER_DISPLAY=parent:multiplicity-parent",
+      ).length,
+      2,
+    );
+    assert.equal(
+      lifecycle.environmentCommands.filter(
+        (command) =>
           command === `PI_SUBAGENT_PARENT_SESSION=${LEAD_SESSION_ID}`,
       ).length,
       2,
@@ -354,6 +361,12 @@ test("lead direct placement modes use real controller delegation", async () => {
       };
       const first = await start(`placement-${placement}-one`);
       const second = await start(`placement-${placement}-two`);
+      assert.equal(
+        lifecycle.environmentCommands.filter(
+          (command) => command === "PI_HERDSMAN_OWNER_DISPLAY=lead",
+        ).length,
+        2,
+      );
       const firstTab = lifecycle.tabForPane(first.paneId);
       const secondTab = lifecycle.tabForPane(second.paneId);
       assert.ok(firstTab);
@@ -760,6 +773,7 @@ test("managed-agent delegation always splits in its current pane for every lead 
     process.env.PI_HERDSMAN_MAILBOX = parentMailbox;
     process.env.PI_HERDSMAN_RUN_ID = parent.runId;
     process.env.PI_HERDSMAN_OWNER_SESSION_ID = parent.ownerSessionId;
+    process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
     process.env.PI_HERDSMAN_LABEL = parent.agentLabel;
     process.env.PI_HERDSMAN_WORKSPACE_ID = WORKSPACE;
     process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
@@ -2414,6 +2428,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     process.env.PI_HERDSMAN_MAILBOX = agentMailboxPath(WORKSPACE, label);
     process.env.PI_HERDSMAN_RUN_ID = AGENT_ID;
     process.env.PI_HERDSMAN_OWNER_SESSION_ID = ownerSessionId;
+    process.env.PI_HERDSMAN_OWNER_DISPLAY = `${definition}:${label}`;
     process.env.PI_HERDSMAN_LABEL = label;
     process.env.PI_HERDSMAN_WORKSPACE_ID = WORKSPACE;
     process.env.PI_HERDSMAN_AGENT_DEFINITION = definition;
@@ -2544,6 +2559,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     delete process.env.PI_HERDSMAN_MAILBOX;
     delete process.env.PI_HERDSMAN_RUN_ID;
     delete process.env.PI_HERDSMAN_OWNER_SESSION_ID;
+    delete process.env.PI_HERDSMAN_OWNER_DISPLAY;
     delete process.env.PI_HERDSMAN_LABEL;
     delete process.env.PI_HERDSMAN_WORKSPACE_ID;
     delete process.env.PI_HERDSMAN_AGENT_DEFINITION;
@@ -3932,6 +3948,10 @@ test("session continuation starts a new agent generation with current prompt con
     assert.equal(launched[0].contents.length, 3);
     assert.equal(result.details.session_id, session.id);
     assert.equal(result.details.owner_session_id, LEAD_SESSION_ID);
+    assert.ok(
+      startup.environmentCommands.includes("PI_HERDSMAN_OWNER_DISPLAY=lead"),
+      "continued generation must use its current Lead caller as direct owner",
+    );
     assert.equal(result.details.session_path, "/tmp/registered-agent.jsonl");
     assert.ok(
       !JSON.stringify(result.content).includes("/tmp/registered-agent.jsonl"),
