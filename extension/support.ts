@@ -314,6 +314,23 @@ mock.module("@earendil-works/pi-coding-agent", {
 });
 mock.module("@earendil-works/pi-tui", {
   namedExports: {
+    MouseRegion: class {
+      private readonly child: any;
+      private readonly onMouse: (event: any) => unknown;
+      constructor(child: any, onMouse: (event: any) => unknown) {
+        this.child = child;
+        this.onMouse = onMouse;
+      }
+      render(width: number) {
+        return this.child.render(width);
+      }
+      handleMouse(event: any) {
+        return this.child.handleMouse?.(event) ?? this.onMouse(event);
+      }
+      invalidate() {
+        this.child.invalidate();
+      }
+    },
     Container: class {
       children: any[] = [];
       addChild(child: any) {
