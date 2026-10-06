@@ -723,12 +723,32 @@ test("registered agent writes state, handles input, and settles one result", asy
     Value.Check(askSchema, { question: "choose", files: ["options.md"] }),
     true,
   );
-  assert.equal(agent.events.has("before_agent_start"), false);
+  assert.equal(agent.events.has("before_agent_start"), true);
   assert.ok(agent.events.has("input"));
   assert.ok(agent.events.has("message_end"));
   assert.ok(agent.events.has("agent_settled"));
 
   const context = fakeContext();
+  const promptEvent: any = {
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  await agent.events.get("before_agent_start")![0](promptEvent, context as any);
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_agent,
+    /identity: agent:registered-agent/,
+  );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_agent,
+    /direct_owner: lead/,
+  );
+  assert.equal(
+    "delegating_agent_role" in promptEvent.systemPromptOptions.sections,
+    false,
+  );
+  assert.equal(
+    "agent_definitions" in promptEvent.systemPromptOptions.sections,
+    false,
+  );
   agent.events.get("session_start")![0](undefined, context);
   await new Promise((resolve) => setImmediate(resolve));
   const started = readAgentState(mailbox);

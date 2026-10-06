@@ -2804,29 +2804,46 @@ test("delegating agents receive only their allowed definition roster", async () 
   assert.equal(sessionStartHandlers.length, 1);
   await sessionStartHandlers[0](undefined, context);
   assert.equal(pi.events.has("context"), true);
-  const prompt = await pi.events.get("before_agent_start")![0](
-    { systemPrompt: "base" },
-    context,
-  );
-  assert.match(prompt?.systemPrompt ?? "", /## Delegating agent role/);
-  assert.doesNotMatch(prompt?.systemPrompt ?? "", /## Lead role/);
+  const event: any = {
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  const prompt = await pi.events.get("before_agent_start")![0](event, context);
+  assert.equal(prompt, undefined);
   assert.match(
-    prompt?.systemPrompt ?? "",
+    event.systemPromptOptions.sections.pi_herdsman_agent,
+    /identity: agent:delegating-agent/,
+  );
+  assert.match(
+    event.systemPromptOptions.sections.pi_herdsman_agent,
+    /direct_owner: lead/,
+  );
+  assert.match(
+    event.systemPromptOptions.sections.delegating_agent_role,
+    /## Delegating agent role/,
+  );
+  assert.match(
+    event.systemPromptOptions.sections.delegating_agent_role,
     /integration, validation, or onward handoff/,
   );
-  assert.doesNotMatch(prompt?.systemPrompt ?? "", /supervisor_message/);
-  assert.match(prompt?.systemPrompt ?? "", /<agent_definitions>/);
-  const supervisorState = pi.sentMessageCalls.find(
-    ({ message }: any) =>
-      message?.customType === "pi-herdsman-supervisor-state",
+  assert.doesNotMatch(
+    event.systemPromptOptions.sections.delegating_agent_role,
+    /supervisor_message/,
   );
-  assert.ok(supervisorState);
-  assert.equal((supervisorState?.message as any).display, false);
-  assert.deepEqual(supervisorState?.options, { triggerTurn: false });
+  assert.match(
+    event.systemPromptOptions.sections.agent_definitions,
+    /Use agent_list for live Agent state/,
+  );
   const roster = JSON.parse(
-    prompt.systemPrompt.match(
-      /<agent_definitions>\n([\s\S]*?)\n<\/agent_definitions>/,
-    )[1],
+    event.systemPromptOptions.sections.agent_definitions.split(
+      "\n\nThis is the session-start definition snapshot.",
+    )[0],
+  );
+  assert.equal(
+    pi.sentMessageCalls.some(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-supervisor-state",
+    ),
+    false,
   );
   assert.deepEqual(
     roster.map((definition: Record<string, unknown>) => definition.name),
@@ -2955,7 +2972,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   setLeadEnvironment();
 });
 
-test("delegating agents receive the verified Manager supervisor projection", async () => {
+test("delegating agents do not receive Manager supervisor projections", async () => {
   const mailbox = setAgentEnvironment("manager-projection-agent", ["scout"]);
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
@@ -3090,25 +3107,21 @@ test("delegating agents receive the verified Manager supervisor projection", asy
     const sessionStartHandlers = pi.events.get("session_start") ?? [];
     assert.equal(sessionStartHandlers.length, 1);
     await sessionStartHandlers[0](undefined, context);
-    const prompt = await pi.events.get("before_agent_start")![0](
-      { systemPrompt: "base" },
-      context,
-    );
-    assert.match(prompt?.systemPrompt ?? "", /## Delegating agent role/);
-    assert.doesNotMatch(prompt?.systemPrompt ?? "", /## Lead role/);
-    const message = pi.sentMessageCalls.find(
-      ({ message }: any) =>
-        message?.customType === "pi-herdsman-supervisor-state",
-    );
-    assert.ok(message);
-    assert.match((message!.message as any).content, /supervisor: manager/);
-    assert.match((message!.message as any).content, /availability: available/);
+    const event: any = {
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, context);
     assert.match(
-      (message!.message as any).content,
-      /project_messages: retained across Manager turnover/,
+      event.systemPromptOptions.sections.pi_herdsman_agent,
+      /direct_owner: lead/,
     );
-    assert.equal((message!.message as any).display, false);
-    assert.deepEqual(message!.options, { triggerTurn: false });
+    assert.equal(
+      pi.sentMessageCalls.some(
+        ({ message }: any) =>
+          message?.customType === "pi-herdsman-supervisor-state",
+      ),
+      false,
+    );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     manager.release();
@@ -3193,7 +3206,34 @@ test("leaf agents and active Chiefs do not receive agent definition rosters", as
   const mailbox = setAgentEnvironment("leaf-agent");
   const leaf = fakePi();
   registerExtension!(leaf.pi as never);
-  assert.equal(leaf.events.has("before_agent_start"), false);
+  assert.equal(leaf.events.has("before_agent_start"), true);
+  const leafContext = fakeContext() as any;
+  const leafEvent: any = {
+    systemPromptOptions: {
+      sections: {
+        delegating_agent_role: "earlier extension role",
+        agent_definitions: "earlier extension definitions",
+      },
+      contextFiles: [],
+    },
+  };
+  await leaf.events.get("before_agent_start")![0](leafEvent, leafContext);
+  assert.match(
+    leafEvent.systemPromptOptions.sections.pi_herdsman_agent,
+    /identity: agent:leaf-agent/,
+  );
+  assert.match(
+    leafEvent.systemPromptOptions.sections.pi_herdsman_agent,
+    /direct_owner: lead/,
+  );
+  assert.equal(
+    leafEvent.systemPromptOptions.sections.delegating_agent_role,
+    "earlier extension role",
+  );
+  assert.equal(
+    leafEvent.systemPromptOptions.sections.agent_definitions,
+    "earlier extension definitions",
+  );
   leaf.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 
@@ -3458,6 +3498,14 @@ test("invalid agent owner identity registers no managed agent hooks", () => {
   assert.equal(invalid.events.has("before_agent_start"), false);
   assert.equal(invalid.events.size, 1);
   assert.equal(readAgentState(mailbox), undefined);
+
+  const missingDisplayMailbox = setAgentEnvironment();
+  delete process.env.PI_HERDSMAN_OWNER_DISPLAY;
+  const missingDisplay = fakePi();
+  registerExtension!(missingDisplay.pi as never);
+  assert.equal(missingDisplay.events.has("before_agent_start"), false);
+  assert.equal(readAgentState(missingDisplayMailbox), undefined);
+  resetAgentMailbox(missingDisplayMailbox);
 });
 
 test("invalid mailbox-intent agent environment reports the exact field", async () => {
@@ -3609,6 +3657,7 @@ for (const delegationEnabled of [false, true]) {
     );
     const ownerSessionId = LEAD_SESSION_ID;
     process.env.PI_HERDSMAN_OWNER_SESSION_ID = ownerSessionId;
+    process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
     const leadPaneId = "status-boundary-lead-pane";
     const agentSessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
     const agentPaneId = "status-boundary-agent-pane";

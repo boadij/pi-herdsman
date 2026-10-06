@@ -4401,6 +4401,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   };
   process.env.PI_HERDSMAN_RUN_ID = parent.runId;
   process.env.PI_HERDSMAN_OWNER_SESSION_ID = LEAD_SESSION_ID;
+  process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "parent";
   const parentPi = fakePi({
     exec,

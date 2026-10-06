@@ -908,6 +908,7 @@ export function setLeadEnvironment(): void {
     "PI_HERDSMAN_MAILBOX",
     "PI_HERDSMAN_RUN_ID",
     "PI_HERDSMAN_OWNER_SESSION_ID",
+    "PI_HERDSMAN_OWNER_DISPLAY",
     "PI_HERDSMAN_LABEL",
     "PI_HERDSMAN_WORKSPACE_ID",
     "PI_HERDSMAN_AGENT_DEFINITION",
@@ -941,6 +942,7 @@ export function setAgentEnvironment(
   process.env.PI_HERDSMAN_RUN_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   process.env.PI_HERDSMAN_OWNER_SESSION_ID =
     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
   process.env.PI_HERDSMAN_LABEL = label;
   process.env.PI_HERDSMAN_WORKSPACE_ID = workspace;
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
@@ -2905,11 +2907,8 @@ export function promptLaunchContents(args: string[]): string[] {
       args[index] === "--append-system-prompt"
     ) {
       const input = args[index + 1]!;
-      contents.push(
-        input.startsWith("<active_agent ")
-          ? input
-          : readFileSync(input, "utf8"),
-      );
+      if (input.startsWith("<active_agent ")) continue;
+      contents.push(readFileSync(input, "utf8"));
     }
   }
   return contents;
