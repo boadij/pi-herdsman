@@ -1782,6 +1782,217 @@ test("Manager auto-start finalization suspends and invalidates Lead when rollbac
   assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
 });
 
+test("takeover cancellation preserves assignment and confirmation releases only project coordination", async () => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  const sessionId = randomUUID();
+  const assignment: any = {
+    version: 2,
+    id: sessionId,
+    repoKey: "repo-key",
+    branch: "feature",
+    text: "task",
+  };
+  for (const confirmed of [false, true]) {
+    let current: any = assignment;
+    let pending = true;
+    let removedMessages = 0;
+    let lockCount = 0;
+    const notices: string[] = [];
+    const state: any = {
+      controllerRole: "lead",
+      chiefMode: "inactive",
+      roleSuspended: false,
+    };
+    const host: any = new Proxy(
+      {
+        workspaceId: () => WORKSPACE,
+        worktreeGroupScope: async () => ({
+          repoKey: "repo-key",
+          repoName: "repo",
+          primaryWorkspaceId: WORKSPACE,
+          workspaceIds: [WORKSPACE],
+        }),
+        findProjectAssignmentBySession: () => (current ? [current] : []),
+        supervisionRuntime: () => ({}),
+        projectAssignmentPath: () => "/tmp/takeover-assignment",
+        readProjectAssignment: () => current,
+        removeProjectAssignment: () => {
+          current = undefined;
+        },
+        removeProjectMessages: () => {
+          pending = false;
+          removedMessages++;
+        },
+        acquireProcessLock: () => {
+          lockCount++;
+          return { release() {} };
+        },
+        appendDurableError: () => assert.fail("unexpected cleanup error"),
+        pi: fakePi().pi,
+      },
+      {
+        get: (target, key) =>
+          key in target ? target[key as keyof typeof target] : () => undefined,
+      },
+    );
+    const transitions = createLeadRoleTransitions(state, host);
+    const ctx: any = fakeContext();
+    ctx.sessionManager.getSessionId = () => sessionId;
+    ctx.hasUI = true;
+    ctx.ui.confirm = async () => confirmed;
+    ctx.ui.notify = (message: string) => notices.push(message);
+    await transitions.takeover(ctx);
+    assert.equal(Boolean(current), !confirmed);
+    assert.equal(pending, !confirmed);
+    assert.equal(removedMessages, confirmed ? 1 : 0);
+    assert.equal(lockCount, confirmed ? 1 : 0);
+    assert.equal(
+      notices.at(-1),
+      confirmed
+        ? "Lead taken over. Manager control and automatic project-result forwarding ended."
+        : undefined,
+    );
+    assert.equal(ctx.sessionManager.getSessionId(), sessionId);
+  }
+});
+
+test("takeover fails closed when assignment authority is duplicated or changes after confirmation", async () => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  const sessionId = randomUUID();
+  const original: any = {
+    version: 2,
+    id: sessionId,
+    repoKey: "repo-key",
+    branch: "feature",
+    text: "task",
+  };
+  for (const scenario of ["duplicate", "changed"] as const) {
+    let current = original;
+    let removed = false;
+    let confirms = 0;
+    const host: any = new Proxy(
+      {
+        workspaceId: () => WORKSPACE,
+        worktreeGroupScope: async () => ({
+          repoKey: "repo-key",
+          repoName: "repo",
+          primaryWorkspaceId: WORKSPACE,
+          workspaceIds: [WORKSPACE],
+        }),
+        findProjectAssignmentBySession: () =>
+          scenario === "duplicate"
+            ? [original, { ...original, branch: "duplicate" }]
+            : [current],
+        supervisionRuntime: () => ({}),
+        projectAssignmentPath: () => "/tmp/takeover-assignment",
+        readProjectAssignment: () => current,
+        removeProjectAssignment: () => {
+          removed = true;
+          current = undefined as any;
+        },
+        removeProjectMessages: () => {},
+        acquireProcessLock: () => ({ release() {} }),
+        appendDurableError: () => assert.fail("unexpected cleanup error"),
+        pi: fakePi().pi,
+      },
+      {
+        get: (target, key) =>
+          key in target ? target[key as keyof typeof target] : () => undefined,
+      },
+    );
+    const transitions = createLeadRoleTransitions(
+      {
+        controllerRole: "lead",
+        chiefMode: "inactive",
+        roleSuspended: false,
+      } as any,
+      host,
+    );
+    const ctx: any = fakeContext();
+    ctx.sessionManager.getSessionId = () => sessionId;
+    ctx.hasUI = true;
+    ctx.ui.confirm = async () => {
+      confirms++;
+      if (scenario === "changed") current = { ...original, branch: "changed" };
+      return true;
+    };
+    await assert.rejects(() => transitions.takeover(ctx));
+    assert.equal(removed, false);
+    assert.equal(confirms, scenario === "duplicate" ? 0 : 1);
+  }
+});
+
+test("takeover rejects non-Lead and noninteractive use and leaves ordinary Leads unchanged", async () => {
+  const { createLeadRoleTransitions } = await import("./lead-runtime.ts");
+  let locks = 0;
+  let removals = 0;
+  const host: any = new Proxy(
+    {
+      workspaceId: () => WORKSPACE,
+      worktreeGroupScope: async () => ({
+        repoKey: "repo-key",
+        repoName: "repo",
+        primaryWorkspaceId: WORKSPACE,
+        workspaceIds: [WORKSPACE],
+      }),
+      findProjectAssignmentBySession: () => [],
+      supervisionRuntime: () => ({}),
+      removeProjectAssignment: () => {
+        removals++;
+      },
+      removeProjectMessages: () => {
+        removals++;
+      },
+      acquireProcessLock: () => {
+        locks++;
+        return { release() {} };
+      },
+      pi: fakePi().pi,
+    },
+    {
+      get: (target, key) =>
+        key in target ? target[key as keyof typeof target] : () => undefined,
+    },
+  );
+  const context = () => {
+    const ctx: any = fakeContext();
+    ctx.sessionManager.getSessionId = () => randomUUID();
+    ctx.hasUI = true;
+    ctx.ui.notify = (message: string) => {
+      assert.equal(message, "This Lead is not managed.");
+    };
+    return ctx;
+  };
+  const manager = createLeadRoleTransitions(
+    {
+      controllerRole: "manager",
+      chiefMode: "inactive",
+      roleSuspended: false,
+    } as any,
+    host,
+  );
+  await assert.rejects(() => manager.takeover(context()), /only in Lead mode/);
+
+  const lead = createLeadRoleTransitions(
+    {
+      controllerRole: "lead",
+      chiefMode: "inactive",
+      roleSuspended: false,
+    } as any,
+    host,
+  );
+  const nonInteractive = context();
+  nonInteractive.hasUI = false;
+  await assert.rejects(
+    () => lead.takeover(nonInteractive),
+    /requires an interactive UI/,
+  );
+
+  await lead.takeover(context());
+  assert.equal(locks, 0);
+  assert.equal(removals, 0);
+});
+
 test("malformed Lead coordination blocks Manager auto-start", async () => {
   setLeadEnvironment();
   updateConfig("autoActivateManager", true);
@@ -2344,7 +2555,7 @@ async function managerDelegateAssignmentTest(
       );
       assert.match(
         assignmentDelivery.content!,
-        /Herdsman automatically hands your\s+normal assignment response to the Manager role\.\s+If no Manager is available,\s+the handoff remains pending until a Manager can receive it\./,
+        /Herdsman automatically hands every completed\s+direct-work response to the Manager role while this assignment remains active\./,
       );
       const message = await lead.tools
         .find((tool) => tool.name === "supervisor_message")!
@@ -2388,7 +2599,7 @@ for (const projectTrusted of [true, false])
   test(`Manager delegate persists an exact worktree Lead assignment (${projectTrusted ? "trusted" : "untrusted"})`, (t) =>
     managerDelegateAssignmentTest(t, projectTrusted));
 
-test("Chief staff and ambient supervision include Managers and unclaimed Leads", async () => {
+test("Manager reports only assignments and Chief keeps unassigned Leads in scope", async () => {
   setLeadEnvironment();
   process.env.HERDR_SOCKET_PATH = join(
     tmpdir(),
@@ -2412,52 +2623,71 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
     pane_id: "manager-pane",
     tab_id: "manager-tab",
   };
-  const independentLeadSession = `lead-${randomUUID()}`;
-  const independentWorkspace = `workspace-${randomUUID()}`;
-  const independentLead = {
+  const assignedLeadSession = randomUUID();
+  const assignedWorkspace = `workspace-${randomUUID()}`;
+  const assignedLead = {
     agent_session: {
       source: "herdr:pi",
       agent: "pi",
       kind: "id",
-      value: independentLeadSession,
+      value: assignedLeadSession,
     },
-    workspace_id: independentWorkspace,
-    pane_id: "independent-pane",
-    tab_id: "independent-tab",
-    cwd: "/tmp/independent-project",
+    workspace_id: assignedWorkspace,
+    pane_id: "assigned-pane",
+    tab_id: "assigned-tab",
+    cwd: "/tmp/assigned-project",
+  };
+  const ordinaryLeadSession = randomUUID();
+  const ordinaryWorkspace = `workspace-${randomUUID()}`;
+  const ordinaryLead = {
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: ordinaryLeadSession,
+    },
+    workspace_id: ordinaryWorkspace,
+    pane_id: "ordinary-pane",
+    tab_id: "ordinary-tab",
+    cwd: "/tmp/ordinary-project",
   };
   writeLeadCoordinationState(supervisionRuntime(), {
     version: 1,
     role: "lead",
     instanceId: randomUUID(),
-    piSessionId: independentLeadSession,
+    piSessionId: assignedLeadSession,
     updatedAt: Date.now(),
   });
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    role: "lead",
+    instanceId: randomUUID(),
+    piSessionId: ordinaryLeadSession,
+    updatedAt: Date.now(),
+  });
+  writeProjectAssignment(supervisionRuntime(), {
+    version: 2,
+    id: assignedLeadSession,
+    repoKey: "repo-key",
+    branch: "assigned-branch",
+    text: "assigned work",
+  });
+  const liveAgents = [managerAgent, assignedLead, ordinaryLead];
   const exec = (command: string, args: string[]) => {
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace:
           args[2] === WORKSPACE
             ? { worktree: { repo_key: "repo-key", is_linked_worktree: false } }
-            : args[2] === independentWorkspace
+            : args[2] === assignedWorkspace || args[2] === ordinaryWorkspace
               ? {
                   worktree: {
-                    repo_key: "other-repo",
-                    is_linked_worktree: false,
+                    repo_key: "repo-key",
+                    is_linked_worktree: true,
                   },
                 }
               : {},
       });
-    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
-      if (args[args.indexOf("--workspace") + 1] === independentWorkspace)
-        return respond({
-          source: {
-            source_workspace_id: independentWorkspace,
-            repo_key: "other-repo",
-            repo_name: "other",
-          },
-          worktrees: [],
-        });
     if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
       return respond({
         source: {
@@ -2465,15 +2695,18 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
           repo_key: "repo-key",
           repo_name: "project",
         },
-        worktrees: [],
+        worktrees: [
+          { open_workspace_id: assignedWorkspace },
+          { open_workspace_id: ordinaryWorkspace },
+        ],
       });
     if (command === "herdr" && isAgentList(args))
-      return respond({ agents: [managerAgent, independentLead] });
+      return respond({ agents: liveAgents });
     if (command === "herdr" && args[0] === "agent" && args[1] === "get")
       return respond({ agent: managerAgent });
     if (command === "herdr" && isApiSnapshot(args))
       return respond({
-        snapshot: { agents: [managerAgent, independentLead], panes: [] },
+        snapshot: { agents: liveAgents, panes: [] },
       });
     return respond({});
   };
@@ -2483,6 +2716,38 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
     process.env.HERDR_WORKSPACE_ID = WORKSPACE;
     await manager.events.get("session_start")![0](undefined, fakeContext());
     await manager.commandOptions.get("manager").handler("", fakeContext());
+    const managerStaff = manager.tools.find(
+      (tool) => tool.name === "staff_list",
+    )!;
+    const managerListing = await managerStaff.execute(
+      "list",
+      {},
+      undefined,
+      undefined,
+      fakeContext(),
+    );
+    assert.deepEqual(
+      managerListing.details.reports.map((report: any) => report.session),
+      [assignedLeadSession],
+      "shared project scope does not make an unassigned Lead a Manager report",
+    );
+    const duplicatePath = projectAssignmentPath(
+      supervisionRuntime(),
+      "repo-key",
+      "duplicate-assignment",
+    );
+    writeProjectAssignment(supervisionRuntime(), {
+      version: 2,
+      id: assignedLeadSession,
+      repoKey: "repo-key",
+      branch: "duplicate-assignment",
+      text: "ambiguous duplicate",
+    });
+    await assert.rejects(
+      managerStaff.execute("list", {}, undefined, undefined, fakeContext()),
+      /Multiple project assignments match a Lead session/,
+    );
+    rmSync(duplicatePath, { force: true });
     process.env.HERDR_WORKSPACE_ID = "chief-workspace";
     process.env.HERDR_PANE_ID = "chief-pane";
     process.env.HERDR_TAB_ID = "chief-tab";
@@ -2530,9 +2795,7 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
           message?.customType === "pi-herdsman-supervision-context",
       );
       assert.ok(
-        JSON.stringify(contextMessage?.message).includes(
-          independentLeadSession,
-        ),
+        JSON.stringify(contextMessage?.message).includes(ordinaryLeadSession),
       );
       const staff = chief.tools.find((tool) => tool.name === "staff_list")!;
       const listed = await staff.execute(
@@ -2546,9 +2809,12 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
       assert.equal(listed.details.reports.length, 2);
       assert.equal(listed.details.reports[0].role, "manager");
       assert.equal(listed.details.reports[0].session, LEAD_SESSION_ID);
-      assert.equal(listed.details.reports[0].leads.length, 0);
+      assert.deepEqual(
+        listed.details.reports[0].leads.map((lead: any) => lead.session),
+        [assignedLeadSession],
+      );
       assert.equal(listed.details.reports[1].role, "lead");
-      assert.equal(listed.details.reports[1].session, independentLeadSession);
+      assert.equal(listed.details.reports[1].session, ordinaryLeadSession);
       await assert.rejects(
         chief.tools
           .find((tool) => tool.name === "staff_message")!
@@ -2567,6 +2833,14 @@ test("Chief staff and ambient supervision include Managers and unclaimed Leads",
     } finally {
       resetAgentMailbox(agentMailboxPath(WORKSPACE, mailboxLabel));
       await chief.events.get("session_shutdown")![0]();
+      rmSync(
+        projectAssignmentPath(
+          supervisionRuntime(),
+          "repo-key",
+          "assigned-branch",
+        ),
+        { force: true },
+      );
     }
   } finally {
     await manager.events.get("session_shutdown")![0]();
@@ -4236,6 +4510,22 @@ async function openChiefOverview(
     exec: (_command, args) => {
       if (failRefresh && isApiSnapshot(args))
         throw new Error("supervision unavailable");
+      if (args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
+              worktrees: [],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
       return isApiSnapshot(args)
         ? {
             stdout: JSON.stringify({

@@ -27,6 +27,7 @@ import support, {
   LEAD_SESSION_ID,
   AGENT_ID,
   WORKSPACE,
+  StatusWidget,
   agentFromState,
   cascadeExecutor,
   controlMarker,
@@ -84,6 +85,7 @@ const {
   managerDescriptorPath,
   readManagerDescriptor,
   writeProjectAssignment,
+  removeProjectAssignment,
   listProjectMessages,
   writeProjectMessage,
   projectAssignmentPath,
@@ -158,7 +160,7 @@ const ownershipResult = (
   },
 });
 
-test("assigned Lead steers active Manager messages and saves supervisor messages durably", async (t) => {
+test("a manually continued assigned Lead stays managed and rejects stale Manager messages", async (t) => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `manager-routing-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
@@ -230,6 +232,19 @@ test("assigned Lead steers active Manager messages and saves supervisor messages
     getSessionId: () => leadId,
     getSessionFile: () => `/tmp/${leadId}.jsonl`,
   };
+  assert.equal(process.env.PI_HERDSMAN_AGENT_DEFINITION, undefined);
+  ctx.hasUI = true;
+  let statusWidget: StatusWidget | undefined;
+  ctx.ui.setWidget = (_key: string, content: unknown) => {
+    if (typeof content === "function")
+      statusWidget = (content as any)(
+        { requestRender: () => undefined },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+      );
+  };
   try {
     writeProjectAssignment(runtime, {
       version: 2,
@@ -246,6 +261,9 @@ test("assigned Lead steers active Manager messages and saves supervisor messages
       updatedAt: Date.now(),
     });
     await pi.events.get("session_start")![0](undefined, ctx);
+    await t.waitFor(() =>
+      assert.match(statusWidget!.render(160)[0], /^● lead · managed/),
+    );
     ctx.isIdle = () => false;
     writeChiefMessage(
       {
@@ -303,6 +321,38 @@ test("assigned Lead steers active Manager messages and saves supervisor messages
         },
       ],
     );
+    const staleText = "must be rejected after takeover";
+    writeChiefMessage(
+      {
+        version: 2,
+        id: randomUUID(),
+        leaseId: manager.descriptor.leaseId,
+        kind: "manager_message",
+        fromSessionId: managerId,
+        toSessionId: leadId,
+        leadSessionId: leadId,
+        text: staleText,
+        createdAt: Date.now(),
+      },
+      runtime,
+    );
+    removeProjectAssignment(runtime, "repo-key", "smoke/routing");
+    await t.waitFor(() =>
+      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+    );
+    assert.equal(
+      pi.sentMessageCalls.some(({ message }: any) =>
+        message?.content?.includes(staleText),
+      ),
+      false,
+    );
+    writeProjectAssignment(runtime, {
+      version: 2,
+      id: leadId,
+      repoKey: "repo-key",
+      branch: "smoke/routing",
+      text: "routing assignment",
+    });
     manager.release();
     managerReleased = true;
     const withoutManager = await send("MANAGER_ABSENT_OK");
@@ -315,6 +365,62 @@ test("assigned Lead steers active Manager messages and saves supervisor messages
         (record) => record.text,
       ),
       ["SMOKE_READY_1", "MANAGER_ABSENT_OK"],
+    );
+
+    const branchEntries = ctx.sessionManager.getBranch() as any[];
+    const turnStart = Date.now();
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, ctx);
+    branchEntries.push({
+      type: "message",
+      message: {
+        role: "assistant",
+        timestamp: turnStart + 1,
+        content: [{ type: "text", text: "Manual continuation result." }],
+      },
+    });
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler(undefined, ctx);
+    await t.waitFor(() =>
+      assert.equal(
+        listProjectMessages(runtime, "repo-key", "smoke/routing").length,
+        3,
+      ),
+    );
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", "smoke/routing")[2].text,
+      "Manual continuation result.",
+    );
+
+    ctx.hasUI = true;
+    ctx.ui.confirm = async () => true;
+    await pi.commandOptions.get("takeover")!.handler("", ctx);
+    assert.equal(ctx.sessionManager.getSessionId(), leadId);
+    assert.equal(listProjectAssignments(runtime, "repo-key").length, 0);
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", "smoke/routing").length,
+      0,
+    );
+    await t.waitFor(() =>
+      assert.doesNotMatch(statusWidget!.render(160)[0], /managed/),
+    );
+
+    for (const handler of pi.events.get("agent_start") ?? [])
+      await handler(undefined, ctx);
+    branchEntries.push({
+      type: "message",
+      message: {
+        role: "assistant",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "Post-takeover local result." }],
+      },
+    });
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler(undefined, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", "smoke/routing").length,
+      0,
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -1740,7 +1846,7 @@ for (const scenario of [
         );
         assert.match(
           delivered[0].content,
-          /automatically hands your\s+normal assignment response to the Manager role/,
+          /automatically hands every completed\s+direct-work response to the Manager role/,
         );
         assert.equal(delivered[0].content.includes(sessionId), false);
         assert.ok(
@@ -3172,19 +3278,20 @@ async function runManagerStartupScenario(
         listProjectAssignments(supervisionRuntime(), "repo-key"),
         [],
       );
-      const closed = await pi.tools
-        .find((tool) => tool.name === "staff_stop")!
-        .execute("close", { session: staleId }, undefined, undefined, ctx);
-      assert.equal(closed.details.ok, true);
-      assert.equal(closed.details.session, staleId);
-      assert.equal("branch" in closed.details, false);
-      assert.equal(started, false);
+      await assert.rejects(
+        () =>
+          pi.tools
+            .find((tool) => tool.name === "staff_stop")!
+            .execute("close", { session: staleId }, undefined, undefined, ctx),
+        /not an exact current project assignment/,
+      );
+      assert.equal(started, true);
       const liveAgents = JSON.parse(
         (await exec("herdr", ["agent", "list"])).stdout,
       ).result.agents;
       assert.equal(
         liveAgents.some((agent: any) => agent.agent_session?.value === staleId),
-        false,
+        true,
       );
       assert.deepEqual(
         listProjectAssignments(supervisionRuntime(), "repo-key"),
@@ -4012,7 +4119,7 @@ test("Manager retains assignment when exact Lead stop fails", () =>
   runManagerStartupScenario("close-failure"));
 test("Manager resume reports incompatible Lead builds as staff_resume", () =>
   runManagerStartupScenario("active-live-mismatch"));
-test("Manager closes an unassigned direct Lead and preserves its worktree", () =>
+test("Manager rejects stopping an unassigned direct Lead", () =>
   runManagerStartupScenario("unassigned-close"));
 test("Manager adopts a preexisting branch worktree for fresh delegation", () =>
   runManagerStartupScenario("preexisting"));

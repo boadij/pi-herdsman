@@ -14,11 +14,14 @@ and direct-report authority.
 
 ## Direct-report projection
 
-Chief sees active Managers and ordinary Leads whose project scope has no active
-Manager. A Manager's nested Leads may be summarized for Chief but are not Chief
-targets. Manager sees eligible ordinary Leads in its own Herdr worktree group,
-including Leads it did not create. It may observe descendant Agent counts but
-cannot target another Lead's Agents.
+Chief sees active Managers and ordinary unassigned Leads, even when an active
+Manager shares their project scope. A Manager's nested assigned Leads may be
+summarized for Chief but are not Chief targets. Manager sees only live exact
+Leads named by current `ProjectAssignment` records for its repository; physical
+scope, worktree membership, or which Manager created a Lead does not establish
+authority. It may observe descendant Agent counts but cannot target another
+Lead's Agents. Ambiguous duplicate assignments do not produce an actionable
+report.
 
 A direct-report record can expose the exact `session`, presentation-only
 `display_name`, runtime state, Agent counts, `available_tools`, and optional
@@ -130,13 +133,15 @@ from the current default branch.
 { "session": "<exact live direct Lead session ID>" }
 ```
 
-Stops the exact Lead and its owned Agent execution tree. For managed project
-work, the assignment, Pi session, Git branch, and worktree are preserved. Resume
-the work with `staff_resume` using its branch. An unassigned direct Lead can
-also be stopped without creating project work. Failed or ambiguous cleanup does
-not retire an assignment. Project retirement is driven by a successful Herdr
-worktree removal; a missing worktree alone leaves the assignment recoverable
-with `staff_resume`.
+Stops only an exact currently assigned project Lead and its owned Agent
+execution tree. The assignment, Pi session, Git branch, and worktree are
+preserved. Resume the work with `staff_resume` using its branch. An unassigned
+Lead is not a Manager staff-stop target. Failed or ambiguous cleanup does not
+retire an assignment. Successful Herdr worktree removal retires the assignment
+and pending project messages; a missing worktree alone leaves the assignment
+recoverable with `staff_resume`. The assigned Lead may separately release
+Manager authority through confirmed `/takeover`, which removes the assignment
+and pending project messages without stopping the session or owned Agents.
 
 ## See also
 

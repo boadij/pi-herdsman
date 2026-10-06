@@ -26,6 +26,7 @@ diagnostic that includes the running Pi Herdsman package version.
 /manager leave
 /chief
 /chief leave
+/takeover
 ```
 
 The plain command opens a native Pi selection menu titled with the running
@@ -203,14 +204,37 @@ Lead; successful automatic startup does not persist Manager intent. Changing
 the setting affects only a later `session_start`, not the running role.
 The Manager overview lists branch-based work, including paused work whose Lead
 is no longer running. It offers resume for paused work and focus or stop for a
-live Lead. Project retirement follows successful Herdr worktree removal; a
-missing worktree alone leaves the assignment recoverable with `staff_resume`.
+live assigned Lead. Manager staff reports contain only live exact Leads named
+by current project assignments; physical worktree scope alone grants no
+authority. Project assignments survive Manager replacement and manual
+continuation of the exact assigned Pi session. `managed-lead` is launch policy,
+not authority. Successful Herdr worktree removal retires an assignment; a
+missing worktree alone leaves it recoverable with `staff_resume`.
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
 While Chief, `/chief` opens the overview and `/chief leave` exits the mode.
 A Manager cannot activate Chief. Chief's staff roster contains active
-Managers, and may contain ordinary Leads in worktree groups without an active
-Manager; a Manager's roster contains Leads from its worktree group.
+Managers and ordinary unassigned Leads, including those in a project scope
+with an active Manager. A Manager's roster contains only live exact Leads named
+by its current project assignments.
+
+## `/takeover`
+
+Available in Lead mode with an interactive UI. On an assigned managed Lead,
+prompts for confirmation before removing that exact session's project
+assignment and any pending project messages. A successful takeover ends
+Manager control and automatic project-result forwarding while preserving the
+Pi session, conversation, branch, worktree, running process, and Lead-owned
+Agents. It does not imply project completion, and it does not restart Pi or
+change the current launch configuration. On an unassigned Lead it reports that
+the Lead is not managed. In Manager or Chief mode it reports `Takeover is
+available only in Lead mode.` Without an interactive confirmation UI it
+reports `Takeover requires an interactive UI.` Cancellation leaves state
+unchanged.
+
+Successful Herdr worktree removal and explicit `/takeover` are distinct
+assignment-release paths. Settlement, review, or user interaction does not
+release Manager authority.
 
 ## See also
 

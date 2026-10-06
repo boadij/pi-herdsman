@@ -8,7 +8,8 @@ agents plus controller-local transient starting assignments.
 It does not replace mailbox assignment/result authority.
 
 An active Chief receives a separate supervision widget for its current direct
-reports (Managers and ordinary Leads without an active project Manager). It
+reports (Managers and ordinary unassigned Leads, including those sharing
+project scope with an active Manager). It
 shows both categories together when both exist, not managed Agent rows. An
 active Manager receives a work-centric branch projection rather than the
 ordinary Lead Agent widget. Chief's complete overview, peek, and focus behavior
@@ -16,8 +17,9 @@ is documented in the [command reference](commands.md#project-manager-and-chief).
 Agent widgets are never combined.
 
 The Chief supervision tree uses `├─` for non-final visible reports and `└─` for the
-final visible report. A Manager's observational Lead/project work appears as
-second-level children; these children do not become Chief control targets.
+final visible report. A Manager's observational assigned Lead/project work
+appears as second-level children; these children do not become Chief control
+targets.
 Chief direct reports and their nested Manager work follow this shape:
 
 ```text
@@ -102,6 +104,23 @@ boundary. It does not add a socket transport or another agent-control protocol.
 A refresh failure never mutates mailbox/control eligibility.
 
 ## Breadcrumb
+
+An ordinary Lead's header may include contextual `· managed` metadata when its
+exact Pi session is named by the current project assignment, for example:
+
+```text
+● lead · managed
+```
+
+This marker is derived from current project assignment state and disappears
+after explicit `/takeover` without restarting Pi. It is presentation only, not
+authority. It appears separately from Agent ownership ancestry; a managed Lead
+with descendants retains an ownership breadcrumb such as `lead → implementer`
+and renders `· managed` as contextual metadata, never as an added breadcrumb
+segment. The marker participates in width-aware metadata truncation rather than
+overflowing a narrow header. A manually continued exact assigned session
+remains marked managed; the `managed-lead` launch definition is not used to
+derive the marker.
 
 Example:
 

@@ -126,6 +126,7 @@ export interface StatusSnapshot {
   ownTools?: string[];
   identityOnly?: boolean;
   refreshedAt?: number;
+  managed?: boolean;
 }
 export interface CompletionMessageDetails {
   requestId: string;
@@ -3513,6 +3514,7 @@ export class StatusWidget {
       : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
     const availableWidth = Math.max(0, width);
     const breadcrumb = renderBreadcrumb(s.breadcrumb ?? ["?"], availableWidth);
+    const managed = s.managed ? " · managed" : "";
     const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
     const run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
     const suffixText = s.identityOnly || !suffix ? "" : `  ${suffix}`;
@@ -3522,15 +3524,17 @@ export class StatusWidget {
         0,
         availableWidth -
           visibleWidth(breadcrumb) -
+          visibleWidth(managed) -
           visibleWidth(run) -
           visibleWidth(suffixText),
       ),
     );
     const styledBreadcrumb = this.theme.fg("success", breadcrumb);
+    const styledManaged = managed ? this.theme.fg("muted", managed) : "";
     const styledTools = tools ? this.theme.fg("muted", tools) : "";
     const styledRun = run ? this.theme.fg("accent", run) : "";
     const styledSuffix = suffixText ? this.theme.fg("muted", suffixText) : "";
-    const header = `${styledBreadcrumb}${styledTools}${styledRun}${styledSuffix}`;
+    const header = `${styledBreadcrumb}${styledManaged}${styledTools}${styledRun}${styledSuffix}`;
     const out = [truncateToWidth(header, availableWidth, "…")];
     if (s.identityOnly) return out;
     out.push(

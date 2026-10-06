@@ -1531,17 +1531,22 @@ test("staged fresh assignment removes a fast completion without observing workin
     const beforeCompletion = await list();
     assert.equal(beforeCompletion.details.agents[0].state, "settling");
     assert.equal(fixture.workingObservations, 0);
+    await t.waitFor(() =>
+      assert.match(fixture.widgetValue.render(160).join("\n"), /starting/),
+    );
     const renderedBeforeCompletion = fixture.widgetValue.render(160).join("\n");
     assert.match(renderedBeforeCompletion, /starting/);
     assert.doesNotMatch(renderedBeforeCompletion, /settling/);
     fixture.completeFast(requestId);
-    await t.waitFor(() =>
-      assert.ok(
-        fixture.pi.sent.some(
-          (message: any) => message.customType === "pi-herdsman-agent-result",
+    await t.waitFor(
+      () =>
+        assert.ok(
+          fixture.pi.sent.some(
+            (message: any) => message.customType === "pi-herdsman-agent-result",
+          ),
+          "fast completion result was not delivered",
         ),
-        "fast completion result was not delivered",
-      ),
+      { timeout: 5000 },
     );
     assert.equal(requestId, fixture.requestId);
     assert.equal(fixture.workingObservations, 0);
@@ -1955,7 +1960,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
   }
 });
 
-test("zero-Agent response ignores manager acknowledgement", async () => {
+test("each direct managed Lead turn returns its response", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `project-zero-agent-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
@@ -2052,12 +2057,12 @@ test("zero-Agent response ignores manager acknowledgement", async () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
     assert.equal(
       listProjectMessages(runtime, "repo-key", branch).length,
-      1,
-      "a later manager acknowledgement must not produce another handoff",
+      2,
+      "a later direct turn produces another handoff",
     );
     assert.equal(
-      listProjectMessages(runtime, "repo-key", branch)[0].text,
-      response.text,
+      listProjectMessages(runtime, "repo-key", branch)[1].text,
+      "You're welcome.",
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
