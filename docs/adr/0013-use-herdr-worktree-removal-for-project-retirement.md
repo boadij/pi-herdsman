@@ -1,5 +1,7 @@
 # Use Herdr worktree removal for project retirement
 
+> **Superseded in part by [ADR 0017](0017-use-project-assignments-for-managed-lead-authority.md):** explicit user `/takeover` is an additional assignment-release path. This ADR continues to define successful Herdr worktree removal as a separate retirement event.
+
 ## Decision
 
 A persisted `ProjectAssignment` represents project work still managed by

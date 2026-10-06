@@ -62,15 +62,18 @@ Assigned Lead messages are pending Manager delivery and are nonterminal; once
 delivered, they become Pi conversation history rather than pending Herdsman
 coordination. `staff_stop` pauses execution without removing the assignment.
 Successful Herdr worktree removal retires the matching project assignment and
-any still-pending messages. A missing worktree alone does not retire an
-assignment;
-`staff_resume` can reconstruct the checkout when its branch remains available.
+any still-pending messages. The assigned Lead can also explicitly release
+Manager control with confirmed `/takeover`, which removes the assignment and
+pending project messages while preserving its session, branch, worktree,
+process, and owned Agents. A missing worktree alone does not retire an
+assignment; `staff_resume` can reconstruct the checkout when its branch
+remains available.
 
 An assigned project Lead saves messages with its project assignment for the
 Manager role while Manager is absent; they remain pending until a Manager can
-receive them and are not replayed after delivery. An unassigned Lead routes to
-its active Manager
-when one exists, otherwise to Chief. A Manager routes to Chief.
+receive them and are not replayed after delivery. An unassigned Lead routes
+only to Chief when verified, never to a same-scope Manager. A Manager routes to
+Chief.
 
 ## Same-role peers
 

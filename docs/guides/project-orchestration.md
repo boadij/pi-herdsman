@@ -5,8 +5,9 @@
 Use Manager when independent project work deserves separate Leads and Git
 branches instead of more Agents inside one Lead's worktree.
 
-Manager supervises project scope and assignment boundaries. Project Leads own
-technical decisions and orchestrate execution through their Agent trees.
+Manager controls the Leads named by current project assignments; project scope
+alone grants no authority over a Lead. Project Leads own technical decisions
+and orchestrate execution through their Agent trees.
 
 Manager-created project Leads are launched from the reserved `managed-lead`
 definition. The bundled default keeps direct Lead work read-only and delegates
@@ -84,20 +85,20 @@ independent enough to justify separate branch and execution boundaries.
 
 ## Coordinate and review
 
-For each project-assignment delivery, Herdsman automatically records the
-Lead's normal response to the Manager role. If no Manager is available, the
-handoff remains pending until a Manager can receive it. Successful
-delegation or continuation of managed Agent work defers that handoff until the
-herd run settles; the response summarizes outcome, validation, and important
-unresolved points. Unsuccessful delegation leaves the local response path
-available. Later conversational replies stay local. This handoff is not
-project completion: the assignment remains open through review and requested
-corrections. Leads use `supervisor_message` only for material coordination
-requiring Manager attention, a decision, or action—not routine acknowledgment
-or a duplicate handoff. Such messages remain pending while Manager is absent
-and are delivered to the next Manager that can receive them. Already-delivered messages are Pi
-conversation history, not pending Herdsman coordination. Settlement and review
-do not retire the assignment.
+While a Lead remains assigned, Herdsman automatically returns every completed
+direct Lead response to the Manager role. If no Manager is available, the
+handoff remains pending until a Manager can receive it. When managed Agent work
+is active, the herd run owns that handoff until it settles; the response
+summarizes outcome, validation, and important unresolved points. These
+nonterminal handoffs do not close project work: assignments remain open through
+review and requested corrections. Leads use `supervisor_message` for material
+coordination that should reach Manager before the normal result boundary, such
+as a blocker, warning, scope conflict, risk, decision request, or important
+evidence—not to duplicate an automatic result. Managers should treat routine
+progress and conversational results as informational and act only when useful
+coordination is needed. Such messages remain pending while Manager is absent
+and are delivered to the next Manager that can receive them. Already-delivered
+messages are Pi conversation history, not pending Herdsman coordination.
 
 Use the current supervision state rather than repeatedly listing or inspecting
 reports to poll for progress. Inspect live terminal or persisted transcript
@@ -117,7 +118,13 @@ See [`staff_stop`](../reference/staff.md#staff_stop) and
 Successful Herdr worktree removal retires the matching project assignment and
 any still-pending messages; the Git branch remains. A worktree that is merely
 missing does not imply retirement, so the assignment remains recoverable with
-`staff_resume` when its branch is available.
+`staff_resume` when its branch is available. An assigned Lead can explicitly
+release Manager control with `/takeover`; after confirmation, the assignment
+and pending project messages are removed while its Pi session, conversation,
+branch, worktree, running process, and owned Agents remain. Takeover does not
+claim the work is complete or accepted. These are distinct explicit assignment
+release paths; settlement, review, and user interaction do not release an
+assignment.
 
 ## Leave and return
 
@@ -134,9 +141,15 @@ the same repository and branch-based work.
 ## Use Chief only for the next supervision layer
 
 Chief is separate from project orchestration. It supervises Managers across
-the current Herdr runtime and can directly supervise ordinary Leads only when
-their project scope has no active Manager. A Manager does not become Chief and
-does not forward its direct Leads into a parallel Chief control path.
+the current Herdr runtime and directly supervises ordinary unassigned Leads,
+including Leads sharing project scope with an active Manager. Managers control
+only Leads named by current project assignments; their authority survives
+Manager process replacement. A Manager does not become Chief and does not
+forward assigned Leads into a parallel Chief control path.
+
+Manually continuing the exact assigned Pi session within valid project scope
+keeps it managed. The `managed-lead` definition controls launch configuration,
+not authority; only the current `ProjectAssignment` establishes Manager control.
 
 See [Coordination](../concepts/coordination.md) and
 [Commands](../reference/commands.md).

@@ -2481,6 +2481,60 @@ test("Status widgets preserve parent families and settling counts", (t) => {
   }
 });
 
+test("Status widget renders managed metadata without changing ownership ancestry", (t) => {
+  const calls: string[] = [];
+  const widget = new StatusWidget(undefined, {
+    fg: (color: string, text: string) => {
+      calls.push(`${color}:${text}`);
+      return text;
+    },
+    bold: (text: string) => text,
+  });
+  t.after(() => widget.dispose());
+  const snapshot = {
+    agents: [],
+    stale: false,
+    unavailable: false,
+    breadcrumb: ["lead"],
+  };
+  widget.setSnapshot({ ...snapshot, managed: true });
+  assert.equal(widget.render(160)[0], "● lead · managed");
+  assert.ok(calls.includes("success:● lead"));
+  assert.ok(calls.includes("muted: · managed"));
+  widget.setSnapshot(snapshot);
+  assert.equal(widget.render(160)[0], "● lead");
+
+  const breadcrumb = ["lead", "implementer", "scout"];
+  widget.setSnapshot({
+    ...snapshot,
+    managed: true,
+    breadcrumb,
+    ownTools: ["read", "bash"],
+    identityOnly: true,
+  });
+  assert.equal(
+    widget.render(160)[0],
+    "● lead → implementer → scout · managed  [read, bash]",
+  );
+  assert.deepEqual(breadcrumb, ["lead", "implementer", "scout"]);
+  assert.equal(widget.render(41)[0], "● lead → implementer → scout · managed");
+  for (let width = 0; width <= 160; width++)
+    assert.ok(
+      widget.render(width).every((line) => visibleWidth(line) <= width),
+    );
+  assert.match(widget.render(8)[0]!, /scout/);
+
+  widget.setSnapshot({
+    ...snapshot,
+    managed: true,
+    agents: [
+      { label: "implementer", definition: "implementer", state: "blocked" },
+    ],
+  });
+  assert.match(widget.render(160)[0]!, /^● lead · managed  1 blocked$/);
+  assert.match(widget.render(160)[1]!, /└─ .*implementer/);
+});
+
 test("Status widget headers keep tools separate from child metadata", (t) => {
   const semanticTools = [
     "read",

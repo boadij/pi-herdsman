@@ -2117,11 +2117,25 @@ export function registerLeadRuntime(
     ) => roleTransitions.managerForScope(...args),
     currentPeerPresenceValid: (ctx: ExtensionContext) =>
       coordinationRuntime.currentPeerPresenceValid(ctx),
+    currentWorktreeScope: (ctx: ExtensionContext) =>
+      roleTransitions.currentWorktreeScope(ctx),
+    projectAssignmentForScope: (
+      ...args: Parameters<typeof roleTransitions.projectAssignmentForScope>
+    ) => roleTransitions.projectAssignmentForScope(...args),
     drainProjectMessages: (ctx: ExtensionContext) =>
       coordinationRuntime.drainProjectMessages(ctx),
   };
   inboxRuntime = createLeadInboxRuntime(inboxServices);
   let herdRunRuntime: ReturnType<typeof createLeadHerdRunRuntime> | undefined;
+  let statusWorktreeScope:
+    | {
+        sessionId: string;
+        workspaceId: string;
+        scope?: WorktreeGroupScope;
+      }
+    | undefined;
+  let statusWorktreeScopeRequest:
+    { sessionId: string; workspaceId: string } | undefined;
   const controller = createAgentController(pi, {
     ...options.controllerServices,
     scope: { kind: "lead" },
@@ -2156,6 +2170,54 @@ export function registerLeadRuntime(
     runtimeForLabel: (label: string) => Runtime | undefined = (label) =>
       controller.runtimeForLabel(label),
   ): Promise<StatusSnapshot> => {
+    let assignment: ProjectAssignment | undefined;
+    if (roleTransitions && activeLeadRole(options.leadRuntime) === "lead") {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const workspaceId = process.env.HERDR_WORKSPACE_ID;
+      if (workspaceId) {
+        if (
+          statusWorktreeScope?.sessionId === sessionId &&
+          statusWorktreeScope.workspaceId === workspaceId
+        ) {
+          if (statusWorktreeScope.scope) {
+            try {
+              assignment = roleTransitions.projectAssignmentForScope(
+                statusWorktreeScope.scope,
+                sessionId,
+              );
+            } catch {
+              // Ambiguous assignment evidence must not claim Manager control.
+            }
+          }
+        } else if (
+          statusWorktreeScopeRequest?.sessionId !== sessionId ||
+          statusWorktreeScopeRequest.workspaceId !== workspaceId
+        ) {
+          // Scope lookup is deliberately outside the status refresh path: a
+          // slow or unavailable Herdr topology must not stall agent status.
+          statusWorktreeScopeRequest = { sessionId, workspaceId };
+          void roleTransitions.currentWorktreeScope(ctx).then(
+            (scope) => {
+              if (
+                statusWorktreeScopeRequest?.sessionId !== sessionId ||
+                statusWorktreeScopeRequest.workspaceId !== workspaceId
+              )
+                return;
+              statusWorktreeScope = { sessionId, workspaceId, scope };
+              statusWorktreeScopeRequest = undefined;
+              statusRuntime.requestRefresh();
+            },
+            () => {
+              if (
+                statusWorktreeScopeRequest?.sessionId === sessionId &&
+                statusWorktreeScopeRequest.workspaceId === workspaceId
+              )
+                statusWorktreeScopeRequest = undefined;
+            },
+          );
+        }
+      }
+    }
     const view = await controller.agentSnapshotView(
       ctx,
       { kind: "lead" },
@@ -2163,13 +2225,14 @@ export function registerLeadRuntime(
       true,
       allowTranscriptDefinitionFallback,
     );
-    return buildAgentStatusSnapshot(view, ctx, {
+    const snapshot = buildAgentStatusSnapshot(view, ctx, {
       ...options.statusSnapshotHost,
       scope: { kind: "lead" },
       listedAgentRecord: controller.listedAgentRecord,
       runtimeForLabel,
       herdStartedAt: () => herdRunRuntime?.startedAt(),
     });
+    return { ...snapshot, ...(assignment ? { managed: true } : {}) };
   };
   statusRuntime.configure({
     ...options.statusSnapshotHost,
@@ -2351,11 +2414,6 @@ export function registerLeadRuntime(
   pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) =>
     agentEvents.agentStart(ctx),
   );
-  pi.on("message_start", (event: any) => {
-    const message = event?.message;
-    if (message?.customType === "pi-herdsman-project_assignment")
-      herdRunRuntime?.projectAssignmentStarted(message.timestamp);
-  });
   pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) =>
     agentEvents.agentSettled(ctx),
   );
@@ -2658,8 +2716,17 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         suppliedAgents,
         true,
       );
-      return snapshot.leads.filter((lead) =>
-        scope.workspaceIds.includes(lead.workspaceId),
+      const assignments = host.listProjectAssignments(
+        host.supervisionRuntime(),
+        manager.repoKey,
+      );
+      const sessions = new Set(assignments.map((assignment) => assignment.id));
+      if (sessions.size !== assignments.length)
+        throw new Error("Multiple project assignments match a Lead session");
+      return snapshot.leads.filter(
+        (lead) =>
+          sessions.has(lead.lead) &&
+          scope.workspaceIds.includes(lead.workspaceId),
       );
     }
     if (host.activeRole() !== "chief")
@@ -2689,7 +2756,31 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     ).agents;
     const managerLeadSessions = new Set<string>();
     const descriptors = host.listManagerDescriptors(host.supervisionRuntime());
+    for (const lead of allLeads) {
+      try {
+        const scope = await host.worktreeGroupScope(
+          host.pi,
+          ctx,
+          lead.workspaceId,
+          ctx.signal,
+        );
+        for (const assignment of host.listProjectAssignments(
+          host.supervisionRuntime(),
+          scope.repoKey,
+        ))
+          managerLeadSessions.add(assignment.id);
+      } catch {
+        // Unverifiable worktree scope cannot produce Chief direct authority.
+        managerLeadSessions.add(lead.lead);
+      }
+    }
     for (const descriptor of descriptors) {
+      const assignedSessions = new Set(
+        host
+          .listProjectAssignments(host.supervisionRuntime(), descriptor.repoKey)
+          .map((assignment) => assignment.id),
+      );
+      for (const session of assignedSessions) managerLeadSessions.add(session);
       if (
         descriptors.filter(
           (candidate) => candidate.piSessionId === descriptor.piSessionId,
@@ -2719,8 +2810,10 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         scope.primaryWorkspaceId !== descriptor.workspaceId
       )
         continue;
-      const leads = allLeads.filter((lead) =>
-        scope.workspaceIds.includes(lead.workspaceId),
+      const leads = allLeads.filter(
+        (lead) =>
+          assignedSessions.has(lead.lead) &&
+          scope.workspaceIds.includes(lead.workspaceId),
       );
       for (const lead of leads) managerLeadSessions.add(lead.lead);
       const ownerSessions = new Set([descriptor.piSessionId]);
@@ -3427,7 +3520,6 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
 export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
   let leadAgentStartedAt: number | undefined;
   let herdRunStartedAt: number | undefined;
-  let projectAssignmentStartedAt: number | undefined;
   let leadSettled = true;
   const latestMeaningfulAssistantResponse = (
     ctx: ExtensionContext,
@@ -3499,7 +3591,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     }
   };
   const begin = (ctx: ExtensionContext): void => {
-    projectAssignmentStartedAt = undefined;
     if (herdRunStartedAt !== undefined) return;
     const startedAt = leadAgentStartedAt ?? Date.now();
     herdRunStartedAt = startedAt;
@@ -3518,23 +3609,18 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
   return {
     begin,
     maybeFinish,
-    projectAssignmentStarted: (startedAt: number) => {
-      projectAssignmentStartedAt = startedAt;
-    },
     agentStarted: () => {
       leadAgentStartedAt = Date.now();
       leadSettled = false;
     },
     agentSettled: (ctx: ExtensionContext) => {
-      const assignmentStartedAt = projectAssignmentStartedAt;
-      projectAssignmentStartedAt = undefined;
+      const turnStartedAt = leadAgentStartedAt;
+      leadAgentStartedAt = undefined;
+      const herdOwnsHandoff = herdRunStartedAt !== undefined;
       leadSettled = true;
       maybeFinish(ctx);
-      if (assignmentStartedAt !== undefined) {
-        const response = latestMeaningfulAssistantResponse(
-          ctx,
-          assignmentStartedAt,
-        );
+      if (!herdOwnsHandoff && turnStartedAt !== undefined) {
+        const response = latestMeaningfulAssistantResponse(ctx, turnStartedAt);
         if (response)
           void publishProjectHandoff(ctx, response).catch((error) =>
             host.appendDurableError(
@@ -3548,7 +3634,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     },
     restoreSession: (entries: unknown[], sessionId: string) => {
       leadAgentStartedAt = undefined;
-      projectAssignmentStartedAt = undefined;
       herdRunStartedAt = restoreHerdRunStartedAt(
         entries,
         sessionId,
@@ -3566,7 +3651,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     shutdown: () => {
       leadAgentStartedAt = undefined;
       herdRunStartedAt = undefined;
-      projectAssignmentStartedAt = undefined;
       leadSettled = true;
     },
   };
@@ -3650,17 +3734,16 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       manager.repoKey,
       session,
     );
-    if (assignments.length > 1)
-      throw new Error("Multiple project assignments match the Lead session");
+    if (assignments.length !== 1)
+      throw new Error("Lead is not an exact current project assignment");
     const assignment = assignments[0];
     const close = async () => {
       if (
-        assignment &&
         host.readProjectAssignment(
           host.supervisionRuntime(),
           manager.repoKey,
           assignment.branch,
-        )?.branch !== assignment.branch
+        )?.id !== assignment.id
       )
         throw new Error("Project assignment changed before close");
       const live = (await host.liveLead(ctx, session)).filter((agent: any) =>
@@ -3684,12 +3767,15 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         },
       };
     };
-    return assignment
-      ? host.withProjectWorkLock(
-          `${manager.repoKey}\0${assignment.branch}`,
+    return host.withProjectWorkLock(
+      `${manager.repoKey}\0${assignment.branch}`,
+      () =>
+        host.withProjectAssignmentLock(
+          manager.repoKey,
+          assignment.branch,
           close,
-        )
-      : close();
+        ),
+    );
   };
   const {
     pi,
@@ -4640,6 +4726,21 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           );
         },
       );
+      const currentAuthority =
+        activeRole() === "chief"
+          ? await currentChiefAuthority(ctx)
+          : await currentManager(ctx);
+      const currentLead = (await directReports(ctx)).find(
+        (candidate: any) => reportSession(candidate) === params.session,
+      );
+      if (
+        !currentAuthority ||
+        currentAuthority.leaseId !== authority.leaseId ||
+        !currentLead ||
+        !sameLeadIdentity(currentLead, lead) ||
+        !currentLead.availableActions.includes("inspect")
+      )
+        throw new Error("Lead changed during inspection");
       return result({
         ok: true,
         action: "inspect",
@@ -5510,11 +5611,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           details: { id: published.id, branch: assignment.branch },
         };
       }
-      const chief =
-        activeRole() === "lead"
-          ? ((await currentManager(ctx, scope)) ??
-            (await currentChiefAuthority(ctx)))
-          : await currentSupervisor(ctx);
+      const chief = await currentSupervisor(ctx);
       if (!chief) throw new Error("No active supervisor is available");
       const recordId = randomUUID();
       const createdAt = Date.now();
@@ -5830,16 +5927,17 @@ function projectAssignmentInstruction(
   return `${assignment.text}
 
 Manager supervises project scope and assignment boundaries; you own technical
-decisions and orchestration of execution. Herdsman automatically hands your
-normal assignment response to the Manager role. If no Manager is available,
+decisions and orchestration of execution. Herdsman automatically hands every completed
+direct-work response to the Manager role while this assignment remains active. If no Manager is available,
 the handoff remains pending until a Manager can receive it. After successfully
 delegating or continuing managed Agent work, the herd run owns that handoff
 until it settles; summarize outcome, validation, and important unresolved
-points in your response. If delegation is unsuccessful, respond
-locally. Later conversational replies stay local.
+points in your response.
 
-Use supervisor_message only for material coordination requiring Manager
-attention, a decision, or action—not routine status or a duplicate handoff.
+Use supervisor_message only for nonblocking material coordination that should
+reach Manager before the normal result boundary—not routine status or a
+duplicate handoff. It queues coordination but does not wait for a Manager reply
+or block project work.
 Undelivered project handoffs survive Manager absence. Once delivered, they
 are not automatically replayed to later Managers. Settlement is nonterminal; do not infer project closure from runtime state.`;
 }
@@ -5934,9 +6032,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           entry?.details?.askId === record.askId &&
           entry?.details?.branch === record.branch,
       );
-  const managerClaimsScope = (
-    scope: Awaited<ReturnType<typeof worktreeGroupScope>> | undefined,
-  ): boolean => !!managerForScope(scope);
   const projectAssignmentAuthorized = (
     authorized: boolean,
     reason: string,
@@ -6059,7 +6154,9 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         return (
           !!state &&
           (state.role ?? "lead") === "lead" &&
-          !managerClaimsScope(scope)
+          !(
+            scope && host.projectAssignmentForScope(scope, record.fromSessionId)
+          )
         );
       }
       if (record.kind !== "manager_message") return false;
@@ -6134,7 +6231,10 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         record.leadSessionId === sessionId
       );
     }
-    const manager = await currentManager(ctx);
+    const scope = await host.currentWorktreeScope(ctx);
+    if (!scope || !host.projectAssignmentForScope(scope, sessionId))
+      return false;
+    const manager = await currentManager(ctx, scope);
     const state = readLeadCoordinationState(supervisionRuntime(), sessionId);
     return (
       !!manager &&
@@ -7118,12 +7218,94 @@ export function createLeadRoleTransitions(
       return undefined;
     }
   };
-  const currentSupervisor = async (ctx: ExtensionContext) =>
-    activeLeadRole(state) === "lead"
-      ? ((await currentManager(ctx)) ?? (await host.currentChiefAuthority(ctx)))
-      : activeLeadRole(state) === "manager"
-        ? await host.currentChiefAuthority(ctx)
-        : undefined;
+  const currentSupervisor = async (ctx: ExtensionContext) => {
+    if (activeLeadRole(state) === "manager")
+      return host.currentChiefAuthority(ctx);
+    if (activeLeadRole(state) !== "lead") return undefined;
+    const scope = await currentWorktreeScope(ctx);
+    const assignment = scope
+      ? projectAssignmentForScope(scope, ctx.sessionManager.getSessionId())
+      : undefined;
+    return assignment
+      ? currentManager(ctx, scope)
+      : host.currentChiefAuthority(ctx);
+  };
+  const removeProjectAssignmentState = (
+    assignment: ProjectAssignment,
+    ctx: ExtensionContext,
+  ): boolean => {
+    const runtime = host.supervisionRuntime();
+    const current = host.readProjectAssignment(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    );
+    if (!current || current.id !== assignment.id) return false;
+    host.removeProjectAssignment(
+      runtime,
+      assignment.repoKey,
+      assignment.branch,
+    );
+    try {
+      host.removeProjectMessages(
+        runtime,
+        assignment.repoKey,
+        assignment.branch,
+      );
+    } catch (error) {
+      host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+    }
+    return true;
+  };
+  const takeover = async (ctx: ExtensionCommandContext): Promise<void> => {
+    if (
+      activeLeadRole(state) !== "lead" ||
+      state.chiefMode === "active" ||
+      state.roleSuspended
+    )
+      throw new Error("Takeover is available only in Lead mode.");
+    if (!ctx.hasUI) throw new Error("Takeover requires an interactive UI.");
+    const scope = await currentWorktreeScope(ctx);
+    if (!scope) throw new Error("Current project scope is unavailable");
+    const sessionId = ctx.sessionManager.getSessionId();
+    const assignment = projectAssignmentForScope(scope, sessionId);
+    if (!assignment) {
+      ctx.ui.notify("This Lead is not managed.", "info");
+      return;
+    }
+    if (
+      !(await ctx.ui.confirm(
+        "Take over this managed Lead?",
+        "Manager control and automatic project-result forwarding will stop.\nThe Pi session, conversation, branch, worktree, and owned Agents will remain.",
+      ))
+    )
+      return;
+    await withProjectWorkLock(
+      `${assignment.repoKey}\0${assignment.branch}`,
+      () =>
+        withProjectAssignmentLock(
+          assignment.repoKey,
+          assignment.branch,
+          async () => {
+            const currentScope = await currentWorktreeScope(ctx);
+            const current =
+              currentScope && currentScope.repoKey === assignment.repoKey
+                ? projectAssignmentForScope(currentScope, sessionId)
+                : undefined;
+            if (
+              !current ||
+              current.branch !== assignment.branch ||
+              !removeProjectAssignmentState(assignment, ctx)
+            )
+              throw new Error("Project assignment changed during takeover");
+          },
+        ),
+    );
+    ctx.ui.notify(
+      "Lead taken over. Manager control and automatic project-result forwarding ended.",
+      "info",
+    );
+  };
   const retireRemovedProjectWork = async (
     removed: { repoKey: string; branch: string },
     ctx: ExtensionContext,
@@ -7136,7 +7318,6 @@ export function createLeadRoleTransitions(
       removed.branch,
     );
     if (!observed) return;
-    const expectedId = observed.id;
     const scope = await currentWorktreeScope(ctx);
     if (!scope || scope.repoKey !== removed.repoKey) return;
     await withProjectWorkLock(
@@ -7151,31 +7332,7 @@ export function createLeadRoleTransitions(
               removed.repoKey,
               removed.branch,
               async () => {
-                const current = host.readProjectAssignment(
-                  runtime,
-                  removed.repoKey,
-                  removed.branch,
-                );
-                if (!current || current.id !== expectedId) return;
-                host.removeProjectAssignment(
-                  runtime,
-                  removed.repoKey,
-                  removed.branch,
-                );
-                try {
-                  host.removeProjectMessages(
-                    runtime,
-                    removed.repoKey,
-                    removed.branch,
-                  );
-                } catch (error) {
-                  host.appendDurableError(
-                    host.pi,
-                    ctx,
-                    "pi_herdsman_state_error",
-                    error,
-                  );
-                }
+                removeProjectAssignmentState(observed, ctx);
               },
             );
             return;
@@ -7844,6 +8001,7 @@ export function createLeadRoleTransitions(
     currentChief,
     currentChiefAuthority,
     currentSupervisor,
+    takeover,
     retireRemovedProjectWork,
     clearLeadContext: () => {
       state.leadContext = undefined;

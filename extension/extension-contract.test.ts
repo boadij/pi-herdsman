@@ -603,6 +603,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     "chief",
     "herdsman",
     "manager",
+    "takeover",
   ]);
   assert.deepEqual(
     lead.pi.getActiveTools().sort(),
@@ -1814,6 +1815,22 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
   let mutateLeadDuringTranscript = false;
   let snapshotCalls = 0;
   const exec = (_command: string, args: string[]) => {
+    if (args[0] === "worktree" && args[1] === "list")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            source: {
+              source_workspace_id: WORKSPACE,
+              repo_key: "repo-key",
+              repo_name: "project",
+            },
+            worktrees: [],
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
     if (isApiSnapshot(args)) {
       snapshotCalls++;
       if (mutateLeadDuringTranscript && snapshotCalls > 1) {

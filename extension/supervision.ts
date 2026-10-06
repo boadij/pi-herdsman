@@ -2145,9 +2145,6 @@ export async function leadSupervisorState<S, A>(
       }
       return `<supervisor_state>\nsupervisor: manager\navailability: unavailable\nproject_messages: retained for the Manager role\n</supervisor_state>`;
     }
-    const manager = await host.currentManager(ctx, scope);
-    if (manager)
-      return `<supervisor_state>\nsupervisor: manager\navailability: available\n</supervisor_state>`;
     const chief = await host.currentChiefAuthority(ctx, true);
     if (chief)
       return `<supervisor_state>\nsupervisor: chief\navailability: available\n</supervisor_state>`;

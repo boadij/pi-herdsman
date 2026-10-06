@@ -3239,7 +3239,7 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
     "peer_list",
     "peer_message",
   ]);
-  assert.deepEqual(lead.commands, ["agents", "herdsman"]);
+  assert.deepEqual(lead.commands, ["takeover", "agents", "herdsman"]);
   lead.events.get("session_shutdown")?.[0]();
 });
 

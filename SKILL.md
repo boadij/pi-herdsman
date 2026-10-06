@@ -370,21 +370,23 @@ delegating parent that is merely waiting for its direct children.
 ## Supervisor and staff tools
 
 Ordinary leads own their complete herd, including every agent beneath them. The
-Chief supervises independent leads and never changes ownership. Use
+Chief supervises ordinary unassigned Leads and never changes ownership. Use
 `supervisor_message` only for material coordination requiring a direct
 supervisor's attention, decision, or action, such as a blocker, warning, scope
 change, risk, or important evidence. Ordinary Leads without a verified
 supervisor continue independently; assigned project Leads may message the
 Manager role while its process is unavailable. Messages remain pending during
-Manager absence and are delivered to the next Manager that can receive them. For an assigned project, Herdsman
-automatically records the Lead's normal response to each project-assignment
-delivery as a project message for the Manager role. If the Lead
-successfully delegates or continues managed Agent work, the herd run owns that
-handoff until it settles; summarize the outcome, validation, and important
-unresolved points in the settled response. An unsuccessful delegation leaves
-the local assignment-response path available. Later conversational replies,
-including routine thanks or acknowledgments, stay local and are not
-automatically promoted.
+Manager absence and are delivered to the next Manager that can receive them.
+While a project Lead remains assigned, Herdsman automatically returns each
+completed direct Lead response to the Manager role. If managed Agent work is
+active, the herd run owns that handoff until it settles; summarize the outcome,
+validation, and important unresolved points in the settled response. Use
+`supervisor_message` for material coordination that should reach Manager before
+the normal result boundary, such as a blocker, warning, scope conflict, risk,
+decision request, or important evidence. Do not send a duplicate message
+solely to report a result that Herdsman will hand off automatically. Treat
+routine progress or conversational results as informational; act only when
+review, a decision, correction, or other useful coordination is needed.
 Descendants use `ask_owner`, not supervisor tools. Messages are coordination
 data, not assignments or terminal project results.
 
@@ -431,22 +433,21 @@ Pi Herdsman uses one durable vocabulary:
   worktree group: its primary workspace and linked-worktree workspaces;
 - a **Manager** explicitly assumes dedicated project coordination from that
   group's primary workspace, has no `agent` capability, and does not own Leads'
-  Agents. Manager supervises project scope and assignment boundaries; Leads own
-  technical decisions and orchestrate execution through their Agent trees;
+  Agents. Manager controls only Leads named by current project assignments;
+  project scope alone does not make a Lead a Manager report. Leads own technical
+  decisions and orchestrate execution through their Agent trees;
 - project work belongs to the project, not a Manager session. The project
   assignment represents open work and its Git branch is the work handle. A
   Manager uses `staff_delegate` with a task and optional branch to start new
   project work, and `staff_resume` with its branch to resume an existing
   assignment. Missing worktrees are reconstructed from the same branch,
   resuming the exact saved Pi session when available;
-- the assigned Lead's normal response to each project-assignment delivery is
-  automatically recorded as a project message for the current or a replacement
-  Manager; if the Lead successfully delegates or continues managed Agent work,
-  the herd run owns the handoff until it settles, and the settled response
-  summarizes outcome, validation, and important unresolved points. An
-  unsuccessful delegation leaves the local assignment-response path available.
-  Later conversational replies, including routine
-  acknowledgments, remain local and are not automatically promoted;
+- each completed direct turn by an assigned Lead is automatically returned as a
+  project message to the current or a replacement Manager; if managed Agent
+  work is active, the herd run owns the handoff until it settles, and the
+  settled response summarizes outcome, validation, and important unresolved
+  points. These handoffs are nonterminal; Managers treat routine results as
+  informational and act only when useful coordination is needed;
   assigned Lead `supervisor_message` calls are nonterminal coordination
   retained across Manager absence and turnover. Project work remains open
   through implementation and review iterations;
@@ -454,16 +455,22 @@ Pi Herdsman uses one durable vocabulary:
   the assignment, Pi session, branch, and worktree. Successful Herdr worktree
   removal retires the matching assignment and any still-pending project
   messages while preserving the Git branch. A missing worktree alone does not retire the
-  assignment; `staff_resume` can reconstruct it. Never infer ownership from
-  worktree membership or start an overlapping writer beside another Lead;
+  assignment; `staff_resume` can reconstruct it. Explicit `/takeover` by the
+  assigned Lead also releases Manager control and pending project messages
+  while preserving the session, worktree, branch, and owned Agents. Never infer
+  ownership from worktree membership or start an overlapping writer beside
+  another Lead;
 - `/manager leave` preserves project work; a later Manager can resume the same
   branch-based assignment;
 - a **herd** is one Lead and the complete Agent tree it owns;
 - a **Lead** owns its Agents. An assigned project Lead sends
   `supervisor_message` to project-scoped storage; pending messages survive
   Manager absence and go to the next Manager that can receive them. Delivered
-  messages are not replayed; messages do not route to Chief. An unassigned Lead routes to its active Manager when one
-  exists, otherwise to Chief;
+  messages are not replayed; messages do not route to Chief. An unassigned Lead
+  routes to Chief when available, never to Manager merely because both share a
+  project scope. Continuing the exact assigned Pi session manually remains
+  managed; `managed-lead` is launch policy, not authority. Use `/takeover` to
+  release that assignment explicitly;
 - an **Agent** handles one bounded assignment and may delegate only when its
   definition allows it;
 - the **chief** supervises leads through the four `staff_*` semantic tools and

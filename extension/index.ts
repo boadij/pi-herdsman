@@ -368,16 +368,13 @@ Use staff_message for decisions and review feedback. Use staff_stop to pause a
 Lead while preserving its assignment. Project retirement is user-controlled
 through successful Herdr worktree removal.
 
-Each project-assignment delivery to a Lead is an automatic handoff to you:
-Herdsman automatically hands the Lead's normal assignment response to the
-Manager role. If no Manager is available, the handoff remains pending until a Manager
-can receive it. If the Lead successfully delegates or
-continues managed Agent work, the herd run owns that handoff until it settles,
-and the Lead's settled response should summarize the outcome, validation, and
-important unresolved points. An unsuccessful delegation leaves the local
-assignment-response path available. Later conversational replies, including
-routine thanks or acknowledgments, remain local and are not automatically
-promoted. Undelivered project handoffs survive Manager absence. Once a handoff
+While a project Lead remains assigned, Herdsman automatically returns each
+completed direct Lead response to the Manager role. If managed Agent work is
+active, the herd run owns that handoff until it settles. These handoffs are
+nonterminal project coordination. Treat routine progress or conversational
+results as informational; do not acknowledge or query them automatically.
+Act only when review, a decision, correction, or other useful coordination is
+needed. Undelivered project handoffs survive Manager absence. Once a handoff
 has been delivered, it is not automatically replayed to later Managers. Review
 received handoffs and request corrections with staff_message when needed.
 
@@ -1658,6 +1655,15 @@ export default function (pi: ExtensionAPI): void {
       formatSessionUsage,
     };
     if (controllerScope.kind === "lead") {
+      pi.registerCommand("takeover", {
+        description:
+          "Release Manager control while preserving this Lead and its work",
+        handler: async (args, ctx) => {
+          if (args.trim()) throw new Error("/takeover takes no arguments");
+          await roleTransitions.takeover(ctx);
+          leadRuntimes.statusRuntime.requestRefresh();
+        },
+      });
       if (process.env.HERDR_PANE_ID)
         pi.registerCommand("manager", {
           description:
