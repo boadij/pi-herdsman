@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { Value } from "typebox/value";
 import { parseControlMarker } from "./mailbox.ts";
+import { ownedAssignmentChildren } from "./agent-controller.ts";
 import {
   controlMarker,
   fakeContext,
@@ -18,6 +22,47 @@ import {
   agentMailboxPath,
   writeAgentState,
 } from "./support.ts";
+
+test("historical Agent assignment tool results still reconstruct ownership", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-herdsman-history-"));
+  try {
+    const entries = [
+      ["agent_delegate", "11111111-1111-4111-8111-111111111111"],
+      ["agent_continue", "22222222-2222-4222-8222-222222222222"],
+    ].map(([toolName, sessionId], index) => {
+      const sessionPath = join(root, `${index}.jsonl`);
+      writeFileSync(sessionPath, "{}\n");
+      return {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName,
+          details: {
+            ok: true,
+            owner_session_id: "33333333-3333-4333-8333-333333333333",
+            session_id: sessionId,
+            session_path: sessionPath,
+            agent: `child-${index}`,
+            definition: "scout",
+          },
+        },
+      };
+    });
+    assert.deepEqual(
+      ownedAssignmentChildren(
+        entries,
+        "33333333-3333-4333-8333-333333333333",
+        true,
+      ).map(({ label, id }) => ({ label, id })),
+      [
+        { label: "child-0", id: "11111111-1111-4111-8111-111111111111" },
+        { label: "child-1", id: "22222222-2222-4222-8222-222222222222" },
+      ],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("multiplexed coordination tool aliases are absent", async () => {
   setLeadEnvironment();
@@ -73,10 +118,22 @@ test("the legacy allowlist environment variable grants no agent capability", () 
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   try {
-    assert.equal(
-      pi.tools.some((tool) => tool.name.startsWith("agent_")),
-      false,
-    );
+    for (const name of [
+      "agent_list",
+      "agent_delegate",
+      "agent_continue",
+      "agent_steer",
+      "agent_interrupt",
+      "agent_reply",
+      "agent_close",
+      "agent_inspect",
+      "agent_transcript",
+    ])
+      assert.equal(
+        pi.tools.some((tool) => tool.name === name),
+        false,
+        name,
+      );
     assert.equal(
       pi.tools.some((tool) => tool.name === "ask_owner"),
       true,
@@ -101,18 +158,21 @@ test("managed Agent surfaces distinguish delegation capability from leaf access"
   const mailbox = setAgentEnvironment("delegating-surface-agent", ["scout"]);
   const delegating = fakePi();
   registerExtension!(delegating.pi as never);
-  assert.deepEqual(names(delegating), [
-    "agent_close",
-    "agent_continue",
-    "agent_delegate",
-    "agent_inspect",
-    "agent_interrupt",
-    "agent_list",
-    "agent_reply",
-    "agent_steer",
-    "agent_transcript",
-    "ask_owner",
-  ]);
+  assert.deepEqual(
+    names(delegating),
+    [
+      "ask_owner",
+      "close_agent",
+      "continue_agent",
+      "delegate_agent",
+      "inspect_agent",
+      "interrupt_agent",
+      "list_agents",
+      "reply_agent",
+      "steer_agent",
+      "read_agent_transcript",
+    ].sort(),
+  );
   delegating.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 });
@@ -160,7 +220,7 @@ test("current error codes replace the legacy label and busy codes", async () => 
   });
   registerExtension!(duplicatePi.pi as never);
   const duplicateResult = await duplicatePi.tools
-    .find((tool) => tool.name === "agent_delegate")!
+    .find((tool) => tool.name === "delegate_agent")!
     .execute(
       "id",
       {
@@ -184,10 +244,10 @@ test("current error codes replace the legacy label and busy codes", async () => 
   const busyLabel = "cutover-busy-agent";
   const busyIdentity = recoveryIdentity(busyLabel);
   const busyMailbox = agentMailboxPath(WORKSPACE, busyLabel);
-  writeAgentState(
-    busyMailbox,
-    managedState(busyLabel, undefined, busyIdentity),
-  );
+  writeAgentState(busyMailbox, {
+    ...managedState(busyLabel, undefined, busyIdentity),
+    agentDefinition: "agent",
+  });
   const busyPi = fakePi({
     exec: leadExec(
       busyLabel,
@@ -201,7 +261,7 @@ test("current error codes replace the legacy label and busy codes", async () => 
   registerExtension!(busyPi.pi as never);
   try {
     const busyResult = await busyPi.tools
-      .find((tool) => tool.name === "agent_steer")!
+      .find((tool) => tool.name === "steer_agent")!
       .execute(
         "id",
         { agent: busyLabel, message: "busy" },
@@ -222,51 +282,51 @@ test("each Agent operation has its own schema without projection", () => {
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const cases = [
-    ["agent_list", {}, { agent: "target" }, []],
+    ["list_agents", {}, { agent: "target" }, []],
     [
-      "agent_delegate",
+      "delegate_agent",
       { definition: "scout", task: "work" },
       { definition: "scout", task: "work", session: "x" },
       ["definition", "task"],
     ],
     [
-      "agent_continue",
+      "continue_agent",
       { session: "/tmp/session.jsonl", task: "work" },
       { session: "/tmp/session.jsonl", task: "work", agent: "x" },
       ["session", "task"],
     ],
     [
-      "agent_steer",
+      "steer_agent",
       { agent: "worker", message: "change" },
       { agent: "worker", message: "change", session: "x" },
       ["agent", "message"],
     ],
     [
-      "agent_interrupt",
+      "interrupt_agent",
       { agent: "worker", message: "replace" },
       { agent: "worker", message: "replace", task: "x" },
       ["agent", "message"],
     ],
     [
-      "agent_reply",
+      "reply_agent",
       { agent: "worker", message: "decision" },
       { agent: "worker", message: "decision", session: "x" },
       ["agent", "message"],
     ],
     [
-      "agent_close",
+      "close_agent",
       { agent: "worker" },
       { agent: "worker", message: "x" },
       ["agent"],
     ],
     [
-      "agent_inspect",
+      "inspect_agent",
       { agent: "worker" },
       { agent: "worker", session: "x" },
       ["agent"],
     ],
     [
-      "agent_transcript",
+      "read_agent_transcript",
       { agent: "worker" },
       { agent: "worker", session: "x" },
       ["agent"],

@@ -162,7 +162,7 @@ test("parent delegates two same-definition children with exact ownership", async
       await handler(undefined, context);
     for (const task of ["first child", "second child"]) {
       const started = await pi.tools
-        .find((tool) => tool.name === "agent_delegate")!
+        .find((tool) => tool.name === "delegate_agent")!
         .execute(
           "start",
           { definition: "child", task },
@@ -183,19 +183,19 @@ test("parent delegates two same-definition children with exact ownership", async
     const content = String((guidance[0].message as any).content);
     for (const phrase of [
       "Each unresolved unit of work has one executor.",
-      "agent_steer queues a cooperative correction",
+      "steer_agent queues a cooperative correction",
       "it does not preempt the current operation",
       "A repeated reminder for the same stale episode is additional recovery evidence",
       "A steer queued during that unchanged episode cannot have taken effect yet",
-      "otherwise use agent_interrupt",
+      "otherwise use interrupt_agent",
       "Do not take over or replace unresolved delegated work",
     ])
       assert.ok(content.includes(phrase), phrase);
     const sharedGuidance = pi.tools
-      .find((tool) => tool.name === "agent_list")!
+      .find((tool) => tool.name === "list_agents")!
       .promptGuidelines!.join(" ");
     for (const phrase of [
-      "Use agent_delegate to start a fresh bounded assignment from a definition; use agent_continue to resume an exact historical managed-Agent Pi session with a new bounded assignment.",
+      "Use delegate_agent to start a fresh bounded assignment from a definition; use continue_agent to resume an exact historical managed-Agent Pi session with a new bounded assignment.",
       "Each live Agent generation exists for one assignment; after its terminal result is delivered, Herdsman cleans up that generation.",
       "Agent labels identify the current live generation; exact Pi sessions identify historical context and continuation.",
       "Do not attach or mention agent instruction files such as AGENTS.md, CLAUDE.md, GEMINI.md, or equivalents merely because they exist.",
@@ -251,7 +251,7 @@ test("parent delegates two same-definition children with exact ownership", async
     assert.equal(lifecycle.createdTabs(), 0);
     for (const label of labels) {
       const closed = await pi.tools
-        .find((tool) => tool.name === "agent_close")!
+        .find((tool) => tool.name === "close_agent")!
         .execute("close", { agent: label }, undefined, undefined, context);
       assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
       assert.equal(
@@ -312,7 +312,24 @@ async function liveAgentList(pi: ReturnType<typeof fakePi>) {
 const registeredAgentTool = (
   pi: ReturnType<typeof fakePi>,
   operation: string,
-) => pi.tools.find((tool) => tool.name === `agent_${operation}`)!;
+) =>
+  pi.tools.find(
+    (tool) =>
+      tool.name ===
+      (
+        {
+          list: "list_agents",
+          delegate: "delegate_agent",
+          continue: "continue_agent",
+          steer: "steer_agent",
+          interrupt: "interrupt_agent",
+          reply: "reply_agent",
+          close: "close_agent",
+          inspect: "inspect_agent",
+          transcript: "read_agent_transcript",
+        } as Record<string, string>
+      )[operation],
+  )!;
 
 test("lead direct placement modes use real controller delegation", async () => {
   for (const placement of ["tab", "subtree", "split"] as const) {
@@ -1297,7 +1314,7 @@ test("staged fresh assignment bridges pending start through working", async (t) 
     assert.equal(working.details.agents[0].state, "working");
     assert.equal(working.details.agents[0].active_request_id, requestId);
     assert.equal(
-      working.details.agents[0].available_tools.includes("agent_delegate"),
+      working.details.agents[0].available_tools.includes("delegate_agent"),
       false,
     );
     await t.waitFor(
@@ -1452,7 +1469,7 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
       ),
     );
     const listed = await pi.tools
-      .find((tool) => tool.name === "agent_list")!
+      .find((tool) => tool.name === "list_agents")!
       .execute("list", {}, undefined, undefined, context);
     assert.equal(
       listed.details.agents[0]?.agent,
@@ -1936,7 +1953,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
         message: {
           role: "assistant",
           timestamp: startedAt + 2,
-          content: [{ type: "toolCall", name: "agent_list" }],
+          content: [{ type: "toolCall", name: "list_agents" }],
         },
       },
     );
@@ -1950,7 +1967,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
     assert.match(message.text, /^Herd run settled\./);
     assert.match(message.text, /CURRENT_ROUND_SUMMARY/);
     assert.doesNotMatch(message.text, /OLD_ROUND_SUMMARY/);
-    assert.doesNotMatch(message.text, /agent_list/);
+    assert.doesNotMatch(message.text, /list_agents/);
     assert.equal(
       listProjectAssignments(runtime, "repo-key").some(
         (assignment) => assignment.id === LEAD_SESSION_ID,
@@ -3101,7 +3118,7 @@ test("historical session with its inherited label rejects an active managed repr
     const controllerContext = fakeContext();
     controllerContext.sessionManager.getSessionId = () => session.id;
     const ownSession = await pi.tools
-      .find((tool) => tool.name === "agent_continue")!
+      .find((tool) => tool.name === "continue_agent")!
       .execute(
         "controller-session",
         {
@@ -3115,7 +3132,7 @@ test("historical session with its inherited label rejects an active managed repr
     assert.equal(ownSession.details.error.category, "invalid_request");
     const before = pi.calls.length;
     const result = await pi.tools
-      .find((tool) => tool.name === "agent_continue")!
+      .find((tool) => tool.name === "continue_agent")!
       .execute(
         "id",
         { session: session.path, task: "must wait" },

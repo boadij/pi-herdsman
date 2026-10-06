@@ -5,15 +5,15 @@
 Managed-agent operations are exposed as nine distinct tools:
 
 ```text
-agent_list
-agent_delegate
-agent_continue
-agent_steer
-agent_interrupt
-agent_reply
-agent_close
-agent_inspect
-agent_transcript
+list_agents
+delegate_agent
+continue_agent
+steer_agent
+interrupt_agent
+reply_agent
+close_agent
+inspect_agent
+read_agent_transcript
 ```
 
 Each tool accepts only its operation's fields. Schemas require necessary fields
@@ -21,7 +21,7 @@ and reject unrelated properties; runtime authorization and fresh lifecycle
 checks remain authoritative. These tools are registered only for the lead
 controller and authorized delegating-agent controllers.
 
-## `agent_delegate`
+## `delegate_agent`
 
 ```json
 {
@@ -31,7 +31,7 @@ controller and authorized delegating-agent controllers.
 }
 ```
 
-Call `agent_delegate` with `definition`, `task`, and optional `label` and
+Call `delegate_agent` with `definition`, `task`, and optional `label` and
 `files`. The optional `label` must match `^[a-z][a-z0-9_-]{0,31}$` and sets
 the requested logical agent label; an existing live-label collision fails.
 Fresh delegation runs in the calling controller's cwd.
@@ -42,7 +42,7 @@ session.
 Each accepted definition delegation creates one agent generation for one
 assignment. The terminal result is delivered once and the agent is cleaned up.
 
-## `agent_continue`
+## `continue_agent`
 
 ```json
 {
@@ -51,7 +51,7 @@ assignment. The terminal result is delivered once and the agent is cleaned up.
 }
 ```
 
-Call `agent_continue` with `session`, `task`, and optional `files`. The exact
+Call `continue_agent` with `session`, `task`, and optional `files`. The exact
 saved session path or full UUID supplies its cwd, definition identity, and
 historical Pi context. Continuation always creates a new agent generation for
 one assignment with a live label; it never assigns work to an existing agent.
@@ -64,7 +64,7 @@ Concurrent or otherwise conflicting managed representations of the exact
 session fail closed. The controller's own active Pi session cannot be continued
 to itself.
 
-When `contextRetirement` is enabled, `agent_continue` is rejected for a retired
+When `contextRetirement` is enabled, `continue_agent` is rejected for a retired
 managed-agent session; delegate a fresh agent and pass the previous
 handoff/result and relevant files instead. Retired results explicitly instruct
 the controller to delegate a fresh agent.
@@ -79,11 +79,11 @@ names. They include `agent`, `definition`, request, session, and startup
 evidence where available. All return after atomic
 recording for controller restart recovery, not completion. A terminal result
 makes the exact session identity
-prominent for a later `agent_continue` call.
+prominent for a later `continue_agent` call.
 
-## `agent_list`
+## `list_agents`
 
-`agent_list` request:
+`list_agents` request:
 
 ```json
 {}
@@ -96,44 +96,44 @@ Each valid durable generation in the controller's proven ownership projection
 remains visible, including physically unresolved `unknown` and proven `lost`
 records. Each actionable live agent record includes:
 
-| Field                                                           | Meaning                                                                                                                                                                                                     |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`                                                         | Exact live logical agent identity to pass to the applicable `agent_inspect`, `agent_transcript`, `agent_steer`, `agent_interrupt`, `agent_reply`, or `agent_close` tool. It is not a continuation identity. |
-| `state`                                                         | Safe lifecycle state for observability.                                                                                                                                                                     |
-| `available_tools`                                               | Snapshot of currently eligible callable tools, using their exact names.                                                                                                                                     |
-| `workspace_id`, `pane_id`, `tab_id`, `tab_label`                | Herdr identity evidence.                                                                                                                                                                                    |
-| `cwd`, `pi_session_id`, `pi_session_path`                       | Agent location and Pi session evidence.                                                                                                                                                                     |
-| `owner_session_id`                                              | Exact direct owner Pi session.                                                                                                                                                                              |
-| `agent_definition`                                              | Effective definition name.                                                                                                                                                                                  |
-| `active_request_id`, `last_activity_at`, `stale`, `inactive_ms` | Assignment and advisory activity evidence.                                                                                                                                                                  |
-| `parent_label`                                                  | Durable parent assignment when the parent is visible.                                                                                                                                                       |
-| `cleanup_error`, `result_error`, `diagnostic`, `tokens`         | Bounded recovery and presentation evidence when present.                                                                                                                                                    |
+| Field                                                           | Meaning                                                                                                                                                                                                          |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`                                                         | Exact live logical agent identity to pass to the applicable `inspect_agent`, `read_agent_transcript`, `steer_agent`, `interrupt_agent`, `reply_agent`, or `close_agent` tool. It is not a continuation identity. |
+| `state`                                                         | Safe lifecycle state for observability.                                                                                                                                                                          |
+| `available_tools`                                               | Snapshot of currently eligible callable tools, using their exact names.                                                                                                                                          |
+| `workspace_id`, `pane_id`, `tab_id`, `tab_label`                | Herdr identity evidence.                                                                                                                                                                                         |
+| `cwd`, `pi_session_id`, `pi_session_path`                       | Agent location and Pi session evidence.                                                                                                                                                                          |
+| `owner_session_id`                                              | Exact direct owner Pi session.                                                                                                                                                                                   |
+| `agent_definition`                                              | Effective definition name.                                                                                                                                                                                       |
+| `active_request_id`, `last_activity_at`, `stale`, `inactive_ms` | Assignment and advisory activity evidence.                                                                                                                                                                       |
+| `parent_label`                                                  | Durable parent assignment when the parent is visible.                                                                                                                                                            |
+| `cleanup_error`, `result_error`, `diagnostic`, `tokens`         | Bounded recovery and presentation evidence when present.                                                                                                                                                         |
 
 `available_tools` is authoritative model guidance for the current snapshot.
 Do not infer eligibility from `state`.
-`agent_close` is listed only when the current snapshot passes the applicable close
+`close_agent` is listed only when the current snapshot passes the applicable close
 preflight. For a Lead-owned delegating agent, that preflight covers the complete
 owned descendant cascade because closing the parent closes that cascade
 child-first. Invocation always reacquires current evidence and revalidates
 identity, ownership, mailbox state, durable results, and lifecycle before
-mutation. Active work may list `agent_steer`; a valid correlated pending
-`ask_owner` may list `agent_reply`. A currently working agent may list
-`agent_interrupt`; a delegating agent blocked while waiting on children may
-still list `agent_steer` but not `agent_interrupt`.
-`available_tools` never lists `agent_delegate` or `agent_continue`: these are
+mutation. Active work may list `steer_agent`; a valid correlated pending
+`ask_owner` may list `reply_agent`. A currently working agent may list
+`interrupt_agent`; a delegating agent blocked while waiting on children may
+still list `steer_agent` but not `interrupt_agent`.
+`available_tools` never lists `delegate_agent` or `continue_agent`: these are
 controller tools, not controls on an already-live agent. An agent cannot
 receive a second assignment. Directly owned live agents may expose the
 applicable live controls; directly owned live or proven `lost` records expose
-`agent_transcript` when their materialized persisted Pi session file exists. Directly
-owned live or proven `lost` records may expose `agent_close` when the applicable close
+`read_agent_transcript` when their materialized persisted Pi session file exists. Directly
+owned live or proven `lost` records may expose `close_agent` when the applicable close
 preflight currently succeeds. Unknown records and non-direct descendants expose
 no mutation actions. Every operation rechecks identity, ownership, mailbox
 state, and lifecycle immediately before mutation.
 The public record does not expose `steerable`.
 
 The session-start instructions include the same complete definition metadata
-projection returned by `agent_list` for that controller. It is a startup snapshot;
-use `agent_list` for live agent state, ownership, or a refreshed definition roster
+projection returned by `list_agents` for that controller. It is a startup snapshot;
+use `list_agents` for live agent state, ownership, or a refreshed definition roster
 after configuration changes. Leaf agents do not receive a definition roster.
 
 Lead controllers see the complete effective definition roster and agents whose
@@ -148,7 +148,7 @@ Health reconciliation is event-driven with a 30-second fallback scan. It
 reconciles fresh mailbox and Herdr state and sends attention only to the exact
 direct owner while that owner is idle. The `available_tools` included in an
 attention event is an advisory snapshot of current authority; every later
-`agent_steer`, `agent_interrupt`, `agent_reply`, or `agent_close` call revalidates identity, ownership,
+`steer_agent`, `interrupt_agent`, `reply_agent`, or `close_agent` call revalidates identity, ownership,
 mailbox state, and lifecycle.
 
 Persistent actionable attention may repeat while the same condition remains
@@ -192,27 +192,27 @@ path never duplicates first ask delivery. Unknown is the exception to repeated
 attention: it is one notification per unresolved physical-identity episode.
 
 For stale recovery, use supplied evidence first. If it is absent or
-insufficient, perform at most one bounded diagnostic read: `agent_transcript` for
-persisted conversation/tool history or `agent_inspect` for live terminal/process
+insufficient, perform at most one bounded diagnostic read: `read_agent_transcript` for
+persisted conversation/tool history or `inspect_agent` for live terminal/process
 evidence. Do not repeat a read solely because the same stale episode was
-reminded again. `agent_steer` acceptance means a cooperative correction was queued
+reminded again. `steer_agent` acceptance means a cooperative correction was queued
 for Pi, not that the current operation observed it: Pi delivers it after the
 current assistant turn and its tool calls reach a steering boundary. An unchanged
 stale episode means no qualifying execution boundary occurred, so a steer queued
 during that episode cannot yet have taken effect. Continue waiting only while
 existing evidence positively supports legitimate long-running work; otherwise
-use `agent_interrupt` to preempt the active Pi operation and continue the same
-assignment. It supersedes earlier undelivered steering. Use `agent_close` only
+use `interrupt_agent` to preempt the active Pi operation and continue the same
+assignment. It supersedes earlier undelivered steering. Use `close_agent` only
 when abandoning the assignment is intended. Do not poll or create another
 delivery path for health attention.
 
-## `agent_inspect`
+## `inspect_agent`
 
 ```json
 { "agent": "implementer-1" }
 ```
 
-`agent_inspect` accepts only the exact live agent label. It is available
+`inspect_agent` accepts only the exact live agent label. It is available
 only to that agent's direct owner, and only when the agent is a current,
 unambiguous managed identity. The result is read-only live terminal/process
 evidence only: it contains the exact session/pane identity, Herdr's up to 80
@@ -228,14 +228,14 @@ The identity is checked again after capture; if the pane or Pi session was
 replaced, inspection fails closed. Inspection does not change agent state,
 mailbox records, lifecycle, or available controls.
 
-## `agent_transcript`
+## `read_agent_transcript`
 
 ```json
 { "agent": "implementer-1" }
 ```
 
-`agent_transcript` accepts only the exact agent label. It is available only to
-the exact direct owner when `available_tools` includes `agent_transcript`.
+`read_agent_transcript` accepts only the exact agent label. It is available only to
+the exact direct owner when `available_tools` includes `read_agent_transcript`.
 It reads the exact persisted Pi session through Pi's native compaction-aware
 session context and returns user text, visible assistant text, tool calls,
 textual tool results, and persisted compaction/branch summaries. It does not
@@ -243,23 +243,23 @@ expose raw assistant reasoning, system messages, extension custom entries or
 messages, model/provider metadata, images, or live terminal/process state.
 
 Pi can assign a session ID and future session path before creating the JSONL
-file. During that brief interval `agent_transcript` is not listed in
+file. During that brief interval `read_agent_transcript` is not listed in
 `available_tools`; this is normal startup behavior. A materialized session
-file must be non-empty before `agent_transcript` is advertised. Output is tail-bounded
+file must be non-empty before `read_agent_transcript` is advertised. Output is tail-bounded
 to 16 KiB. Individual textual tool results larger than 4 KiB preserve their
 beginning and end and replace their middle with an omission marker. The
 `transcript_truncated` field is true when an individual tool result or the final
 transcript was bounded. A finalized assistant tool call is
 persisted before the tool starts, so a currently executing tool may appear
 without a corresponding tool result. That absence does not itself prove that
-the tool is still running. `agent_inspect` remains the live terminal/process
+the tool is still running. `inspect_agent` remains the live terminal/process
 observation path. Transcript is read-only and does not change agent state.
 
 ## `files`
 
-`files` is valid on `agent_delegate`, `agent_continue`, `agent_steer`,
-`agent_interrupt`, and `agent_reply`; it is not valid on `agent_list`,
-`agent_close`, `agent_inspect`, or `agent_transcript`. It accepts
+`files` is valid on `delegate_agent`, `continue_agent`, `steer_agent`,
+`interrupt_agent`, and `reply_agent`; it is not valid on `list_agents`,
+`close_agent`, `inspect_agent`, or `read_agent_transcript`. It accepts
 ordinary paths,
 reusable direct-agent refs such as `result:researcher#1`, and canonical
 `result:<request-id>` refs already supplied as evidence. Semantic refs use the
@@ -276,7 +276,7 @@ result references when explicitly supplied as evidence. `files` remains a
 
 `files` is explicit per-message evidence. A fresh delegated session does not
 implicitly receive the caller's conversation or caller-side attachments.
-`agent_continue` resumes the exact saved managed-agent Pi history.
+`continue_agent` resumes the exact saved managed-agent Pi history.
 
 Startup uses Herdsman's default timeout budget; it is unrelated to managed-agent
 Pi shell execution. Direct calls from a managed agent to the Pi built-in
@@ -296,7 +296,7 @@ only when the task needs it and the selected definition does not already provide
 that skill. Ordinary relevant source, documentation, configuration, and
 evidence files remain attachable.
 
-## `agent_steer`
+## `steer_agent`
 
 ```json
 {
@@ -306,15 +306,15 @@ evidence files remain attachable.
 }
 ```
 
-Call `agent_steer` only when `available_tools` lists it. Steering changes the
+Call `steer_agent` only when `available_tools` lists it. Steering changes the
 current assignment and does not create another final result.
 
-`agent_steer` changes the current assignment without cancelling the current Pi
+`steer_agent` changes the current assignment without cancelling the current Pi
 operation. While Pi is executing a model or tool operation, steering may remain
 queued until that operation reaches a safe boundary. Steering cannot stop a
 wedged tool.
 
-## `agent_interrupt`
+## `interrupt_agent`
 
 ```json
 {
@@ -323,7 +323,7 @@ wedged tool.
 }
 ```
 
-`agent_interrupt` accepts the exact live `agent` and a required non-empty
+`interrupt_agent` accepts the exact live `agent` and a required non-empty
 `message`, and optional `files`. It is available only to the exact direct owner
 while the agent has a currently working Pi operation.
 
@@ -336,9 +336,9 @@ removed from execution by Pi's native abort behavior and is not retained in the
 child editor.
 
 Cancellation uses Pi's native abort mechanism. Non-cooperative third-party
-tools may not stop immediately; `agent_close` remains the destructive fallback.
+tools may not stop immediately; `close_agent` remains the destructive fallback.
 
-## `agent_reply`
+## `reply_agent`
 
 ```json
 {
@@ -347,19 +347,19 @@ tools may not stop immediately; `agent_close` remains the destructive fallback.
 }
 ```
 
-Call `agent_reply` only when `available_tools` lists it for a valid correlated
+Call `reply_agent` only when `available_tools` lists it for a valid correlated
 pending `ask_owner` question. The reply continues the same assignment and
 contains its request, ask, assignment, and session correlation evidence.
 
 See [`ask_owner` API](ask-owner.md).
 
-## `agent_close`
+## `close_agent`
 
 ```json
 { "agent": "implementer-1" }
 ```
 
-Call `agent_close` with `agent`. Close requires exact direct ownership
+Call `close_agent` with `agent`. Close requires exact direct ownership
 and a current applicable close preflight. For a Lead-owned parent, that
 preflight covers the complete owned descendant cascade because closing the
 parent closes that cascade child-first. Invocation always reacquires current

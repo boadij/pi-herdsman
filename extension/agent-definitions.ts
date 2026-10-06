@@ -110,15 +110,15 @@ export type AgentDefinition = {
 };
 
 export const AGENT_COORDINATION_TOOLS = [
-  "agent_list",
-  "agent_delegate",
-  "agent_continue",
-  "agent_steer",
-  "agent_interrupt",
-  "agent_reply",
-  "agent_close",
-  "agent_inspect",
-  "agent_transcript",
+  "list_agents",
+  "delegate_agent",
+  "continue_agent",
+  "steer_agent",
+  "interrupt_agent",
+  "reply_agent",
+  "close_agent",
+  "inspect_agent",
+  "read_agent_transcript",
 ] as const;
 
 function markdownFiles(root: string): string[] {

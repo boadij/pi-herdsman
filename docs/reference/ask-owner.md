@@ -90,7 +90,7 @@ on its own direct ownership edge.
 
 ## Reply
 
-The direct owner answers through `agent_reply`:
+The direct owner answers through `reply_agent`:
 
 ```json
 {
@@ -133,6 +133,6 @@ Closing the agent abandons the pending question as part of agent teardown.
 
 ## See also
 
-- [`agent_reply`](agent.md#agent_reply)
+- [`reply_agent`](agent.md#reply_agent)
 - [Lifecycle](../concepts/lifecycle.md)
 - [Delegation](../concepts/delegation.md)

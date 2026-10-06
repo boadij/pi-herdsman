@@ -12,15 +12,15 @@ A Lead or delegation-enabled Agent controls only its owned Agent boundary.
 Use [Agent tools](reference/agent.md) for:
 
 ```text
-agent_list
-agent_delegate
-agent_continue
-agent_steer
-agent_interrupt
-agent_reply
-agent_close
-agent_inspect
-agent_transcript
+list_agents
+delegate_agent
+continue_agent
+steer_agent
+interrupt_agent
+reply_agent
+close_agent
+inspect_agent
+read_agent_transcript
 ```
 
 Managed Agents contact their exact direct owner through
@@ -34,19 +34,19 @@ The lifecycle and execution-ownership rules are documented in
 Chief and Manager use [Staff tools](reference/staff.md) for direct-report
 observation and communication.
 
-Manager additionally uses branch-based staff operations to start and resume
+Manager additionally uses branch-based project operations to start and resume
 project work, and can stop a Lead without retiring its assignment.
 
 ```text
-staff_list
-staff_inspect
-staff_transcript
-staff_message
+list_staff
+inspect_staff
+read_staff_transcript
+message_staff
 
 Manager only:
-staff_delegate
-staff_resume
-staff_stop
+delegate_project
+resume_project
+stop_lead
 ```
 
 ## Direct supervisor
@@ -55,25 +55,27 @@ Ordinary Leads and Managers communicate upward through
 [Supervisor tools](reference/supervisor.md).
 
 ```text
-supervisor_message
+message_supervisor
 ```
 
-Assigned Lead messages are pending Manager delivery and are nonterminal; once
-delivered, they become Pi conversation history rather than pending Herdsman
-coordination. `staff_stop` pauses execution without removing the assignment.
+Managed Leads use nonblocking `message_supervisor` for timely questions,
+clarifications, or warnings needed before the automatic completed-result
+handoff. A Lead may choose to wait for a response through `message_staff`.
+Routine information that can wait belongs in the result; there is no
+message/result deduplication. `stop_lead` pauses execution without removing the
+assignment, and `resume_project` resumes it.
 Successful Herdr worktree removal retires the matching project assignment and
-any still-pending messages. The assigned Lead can also explicitly release
-Manager control with confirmed `/takeover`, which removes the assignment and
-pending project messages while preserving its session, branch, worktree,
-process, and owned Agents. A missing worktree alone does not retire an
-assignment; `staff_resume` can reconstruct the checkout when its branch
+any still-pending project messages. The assigned Lead can also explicitly
+release Manager control with confirmed `/takeover`, which removes the
+assignment and pending project messages while preserving its session, branch,
+worktree, process, and owned Agents. A missing worktree alone does not retire
+an assignment; `resume_project` can reconstruct the checkout when its branch
 remains available.
 
-An assigned project Lead saves messages with its project assignment for the
-Manager role while Manager is absent; they remain pending until a Manager can
-receive them and are not replayed after delivery. An unassigned Lead routes
-only to Chief when verified, never to a same-scope Manager. A Manager routes to
-Chief.
+An assigned project Lead uses `message_supervisor` for timely Manager
+coordination; an ordinary Lead and a Manager use it to contact Chief. An
+unassigned Lead routes only to Chief when verified, never to a same-scope
+Manager.
 
 ## Same-role peers
 
@@ -81,8 +83,8 @@ Ordinary Leads and active Managers can discover and message live peers of the
 same role through [Peer tools](reference/peer.md):
 
 ```text
-peer_list
-peer_message
+list_peers
+message_peer
 ```
 
 Peer communication does not change ownership or supervision authority.

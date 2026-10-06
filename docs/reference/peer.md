@@ -39,7 +39,7 @@ labels, and metadata are never peer targets.
 
 ## Peer tools
 
-Ordinary Leads and active Managers have `peer_list` and `peer_message`.
+Ordinary Leads and active Managers have `list_peers` and `message_peer`.
 
 ```json
 {}
@@ -71,13 +71,13 @@ list has no `session_id`, `pane_id`, `tab_id`, or `workspace_id` fields.
 
 ```json
 {
-  "session": "<exact full Pi session ID from `peer_list`>",
+  "session": "<exact full Pi session ID from `list_peers`>",
   "message": "The integration is ready.",
   "files": ["result:researcher#1"]
 }
 ```
 
-`peer_message` accepts ordinary files, reusable direct-agent refs such as
+`message_peer` accepts ordinary files, reusable direct-agent refs such as
 `result:researcher#1`, and canonical `result:<request-id>` refs already supplied
 as evidence. A semantic ref resolves on the sender's current branch and keeps
 its model-facing name during attachment preparation. Its hidden canonical

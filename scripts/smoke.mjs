@@ -618,7 +618,7 @@ export function staffDelegateResults(contents) {
     if (
       entry.type !== "message" ||
       message?.role !== "toolResult" ||
-      message.toolName !== "staff_delegate" ||
+      message.toolName !== "delegate_project" ||
       message.isError
     )
       return [];
@@ -803,7 +803,7 @@ export function hasSuccessfulSupervisorMessage(contents, text) {
       ? entry.message.content.filter(
           (block) =>
             block?.type === "toolCall" &&
-            block.name === "supervisor_message" &&
+            block.name === "message_supervisor" &&
             block.arguments?.message === text,
         )
       : [],
@@ -813,7 +813,7 @@ export function hasSuccessfulSupervisorMessage(contents, text) {
       (entry) =>
         entry.type === "message" &&
         entry.message?.role === "toolResult" &&
-        entry.message.toolName === "supervisor_message" &&
+        entry.message.toolName === "message_supervisor" &&
         entry.message.toolCallId === call.id &&
         !entry.message.isError,
     ),
@@ -830,7 +830,7 @@ export function leadReadyCompleted(contents, text) {
           .filter(
             (block) =>
               block?.type === "toolCall" &&
-              block.name === "supervisor_message" &&
+              block.name === "message_supervisor" &&
               block.arguments?.message === text,
           )
           .map((block) => ({ id: block.id, index }))
@@ -840,7 +840,7 @@ export function leadReadyCompleted(contents, text) {
     (entry, index) =>
       entry.type === "message" &&
       entry.message?.role === "toolResult" &&
-      entry.message.toolName === "supervisor_message" &&
+      entry.message.toolName === "message_supervisor" &&
       !entry.message.isError &&
       calls.some(
         (call) => call.index < index && call.id === entry.message.toolCallId,
@@ -911,7 +911,7 @@ export function managerReadyAnswer(contents, branch, leadSessionId) {
       entry.message.content.some(
         (block) =>
           block?.type === "toolCall" &&
-          block.name === "staff_message" &&
+          block.name === "message_staff" &&
           block.arguments?.message === "MANAGER_RECOVERY_FINISH",
       ),
   );
@@ -1100,7 +1100,7 @@ export function correlatedContinuationTask(
     if (
       ancestors[index].type !== "message" ||
       message?.role !== "toolResult" ||
-      message.toolName !== "agent_continue" ||
+      message.toolName !== "continue_agent" ||
       message.isError ||
       message.details?.ok !== true ||
       message.details.action !== "continue" ||
@@ -1117,7 +1117,7 @@ export function correlatedContinuationTask(
       const call = candidate.message.content.find(
         (block) =>
           block?.type === "toolCall" &&
-          block.name === "agent_continue" &&
+          block.name === "continue_agent" &&
           typeof block.id === "string" &&
           block.id === message.toolCallId,
       );
@@ -1785,15 +1785,15 @@ function continuationPrompt() {
 }
 
 export function managerRecoveryFreshPrompt(branch) {
-  return `Use staff_delegate exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call supervisor_message with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait for further instruction.\n\nManager handshake: after staff_delegate returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any staff_message. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn.`;
+  return `Use delegate_project exactly once to start new project work. Set its \`task\` argument to the delegated task below and its \`branch\` argument to exactly ${branch}. Omit \`base\` and \`files\`.\n\nThe delegated task is:\n- do not modify any files;\n- immediately call message_supervisor with exactly MANAGER_RECOVERY_READY;\n- then end the turn and wait for further instruction.\n\nManager handshake: after delegate_project returns, end this turn immediately. Do not call any other tool, output any recovery marker, or send any message_staff. Wait until the exact MANAGER_RECOVERY_READY message from this Lead is delivered into your conversation; do not infer delivery from the delegate result, a Lead transcript, or other evidence. Only after that delivered message, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_READY and end the turn.`;
 }
 
 export function managerRecoveryResumePrompt(branch) {
-  return `Resume the existing work on branch ${branch}.\n\nCall staff_resume using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
+  return `Resume the existing work on branch ${branch}.\n\nCall resume_project using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
 }
 
 export function managerRecoveryPostRecoveryPrompt() {
-  return "Recall the exact context marker you were instructed to remember before recovery, using your prior conversation context. Call supervisor_message with exactly that marker. Do not use any other tool.";
+  return "Recall the exact context marker you were instructed to remember before recovery using your prior conversation context. This information must reach the Manager before your normal result boundary, so send it now with message_supervisor. If information can wait until the normal result boundary, do not send it early; let the automatic result handoff carry it. Use exactly the recalled marker as the message and no other tool.";
 }
 
 export function managerRecoveryLeadContextPrompt(marker) {
@@ -1801,15 +1801,15 @@ export function managerRecoveryLeadContextPrompt(marker) {
 }
 
 export function managerRecoveryStopPrompt(session) {
-  return `Pause the existing project work. Call staff_stop exactly once using only ${JSON.stringify({ session })}. After staff_stop succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_PAUSED.`;
+  return `Pause the existing project work. Call stop_lead exactly once using only ${JSON.stringify({ session })}. After stop_lead succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_PAUSED.`;
 }
 
 export function managerRecoveryReviewPrompt(branch) {
-  return `Use staff_message to ask the Lead to confirm readiness for review of ${branch}. Then end the turn.`;
+  return `Use message_staff to send a nonblocking request for the Lead to confirm readiness for review of ${branch}. Routine information that can wait should be left to the Lead's automatic result handoff. Then end the turn.`;
 }
 
 export function managerRecoveryResumeOnlyPrompt(branch) {
-  return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall staff_resume exactly once using only these arguments:\n${JSON.stringify({ branch })}\n\nDo not call any other tool.\n\nAfter staff_resume succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
+  return `Resume the existing project work on the exact full branch string ${JSON.stringify(branch)}. Copy that branch string verbatim; do not shorten, summarize, normalize, or otherwise alter it.\n\nCall resume_project exactly once using only these arguments:\n${JSON.stringify({ branch })}\n\nDo not call any other tool.\n\nAfter resume_project succeeds, reply exactly:\nPI_HERDSMAN_MANAGER_RECOVERY_RESUMED`;
 }
 
 export function managerRecoveryResumeDiagnostics(contents, prompt) {
@@ -1843,14 +1843,14 @@ export function managerRecoveryResumeDiagnostics(contents, prompt) {
       return [];
     return (Array.isArray(entry.message.content) ? entry.message.content : [])
       .filter(
-        (part) => part.type === "toolCall" && part.name === "staff_resume",
+        (part) => part.type === "toolCall" && part.name === "resume_project",
       )
       .map((call) => {
         const result = entries.find(
           (candidate) =>
             candidate.type === "message" &&
             candidate.message?.role === "toolResult" &&
-            candidate.message.toolName === "staff_resume" &&
+            candidate.message.toolName === "resume_project" &&
             candidate.message.toolCallId === call.id,
         );
         return {
@@ -2992,7 +2992,7 @@ async function runManagerRecoverySmoke(ctx) {
       (entry) =>
         entry.type === "message" &&
         entry.message?.role === "toolResult" &&
-        entry.message.toolName === "staff_message" &&
+        entry.message.toolName === "message_staff" &&
         !entry.message.isError,
     )
       ? session
@@ -3006,7 +3006,7 @@ async function runManagerRecoverySmoke(ctx) {
     async () => {
       const session = await rootSnapshot();
       if (!session) return null;
-      const closes = staffActionResults(session.contents, "staff_stop", "stop");
+      const closes = staffActionResults(session.contents, "stop_lead", "stop");
       if (closes.length !== 1) return null;
       const close = closes[0];
       if (
@@ -3030,7 +3030,7 @@ async function runManagerRecoverySmoke(ctx) {
   await assertUnchangedAssignment();
   assert.ok(
     await paneExists(paneId),
-    "staff_stop removed the preserved assignment pane",
+    "stop_lead removed the preserved assignment pane",
   );
   const pausedWorktrees = await matchingWorktrees();
   assert.equal(pausedWorktrees.length, 1);
@@ -3048,7 +3048,7 @@ async function runManagerRecoverySmoke(ctx) {
     if (!session) return null;
     const results = staffActionResults(
       session.contents,
-      "staff_resume",
+      "resume_project",
       "resume",
       resumePrompt,
     );
@@ -3233,7 +3233,7 @@ async function runManagerRecoverySmoke(ctx) {
       session &&
       staffActionResults(
         session.contents,
-        "staff_resume",
+        "resume_project",
         "resume",
         recoveryPrompt,
       );
@@ -3338,7 +3338,6 @@ async function runManagerRecoverySmoke(ctx) {
   });
   assert.ok(retainedRecord);
   assert.equal(retainedRecord.text, contextMarker);
-
   markStage(ctx, "replacement-manager-reentry");
   await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
   await waitFor(

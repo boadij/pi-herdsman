@@ -143,87 +143,87 @@ function assertPortableToolSchema(tool: any): void {
 
 const REGISTERED_ROLE_TOOLS = [
   ...[
-    "agent_list",
-    "agent_delegate",
-    "agent_continue",
-    "agent_steer",
-    "agent_interrupt",
-    "agent_reply",
-    "agent_close",
-    "agent_inspect",
-    "agent_transcript",
-    "supervisor_message",
-    "peer_list",
-    "peer_message",
-    "staff_list",
-    "staff_inspect",
-    "staff_transcript",
-    "staff_message",
-    "staff_delegate",
-    "staff_resume",
-    "staff_stop",
+    "list_agents",
+    "delegate_agent",
+    "continue_agent",
+    "steer_agent",
+    "interrupt_agent",
+    "reply_agent",
+    "close_agent",
+    "inspect_agent",
+    "read_agent_transcript",
+    "message_supervisor",
+    "list_peers",
+    "message_peer",
+    "list_staff",
+    "inspect_staff",
+    "read_staff_transcript",
+    "message_staff",
+    "delegate_project",
+    "resume_project",
+    "stop_lead",
   ].map((name) => ({ name })),
 ];
 
 const SEMANTIC_TOOL_CASES = [
-  ["agent_list", {}, { agent: "x" }, []],
+  ["list_agents", {}, { agent: "x" }, []],
   [
-    "agent_delegate",
+    "delegate_agent",
     { definition: "scout", task: "work" },
     { definition: "scout", task: "work", session: "x" },
     ["definition", "task"],
   ],
   [
-    "agent_continue",
+    "continue_agent",
     { session: "/tmp/session.jsonl", task: "work" },
     { session: "/tmp/session.jsonl", task: "work", agent: "x" },
     ["session", "task"],
   ],
   [
-    "agent_steer",
+    "steer_agent",
     { agent: "worker", message: "change" },
     { agent: "worker", message: "change", session: "x" },
     ["agent", "message"],
   ],
   [
-    "agent_interrupt",
+    "interrupt_agent",
     { agent: "worker", message: "replace" },
     { agent: "worker", message: "replace", task: "x" },
     ["agent", "message"],
   ],
   [
-    "agent_reply",
+    "reply_agent",
     { agent: "worker", message: "decision" },
     { agent: "worker", message: "decision", session: "x" },
     ["agent", "message"],
   ],
   [
-    "agent_close",
+    "close_agent",
     { agent: "worker" },
     { agent: "worker", message: "x" },
     ["agent"],
   ],
   [
-    "agent_inspect",
+    "inspect_agent",
     { agent: "worker" },
     { agent: "worker", session: "x" },
     ["agent"],
   ],
   [
-    "agent_transcript",
+    "read_agent_transcript",
     { agent: "worker" },
     { agent: "worker", session: "x" },
     ["agent"],
   ],
   [
-    "supervisor_message",
+    "message_supervisor",
     { message: "progress" },
     { message: "progress", question: "x" },
     ["message"],
   ],
-  ["peer_list", {}, { session: "x" }, []],
+  ["list_peers", {}, { session: "x" }, []],
   [
-    "peer_message",
+    "message_peer",
     { session: "session-id", message: "please review" },
     { session: "session-id", message: "please review", lead: "x" },
     ["session", "message"],
@@ -231,21 +231,21 @@ const SEMANTIC_TOOL_CASES = [
 ] as const;
 
 const STAFF_TOOL_CASES = [
-  ["staff_list", {}, { session: "x" }, []],
+  ["list_staff", {}, { session: "x" }, []],
   [
-    "staff_inspect",
+    "inspect_staff",
     { session: "session-id" },
     { session: "session-id", message: "x" },
     ["session"],
   ],
   [
-    "staff_transcript",
+    "read_staff_transcript",
     { session: "session-id" },
     { session: "session-id", message: "x" },
     ["session"],
   ],
   [
-    "staff_message",
+    "message_staff",
     { session: "session-id", message: "progress" },
     { session: "session-id", message: "progress", lead: "x" },
     ["session", "message"],
@@ -254,19 +254,19 @@ const STAFF_TOOL_CASES = [
 
 const MANAGER_STAFF_TOOL_CASES = [
   [
-    "staff_delegate",
+    "delegate_project",
     { task: "implement" },
     { branch: "feat/existing" },
     ["task"],
   ],
   [
-    "staff_resume",
+    "resume_project",
     { branch: "feat/existing" },
     { branch: "feat/existing", task: "replace it" },
     ["branch"],
   ],
   [
-    "staff_stop",
+    "stop_lead",
     { session: "session-id" },
     { session: "session-id", branch: "feat/x" },
     ["session"],
@@ -279,14 +279,58 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   registerExtension!(pi.pi as never);
   const tools = new Map(pi.tools.map((tool) => [tool.name, tool]));
   const semanticNames = SEMANTIC_TOOL_CASES.map(([name]) => name);
+  const labels: Record<string, string> = {
+    list_agents: "list agents",
+    delegate_agent: "delegate agent",
+    continue_agent: "continue agent",
+    steer_agent: "steer agent",
+    interrupt_agent: "interrupt agent",
+    reply_agent: "reply agent",
+    close_agent: "close agent",
+    inspect_agent: "inspect agent",
+    read_agent_transcript: "read agent transcript",
+    message_supervisor: "message supervisor",
+    list_peers: "list peers",
+    message_peer: "message peer",
+    list_staff: "list staff",
+    inspect_staff: "inspect staff",
+    read_staff_transcript: "read staff transcript",
+    message_staff: "message staff",
+    delegate_project: "delegate project",
+    resume_project: "resume project",
+    stop_lead: "stop lead",
+  };
   for (const legacy of ["agent", "chief", "peer", "staff"])
     assert.equal(tools.has(legacy), false, `legacy tool remains: ${legacy}`);
+  for (const removed of [
+    "agent_list",
+    "agent_delegate",
+    "agent_continue",
+    "agent_steer",
+    "agent_interrupt",
+    "agent_reply",
+    "agent_close",
+    "agent_inspect",
+    "agent_transcript",
+    "peer_list",
+    "peer_message",
+    "supervisor_message",
+    "staff_list",
+    "staff_inspect",
+    "staff_transcript",
+    "staff_message",
+    "staff_delegate",
+    "staff_resume",
+    "staff_stop",
+  ])
+    assert.equal(tools.has(removed), false, `old callable remains: ${removed}`);
   for (const removed of ["staff_close", "staff_complete", "staff_discard"])
     assert.equal(tools.has(removed), false, `removed tool remains: ${removed}`);
 
   for (const [name, valid, invalid, required] of SEMANTIC_TOOL_CASES) {
     const tool = tools.get(name);
     assert.ok(tool, `missing ${name}`);
+    assert.equal(tool.label, labels[name], name);
     assertPortableToolSchema(tool);
     assert.deepEqual(
       [...(tool.parameters.required ?? [])].sort(),
@@ -321,23 +365,23 @@ test("semantic coordination tools expose exact strict object contracts", () => {
     pi.tools.map((tool) => tool.name).sort(),
     [
       ...semanticNames,
-      "staff_list",
-      "staff_inspect",
-      "staff_transcript",
-      "staff_message",
-      "staff_delegate",
-      "staff_resume",
-      "staff_stop",
+      "list_staff",
+      "inspect_staff",
+      "read_staff_transcript",
+      "message_staff",
+      "delegate_project",
+      "resume_project",
+      "stop_lead",
     ].sort(),
   );
   for (const name of [
-    "staff_list",
-    "staff_inspect",
-    "staff_transcript",
-    "staff_message",
-    "staff_delegate",
-    "staff_resume",
-    "staff_stop",
+    "list_staff",
+    "inspect_staff",
+    "read_staff_transcript",
+    "message_staff",
+    "delegate_project",
+    "resume_project",
+    "stop_lead",
   ]) {
     const tool = tools.get(name)!;
     assert.equal(tool.defaultActive, false);
@@ -347,6 +391,7 @@ test("semantic coordination tools expose exact strict object contracts", () => {
   for (const [name, valid, invalid, required] of MANAGER_STAFF_TOOL_CASES) {
     const tool = tools.get(name);
     assert.ok(tool, `missing ${name}`);
+    assert.equal(tool.label, labels[name], name);
     assertPortableToolSchema(tool);
     assert.deepEqual(
       [...(tool.parameters.required ?? [])].sort(),
@@ -443,10 +488,10 @@ test("Chief activation exposes only semantic staff tools", async () => {
       fakeContext(entries) as any,
     );
     assert.deepEqual(chief.pi.getActiveTools(), [
-      "staff_list",
-      "staff_inspect",
-      "staff_transcript",
-      "staff_message",
+      "list_staff",
+      "inspect_staff",
+      "read_staff_transcript",
+      "message_staff",
     ]);
     const tools = new Map(chief.tools.map((tool) => [tool.name, tool]));
     for (const [name, valid, invalid, required] of STAFF_TOOL_CASES) {
@@ -469,7 +514,7 @@ test("Chief activation exposes only semantic staff tools", async () => {
         `${name} cross-operation input`,
       );
     }
-    for (const name of ["staff_delegate", "staff_stop"])
+    for (const name of ["delegate_project", "stop_lead"])
       assert.equal(tools.get(name)?.exposure, "model-only", name);
   } finally {
     await chief.events.get("session_shutdown")?.[0]();
@@ -520,7 +565,7 @@ test("Herdr preflight gates minimum client version and server compatibility", as
     registerExtension!(pi.pi as never);
     try {
       return await pi.tools
-        .find((tool) => tool.name === "agent_delegate")!
+        .find((tool) => tool.name === "delegate_agent")!
         .execute(
           "preflight",
           {
@@ -574,7 +619,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   });
   registerExtension!(lead.pi as never);
   const historicalStaffMessage = lead.tools.find(
-    (tool) => tool.name === "staff_message",
+    (tool) => tool.name === "message_staff",
   )!;
   assert.ok(historicalStaffMessage);
   assert.equal(historicalStaffMessage.defaultActive, false);
@@ -594,7 +639,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   assert.match(
     historicalCall.render(160).join("\n"),
-    /^staff message  lead-his/,
+    /^message staff  lead-his/,
   );
   const leadContext = fakeContext() as any;
   await lead.events.get("session_start")![0](undefined, leadContext);
@@ -608,18 +653,18 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.deepEqual(
     lead.pi.getActiveTools().sort(),
     [
-      "agent_close",
-      "agent_continue",
-      "agent_delegate",
-      "agent_inspect",
-      "agent_interrupt",
-      "agent_list",
-      "agent_reply",
-      "agent_steer",
-      "agent_transcript",
-      "supervisor_message",
-      "peer_list",
-      "peer_message",
+      "close_agent",
+      "continue_agent",
+      "delegate_agent",
+      "inspect_agent",
+      "interrupt_agent",
+      "list_agents",
+      "reply_agent",
+      "steer_agent",
+      "read_agent_transcript",
+      "message_supervisor",
+      "list_peers",
+      "message_peer",
     ].sort(),
   );
   assert.equal(
@@ -636,13 +681,13 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     lead.tools.map((tool) => tool.name).sort(),
     [
       ...SEMANTIC_TOOL_CASES.map(([name]) => name),
-      "staff_list",
-      "staff_inspect",
-      "staff_transcript",
-      "staff_message",
-      "staff_delegate",
-      "staff_resume",
-      "staff_stop",
+      "list_staff",
+      "inspect_staff",
+      "read_staff_transcript",
+      "message_staff",
+      "delegate_project",
+      "resume_project",
+      "stop_lead",
     ].sort(),
   );
   assert.equal(
@@ -656,7 +701,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     assert.equal(typeof tool.renderResult, "function");
   }
   assert.ok(
-    lead.tools.find((tool) => tool.name === "agent_list")?.promptGuidelines
+    lead.tools.find((tool) => tool.name === "list_agents")?.promptGuidelines
       ?.length,
   );
   assert.deepEqual(
@@ -829,10 +874,10 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
   try {
     await chief.events.get("session_start")![0](undefined, context);
     assert.deepEqual(chief.pi.getActiveTools(), [
-      "staff_list",
-      "staff_inspect",
-      "staff_transcript",
-      "staff_message",
+      "list_staff",
+      "inspect_staff",
+      "read_staff_transcript",
+      "message_staff",
     ]);
     assert.equal(
       chief.pi.getActiveTools().some((name) => name.startsWith("peer_")),
@@ -847,7 +892,7 @@ test("managed agents receive no peer tool and Chiefs expose only staff actively"
   }
 });
 
-test("peer list and message use global peer presence, not caller inventory", async () => {
+test("list peers and message use global peer presence, not caller inventory", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-a-pane";
   process.env.HERDR_TAB_ID = "lead-a-tab";
@@ -927,8 +972,8 @@ test("peer list and message use global peer presence, not caller inventory", asy
     getSessionId: () => senderId,
   };
   try {
-    const peerList = pi.tools.find((tool) => tool.name === "peer_list");
-    const peerMessage = pi.tools.find((tool) => tool.name === "peer_message");
+    const peerList = pi.tools.find((tool) => tool.name === "list_peers");
+    const peerMessage = pi.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peerList);
     assert.ok(peerMessage);
     const listed = await peerList.execute(
@@ -1155,8 +1200,8 @@ test("peer provenance enrichment never replaces the Lead cwd", async (t) => {
     assert.equal(minimal?.cwd, context.cwd);
     assert.equal(minimal?.repo, undefined);
 
-    await starting;
     releaseWorktree.resolve();
+    await starting;
     await t.waitFor(() => {
       const record = readPeerLeadRecord(runtime, sessionId);
       assert.equal(record?.cwd, context.cwd);
@@ -1220,7 +1265,7 @@ test("peer publication rejects sender and target generation replacement during a
     getSessionId: () => senderId,
   };
   try {
-    const peer = pi.tools.find((tool) => tool.name === "peer_message");
+    const peer = pi.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peer);
     for (const replaced of ["sender", "target"] as const) {
       const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
@@ -1332,7 +1377,7 @@ test("peer publication tolerates sender and target presentation enrichment durin
     getSessionId: () => senderId,
   };
   try {
-    const peer = pi.tools.find((tool) => tool.name === "peer_message");
+    const peer = pi.tools.find((tool) => tool.name === "message_peer");
     assert.ok(peer);
     for (const enriched of ["sender", "target"] as const) {
       const sender = claim(senderId, "lead-a-pane", "lead-a-tab");
@@ -1551,15 +1596,15 @@ test("active chief describes authoritative remote ask projection", async () => {
   const context = fakeContext(entries) as any;
   context.ui.notify = () => undefined;
   await pi.events.get("session_start")![0](undefined, context);
-  const tool = pi.tools.find((candidate) => candidate.name === "staff_message");
+  const tool = pi.tools.find((candidate) => candidate.name === "message_staff");
   const inspectTool = pi.tools.find(
-    (candidate) => candidate.name === "staff_inspect",
+    (candidate) => candidate.name === "inspect_staff",
   );
   const transcriptTool = pi.tools.find(
-    (candidate) => candidate.name === "staff_transcript",
+    (candidate) => candidate.name === "read_staff_transcript",
   );
   const listTool = pi.tools.find(
-    (candidate) => candidate.name === "staff_list",
+    (candidate) => candidate.name === "list_staff",
   );
   assert.ok(tool);
   assert.ok(inspectTool);
@@ -1578,7 +1623,7 @@ test("active chief describes authoritative remote ask projection", async () => {
     tool.description,
     /staff_(?:list|inspect|transcript)|List direct-report|Read bounded/i,
   );
-  assert.equal(tool.label, "staff message");
+  assert.equal(tool.label, "message staff");
   assert.equal(typeof tool.renderCall, "function");
   assert.equal(typeof tool.renderResult, "function");
   assert.equal(
@@ -1608,7 +1653,7 @@ test("active chief describes authoritative remote ask projection", async () => {
   assert.equal(typeof renderedStaffCall.render, "function");
   assert.match(
     renderedStaffCall.render(160).join("\n"),
-    /^staff message  lead-bbbbbb…/,
+    /^message staff  lead-bbbbbb…/,
   );
   const renderedStaffResult = tool.renderResult(
     {
@@ -1624,10 +1669,10 @@ test("active chief describes authoritative remote ask projection", async () => {
   );
   assert.match(renderedStaffResult.text, /✓ sent to workspace\/api/);
   assert.deepEqual(pi.pi.getActiveTools(), [
-    "staff_list",
-    "staff_inspect",
-    "staff_transcript",
-    "staff_message",
+    "list_staff",
+    "inspect_staff",
+    "read_staff_transcript",
+    "message_staff",
   ]);
   const beforeStart = await pi.events.get("before_agent_start")![0](
     { systemPromptOptions: { contextFiles: [] } },
@@ -1649,7 +1694,7 @@ test("active chief describes authoritative remote ask projection", async () => {
   );
   assert.match(
     String(chiefPrompt),
-    /Do not use staff_list, staff_inspect, repeated messages, status requests, sleep, or any other mechanism merely to wait for lead progress or completion/,
+    /Do not use list_staff, inspect_staff, repeated messages, status requests, sleep, or any other mechanism merely to wait for lead progress or completion/,
   );
   const sessionSchema = (tool.parameters as any).properties.session;
   assert.equal(
@@ -1688,7 +1733,7 @@ test("active chief describes authoritative remote ask projection", async () => {
   setLeadEnvironment();
 });
 
-test("staff transcript advertises persisted candidates and revalidates the lead", async () => {
+test("read staff transcript advertises persisted candidates and revalidates the lead", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -1892,10 +1937,10 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const listTool = pi.tools.find(
-      (candidate) => candidate.name === "staff_list",
+      (candidate) => candidate.name === "list_staff",
     );
     const tool = pi.tools.find(
-      (candidate) => candidate.name === "staff_transcript",
+      (candidate) => candidate.name === "read_staff_transcript",
     );
     assert.ok(listTool);
     assert.ok(tool);
@@ -1929,7 +1974,7 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
     assert.equal("lead" in listedLead, false);
     assert.deepEqual(
       listedLead?.available_tools,
-      ["staff_inspect", "staff_transcript", "staff_message"],
+      ["inspect_staff", "read_staff_transcript", "message_staff"],
       JSON.stringify(listed.details),
     );
 
@@ -2003,7 +2048,9 @@ test("staff transcript advertises persisted candidates and revalidates the lead"
         (report) => report.session === leadId,
       );
       assert.ok(mismatchedLead);
-      assert.ok(mismatchedLead.available_tools.includes("staff_transcript"));
+      assert.ok(
+        mismatchedLead.available_tools.includes("read_staff_transcript"),
+      );
       await assert.rejects(
         tool.execute(
           "transcript",
@@ -2144,7 +2191,7 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
       {
         message: {
           role: "assistant",
-          content: [{ type: "toolCall", name: "supervisor_message" }],
+          content: [{ type: "toolCall", name: "message_supervisor" }],
         },
       },
     ],
@@ -2152,7 +2199,7 @@ test("lead rejects a remote chief with mismatched physical identity", async () =
   try {
     await pi.events.get("session_start")![0](undefined, context);
     const tool = pi.tools.find(
-      (candidate) => candidate.name === "supervisor_message",
+      (candidate) => candidate.name === "message_supervisor",
     );
     assert.ok(tool);
     await assert.rejects(
@@ -2200,10 +2247,10 @@ test("chief activation reports unresolved mailbox state instead of owned work", 
     assert.match(notices[0]!, /managed mailbox state is unresolved/);
     assert.doesNotMatch(notices[0]!, /owned agent work exists/);
     assert.notDeepEqual(pi.pi.getActiveTools(), [
-      "staff_list",
-      "staff_inspect",
-      "staff_transcript",
-      "staff_message",
+      "list_staff",
+      "inspect_staff",
+      "read_staff_transcript",
+      "message_staff",
     ]);
   } finally {
     realFs.rmSync(mailbox, { recursive: true, force: true });
@@ -2756,10 +2803,10 @@ test("persisted Chief startup skips agent definition discovery", async () => {
   try {
     await pi.events.get("session_start")![0](undefined, context);
     assert.deepEqual(pi.pi.getActiveTools(), [
-      "staff_list",
-      "staff_inspect",
-      "staff_transcript",
-      "staff_message",
+      "list_staff",
+      "inspect_staff",
+      "read_staff_transcript",
+      "message_staff",
     ]);
     assert.equal(
       entries.some(
@@ -2782,7 +2829,7 @@ test("chief guidance carries the lead coordination contract", () => {
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   assert.ok(
-    pi.tools.some((candidate) => candidate.name === "supervisor_message"),
+    pi.tools.some((candidate) => candidate.name === "message_supervisor"),
   );
   delete process.env.HERDR_PANE_ID;
 });
@@ -2817,7 +2864,7 @@ test("definition roster matches live list and rejects stale sessions", async () 
   );
   assert.match(
     prompt?.systemPrompt ?? "",
-    /Use\s+supervisor_message when your direct supervisor must decide or act/,
+    /Use message_supervisor when the Manager needs coordination[\s\S]*If information can wait, let automatic result handoff carry it/,
   );
   assert.match(
     prompt?.systemPrompt ?? "",
@@ -2827,7 +2874,7 @@ test("definition roster matches live list and rejects stale sessions", async () 
     prompt?.systemPrompt ?? "",
     /carry relevant evidence into onward handoffs/,
   );
-  assert.match(prompt?.systemPrompt ?? "", /peer_list\/peer_message/);
+  assert.match(prompt?.systemPrompt ?? "", /list_peers\/message_peer/);
   assert.doesNotMatch(
     prompt?.systemPrompt ?? "",
     /project-assignment delivery/,
@@ -2844,7 +2891,7 @@ test("definition roster matches live list and rejects stale sessions", async () 
     )[1],
   );
   const listResult = await pi.tools
-    .find((tool) => tool.name === "agent_list")!
+    .find((tool) => tool.name === "list_agents")!
     .execute("list", {}, undefined, undefined, context);
   assert.deepEqual(
     roster,
@@ -2925,11 +2972,11 @@ test("delegating agents receive only their allowed definition roster", async () 
   );
   assert.doesNotMatch(
     event.systemPromptOptions.sections.delegating_agent_role,
-    /supervisor_message/,
+    /message_supervisor/,
   );
   assert.match(
     event.systemPromptOptions.sections.agent_definitions,
-    /Use agent_list for live Agent state/,
+    /Use list_agents for live Agent state/,
   );
   const roster = JSON.parse(
     event.systemPromptOptions.sections.agent_definitions.split(
@@ -2948,15 +2995,15 @@ test("delegating agents receive only their allowed definition roster", async () 
     ["scout"],
   );
   const listResult = await pi.tools
-    .find((tool) => tool.name === "agent_list")!
+    .find((tool) => tool.name === "list_agents")!
     .execute("list", {}, undefined, undefined, context);
   assert.deepEqual(
     roster,
     listResult.details.agent_definitions,
     JSON.stringify(listResult.details),
   );
-  const agentListTool = pi.tools.find((tool) => tool.name === "agent_list")!;
-  const delegateTool = pi.tools.find((tool) => tool.name === "agent_delegate")!;
+  const agentListTool = pi.tools.find((tool) => tool.name === "list_agents")!;
+  const delegateTool = pi.tools.find((tool) => tool.name === "delegate_agent")!;
   assert.equal(
     Value.Check(delegateTool.parameters, {
       definition: "scout",
@@ -2991,15 +3038,15 @@ test("delegating agents receive only their allowed definition roster", async () 
     /genuinely independent or context-heavy work/,
   );
   for (const toolName of [
-    "agent_list",
-    "agent_delegate",
-    "agent_continue",
-    "agent_steer",
-    "agent_interrupt",
-    "agent_reply",
-    "agent_close",
-    "agent_inspect",
-    "agent_transcript",
+    "list_agents",
+    "delegate_agent",
+    "continue_agent",
+    "steer_agent",
+    "interrupt_agent",
+    "reply_agent",
+    "close_agent",
+    "inspect_agent",
+    "read_agent_transcript",
   ])
     assert.ok(
       sharedGuidance.includes(toolName),
@@ -3037,7 +3084,7 @@ test("delegating agents receive only their allowed definition roster", async () 
   );
   assert.match(
     description,
-    /Each unresolved unit of work has one executor\. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves\. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work\. Continue only concrete, necessary work clearly outside the delegated scope that you still own\./,
+    /Each unresolved unit of work has one executor\. Using delegate_agent transfers that assignment's execution ownership to the Agent until it resolves\. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work\. Continue only concrete, necessary work clearly outside the delegated scope that you still own\./,
   );
   assert.match(
     sharedGuidance,
@@ -3505,7 +3552,7 @@ test("lead metadata failures do not escape the serialized queue", async (t) => {
     registerExtension!(pi.pi as never);
     const context = fakeContext() as any;
     await pi.events.get("session_start")![0](undefined, context);
-    assert.ok(pi.tools.some((tool) => tool.name === "supervisor_message"));
+    assert.ok(pi.tools.some((tool) => tool.name === "message_supervisor"));
     await pi.events.get("session_info_changed")![0]({ name: "retry" }, context);
     await t.waitFor(() => assert.equal(metadataCalls, 2));
     assert.equal(unhandled.length, 0);
@@ -3579,7 +3626,7 @@ test("list ignores an unrelated unnamed Herdr agent", async () => {
   await pi.events.get("session_start")![0](undefined, context);
 
   const result = await pi.tools
-    .find((tool) => tool.name === "agent_list")!
+    .find((tool) => tool.name === "list_agents")!
     .execute("list", {}, undefined, undefined, context);
 
   assert.equal(result.details.ok, true, JSON.stringify(result.details));
@@ -3724,7 +3771,7 @@ test("delegating managed agents refresh their status widget after controller cha
   await t.waitFor(() => assert.ok(renders > 0));
   const initialRenders = renders;
   const delegated = pi.tools
-    .find((tool) => tool.name === "agent_delegate")!
+    .find((tool) => tool.name === "delegate_agent")!
     .execute(
       "status-change",
       { definition: "child", label: "status-child", task: "refresh" },
@@ -4001,7 +4048,7 @@ test("periodic health loss reminders do not open transcripts for missing mailbox
   assert.equal(openCalls, 0);
 });
 
-test("registered agent inspect exposes process and recent activity evidence", async () => {
+test("registered inspect agent exposes process and recent activity evidence", async () => {
   setLeadEnvironment();
   const label = "inspect-agent";
   const identity = recoveryIdentity(label);
@@ -4053,7 +4100,7 @@ test("registered agent inspect exposes process and recent activity evidence", as
   });
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
-  const tool = pi.tools.find((candidate) => candidate.name === "agent_inspect");
+  const tool = pi.tools.find((candidate) => candidate.name === "inspect_agent");
   assert.ok(tool);
   try {
     const result = await tool.execute(
@@ -4218,7 +4265,7 @@ test("registered delegate embeds text and references binary evidence", async () 
   registerExtension!(pi.pi as never);
   try {
     const result = await pi.tools
-      .find((tool) => tool.name === "agent_delegate")!
+      .find((tool) => tool.name === "delegate_agent")!
       .execute(
         "id",
         {

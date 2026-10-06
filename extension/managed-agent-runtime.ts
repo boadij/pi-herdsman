@@ -67,7 +67,11 @@ import {
   formatRuntimeBuild,
   type RuntimeBuild,
 } from "./compatibility.ts";
-import { taskAcceptanceAllowed, steerAcceptanceAllowed } from "./core.ts";
+import {
+  taskAcceptanceAllowed,
+  steerAcceptanceAllowed,
+  currentTurnIsSoleToolCall,
+} from "./core.ts";
 import { importResultBindings } from "./agent-controller.ts";
 import { fail, OperationError } from "./errors.ts";
 import { readConfig } from "./config.ts";
@@ -83,17 +87,6 @@ import {
 const DELEGATING_AGENT_ROLE_CHARTER = `## Delegating agent role
 ${DELEGATING_AGENT_SCOPE_DESCRIPTION}
 ${FILE_HANDOFF_GUIDANCE}`;
-
-function currentTurnIsSoleToolCall(message: unknown, name: string): boolean {
-  const turn = message as { role?: unknown; content?: unknown } | undefined;
-  if (turn?.role !== "assistant" || !Array.isArray(turn.content)) return false;
-  const toolCalls = turn.content.filter(
-    (part) => (part as { type?: unknown }).type === "toolCall",
-  );
-  return (
-    toolCalls.length === 1 && (toolCalls[0] as { name?: unknown }).name === name
-  );
-}
 
 function askRecordBytes(
   state: ManagedAgentState,
@@ -1556,7 +1549,7 @@ export function registerManagedAgentSettlementHandlers(
             retrySafe: false,
             cleanupSafe: true,
             nextAction:
-              "Resolve the mailbox persistence failure described by result_error, then use agent_close before starting another assignment.",
+              "Resolve the mailbox persistence failure described by result_error, then use close_agent before starting another assignment.",
           };
           try {
             const currentAssignment = execution.assignment;
@@ -1678,7 +1671,6 @@ export function registerManagedAgentRuntime(
       files: string[] | undefined,
       operation: string,
     ): any;
-    currentTurnMessage(ctx: ExtensionContext): unknown;
     appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
     getAgentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
   },
@@ -1767,7 +1759,7 @@ export function registerManagedAgentRuntime(
         event.systemPromptOptions.sections.agent_definitions =
           `${JSON.stringify(availableRoster.definitions, null, 2)}\n\n` +
           `This is the session-start definition snapshot. ` +
-          `Use agent_list for live Agent state or to refresh Agent definitions after configuration changes.`;
+          `Use list_agents for live Agent state or to refresh Agent definitions after configuration changes.`;
     }
   });
   const execution = createManagedAgentExecutionState();
@@ -1875,8 +1867,7 @@ export function registerManagedAgentRuntime(
       sameIdentity: sameManagedAgentIdentity,
       eligible: requestState.eligibleToAsk,
       rejectionReason: requestState.askRejectionReason,
-      isSoleToolCall: (ctx) =>
-        currentTurnIsSoleToolCall(options.currentTurnMessage(ctx), "ask_owner"),
+      isSoleToolCall: (ctx) => currentTurnIsSoleToolCall(ctx, "ask_owner"),
       messageLimits: options.messageLimits,
       prepare: (ctx, question, files, state, askId, createdAt, limits) =>
         prepareMessageInput(

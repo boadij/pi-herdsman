@@ -23,7 +23,9 @@ Agents by default. Manager owns project supervision and assignment
 boundaries; the Lead owns technical decisions and execution orchestration.
 Herdsman automatically hands off the normal assignment response, deferring it
 until delegated Agent work settles. See [Project orchestration](project-orchestration.md)
-for the full handoff and `supervisor_message` contract. Override the same name
+for the automatic result and `message_supervisor` coordination contract.
+Managed Leads use it to contact their assigned Manager; ordinary Leads and
+Managers use it to contact Chief. Override the same name
 when a project or user deliberately needs a different prompt, model, thinking
 level, tool policy, skill policy, or extension policy:
 
@@ -45,8 +47,8 @@ override remains `~/.pi/agent/agents/managed-lead.md`.
 `managed-lead` does not support `enabled`, `agents`, or `permission`.
 Its ordinary tool policy may be overridden, but Herdsman's mandatory Lead
 coordination tools cannot be removed. Definition changes apply to future Lead
-launches, not already-running Leads. Use `staff_stop` followed by
-`staff_resume` when a running project Lead must restart with changed launch
+launches, not already-running Leads. Use `stop_lead` followed by
+`resume_project` when a running project Lead must restart with changed launch
 policy.
 
 ## Minimal model override

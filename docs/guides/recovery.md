@@ -17,19 +17,19 @@ For stale attention, use this decision sequence:
 
 1. Read the bounded evidence supplied with the first stale attention.
 2. If that evidence is absent or insufficient, use one bounded diagnostic read:
-   `agent_transcript` for persisted history or `agent_inspect` for live terminal/process
+   `read_agent_transcript` for persisted history or `inspect_agent` for live terminal/process
    state.
 3. Keep waiting while evidence positively supports legitimate long-running work.
-4. Use `agent_steer` to queue a cooperative correction when the current operation
+4. Use `steer_agent` to queue a cooperative correction when the current operation
    can safely finish first.
 5. If the same stale episode repeats, treat the extra elapsed time as additional
    evidence. No qualifying execution boundary occurred, so steering queued
    during that episode has not taken effect. Do not repeat reads solely because
    of the reminder.
 6. Keep waiting only while existing evidence still justifies the operation;
-   otherwise use `agent_interrupt` to abandon it and continue the same assignment.
+   otherwise use `interrupt_agent` to abandon it and continue the same assignment.
    Interrupt supersedes earlier undelivered steering.
-7. Use `agent_close` only when abandoning the assignment is intended.
+7. Use `close_agent` only when abandoning the assignment is intended.
 
 Other persistent actionable conditions may repeat approximately `5m → 2m30s →
 1m15s → 1m`; stale episodes repeat approximately every five minutes after the
@@ -49,7 +49,7 @@ generate generic attention.
 
 A blocked agent still has an active assignment.
 
-If the agent is waiting for an owner answer, use `agent_reply` with its exact agent.
+If the agent is waiting for an owner answer, use `reply_agent` with its exact agent.
 
 Otherwise inspect the reported external/runtime condition and resolve it using
 only the currently listed actions. A live Herdr runtime reported as `blocked`
@@ -72,10 +72,10 @@ an externally blocked runtime. Do not delegate a new task to a blocked agent.
 Do not delegate another task yet.
 
 If nothing independent remains, end the turn normally and let result/attention
-delivery returns attention to the owner. Refresh with `agent_list` only when there is a reason to take
+delivery returns attention to the owner. Refresh with `list_agents` only when there is a reason to take
 another control action.
 
-If `agent_list` reports `result_error`, the agent's result could not be persisted
+If `list_agents` reports `result_error`, the agent's result could not be persisted
 after bounded retries. The condition retains the run, request, owner, agent,
 and failure category. Do not delegate over it: resolve the mailbox persistence
 problem, then close the exact agent before delegating new work. The condition
@@ -93,7 +93,7 @@ Do not guess from pane IDs, process appearance, elapsed time, or stale metadata.
 Physical `unknown` remains fail-closed: it has no mutation actions and receives
 at most one generic attention event for an unresolved episode. Do not infer
 loss, guess a pane or process, or use `ask_owner` as a generic escalation path.
-Refresh with `agent_list` and resolve the identity/lifecycle condition when new exact
+Refresh with `list_agents` and resolve the identity/lifecycle condition when new exact
 evidence is available. If a cleanup or recovery error is present, inspect its
 exact details.
 
@@ -102,9 +102,9 @@ exact details.
 `lost` means the expected physical execution is proven gone before a durable
 terminal result resolved the assignment. The durable mailbox remains owned and
 the assignment remains unresolved; loss is not completion or task failure.
-Only the direct owner may use `agent_close` to abandon the lost generation. When
-`agent_close` is listed, use it before replacing it or continuing its saved session.
-If `agent_close` is absent, resolve the condition blocking its close preflight first.
+Only the direct owner may use `close_agent` to abandon the lost generation. When
+`close_agent` is listed, use it before replacing it or continuing its saved session.
+If `close_agent` is absent, resolve the condition blocking its close preflight first.
 Herdsman never redelegates or continues it automatically. Moved or conflicting
 evidence is `unknown`, not `lost`, and remains fail-closed.
 
@@ -193,7 +193,7 @@ uncertain.
 
 ## Close failure
 
-Normal `agent_close` targets one exact directly owned live agent or a directly
+Normal `close_agent` targets one exact directly owned live agent or a directly
 owned generation proven `lost` by fresh absence evidence. Unknown presence
 fails closed.
 
@@ -207,7 +207,7 @@ not the normal model orchestration interface.
 
 ## Historical session failure
 
-`agent_continue` requires an exact session path or full UUID.
+`continue_agent` requires an exact session path or full UUID.
 
 The saved session header must contain a non-empty working directory. Session
 continuation uses that saved cwd and does not accept a caller-supplied `cwd`.
@@ -241,7 +241,7 @@ Check:
 7. cleanup cause;
 8. `rollbackOccurred`;
 9. `nextAction`;
-10. current `agent_list`.
+10. current `list_agents`.
 
 ## See also
 

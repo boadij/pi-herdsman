@@ -14,9 +14,9 @@ evidence, not runtime capability.
 Pi Herdsman has two text-file mechanisms with different purposes:
 
 - `files` supplies evidence to the coordination operations that accept it:
-  `agent_delegate`, `agent_continue`, `agent_steer`, `agent_interrupt`,
-  `agent_reply`, `staff_delegate`, `staff_message`, `supervisor_message`,
-  `peer_message`, and `ask_owner`.
+  `delegate_agent`, `continue_agent`, `steer_agent`, `interrupt_agent`,
+  `reply_agent`, `delegate_project`, `message_staff`,
+  `message_supervisor`, `message_peer`, and `ask_owner`.
 - whole-line body `@file` references put definition-owned text into the agent
   system prompt when a new agent generation is built.
 
@@ -99,9 +99,9 @@ size; for a result reference, it carries the supplied logical result name, the
 physical path attribute, and observed byte size. File content remains raw text. This
 markup frames evidence for the model and is not a security boundary.
 
-`files` is supported by `agent_delegate`, `agent_continue`, `agent_steer`,
-`agent_interrupt`, `agent_reply`, `staff_delegate`, `staff_message`,
-`supervisor_message`, `peer_message`, and `ask_owner`. For controller actions,
+`files` is supported by `delegate_agent`, `continue_agent`, `steer_agent`,
+`interrupt_agent`, `reply_agent`, `delegate_project`, `message_staff`,
+`message_supervisor`, `message_peer`, and `ask_owner`. For controller actions,
 relative paths resolve from the calling controller's cwd; for `ask_owner`, they
 resolve from the managed agent's cwd. Accepted ordinary filesystem paths retain
 canonical absolute-path names; semantic and canonical result refs retain the
@@ -298,7 +298,7 @@ resolution and transitive forwarding through `files`. For a
 reference-only result, the provenance is available with the body when the
 referenced artifact is read; it is not separately embedded. The context is
 informational model evidence, not authorization: an exact session ID or path
-does not authorize `agent_continue` without durable ownership ancestry. The normal
+does not authorize `continue_agent` without durable ownership ancestry. The normal
 completion shown to the owning session
 remains unchanged.
 

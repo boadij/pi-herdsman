@@ -15,34 +15,34 @@ durable assignment/convergence evidence. It is not a raw herdr lifecycle string.
 
 ## `available_tools` is authoritative
 
-A live agent record in `agent_list` includes an `available_tools` snapshot.
+A live agent record in `list_agents` includes an `available_tools` snapshot.
 Use only tools currently listed there; do not infer control eligibility
-from `state` alone. `agent_steer` means active work accepts cooperative steering,
-`agent_interrupt` means a currently working Pi operation may be preempted,
+from `state` alone. `steer_agent` means active work accepts cooperative steering,
+`interrupt_agent` means a currently working Pi operation may be preempted,
 superseding earlier undelivered steering with replacement direction,
-`agent_reply` means a correlated pending `ask_owner` is valid, and
-`agent_close` means exact direct ownership and the current applicable close
+`reply_agent` means a correlated pending `ask_owner` is valid, and
+`close_agent` means exact direct ownership and the current applicable close
 preflight permit teardown. For a
 Lead-owned parent, that preflight includes its owned descendant cascade.
-`available_tools` never includes `agent_delegate`; an agent generation handles one assignment only. Every operation
+`available_tools` never includes `delegate_agent`; an agent generation handles one assignment only. Every operation
 revalidates identity, ownership, mailbox state, and lifecycle immediately before
 mutation.
 
 A delegating agent may be blocked while direct agent work is pending and still accept
-steering when `agent_steer` is listed, but it cannot expose `agent_interrupt` without a
+steering when `steer_agent` is listed, but it cannot expose `interrupt_agent` without a
 currently working Pi operation. Stale or inactive fields are advisory and do
 not automatically authorize or recommend interrupt. Descendant visibility does not imply authority;
 records outside the controller's direct ownership can have an empty action list.
 Directly owned live records may expose the applicable live controls; directly
-owned live or proven `lost` records may expose `agent_close` when the applicable close
-preflight currently succeeds. They may also expose the read-only `agent_transcript`
+owned live or proven `lost` records may expose `close_agent` when the applicable close
+preflight currently succeeds. They may also expose the read-only `read_agent_transcript`
 action when a materialized persisted Pi session file exists. Unknown records and
 non-direct descendants remain fail-closed with no actions.
 
 ## `blocked` and owner questions
 
 An agent waiting on a valid `ask_owner` reply projects as `blocked` after its ask
-turn settles. Answer through the exact direct owner using `agent_reply` with the exact `agent` identity.
+turn settles. Answer through the exact direct owner using `reply_agent` with the exact `agent` identity.
 
 A delegating parent can also project as `blocked` while it waits for direct
 children. That is progress-capable parent waiting, not evidence that the child
@@ -74,7 +74,7 @@ When exact physical evidence changes, re-evaluate the record from fresh state.
 
 `lost` is different: a coherent Herdr inventory proves the expected pane,
 session, and run-scoped alias are absent. It is not completion or task failure;
-use direct-owner `agent_close` to abandon the unresolved generation when the
+use direct-owner `close_agent` to abandon the unresolved generation when the
 applicable close preflight succeeds. Lost attention may repeat for the direct
 owner while the assignment remains unresolved.
 
@@ -85,11 +85,11 @@ absence and projects as `settling` while delivery or recovery converges. A
 failed inventory never proves `lost`; relocated or conflicting evidence is
 `unknown`.
 
-| Record    | Direct-owner actions                                                                                                                                           |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `live`    | `agent_inspect`, eligible `agent_transcript`, `agent_steer`, `agent_interrupt`, `agent_reply`, and `agent_close` when the applicable close preflight succeeds. |
-| `lost`    | eligible `agent_transcript` and `agent_close` when the applicable close preflight succeeds.                                                                    |
-| `unknown` | None.                                                                                                                                                          |
+| Record    | Direct-owner actions                                                                                                                                                |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live`    | `inspect_agent`, eligible `read_agent_transcript`, `steer_agent`, `interrupt_agent`, `reply_agent`, and `close_agent` when the applicable close preflight succeeds. |
+| `lost`    | eligible `read_agent_transcript` and `close_agent` when the applicable close preflight succeeds.                                                                    |
+| `unknown` | None.                                                                                                                                                               |
 
 Owned descendants remain visible through proven durable ancestry but do not gain
 direct control from that visibility.
@@ -104,7 +104,7 @@ do not advance `last_activity_at`. This advisory does not change the state or
 prove a hang. The first stale attention is eligible after ten minutes without
 qualifying progress; if the same condition persists, reminders may repeat at
 approximately `5m → 2m30s → 1m15s → 1m`, subject to the 30-second health scan.
-Leave healthy or legitimately long-running work alone. Use `agent_transcript` for persisted evidence and `agent_inspect` for live evidence; stale alone does not justify `agent_interrupt` or `agent_close`.
+Leave healthy or legitimately long-running work alone. Use `read_agent_transcript` for persisted evidence and `inspect_agent` for live evidence; stale alone does not justify `interrupt_agent` or `close_agent`.
 The stale episode is defined by its active request and last qualifying activity;
 first-attention diagnosis is bounded, and repeated reminders do not automatically
 repeat the live capture.

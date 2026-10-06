@@ -248,7 +248,7 @@ References are resolved from the Markdown file that declares them.
 The bundled Agent definitions are `generalist`, `implementer`,
 `researcher`, `reviewer`, and `scout`. The reserved bundled
 `managed-lead` definition is excluded from this roster. The session-start
-agent-definition roster and the `agent_list` result use the same metadata
+agent-definition roster and the `list_agents` result use the same metadata
 projection.
 
 For exact expansion, deduplication, and caller-file precedence, see

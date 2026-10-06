@@ -2,7 +2,7 @@
 
 ## Decision
 
-Pi Herdsman will expose narrow operation-specific model tools such as `agent_delegate`, `agent_continue`, and `agent_close` instead of multiplexed tools whose schema contains fields for several actions.
+Pi Herdsman exposes narrow operation-specific model tools such as `delegate_agent`, `continue_agent`, and `close_agent` instead of multiplexed tools whose schema contains fields for several actions. Callable names use natural action-first wording, such as verb-first names for the operation-specific interfaces.
 
 Internal dispatch, lifecycle, authorization, and recovery logic may remain shared behind thin adapters, but the model-facing schema for each operation must advertise only the inputs that operation accepts.
 

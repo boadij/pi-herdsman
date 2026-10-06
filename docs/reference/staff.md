@@ -2,13 +2,14 @@
 
 [Documentation index](../README.md) · [Coordination](../concepts/coordination.md)
 
-`staff_*` is the direct-report interface for active Chief and Manager sessions.
-Chief and Manager can list, inspect, read transcripts, and message direct
-reports. Manager additionally owns branch-based project operations:
-`staff_delegate`, `staff_resume`, and `staff_stop`.
+Staff tools are available to active Chief and Manager sessions. Both roles can
+use `list_staff`, `inspect_staff`, `read_staff_transcript`, and
+`message_staff`. Manager additionally has the branch-based project operations
+`delegate_project`, `resume_project`, and `stop_lead`.
+Chief has no project-operation tools.
 
 Lead-targeted actions use the exact full Pi `session` ID from a fresh
-supervision snapshot or `staff_list`. Project actions use the Git branch.
+supervision snapshot or `list_staff`. Project actions use the Git branch.
 Presentation state is not authority; every action revalidates current identity
 and direct-report authority.
 
@@ -27,9 +28,9 @@ A direct-report record can expose the exact `session`, presentation-only
 `display_name`, runtime state, Agent counts, `available_tools`, and optional
 branch provenance. Use `session` as the target, never `display_name`. The
 automatic supervision snapshot is bounded state, not terminal or transcript
-evidence. Use `staff_list` when a fresh complete roster is materially needed.
+evidence. Use `list_staff` when a fresh complete roster is materially needed.
 
-## `staff_list`
+## `list_staff`
 
 ```json
 {}
@@ -47,9 +48,9 @@ For Manager, `open_workspaces` separately reports current Herdr topology. It is
 not assignment ownership. A branch is the project-work handle; a report's
 `session` is the handle for live Lead actions.
 
-Do not call `staff_list` merely to poll progress.
+Do not call `list_staff` merely to poll progress.
 
-## `staff_inspect`
+## `inspect_staff`
 
 ```json
 { "session": "<exact full Pi session ID>" }
@@ -59,7 +60,7 @@ Read-only. Requires a current exact direct-report session. Returns bounded live
 terminal/process evidence. It does not expose persisted Pi conversation
 history. Use it only when live terminal/process evidence materially matters.
 
-## `staff_transcript`
+## `read_staff_transcript`
 
 ```json
 { "session": "<exact full Pi session ID>" }
@@ -70,7 +71,7 @@ persisted Pi session before returning bounded visible conversation and tool
 evidence. Reasoning, system messages, extension entries, and control markers
 are excluded; the internal session-file path is not returned.
 
-## `staff_message`
+## `message_staff`
 
 ```json
 {
@@ -89,7 +90,7 @@ result refs already supplied as evidence. Attachments are prepared at
 submission; the coordination record carries the prepared text and any hidden
 semantic-result bindings needed for the recipient to forward them.
 
-## `staff_delegate`
+## `delegate_project`
 
 Manager only. Start new project work with a required `task` and optional
 `branch`, `base`, and `files`:
@@ -98,7 +99,7 @@ Manager only. Start new project work with a required `task` and optional
 { "task": "Implement the change", "branch": "feat/example" }
 ```
 
-An existing assignment on that branch is rejected; use `staff_resume` to
+An existing assignment on that branch is rejected; use `resume_project` to
 continue it. An unoccupied existing Herdr worktree may still be reused for new
 work. A different live Lead occupying that worktree prevents another managed
 writer.
@@ -111,7 +112,7 @@ non-fitting files remain canonical references.
 Manager-created Leads inherit the Manager session's effective project-trust
 decision for that run; this does not modify Pi's persistent trust store.
 
-## `staff_resume`
+## `resume_project`
 
 Manager only. Resume existing unresolved project work using its exact branch:
 
@@ -127,7 +128,7 @@ resumes the exact saved Pi session; its saved cwd is used when available. If
 the branch no longer exists, recovery fails closed rather than creating it
 from the current default branch.
 
-## `staff_stop`
+## `stop_lead`
 
 ```json
 { "session": "<exact live direct Lead session ID>" }
@@ -135,13 +136,15 @@ from the current default branch.
 
 Stops only an exact currently assigned project Lead and its owned Agent
 execution tree. The assignment, Pi session, Git branch, and worktree are
-preserved. Resume the work with `staff_resume` using its branch. An unassigned
-Lead is not a Manager staff-stop target. Failed or ambiguous cleanup does not
-retire an assignment. Successful Herdr worktree removal retires the assignment
-and pending project messages; a missing worktree alone leaves the assignment
-recoverable with `staff_resume`. The assigned Lead may separately release
-Manager authority through confirmed `/takeover`, which removes the assignment
-and pending project messages without stopping the session or owned Agents.
+preserved. Resume the work with
+`resume_project` using its branch. An unassigned Lead is not a Manager staff-stop
+target. Failed or ambiguous cleanup does not retire an assignment. Successful
+Herdr worktree removal retires the assignment and removes pending project
+messages; a missing worktree alone leaves the assignment recoverable with
+`resume_project`. The
+assigned Lead may separately release Manager authority through confirmed
+`/takeover`, which removes the assignment and pending project messages without
+stopping the session or owned Agents.
 
 ## See also
 

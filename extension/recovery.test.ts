@@ -70,7 +70,23 @@ import support, {
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
-  pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
+  pi.tools.find(
+    (candidate) =>
+      candidate.name ===
+      (
+        {
+          list: "list_agents",
+          delegate: "delegate_agent",
+          continue: "continue_agent",
+          steer: "steer_agent",
+          interrupt: "interrupt_agent",
+          reply: "reply_agent",
+          close: "close_agent",
+          inspect: "inspect_agent",
+          transcript: "read_agent_transcript",
+        } as Record<string, string>
+      )[name],
+  )!;
 
 test("combined status reports a completed agent as pending, not active", async () => {
   setAgentEnvironment("status-pending-parent", ["child"]);
@@ -790,7 +806,10 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   const rendered = agentTool(pi, "delegate").renderResult(
     { content: result.content, details: result.details },
     { expanded: true, isPartial: false },
-    { fg: (_color: string, text: string) => text },
+    {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    },
     {
       args: {
         definition: "agent",
@@ -847,7 +866,7 @@ test("malformed disappearance proof retains failed-launch cleanup evidence", asy
   );
   assert.equal(listed.details.agents.length, 1);
   assert.equal(listed.details.agents[0].state, "lost");
-  assert.deepEqual(listed.details.agents[0].available_tools, ["agent_close"]);
+  assert.deepEqual(listed.details.agents[0].available_tools, ["close_agent"]);
   assert.equal(listed.details.cleanup_errors, undefined);
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
@@ -2190,9 +2209,9 @@ test("controller reply submits the normal request and preserves the assignment",
     context,
   );
   assert.deepEqual(waitingList.details.agents[0].available_tools, [
-    "agent_inspect",
-    "agent_reply",
-    "agent_close",
+    "inspect_agent",
+    "reply_agent",
+    "close_agent",
   ]);
   const result = await agentTool(pi, "reply").execute(
     "reply",
@@ -2251,10 +2270,10 @@ test("controller reply submits the normal request and preserves the assignment",
     context,
   );
   assert.deepEqual(afterReply.details.agents[0].available_tools, [
-    "agent_inspect",
-    "agent_steer",
-    "agent_interrupt",
-    "agent_close",
+    "inspect_agent",
+    "steer_agent",
+    "interrupt_agent",
+    "close_agent",
   ]);
   const missingAsk = await agentTool(pi, "reply").execute(
     "reply-without-ask",
@@ -2266,7 +2285,7 @@ test("controller reply submits the normal request and preserves the assignment",
   assert.equal(missingAsk.details.error.category, "agent_busy");
   assert.match(
     missingAsk.details.error.nextAction,
-    /Use agent_reply only for an outstanding ask_owner question/,
+    /Use reply_agent only for an outstanding ask_owner question/,
   );
   resetAgentMailbox(mailbox);
   realFs.rmSync(replyFile, { force: true });
@@ -2919,7 +2938,7 @@ test("manual close omits malformed and absent agents", async () => {
   writeAgentState(mailbox, managedState(label, undefined, identity));
   await pi.events.get("session_start")![0](undefined, fakeContext());
   writeFileSync(join(mailbox, "state.json"), "{malformed", "utf8");
-  const tool = pi.tools.find((candidate) => candidate.name === "agent_close");
+  const tool = pi.tools.find((candidate) => candidate.name === "close_agent");
   assert.ok(tool);
   const malformed = await tool.execute(
     "id",
@@ -4442,7 +4461,7 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   assert.match(advisory.content, /not proof of a hang/);
   assert.doesNotMatch(
     advisory.content,
-    /Use agent_transcript when .*; use agent_inspect only/,
+    /Use read_agent_transcript when .*; use inspect_agent only/,
   );
   assert.match(advisory.content, /Bounded live diagnostic/);
   assert.match(advisory.content, /npm test/);
@@ -4459,9 +4478,9 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   );
   assert.match(
     advisory.content,
-    /Available tools: agent_inspect, agent_steer, agent_interrupt, agent_close/,
+    /Available tools: inspect_agent, steer_agent, interrupt_agent, close_agent/,
   );
-  assert.match(advisory.content, /agent_steer queues a cooperative correction/);
+  assert.match(advisory.content, /steer_agent queues a cooperative correction/);
   assert.match(
     advisory.content,
     /interrupt.*current operation.*continues the same assignment/,
@@ -4487,9 +4506,9 @@ test("delegation parent notifies only its direct stale child", async (t) => {
   assert.match(reminder.content, /steer.*cannot have taken effect/i);
   assert.match(
     reminder.content,
-    /do not repeat agent_inspect or agent_transcript/i,
+    /do not repeat inspect_agent or read_agent_transcript/i,
   );
-  assert.match(reminder.content, /otherwise use agent_interrupt/i);
+  assert.match(reminder.content, /otherwise use interrupt_agent/i);
   assert.match(
     reminder.content,
     /Continue waiting only while existing evidence still positively supports a legitimate long-running operation/,
@@ -4871,7 +4890,7 @@ test("result errors wake the direct owner with durable recovery evidence", async
       retrySafe: false,
       cleanupSafe: true,
       nextAction:
-        "Resolve the mailbox persistence failure described by result_error, then use agent_close before starting another assignment.",
+        "Resolve the mailbox persistence failure described by result_error, then use close_agent before starting another assignment.",
     },
   };
   const mailbox = agentMailboxPath(WORKSPACE, label);
@@ -4895,8 +4914,8 @@ test("result errors wake the direct owner with durable recovery evidence", async
   assert.equal(attention?.details.reason, "result_error");
   assert.equal(attention?.details.requestId, REQUEST_ID);
   assert.equal(attention?.details.nextReminderMs, 5 * 60_000);
-  assert.doesNotMatch(attention.details.nextAction, /\bagent_inspect\b/);
-  assert.match(attention.details.nextAction, /\bagent_close\b/);
+  assert.doesNotMatch(attention.details.nextAction, /\binspect_agent\b/);
+  assert.match(attention.details.nextAction, /\bclose_agent\b/);
   pi.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 });
@@ -5010,7 +5029,7 @@ test("delivered owner asks repeat without duplicating first delivery", async (t)
   assert.match(reminders[0].content, /still waiting/);
   assert.match(
     reminders[0].content,
-    /Use agent_reply to reply to this exact pending ask/,
+    /Use reply_agent to reply to this exact pending ask/,
   );
   writeAgentState(mailbox, { ...state, pendingAskId: undefined });
   removeAsk(mailbox, ask.askId);
@@ -5120,7 +5139,7 @@ test("health reconciliation publishes at most one attention per scan", async (t)
         retrySafe: false,
         cleanupSafe: true,
         nextAction:
-          "Use agent_inspect to inspect the stored result error, then use agent_close to close this agent.",
+          "Use inspect_agent to inspect the stored result error, then use close_agent to close this agent.",
       },
     };
   });
@@ -5244,8 +5263,8 @@ test("lost managed agents remain visible and repeatedly notify their owner", asy
     );
     assert.equal(agent.state, "lost");
     assert.deepEqual(agent.available_tools, [
-      "agent_transcript",
-      "agent_close",
+      "read_agent_transcript",
+      "close_agent",
     ]);
     assert.equal(
       pi.sent.filter(
@@ -5367,7 +5386,7 @@ test("lost parent health attention omits close when a descendant has an unread d
     assert.equal(attention?.details.availableActions.includes("close"), false);
     assert.match(
       String(attention?.content),
-      /agent_close is not currently available/,
+      /close_agent is not currently available/,
     );
     assert.doesNotMatch(
       String(attention?.content),
@@ -5416,7 +5435,7 @@ test("live agents with an unread durable result do not advertise close", async (
       (candidate: any) => candidate.agent === label,
     );
     assert.equal(agent.state, "settling");
-    assert.equal(agent.available_tools.includes("agent_close"), false);
+    assert.equal(agent.available_tools.includes("close_agent"), false);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
@@ -5476,7 +5495,7 @@ test("lead list hides close when a descendant has an unread durable result", asy
     const listedParent = result.details.agents.find(
       (agent: any) => agent.agent === parent.agentLabel,
     );
-    assert.equal(listedParent.available_tools.includes("agent_close"), false);
+    assert.equal(listedParent.available_tools.includes("close_agent"), false);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(parentMailbox);
@@ -5648,7 +5667,7 @@ test("lost close fails closed when a result appears during its final proof", asy
       undefined,
       fakeContext(),
     );
-    assert.deepEqual(listed.details.agents[0].available_tools, ["agent_close"]);
+    assert.deepEqual(listed.details.agents[0].available_tools, ["close_agent"]);
     const closed = await agentTool(pi, "close").execute(
       "id",
       { agent: state.agentLabel },
@@ -5704,7 +5723,7 @@ test("a lost parent retains its live child ancestry and closes child-first", asy
       (agent: any) => agent.agent === child.agentLabel,
     );
     assert.equal(parentRow?.state, "lost");
-    assert.equal(parentRow?.available_tools.includes("agent_close"), true);
+    assert.equal(parentRow?.available_tools.includes("close_agent"), true);
     assert.equal(childRow?.parent_label, parent.agentLabel);
 
     const closed = await agentTool(pi, "close").execute(

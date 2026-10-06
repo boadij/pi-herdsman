@@ -38,11 +38,11 @@ disagrees.
 | Handoffs, files, and result references                 | [Handoffs and files](../guides/handoffs.md)                         |
 | Operator recovery                                      | [Recovery](../guides/recovery.md)                                   |
 | Container deployment                                   | [Container deployment](../guides/container-deployment.md)           |
-| `agent_*` contract                                     | [Agent tools](../reference/agent.md)                                |
+| Agent ownership contract                               | [Agent tools](../reference/agent.md)                                |
 | `ask_owner` contract                                   | [`ask_owner`](../reference/ask-owner.md)                            |
-| `staff_*` and project-work contract                    | [Staff tools](../reference/staff.md)                                |
-| `supervisor_*` contract                                | [Supervisor tools](../reference/supervisor.md)                      |
-| `peer_*` contract                                      | [Peer tools](../reference/peer.md)                                  |
+| Staff and project-work contract                        | [Staff tools](../reference/staff.md)                                |
+| Supervisor and ask contract                            | [Supervisor tools](../reference/supervisor.md)                      |
+| Peer contract                                          | [Peer tools](../reference/peer.md)                                  |
 | Slash commands                                         | [Commands](../reference/commands.md)                                |
 | Agent-definition fields                                | [Agent-definition schema](../reference/agent-definition-schema.md)  |
 | Public Agent states                                    | [Agent states](../reference/agent-states.md)                        |
@@ -140,8 +140,9 @@ When implementation and prose disagree:
 2. current accepted runtime evidence can clarify integration behavior
 3. stale prose is deleted rather than preserved as another contract
 
-Particularly verify runtime implementation for `agent_*`, `ask_owner`,
-`staff_*`, `supervisor_*`, `peer_*`, `/agents`, `/manager`, `/chief`, states,
+Particularly verify runtime implementation for Agent ownership operations,
+`ask_owner`, staff and project operations, supervisor and ask operations, peer
+operations, `/agents`, `/manager`, `/chief`, states,
 definition composition, project work, recovery, and presentation behavior.
 
 Use `package.json` for supported Pi versions and package resources.

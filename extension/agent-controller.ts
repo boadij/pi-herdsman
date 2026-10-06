@@ -578,23 +578,48 @@ function guardMailboxOccupancy(
   return true;
 }
 
+function agentToolName(action: string): string {
+  switch (action) {
+    case "list":
+      return "list_agents";
+    case "delegate":
+      return "delegate_agent";
+    case "continue":
+      return "continue_agent";
+    case "steer":
+      return "steer_agent";
+    case "interrupt":
+      return "interrupt_agent";
+    case "reply":
+      return "reply_agent";
+    case "close":
+      return "close_agent";
+    case "inspect":
+      return "inspect_agent";
+    case "transcript":
+      return "read_agent_transcript";
+    default:
+      return action;
+  }
+}
+
 export const AGENT_DEFINITION_ENTRY = "pi-herdsman-agent-definition";
 export const AGENT_EXECUTION_OWNERSHIP_GUIDANCE =
-  "Each unresolved unit of work has one executor. Using agent_delegate transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.";
+  "Each unresolved unit of work has one executor. Using delegate_agent transfers that assignment's execution ownership to the Agent until it resolves. After delegation succeeds, stop executing, inspecting, or analyzing that delegated scope locally; do not assign overlapping work. Continue only concrete, necessary work clearly outside the delegated scope that you still own.";
 export const AGENT_UNRESOLVED_GUIDANCE =
-  "Use agent_list when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. " +
-  "Follow current available_tools and revalidation: agent_steer queues a cooperative correction for Pi to deliver after the current assistant turn and its tool calls reach a steering boundary; it does not preempt the current operation. agent_interrupt cancels the current operation and replaces its direction. " +
-  "Use agent_reply only to answer that Agent's exact pending ask_owner question. agent_close destructively closes an eligible Agent generation. agent_inspect provides bounded live terminal/process evidence; agent_transcript provides bounded persisted conversation/tool evidence. " +
+  "Use list_agents when fresh Agent state or ownership is materially needed for a control or recovery decision, or to refresh the definition roster; do not use it for progress polling. " +
+  "Follow current available_tools and revalidation: steer_agent queues a cooperative correction for Pi to deliver after the current assistant turn and its tool calls reach a steering boundary; it does not preempt the current operation. interrupt_agent cancels the current operation and replaces its direction. " +
+  "Use reply_agent only to answer that Agent's exact pending ask_owner question. close_agent destructively closes an eligible Agent generation. inspect_agent provides bounded live terminal/process evidence; read_agent_transcript provides bounded persisted conversation/tool evidence. " +
   "When Agent work is unresolved, handle required control, then continue only necessary work you still own or end the turn without concluding; results or attention resume the session automatically. Do not poll with status requests, sleep, or other waiting mechanisms. " +
-  "Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. A repeated reminder for the same stale episode is additional recovery evidence: unchanged qualifying activity means the Agent has not crossed an execution boundary since the previous reminder. A steer queued during that unchanged episode cannot have taken effect yet. Do not repeat diagnostic reads solely because a reminder fired. Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use agent_interrupt to stop the current operation and continue the same assignment. " +
+  "Stale health attention is diagnosis, not progress polling: use attached evidence first and, when absent or insufficient, perform at most one bounded diagnostic read before passive waiting. A repeated reminder for the same stale episode is additional recovery evidence: unchanged qualifying activity means the Agent has not crossed an execution boundary since the previous reminder. A steer queued during that unchanged episode cannot have taken effect yet. Do not repeat diagnostic reads solely because a reminder fired. Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use interrupt_agent to stop the current operation and continue the same assignment. " +
   "A proven lost Agent remains unresolved; physical disappearance is not completion. Unknown or conflicting identity remains fail-closed. Do not take over or replace unresolved delegated work until the current generation is resolved or explicitly closed. Do not invent work merely to remain active.";
 export const AGENT_DELEGATION_GUIDANCE =
   "Delegate bounded execution work when an Agent can reasonably own it and delegation is useful. " +
   "Keep work local when it is trivial, inseparable from work you must own, " +
   "otherwise unsuitable for an Agent, or delegation would add more coordination than value.";
 export const AGENT_HANDOFF_GUIDANCE =
-  "Use agent_delegate to start a fresh bounded assignment from a definition; " +
-  "use agent_continue to resume an exact historical managed-Agent Pi session " +
+  "Use delegate_agent to start a fresh bounded assignment from a definition; " +
+  "use continue_agent to resume an exact historical managed-Agent Pi session " +
   "with a new bounded assignment. Each live Agent generation exists for one " +
   "assignment; after its terminal result is delivered, Herdsman cleans up that " +
   "generation. Agent labels identify the current live generation; exact Pi " +
@@ -682,11 +707,15 @@ export function durableParentCandidates(
   );
 }
 
-function directChildStates(parent: ManagedAgentState) {
+type DirectOwner = Readonly<{ workspaceId: string; sessionId: string }>;
+
+function directChildStates(parent: ManagedAgentState | DirectOwner) {
+  const sessionId =
+    "piSessionId" in parent ? parent.piSessionId : parent.sessionId;
   return listAgentStates().filter(
     ({ state }) =>
       state.workspaceId === parent.workspaceId &&
-      state.ownerSessionId === parent.piSessionId,
+      state.ownerSessionId === sessionId,
   );
 }
 
@@ -712,9 +741,12 @@ export function hasPendingDirectChildWork(parent: ManagedAgentState): boolean {
 }
 
 export function allDirectChildrenAskBlocked(
-  parent: ManagedAgentState,
+  parent: ManagedAgentState | DirectOwner,
 ): boolean {
-  return directChildStates(parent).every(({ path, state }) => {
+  return directChildStates({
+    workspaceId: parent.workspaceId,
+    sessionId: "piSessionId" in parent ? parent.piSessionId : parent.sessionId,
+  }).every(({ path, state }) => {
     if (state.resultError) return false;
     if (!state.activeRequestId)
       return !pendingResultExists(path, state.completedRequestId);
@@ -1433,7 +1465,9 @@ function ownedAssignmentToolResult(
     !("role" in message) ||
     message.role !== "toolResult" ||
     !("toolName" in message) ||
-    (message.toolName !== "agent_delegate" &&
+    (message.toolName !== "delegate_agent" &&
+      message.toolName !== "continue_agent" &&
+      message.toolName !== "agent_delegate" &&
       message.toolName !== "agent_continue") ||
     ("isError" in message && message.isError === true) ||
     !("details" in message)
@@ -2345,7 +2379,7 @@ export function listedAgentRecord(
   return {
     ...publicAgent,
     agent: listed.label,
-    available_tools: actions.map((action) => `agent_${action}`),
+    available_tools: actions.map(agentToolName),
     ...(cleanupError ? { cleanup_error: cleanupError } : {}),
     ...(parentLabel ? { parent_label: parentLabel } : {}),
   };
@@ -3474,7 +3508,7 @@ export function createAgentController(
         "steer",
         {
           nextAction:
-            "Refresh with agent_list and use agent_steer only when available_tools includes it.",
+            "Refresh with list_agents and use steer_agent only when available_tools includes it.",
         },
       );
     if (operation === "steer" && !runtime.activeRequestId)
@@ -3486,7 +3520,7 @@ export function createAgentController(
         "interrupt",
         {
           nextAction:
-            "Use agent_interrupt only when available_tools includes it. Use agent_steer for non-preemptive assignment changes.",
+            "Use interrupt_agent only when available_tools includes it. Use steer_agent for non-preemptive assignment changes.",
         },
       );
     if (
@@ -3515,7 +3549,7 @@ export function createAgentController(
       if (!current?.activeRequestId || !askId || !ask)
         fail("agent_busy", "Agent is not waiting for an owner reply", "reply", {
           nextAction:
-            "Use agent_reply only for an outstanding ask_owner question; otherwise continue normal control or refresh with agent_list.",
+            "Use reply_agent only for an outstanding ask_owner question; otherwise continue normal control or refresh with list_agents.",
         });
       if (
         ask.askId !== askId ||
@@ -3778,7 +3812,7 @@ export function createAgentController(
         }),
       },
     ).available_tools as string[];
-    if (!actions.includes("agent_transcript")) {
+    if (!actions.includes("read_agent_transcript")) {
       if (candidate.presence.kind === "unknown")
         fail(
           "target_ambiguous",
@@ -3797,7 +3831,7 @@ export function createAgentController(
           "transcript",
           {
             nextAction:
-              "This is expected briefly after delegation. Do not poll or retry immediately; use agent_transcript later only when it is listed in available_tools and persisted transcript evidence is needed.",
+              "This is expected briefly after delegation. Do not poll or retry immediately; use read_agent_transcript later only when it is listed in available_tools and persisted transcript evidence is needed.",
           },
         );
       fail(
@@ -3806,7 +3840,7 @@ export function createAgentController(
         "transcript",
         {
           nextAction:
-            "Use agent_transcript only when it is listed in available_tools.",
+            "Use read_agent_transcript only when it is listed in available_tools.",
         },
       );
     }
@@ -6049,8 +6083,8 @@ export function createAgentController(
       { additionalProperties: false },
     );
     const agentTool = {
-      name: "agent_list",
-      label: "agent list",
+      name: "list_agents",
+      label: "list agents",
       exposure: "model-only",
       promptSnippet:
         "Delegate and coordinate work with owned asynchronous agents",
@@ -6208,8 +6242,8 @@ export function createAgentController(
     });
     pi.registerTool({
       ...agentTool,
-      name: "agent_delegate",
-      label: "agent delegate",
+      name: "delegate_agent",
+      label: "delegate agent",
       description:
         "Start one fresh bounded assignment from an Agent definition.",
       parameters: agentDelegateParameters,
@@ -6236,8 +6270,8 @@ export function createAgentController(
     });
     pi.registerTool({
       ...agentTool,
-      name: "agent_continue",
-      label: "agent continue",
+      name: "continue_agent",
+      label: "continue agent",
       description:
         "Start one bounded assignment from an exact historical managed-Agent Pi session.",
       parameters: agentContinueParameters,
@@ -6264,8 +6298,8 @@ export function createAgentController(
     });
     pi.registerTool({
       ...agentTool,
-      name: "agent_steer",
-      label: "agent steer",
+      name: "steer_agent",
+      label: "steer agent",
       description:
         "Cooperatively change a live direct Agent's current assignment.",
       parameters: agentMessageParameters,
@@ -6292,8 +6326,8 @@ export function createAgentController(
     });
     pi.registerTool({
       ...agentTool,
-      name: "agent_interrupt",
-      label: "agent interrupt",
+      name: "interrupt_agent",
+      label: "interrupt agent",
       description:
         "Cancel a live Agent's current Pi operation and continue the same assignment with replacement direction.",
       parameters: agentMessageParameters,
@@ -6320,8 +6354,8 @@ export function createAgentController(
     });
     pi.registerTool({
       ...agentTool,
-      name: "agent_reply",
-      label: "agent reply",
+      name: "reply_agent",
+      label: "reply agent",
       description:
         "Answer the exact pending ask_owner question for a direct Agent.",
       parameters: agentMessageParameters,
@@ -6348,8 +6382,8 @@ export function createAgentController(
     });
     pi.registerTool({
       ...agentTool,
-      name: "agent_close",
-      label: "agent close",
+      name: "close_agent",
+      label: "close agent",
       description:
         "Destructively close an eligible directly owned Agent generation.",
       parameters: agentTargetParameters,
@@ -6370,8 +6404,8 @@ export function createAgentController(
     });
     pi.registerTool({
       ...agentTool,
-      name: "agent_inspect",
-      label: "agent inspect",
+      name: "inspect_agent",
+      label: "inspect agent",
       description:
         "Read bounded live terminal/process evidence for an eligible Agent.",
       parameters: agentTargetParameters,
@@ -6392,8 +6426,8 @@ export function createAgentController(
     });
     pi.registerTool({
       ...agentTool,
-      name: "agent_transcript",
-      label: "agent transcript",
+      name: "read_agent_transcript",
+      label: "read agent transcript",
       description:
         "Read bounded persisted Pi conversation/tool evidence for an eligible Agent.",
       parameters: agentTargetParameters,
@@ -6558,7 +6592,30 @@ export function createAgentController(
           }),
         },
       ).available_tools as string[]) ?? []
-    ).map((tool) => tool.slice("agent_".length));
+    ).flatMap((tool) => {
+      switch (tool) {
+        case "list_agents":
+          return ["list"];
+        case "delegate_agent":
+          return ["delegate"];
+        case "continue_agent":
+          return ["continue"];
+        case "steer_agent":
+          return ["steer"];
+        case "interrupt_agent":
+          return ["interrupt"];
+        case "reply_agent":
+          return ["reply"];
+        case "close_agent":
+          return ["close"];
+        case "inspect_agent":
+          return ["inspect"];
+        case "read_agent_transcript":
+          return ["transcript"];
+        default:
+          return [];
+      }
+    });
   const publishAgentLoss = (
     ctx: ExtensionContext,
     state: ManagedAgentState,
@@ -6615,16 +6672,16 @@ export function createAgentController(
           content: [
             `Agent ${current.agentLabel} is still lost and its assignment remains unresolved.`,
             ...(latestRequestId ? [`Request: ${latestRequestId}`] : []),
-            `Available tools: ${availableActions.map((action) => `agent_${action}`).join(", ") || "none"}`,
+            `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
             `Next reminder if unresolved: ~${formatHealthAttentionDuration(nextReminderMs)}`,
             "",
-            "Use agent_transcript only when persisted work materially affects the recovery decision.",
+            "Use read_agent_transcript only when persisted work materially affects the recovery decision.",
             ...(closeAvailable
               ? [
-                  "Use agent_close to close this lost generation before replacing it or continuing its saved session.",
+                  "Use close_agent to close this lost generation before replacing it or continuing its saved session.",
                 ]
               : [
-                  "agent_close is not currently available; resolve the condition blocking its close preflight before replacing or continuing it.",
+                  "close_agent is not currently available; resolve the condition blocking its close preflight before replacing or continuing it.",
                 ]),
             "Physical disappearance is not task completion.",
           ].join("\n"),
@@ -6710,7 +6767,7 @@ export function createAgentController(
                 `Agent ${current.agentLabel} could not persist its terminal result.`,
                 `Request: ${error.requestId}`,
                 `Failure: ${error.message}`,
-                `Available tools: ${availableActions.map((action) => `agent_${action}`).join(", ") || "none"}`,
+                `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
                 `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
                 "",
                 error.nextAction,
@@ -6770,7 +6827,7 @@ export function createAgentController(
               customType: "pi-herdsman-agent-attention",
               content: [
                 `Agent ${current.agentLabel} has unresolved physical identity.`,
-                `Available tools: ${availableActions.map((action) => `agent_${action}`).join(", ") || "none"}`,
+                `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
                 "",
                 "No safe direct control action is currently available.",
                 "Do not infer loss, guess a pane or process, or target ambiguous execution.",
@@ -6842,10 +6899,10 @@ export function createAgentController(
                   "",
                   currentAsk.question,
                   "",
-                  `Available tools: ${availableActions.map((action) => `agent_${action}`).join(", ") || "none"}`,
+                  `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
                   `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
                   "",
-                  "Use agent_reply to reply to this exact pending ask if the required decision is available.",
+                  "Use reply_agent to reply to this exact pending ask if the required decision is available.",
                   "Do not delegate around or duplicate the blocked assignment.",
                 ].join("\n"),
                 display: true,
@@ -6891,13 +6948,13 @@ export function createAgentController(
               content: [
                 `Agent ${current.agentLabel} is blocked in its live runtime, but no Herdsman ask_owner question exists.`,
                 `Request: ${current.activeRequestId}`,
-                `Available tools: ${availableActions.map((action) => `agent_${action}`).join(", ") || "none"}`,
+                `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
                 `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
                 "",
-                "Use agent_transcript for persisted conversation/tool evidence.",
-                "Use agent_inspect only when the live blocking state matters.",
+                "Use read_agent_transcript for persisted conversation/tool evidence.",
+                "Use inspect_agent only when the live blocking state matters.",
                 "Do not invent an owner reply or send guessed terminal input.",
-                "Use agent_close only when abandoning the assignment is the intended recovery.",
+                "Use close_agent only when abandoning the assignment is the intended recovery.",
               ].join("\n"),
               display: true,
               details: {
@@ -6957,7 +7014,7 @@ export function createAgentController(
                 `Agent ${current.agentLabel} still has an unacknowledged ${currentRequest.kind} request.`,
                 `Request: ${currentRequest.requestId}`,
                 `Pending for: ${formatHealthAttentionDuration(now - currentRequest.createdAt)}`,
-                `Available tools: ${availableActions.map((action) => `agent_${action}`).join(", ") || "none"}`,
+                `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
                 `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
                 "",
                 "The durable request is still retained.",
@@ -7095,8 +7152,8 @@ export function createAgentController(
               : []),
             ...(outputTruncated ? ["Earlier terminal output omitted."] : []),
             "",
-            "Use this evidence first. Do not repeat agent_inspect merely because this stale episode remains unresolved.",
-            "If the supplied live evidence is insufficient and persisted conversation/tool history materially affects the decision, use agent_transcript once.",
+            "Use this evidence first. Do not repeat inspect_agent merely because this stale episode remains unresolved.",
+            "If the supplied live evidence is insufficient and persisted conversation/tool history materially affects the decision, use read_agent_transcript once.",
           ]
         : firstAttention
           ? [
@@ -7105,7 +7162,7 @@ export function createAgentController(
               availableActions.includes("transcript")
                 ? [
                     "Automatic live diagnostic evidence was unavailable.",
-                    "Before returning to passive waiting, perform at most one currently available diagnostic read: use agent_transcript for persisted conversation/tool history or agent_inspect for live terminal/process evidence.",
+                    "Before returning to passive waiting, perform at most one currently available diagnostic read: use read_agent_transcript for persisted conversation/tool history or inspect_agent for live terminal/process evidence.",
                   ]
                 : [
                     "No safe diagnostic read is currently available. Do not guess or intervene solely because work is stale.",
@@ -7115,9 +7172,9 @@ export function createAgentController(
               "",
               "This is the same stale episode. Additional elapsed time without qualifying execution progress is new recovery evidence.",
               "No qualifying execution boundary has occurred since the previous reminder.",
-              "If agent_steer was queued during this episode, it cannot have taken effect yet because Pi delivers steering only after the current assistant turn and its tool calls reach a boundary.",
-              "Do not repeat agent_inspect or agent_transcript solely because this reminder fired.",
-              "Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use agent_interrupt to stop the current operation and continue the same assignment.",
+              "If steer_agent was queued during this episode, it cannot have taken effect yet because Pi delivers steering only after the current assistant turn and its tool calls reach a boundary.",
+              "Do not repeat inspect_agent or read_agent_transcript solely because this reminder fired.",
+              "Continue waiting only while existing evidence still positively supports a legitimate long-running operation; otherwise use interrupt_agent to stop the current operation and continue the same assignment.",
             ];
       try {
         if (signal.aborted || generation !== healthGeneration || !ctx.isIdle())
@@ -7128,15 +7185,15 @@ export function createAgentController(
             content: [
               `Agent ${current.agentLabel} has had no qualifying execution progress for ${formatHealthAttentionDuration(inactiveMs)}.`,
               `Request: ${current.activeRequestId}`,
-              `Available tools: ${availableActions.map((action) => `agent_${action}`).join(", ") || "none"}`,
+              `Available tools: ${availableActions.map(agentToolName).join(", ") || "none"}`,
               `Next reminder if unresolved: ~${formatHealthAttentionDuration(intervalMs)}`,
               ...diagnosticLines,
               "",
               "This is advisory inactivity, not proof of a hang.",
               "Streaming tool output does not count as qualifying progress.",
-              "agent_steer queues a cooperative correction; it does not preempt the current operation.",
-              "Use agent_interrupt only when the current operation itself must be abandoned; agent_interrupt cancels that operation, supersedes earlier steering Pi has not yet delivered, and continues the same assignment.",
-              "Use agent_close only to abandon the assignment or as destructive fallback.",
+              "steer_agent queues a cooperative correction; it does not preempt the current operation.",
+              "Use interrupt_agent only when the current operation itself must be abandoned; interrupt_agent cancels that operation, supersedes earlier steering Pi has not yet delivered, and continues the same assignment.",
+              "Use close_agent only to abandon the assignment or as destructive fallback.",
             ].join("\n"),
             display: true,
             details: {

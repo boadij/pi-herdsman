@@ -146,6 +146,7 @@ const {
   spawnPlacementMenuOptions,
   spawnPlacementFromMenuSelection,
 } = await import("./core.ts");
+
 const {
   isCanonicalResultRef,
   isResultBinding,

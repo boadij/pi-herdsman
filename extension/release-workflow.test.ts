@@ -68,10 +68,7 @@ test("PR preview publication isolates publish credentials from PR code", () => {
     /prepare:[\s\S]*outputs:\s*\n\s+sha:\s*\$\{\{\s*steps\.target\.outputs\.sha\s*\}\}\s*\n\s*steps:/,
   );
 
-  assert.match(
-    previewWorkflow,
-    /npm run release:check -- --tag "pr-\$PR"/,
-  );
+  assert.match(previewWorkflow, /npm run release:check -- --tag "pr-\$PR"/);
   assert.match(previewWorkflow, /npm pack[\s\S]*--ignore-scripts/);
 
   const publishIndex = previewWorkflow.indexOf("\n  publish:\n");

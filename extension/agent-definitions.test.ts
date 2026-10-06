@@ -902,18 +902,18 @@ test("preserves role-required tools through native allowlists and exclusions", (
     path: "/managed-role.md",
     frontmatter: {
       tools: ["read"],
-      excludeTools: ["supervisor_message", "write"],
+      excludeTools: ["message_supervisor", "write"],
     },
     body: "",
   };
   const args = agentLaunchArgs(definition, {
-    requiredTools: ["supervisor_message", "peer_list"],
+    requiredTools: ["message_supervisor", "list_peers"],
   });
   const tools = args.indexOf("--tools");
   assert.deepEqual(args[tools + 1].split(","), [
     "read",
-    "supervisor_message",
-    "peer_list",
+    "message_supervisor",
+    "list_peers",
     "mcp__",
   ]);
   const excluded = args.indexOf("--exclude-tools");
@@ -924,11 +924,11 @@ test("preserves role-required tools through native allowlists and exclusions", (
       ...definition,
       frontmatter: { noTools: true, tools: [] },
     },
-    { requiredTools: ["supervisor_message"] },
+    { requiredTools: ["message_supervisor"] },
   );
   assert.equal(closed.includes("--no-tools"), true);
   const required = closed.indexOf("--tools");
-  assert.equal(closed[required + 1], "supervisor_message,mcp__");
+  assert.equal(closed[required + 1], "message_supervisor,mcp__");
 });
 
 test("composes all definition layers with provenance and whole-array replacement", () => {
@@ -1710,7 +1710,7 @@ test("delegation preserves legacy tool-policy authorization", () => {
       frontmatter: {
         agents: ["child"],
         tools: ["read"],
-        excludeTools: ["agent_delegate"],
+        excludeTools: ["delegate_agent"],
       },
       body: "",
     }),
@@ -1809,7 +1809,9 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
     [...roleTools, "mcp__"].join(","),
   ]);
   assert.equal(
-    toolArgs({ agents: ["child"], tools: ["agent"] })[1].includes("agent,"),
+    /(?:^|,)agent(?:,|$)/u.test(
+      toolArgs({ agents: ["child"], tools: ["agent"] })[1],
+    ),
     false,
   );
 });
@@ -1881,14 +1883,14 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
       frontmatter: {
         agents: ["scout"],
         tools: ["read"],
-        excludeTools: ["agent_delegate"],
+        excludeTools: ["delegate_agent"],
       },
       body: "",
     },
     "leaf",
   );
   assert.deepEqual(denied.frontmatter.tools, ["read"]);
-  assert.deepEqual(denied.frontmatter.excludeTools, ["agent_delegate"]);
+  assert.deepEqual(denied.frontmatter.excludeTools, ["delegate_agent"]);
   const delegationOnlyLeaf = projectAgentDefinition(
     {
       name: "parent",
@@ -2189,17 +2191,17 @@ test("wildcard exclusions reject mandatory overlap and escape regex syntax", () 
       frontmatter: {
         agents: ["child"],
         tools: ["read"],
-        excludeTools: ["agent_*"],
+        excludeTools: ["*_agents"],
       },
       options: { managedAgent: true },
-      pattern: "agent_*",
-      required: "agent_list",
+      pattern: "*_agents",
+      required: "list_agents",
     },
     {
-      frontmatter: { tools: ["read"], excludeTools: ["peer*"] },
-      options: { requiredTools: ["peer_list"] },
-      pattern: "peer*",
-      required: "peer_list",
+      frontmatter: { tools: ["read"], excludeTools: ["list*"] },
+      options: { requiredTools: ["list_peers"] },
+      pattern: "list*",
+      required: "list_peers",
     },
     {
       frontmatter: { excludeTools: ["*"] },
