@@ -156,9 +156,12 @@ definition.
 Skill and extension paths are passed to Pi unchanged. herdr does not resolve
 them relative to the definition file.
 
-Tool names are governed by Pi's native name-based policy, regardless of
+Tool names and `*` patterns are governed by Pi's native name-based policy on
+the Pi 1.0.4 baseline, regardless of
 whether a tool is built in, registered by an extension, or supplied as a
-custom/SDK tool. When both fields apply, an exclusion wins over an allowlist.
+custom/SDK tool or supplied through MCP. Both `tools` and `excludeTools`
+accept these selectors; only `*` is special and matches any characters.
+When both fields apply, an exclusion wins over an allowlist.
 Names do not need to exist when a definition is discovered: unknown names are
 accepted and can match a tool registered later. Pi Herdsman does not provide
 source-qualified permissions, such as an extension path plus tool name.
@@ -172,7 +175,14 @@ ordinary tool names. Managed agents and managed project Leads always retain thei
 Herdsman coordination tools, which are protected from exclusions. When `tools`
 is omitted, Pi Herdsman does not emit `--tools`, preserving Pi's
 configured/default tool selection. When `tools` is explicitly set, the
-selected allowlist is augmented with the runtime role's mandatory tools.
+selected allowlist is closed across Pi callable tool sources and augmented
+with the runtime role's mandatory tools. Unselected tools do not become callable
+merely because additional MCP servers, extensions, or custom tools are configured.
+An explicit empty policy disables ordinary tools. `noBuiltinTools: true` alone
+does not close the policy; other normal Pi tool sources remain available.
+Exact exclusions naming mandatory tools are ignored. Wildcard exclusions
+matching any mandatory Herdsman tool are invalid and reject launch: Pi exclusions
+cannot express everything matching a pattern except required infrastructure.
 Unmanaged Pi launches do not receive these managed-role exceptions.
 
 Loading extension code and exposing its tools are separate concerns. An
