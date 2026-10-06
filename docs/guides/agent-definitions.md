@@ -82,9 +82,12 @@ permission:
 ```
 
 Pi Herdsman accepts and preserves `permission:` but does not evaluate its
-contents or make authorization decisions from it. Managed agents also publish
-the conventional active-agent identity and subagent lineage metadata used by
-compatible extensions. Permission policy is effective only when the
+contents or make authorization decisions from it. Managed agents publish the
+conventional `<active_agent name="<definition>"/>` identity signal and
+subagent lineage metadata used by compatible extensions. Herdsman separately
+projects current semantic identity and direct-owner context in its
+`pi_herdsman_agent` prompt section; this is not an authorization signal.
+Permission policy is effective only when the
 compatible permission extension is loaded in that Pi session. The permission
 extension is optional; Pi Herdsman does not install or depend on it.
 
@@ -266,6 +269,11 @@ or the model can use:
 ```
 
 Both resolve the same effective roster.
+
+For model-assisted definition management, ask Pi directly or explicitly invoke
+`/skill:agent-definitions`. The bundled skill uses the same
+project/global Markdown definitions and existing Herdsman validation rather than
+a separate configuration interface.
 
 The human `Definitions` menu is a flat list of actionable definitions, with
 reserved `managed-lead` first. Each row identifies its contributing source or

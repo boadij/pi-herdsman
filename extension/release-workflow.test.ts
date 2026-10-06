@@ -68,7 +68,10 @@ test("PR preview publication isolates publish credentials from PR code", () => {
     /prepare:[\s\S]*outputs:\s*\n\s+sha:\s*\$\{\{\s*steps\.target\.outputs\.sha\s*\}\}\s*\n\s*steps:/,
   );
 
-  assert.match(previewWorkflow, /npm run release:check/);
+  assert.match(
+    previewWorkflow,
+    /npm run release:check -- --tag "pr-\$PR"/,
+  );
   assert.match(previewWorkflow, /npm pack[\s\S]*--ignore-scripts/);
 
   const publishIndex = previewWorkflow.indexOf("\n  publish:\n");
@@ -81,7 +84,9 @@ test("PR preview publication isolates publish credentials from PR code", () => {
   assert.match(publish, /id-token:\s*write/);
   assert.match(publish, /environment:\s*npm-preview/);
 
+  assert.match(publish, /npm install -g npm@11\.21\.0/);
   assert.match(publish, /actions\/download-artifact@v8/);
+  assert.match(publish, /TARBALLS=\(\.\/package\/\*\.tgz\)/);
   assert.match(publish, /VERSION="0\.0\.0-pr\.\$PR\.g\$SHA"/);
   assert.match(publish, /TAG="pr-\$PR"/);
   assert.doesNotMatch(publish, /needs\.prepare\.outputs\.(?:version|tag)/);

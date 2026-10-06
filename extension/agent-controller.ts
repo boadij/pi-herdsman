@@ -5554,10 +5554,21 @@ export function createAgentController(
         } finally {
           resetRelease();
         }
+        let ownerDisplay = "lead";
+        if (scope.kind === "managed-agent") {
+          const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION;
+          const parentLabel = process.env.PI_HERDSMAN_LABEL;
+          if (!definition || !parentLabel)
+            throw new Error(
+              "Managed-Agent launch is missing its definition or label",
+            );
+          ownerDisplay = displayIdentity(definition, parentLabel);
+        }
         const env = [
           `PI_HERDSMAN_MAILBOX=${mailbox}`,
           `PI_HERDSMAN_RUN_ID=${runId}`,
           `PI_HERDSMAN_OWNER_SESSION_ID=${owner}`,
+          `PI_HERDSMAN_OWNER_DISPLAY=${ownerDisplay}`,
           `PI_SUBAGENT_PARENT_SESSION=${forwardingSession}`,
           `PI_HERDSMAN_LABEL=${label}`,
           `PI_HERDSMAN_WORKSPACE_ID=${workspaceId}`,

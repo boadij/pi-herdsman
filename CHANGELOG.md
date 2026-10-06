@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.21.2](https://github.com/boadij/pi-herdsman/compare/v0.21.1...v0.21.2) (2026-10-06)
+
+
+### Refactoring
+
+* **context:** persist retirement guidance ([#280](https://github.com/boadij/pi-herdsman/issues/280)) ([e538a4b](https://github.com/boadij/pi-herdsman/commit/e538a4b404c342f7d1ce4468452e3922da7c28be))
+
+## [0.21.1](https://github.com/boadij/pi-herdsman/compare/v0.21.0...v0.21.1) (2026-10-06)
+
+
+### Fixes
+
+* **agent:** project direct ownership into managed Agent context ([#287](https://github.com/boadij/pi-herdsman/issues/287)) ([3fa80a6](https://github.com/boadij/pi-herdsman/commit/3fa80a6c74070efec418d22e0a0551070afde0b4))
+* **runtime:** adopt Pi 1.0.4 with closed tool policy ([#286](https://github.com/boadij/pi-herdsman/issues/286)) ([e92f58d](https://github.com/boadij/pi-herdsman/commit/e92f58dc418de5d2812d1a2de095b9e5525deab3))
+* **ui:** restore Lead ancestry in delegating Agent breadcrumbs ([#283](https://github.com/boadij/pi-herdsman/issues/283)) ([ce22333](https://github.com/boadij/pi-herdsman/commit/ce223336408ae11109e4a1315b98df2d0177e460))
+
+## [0.21.0](https://github.com/boadij/pi-herdsman/compare/v0.20.1...v0.21.0) (2026-10-05)
+
+
+### Features
+
+* **config:** add Agent-definition management skill ([#271](https://github.com/boadij/pi-herdsman/issues/271)) ([47e8714](https://github.com/boadij/pi-herdsman/commit/47e87148936489157d12d377c92b8a23d7db2fb0))
+
+
+### Fixes
+
+* **manager:** consume delivered project messages ([#269](https://github.com/boadij/pi-herdsman/issues/269)) ([fd71d4d](https://github.com/boadij/pi-herdsman/commit/fd71d4d4f62be7610cd3ec9835e9699382a4dcec))
+* **presentation:** preserve staff project context ([#268](https://github.com/boadij/pi-herdsman/issues/268)) ([e154b97](https://github.com/boadij/pi-herdsman/commit/e154b976fa4ac722772ed57459d44fff4c71b518))
+* **release:** publish preview tarball locally ([#276](https://github.com/boadij/pi-herdsman/issues/276)) ([b680574](https://github.com/boadij/pi-herdsman/commit/b6805746289c83c4ef2af8d0be901ba143a18e60))
+* **release:** tag preview dry-run publish ([#275](https://github.com/boadij/pi-herdsman/issues/275)) ([dea6768](https://github.com/boadij/pi-herdsman/commit/dea6768582384ef7978edda93c06f6a9ba7259ad))
+* **supervision:** steer active direct reports ([#272](https://github.com/boadij/pi-herdsman/issues/272)) ([ee69e58](https://github.com/boadij/pi-herdsman/commit/ee69e582759f2c43a33f4589877cdaa8a38123e0))
+
+
+### Documentation
+
+* make positive steering structural ([#263](https://github.com/boadij/pi-herdsman/issues/263)) ([7595a37](https://github.com/boadij/pi-herdsman/commit/7595a37602884f73701ef2ddb218dfb0287228bb))
+
 ## [0.20.1](https://github.com/boadij/pi-herdsman/compare/v0.20.0...v0.20.1) (2026-10-04)
 
 

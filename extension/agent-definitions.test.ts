@@ -456,6 +456,14 @@ test("selects global and project context independently in native order", () => {
   }
 });
 
+test("managed launches retain the generic active-agent interoperability marker", () => {
+  const args = agentLaunchArgs(
+    { name: "reviewer", path: "/agent.md", frontmatter: {}, body: "" },
+    { managedAgent: true },
+  );
+  assert.ok(args.includes('<active_agent name="reviewer"/>'));
+});
+
 test("discovers the five portable bundled definitions without a user agents directory", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agents-"));
   assert.deepEqual(
@@ -707,7 +715,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       });
       const toolsIndex = args.indexOf("--tools");
       assert.notEqual(toolsIndex, -1);
-      assert.deepEqual(args[toolsIndex + 1].split(","), tools);
+      assert.deepEqual(args[toolsIndex + 1].split(","), [...tools, "mcp__"]);
       const launchedTools = args.flatMap((arg) => arg.split(","));
       for (const tool of forbidden)
         assert.equal(launchedTools.includes(tool), false);
@@ -731,6 +739,7 @@ test("enforces read-only managed launch policies and reviewer leaf projection", 
       "find",
       "grep",
       "ask_owner",
+      "mcp__",
     ]);
     assert.equal(
       args.flatMap((arg) => arg.split(",")).includes("agent"),
@@ -905,9 +914,10 @@ test("preserves role-required tools through native allowlists and exclusions", (
     "read",
     "supervisor_message",
     "peer_list",
+    "mcp__",
   ]);
   const excluded = args.indexOf("--exclude-tools");
-  assert.equal(args[excluded + 1], "write");
+  assert.equal(args[excluded + 1], "write,mcp__");
 
   const closed = agentLaunchArgs(
     {
@@ -918,7 +928,7 @@ test("preserves role-required tools through native allowlists and exclusions", (
   );
   assert.equal(closed.includes("--no-tools"), true);
   const required = closed.indexOf("--tools");
-  assert.equal(closed[required + 1], "supervisor_message");
+  assert.equal(closed[required + 1], "supervisor_message,mcp__");
 });
 
 test("composes all definition layers with provenance and whole-array replacement", () => {
@@ -1244,9 +1254,9 @@ test("builds exact Pi capability launch arguments", () => {
     promptPath,
     "--no-tools",
     "--tools",
-    "read, grep ",
+    "read,grep,mcp__",
     "--exclude-tools",
-    "bash,write",
+    "bash,write,mcp__",
     "--skill",
     "./skills/local.md",
     "--skill",
@@ -1401,6 +1411,7 @@ test("bundled generalist definition retains its declared tool policy", () => {
       "write",
       ...AGENT_COORDINATION_TOOLS,
       "ask_owner",
+      "mcp__",
     ].join(","),
   );
 });
@@ -1416,13 +1427,28 @@ test("managed launch policy always includes ask_owner", () => {
       },
     );
   const cases = [
-    [{ tools: ["read", " ask_owner", "read"] }, ["--tools", "read,ask_owner"]],
-    [{ noTools: true }, ["--no-tools", "--tools", "ask_owner"]],
+    [
+      { tools: ["read", " ask_owner", "read"] },
+      ["--tools", "read,ask_owner,mcp__", "--exclude-tools", "mcp__"],
+    ],
+    [
+      { noTools: true },
+      ["--no-tools", "--tools", "ask_owner,mcp__", "--exclude-tools", "mcp__"],
+    ],
     [
       { noTools: true, tools: ["read"] },
-      ["--no-tools", "--tools", "read,ask_owner"],
+      [
+        "--no-tools",
+        "--tools",
+        "read,ask_owner,mcp__",
+        "--exclude-tools",
+        "mcp__",
+      ],
     ],
-    [{ tools: [] }, ["--no-tools", "--tools", "ask_owner"]],
+    [
+      { tools: [] },
+      ["--no-tools", "--tools", "ask_owner,mcp__", "--exclude-tools", "mcp__"],
+    ],
     [
       { noBuiltinTools: true, excludeTools: ["write", "ask_owner"] },
       ["--no-builtin-tools", "--exclude-tools", "write"],
@@ -1732,11 +1758,11 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   };
   assert.deepEqual(toolArgs({ agents: ["child"], tools: ["read"] }), [
     "--tools",
-    ["read", ...roleTools].join(","),
+    ["read", ...roleTools, "mcp__"].join(","),
   ]);
   assert.deepEqual(
     toolArgs({ agents: ["child"], noTools: true, tools: ["read"] }),
-    ["--tools", ["read", ...leafTools].join(",")],
+    ["--tools", ["read", ...leafTools, "mcp__"].join(",")],
   );
   assert.equal(
     make({ agents: ["child"], noTools: true, tools: ["read"] }).includes(
@@ -1752,16 +1778,19 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   });
   const toolsIndex = exclusions.indexOf("--tools");
   assert.notEqual(toolsIndex, -1);
-  assert.equal(exclusions[toolsIndex + 1], ["read", ...roleTools].join(","));
+  assert.equal(
+    exclusions[toolsIndex + 1],
+    ["read", ...roleTools, "mcp__"].join(","),
+  );
   const exclusionsIndex = exclusions.indexOf("--exclude-tools");
   assert.notEqual(exclusionsIndex, -1);
   assert.deepEqual(exclusions.slice(exclusionsIndex, exclusionsIndex + 2), [
     "--exclude-tools",
-    "read",
+    "read,mcp__",
   ]);
   assert.deepEqual(toolArgs({ agents: ["child"], noTools: true }), [
     "--tools",
-    leafTools.join(","),
+    [...leafTools, "mcp__"].join(","),
   ]);
   assert.equal(
     make({ agents: ["child"], noTools: true }).includes("--no-tools"),
@@ -1769,7 +1798,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   );
   assert.deepEqual(toolArgs({ agents: ["child"], tools: [] }), [
     "--tools",
-    leafTools.join(","),
+    [...leafTools, "mcp__"].join(","),
   ]);
   assert.equal(
     make({ agents: ["child"], tools: [] }).includes("--no-tools"),
@@ -1777,7 +1806,7 @@ test("keeps ordinary tool metadata separate from managed role tools", () => {
   );
   assert.deepEqual(toolArgs({ agents: ["child"], tools: ["agent"] }), [
     "--tools",
-    roleTools.join(","),
+    [...roleTools, "mcp__"].join(","),
   ]);
   assert.equal(
     toolArgs({ agents: ["child"], tools: ["agent"] })[1].includes("agent,"),
@@ -1812,7 +1841,7 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     agentLaunchArgs(leaf, { managedAgent: true }).filter(
       (value) => value === "--tools" || value.includes("ask_owner"),
     ),
-    ["--tools", "read,bash,ask_owner"],
+    ["--tools", "read,bash,ask_owner,mcp__"],
   );
   const empty = projectAgentDefinition(
     {
@@ -1839,9 +1868,11 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
   assert.deepEqual(
     agentLaunchArgs(legacyToolLeaf, { managedAgent: true }).filter(
       (value) =>
-        value === "--no-tools" || value === "--tools" || value === "ask_owner",
+        value === "--no-tools" ||
+        value === "--tools" ||
+        value === "ask_owner,mcp__",
     ),
-    ["--no-tools", "--tools", "ask_owner"],
+    ["--no-tools", "--tools", "ask_owner,mcp__"],
   );
   const denied = projectAgentDefinition(
     {
@@ -1871,12 +1902,14 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
     agentLaunchArgs(delegationOnlyLeaf, { managedAgent: true }),
     [
       "--no-context-files",
-      "--append-system-prompt",
-      '<active_agent name="parent"/>',
       "--no-tools",
       "--tools",
-      "ask_owner",
+      "ask_owner,mcp__",
+      "--exclude-tools",
+      "mcp__",
       "--no-skills",
+      "--append-system-prompt",
+      '<active_agent name="parent"/>',
     ],
   );
   const omittedToolsLeaf = projectAgentDefinition(
@@ -2073,5 +2106,141 @@ test("the inherited provider is Pi's resolved provider, not the token's first se
       isForeignProvider: (id) => id === "acme",
     }),
     { kind: "use", model: "solo-chat", extensionDiscovery: true },
+  );
+});
+
+test("closed policies preserve native selectors and protect mandatory tools", () => {
+  const cases: [
+    Frontmatter,
+    string | undefined,
+    string | undefined,
+    boolean,
+  ][] = [
+    [{}, undefined, undefined, false],
+    [{ noBuiltinTools: true }, undefined, undefined, false],
+    [{ tools: ["read"] }, "read,ask_owner,mcp__", "mcp__", false],
+    [{ tools: ["*search"] }, "*search,ask_owner,mcp__", "mcp__", false],
+    [
+      { tools: ["read", "mcp__github__*"] },
+      "read,mcp__github__*,ask_owner",
+      undefined,
+      false,
+    ],
+    [
+      { tools: ["list_mcp_resources"] },
+      "list_mcp_resources,ask_owner,mcp__",
+      "mcp__",
+      false,
+    ],
+    [{ tools: [] }, "ask_owner,mcp__", "mcp__", true],
+    [{ tools: [","] }, "ask_owner,mcp__", "mcp__", true],
+    [{ noTools: true }, "ask_owner,mcp__", "mcp__", true],
+    [{ noTools: true, tools: ["read"] }, "read,ask_owner,mcp__", "mcp__", true],
+    [
+      { tools: ["read"], excludeTools: ["ask_owner"] },
+      "read,ask_owner,mcp__",
+      "mcp__",
+      false,
+    ],
+    [
+      { tools: ["read"], excludeTools: ["write*", "mcp__", "write*"] },
+      "read,ask_owner,mcp__",
+      "write*,mcp__",
+      false,
+    ],
+  ];
+  for (const [frontmatter, tools, excluded, noTools] of cases) {
+    const args = agentLaunchArgs(
+      { name: "policy", path: "/policy.md", body: "", frontmatter },
+      { managedAgent: true },
+    );
+    const value = (flag: string) => {
+      const index = args.indexOf(flag);
+      assert.equal(
+        args.filter((arg) => arg === flag).length,
+        index < 0 ? 0 : 1,
+      );
+      return index < 0 ? undefined : args[index + 1];
+    };
+    assert.equal(value("--tools"), tools);
+    assert.equal(value("--exclude-tools"), excluded);
+    assert.equal(args.includes("--no-tools"), noTools);
+    assert.equal(args.includes("--no-mcp"), false);
+  }
+  for (const tools of [[], [","]]) {
+    const args = agentLaunchArgs(
+      { name: "policy", path: "/policy.md", body: "", frontmatter: { tools } },
+      {},
+    );
+    assert.equal(args.includes("--no-tools"), true);
+    assert.equal(args.includes("--tools"), false);
+  }
+});
+
+test("wildcard exclusions reject mandatory overlap and escape regex syntax", () => {
+  const cases = [
+    {
+      frontmatter: { excludeTools: ["ask_*"] },
+      options: { managedAgent: true },
+      pattern: "ask_*",
+      required: "ask_owner",
+    },
+    {
+      frontmatter: {
+        agents: ["child"],
+        tools: ["read"],
+        excludeTools: ["agent_*"],
+      },
+      options: { managedAgent: true },
+      pattern: "agent_*",
+      required: "agent_list",
+    },
+    {
+      frontmatter: { tools: ["read"], excludeTools: ["peer*"] },
+      options: { requiredTools: ["peer_list"] },
+      pattern: "peer*",
+      required: "peer_list",
+    },
+    {
+      frontmatter: { excludeTools: ["*"] },
+      options: { managedAgent: true },
+      pattern: "*",
+      required: "ask_owner",
+    },
+    {
+      frontmatter: { excludeTools: ["tool.[x]+?*"] },
+      options: { requiredTools: ["tool.[x]+?name"] },
+      pattern: "tool.[x]+?*",
+      required: "tool.[x]+?name",
+    },
+  ];
+  for (const entry of cases)
+    assert.throws(
+      () =>
+        agentLaunchArgs(
+          {
+            name: "policy",
+            path: "/policy.md",
+            body: "",
+            frontmatter: entry.frontmatter,
+          },
+          entry.options,
+        ),
+      {
+        message: `agent policy excludeTools pattern ${JSON.stringify(entry.pattern)} matches required tool ${JSON.stringify(entry.required)}; required tools cannot be excluded by patterns`,
+      },
+    );
+  const args = agentLaunchArgs(
+    {
+      name: "policy",
+      path: "/policy.md",
+      body: "",
+      frontmatter: { excludeTools: ["ask.?*", "agent", "xask_*"] },
+    },
+    { managedAgent: true },
+  );
+  assert.equal(
+    args[args.indexOf("--exclude-tools") + 1],
+    "ask.?*,agent,xask_*",
   );
 });

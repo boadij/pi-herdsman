@@ -4,8 +4,8 @@
 
 `supervisor_message` is the coordination operation for ordinary Leads and
 Managers. An assigned project Lead saves messages with its project assignment
-for the current or a replacement Manager, even when no Manager is active; it
-does not route those messages to Chief. An unassigned Lead routes to its active
+while pending when no Manager can receive them; it does not route those messages
+to Chief. An unassigned Lead routes to its active
 Manager when one exists, otherwise to Chief. A Manager routes to Chief. Managed
 Agents use `ask_owner` instead.
 
@@ -28,24 +28,24 @@ Use it only when material coordination needs a supervisor's attention,
 decision, or action, such as a blocker, warning, scope change, risk, or
 important evidence. For an assigned project, Herdsman automatically records
 the Lead's normal response to each project-assignment delivery as a project
-message for the current or a replacement Manager. If the Lead successfully
+message for the Manager role. If the Lead successfully
 delegates or continues managed Agent work, the herd run owns that handoff until
 it settles, and the settled response should summarize outcome, validation, and
 important unresolved points. An unsuccessful delegation leaves the local
 assignment-response path available. Later conversational replies, including
-routine acknowledgments, remain local and are not automatically promoted. For a Lead
-with a project assignment, messages are retained with that assignment and can
-be delivered to a current Manager even if no Manager is active when sent. A
-replacement Manager receives retained project messages; the same Manager
-session does not receive a message again once it appears in its Pi history.
-Both handoffs and
-messages are nonterminal; the project remains open until successful Herdr
-worktree removal retires its assignment.
+routine acknowledgments, remain local and are not automatically promoted. Assigned Lead messages are persisted while pending when no Manager can receive
+them. The next verified Manager receives pending messages. Once exact delivery
+appears in that Manager's Pi session history, Herdsman consumes the pending
+record; later Managers do not automatically replay it. Pending backlog from
+before the current Manager generation is inserted without starting one
+autonomous turn per message; new messages during the active Manager generation
+continue to wake the Manager. Already-delivered messages are Pi conversation
+history, not pending Herdsman coordination. Project messages remain nonterminal.
+Project retirement still follows authoritative Herdr worktree removal.
 
 An ordinary Lead without a verified supervisor should continue independently
 until a supervisor is available. An assigned project Lead remains Manager-owned
-and may message the Manager role while no Manager is active; the message is
-retained with the project assignment.
+and may leave pending messages in project storage while no Manager is active.
 
 For ordinary Lead or Manager-to-Chief communication, the message follows the
 current direct-supervisor route. Messages are bounded. `files` accepts ordinary
@@ -58,9 +58,10 @@ recipient to forward them.
 
 Direct-supervisor messages are queued for the exact current recipient and
 validated against current authority before delivery. Assigned project Lead
-messages are scoped by repository, branch, and exact Lead session and remain
-available while the assignment exists. Successful Herdr worktree removal
-retires the assignment and removes its retained project messages.
+messages are scoped by repository, branch, and exact Lead session while pending;
+they are consumed after delivery or discarded on authoritative project
+retirement. Successful Herdr worktree removal
+retires the assignment and removes any still-pending project messages.
 
 ## See also
 

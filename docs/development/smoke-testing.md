@@ -179,7 +179,14 @@ are not removed by `excludeTools`.
 For a definition with `tools` omitted, verify that launch does not add a
 `--tools` option and Pi's configured/default selection remains in effect.
 For an explicit `tools` list, verify that Pi receives the selected ordinary
-tools augmented with the agent's required role tools. Confirm result delivery,
+tools augmented with the agent's required role tools. Use the existing
+`scripts/tool-policy-diagnostic.mjs` with a disposable
+`mcp__policy_probe__forbidden` tool that the explicit allowlist does not select.
+Verify that the probe is not active or provider-visible, an attempted forbidden
+dispatch cannot execute it, and an allowed control tool remains callable.
+With `tools` omitted, verify that the configured probe remains ambient under
+Pi's normal selection. The probe is disposable validation infrastructure only.
+Confirm result delivery,
 integration, and cleanup for all one-shot agents.
 
 ## Body reference expansion
@@ -328,7 +335,8 @@ After every smoke:
 `manager-recovery` is the canonical automated live Manager lifecycle check. It
 covers fresh delegation, project review messaging, pause/resume, missing
 worktree recovery without an explicit Herdr removal event, exact Pi-session
-continuity, retained project messages across Manager turnover, retirement after
+continuity, pending project messages across Manager absence and delivery,
+retirement after
 successful Herdr worktree removal, and exact cleanup.
 
 The broader matrix below remains optional exploratory acceptance for supervision
@@ -371,10 +379,10 @@ Automated live scenario results are separate and do not replace these checks.
 | Leads retain descendant ownership after a Chief `message`                                                                                                                      | NOT RUN |
 | Lead `supervisor_message` reaches the active Chief                                                                                                                             | NOT RUN |
 | Assigned Lead `supervisor_message` reaches the active Manager as project-scoped coordination                                                                                   | NOT RUN |
-| An assigned Lead can retain a project message while no Manager is active; a replacement Manager receives it                                                                    | NOT RUN |
+| An assigned Lead can retain a project message while no Manager is active; a Manager receives the pending message                                                               | NOT RUN |
 | Metadata publication failure does not remove communication eligibility                                                                                                         | NOT RUN |
 | Ordinary lead messages leave lead coordination state unchanged                                                                                                                 | NOT RUN |
-| Follow-up delivery while the receiver is streaming, never steering                                                                                                             | NOT RUN |
+| Downward staff_message to an active direct report uses Pi steering; non-supervisor inbox traffic remains deferred                                                              | NOT RUN |
 | Receiver restart delivers each queued message once                                                                                                                             | NOT RUN |
 | Accepted-before-delete crash deduplicates without reinjection                                                                                                                  | NOT RUN |
 | Failed delivery/acceptance retains the queued record                                                                                                                           | NOT RUN |

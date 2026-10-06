@@ -2071,7 +2071,11 @@ async function managerDelegateAssignmentTest(
         "find",
         "grep",
         ...leadTools,
+        "mcp__",
       ]);
+      const excludedIndex = args.indexOf("--exclude-tools");
+      assert.notEqual(excludedIndex, -1);
+      assert.equal(args[excludedIndex + 1], "mcp__");
       for (const tool of ["bash", "powershell", "edit", "write"])
         assert.equal(args[toolsIndex + 1]!.split(",").includes(tool), false);
       assert.equal(args.includes("--no-skills"), true);
@@ -2344,7 +2348,7 @@ async function managerDelegateAssignmentTest(
       );
       assert.match(
         assignmentDelivery.content!,
-        /Herdsman automatically hands your\s+normal assignment response to the current or a replacement Manager\./,
+        /Herdsman automatically hands your\s+normal assignment response to the Manager role\.\s+If no Manager is available,\s+the handoff remains pending until a Manager can receive it\./,
       );
       const message = await lead.tools
         .find((tool) => tool.name === "supervisor_message")!

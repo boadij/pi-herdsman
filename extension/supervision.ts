@@ -148,10 +148,13 @@ export type ChiefInboxDrainOptions = {
   signal?: AbortSignal;
   isAuthorized: (record: ChiefMessageRecord) => boolean | Promise<boolean>;
   isDelivered: (id: string) => boolean;
+  deliveryMode?: (
+    record: ChiefMessageRecord,
+  ) => "steer" | "followUp" | undefined;
   sendMessage: (
     message: unknown,
     options: {
-      deliverAs: "followUp";
+      deliverAs: "steer" | "followUp";
       triggerTurn: true;
     },
     record: ChiefMessageRecord,
@@ -769,6 +772,10 @@ export async function drainCoordinationInbox(
       }
       continue;
     }
+    const deliverAs = options.deliveryMode
+      ? options.deliveryMode(record)
+      : "followUp";
+    if (!deliverAs) continue;
     let token: unknown;
     const clearTransaction = async (): Promise<void> => {
       if (token === undefined) return;
@@ -847,7 +854,7 @@ export async function drainCoordinationInbox(
               ...(record.branch ? { branch: record.branch } : {}),
             },
           },
-          { deliverAs: "followUp", triggerTurn: true },
+          { deliverAs, triggerTurn: true },
           record,
         );
         await options.transaction?.revalidate(token, "after-send");
@@ -2023,6 +2030,22 @@ export function listProjectMessages(
       }
     })
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+}
+
+export function removeProjectMessage(
+  runtime: SupervisionRuntime,
+  repoKey: string,
+  branch: string,
+  id: string,
+): void {
+  if (!UUID.test(id)) throw new Error("Invalid project message ID");
+  const directory = projectMessageDirectory(runtime, repoKey, branch);
+  try {
+    unlinkSync(join(directory, `${id}.json`));
+    fsyncDirectory(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 export function removeProjectMessages(

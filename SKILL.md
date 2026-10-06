@@ -375,10 +375,10 @@ Chief supervises independent leads and never changes ownership. Use
 supervisor's attention, decision, or action, such as a blocker, warning, scope
 change, risk, or important evidence. Ordinary Leads without a verified
 supervisor continue independently; assigned project Leads may message the
-Manager role while its process is unavailable, and those messages remain
-retained with the project. For an assigned project, Herdsman automatically
-records the Lead's normal response to each project-assignment delivery as a
-project message for the current or a replacement Manager. If the Lead
+Manager role while its process is unavailable. Messages remain pending during
+Manager absence and are delivered to the next Manager that can receive them. For an assigned project, Herdsman
+automatically records the Lead's normal response to each project-assignment
+delivery as a project message for the Manager role. If the Lead
 successfully delegates or continues managed Agent work, the herd run owns that
 handoff until it settles; summarize the outcome, validation, and important
 unresolved points in the settled response. An unsuccessful delegation leaves
@@ -389,8 +389,9 @@ Descendants use `ask_owner`, not supervisor tools. Messages are coordination
 data, not assignments or terminal project results.
 
 `supervisor_message` is available to ordinary Leads and Managers. Assigned Lead
-messages are retained with the project and remain available to a replacement
-Manager, including when no Manager is active at send time. Manager messages to
+messages remain pending while Manager is absent and are delivered to the next
+Manager that can receive them; delivered messages are Pi conversation history,
+not pending Herdsman coordination. Manager messages to
 Leads use `staff_message`. For files, these tools accept ordinary paths,
 reusable direct-agent result refs, and already-supplied canonical result refs
 through `files`.
@@ -451,17 +452,17 @@ Pi Herdsman uses one durable vocabulary:
   through implementation and review iterations;
 - `staff_stop` stops an exact Lead and its owned Agent tree while preserving
   the assignment, Pi session, branch, and worktree. Successful Herdr worktree
-  removal retires the matching assignment and retained project messages while
-  preserving the Git branch. A missing worktree alone does not retire the
+  removal retires the matching assignment and any still-pending project
+  messages while preserving the Git branch. A missing worktree alone does not retire the
   assignment; `staff_resume` can reconstruct it. Never infer ownership from
   worktree membership or start an overlapping writer beside another Lead;
 - `/manager leave` preserves project work; a later Manager can resume the same
   branch-based assignment;
 - a **herd** is one Lead and the complete Agent tree it owns;
 - a **Lead** owns its Agents. An assigned project Lead sends
-  `supervisor_message` to project-scoped storage for the current or a
-  replacement Manager, even when no Manager is active; it does not route those
-  messages to Chief. An unassigned Lead routes to its active Manager when one
+  `supervisor_message` to project-scoped storage; pending messages survive
+  Manager absence and go to the next Manager that can receive them. Delivered
+  messages are not replayed; messages do not route to Chief. An unassigned Lead routes to its active Manager when one
   exists, otherwise to Chief;
 - an **Agent** handles one bounded assignment and may delegate only when its
   definition allows it;

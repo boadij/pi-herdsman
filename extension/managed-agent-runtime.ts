@@ -1,13 +1,15 @@
 import { isAbsolute, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import type {
-  ContextEvent,
   ExtensionAPI,
   ExtensionContext,
+  ContextEvent,
   ModelSelectEvent,
+  SessionCompactFailedEvent,
   SessionBeforeCompactEvent,
   ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
+import { buildSessionProjection } from "@earendil-works/pi-coding-agent";
 import {
   agentMailboxPath,
   controlMarker,
@@ -33,6 +35,7 @@ import {
 import { contentText } from "@earendil-works/pi-ai";
 import {
   AGENT_DEFINITION_ENTRY,
+  DELEGATING_AGENT_SCOPE_DESCRIPTION,
   sessionAgentIdentity,
   validateManagedAgentControllerIdentity,
   validId,
@@ -51,7 +54,11 @@ import {
   type ManagedAgentSnapshotCollection,
 } from "./agent-controller.ts";
 import { runHerdr, sameCwd } from "./herdr.ts";
-import { displayIdentity, prepareMessageInput } from "./core.ts";
+import {
+  displayIdentity,
+  FILE_HANDOFF_GUIDANCE,
+  prepareMessageInput,
+} from "./core.ts";
 import { collapseDisplayText, createStatusWidget } from "./presentation.ts";
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
@@ -63,7 +70,6 @@ import {
 import { taskAcceptanceAllowed, steerAcceptanceAllowed } from "./core.ts";
 import { importResultBindings } from "./agent-controller.ts";
 import { fail, OperationError } from "./errors.ts";
-import { FILE_HANDOFF_GUIDANCE } from "./core.ts";
 import { readConfig } from "./config.ts";
 import { isDeepStrictEqual } from "node:util";
 import type { ResultBinding } from "./storage.ts";
@@ -73,6 +79,10 @@ import {
   validateAgentDefinitionReferences,
   type AgentDefinition,
 } from "./agent-definitions.ts";
+
+const DELEGATING_AGENT_ROLE_CHARTER = `## Delegating agent role
+${DELEGATING_AGENT_SCOPE_DESCRIPTION}
+${FILE_HANDOFF_GUIDANCE}`;
 
 function currentTurnIsSoleToolCall(message: unknown, name: string): boolean {
   const turn = message as { role?: unknown; content?: unknown } | undefined;
@@ -317,6 +327,9 @@ const CONTEXT_RETIREMENT_INSTRUCTION =
   "self-contained handoff covering completed work, current state, relevant files, " +
   "validation performed, unresolved issues, and exact next steps. This session " +
   "will not be continued or forked.";
+const CONTEXT_RETIREMENT_REMINDER =
+  "This session is retired. Do not start new work or agents. " +
+  "Finish the current assignment and return a self-contained handoff.";
 
 type MetadataActivity = { requestId: string; task: string; startedAt: number };
 type MetadataRuntime = {
@@ -1668,14 +1681,6 @@ export function registerManagedAgentRuntime(
     currentTurnMessage(ctx: ExtensionContext): unknown;
     appendError(ctx: ExtensionContext, kind: string, error: unknown): void;
     getAgentDefinitions(ctx: ExtensionContext): Promise<AgentDefinition[]>;
-    prepareDelegatingStart(ctx: ExtensionContext): Promise<{
-      roleCharter: string;
-      supervisorStateMessage?: {
-        customType: string;
-        content: string;
-        display: boolean;
-      };
-    }>;
   },
 ): void {
   pi.on("tool_call", (event: any) => {
@@ -1723,6 +1728,8 @@ export function registerManagedAgentRuntime(
           ctx,
           scope,
           controller.sessionSignal(),
+          true,
+          false,
         );
         return buildAgentStatusSnapshot(view, ctx, {
           scope,
@@ -1741,28 +1748,28 @@ export function registerManagedAgentRuntime(
     });
   }
   controller?.registerTools(new Map());
-  if (delegationEnabled)
-    pi.on("before_agent_start", async (event: any, ctx: ExtensionContext) => {
-      const projection = await options.prepareDelegatingStart(ctx);
-      if (projection.supervisorStateMessage)
-        pi.sendMessage(projection.supervisorStateMessage, {
-          triggerTurn: false,
-        });
+  pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
+    const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION!;
+    const label = process.env.PI_HERDSMAN_LABEL!;
+    event.systemPromptOptions.sections.pi_herdsman_agent = [
+      `identity: ${displayIdentity(definition, label)}`,
+      `direct_owner: ${process.env.PI_HERDSMAN_OWNER_DISPLAY!}`,
+    ].join("\n");
+    if (delegationEnabled) {
       const roster = startupDefinitionRoster;
       const availableRoster =
         roster?.sessionId === ctx.sessionManager.getSessionId()
           ? roster
           : undefined;
-      return {
-        systemPrompt:
-          `${event.systemPrompt}\n\n${projection.roleCharter}\n\n` +
-          (availableRoster
-            ? `## Available agent definitions\n\n` +
-              `<agent_definitions>\n${JSON.stringify(availableRoster.definitions, null, 2)}\n</agent_definitions>\n\n` +
-              `This is the session-start definition snapshot. Use agent_list for live Agent state or to refresh Agent definitions after configuration changes.`
-            : ""),
-      };
-    });
+      event.systemPromptOptions.sections.delegating_agent_role =
+        DELEGATING_AGENT_ROLE_CHARTER;
+      if (availableRoster)
+        event.systemPromptOptions.sections.agent_definitions =
+          `${JSON.stringify(availableRoster.definitions, null, 2)}\n\n` +
+          `This is the session-start definition snapshot. ` +
+          `Use agent_list for live Agent state or to refresh Agent definitions after configuration changes.`;
+    }
+  });
   const execution = createManagedAgentExecutionState();
   const metadataPublisher = createManagedAgentMetadataPublisher(pi);
   const leafStatus = createManagedAgentLeafStatus({
@@ -1913,10 +1920,6 @@ export function registerManagedAgentRuntime(
       },
     }),
   );
-  registerManagedAgentContextHandlers(pi, {
-    contextRetirementEnabled: () => readConfig().contextRetirement,
-    hasActiveAssignment: () => !!execution.assignment?.activeRequestId,
-  });
   const prepareDelegatingRoster = async (
     ctx: ExtensionContext,
   ): Promise<void> => {
@@ -2072,6 +2075,10 @@ export function registerManagedAgentRuntime(
       controller.stopHealthScanner();
       controller.shutdown();
     },
+  });
+  registerManagedAgentContextHandlers(pi, {
+    contextRetirementEnabled: () => readConfig().contextRetirement,
+    hasActiveAssignment: () => !!execution.assignment?.activeRequestId,
   });
 }
 
@@ -2277,6 +2284,8 @@ export function managedAgentEnvironmentError(): string | undefined {
   if (!validId(e.PI_HERDSMAN_RUN_ID)) return "PI_HERDSMAN_RUN_ID invalid";
   if (!validId(e.PI_HERDSMAN_OWNER_SESSION_ID))
     return "PI_HERDSMAN_OWNER_SESSION_ID invalid";
+  if (!e.PI_HERDSMAN_OWNER_DISPLAY?.trim())
+    return "PI_HERDSMAN_OWNER_DISPLAY missing";
   if (!e.PI_HERDSMAN_LABEL || !AGENT_LABEL_PATTERN.test(e.PI_HERDSMAN_LABEL))
     return "PI_HERDSMAN_LABEL invalid";
   if (!e.PI_HERDSMAN_WORKSPACE_ID?.trim())
@@ -2309,6 +2318,19 @@ export function sessionContextRetired(
   );
 }
 
+function sessionRetirementGuidanceVisible(
+  ctx: ExtensionContext,
+  sessionId: string,
+): boolean {
+  return buildSessionProjection(ctx.sessionManager.getBranch()).entries.some(
+    ({ sourceEntry, messages }: any) =>
+      sourceEntry.type === "custom_message" &&
+      sourceEntry.customType === AGENT_CONTEXT_RETIRED_ENTRY &&
+      sourceEntry.details?.sessionId === sessionId &&
+      messages.length > 0,
+  );
+}
+
 export function registerManagedAgentContextHandlers(
   pi: ExtensionAPI,
   options: {
@@ -2316,6 +2338,7 @@ export function registerManagedAgentContextHandlers(
     hasActiveAssignment(): boolean;
   },
 ): void {
+  let overflowRetryGuidance: string | undefined;
   pi.on(
     "session_before_compact",
     (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
@@ -2325,24 +2348,46 @@ export function registerManagedAgentContextHandlers(
 
       const sessionId = ctx.sessionManager.getSessionId();
       const entries = ctx.sessionManager.getEntries();
-      if (!sessionContextRetired(entries, sessionId))
-        pi.appendEntry(AGENT_CONTEXT_RETIRED_ENTRY, { sessionId });
+      const retired = sessionContextRetired(entries, sessionId);
+      const guided = sessionRetirementGuidanceVisible(ctx, sessionId);
+      let guidance: string | undefined;
+      if (!retired) pi.appendEntry(AGENT_CONTEXT_RETIRED_ENTRY, { sessionId });
+      if (!guided) guidance = CONTEXT_RETIREMENT_INSTRUCTION;
+      else if (event.reason === "overflow")
+        guidance = CONTEXT_RETIREMENT_REMINDER;
+      if (guidance) {
+        pi.sendMessage(
+          {
+            customType: AGENT_CONTEXT_RETIRED_ENTRY,
+            content: guidance,
+            display: false,
+            details: { sessionId },
+          },
+          { triggerTurn: false },
+        );
+        if (event.reason === "overflow" && event.willRetry)
+          overflowRetryGuidance = guidance;
+      }
       if (event.reason === "threshold") return { cancel: true };
     },
   );
-  pi.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
-    if (!options.contextRetirementEnabled()) return;
-    if (!options.hasActiveAssignment()) return;
-    const sessionId = ctx.sessionManager.getSessionId();
-    if (!sessionContextRetired(ctx.sessionManager.getEntries(), sessionId))
-      return;
+  pi.on("session_compact_failed", (event: SessionCompactFailedEvent) => {
+    if (event.reason === "overflow") overflowRetryGuidance = undefined;
+  });
+  pi.on("agent_settled", () => {
+    overflowRetryGuidance = undefined;
+  });
+  pi.on("context", (event: ContextEvent) => {
+    if (!overflowRetryGuidance) return;
+    const content = overflowRetryGuidance;
+    overflowRetryGuidance = undefined;
     return {
       messages: [
         ...event.messages,
         {
-          role: "custom" as const,
+          role: "custom",
           customType: AGENT_CONTEXT_RETIRED_ENTRY,
-          content: CONTEXT_RETIREMENT_INSTRUCTION,
+          content,
           display: false,
           timestamp: Date.now(),
         },

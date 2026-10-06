@@ -2,7 +2,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
+import {
+  discoverAndLoadExtensions,
+  loadSkillsFromDir,
+} from "@earendil-works/pi-coding-agent";
 
 const root = process.cwd();
 const normalize = (path) => path.replace(/^package\//u, "");
@@ -20,12 +23,13 @@ const packed = JSON.parse(
 );
 const files = packed[0]?.files ?? [];
 const allowed =
-  /^(?:package\.json|README\.md|SKILL\.md|LICENSE|docs\/|dist\/)/u;
+  /^(?:package\.json|README\.md|SKILL\.md|LICENSE|docs\/|dist\/|skills\/)/u;
 const expectedRoot = new Set([
   "package.json",
   "README.md",
   "SKILL.md",
   "LICENSE",
+  "skills/agent-definitions/SKILL.md",
 ]);
 const expectedDefinitions = readdirSync(
   resolve(root, "extension/agent-definitions"),
@@ -111,6 +115,27 @@ try {
   if (loadedEntries.length !== 1 || loadedEntries[0] !== expectedEntry)
     throw new Error(
       `Pi package load expected ${expectedEntry}, loaded ${JSON.stringify(loadedEntries)}`,
+    );
+
+  const { skills, diagnostics } = loadSkillsFromDir({
+    dir: resolve(root, "skills"),
+    source: "path",
+  });
+  if (diagnostics.length)
+    throw new Error(
+      `Pi failed to load packaged skills: ${diagnostics.map(({ message, path }) => `${path}: ${message}`).join(", ")}`,
+    );
+  const expectedSkill = resolve(
+    root,
+    "skills/agent-definitions/SKILL.md",
+  );
+  if (
+    skills.length !== 1 ||
+    skills[0]?.name !== "agent-definitions" ||
+    skills[0]?.filePath !== expectedSkill
+  )
+    throw new Error(
+      `Pi package load expected skill ${expectedSkill}, loaded ${JSON.stringify(skills.map(({ name, filePath }) => ({ name, filePath })))}`,
     );
 } finally {
   rmSync(isolated, { recursive: true, force: true });

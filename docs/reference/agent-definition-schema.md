@@ -129,7 +129,7 @@ the fallback.
 | `noTools`               | boolean                                                               | Pi normal tool policy                                                                                               | `true` emits `--no-tools`; managed `ask_owner` remains infrastructure.                                                                                                                                                |
 | `noBuiltinTools`        | boolean                                                               | Pi normal built-in tool policy                                                                                      | `true` emits `--no-builtin-tools`.                                                                                                                                                                                    |
 | `tools`                 | array of non-empty strings                                            | no explicit allowlist                                                                                               | Passed to Pi as a source-agnostic tool-name allowlist; matching overlay replaces whole array.                                                                                                                         |
-| `excludeTools`          | array of non-empty strings                                            | no explicit exclusions                                                                                              | Passed to Pi as source-agnostic tool-name exclusions; matching override replaces whole array.                                                                                                                         |
+| `excludeTools`          | array of non-empty strings                                            | no explicit exclusions                                                                                              | Passed to Pi as source-agnostic tool-name exclusions; matching override replaces whole array.                                                                                                                        |
 | `permission`            | mapping                                                               | absent                                                                                                              | Opaque interoperability policy for permission-aware extensions; Pi Herdsman does not evaluate it.                                                                                                                     |
 | `noSkills`              | boolean                                                               | skills disabled unless `inheritSkills: true`                                                                        | Controls Pi native skill discovery; explicit `skills` values are still passed separately.                                                                                                                             |
 | `inheritSkills`         | boolean                                                               | does not enable by itself unless `true`                                                                             | `true` changes omitted `noSkills` default so native skills remain available. Explicit `noSkills` wins.                                                                                                                |
@@ -156,9 +156,12 @@ definition.
 Skill and extension paths are passed to Pi unchanged. herdr does not resolve
 them relative to the definition file.
 
-Tool names are governed by Pi's native name-based policy, regardless of
+Tool names and `*` patterns are governed by Pi's native name-based policy on
+the Pi 1.0.4 baseline, regardless of
 whether a tool is built in, registered by an extension, or supplied as a
-custom/SDK tool. When both fields apply, an exclusion wins over an allowlist.
+custom/SDK tool or supplied through MCP. Both `tools` and `excludeTools`
+accept these selectors; only `*` is special and matches any characters.
+When both fields apply, an exclusion wins over an allowlist.
 Names do not need to exist when a definition is discovered: unknown names are
 accepted and can match a tool registered later. Pi Herdsman does not provide
 source-qualified permissions, such as an extension path plus tool name.
@@ -172,7 +175,14 @@ ordinary tool names. Managed agents and managed project Leads always retain thei
 Herdsman coordination tools, which are protected from exclusions. When `tools`
 is omitted, Pi Herdsman does not emit `--tools`, preserving Pi's
 configured/default tool selection. When `tools` is explicitly set, the
-selected allowlist is augmented with the runtime role's mandatory tools.
+selected allowlist is closed across Pi callable tool sources and augmented
+with the runtime role's mandatory tools. Unselected tools do not become callable
+merely because additional MCP servers, extensions, or custom tools are configured.
+An explicit empty policy disables ordinary tools. `noBuiltinTools: true` alone
+does not close the policy; other normal Pi tool sources remain available.
+Exact exclusions naming mandatory tools are ignored. Wildcard exclusions
+matching any mandatory Herdsman tool are invalid and reject launch: Pi exclusions
+cannot express everything matching a pattern except required infrastructure.
 Unmanaged Pi launches do not receive these managed-role exceptions.
 
 Loading extension code and exposing its tools are separate concerns. An
@@ -299,6 +309,11 @@ selected project/global context-file additions
 shared herdr agent guidance
     ↓
 <active_agent name="<definition>"/>
+    ↓ generic identity signal for compatible extensions
+<pi_herdsman_agent>
+identity: <definition>:<label>
+direct_owner: lead | <owner-definition>:<owner-label>
+</pi_herdsman_agent>
 ```
 
 Omitting `systemPromptMode` defaults to `append`, preserving Pi's normal system
@@ -306,9 +321,15 @@ prompt and runtime/tool guidance alongside the role-specific body. Ordinary
 custom definitions may explicitly select `replace`; the reserved
 `managed-lead` role is append-only and rejects that setting.
 
-The final effective body and shared guidance are delivered through private
-temporary prompt snapshots. The active-agent tag is appended directly as
-interoperability metadata for compatible Pi extensions.
+The effective body and shared guidance are delivered through private temporary
+prompt snapshots. Managed agents retain the generic literal
+`<active_agent name="<definition>"/>` interoperability signal for compatible
+extensions. Separately, the managed-Agent runtime supplies a structured
+`pi_herdsman_agent` section with the current semantic identity and direct owner.
+`direct_owner` is model-facing context only; exact ownership and routing
+continue to use internal Pi session identity. A continued generation
+recomputes its direct owner from the current caller rather than restoring the
+historical owner.
 
 ## Complete override example
 

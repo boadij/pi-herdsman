@@ -123,7 +123,6 @@ import {
   startHerdrAgentInPane,
   sameCwd,
   inspectHerdrAgent,
-  verifiedHerdrAgent,
   stopHerdrAgentPreservingPane,
   HerdrStartFailure,
   validateHerdrStatus,
@@ -145,7 +144,6 @@ import {
 import {
   AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
   AGENT_UNRESOLVED_GUIDANCE,
-  DELEGATING_AGENT_SCOPE_DESCRIPTION,
   LEAD_SCOPE_DESCRIPTION,
   canonicalSessionPath,
   createAgentStatusRuntime,
@@ -203,6 +201,7 @@ import {
   projectMessageBytes,
   writeProjectMessage,
   listProjectMessages,
+  removeProjectMessage,
   removeProjectMessages,
   sessionLeadRoleState,
   type ChiefLease,
@@ -231,10 +230,6 @@ import {
   writeLeadCoordinationState,
   chiefLeaseIsHeld,
   sameChiefDescriptor,
-  leadSupervisorState as resolveLeadSupervisorState,
-  supervisorStateMessage,
-  verifyManagerCoordinationAuthority,
-  verifyRemoteChiefAuthority,
   normalizeHerdrLifecycleState,
   peerLeadLockPath,
   peerRuntime,
@@ -364,9 +359,6 @@ const LEAD_ROLE_CHARTER = `## Lead role
 ${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
 ${FILE_HANDOFF_GUIDANCE}`;
-const DELEGATING_AGENT_ROLE_CHARTER = `## Delegating agent role
-${DELEGATING_AGENT_SCOPE_DESCRIPTION}
-${FILE_HANDOFF_GUIDANCE}`;
 const MANAGER_ROLE_CHARTER = `## Manager role
 Manage project work by branch. Use staff_delegate with a task and optional branch
 to start new project work. Use staff_resume with its branch to resume existing
@@ -377,14 +369,16 @@ Lead while preserving its assignment. Project retirement is user-controlled
 through successful Herdr worktree removal.
 
 Each project-assignment delivery to a Lead is an automatic handoff to you:
-Herdsman records the Lead's normal response as a project message for the current
-or a replacement Manager. If the Lead successfully delegates or
+Herdsman automatically hands the Lead's normal assignment response to the
+Manager role. If no Manager is available, the handoff remains pending until a Manager
+can receive it. If the Lead successfully delegates or
 continues managed Agent work, the herd run owns that handoff until it settles,
 and the Lead's settled response should summarize the outcome, validation, and
 important unresolved points. An unsuccessful delegation leaves the local
 assignment-response path available. Later conversational replies, including
 routine thanks or acknowledgments, remain local and are not automatically
-promoted. Review
+promoted. Undelivered project handoffs survive Manager absence. Once a handoff
+has been delivered, it is not automatically replayed to later Managers. Review
 received handoffs and request corrections with staff_message when needed.
 
 Project execution belongs to project Leads and their Agent trees. Your role
@@ -1199,159 +1193,6 @@ export default function (pi: ExtensionAPI): void {
   ) => roleTransitions.managerForScope(scope);
   const currentWorktreeScope = (ctx: ExtensionContext) =>
     roleTransitions.currentWorktreeScope(ctx);
-  const managedSupervisorWorktreeScope = async (ctx: ExtensionContext) => {
-    const workspaceId = process.env.HERDR_WORKSPACE_ID;
-    if (!workspaceId) return undefined;
-    try {
-      return await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
-    } catch (error) {
-      if (
-        error instanceof OperationError &&
-        error.detail.details?.herdrCode === "not_git_worktree"
-      )
-        return undefined;
-      throw error;
-    }
-  };
-  const managedSupervisorAgent = (
-    ctx: ExtensionContext,
-    descriptor: {
-      piSessionId: string;
-      piSessionFile?: string;
-      paneId: string;
-      tabId?: string;
-      workspaceId: string;
-    },
-  ) =>
-    verifiedHerdrAgent(descriptor, {
-      listAgents: async () =>
-        (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents,
-      getAgent: async (paneId) =>
-        (
-          await runHerdr(pi, ctx, ["agent", "get", paneId], {
-            signal: ctx.signal,
-          })
-        )?.agent,
-      expectedSession,
-      isPiAgent,
-      matchesExpectedSession,
-    });
-  const managedCurrentManager = async (
-    ctx: ExtensionContext,
-    scope?: Awaited<ReturnType<typeof worktreeGroupScope>> | null,
-  ) => {
-    const currentScope =
-      scope === null || scope === undefined
-        ? await managedSupervisorWorktreeScope(ctx)
-        : scope;
-    if (!currentScope) return undefined;
-    const status = readManagerDescriptorStatus(
-      supervisionRuntime(),
-      currentScope.primaryWorkspaceId,
-    );
-    if (!status || !status.live) return undefined;
-    if (status.descriptor.repoKey !== currentScope.repoKey)
-      throw new Error("Manager authority does not match project");
-    verifyManagerCoordinationAuthority(
-      status.descriptor,
-      readLeadCoordinationState(
-        supervisionRuntime(),
-        status.descriptor.piSessionId,
-      ),
-      HERDSMAN_BUILD,
-      requireCompatibleBuild,
-    );
-    if (!(await managedSupervisorAgent(ctx, status.descriptor)))
-      throw new Error(
-        "Manager authority exists but live discovery is inconclusive",
-      );
-    return status.descriptor;
-  };
-  const managedCurrentChief = async (
-    ctx: ExtensionContext,
-    failOnVerificationError = false,
-  ) => {
-    const runtime = supervisionRuntime();
-    const leaseMayExist = (): boolean => {
-      try {
-        statSync(runtime.lock);
-        return true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-        throw error;
-      }
-    };
-    let descriptor: ChiefDescriptor;
-    try {
-      descriptor = readChiefDescriptor(runtime.descriptor);
-    } catch (error) {
-      if (failOnVerificationError && leaseMayExist()) throw error;
-      return undefined;
-    }
-    requireCompatibleBuild(
-      HERDSMAN_BUILD,
-      descriptor.build,
-      "supervision",
-      `Chief ${descriptor.piSessionId}`,
-    );
-    if (!chiefLeaseIsHeld(runtime)) {
-      if (failOnVerificationError && leaseMayExist())
-        throw new Error("Unable to verify Chief supervision lease");
-      return undefined;
-    }
-    try {
-      const verified = await verifyRemoteChiefAuthority(descriptor, {
-        remoteIdentity: () => managedSupervisorAgent(ctx, descriptor),
-        requireCompatibleBuild,
-        build: HERDSMAN_BUILD,
-      });
-      if (!verified) return undefined;
-      return descriptor;
-    } catch (error) {
-      if (
-        error instanceof OperationError &&
-        error.detail.category === "incompatible_build"
-      )
-        throw error;
-      if (failOnVerificationError) throw error;
-      return undefined;
-    }
-  };
-  const prepareManagedSupervisorState = async (ctx: ExtensionContext) => {
-    const content = await resolveLeadSupervisorState(ctx, {
-      currentWorktreeScope: managedSupervisorWorktreeScope,
-      projectAssignmentForScope: (scope, sessionId) => {
-        const assignments = findProjectAssignmentBySession(
-          supervisionRuntime(),
-          scope.repoKey,
-          sessionId,
-        );
-        if (assignments.length > 1)
-          throw new Error(
-            "Multiple project assignments match the Lead session",
-          );
-        return assignments[0];
-      },
-      currentManager: managedCurrentManager,
-      currentChiefAuthority: managedCurrentChief,
-    });
-    const latest = [
-      ...buildSessionProjection(ctx.sessionManager.getBranch()).entries,
-    ]
-      .reverse()
-      .find(
-        (candidate: any) =>
-          candidate.sourceEntry.type === "custom_message" &&
-          candidate.sourceEntry.customType === SUPERVISOR_STATE_TYPE &&
-          candidate.messages.length > 0,
-      );
-    const latestMessage = latest?.messages[0];
-    return supervisorStateMessage(
-      SUPERVISOR_STATE_TYPE,
-      content,
-      latestMessage ? contentText(latestMessage.content, "") : undefined,
-    );
-  };
   const currentManager = (
     ctx: ExtensionContext,
     scope:
@@ -1988,7 +1829,8 @@ export default function (pi: ExtensionAPI): void {
           ...staffTool,
           name: "staff_message",
           label: "staff message",
-          description: "Send a durable follow-up message to a direct report.",
+          description:
+            "Send a durable supervisor message to a direct report; active work is steered cooperatively.",
           parameters: staffMessageParameters,
           promptSnippet: undefined,
           promptGuidelines: [FILE_HANDOFF_GUIDANCE],
@@ -2230,6 +2072,7 @@ export default function (pi: ExtensionAPI): void {
           writeChiefMessage,
           listProjectAssignments,
           listProjectMessages,
+          removeProjectMessage,
           readProjectAssignment,
           importResultBindings,
         },
@@ -2375,10 +2218,6 @@ export default function (pi: ExtensionAPI): void {
     currentTurnMessage,
     getAgentDefinitions: async (ctx) =>
       (await contextAgentDefinitions(ctx)).definitions,
-    prepareDelegatingStart: async (ctx) => ({
-      roleCharter: DELEGATING_AGENT_ROLE_CHARTER,
-      supervisorStateMessage: await prepareManagedSupervisorState(ctx),
-    }),
     appendError: (ctx, kind, error) => appendDurableError(pi, ctx, kind, error),
   });
 }

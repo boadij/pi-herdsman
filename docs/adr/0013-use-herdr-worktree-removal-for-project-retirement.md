@@ -9,7 +9,7 @@ messages are nonterminal.
 Managers may start, resume, message, review, and stop project execution, but
 cannot remove a `ProjectAssignment`. A successful Herdr `worktree.removed`
 lifecycle event with coherent linked-workspace repository provenance and branch
-identity retires the matching assignment and its retained project messages.
+identity retires the matching assignment and any still-pending project messages.
 
 A worktree that is merely absent does not imply retirement. Missing checkout
 recovery remains supported through `staff_resume`.
