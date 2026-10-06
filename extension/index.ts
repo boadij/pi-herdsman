@@ -296,7 +296,7 @@ import type { SupervisionContextStatus } from "./presentation.ts";
 
 const HERDSMAN_VERSION = packageMetadata.version;
 
-function expandableMessage(
+function expandablePresentation(
   initialExpanded: boolean,
   render: (expanded: boolean) => Component,
 ): MouseRegion {
@@ -771,10 +771,13 @@ export default function (pi: ExtensionAPI): void {
       typeof entry?.data?.instructions === "string"
         ? entry.data.instructions
         : undefined;
-    return renderAgentDefinitionsOverview(definitions, theme, {
-      ...options,
-      instructions,
-    });
+    return expandablePresentation(options.expanded, (expanded) =>
+      renderAgentDefinitionsOverview(definitions, theme, {
+        ...options,
+        expanded,
+        instructions,
+      }),
+    );
   });
   pi.registerEntryRenderer(HERD_RUN_ENTRY, (entry, _options, theme) =>
     renderHerdRunEntry(entry, theme),
@@ -783,7 +786,7 @@ export default function (pi: ExtensionAPI): void {
     pi.registerMessageRenderer(
       `pi-herdsman-${kind}`,
       (message, options, theme) =>
-        expandableMessage(options.expanded, (expanded) =>
+        expandablePresentation(options.expanded, (expanded) =>
           renderCoordinationMessage(
             kind,
             message,
@@ -796,7 +799,7 @@ export default function (pi: ExtensionAPI): void {
   pi.registerMessageRenderer(
     "pi-herdsman-project_message",
     (message, options, theme) =>
-      expandableMessage(options.expanded, (expanded) =>
+      expandablePresentation(options.expanded, (expanded) =>
         renderCoordinationMessage(
           "project_message",
           message,
@@ -812,35 +815,35 @@ export default function (pi: ExtensionAPI): void {
   pi.registerMessageRenderer(
     "pi-herdsman-agent-result",
     (message, options, theme) =>
-      expandableMessage(options.expanded, (expanded) =>
+      expandablePresentation(options.expanded, (expanded) =>
         renderCompletionMessage(message, { ...options, expanded }, theme),
       ),
   );
   pi.registerMessageRenderer(
     "pi-herdsman-agent-ask",
     (message, options, theme) =>
-      expandableMessage(options.expanded, (expanded) =>
+      expandablePresentation(options.expanded, (expanded) =>
         renderAgentAskMessage(message, { ...options, expanded }, theme),
       ),
   );
   pi.registerMessageRenderer(
     "pi-herdsman-agent-stale",
     (message, options, theme) =>
-      expandableMessage(options.expanded, (expanded) =>
+      expandablePresentation(options.expanded, (expanded) =>
         renderAgentStaleMessage(message, { ...options, expanded }, theme),
       ),
   );
   pi.registerMessageRenderer(
     "pi-herdsman-agent-lost",
     (message, options, theme) =>
-      expandableMessage(options.expanded, (expanded) =>
+      expandablePresentation(options.expanded, (expanded) =>
         renderAgentLostMessage(message, { ...options, expanded }, theme),
       ),
   );
   pi.registerMessageRenderer(
     "pi-herdsman-agent-attention",
     (message, options, theme) =>
-      expandableMessage(options.expanded, (expanded) =>
+      expandablePresentation(options.expanded, (expanded) =>
         renderAgentAttentionMessage(message, { ...options, expanded }, theme),
       ),
   );
