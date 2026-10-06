@@ -3,10 +3,13 @@ import { realpathSync } from "node:fs";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ContextEvent,
   ModelSelectEvent,
+  SessionCompactFailedEvent,
   SessionBeforeCompactEvent,
   ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
+import { buildSessionProjection } from "@earendil-works/pi-coding-agent";
 import {
   agentMailboxPath,
   controlMarker,
@@ -2315,15 +2318,16 @@ export function sessionContextRetired(
   );
 }
 
-function sessionRetirementGuidancePersisted(
-  entries: readonly unknown[],
+function sessionRetirementGuidanceVisible(
+  ctx: ExtensionContext,
   sessionId: string,
 ): boolean {
-  return entries.some(
-    (entry: any) =>
-      entry?.type === "custom_message" &&
-      entry.customType === AGENT_CONTEXT_RETIRED_ENTRY &&
-      entry.details?.sessionId === sessionId,
+  return buildSessionProjection(ctx.sessionManager.getBranch()).entries.some(
+    ({ sourceEntry, messages }: any) =>
+      sourceEntry.type === "custom_message" &&
+      sourceEntry.customType === AGENT_CONTEXT_RETIRED_ENTRY &&
+      sourceEntry.details?.sessionId === sessionId &&
+      messages.length > 0,
   );
 }
 
@@ -2334,6 +2338,7 @@ export function registerManagedAgentContextHandlers(
     hasActiveAssignment(): boolean;
   },
 ): void {
+  let overflowRetryGuidance: string | undefined;
   pi.on(
     "session_before_compact",
     (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
@@ -2344,31 +2349,48 @@ export function registerManagedAgentContextHandlers(
       const sessionId = ctx.sessionManager.getSessionId();
       const entries = ctx.sessionManager.getEntries();
       const retired = sessionContextRetired(entries, sessionId);
-      const guided = sessionRetirementGuidancePersisted(entries, sessionId);
+      const guided = sessionRetirementGuidanceVisible(ctx, sessionId);
+      let guidance: string | undefined;
       if (!retired) pi.appendEntry(AGENT_CONTEXT_RETIRED_ENTRY, { sessionId });
-      if (!guided)
-        pi.sendMessage(
-          {
-            customType: AGENT_CONTEXT_RETIRED_ENTRY,
-            content: CONTEXT_RETIREMENT_INSTRUCTION,
-            display: false,
-            details: { sessionId },
-          },
-          { triggerTurn: false },
-        );
+      if (!guided) guidance = CONTEXT_RETIREMENT_INSTRUCTION;
       else if (event.reason === "overflow")
+        guidance = CONTEXT_RETIREMENT_REMINDER;
+      if (guidance) {
         pi.sendMessage(
           {
             customType: AGENT_CONTEXT_RETIRED_ENTRY,
-            content: CONTEXT_RETIREMENT_REMINDER,
+            content: guidance,
             display: false,
             details: { sessionId },
           },
           { triggerTurn: false },
         );
+        if (event.reason === "overflow" && event.willRetry)
+          overflowRetryGuidance = guidance;
+      }
       if (event.reason === "threshold") return { cancel: true };
     },
   );
+  pi.on("session_compact_failed", (event: SessionCompactFailedEvent) => {
+    if (event.reason === "overflow") overflowRetryGuidance = undefined;
+  });
+  pi.on("context", (event: ContextEvent) => {
+    if (!overflowRetryGuidance) return;
+    const content = overflowRetryGuidance;
+    overflowRetryGuidance = undefined;
+    return {
+      messages: [
+        ...event.messages,
+        {
+          role: "custom",
+          customType: AGENT_CONTEXT_RETIRED_ENTRY,
+          content,
+          display: false,
+          timestamp: Date.now(),
+        },
+      ],
+    };
+  });
   pi.on("session_before_switch", () => ({ cancel: true }));
   pi.on("session_before_fork", () => ({ cancel: true }));
 }

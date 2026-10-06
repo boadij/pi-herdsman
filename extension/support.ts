@@ -519,7 +519,8 @@ const {
   resolveAssignmentSession: resolveOwnedAssignmentSession,
   sessionAgentIdentity,
 } = await import("./agent-controller.ts");
-const { sessionContextRetired } = await import("./managed-agent-runtime.ts");
+const { sessionContextRetired, registerManagedAgentContextHandlers } =
+  await import("./managed-agent-runtime.ts");
 const { default: registerExtension } = await import("./index.ts");
 const { readConfig } = await import("./config.ts");
 export function resolveAssignmentSession(
@@ -535,6 +536,7 @@ export function resolveAssignmentSession(
 export { sessionAgentIdentity };
 export { registerExtension };
 export { sessionContextRetired };
+export { registerManagedAgentContextHandlers };
 export const HERDSMAN_BUILD = runtimeBuild(
   packageMetadata.version,
   fileURLToPath(new URL("./index.ts", import.meta.url)),

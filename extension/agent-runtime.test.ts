@@ -43,6 +43,7 @@ import support, {
   leadExec,
   sessionAgentIdentity,
   sessionContextRetired,
+  registerManagedAgentContextHandlers,
   setLeadEnvironment,
   setAgentEnvironment,
   watchedResultPaths,
@@ -3657,6 +3658,81 @@ test("overflow retires without cancellation and inactive sessions stay untouched
     inactiveAgent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(inactiveMailbox);
   }
+});
+
+test("overflow retry bridges queued retirement guidance once and only when absent from the active projection", () => {
+  const sessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const staleGuidance = {
+    type: "custom_message",
+    customType: "pi-herdsman-agent-context-retired",
+    content: "Guidance on an inactive branch",
+    display: false,
+    details: { sessionId },
+  };
+  const entries: any[] = [staleGuidance];
+  const context = fakeAgentContext(entries, []);
+  const pending: any[] = [];
+  let streaming = true;
+  const agent = fakePi({
+    entries,
+    sendMessage(message: any) {
+      if (streaming) pending.push(message);
+      else entries.push({ type: "custom_message", ...message });
+    },
+  });
+  registerManagedAgentContextHandlers(agent.pi as never, {
+    contextRetirementEnabled: () => true,
+    hasActiveAssignment: () => true,
+  });
+
+  const compact = agent.events.get("session_before_compact")![0];
+  assert.equal(
+    compact({ reason: "overflow", willRetry: true }, context),
+    undefined,
+  );
+  assert.equal(pending.length, 1);
+  assert.equal(entries.includes(staleGuidance), true);
+  assert.equal(
+    entries.filter((entry) => entry.type === "custom_message").length,
+    1,
+    "sendMessage remains queued while the Agent is streaming",
+  );
+
+  const contextEvent = { messages: [{ role: "user", content: "retry" }] };
+  const bridged = agent.events.get("context")![0](contextEvent, context) as any;
+  assert.equal(bridged.messages.length, 2);
+  assert.equal(bridged.messages[1].content, pending[0].content);
+  assert.equal(
+    agent.events.get("context")![0](contextEvent, context),
+    undefined,
+    "the immediate retry consumes the bridge",
+  );
+
+  streaming = false;
+  entries.push({ type: "custom_message", ...pending.shift() });
+  assert.equal(
+    entries.filter((entry) => entry.type === "custom_message").length,
+    2,
+  );
+  assert.equal(
+    agent.events.get("context")![0](contextEvent, context),
+    undefined,
+  );
+
+  streaming = true;
+  assert.equal(
+    compact({ reason: "overflow", willRetry: true }, context),
+    undefined,
+  );
+  assert.equal(pending.length, 1);
+  agent.events.get("session_compact_failed")![0](
+    { reason: "overflow" },
+    context,
+  );
+  assert.equal(
+    agent.events.get("context")![0](contextEvent, context),
+    undefined,
+  );
 });
 
 test("agent persists one identity entry before mailbox initialization", async () => {

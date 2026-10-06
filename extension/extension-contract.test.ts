@@ -2809,7 +2809,6 @@ test("delegating agents receive only their allowed definition roster", async () 
     messages: [{ role: "user", content: "ordinary turn" }],
   };
   assert.equal(contextHandlers[0](ordinaryContext, context), undefined);
-
   const event: any = {
     systemPromptOptions: { sections: {}, contextFiles: [] },
   };
