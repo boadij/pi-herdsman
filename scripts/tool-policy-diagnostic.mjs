@@ -1,5 +1,39 @@
+import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
+
+const providerTools = (value, found = []) => {
+  if (!value || typeof value !== "object") return found;
+  if (Array.isArray(value)) {
+    value.forEach((item) => providerTools(item, found));
+    return found;
+  }
+  if (value.type === "namespace") return providerTools(value.tools, found);
+  if (Array.isArray(value.tools)) return providerTools(value.tools, found);
+  const name =
+    value.type === "function"
+      ? (value.name ?? value.function?.name)
+      : "input_schema" in value
+        ? value.name
+        : undefined;
+  if (typeof name === "string") found.push(name);
+  return found;
+};
+
+if (process.argv.includes("--provider-tools-check")) {
+  const forbidden = "mcp__policy_probe__forbidden";
+  const names = providerTools({
+    tools: [
+      { type: "function", name: "direct" },
+      { type: "function", function: { name: "chat" } },
+      { name: forbidden, input_schema: {} },
+    ],
+  });
+  assert.deepEqual(names, ["direct", "chat", forbidden]);
+  assert.ok(names.includes(forbidden), "Anthropic forbidden tool was missed");
+  console.log(JSON.stringify({ pass: true, providerTools: names }));
+  process.exit(0);
+}
 
 if (process.argv.includes("--dispatch-check")) {
   const { runAgentLoop } =
@@ -131,17 +165,6 @@ const fail = (message) => {
 const check = (kind, values) => {
   const bad = values.filter((name) => forbidden.has(name));
   if (bad.length) fail(`${kind} contains forbidden tool(s): ${bad.join(",")}`);
-};
-const providerTools = (value, found = []) => {
-  if (!value || typeof value !== "object") return found;
-  if (Array.isArray(value)) {
-    value.forEach((item) => providerTools(item, found));
-    return found;
-  }
-  if (value.type === "namespace") return providerTools(value.tools, found);
-  if (Array.isArray(value.tools)) return providerTools(value.tools, found);
-  if (value.type === "function" && value.name) found.push(value.name);
-  return found;
 };
 const same = (actual, expected) =>
   actual.length === expected.size && actual.every((name) => expected.has(name));
