@@ -1006,6 +1006,34 @@ function sessionEntries(contents) {
     });
 }
 
+export function managerProjectMessageSettled(
+  contents,
+  branch,
+  fromSessionId,
+  marker,
+) {
+  const entries = sessionEntries(contents);
+  const receipt = entries.findIndex(
+    (entry) =>
+      entry.type === "custom_message" &&
+      entry.customType === "pi-herdsman-project_message" &&
+      entry.details?.branch === branch &&
+      entry.details?.fromSessionId === fromSessionId &&
+      String(entry.content).includes(marker),
+  );
+  return (
+    receipt >= 0 &&
+    entries
+      .slice(receipt + 1)
+      .some(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "assistant" &&
+          entry.message.stopReason === "stop",
+      )
+  );
+}
+
 export function savedSessionHeaderEvidence(contents, expectedSessionId) {
   const header = sessionEntries(contents).find(
     (entry) => entry.type === "session",
@@ -2936,6 +2964,18 @@ async function runManagerRecoverySmoke(ctx) {
     return session &&
       verifiedLeadSession(session, first.session) &&
       assistantResultForSession(session, leadContextPrompt, contextMarker)
+      ? session
+      : null;
+  });
+  await waitFor("direct-handoff-settled", async () => {
+    const session = await rootSnapshot();
+    return session &&
+      managerProjectMessageSettled(
+        session.contents,
+        branch,
+        first.session,
+        contextMarker,
+      )
       ? session
       : null;
   });

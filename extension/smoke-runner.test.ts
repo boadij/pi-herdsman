@@ -18,6 +18,7 @@ import {
   chiefTreeBranchPlan,
   managerRecoveryFreshPrompt,
   managerRecoveryLeadContextPrompt,
+  managerProjectMessageSettled,
   managerRecoveryPostRecoveryPrompt,
   managerRecoveryStopPrompt,
   managerRecoveryResumeOnlyPrompt,
@@ -1029,6 +1030,48 @@ test("manager-recovery seeds continuity only in the Lead conversation, then reca
   assert.match(
     recallPrompt,
     /call supervisor_message with exactly that marker/i,
+  );
+});
+
+test("manager-recovery waits for the exact automatic project message turn to settle", () => {
+  const contents = [
+    {
+      type: "custom_message",
+      customType: "pi-herdsman-project_message",
+      content: "Project branch-a from lead lead-session:\n\nCONTEXT_MARKER",
+      details: { branch: "branch-a", fromSessionId: "lead-session" },
+    },
+    { type: "message", message: { role: "assistant", stopReason: "stop" } },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+
+  assert.equal(
+    managerProjectMessageSettled(
+      contents,
+      "branch-a",
+      "lead-session",
+      "CONTEXT_MARKER",
+    ),
+    true,
+  );
+  assert.equal(
+    managerProjectMessageSettled(
+      contents,
+      "branch-b",
+      "lead-session",
+      "CONTEXT_MARKER",
+    ),
+    false,
+  );
+  assert.equal(
+    managerProjectMessageSettled(
+      contents.replace('"stopReason":"stop"', '"stopReason":"toolUse"'),
+      "branch-a",
+      "lead-session",
+      "CONTEXT_MARKER",
+    ),
+    false,
   );
 });
 
