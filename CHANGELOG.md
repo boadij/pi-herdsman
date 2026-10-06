@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.2](https://github.com/boadij/pi-herdsman/compare/v0.21.1...v0.21.2) (2026-10-06)
+
+
+### Refactoring
+
+* **context:** persist retirement guidance ([#280](https://github.com/boadij/pi-herdsman/issues/280)) ([e538a4b](https://github.com/boadij/pi-herdsman/commit/e538a4b404c342f7d1ce4468452e3922da7c28be))
+
 ## [0.21.1](https://github.com/boadij/pi-herdsman/compare/v0.21.0...v0.21.1) (2026-10-06)
 
 
