@@ -43,6 +43,7 @@ import support, {
   leadExec,
   sessionAgentIdentity,
   sessionContextRetired,
+  registerManagedAgentContextHandlers,
   setLeadEnvironment,
   setAgentEnvironment,
   watchedResultPaths,
@@ -3367,7 +3368,13 @@ test("session agent identity reads the session-wide entry array", () => {
 
 test("retired active sessions suppress threshold compaction until completion", async () => {
   const mailbox = setAgentEnvironment("retirement-agent");
-  const agent = fakePi();
+  const entries: any[] = [];
+  const agent = fakePi({
+    entries,
+    sendMessage(message: any) {
+      entries.push({ type: "custom_message", ...message });
+    },
+  });
   registerExtension!(agent.pi as never);
   const context = fakeAgentContext(agent.entries);
   await agent.events.get("session_start")![0](undefined, context);
@@ -3391,9 +3398,37 @@ test("retired active sessions suppress threshold compaction until completion", a
   );
 
   const compact = agent.events.get("session_before_compact")![0];
+  const sentBefore = agent.sentMessageCalls.length;
+  const entriesBeforeManual = entries.slice();
+  assert.equal(compact({ reason: "manual" }, context), undefined);
+  assert.deepEqual(entries, entriesBeforeManual);
+  assert.equal(agent.sentMessageCalls.length, sentBefore);
+  assert.equal(
+    sessionContextRetired(entries, context.sessionManager.getSessionId()),
+    false,
+  );
   assert.deepEqual(compact({ reason: "threshold" }, context), {
     cancel: true,
   });
+  assert.deepEqual(agent.sentMessageCalls.slice(sentBefore), [
+    {
+      message: {
+        customType: "pi-herdsman-agent-context-retired",
+        content:
+          "Context pressure has retired this session. Do not start new work or new agents. " +
+          "Finish the current coherent operation at the next safe point. Avoid nonessential " +
+          "tool calls and validation; perform only what is needed for a reliable handoff. " +
+          "Resolve already-running dependent work, then complete this assignment with a " +
+          "self-contained handoff covering completed work, current state, relevant files, " +
+          "validation performed, unresolved issues, and exact next steps. This session " +
+          "will not be continued or forked.",
+        display: false,
+        details: { sessionId: context.sessionManager.getSessionId() },
+      },
+      options: { triggerTurn: false },
+    },
+  ]);
+  const retiredEntries = entries.slice();
   assert.equal(
     sessionContextRetired(
       context.sessionManager.getEntries(),
@@ -3417,25 +3452,40 @@ test("retired active sessions suppress threshold compaction until completion", a
       ).length,
     1,
   );
+  assert.deepEqual(entries, retiredEntries);
+  assert.equal(agent.sentMessageCalls.length, sentBefore + 1);
+  assert.deepEqual(
+    entries.filter(
+      (entry) =>
+        entry.type === "custom" &&
+        entry.customType === "pi-herdsman-agent-context-retired",
+    ),
+    [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-context-retired",
+        data: { sessionId: context.sessionManager.getSessionId() },
+      },
+    ],
+  );
   assert.equal(compact({ reason: "overflow" }, context), undefined);
+  assert.deepEqual(agent.sentMessageCalls.slice(sentBefore + 1), [
+    {
+      message: {
+        customType: "pi-herdsman-agent-context-retired",
+        content:
+          "This session is retired. Do not start new work or agents. " +
+          "Finish the current assignment and return a self-contained handoff.",
+        display: false,
+        details: { sessionId: context.sessionManager.getSessionId() },
+      },
+      options: { triggerTurn: false },
+    },
+  ]);
+  assert.deepEqual(entries.slice(0, retiredEntries.length), retiredEntries);
+  assert.equal(entries.length, retiredEntries.length + 1);
   assert.equal(compact({ reason: "manual" }, context), undefined);
-
-  const injected = agent.events.get("context")![1]?.(
-    { messages: [{ role: "user", content: "work" }] },
-    context,
-  );
-  const contextResult =
-    injected ??
-    agent.events.get("context")![0]?.(
-      { messages: [{ role: "user", content: "work" }] },
-      context,
-    );
-  assert.ok(contextResult);
-  assert.match(contextResult.messages.at(-1).content, /retired this session/i);
-  assert.match(
-    contextResult.messages.at(-1).content,
-    /self-contained handoff/i,
-  );
+  assert.equal(agent.sentMessageCalls.length, sentBefore + 2);
   agent.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
 });
@@ -3466,6 +3516,15 @@ test("context retirement bypasses compaction behavior when disabled", async () =
     agent.pi.appendEntry("pi-herdsman-agent-context-retired", {
       sessionId: context.sessionManager.getSessionId(),
     });
+    agent.entries.push({
+      type: "custom_message",
+      customType: "pi-herdsman-agent-context-retired",
+      content: "Persisted retirement guidance",
+      display: false,
+      details: { sessionId: context.sessionManager.getSessionId() },
+    });
+    const entriesBefore = agent.entries.slice();
+    const sentBefore = agent.sentMessageCalls.length;
     assert.equal(
       agent.events.get("session_before_compact")![0](
         { reason: "threshold" },
@@ -3473,10 +3532,8 @@ test("context retirement bypasses compaction behavior when disabled", async () =
       ),
       undefined,
     );
-    assert.equal(
-      agent.events.get("context")![0]({ messages: [] }, context),
-      undefined,
-    );
+    assert.deepEqual(agent.entries, entriesBefore);
+    assert.equal(agent.sentMessageCalls.length, sentBefore);
     assert.equal(
       sessionContextRetired(
         context.sessionManager.getEntries(),
@@ -3493,7 +3550,13 @@ test("context retirement bypasses compaction behavior when disabled", async () =
 
 test("overflow retires without cancellation and inactive sessions stay untouched", async () => {
   const mailbox = setAgentEnvironment("retirement-overflow-agent");
-  const agent = fakePi();
+  const entries: any[] = [];
+  const agent = fakePi({
+    entries,
+    sendMessage(message: any) {
+      entries.push({ type: "custom_message", ...message });
+    },
+  });
   registerExtension!(agent.pi as never);
   const context = fakeAgentContext(agent.entries);
   try {
@@ -3514,10 +3577,41 @@ test("overflow retires without cancellation and inactive sessions stay untouched
     writeRequest(mailbox, request);
     agent.events.get("input")![0]({ text: controlMarker(REQUEST_ID) }, context);
     const compact = agent.events.get("session_before_compact")![0];
+    const sentBefore = agent.sentMessageCalls.length;
     assert.equal(compact({ reason: "overflow" }, context), undefined);
+    const calls = agent.sentMessageCalls.slice(sentBefore);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].options, { triggerTurn: false });
+    assert.deepEqual(calls[0].message, {
+      customType: "pi-herdsman-agent-context-retired",
+      content: calls[0].message.content,
+      display: false,
+      details: { sessionId: context.sessionManager.getSessionId() },
+    });
+    assert.match(
+      calls[0].message.content,
+      /^Context pressure has retired this session\./,
+    );
+    assert.equal(
+      entries.filter(
+        (entry) =>
+          entry.type === "custom" &&
+          entry.customType === "pi-herdsman-agent-context-retired",
+      ).length,
+      1,
+    );
+    assert.equal(
+      entries.filter(
+        (entry) =>
+          entry.type === "custom_message" &&
+          entry.customType === "pi-herdsman-agent-context-retired",
+      ).length,
+      1,
+    );
     assert.deepEqual(compact({ reason: "threshold" }, context), {
       cancel: true,
     });
+    assert.equal(agent.sentMessageCalls.length, sentBefore + 1);
     assert.equal(
       sessionContextRetired(
         context.sessionManager.getEntries(),
@@ -3542,6 +3636,8 @@ test("overflow retires without cancellation and inactive sessions stay untouched
     inactiveAgent.pi.appendEntry("pi-herdsman-agent-context-retired", {
       sessionId: inactiveContext.sessionManager.getSessionId(),
     });
+    const entriesBefore = inactiveAgent.entries.slice();
+    const sentBefore = inactiveAgent.sentMessageCalls.length;
     assert.equal(
       inactiveAgent.events.get("session_before_compact")![0](
         { reason: "threshold" },
@@ -3550,16 +3646,119 @@ test("overflow retires without cancellation and inactive sessions stay untouched
       undefined,
     );
     assert.equal(
-      inactiveAgent.events.get("context")![0](
-        { messages: [] },
+      inactiveAgent.events.get("session_before_compact")![0](
+        { reason: "overflow" },
         inactiveContext,
       ),
       undefined,
     );
+    assert.deepEqual(inactiveAgent.entries, entriesBefore);
+    assert.equal(inactiveAgent.sentMessageCalls.length, sentBefore);
   } finally {
     inactiveAgent.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(inactiveMailbox);
   }
+});
+
+test("overflow retry bridges queued retirement guidance once and only when absent from the active projection", () => {
+  const sessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const staleGuidance = {
+    type: "custom_message",
+    customType: "pi-herdsman-agent-context-retired",
+    content: "Guidance on an inactive branch",
+    display: false,
+    details: { sessionId },
+  };
+  const entries: any[] = [staleGuidance];
+  const context = fakeAgentContext(entries, []);
+  const pending: any[] = [];
+  let streaming = true;
+  const agent = fakePi({
+    entries,
+    sendMessage(message: any) {
+      if (streaming) pending.push(message);
+      else entries.push({ type: "custom_message", ...message });
+    },
+  });
+  registerManagedAgentContextHandlers(agent.pi as never, {
+    contextRetirementEnabled: () => true,
+    hasActiveAssignment: () => true,
+  });
+
+  const compact = agent.events.get("session_before_compact")![0];
+  assert.equal(
+    compact({ reason: "overflow", willRetry: true }, context),
+    undefined,
+  );
+  assert.equal(pending.length, 1);
+  assert.equal(entries.includes(staleGuidance), true);
+  assert.equal(
+    entries.filter((entry) => entry.type === "custom_message").length,
+    1,
+    "sendMessage remains queued while the Agent is streaming",
+  );
+
+  const contextEvent = { messages: [{ role: "user", content: "retry" }] };
+  const bridged = agent.events.get("context")![0](contextEvent, context) as any;
+  assert.equal(bridged.messages.length, 2);
+  assert.equal(bridged.messages[1].content, pending[0].content);
+  assert.equal(
+    agent.events.get("context")![0](contextEvent, context),
+    undefined,
+    "the immediate retry consumes the bridge",
+  );
+
+  streaming = false;
+  entries.push({ type: "custom_message", ...pending.shift() });
+  assert.equal(
+    entries.filter((entry) => entry.type === "custom_message").length,
+    2,
+  );
+  assert.equal(
+    agent.events.get("context")![0](contextEvent, context),
+    undefined,
+  );
+
+  streaming = true;
+  assert.equal(
+    compact({ reason: "overflow", willRetry: true }, context),
+    undefined,
+  );
+  assert.equal(pending.length, 1);
+  agent.events.get("session_compact_failed")![0](
+    { reason: "overflow" },
+    context,
+  );
+  assert.equal(
+    agent.events.get("context")![0](contextEvent, context),
+    undefined,
+  );
+});
+
+test("agent settlement clears an overflow retry bridge when no retry context runs", () => {
+  const entries: any[] = [];
+  const context = fakeAgentContext(entries);
+  const agent = fakePi({ entries });
+  registerManagedAgentContextHandlers(agent.pi as never, {
+    contextRetirementEnabled: () => true,
+    hasActiveAssignment: () => true,
+  });
+
+  assert.equal(
+    agent.events.get("session_before_compact")![0](
+      { reason: "overflow", willRetry: true },
+      context,
+    ),
+    undefined,
+  );
+  agent.events.get("agent_settled")![0](undefined, context);
+  assert.equal(
+    agent.events.get("context")![0](
+      { messages: [{ role: "user", content: "later work" }] },
+      context,
+    ),
+    undefined,
+  );
 });
 
 test("agent persists one identity entry before mailbox initialization", async () => {
