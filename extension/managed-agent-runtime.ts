@@ -1,7 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import type {
-  ContextEvent,
   ExtensionAPI,
   ExtensionContext,
   ModelSelectEvent,
@@ -325,6 +324,9 @@ const CONTEXT_RETIREMENT_INSTRUCTION =
   "self-contained handoff covering completed work, current state, relevant files, " +
   "validation performed, unresolved issues, and exact next steps. This session " +
   "will not be continued or forked.";
+const CONTEXT_RETIREMENT_REMINDER =
+  "This session is retired. Do not start new work or agents. " +
+  "Finish the current assignment and return a self-contained handoff.";
 
 type MetadataActivity = { requestId: string; task: string; startedAt: number };
 type MetadataRuntime = {
@@ -2313,6 +2315,18 @@ export function sessionContextRetired(
   );
 }
 
+function sessionRetirementGuidancePersisted(
+  entries: readonly unknown[],
+  sessionId: string,
+): boolean {
+  return entries.some(
+    (entry: any) =>
+      entry?.type === "custom_message" &&
+      entry.customType === AGENT_CONTEXT_RETIRED_ENTRY &&
+      entry.details?.sessionId === sessionId,
+  );
+}
+
 export function registerManagedAgentContextHandlers(
   pi: ExtensionAPI,
   options: {
@@ -2329,30 +2343,32 @@ export function registerManagedAgentContextHandlers(
 
       const sessionId = ctx.sessionManager.getSessionId();
       const entries = ctx.sessionManager.getEntries();
-      if (!sessionContextRetired(entries, sessionId))
-        pi.appendEntry(AGENT_CONTEXT_RETIRED_ENTRY, { sessionId });
+      const retired = sessionContextRetired(entries, sessionId);
+      const guided = sessionRetirementGuidancePersisted(entries, sessionId);
+      if (!retired) pi.appendEntry(AGENT_CONTEXT_RETIRED_ENTRY, { sessionId });
+      if (!guided)
+        pi.sendMessage(
+          {
+            customType: AGENT_CONTEXT_RETIRED_ENTRY,
+            content: CONTEXT_RETIREMENT_INSTRUCTION,
+            display: false,
+            details: { sessionId },
+          },
+          { triggerTurn: false },
+        );
+      else if (event.reason === "overflow")
+        pi.sendMessage(
+          {
+            customType: AGENT_CONTEXT_RETIRED_ENTRY,
+            content: CONTEXT_RETIREMENT_REMINDER,
+            display: false,
+            details: { sessionId },
+          },
+          { triggerTurn: false },
+        );
       if (event.reason === "threshold") return { cancel: true };
     },
   );
-  pi.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
-    if (!options.contextRetirementEnabled()) return;
-    if (!options.hasActiveAssignment()) return;
-    const sessionId = ctx.sessionManager.getSessionId();
-    if (!sessionContextRetired(ctx.sessionManager.getEntries(), sessionId))
-      return;
-    return {
-      messages: [
-        ...event.messages,
-        {
-          role: "custom" as const,
-          customType: AGENT_CONTEXT_RETIRED_ENTRY,
-          content: CONTEXT_RETIREMENT_INSTRUCTION,
-          display: false,
-          timestamp: Date.now(),
-        },
-      ],
-    };
-  });
   pi.on("session_before_switch", () => ({ cancel: true }));
   pi.on("session_before_fork", () => ({ cancel: true }));
 }

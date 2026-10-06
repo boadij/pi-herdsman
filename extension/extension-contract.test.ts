@@ -2803,7 +2803,13 @@ test("delegating agents receive only their allowed definition roster", async () 
   const sessionStartHandlers = pi.events.get("session_start") ?? [];
   assert.equal(sessionStartHandlers.length, 1);
   await sessionStartHandlers[0](undefined, context);
-  assert.equal(pi.events.has("context"), true);
+  const contextHandlers = pi.events.get("context") ?? [];
+  assert.equal(contextHandlers.length, 1);
+  const ordinaryContext = {
+    messages: [{ role: "user", content: "ordinary turn" }],
+  };
+  assert.equal(contextHandlers[0](ordinaryContext, context), undefined);
+
   const event: any = {
     systemPromptOptions: { sections: {}, contextFiles: [] },
   };
