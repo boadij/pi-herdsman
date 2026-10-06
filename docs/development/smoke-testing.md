@@ -179,7 +179,14 @@ are not removed by `excludeTools`.
 For a definition with `tools` omitted, verify that launch does not add a
 `--tools` option and Pi's configured/default selection remains in effect.
 For an explicit `tools` list, verify that Pi receives the selected ordinary
-tools augmented with the agent's required role tools. Confirm result delivery,
+tools augmented with the agent's required role tools. Use the existing
+`scripts/tool-policy-diagnostic.mjs` with a disposable
+`mcp__policy_probe__forbidden` tool that the explicit allowlist does not select.
+Verify that the probe is not active or provider-visible, an attempted forbidden
+dispatch cannot execute it, and an allowed control tool remains callable.
+With `tools` omitted, verify that the configured probe remains ambient under
+Pi's normal selection. The probe is disposable validation infrastructure only.
+Confirm result delivery,
 integration, and cleanup for all one-shot agents.
 
 ## Body reference expansion

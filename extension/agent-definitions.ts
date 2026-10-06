@@ -294,6 +294,15 @@ function normalizedToolNames(tools: readonly string[] | undefined): string[] {
     .filter(Boolean);
 }
 
+function matchesToolPattern(pattern: string, name: string): boolean {
+  if (!pattern.includes("*")) return pattern === name;
+  const source = pattern
+    .split("*")
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/gu, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${source}$`, "u").test(name);
+}
+
 function readOptionalAgentDefinitions(root: string): AgentDefinition[] {
   const stats = statSync(root, { throwIfNoEntry: false });
   if (!stats) return [];
@@ -851,8 +860,10 @@ export function agentLaunchArgs(
     args.push("--append-system-prompt", `<active_agent name="${agent.name}"/>`);
 
   const explicitTools = frontmatter.tools !== undefined;
+  const configuredTools = normalizedToolNames(frontmatter.tools);
   const noTools =
-    frontmatter.noTools || (explicitTools && frontmatter.tools.length === 0);
+    frontmatter.noTools === true ||
+    (explicitTools && configuredTools.length === 0);
   if (noTools) args.push("--no-tools");
   if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");
   const requiredTools = [
@@ -863,26 +874,37 @@ export function agentLaunchArgs(
       : []),
     ...(options.requiredTools ?? []),
   ].filter((tool, index, all) => all.indexOf(tool) === index);
-  if (managedAgent || requiredTools.length) {
-    if (noTools || explicitTools) {
-      const configuredTools = normalizedToolNames(frontmatter.tools).filter(
-        (tool) =>
-          (!managedAgent || tool !== "agent") && !requiredTools.includes(tool),
+  const requiredToolSet = new Set(requiredTools);
+  const excluded = normalizedToolNames(frontmatter.excludeTools)
+    .filter((pattern) => !requiredToolSet.has(pattern))
+    .filter((pattern, index, all) => all.indexOf(pattern) === index);
+  for (const pattern of excluded) {
+    if (!pattern.includes("*")) continue;
+    const required = requiredTools.find((tool) =>
+      matchesToolPattern(pattern, tool),
+    );
+    if (required)
+      throw new Error(
+        `agent ${agent.name} excludeTools pattern ${JSON.stringify(pattern)} ` +
+          `matches required tool ${JSON.stringify(required)}; ` +
+          `required tools cannot be excluded by patterns`,
       );
-      const tools = [...new Set([...configuredTools, ...requiredTools])];
-      if (tools.length) args.push("--tools", tools.join(","));
-    }
-    const requiredToolSet = new Set(requiredTools);
-    const excluded = normalizedToolNames(frontmatter.excludeTools)
-      .filter((tool) => !requiredToolSet.has(tool))
-      .filter((tool, index, all) => all.indexOf(tool) === index);
-    if (excluded.length) args.push("--exclude-tools", excluded.join(","));
-  } else {
-    if (frontmatter.tools?.length)
-      args.push("--tools", frontmatter.tools.join(","));
-    if (frontmatter.excludeTools?.length)
-      args.push("--exclude-tools", frontmatter.excludeTools.join(","));
   }
+  if (noTools || explicitTools) {
+    const configured = configuredTools.filter(
+      (tool) =>
+        (!managedAgent || tool !== "agent") && !requiredToolSet.has(tool),
+    );
+    const selected = [...new Set([...configured, ...requiredTools])];
+    if (selected.length) {
+      if (!selected.some((tool) => tool.startsWith("mcp__"))) {
+        selected.push("mcp__");
+        if (!excluded.includes("mcp__")) excluded.push("mcp__");
+      }
+      args.push("--tools", selected.join(","));
+    }
+  }
+  if (excluded.length) args.push("--exclude-tools", excluded.join(","));
 
   const noSkills = frontmatter.noSkills ?? frontmatter.inheritSkills !== true;
   if (noSkills) args.push("--no-skills");

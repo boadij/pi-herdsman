@@ -139,6 +139,7 @@ const providerTools = (value, found = []) => {
     return found;
   }
   if (value.type === "namespace") return providerTools(value.tools, found);
+  if (Array.isArray(value.tools)) return providerTools(value.tools, found);
   if (value.type === "function" && value.name) found.push(value.name);
   return found;
 };
