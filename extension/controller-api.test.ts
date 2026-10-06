@@ -2411,6 +2411,8 @@ async function runManagerStartupScenario(
     | "concurrent"
     | "active-loss"
     | "active-live"
+    | "active-live-inspect-revoked"
+    | "active-live-inspect-lease-replaced"
     | "active-live-mismatch"
     | "active-missing"
     | "active-missing-no-session"
@@ -2419,6 +2421,7 @@ async function runManagerStartupScenario(
     | "active-closed"
     | "close-resume"
     | "close-failure"
+    | "close-takeover-race"
     | "unassigned-close",
   projectTrusted = false,
   t?: TestContext,
@@ -2464,7 +2467,9 @@ async function runManagerStartupScenario(
   let started =
     mode === "recovery" ||
     mode === "active-live" ||
-    ["close-resume", "close-failure"].includes(mode);
+    mode === "active-live-inspect-revoked" ||
+    mode === "active-live-inspect-lease-replaced" ||
+    ["close-resume", "close-failure", "close-takeover-race"].includes(mode);
   let startupObservations = 0;
   let identityObservations = 0;
   let cleanupOwnershipObservations = 0;
@@ -2485,6 +2490,14 @@ async function runManagerStartupScenario(
   let startCalls = 0;
   let worktreeListCalls = 0;
   let invalidTopologyCall = Number.POSITIVE_INFINITY;
+  let inspectionReached!: () => void;
+  const inspectionReadReached = new Promise<void>((resolve) => {
+    inspectionReached = resolve;
+  });
+  let resumeInspection!: () => void;
+  const inspectionReadGate = new Promise<void>((resolve) => {
+    resumeInspection = resolve;
+  });
   let duplicateWorktree = false;
   const respond = (result: any) => ({
     stdout: JSON.stringify({
@@ -2649,9 +2662,12 @@ async function runManagerStartupScenario(
           tab_id: "child-tab",
           terminal_id: "child-terminal",
           cwd: childPath,
-          ...((["close-resume", "close-failure", "unassigned-close"].includes(
-            mode,
-          ) ||
+          ...(([
+            "close-resume",
+            "close-failure",
+            "close-takeover-race",
+            "unassigned-close",
+          ].includes(mode) ||
             prospective) &&
           started
             ? {
@@ -2675,9 +2691,12 @@ async function runManagerStartupScenario(
           shell_pid: 33,
           foreground_process_group_id:
             started &&
-            (["close-resume", "close-failure", "unassigned-close"].includes(
-              mode,
-            ) ||
+            ([
+              "close-resume",
+              "close-failure",
+              "close-takeover-race",
+              "unassigned-close",
+            ].includes(mode) ||
               prospective)
               ? 44
               : 33,
@@ -2713,7 +2732,14 @@ async function runManagerStartupScenario(
     if (command === "herdr" && args[0] === "pane" && args[1] === "run")
       return respond({});
     if (command === "herdr" && args[0] === "agent" && args[1] === "send-keys") {
-      if (["close-resume", "close-failure", "unassigned-close"].includes(mode))
+      if (
+        [
+          "close-resume",
+          "close-failure",
+          "close-takeover-race",
+          "unassigned-close",
+        ].includes(mode)
+      )
         assert.deepEqual(args, [
           "agent",
           "send-keys",
@@ -3019,11 +3045,15 @@ async function runManagerStartupScenario(
               ]
             : []),
           ...(mode === "active-live" ||
+          mode.startsWith("active-live-inspect-") ||
           mode === "active-live-mismatch" ||
           (started && startupObservations >= 3) ||
-          (["close-resume", "close-failure", "unassigned-close"].includes(
-            mode,
-          ) &&
+          ([
+            "close-resume",
+            "close-failure",
+            "close-takeover-race",
+            "unassigned-close",
+          ].includes(mode) &&
             started)
             ? Array.from(
                 { length: mode === "identity-ambiguity" && delivered ? 2 : 1 },
@@ -3073,6 +3103,13 @@ async function runManagerStartupScenario(
             : managerAgent,
       });
     }
+    if (command === "herdr" && args[0] === "agent" && args[1] === "read") {
+      if (mode.startsWith("active-live-inspect-")) {
+        inspectionReached();
+        await inspectionReadGate;
+      }
+      return { stdout: "captured inspection evidence", stderr: "", code: 0 };
+    }
     return respond({});
   };
   const pi = fakeChiefPi({
@@ -3109,6 +3146,8 @@ async function runManagerStartupScenario(
     const activeMode = [
       "active-loss",
       "active-live",
+      "active-live-inspect-revoked",
+      "active-live-inspect-lease-replaced",
       "active-live-mismatch",
       "active-missing",
       "active-missing-no-session",
@@ -3117,6 +3156,7 @@ async function runManagerStartupScenario(
       "active-closed",
       "close-resume",
       "close-failure",
+      "close-takeover-race",
     ].includes(mode);
     const resumeMode = activeMode || mode === "invalid-topology";
     if (activeMode) {
@@ -3172,7 +3212,7 @@ async function runManagerStartupScenario(
           });
         }
       }
-      if (mode === "active-live") {
+      if (mode === "active-live" || mode.startsWith("active-live-inspect-")) {
         writeFileSync(
           childSessionPath,
           JSON.stringify({ type: "session", id: staleId }),
@@ -3184,7 +3224,11 @@ async function runManagerStartupScenario(
           entries: [],
         });
       }
-      if (mode === "active-live" || mode === "active-live-mismatch")
+      if (
+        mode === "active-live" ||
+        mode.startsWith("active-live-inspect-") ||
+        mode === "active-live-mismatch"
+      )
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
           role: "lead",
@@ -3195,7 +3239,9 @@ async function runManagerStartupScenario(
             : {}),
           updatedAt: Date.now(),
         });
-      if (["close-resume", "close-failure"].includes(mode))
+      if (
+        ["close-resume", "close-failure", "close-takeover-race"].includes(mode)
+      )
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
           role: "lead",
@@ -3322,6 +3368,45 @@ async function runManagerStartupScenario(
         });
         return;
       }
+      if (mode.startsWith("active-live-inspect-")) {
+        const inspect = pi.tools.find((tool) => tool.name === "staff_inspect")!;
+        const pending = inspect.execute(
+          "inspect",
+          { session: staleId },
+          undefined,
+          undefined,
+          ctx,
+        );
+        await inspectionReadReached;
+        if (mode === "active-live-inspect-revoked")
+          removeProjectAssignment(
+            supervisionRuntime(),
+            "repo-key",
+            "smoke/recover",
+          );
+        else {
+          const descriptorPath = managerDescriptorPath(
+            supervisionRuntime(),
+            WORKSPACE,
+          );
+          const descriptor = readManagerDescriptor(
+            supervisionRuntime(),
+            WORKSPACE,
+          )!;
+          writeFileSync(
+            descriptorPath,
+            JSON.stringify({ ...descriptor, leaseId: randomUUID() }),
+          );
+        }
+        resumeInspection();
+        await assert.rejects(
+          pending,
+          mode === "active-live-inspect-revoked"
+            ? /Lead changed during inspection/
+            : /Manager lease is no longer active|Lead changed during inspection/,
+        );
+        return;
+      }
       if (mode === "active-live") {
         const running = await execute();
         assert.equal(running.details.action, "resume");
@@ -3388,12 +3473,44 @@ async function runManagerStartupScenario(
           /conflicts with persisted project identity/,
         );
         realFs.rmSync(conflictingPath, { force: true });
-      } else if (["close-resume", "close-failure"].includes(mode)) {
+      } else if (
+        ["close-resume", "close-failure", "close-takeover-race"].includes(mode)
+      ) {
         const control = (name: string, value: unknown) =>
           pi.tools
             .find((tool) => tool.name === name)!
             .execute(name, value, undefined, undefined, ctx);
-        if (mode === "close-failure") {
+        if (mode === "close-takeover-race") {
+          const assignment = listProjectAssignments(
+            supervisionRuntime(),
+            "repo-key",
+          )[0]!;
+          const releaseAssignmentLock = claimProcessLock(
+            `${projectAssignmentPath(supervisionRuntime(), "repo-key", assignment.branch)}.lock`,
+            { name: "test takeover assignment lock" },
+          );
+          await assert.rejects(control("staff_stop", { session: staleId }));
+          removeProjectAssignment(
+            supervisionRuntime(),
+            "repo-key",
+            assignment.branch,
+          );
+          releaseAssignmentLock();
+          assert.equal(started, true);
+          const liveAgents = JSON.parse(
+            (await exec("herdr", ["agent", "list"])).stdout,
+          ).result.agents;
+          assert.ok(
+            liveAgents.some(
+              (agent: any) => agent.agent_session?.value === staleId,
+            ),
+          );
+          assert.ok(
+            JSON.parse(
+              (await exec("herdr", ["pane", "list"])).stdout,
+            ).result.panes.some((pane: any) => pane.pane_id === "child-pane"),
+          );
+        } else if (mode === "close-failure") {
           await assert.rejects(control("staff_stop", { session: staleId }));
           assert.equal(
             listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
@@ -4117,6 +4234,12 @@ test("Manager stop preserves the exact assignment and resumes its session", () =
   runManagerStartupScenario("close-resume"));
 test("Manager retains assignment when exact Lead stop fails", () =>
   runManagerStartupScenario("close-failure"));
+test("Manager stop cannot race through takeover's assignment lock", () =>
+  runManagerStartupScenario("close-takeover-race"));
+test("Manager inspection rejects evidence after assignment revocation", () =>
+  runManagerStartupScenario("active-live-inspect-revoked"));
+test("Manager inspection rejects evidence after lease replacement", () =>
+  runManagerStartupScenario("active-live-inspect-lease-replaced"));
 test("Manager resume reports incompatible Lead builds as staff_resume", () =>
   runManagerStartupScenario("active-live-mismatch"));
 test("Manager rejects stopping an unassigned direct Lead", () =>

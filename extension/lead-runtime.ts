@@ -3769,7 +3769,12 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     };
     return host.withProjectWorkLock(
       `${manager.repoKey}\0${assignment.branch}`,
-      close,
+      () =>
+        host.withProjectAssignmentLock(
+          manager.repoKey,
+          assignment.branch,
+          close,
+        ),
     );
   };
   const {
@@ -4721,6 +4726,21 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           );
         },
       );
+      const currentAuthority =
+        activeRole() === "chief"
+          ? await currentChiefAuthority(ctx)
+          : await currentManager(ctx);
+      const currentLead = (await directReports(ctx)).find(
+        (candidate: any) => reportSession(candidate) === params.session,
+      );
+      if (
+        !currentAuthority ||
+        currentAuthority.leaseId !== authority.leaseId ||
+        !currentLead ||
+        !sameLeadIdentity(currentLead, lead) ||
+        !currentLead.availableActions.includes("inspect")
+      )
+        throw new Error("Lead changed during inspection");
       return result({
         ok: true,
         action: "inspect",
