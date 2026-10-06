@@ -3735,6 +3735,32 @@ test("overflow retry bridges queued retirement guidance once and only when absen
   );
 });
 
+test("agent settlement clears an overflow retry bridge when no retry context runs", () => {
+  const entries: any[] = [];
+  const context = fakeAgentContext(entries);
+  const agent = fakePi({ entries });
+  registerManagedAgentContextHandlers(agent.pi as never, {
+    contextRetirementEnabled: () => true,
+    hasActiveAssignment: () => true,
+  });
+
+  assert.equal(
+    agent.events.get("session_before_compact")![0](
+      { reason: "overflow", willRetry: true },
+      context,
+    ),
+    undefined,
+  );
+  agent.events.get("agent_settled")![0](undefined, context);
+  assert.equal(
+    agent.events.get("context")![0](
+      { messages: [{ role: "user", content: "later work" }] },
+      context,
+    ),
+    undefined,
+  );
+});
+
 test("agent persists one identity entry before mailbox initialization", async () => {
   const mailbox = setAgentEnvironment();
   const agent = fakePi();

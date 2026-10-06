@@ -1920,10 +1920,6 @@ export function registerManagedAgentRuntime(
       },
     }),
   );
-  registerManagedAgentContextHandlers(pi, {
-    contextRetirementEnabled: () => readConfig().contextRetirement,
-    hasActiveAssignment: () => !!execution.assignment?.activeRequestId,
-  });
   const prepareDelegatingRoster = async (
     ctx: ExtensionContext,
   ): Promise<void> => {
@@ -2079,6 +2075,10 @@ export function registerManagedAgentRuntime(
       controller.stopHealthScanner();
       controller.shutdown();
     },
+  });
+  registerManagedAgentContextHandlers(pi, {
+    contextRetirementEnabled: () => readConfig().contextRetirement,
+    hasActiveAssignment: () => !!execution.assignment?.activeRequestId,
   });
 }
 
@@ -2373,6 +2373,9 @@ export function registerManagedAgentContextHandlers(
   );
   pi.on("session_compact_failed", (event: SessionCompactFailedEvent) => {
     if (event.reason === "overflow") overflowRetryGuidance = undefined;
+  });
+  pi.on("agent_settled", () => {
+    overflowRetryGuidance = undefined;
   });
   pi.on("context", (event: ContextEvent) => {
     if (!overflowRetryGuidance) return;
