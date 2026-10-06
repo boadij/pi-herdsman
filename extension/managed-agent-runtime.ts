@@ -1746,12 +1746,10 @@ export function registerManagedAgentRuntime(
   pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
     const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION!;
     const label = process.env.PI_HERDSMAN_LABEL!;
-    event.systemPromptOptions.sections.active_agent = [
+    event.systemPromptOptions.sections.pi_herdsman_agent = [
       `identity: ${displayIdentity(definition, label)}`,
       `direct_owner: ${process.env.PI_HERDSMAN_OWNER_DISPLAY!}`,
     ].join("\n");
-    delete event.systemPromptOptions.sections.delegating_agent_role;
-    delete event.systemPromptOptions.sections.agent_definitions;
     if (delegationEnabled) {
       const roster = startupDefinitionRoster;
       const availableRoster =

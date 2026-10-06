@@ -456,6 +456,14 @@ test("selects global and project context independently in native order", () => {
   }
 });
 
+test("managed launches retain the generic active-agent interoperability marker", () => {
+  const args = agentLaunchArgs(
+    { name: "reviewer", path: "/agent.md", frontmatter: {}, body: "" },
+    { managedAgent: true },
+  );
+  assert.ok(args.includes('<active_agent name="reviewer"/>'));
+});
+
 test("discovers the five portable bundled definitions without a user agents directory", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-agents-"));
   assert.deepEqual(
@@ -1869,7 +1877,15 @@ test("projects parent-launched definitions as exact leaf capabilities", () => {
   );
   assert.deepEqual(
     agentLaunchArgs(delegationOnlyLeaf, { managedAgent: true }),
-    ["--no-context-files", "--no-tools", "--tools", "ask_owner", "--no-skills"],
+    [
+      "--no-context-files",
+      "--no-tools",
+      "--tools",
+      "ask_owner",
+      "--no-skills",
+      "--append-system-prompt",
+      '<active_agent name="parent"/>',
+    ],
   );
   const omittedToolsLeaf = projectAgentDefinition(
     {

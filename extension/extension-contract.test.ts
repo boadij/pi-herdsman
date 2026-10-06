@@ -2810,11 +2810,11 @@ test("delegating agents receive only their allowed definition roster", async () 
   const prompt = await pi.events.get("before_agent_start")![0](event, context);
   assert.equal(prompt, undefined);
   assert.match(
-    event.systemPromptOptions.sections.active_agent,
+    event.systemPromptOptions.sections.pi_herdsman_agent,
     /identity: agent:delegating-agent/,
   );
   assert.match(
-    event.systemPromptOptions.sections.active_agent,
+    event.systemPromptOptions.sections.pi_herdsman_agent,
     /direct_owner: lead/,
   );
   assert.match(
@@ -3112,7 +3112,7 @@ test("delegating agents do not receive Manager supervisor projections", async ()
     };
     await pi.events.get("before_agent_start")![0](event, context);
     assert.match(
-      event.systemPromptOptions.sections.active_agent,
+      event.systemPromptOptions.sections.pi_herdsman_agent,
       /direct_owner: lead/,
     );
     assert.equal(
@@ -3209,24 +3209,30 @@ test("leaf agents and active Chiefs do not receive agent definition rosters", as
   assert.equal(leaf.events.has("before_agent_start"), true);
   const leafContext = fakeContext() as any;
   const leafEvent: any = {
-    systemPromptOptions: { sections: {}, contextFiles: [] },
+    systemPromptOptions: {
+      sections: {
+        delegating_agent_role: "earlier extension role",
+        agent_definitions: "earlier extension definitions",
+      },
+      contextFiles: [],
+    },
   };
   await leaf.events.get("before_agent_start")![0](leafEvent, leafContext);
   assert.match(
-    leafEvent.systemPromptOptions.sections.active_agent,
+    leafEvent.systemPromptOptions.sections.pi_herdsman_agent,
     /identity: agent:leaf-agent/,
   );
   assert.match(
-    leafEvent.systemPromptOptions.sections.active_agent,
+    leafEvent.systemPromptOptions.sections.pi_herdsman_agent,
     /direct_owner: lead/,
   );
   assert.equal(
-    "delegating_agent_role" in leafEvent.systemPromptOptions.sections,
-    false,
+    leafEvent.systemPromptOptions.sections.delegating_agent_role,
+    "earlier extension role",
   );
   assert.equal(
-    "agent_definitions" in leafEvent.systemPromptOptions.sections,
-    false,
+    leafEvent.systemPromptOptions.sections.agent_definitions,
+    "earlier extension definitions",
   );
   leaf.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);

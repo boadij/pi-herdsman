@@ -3523,7 +3523,9 @@ test("fresh assignment transports automatic prompt snapshots and cleans them up"
     assert.equal(launched.length, 1);
     assert.deepEqual(
       launched[0].args.filter(
-        (arg) => arg === "--system-prompt" || arg === "--append-system-prompt",
+        (arg, index, args) =>
+          (arg === "--system-prompt" || arg === "--append-system-prompt") &&
+          !args[index + 1]?.startsWith("<active_agent "),
       ),
       ["--append-system-prompt", "--append-system-prompt"],
     );
@@ -3662,7 +3664,9 @@ test("caller assignment files suppress canonical-overlapping automatic prompts",
     assert.match(launched[0].contents[1]!, /ask_owner/);
     assert.deepEqual(
       launched[0].args.filter(
-        (arg) => arg === "--system-prompt" || arg === "--append-system-prompt",
+        (arg, index, args) =>
+          (arg === "--system-prompt" || arg === "--append-system-prompt") &&
+          !args[index + 1]?.startsWith("<active_agent "),
       ),
       ["--append-system-prompt", "--append-system-prompt"],
     );

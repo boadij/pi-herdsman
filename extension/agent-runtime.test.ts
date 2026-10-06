@@ -734,11 +734,11 @@ test("registered agent writes state, handles input, and settles one result", asy
   };
   await agent.events.get("before_agent_start")![0](promptEvent, context as any);
   assert.match(
-    promptEvent.systemPromptOptions.sections.active_agent,
+    promptEvent.systemPromptOptions.sections.pi_herdsman_agent,
     /identity: agent:registered-agent/,
   );
   assert.match(
-    promptEvent.systemPromptOptions.sections.active_agent,
+    promptEvent.systemPromptOptions.sections.pi_herdsman_agent,
     /direct_owner: lead/,
   );
   assert.equal(

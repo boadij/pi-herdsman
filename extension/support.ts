@@ -2907,6 +2907,7 @@ export function promptLaunchContents(args: string[]): string[] {
       args[index] === "--append-system-prompt"
     ) {
       const input = args[index + 1]!;
+      if (input.startsWith("<active_agent ")) continue;
       contents.push(readFileSync(input, "utf8"));
     }
   }

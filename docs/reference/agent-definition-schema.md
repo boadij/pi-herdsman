@@ -298,10 +298,12 @@ selected project/global context-file additions
     ↓
 shared herdr agent guidance
     ↓
-<active_agent>
+<active_agent name="<definition>"/>
+    ↓ generic identity signal for compatible extensions
+<pi_herdsman_agent>
 identity: <definition>:<label>
 direct_owner: lead | <owner-definition>:<owner-label>
-</active_agent>
+</pi_herdsman_agent>
 ```
 
 Omitting `systemPromptMode` defaults to `append`, preserving Pi's normal system
@@ -310,10 +312,12 @@ custom definitions may explicitly select `replace`; the reserved
 `managed-lead` role is append-only and rejects that setting.
 
 The effective body and shared guidance are delivered through private temporary
-prompt snapshots. The managed-Agent runtime supplies the structured
-`active_agent` system-prompt section with the current semantic identity and
-direct owner. `direct_owner` is model-facing context only; exact ownership and
-routing continue to use internal Pi session identity. A continued generation
+prompt snapshots. Managed agents retain the generic literal
+`<active_agent name="<definition>"/>` interoperability signal for compatible
+extensions. Separately, the managed-Agent runtime supplies a structured
+`pi_herdsman_agent` section with the current semantic identity and direct owner.
+`direct_owner` is model-facing context only; exact ownership and routing
+continue to use internal Pi session identity. A continued generation
 recomputes its direct owner from the current caller rather than restoring the
 historical owner.
 

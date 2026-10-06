@@ -894,5 +894,7 @@ export function agentLaunchArgs(
     args.push("--no-extensions");
   for (const extension of frontmatter.extensions ?? [])
     args.push("--extension", extension);
+  if (managedAgent)
+    args.push("--append-system-prompt", `<active_agent name="${agent.name}"/>`);
   return args;
 }
