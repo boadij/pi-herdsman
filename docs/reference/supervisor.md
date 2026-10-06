@@ -29,14 +29,15 @@ Available to Leads and Managers.
 ```
 
 `message_supervisor` is asynchronous and nonblocking. Use it for material
-information the direct supervisor needs before the normal result boundary,
-such as a timely question, clarification, blocker, warning, scope conflict,
-risk, decision request, or important evidence. Continue working as appropriate;
-the Lead may also choose to wait for a response through ordinary
-`message_staff`. Routine information that can wait should be included in the
-automatic completed-result handoff.
-Do not message solely to duplicate an automatic result, but do not deduplicate
-separate messages by content.
+information the direct supervisor needs, such as a timely question,
+clarification, blocker, warning, scope conflict, risk, decision request, or
+important evidence. Continue working as appropriate; the Lead may also choose
+to wait for a response through ordinary `message_staff`.
+
+For an assigned project Lead, information that can wait for the normal automatic
+completed-result handoff should go there instead. Do not message solely to
+duplicate that result. Ordinary Leads and Managers have no automatic result
+handoff to Chief. Separate messages and results are not deduplicated.
 
 An ordinary Lead without a verified Chief should continue independently until
 a supervisor is available. Manually continuing the exact assigned Pi session

@@ -375,9 +375,11 @@ Use `message_supervisor` for material coordination with the direct supervisor.
 Managed Leads contact their assigned Manager; ordinary Leads and Managers
 contact Chief. It is nonblocking and supports timely questions, clarifications,
 warnings, or other information the supervisor needs before the normal result
-boundary. Routine information that can wait should go in the automatic result.
-The Lead may choose to wait for a response through `message_staff`. Ordinary
-Leads without a verified Chief continue independently.
+boundary. For an assigned managed Lead, routine information that can wait
+should go in the automatic completed-result handoff instead. The Lead may choose
+to wait for a response through `message_staff`. Ordinary Leads and Managers
+have no automatic result handoff to Chief. Ordinary Leads without a verified
+Chief continue independently.
 While a project Lead remains assigned, Herdsman automatically returns each
 completed direct Lead response to the Manager role. If managed Agent work is
 active, the herd run owns that handoff until it settles; summarize the outcome,
@@ -391,8 +393,9 @@ data, not assignments or terminal project results.
 
 `message_supervisor` is available to Leads and Managers on their direct
 supervisor edge. Manager messages to Leads use `message_staff`. Both tools are
-nonblocking; they do not replace automatic completed-result handoffs. Separate
-messages and results are not deduplicated. For files, these tools accept
+nonblocking; for assigned managed Leads, `message_supervisor` does not replace
+the automatic completed-result handoff. Separate messages and results are not
+deduplicated. For files, these tools accept
 ordinary paths,
 reusable direct-agent result refs, and already-supplied canonical result refs
 through `files`.
