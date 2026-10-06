@@ -1723,6 +1723,8 @@ export function registerManagedAgentRuntime(
           ctx,
           scope,
           controller.sessionSignal(),
+          true,
+          false,
         );
         return buildAgentStatusSnapshot(view, ctx, {
           scope,
