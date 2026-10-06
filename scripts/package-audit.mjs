@@ -29,7 +29,7 @@ const expectedRoot = new Set([
   "README.md",
   "SKILL.md",
   "LICENSE",
-  "skills/pi-herdsman-agent-definitions/SKILL.md",
+  "skills/agent-definitions/SKILL.md",
 ]);
 const expectedDefinitions = readdirSync(
   resolve(root, "extension/agent-definitions"),
@@ -127,7 +127,7 @@ try {
     );
   const expectedSkill = resolve(
     root,
-    "skills/pi-herdsman-agent-definitions/SKILL.md",
+    "skills/agent-definitions/SKILL.md",
   );
   if (
     skills.length !== 1 ||

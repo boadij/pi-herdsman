@@ -672,6 +672,82 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
       ...COORDINATION_MESSAGE_KINDS.map((kind) => `pi-herdsman-${kind}`),
     ].sort(),
   );
+  const leadMessageRenderer = lead.messageRenderers.find(
+    ({ customType }) => customType === "pi-herdsman-lead_message",
+  )!.renderer as any;
+  const leadMessage = {
+    content: "A lead message body",
+    details: { fromSessionId: "lead-session" },
+  };
+  const click = (button: "left" | "right") => ({
+    type: "click",
+    button,
+    x: 0,
+    y: 0,
+    screenX: 0,
+    screenY: 0,
+    width: 80,
+    height: 4,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  });
+  const first = leadMessageRenderer(
+    leadMessage,
+    { expanded: false },
+    {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    },
+  );
+  const second = leadMessageRenderer(
+    leadMessage,
+    { expanded: false },
+    {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    },
+  );
+  assert.doesNotMatch(
+    first.render(120).join("\n"),
+    /from session: lead-session/,
+  );
+  assert.equal(first.handleMouse(click("right"))?.handled, undefined);
+  assert.doesNotMatch(
+    first.render(120).join("\n"),
+    /from session: lead-session/,
+  );
+  assert.equal(first.handleMouse(click("left"))?.handled, true);
+  assert.match(first.render(120).join("\n"), /from session: lead-session/);
+  assert.doesNotMatch(
+    second.render(120).join("\n"),
+    /from session: lead-session/,
+  );
+  assert.equal(first.handleMouse(click("left"))?.handled, true);
+  assert.doesNotMatch(
+    first.render(120).join("\n"),
+    /from session: lead-session/,
+  );
+  const initiallyExpanded = leadMessageRenderer(
+    leadMessage,
+    { expanded: true },
+    {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    },
+  );
+  assert.match(
+    initiallyExpanded.render(120).join("\n"),
+    /from session: lead-session/,
+  );
+  initiallyExpanded.handleMouse(click("left"));
+  assert.doesNotMatch(
+    initiallyExpanded.render(120).join("\n"),
+    /from session: lead-session/,
+  );
   assert.equal(lead.commands.includes("subagents"), false);
   assert.equal(lead.events.has("before_agent_start"), true);
   assert.equal(lead.events.has("context"), false);
