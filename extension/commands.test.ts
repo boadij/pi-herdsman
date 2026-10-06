@@ -6657,6 +6657,76 @@ test("Definitions Details in RPC reports metadata without expanding instructions
   }
 });
 
+test("Agent Definition details toggle independently on click", () => {
+  setLeadEnvironment();
+
+  const pi = fakePi();
+  registerExtension!(pi.pi as never);
+
+  const renderer = pi.entryRenderers.find(
+    ({ customType }) => customType === "pi-herdsman-agent-definitions",
+  )!.renderer as any;
+  const entry = {
+    data: {
+      definitions: [
+        {
+          name: "scout",
+          description: "Example definition",
+          extensions: ["example-extension"],
+        },
+      ],
+      instructions: "AGENT_DEFINITION_INSTRUCTIONS_SENTINEL",
+    },
+  };
+  const theme = {
+    fg: (_role: string, text: string) => text,
+    bg: (_role: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  const click = {
+    type: "click",
+    button: "left",
+    x: 0,
+    y: 0,
+    screenX: 0,
+    screenY: 0,
+    width: 80,
+    height: 4,
+    shift: false,
+    alt: false,
+    ctrl: false,
+  };
+  const first = renderer(entry, { expanded: false }, theme);
+  const second = renderer(entry, { expanded: false }, theme);
+  const rendered = (component: any) => component.render(120).join("\n");
+
+  assert.doesNotMatch(
+    rendered(first),
+    /AGENT_DEFINITION_INSTRUCTIONS_SENTINEL/u,
+  );
+  assert.doesNotMatch(
+    rendered(second),
+    /AGENT_DEFINITION_INSTRUCTIONS_SENTINEL/u,
+  );
+  assert.equal(first.handleMouse(click)?.handled, true);
+  assert.match(rendered(first), /AGENT_DEFINITION_INSTRUCTIONS_SENTINEL/u);
+  assert.doesNotMatch(
+    rendered(second),
+    /AGENT_DEFINITION_INSTRUCTIONS_SENTINEL/u,
+  );
+  assert.equal(first.handleMouse(click)?.handled, true);
+  assert.doesNotMatch(
+    rendered(first),
+    /AGENT_DEFINITION_INSTRUCTIONS_SENTINEL/u,
+  );
+
+  const globallyExpanded = renderer(entry, { expanded: true }, theme);
+  assert.match(
+    rendered(globallyExpanded),
+    /AGENT_DEFINITION_INSTRUCTIONS_SENTINEL/u,
+  );
+});
+
 test("Definitions cancellation navigates one menu level at a time", async () => {
   setLeadEnvironment();
   const pi = fakePi();
