@@ -519,7 +519,8 @@ const {
   resolveAssignmentSession: resolveOwnedAssignmentSession,
   sessionAgentIdentity,
 } = await import("./agent-controller.ts");
-const { sessionContextRetired } = await import("./managed-agent-runtime.ts");
+const { sessionContextRetired, registerManagedAgentContextHandlers } =
+  await import("./managed-agent-runtime.ts");
 const { default: registerExtension } = await import("./index.ts");
 const { readConfig } = await import("./config.ts");
 export function resolveAssignmentSession(
@@ -535,6 +536,7 @@ export function resolveAssignmentSession(
 export { sessionAgentIdentity };
 export { registerExtension };
 export { sessionContextRetired };
+export { registerManagedAgentContextHandlers };
 export const HERDSMAN_BUILD = runtimeBuild(
   packageMetadata.version,
   fileURLToPath(new URL("./index.ts", import.meta.url)),
@@ -908,6 +910,7 @@ export function setLeadEnvironment(): void {
     "PI_HERDSMAN_MAILBOX",
     "PI_HERDSMAN_RUN_ID",
     "PI_HERDSMAN_OWNER_SESSION_ID",
+    "PI_HERDSMAN_OWNER_DISPLAY",
     "PI_HERDSMAN_LABEL",
     "PI_HERDSMAN_WORKSPACE_ID",
     "PI_HERDSMAN_AGENT_DEFINITION",
@@ -941,6 +944,7 @@ export function setAgentEnvironment(
   process.env.PI_HERDSMAN_RUN_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   process.env.PI_HERDSMAN_OWNER_SESSION_ID =
     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  process.env.PI_HERDSMAN_OWNER_DISPLAY = "lead";
   process.env.PI_HERDSMAN_LABEL = label;
   process.env.PI_HERDSMAN_WORKSPACE_ID = workspace;
   process.env.PI_HERDSMAN_AGENT_DEFINITION = "agent";
@@ -2905,11 +2909,8 @@ export function promptLaunchContents(args: string[]): string[] {
       args[index] === "--append-system-prompt"
     ) {
       const input = args[index + 1]!;
-      contents.push(
-        input.startsWith("<active_agent ")
-          ? input
-          : readFileSync(input, "utf8"),
-      );
+      if (input.startsWith("<active_agent ")) continue;
+      contents.push(readFileSync(input, "utf8"));
     }
   }
   return contents;

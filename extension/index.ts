@@ -121,7 +121,6 @@ import {
   startHerdrAgentInPane,
   sameCwd,
   inspectHerdrAgent,
-  verifiedHerdrAgent,
   stopHerdrAgentPreservingPane,
   HerdrStartFailure,
   validateHerdrStatus,
@@ -143,7 +142,6 @@ import {
 import {
   AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
   AGENT_UNRESOLVED_GUIDANCE,
-  DELEGATING_AGENT_SCOPE_DESCRIPTION,
   LEAD_SCOPE_DESCRIPTION,
   canonicalSessionPath,
   createAgentStatusRuntime,
@@ -230,10 +228,6 @@ import {
   writeLeadCoordinationState,
   chiefLeaseIsHeld,
   sameChiefDescriptor,
-  leadSupervisorState as resolveLeadSupervisorState,
-  supervisorStateMessage,
-  verifyManagerCoordinationAuthority,
-  verifyRemoteChiefAuthority,
   normalizeHerdrLifecycleState,
   peerLeadLockPath,
   peerRuntime,
@@ -342,9 +336,6 @@ const LEAD_SUPERVISOR_PEER_GUIDANCE =
 const LEAD_ROLE_CHARTER = `## Lead role
 ${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
-${FILE_HANDOFF_GUIDANCE}`;
-const DELEGATING_AGENT_ROLE_CHARTER = `## Delegating agent role
-${DELEGATING_AGENT_SCOPE_DESCRIPTION}
 ${FILE_HANDOFF_GUIDANCE}`;
 const MANAGER_ROLE_CHARTER = `## Manager role
 Manage project work by branch. Use staff_delegate with a task and optional branch
@@ -1152,159 +1143,6 @@ export default function (pi: ExtensionAPI): void {
   ) => roleTransitions.managerForScope(scope);
   const currentWorktreeScope = (ctx: ExtensionContext) =>
     roleTransitions.currentWorktreeScope(ctx);
-  const managedSupervisorWorktreeScope = async (ctx: ExtensionContext) => {
-    const workspaceId = process.env.HERDR_WORKSPACE_ID;
-    if (!workspaceId) return undefined;
-    try {
-      return await worktreeGroupScope(pi, ctx, workspaceId, ctx.signal);
-    } catch (error) {
-      if (
-        error instanceof OperationError &&
-        error.detail.details?.herdrCode === "not_git_worktree"
-      )
-        return undefined;
-      throw error;
-    }
-  };
-  const managedSupervisorAgent = (
-    ctx: ExtensionContext,
-    descriptor: {
-      piSessionId: string;
-      piSessionFile?: string;
-      paneId: string;
-      tabId?: string;
-      workspaceId: string;
-    },
-  ) =>
-    verifiedHerdrAgent(descriptor, {
-      listAgents: async () =>
-        (await listAllHerdrAgents(pi, ctx, ctx.signal)).agents,
-      getAgent: async (paneId) =>
-        (
-          await runHerdr(pi, ctx, ["agent", "get", paneId], {
-            signal: ctx.signal,
-          })
-        )?.agent,
-      expectedSession,
-      isPiAgent,
-      matchesExpectedSession,
-    });
-  const managedCurrentManager = async (
-    ctx: ExtensionContext,
-    scope?: Awaited<ReturnType<typeof worktreeGroupScope>> | null,
-  ) => {
-    const currentScope =
-      scope === null || scope === undefined
-        ? await managedSupervisorWorktreeScope(ctx)
-        : scope;
-    if (!currentScope) return undefined;
-    const status = readManagerDescriptorStatus(
-      supervisionRuntime(),
-      currentScope.primaryWorkspaceId,
-    );
-    if (!status || !status.live) return undefined;
-    if (status.descriptor.repoKey !== currentScope.repoKey)
-      throw new Error("Manager authority does not match project");
-    verifyManagerCoordinationAuthority(
-      status.descriptor,
-      readLeadCoordinationState(
-        supervisionRuntime(),
-        status.descriptor.piSessionId,
-      ),
-      HERDSMAN_BUILD,
-      requireCompatibleBuild,
-    );
-    if (!(await managedSupervisorAgent(ctx, status.descriptor)))
-      throw new Error(
-        "Manager authority exists but live discovery is inconclusive",
-      );
-    return status.descriptor;
-  };
-  const managedCurrentChief = async (
-    ctx: ExtensionContext,
-    failOnVerificationError = false,
-  ) => {
-    const runtime = supervisionRuntime();
-    const leaseMayExist = (): boolean => {
-      try {
-        statSync(runtime.lock);
-        return true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-        throw error;
-      }
-    };
-    let descriptor: ChiefDescriptor;
-    try {
-      descriptor = readChiefDescriptor(runtime.descriptor);
-    } catch (error) {
-      if (failOnVerificationError && leaseMayExist()) throw error;
-      return undefined;
-    }
-    requireCompatibleBuild(
-      HERDSMAN_BUILD,
-      descriptor.build,
-      "supervision",
-      `Chief ${descriptor.piSessionId}`,
-    );
-    if (!chiefLeaseIsHeld(runtime)) {
-      if (failOnVerificationError && leaseMayExist())
-        throw new Error("Unable to verify Chief supervision lease");
-      return undefined;
-    }
-    try {
-      const verified = await verifyRemoteChiefAuthority(descriptor, {
-        remoteIdentity: () => managedSupervisorAgent(ctx, descriptor),
-        requireCompatibleBuild,
-        build: HERDSMAN_BUILD,
-      });
-      if (!verified) return undefined;
-      return descriptor;
-    } catch (error) {
-      if (
-        error instanceof OperationError &&
-        error.detail.category === "incompatible_build"
-      )
-        throw error;
-      if (failOnVerificationError) throw error;
-      return undefined;
-    }
-  };
-  const prepareManagedSupervisorState = async (ctx: ExtensionContext) => {
-    const content = await resolveLeadSupervisorState(ctx, {
-      currentWorktreeScope: managedSupervisorWorktreeScope,
-      projectAssignmentForScope: (scope, sessionId) => {
-        const assignments = findProjectAssignmentBySession(
-          supervisionRuntime(),
-          scope.repoKey,
-          sessionId,
-        );
-        if (assignments.length > 1)
-          throw new Error(
-            "Multiple project assignments match the Lead session",
-          );
-        return assignments[0];
-      },
-      currentManager: managedCurrentManager,
-      currentChiefAuthority: managedCurrentChief,
-    });
-    const latest = [
-      ...buildSessionProjection(ctx.sessionManager.getBranch()).entries,
-    ]
-      .reverse()
-      .find(
-        (candidate: any) =>
-          candidate.sourceEntry.type === "custom_message" &&
-          candidate.sourceEntry.customType === SUPERVISOR_STATE_TYPE &&
-          candidate.messages.length > 0,
-      );
-    const latestMessage = latest?.messages[0];
-    return supervisorStateMessage(
-      SUPERVISOR_STATE_TYPE,
-      content,
-      latestMessage ? contentText(latestMessage.content, "") : undefined,
-    );
-  };
   const currentManager = (
     ctx: ExtensionContext,
     scope:
@@ -2339,10 +2177,6 @@ export default function (pi: ExtensionAPI): void {
     currentTurnMessage,
     getAgentDefinitions: async (ctx) =>
       (await contextAgentDefinitions(ctx)).definitions,
-    prepareDelegatingStart: async (ctx) => ({
-      roleCharter: DELEGATING_AGENT_ROLE_CHARTER,
-      supervisorStateMessage: await prepareManagedSupervisorState(ctx),
-    }),
     appendError: (ctx, kind, error) => appendDurableError(pi, ctx, kind, error),
   });
 }

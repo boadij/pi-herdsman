@@ -2282,7 +2282,11 @@ async function managerDelegateAssignmentTest(
         "find",
         "grep",
         ...leadTools,
+        "mcp__",
       ]);
+      const excludedIndex = args.indexOf("--exclude-tools");
+      assert.notEqual(excludedIndex, -1);
+      assert.equal(args[excludedIndex + 1], "mcp__");
       for (const tool of ["bash", "powershell", "edit", "write"])
         assert.equal(args[toolsIndex + 1]!.split(",").includes(tool), false);
       assert.equal(args.includes("--no-skills"), true);
