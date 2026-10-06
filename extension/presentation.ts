@@ -3108,7 +3108,7 @@ export function renderCoordinationMessage(
     if (d?.fromSessionId) prefix = `From ${senderRole} ${d.fromSessionId}: `;
   } else {
     switch (kind) {
-      case "message_peer":
+      case "peer_message":
         heading = "Peer message";
         if (d?.fromSessionId) prefix = `Peer message from ${d.fromSessionId}: `;
         break;

@@ -5080,14 +5080,14 @@ test("coordination messages render compact semantic headings and strip only know
     lead_message: "From lead sender-session-uuid: ",
     manager_message: "From manager sender-session-uuid: ",
     project_assignment: "Project assignment for branch feat/bootstrap:\n\n",
-    message_peer: "Peer message from sender-session-uuid: ",
+    peer_message: "Peer message from sender-session-uuid: ",
   };
   const headings = {
     chief_message: "Chief message",
     lead_message: "Lead message",
     manager_message: "Manager message",
     project_assignment: "→ feat/bootstrap assigned",
-    message_peer: "Peer message",
+    peer_message: "Peer message",
   };
   const messageKinds = Object.keys(
     envelopes,
@@ -5138,7 +5138,7 @@ test("coordination messages render compact semantic headings and strip only know
   assert.match(
     renderedText(
       renderCoordinationMessage(
-        "message_peer",
+        "peer_message",
         {
           content: prose,
           details,
@@ -5152,10 +5152,10 @@ test("coordination messages render compact semantic headings and strip only know
   assert.match(
     renderedText(
       renderCoordinationMessage(
-        "message_peer",
+        "peer_message",
         {
           content:
-            envelopes.message_peer + "Keep this without matching details.",
+            envelopes.peer_message + "Keep this without matching details.",
         },
         {},
         presentationTheme,

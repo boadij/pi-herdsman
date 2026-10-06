@@ -354,7 +354,7 @@ const LEAD_COORDINATION_TOOLS = [
 ] as const;
 const CHIEF_TOOLS = STAFF_TOOLS;
 const LEAD_SUPERVISOR_PEER_GUIDANCE =
-  "Use message_supervisor when the Manager needs coordination, a question, clarification, warning, or FYI before the normal result boundary. If information can wait, let automatic result handoff carry it. Use list_peers/message_peer for peer coordination.";
+  "Use message_supervisor for material nonblocking coordination with your direct supervisor. Use list_peers/message_peer for peer coordination.";
 const LEAD_ROLE_CHARTER = `## Lead role
 ${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
@@ -1688,9 +1688,9 @@ export default function (pi: ExtensionAPI): void {
         label: "message supervisor",
         exposure: "model-only",
         promptSnippet:
-          "Send material coordination when a supervisor must decide or act",
+          "Send nonblocking material coordination to your direct supervisor",
         description:
-          "Send material coordination when a supervisor must decide or act, or when a blocker, warning, scope change, risk, or explicit evidence needs attention. Assigned project messages are retained for the Manager role across Manager absence.",
+          "Send a nonblocking question, clarification, warning, risk, scope change, or other material coordination to your direct supervisor.",
         executionMode: "sequential",
         parameters: supervisorMessageParameters,
         execute: (...args: any[]) =>

@@ -2864,7 +2864,7 @@ test("definition roster matches live list and rejects stale sessions", async () 
   );
   assert.match(
     prompt?.systemPrompt ?? "",
-    /Use message_supervisor when the Manager needs coordination[\s\S]*If information can wait, let automatic result handoff carry it/,
+    /Use message_supervisor for material nonblocking coordination with your direct supervisor\./,
   );
   assert.match(
     prompt?.systemPrompt ?? "",

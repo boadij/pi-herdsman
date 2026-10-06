@@ -707,15 +707,11 @@ export function durableParentCandidates(
   );
 }
 
-type DirectOwner = Readonly<{ workspaceId: string; sessionId: string }>;
-
-function directChildStates(parent: ManagedAgentState | DirectOwner) {
-  const sessionId =
-    "piSessionId" in parent ? parent.piSessionId : parent.sessionId;
+function directChildStates(parent: ManagedAgentState) {
   return listAgentStates().filter(
     ({ state }) =>
       state.workspaceId === parent.workspaceId &&
-      state.ownerSessionId === sessionId,
+      state.ownerSessionId === parent.piSessionId,
   );
 }
 
@@ -741,12 +737,9 @@ export function hasPendingDirectChildWork(parent: ManagedAgentState): boolean {
 }
 
 export function allDirectChildrenAskBlocked(
-  parent: ManagedAgentState | DirectOwner,
+  parent: ManagedAgentState,
 ): boolean {
-  return directChildStates({
-    workspaceId: parent.workspaceId,
-    sessionId: "piSessionId" in parent ? parent.piSessionId : parent.sessionId,
-  }).every(({ path, state }) => {
+  return directChildStates(parent).every(({ path, state }) => {
     if (state.resultError) return false;
     if (!state.activeRequestId)
       return !pendingResultExists(path, state.completedRequestId);

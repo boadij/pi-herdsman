@@ -248,12 +248,23 @@ test("coordination records require branch only for project message kinds", () =>
       /Invalid Chief message record/,
     );
   }
-  for (const kind of ["report_result"])
+  for (const kind of [
+    "lead_ask",
+    "chief_reply",
+    "manager_ask",
+    "manager_reply",
+    "report_result",
+  ])
     assert.throws(
       () => writeCoordinationMessage(message({ kind } as never), runtime),
       /Invalid Chief message record/,
       kind,
     );
+  assert.throws(
+    () =>
+      writeCoordinationMessage({ ...message(), askId: id() } as never, runtime),
+    /Invalid Chief message record/,
+  );
 });
 
 test("peer lead presence requires a live generation and excludes corruption", () => {
