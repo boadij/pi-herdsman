@@ -1679,13 +1679,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     async openHerdsmanMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedSection = "agents";
       while (true) {
-        const snapshot = await host.loadStatusSnapshot(
-          ctx,
-          host.controller.sessionSignal(),
-        );
-        const running = host.formatStatusCounts(snapshot.agents) || "0";
-        const definitions = (await host.contextAgentDefinitions(ctx))
-          .definitions;
         const selected = await host.selectMenu(
           ctx,
           `Pi Herdsman · v${host.version}`,
@@ -1693,7 +1686,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             {
               value: "agents",
               label: "Agents",
-              description: running,
               help: "Manage running Agents, layout, and the owned Agent tree.",
             },
             {
@@ -1710,7 +1702,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             {
               value: "definitions",
               label: "Definitions",
-              description: String(definitions.length + 1),
               help: "Inspect effective Agent and managed Lead definitions and edit global overrides.",
             },
             {

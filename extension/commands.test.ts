@@ -4991,50 +4991,13 @@ test("persisted chief collision is suspended and has no lead authority", async (
 
 test("Herdsman menu opens the progressive discovery menu", async () => {
   setLeadEnvironment();
-  const pi = fakePi({
-    exec: (command, args) => {
-      if (command !== "herdr") return { stdout: "{}", stderr: "", code: 0 };
-      if (isApiSnapshot(args))
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: { snapshot: { agents: [], panes: [] } },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      if (isAgentList(args))
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: { workspace_id: WORKSPACE, agents: [] },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      if (isPaneList(args))
-        return {
-          stdout: JSON.stringify({ id: AGENT_ID, result: { panes: [] } }),
-          stderr: "",
-          code: 0,
-        };
-      return { stdout: "{}", stderr: "", code: 0 };
-    },
-  });
+  const pi = fakePi();
   registerExtension!(pi.pi as never);
   const command = pi.commandOptions.get("herdsman");
   const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
-  const { contextAgentDefinitions } = await import("./agent-definitions.ts");
-  const selectableDefinitions = await contextAgentDefinitions(context);
-  assert.equal(
-    selectableDefinitions.definitions.some(
-      ({ name }) => name === "managed-lead",
-    ),
-    false,
-  );
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
     if (prompts.length === 1)
@@ -5043,26 +5006,14 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   };
   await command.handler("", context);
   assert.equal(prompts[0]?.label, `Pi Herdsman · v${packageMetadata.version}`);
-  assert.deepEqual(
-    prompts[0]?.options.map((option) =>
-      /^(Agents|Definitions)\s/u.test(option)
-        ? option.replace(/\s+.*/u, "")
-        : option,
-    ),
-    [
-      "Agents",
-      "Project manager",
-      "Session stats",
-      "Definitions",
-      "Settings",
-      "Advanced…",
-    ],
-  );
-  assert.equal(prompts[0]?.options[0], "Agents  0");
-  assert.equal(
-    prompts[0]?.options[3],
-    `Definitions  ${selectableDefinitions.definitions.length + 1}`,
-  );
+  assert.deepEqual(prompts[0]?.options, [
+    "Agents",
+    "Project manager",
+    "Session stats",
+    "Definitions",
+    "Settings",
+    "Advanced…",
+  ]);
   assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
     "Manager auto-start  off",
@@ -5070,6 +5021,39 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
     "Message limits",
   ]);
   await pi.events.get("session_shutdown")?.[0]();
+});
+
+test("Herdsman root renders when status and definition metadata fail", async () => {
+  const { createLeadCommandRuntime } = await import("./lead-runtime.ts");
+  let rootLabels: string[] = [];
+  const notices: string[] = [];
+  const runtime = createLeadCommandRuntime({
+    version: packageMetadata.version,
+    loadStatusSnapshot: async () => {
+      throw new Error("status unavailable");
+    },
+    contextAgentDefinitions: async () => {
+      throw new Error("definitions unavailable");
+    },
+    roleActive: () => false,
+    selectMenu: async (_ctx: unknown, _title: string, items: any[]) => {
+      rootLabels = items.map(({ label }) => label);
+      return undefined;
+    },
+  } as any);
+  await runtime.runHerdsmanCommand("", {
+    hasUI: true,
+    ui: { notify: (message: string) => notices.push(message) },
+  } as any);
+  assert.deepEqual(rootLabels, [
+    "Agents",
+    "Project manager",
+    "Session stats",
+    "Definitions",
+    "Settings",
+    "Advanced…",
+  ]);
+  assert.deepEqual(notices, []);
 });
 
 test("plain /agents is the focused Running, Layout, Stop all menu", async () => {
@@ -5101,52 +5085,83 @@ test("plain /agents is the focused Running, Layout, Stop all menu", async () => 
 test("Herdsman role menus dispatch through the shared role transition", async () => {
   const { createLeadCommandRuntime } = await import("./lead-runtime.ts");
   for (const role of ["manager", "chief"] as const) {
-    const dispatched: [string, boolean][] = [];
-    const menus: { title: string; labels: string[] }[] = [];
-    let rootSelection = true;
-    const host = {
-      version: packageMetadata.version,
-      controller: { sessionSignal: () => new AbortController().signal },
-      loadStatusSnapshot: async () => ({ agents: [] }),
-      formatStatusCounts: () => "0",
-      contextAgentDefinitions: async () => ({ definitions: [] }),
-      roleActive: () => false,
-      transitionRole: async (selectedRole: string, leave: boolean) => {
-        dispatched.push([selectedRole, leave]);
-        return "transition requested";
+    for (const scenario of [
+      {
+        active: false,
+        action: "start",
+        labels: [`Start ${role === "manager" ? "Manager" : "Chief"} mode`],
       },
-      selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
-        menus.push({
-          title,
-          labels: items.map(({ label }) => label),
-        });
-        if (title.startsWith("Pi Herdsman")) {
-          if (!rootSelection) return undefined;
-          rootSelection = false;
-          return role === "manager" ? "manager" : "advanced";
-        }
-        if (title === "Advanced") return "chief";
-        return "start";
+      {
+        active: true,
+        action: "overview",
+        labels: [
+          "Overview",
+          `Leave ${role === "manager" ? "Manager" : "Chief"} mode`,
+        ],
       },
-    } as any;
-    const runtime = createLeadCommandRuntime(host);
-    const notices: string[] = [];
-    await runtime.runHerdsmanCommand("", {
-      hasUI: true,
-      ui: { notify: (message: string) => notices.push(message) },
-    } as any);
-    const title = role === "manager" ? "Project manager" : "Chief mode";
-    const action =
-      role === "manager" ? "Start Manager mode" : "Start Chief mode";
-    assert.ok(menus.some(({ title: menuTitle }) => menuTitle === title));
-    assert.ok(
-      menus.some(
-        ({ title: menuTitle, labels }) =>
-          menuTitle === title && labels.includes(action),
-      ),
-    );
-    assert.deepEqual(dispatched, [[role, false]]);
-    assert.deepEqual(notices, ["transition requested"]);
+      {
+        active: true,
+        action: "leave",
+        labels: [
+          "Overview",
+          `Leave ${role === "manager" ? "Manager" : "Chief"} mode`,
+        ],
+      },
+    ]) {
+      const dispatched: [string, boolean][] = [];
+      const menus: { title: string; labels: string[] }[] = [];
+      const overviews: string[] = [];
+      let rootSelection = true;
+      const host = {
+        version: packageMetadata.version,
+        roleActive: (selectedRole: string) =>
+          selectedRole === role && scenario.active,
+        transitionRole: async (selectedRole: string, leave: boolean) => {
+          dispatched.push([selectedRole, leave]);
+          return "transition requested";
+        },
+        openSupervisionOverview: async () => {
+          overviews.push(role);
+        },
+        selectMenu: async (_ctx: unknown, title: string, items: any[]) => {
+          menus.push({ title, labels: items.map(({ label }) => label) });
+          if (title.startsWith("Pi Herdsman")) {
+            if (!rootSelection) return undefined;
+            rootSelection = false;
+            return role === "manager" ? "manager" : "advanced";
+          }
+          if (title === "Advanced") return "chief";
+          return scenario.action;
+        },
+      } as any;
+      const runtime = createLeadCommandRuntime(host);
+      const notices: string[] = [];
+      await runtime.runHerdsmanCommand("", {
+        hasUI: true,
+        ui: { notify: (message: string) => notices.push(message) },
+      } as any);
+      const title = role === "manager" ? "Project manager" : "Chief mode";
+      assert.ok(
+        menus.some(
+          (menu) =>
+            menu.title === title &&
+            scenario.labels.every((label) => menu.labels.includes(label)),
+        ),
+      );
+      assert.deepEqual(
+        dispatched,
+        scenario.action === "start"
+          ? [[role, false]]
+          : scenario.action === "leave"
+            ? [[role, true]]
+            : [],
+      );
+      assert.deepEqual(overviews, scenario.action === "overview" ? [role] : []);
+      assert.deepEqual(
+        notices,
+        scenario.action === "overview" ? [] : ["transition requested"],
+      );
+    }
   }
 });
 

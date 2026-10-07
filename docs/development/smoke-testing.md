@@ -269,9 +269,9 @@ In a lead session with UI:
 ### `/herdsman` and `/agents`
 
 Verify `/herdsman` opens the six destinations `Agents`, `Project manager`,
-`Session stats`, `Definitions`, `Settings`, and `Advanced…`. Verify counts and
-active role state are secondary metadata and selected-row contextual help
-updates in the TUI. `/agents` must open only `Running`, `Layout`, and
+`Session stats`, `Definitions`, `Settings`, and `Advanced…`. Verify active role
+state is secondary metadata and selected-row contextual help updates in the
+TUI. `/agents` must open only `Running`, `Layout`, and
 `Stop all…`, with the running count and effective placement as secondary
 metadata. Settings contains only Manager auto-start, Context retirement, and
 Message limits.

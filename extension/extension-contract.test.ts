@@ -817,7 +817,11 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.ok(herdsmanCommand);
   assert.equal(agentsCommand.description, "Manage Herdsman Agents");
   assert.equal(herdsmanCommand.description, "Set up Pi Herdsman");
-  assert.equal(herdsmanCommand.handler, agentsCommand.handler);
+  const levels: string[] = [];
+  context.ui.notify = (message: string, level?: string) => {
+    notices.push(message);
+    if (level) levels.push(level);
+  };
   await herdsmanCommand.handler("", context);
   assert.equal(notices.length, 1);
   assert.ok(
@@ -828,6 +832,9 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.match(notices[0]!, /inactive because .*not running inside Herdr/);
   assert.match(notices[0]!, /herdr\n  pi/);
   assert.match(notices[0]!, /herdr integration install pi/);
+  await herdsmanCommand.handler("anything", context);
+  assert.equal(notices[1], "Usage: /herdsman");
+  assert.deepEqual(levels, ["error"]);
 });
 
 test("managed agents receive no peer tool and Chiefs expose only staff actively", async () => {

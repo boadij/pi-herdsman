@@ -30,11 +30,12 @@ Herdsman package version.
 
 `/herdsman` opens the native Pi menu titled with the running Pi Herdsman package
 version. Its six destinations are `Agents`, `Project manager`, `Session stats`,
-`Definitions`, `Settings`, and `Advanced…`. Counts and active state are
-secondary row metadata; the TUI updates contextual help for the selected row.
+`Definitions`, `Settings`, and `Advanced…`. Active role state is secondary row
+metadata; the TUI updates contextual help for the selected row.
 
 `/agents` opens the focused `Running`, `Layout`, and `Stop all…` menu. Its
-running count and current layout are secondary metadata.
+running count and current layout are secondary metadata. The root does not
+depend on Agent status or definitions to render.
 
 `Settings` contains `Manager auto-start`, `Context retirement`, and `Message
 limits`. The Message limits view edits the user-wide inline attachment and

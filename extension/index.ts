@@ -859,7 +859,13 @@ export default function (pi: ExtensionAPI): void {
     });
     pi.registerCommand("herdsman", {
       description: "Set up Pi Herdsman",
-      handler: setupHandler,
+      handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
+        if (rawArgs.trim()) {
+          if (ctx.hasUI) ctx.ui.notify("Usage: /herdsman", "error");
+          return;
+        }
+        await setupHandler("", ctx);
+      },
     });
     return;
   }
