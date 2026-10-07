@@ -9,7 +9,6 @@ import type {
   SessionBeforeCompactEvent,
   ThinkingLevelSelectEvent,
 } from "@earendil-works/pi-coding-agent";
-import { buildSessionProjection } from "@earendil-works/pi-coding-agent";
 import {
   agentMailboxPath,
   controlMarker,
@@ -32,7 +31,7 @@ import {
   type ResultPersistenceError,
   type RequestRecord,
 } from "./mailbox.ts";
-import { contentText } from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai/utils/text";
 import {
   AGENT_DEFINITION_ENTRY,
   DELEGATING_AGENT_SCOPE_DESCRIPTION,
@@ -2313,13 +2312,14 @@ function sessionRetirementGuidanceVisible(
   ctx: ExtensionContext,
   sessionId: string,
 ): boolean {
-  return buildSessionProjection(ctx.sessionManager.getBranch()).entries.some(
-    ({ sourceEntry, messages }: any) =>
-      sourceEntry.type === "custom_message" &&
-      sourceEntry.customType === AGENT_CONTEXT_RETIRED_ENTRY &&
-      sourceEntry.details?.sessionId === sessionId &&
-      messages.length > 0,
-  );
+  return ctx.sessionManager
+    .buildSessionContext()
+    .messages.some(
+      (message: any) =>
+        message.role === "custom" &&
+        message.customType === AGENT_CONTEXT_RETIRED_ENTRY &&
+        message.details?.sessionId === sessionId,
+    );
 }
 
 export function registerManagedAgentContextHandlers(

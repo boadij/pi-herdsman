@@ -27,6 +27,7 @@ export const nativeSessions = new Map<
     path: string;
     entries?: unknown[];
     contextEntries?: unknown[];
+    contextMessages?: unknown[];
     cwd?: string;
     sessionName?: string;
   }
@@ -307,6 +308,17 @@ mock.module("@earendil-works/pi-coding-agent", {
                 },
               },
             ],
+          buildSessionContext: () => {
+            if (session?.contextMessages)
+              return { messages: session.contextMessages };
+            const parsed = nativeParseSessionEntries(
+              realFs.readFileSync(path, "utf8"),
+            );
+            return {
+              messages: nativeBuildSessionProjection(parsed.slice(1) as any[])
+                .messages,
+            };
+          },
         };
       },
     },
@@ -594,6 +606,7 @@ export type Context = {
     getSessionFile: () => string;
     getEntries: () => unknown[];
     getBranch: () => unknown[];
+    buildSessionContext: () => { messages: unknown[] };
   };
   ui: {
     notify: () => void;
@@ -703,6 +716,9 @@ export function fakeContext(
       getSessionName: () => undefined,
       getEntries: () => entries,
       getBranch: () => branch,
+      buildSessionContext: () => ({
+        messages: nativeBuildSessionProjection(branch as any[]).messages,
+      }),
     },
     ui: {
       notify: () => undefined,
