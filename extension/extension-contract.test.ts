@@ -804,7 +804,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   delete process.env.HERDR_PANE_ID;
   const unmanaged = fakePi();
   registerExtension!(unmanaged.pi as never);
-  assert.deepEqual(unmanaged.commands, ["agents", "herdsman"]);
+  assert.deepEqual(unmanaged.commands, ["herdsman", "agents"]);
   assert.deepEqual(unmanaged.tools, []);
   assert.equal(unmanaged.events.size, 0);
   const notices: string[] = [];
@@ -815,8 +815,14 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   const herdsmanCommand = unmanaged.commandOptions.get("herdsman");
   assert.ok(agentsCommand);
   assert.ok(herdsmanCommand);
-  assert.equal(herdsmanCommand.description, "Alias for /agents");
-  assert.equal(herdsmanCommand.handler, agentsCommand.handler);
+  assert.equal(agentsCommand.description, "Alias for /herdsman");
+  assert.equal(herdsmanCommand.description, "Set up Pi Herdsman");
+  assert.equal(agentsCommand.handler, herdsmanCommand.handler);
+  const levels: string[] = [];
+  context.ui.notify = (message: string, level?: string) => {
+    notices.push(message);
+    if (level) levels.push(level);
+  };
   await herdsmanCommand.handler("", context);
   assert.equal(notices.length, 1);
   assert.ok(
@@ -827,6 +833,11 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.match(notices[0]!, /inactive because .*not running inside Herdr/);
   assert.match(notices[0]!, /herdr\n  pi/);
   assert.match(notices[0]!, /herdr integration install pi/);
+  await herdsmanCommand.handler("anything", context);
+  assert.equal(notices[1], "Usage: /herdsman");
+  await agentsCommand.handler("anything", context);
+  assert.equal(notices[2], notices[1]);
+  assert.deepEqual(levels, ["error", "error"]);
 });
 
 test("managed agents receive no peer tool and Chiefs expose only staff actively", async () => {
@@ -3565,11 +3576,37 @@ test("lead metadata failures do not escape the serialized queue", async (t) => {
   }
 });
 
-test("delegation-enabled agents do not receive the lead agents command", () => {
-  setAgentEnvironment("delegating-agent", ["agents"]);
+test("disabled managed-agent definitions direct configuration to a Lead", async () => {
+  const mailbox = setAgentEnvironment("delegating-agent", ["child"]);
+  writeFileSync(
+    join(PI_AGENTS_DIR, "agent.md"),
+    "---\nname: agent\nenabled: false\n---\nagent instructions\n",
+  );
   const parent = fakePi();
   registerExtension!(parent.pi as never);
   assert.deepEqual(parent.commands, []);
+  const context = fakeAgentContext(parent.entries) as any;
+  context.hasUI = true;
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  try {
+    await parent.events.get("session_start")![0](undefined, context);
+    const error = notices.find((message) =>
+      message.includes("agent is disabled"),
+    );
+    assert.match(
+      error ?? "",
+      /enable it from a Lead session through \/herdsman → Definitions/,
+    );
+    assert.doesNotMatch(
+      error ?? "",
+      /enable it through \/herdsman → Definitions/,
+    );
+  } finally {
+    parent.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    setLeadEnvironment();
+  }
 });
 
 test("list ignores an unrelated unnamed Herdr agent", async () => {

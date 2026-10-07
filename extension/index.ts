@@ -844,19 +844,27 @@ export default function (pi: ExtensionAPI): void {
   );
   const processRole = role();
   if (processRole === "unmanaged") {
-    const agentsCommand = {
-      description: "Show Pi Herdsman setup guidance",
-      handler: async (_args: string, ctx: ExtensionCommandContext) => {
-        if (!ctx.hasUI) return;
-        ctx.ui.notify(
-          `Pi Herdsman v${HERDSMAN_VERSION} is inactive because this Pi session is not running inside Herdr.\n\nStart Herdr in this project, then run Pi in a Herdr pane:\n  herdr\n  pi\n\nIf needed, install the Pi integration once:\n  herdr integration install pi`,
-        );
-      },
+    const setupHandler = async (
+      rawArgs: string,
+      ctx: ExtensionCommandContext,
+    ) => {
+      if (!ctx.hasUI) return;
+      if (rawArgs.trim()) {
+        ctx.ui.notify("Usage: /herdsman", "error");
+        return;
+      }
+      ctx.ui.notify(
+        `Pi Herdsman v${HERDSMAN_VERSION} is inactive because this Pi session is not running inside Herdr.\n\nStart Herdr in this project, then run Pi in a Herdr pane:\n  herdr\n  pi\n\nIf needed, install the Pi integration once:\n  herdr integration install pi`,
+      );
     };
-    pi.registerCommand("agents", agentsCommand);
-    pi.registerCommand("herdsman", {
-      ...agentsCommand,
-      description: "Alias for /agents",
+    const setupCommand = {
+      description: "Set up Pi Herdsman",
+      handler: setupHandler,
+    };
+    pi.registerCommand("herdsman", setupCommand);
+    pi.registerCommand("agents", {
+      ...setupCommand,
+      description: "Alias for /herdsman",
     });
     return;
   }
@@ -1940,8 +1948,8 @@ export default function (pi: ExtensionAPI): void {
             renderCoordinationResult("staff", "stop", r, o, t, c),
         });
       }
-      const agentsCommand = {
-        description: "Manage Herdr agents",
+      const herdsmanCommand = {
+        description: "Open Pi Herdsman",
         getArgumentCompletions: (argumentPrefix: string) => {
           const commands = ["stats", "definitions", "placement", "stop"];
           const trimmed = argumentPrefix.trimStart();
@@ -1957,13 +1965,13 @@ export default function (pi: ExtensionAPI): void {
             .map((value) => ({ value: `placement ${value}`, label: value }));
         },
         handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
-          await leadCommandRuntime.runAgentsCommand(rawArgs, ctx);
+          await leadCommandRuntime.runHerdsmanCommand(rawArgs, ctx);
         },
       };
-      pi.registerCommand("agents", agentsCommand);
-      pi.registerCommand("herdsman", {
-        ...agentsCommand,
-        description: "Alias for /agents",
+      pi.registerCommand("herdsman", herdsmanCommand);
+      pi.registerCommand("agents", {
+        ...herdsmanCommand,
+        description: "Alias for /herdsman",
       });
     }
     if (processRole === "lead") {

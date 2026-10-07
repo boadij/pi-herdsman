@@ -83,7 +83,7 @@ in `AGENTS.md`.
 - `extension/controller-lifecycle.test.ts`: Authorized delegation lifecycle behavior.
 - `extension/agent-runtime.test.ts`: Managed-agent runtime behavior.
 - `extension/recovery.test.ts`: Failure, recovery, and cleanup behavior.
-- `extension/commands.test.ts`: `/agents` and `/chief` configuration UI behavior.
+- `extension/commands.test.ts`: `/herdsman`, `/agents`, and `/chief` configuration UI behavior.
 - `extension/supervision.test.ts`: Chief roles, lease, supervision, transport, and staff tool behavior.
 - `extension/supervision-malformed-cleanup.test.ts`: malformed supervision cleanup behavior.
 

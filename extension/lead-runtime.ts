@@ -1595,7 +1595,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       let selectedSetting = "auto-activate-manager";
       while (true) {
         const config = host.readConfig();
-        const placement = await host.placementSettings(ctx);
         const selected = await host.selectMenu(
           ctx,
           "Settings",
@@ -1605,12 +1604,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               label: "Manager auto-start",
               description: config.autoActivateManager ? "on" : "off",
               help: "Attempt Manager mode automatically on eligible future session starts. Changing this does not alter the current role.",
-            },
-            {
-              value: "layout",
-              label: "Layout",
-              description: placement.effective,
-              help: "Choose where newly delegated Lead-direct Agents are placed in Herdr.",
             },
             {
               value: "context-retirement",
@@ -1628,8 +1621,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         );
         if (!selected) return;
         selectedSetting = selected;
-        if (selected === "layout") await this.openPlacementMenu(ctx);
-        else if (selected === "message-limits")
+        if (selected === "message-limits")
           await this.openMessageLimitsMenu(ctx);
         else {
           const key =
@@ -1652,33 +1644,22 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           host.controller.sessionSignal(),
         );
         const running = host.formatStatusCounts(snapshot.agents) || "0";
-        const definitions = (await host.contextAgentDefinitions(ctx))
-          .definitions;
+        const placement = await host.placementSettings(ctx);
         const selected = await host.selectMenu(
           ctx,
-          `Pi Herdsman · v${host.version}`,
+          "Agents",
           [
             {
               value: "running",
               label: "Running",
-              description: String(running),
+              description: running,
               help: "Focus a live managed Agent.",
             },
             {
-              value: "stats",
-              label: "Session stats",
-              help: "Show Pi-native token usage and cost for this session and owned Agents. Manager mode also includes current assigned Leads and their owned Agent trees.",
-            },
-            {
-              value: "definitions",
-              label: "Definitions",
-              description: String(definitions.length + 1),
-              help: "Inspect effective Agent and managed Lead definitions and edit global overrides.",
-            },
-            {
-              value: "settings",
-              label: "Settings",
-              help: "Configure Manager startup, Agent placement, context retirement, and message limits.",
+              value: "layout",
+              label: "Layout",
+              description: placement.effective,
+              help: "Choose where newly delegated Lead-direct Agents are placed in Herdr.",
             },
             {
               value: "stop-all",
@@ -1691,12 +1672,98 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         if (!selected) return;
         selectedSection = selected;
         if (selected === "running") await this.openRunningAgentsMenu(ctx);
+        else if (selected === "layout") await this.openPlacementMenu(ctx);
+        else if (selected === "stop-all") await this.confirmAndStopAll(ctx);
+      }
+    },
+    async openHerdsmanMenu(ctx: ExtensionCommandContext): Promise<void> {
+      let selectedSection = "agents";
+      while (true) {
+        const selected = await host.selectMenu(
+          ctx,
+          `Pi Herdsman · v${host.version}`,
+          [
+            {
+              value: "agents",
+              label: "Agents",
+              help: "Manage running Agents, layout, and the owned Agent tree.",
+            },
+            {
+              value: "manager",
+              label: "Project manager",
+              description: host.roleActive("manager") ? "active" : undefined,
+              help: "Coordinate durable project work across dedicated Lead sessions.",
+            },
+            {
+              value: "stats",
+              label: "Session stats",
+              help: "Show Pi-native token usage and cost for this session and managed work.",
+            },
+            {
+              value: "definitions",
+              label: "Definitions",
+              help: "Inspect effective Agent and managed Lead definitions and edit global overrides.",
+            },
+            {
+              value: "settings",
+              label: "Settings",
+              help: "Configure future-session and user-wide Herdsman behavior.",
+            },
+            {
+              value: "advanced",
+              label: "Advanced…",
+              description: host.roleActive("chief")
+                ? "Chief active"
+                : undefined,
+              help: "Open advanced Herdsman coordination controls.",
+            },
+          ],
+          selectedSection,
+        );
+        if (!selected) return;
+        selectedSection = selected;
+        if (selected === "agents") await this.openAgentsMenu(ctx);
+        else if (selected === "manager")
+          await this.openRoleMenu("manager", ctx);
         else if (selected === "stats") await this.showSessionStats(ctx);
         else if (selected === "definitions")
           await this.openDefinitionsMenu(ctx);
         else if (selected === "settings") await this.openSettingsMenu(ctx);
-        else if (selected === "stop-all") await this.confirmAndStopAll(ctx);
+        else if (selected === "advanced") await this.openAdvancedMenu(ctx);
       }
+    },
+    async openAdvancedMenu(ctx: ExtensionCommandContext): Promise<void> {
+      const selected = await host.selectMenu(ctx, "Advanced", [
+        {
+          value: "chief",
+          label: "Chief mode",
+          description: host.roleActive("chief") ? "active" : undefined,
+          help: "Supervise Managers and unassigned Leads across Herdsman.",
+        },
+      ]);
+      if (selected === "chief") await this.openRoleMenu("chief", ctx);
+    },
+    async openRoleMenu(
+      role: "manager" | "chief",
+      ctx: ExtensionCommandContext,
+    ): Promise<void> {
+      const active = host.roleActive(role);
+      const name = role === "manager" ? "Manager" : "Chief";
+      const title = role === "manager" ? "Project manager" : "Chief mode";
+      const selected = await host.selectMenu(
+        ctx,
+        title,
+        active
+          ? [
+              { value: "overview", label: "Overview" },
+              { value: "leave", label: `Leave ${name} mode` },
+            ]
+          : [{ value: "start", label: `Start ${name} mode` }],
+      );
+      if (selected === "overview" || selected === "start")
+        await this.runRoleCommand(role, "", ctx);
+      else if (selected === "leave")
+        await this.runRoleCommand(role, "leave", ctx);
     },
     async runRoleCommand(
       role: "manager" | "chief",
@@ -1721,17 +1788,17 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
       }
     },
-    async runAgentsCommand(
+    async runHerdsmanCommand(
       rawArgs: string,
       ctx: ExtensionCommandContext,
     ): Promise<void> {
       if (!ctx.hasUI) return;
       const usage =
-        "Usage: /agents stats | definitions | placement [tab|subtree|split] | stop";
-      const placementUsage = "Usage: /agents placement [tab|subtree|split]";
+        "Usage: /herdsman [stats | definitions | placement [tab|subtree|split] | stop]";
+      const placementUsage = "Usage: /herdsman placement [tab|subtree|split]";
       const args = rawArgs.trim() ? rawArgs.trim().split(/\s+/u) : [];
       try {
-        if (!args.length) return void (await this.openAgentsMenu(ctx));
+        if (!args.length) return void (await this.openHerdsmanMenu(ctx));
         if (args[0] === "stats" && args.length === 1)
           return void (await this.showSessionStats(ctx));
         if (args[0] === "definitions" && args.length === 1)

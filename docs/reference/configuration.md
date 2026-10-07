@@ -44,8 +44,8 @@ An absent file means these defaults:
 | `mailboxPayloadLimitBytes`   | `131072` (128 KiB) | integer from 1024 (1 KiB) through 1048576 (1 MiB) |
 
 Malformed JSON, a non-object root, unknown fields, and invalid known values
-are errors. Reads do not create the directory or file. Configuration changes
-through `/agents` update this single file atomically.
+are errors. Reads do not create the directory or file. Herdsman's human
+configuration controls update this single file atomically.
 
 `inlineAttachmentLimitBytes` applies per file. Eligible complete strict UTF-8
 files are embedded only when the complete durable payload fits; other files

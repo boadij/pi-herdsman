@@ -2,26 +2,24 @@
 
 [Documentation index](../README.md)
 
-`/agents` is the human-facing agent-management command namespace.
-
-`/herdsman` is a discovery alias for `/agents`. It accepts the same arguments
-and runs the same command behavior; help and usage text continue to use
-`/agents` as the canonical name.
+`/herdsman` is the canonical human discovery and control command. `/agents` is
+an alias retained for users familiar with the previous entry point; it accepts
+the same arguments and runs the same behavior.
 
 It is separate from the structured model-facing Agent tools.
 
-Agent-management commands require a lead Pi session with UI. Outside Herdr,
-plain `/agents` and its `/herdsman` alias remain available as a setup
-diagnostic that includes the running Pi Herdsman package version.
+Management menus require a lead Pi session with UI. Outside Herdr, both
+commands remain available as setup diagnostics that include the running Pi
+Herdsman package version.
 
 ## Usage
 
 ```text
-/agents
-/agents stats
-/agents definitions
-/agents placement [tab|subtree|split]
-/agents stop
+/herdsman
+/herdsman stats
+/herdsman definitions
+/herdsman placement [tab|subtree|split]
+/herdsman stop
 /manager
 /manager leave
 /chief
@@ -29,19 +27,25 @@ diagnostic that includes the running Pi Herdsman package version.
 /takeover
 ```
 
-The plain command opens a native Pi selection menu titled with the running
-Pi Herdsman package version for both `/agents` and `/herdsman`. Its five
-destinations are `Running`, `Session stats`, `Definitions`, `Settings`, and
-`Stop all…`. Selection values such as counts and current settings are secondary
+For the Herdsman commands above, replacing `/herdsman` with `/agents` is
+equivalent. The `/manager`, `/chief`, and `/takeover` commands are unchanged.
+
+`/herdsman` opens the native Pi menu titled with the running Pi Herdsman package
+version. Its six destinations are `Agents`, `Project manager`, `Session stats`,
+`Definitions`, `Settings`, and `Advanced…`. Active role state is secondary row
 metadata; the TUI updates contextual help for the selected row.
 
-`Settings` contains `Manager auto-start`, `Layout`, `Context retirement`, and
-`Message limits`. The Message limits view edits the user-wide inline attachment
-and mailbox payload limits. It is available only to a lead Pi session with UI.
+Selecting `Agents` opens the focused `Running`, `Layout`, and `Stop all…` menu.
+Its running count and current layout are secondary metadata. The root does not
+depend on Agent status or definitions to render.
+
+`Settings` contains `Manager auto-start`, `Context retirement`, and `Message
+limits`. The Message limits view edits the user-wide inline attachment and
+mailbox payload limits. It is available only to a lead Pi session with UI.
 Current values and presets show a rough token equivalent using four UTF-8
 bytes per token. The enforced limits are bytes, not tokens.
 
-## `/agents stats`
+## `/herdsman stats`
 
 Shows accumulated Pi-native token usage and cost for the current Pi session plus
 transitively owned managed-Agent Pi sessions whose exact persisted identity can
@@ -70,7 +74,7 @@ Lead's Agent tree. Manager aggregation uses the scope-specific warning
 `Coverage incomplete: some managed project session usage is unavailable.`
 Ordinary usage retains its owned-session warning.
 
-## `/agents definitions`
+## `/herdsman definitions`
 
 Opens a flat native Definitions list of effective definitions, with reserved
 `managed-lead` first. Project definitions are included when Pi considers the
@@ -98,7 +102,7 @@ Bundled implementation paths are intentionally hidden from the human overview.
 Structured `list_agents` keeps exact deterministic metadata, including exact
 source and skill paths when available.
 
-`/agents definitions` does not probe runtime tool availability.
+`/herdsman definitions` does not probe runtime tool availability.
 
 Selecting an ordinary Agent definition opens:
 
@@ -141,30 +145,31 @@ Standalone global definitions are editable too. Removing a model or thinking
 field selects `Inherit current session`; removing any other field inherits its
 lower-precedence value.
 
-## `/agents` Running
+## `/herdsman` → Agents → Running
 
 Select a live managed agent from the shared status projection to focus its pane.
 Pi Herdsman refreshes and verifies the exact label, pane, and session identity
 before issuing herdr's focus command. If the agent changed, no focus command
 is sent.
 
-## `/agents placement`
+## `/herdsman placement`
 
 Selecting Layout opens a native selector showing the effective setting.
 When unset, the effective setting is `subtree`.
 Explicit values continue to set directly:
 
 ```text
-/agents placement tab
-/agents placement subtree
-/agents placement split
+/herdsman placement tab
+/herdsman placement subtree
+/herdsman placement split
 ```
 
 See [Configuration](configuration.md).
 
-## `/agents stop`
+## `/herdsman stop`
 
-Destructive lead-only emergency control.
+Destructive lead-only emergency control. The same operation is available as
+`/agents stop` through the alias.
 
 It aborts the current lead turn and attempts to close the exactly proven owned
 agent tree.
@@ -175,6 +180,12 @@ Cleanup uses existing exact ownership proofs and proceeds conservatively across
 independent failures.
 
 Use ordinary `close_agent` for normal targeted model-driven control.
+
+`Project manager` offers `Start Manager mode` when inactive, or `Overview` and
+`Leave Manager mode` while active. `Advanced…` opens `Chief mode`, which offers
+the corresponding Chief start, overview, and leave actions. These menu actions
+use the same transitions as `/manager` and `/chief`; they do not add role
+eligibility or authority rules.
 
 ## Project Manager and Chief
 
@@ -196,7 +207,7 @@ relinquishes the lease and restores the exact Lead tool baseline, including
 opens the overview without changing the role or lease. See
 [Coordination](../concepts/coordination.md) for the role and project boundaries.
 
-The `/agents` Manager auto-start setting optionally makes a new session attempt
+The `Manager auto-start` setting optionally makes a new session attempt
 that same Manager startup when it has no persisted role intent and starts in the
 project's primary workspace. Explicit persisted Lead, Manager, or Chief intent
 takes precedence. Ineligible or contended optional startup remains an ordinary
