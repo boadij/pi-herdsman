@@ -57,6 +57,30 @@ unchanged. The same generic orchestration primitives should compose through
 nested delegation instead of accumulating provider-, root-, or
 integration-specific inheritance rules.
 
+## Make power progressive and native
+
+Herdsman should be useful before users understand Herdsman.
+
+Preserve familiar Pi and Herdr workflows, defaults, concepts, controls, and
+configuration wherever they already fit the need. Introduce Herdsman-specific
+vocabulary or parallel interaction patterns only for orchestration concepts the
+underlying systems do not already express adequately.
+
+Give users an obvious path to discover important capabilities, then reveal
+complexity only when the current task requires it. Prefer progressive
+disclosure and contextual explanation over requiring users to learn roles,
+commands, settings, or architecture before they can begin useful work.
+
+Do not build separate beginner and expert systems. The same underlying
+capability and state should support both a discoverable path for learning and
+direct commands or configuration for experienced users. Advanced workflows may
+expose more control, but should compose from the same contracts rather than
+forking product semantics.
+
+Optional power should remain unobtrusive until needed. Installing or enabling
+Herdsman should not force users away from familiar Pi workflows unless the
+orchestration behavior they explicitly choose requires it.
+
 ## Keep the core small and correct
 
 Prefer deletion, consolidation, native platform capabilities, and existing
@@ -82,6 +106,8 @@ For any proposed feature, ask:
 4. What is the smallest provider-, model-, and extension-agnostic primitive
    that solves those cases?
 5. Can everything else remain outside Herdsman?
+6. Can the capability stay unobtrusive until needed, then be discoverable
+   through a familiar path with direct access for experienced users?
 
 If the answer to the first question is no, the feature probably does not belong
 in Herdsman.
