@@ -117,7 +117,7 @@ function validateManagedAgentDefinition(definitions: AgentDefinition[]): void {
   if (!definition) throw new Error(`agent ${name} not found`);
   if (!agentDefinitionEnabled(definition))
     throw new Error(
-      `agent ${definition.name} is disabled; enable it through /herdsman → Definitions before starting a new agent`,
+      `agent ${definition.name} is disabled; enable it from a Lead session through /herdsman → Definitions before starting a new agent`,
     );
   validateAgentDefinitionReferences(definition, definitions);
 }
