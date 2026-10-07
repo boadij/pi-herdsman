@@ -41,6 +41,7 @@ import support, {
   resetAgentMailbox,
   resultEntryDetails,
   leadExec,
+  nativeSessions,
   sessionAgentIdentity,
   sessionContextRetired,
   registerManagedAgentContextHandlers,
@@ -58,7 +59,84 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
-const { statusBreadcrumb } = await import("./agent-controller.ts");
+const { readPersistedTranscript, statusBreadcrumb } =
+  await import("./agent-controller.ts");
+const { registerManagedAgentResultCapture } =
+  await import("./managed-agent-runtime.ts");
+
+test("persisted transcript formats SessionManager context messages", () => {
+  const sessionId = randomUUID();
+  const sessionFile = join(testTmpRoot, `${sessionId}.jsonl`);
+  realFs.writeFileSync(
+    sessionFile,
+    [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: new Date().toISOString(),
+        cwd: "/tmp",
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "disk-entry",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "raw session file message" }],
+        },
+      }),
+    ].join("\n") + "\n",
+  );
+  nativeSessions.set(sessionId, {
+    id: sessionId,
+    path: sessionFile,
+    contextMessages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "SessionManager context message" }],
+      },
+    ],
+  });
+  try {
+    const result = readPersistedTranscript(
+      { piSessionId: sessionId, piSessionFile: sessionFile } as any,
+      (path) => realFs.readFileSync(path, "utf8"),
+      realFs.existsSync,
+    );
+    assert.equal(
+      result.transcript,
+      "assistant:\nSessionManager context message",
+    );
+    assert.doesNotMatch(result.transcript, /raw session file message/);
+  } finally {
+    nativeSessions.delete(sessionId);
+    realFs.rmSync(sessionFile, { force: true });
+  }
+});
+
+test("managed result capture extracts assistant text", () => {
+  const fixture = fakePi();
+  let latest = "";
+  registerManagedAgentResultCapture(fixture.pi as any, {
+    state: () => managedState("scout", REQUEST_ID),
+    pendingResult: () => false,
+    delegationEnabled: false,
+    hasUndeliveredDirectChildWork: () => false,
+    setLatest: (value) => {
+      latest = value;
+    },
+  });
+  fixture.events.get("message_end")![0](
+    {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "managed result" }],
+      },
+    },
+    {} as any,
+  );
+  assert.equal(latest, "managed result");
+});
 
 test("status breadcrumb trusts only validated Lead ancestry", () => {
   const state = managedState("scout");

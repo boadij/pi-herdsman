@@ -12,12 +12,13 @@ import fs, {
 import { syncBuiltinESMExports } from "node:module";
 import { createServer, type Socket } from "node:net";
 import test from "node:test";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   HerdrStartFailure,
+  herdrManagedLaunchTarget,
   herdrAgentAlias,
   listHerdrAgents,
   listAllHerdrAgents,
@@ -52,6 +53,17 @@ import {
 import { claimProcessLock } from "./lock.ts";
 import { OperationError } from "./errors.ts";
 import { herdsmanTempRoot } from "./storage.ts";
+
+test("managed launch selects the host agent kind and state integration", () => {
+  assert.deepEqual(herdrManagedLaunchTarget("/pi", false), {
+    kind: "pi",
+    stateExtension: "/pi/extensions/herdr-agent-state.ts",
+  });
+  assert.deepEqual(herdrManagedLaunchTarget("/omp", true), {
+    kind: "omp",
+    stateExtension: "/omp/extensions/herdr-omp-agent-state.ts",
+  });
+});
 
 test("nested topology keeps the Herdr workspace authoritative", () => {
   assert.deepEqual(
@@ -3556,7 +3568,7 @@ test("inspection matches canonical native path identities and rejects missing pa
   }
 });
 
-test("session identity requires the native Pi AgentSessionInfo", () => {
+test("session identity accepts only matching native Pi or OMP references", () => {
   const valid = {
     source: "herdr:pi",
     agent: "pi",
@@ -3566,6 +3578,7 @@ test("session identity requires the native Pi AgentSessionInfo", () => {
   assert.deepEqual(sessionIdentity(valid), {
     kind: "id",
     value: "agent-session",
+    runtime: "pi",
   });
   for (const invalid of [
     { ...valid, source: "other" },
@@ -3582,7 +3595,25 @@ test("session identity requires the native Pi AgentSessionInfo", () => {
   }
   assert.deepEqual(
     sessionIdentity({ ...valid, kind: "path", value: "/tmp/session.jsonl" }),
-    { kind: "path", value: "/tmp/session.jsonl" },
+    { kind: "path", value: "/tmp/session.jsonl", runtime: "pi" },
+  );
+  assert.deepEqual(
+    sessionIdentity({
+      source: "herdr:omp",
+      agent: "omp",
+      kind: "id",
+      value: "omp-session",
+    }),
+    { kind: "id", value: "omp-session", runtime: "omp" },
+  );
+  assert.equal(
+    sessionIdentity({
+      source: "herdr:omp",
+      agent: "pi",
+      kind: "id",
+      value: "omp-session",
+    }),
+    undefined,
   );
 });
 
@@ -3614,6 +3645,55 @@ test("Herdr session helpers preserve native IDs and canonical exact paths", () =
         },
       }),
       "native-id",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("OMP path identity uses the native session manager and exact path", () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-omp-session-"));
+  try {
+    const manager = SessionManager.create(root, root);
+    const path = manager.getSessionFile();
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        type: "session",
+        id: manager.getSessionId(),
+        version: 3,
+        timestamp: new Date().toISOString(),
+        cwd: root,
+      })}\n`,
+    );
+    const observed = {
+      source: "herdr:omp",
+      agent: "omp",
+      kind: "path",
+      value: path,
+    };
+    const identity = { agent_session: observed };
+    assert.equal(herdrSessionId(identity), manager.getSessionId());
+    assert.equal(
+      matchesExpectedSession(observed, {
+        id: manager.getSessionId(),
+        path,
+      }),
+      true,
+    );
+    assert.equal(
+      matchesExpectedSession(observed, {
+        id: "another-session",
+        path,
+      }),
+      false,
+    );
+    assert.equal(
+      matchesExpectedSession(observed, {
+        id: manager.getSessionId(),
+        path: join(root, "other-session.jsonl"),
+      }),
+      false,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

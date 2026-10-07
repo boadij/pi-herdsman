@@ -4,9 +4,9 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { contentText, StringEnum } from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai/utils/text";
+import { StringEnum } from "@earendil-works/pi-ai";
 import {
-  buildSessionProjection,
   DynamicBorder,
   getAgentDir,
   getSelectListTheme,
@@ -38,15 +38,15 @@ import {
   fuzzyFilter,
   Input,
   Key,
-  MouseRegion,
   matchesKey,
   SelectList,
   Spacer,
   Text as TuiText,
-  type Component,
   type SelectItem,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import * as PiTui from "@earendil-works/pi-tui";
+import { isOmpRuntime } from "./host-runtime.ts";
 import {
   controlMarker,
   claimAgentMailbox,
@@ -298,8 +298,11 @@ const HERDSMAN_VERSION = packageMetadata.version;
 
 function expandablePresentation(
   initialExpanded: boolean,
-  render: (expanded: boolean) => Component,
-): MouseRegion {
+  render: (expanded: boolean) => any,
+): any {
+  const MouseRegion = (PiTui as typeof PiTui & { MouseRegion?: any })
+    .MouseRegion;
+  if (isOmpRuntime || !MouseRegion) return render(initialExpanded);
   let expanded = initialExpanded;
   const content = new Container();
   const rebuild = () => {
@@ -307,7 +310,7 @@ function expandablePresentation(
     content.addChild(render(expanded));
   };
   rebuild();
-  return new MouseRegion(content, (event) => {
+  return new MouseRegion(content, (event: any) => {
     if (event.type !== "click" || event.button !== "left") return undefined;
     expanded = !expanded;
     rebuild();
@@ -750,33 +753,38 @@ export default function (pi: ExtensionAPI): void {
     });
     return;
   }
-  pi.registerEntryRenderer(AGENT_DEFINITIONS_ENTRY, (entry, options, theme) => {
-    const definitions = entry?.data?.definitions;
-    if (
-      !Array.isArray(definitions) ||
-      !definitions.every(
-        (definition) =>
-          definition !== null &&
-          typeof definition === "object" &&
-          !Array.isArray(definition),
-      )
-    )
-      return undefined;
-    const instructions =
-      typeof entry?.data?.instructions === "string"
-        ? entry.data.instructions
-        : undefined;
-    return expandablePresentation(options.expanded, (expanded) =>
-      renderAgentDefinitionsOverview(definitions, theme, {
-        ...options,
-        expanded,
-        instructions,
-      }),
+  if (typeof pi.registerEntryRenderer === "function") {
+    pi.registerEntryRenderer(
+      AGENT_DEFINITIONS_ENTRY,
+      (entry, options, theme) => {
+        const definitions = entry?.data?.definitions;
+        if (
+          !Array.isArray(definitions) ||
+          !definitions.every(
+            (definition) =>
+              definition !== null &&
+              typeof definition === "object" &&
+              !Array.isArray(definition),
+          )
+        )
+          return undefined;
+        const instructions =
+          typeof entry?.data?.instructions === "string"
+            ? entry.data.instructions
+            : undefined;
+        return expandablePresentation(options.expanded, (expanded) =>
+          renderAgentDefinitionsOverview(definitions, theme, {
+            ...options,
+            expanded,
+            instructions,
+          }),
+        );
+      },
     );
-  });
-  pi.registerEntryRenderer(HERD_RUN_ENTRY, (entry, _options, theme) =>
-    renderHerdRunEntry(entry, theme),
-  );
+    pi.registerEntryRenderer(HERD_RUN_ENTRY, (entry, _options, theme) =>
+      renderHerdRunEntry(entry, theme),
+    );
+  }
   for (const kind of COORDINATION_MESSAGE_KINDS) {
     pi.registerMessageRenderer(
       `pi-herdsman-${kind}`,
@@ -2068,7 +2076,6 @@ export default function (pi: ExtensionAPI): void {
           messageLimits,
           chiefMessageBytes,
           coordinationMessageMaxBytes: COORDINATION_MESSAGE_MAX_BYTES,
-          buildSessionProjection,
           contentText,
           supervisorStateType: SUPERVISOR_STATE_TYPE,
           sameManagerDescriptor,

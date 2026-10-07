@@ -12,15 +12,16 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as PiCodingAgent from "@earendil-works/pi-coding-agent";
 import {
   CONFIG_DIR_NAME,
   getAgentDir,
-  loadProjectContextFiles,
   parseFrontmatter as parsePiFrontmatter,
 } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { snapshotTextFiles } from "./core.ts";
 import { herdsmanTempRoot } from "./storage.ts";
+import { isOmpRuntime } from "./host-runtime.ts";
 
 export const VALID_THINKING_LEVELS = [
   "off",
@@ -108,6 +109,21 @@ export type AgentDefinition = {
   projectSource?: string;
   overrideSource?: string;
 };
+
+type LaunchContextFile = {
+  path: string;
+  content: string;
+  level?: "user" | "project";
+  depth?: number;
+};
+type ContextFileApi = {
+  loadProjectContextFiles?: (options: {
+    cwd: string;
+    agentDir: string;
+  }) => LaunchContextFile[];
+  discoverContextFiles?: (cwd: string) => Promise<LaunchContextFile[]>;
+};
+const contextFileApi = PiCodingAgent as typeof PiCodingAgent & ContextFileApi;
 
 export const AGENT_COORDINATION_TOOLS = [
   "list_agents",
@@ -779,11 +795,39 @@ export type AgentLaunchOptions = {
    * model (configured, else inherited) is passed through unchanged.
    */
   modelDecision?: ChildModelDecision;
+  contextFiles?: readonly LaunchContextFile[];
 };
+
+export async function contextFilesForAgentLaunch(
+  agent: AgentDefinition,
+  cwd: string,
+): Promise<readonly LaunchContextFile[] | undefined> {
+  const inheritProjectContext =
+    agent.frontmatter.inheritProjectContext ?? agent.name === "delegate";
+  const inheritGlobalContext =
+    agent.frontmatter.inheritGlobalContext ?? inheritProjectContext;
+  if (inheritProjectContext && inheritGlobalContext) return undefined;
+  if (contextFileApi.discoverContextFiles)
+    return contextFileApi.discoverContextFiles(cwd);
+  if (contextFileApi.loadProjectContextFiles)
+    return contextFileApi.loadProjectContextFiles({
+      cwd,
+      agentDir: getAgentDir(),
+    });
+  throw new Error("runtime does not expose context-file discovery");
+}
 
 export function agentLaunchArgs(
   agent: AgentDefinition,
   options: AgentLaunchOptions,
+): string[] {
+  return agentLaunchArgsForRuntime(agent, options, isOmpRuntime);
+}
+
+export function agentLaunchArgsForRuntime(
+  agent: AgentDefinition,
+  options: AgentLaunchOptions,
+  omp: boolean,
 ): string[] {
   const {
     bodyPromptPath,
@@ -809,7 +853,7 @@ export function agentLaunchArgs(
       `agent ${agent.name} has a body but no bodyPromptPath was provided`,
     );
   const args: string[] = [];
-  if (approveProject) args.push("--approve");
+  if (approveProject && !omp) args.push("--approve");
   const requestedModel = configuredModel(frontmatter) ?? inheritedModel;
   const decision =
     options.modelDecision ??
@@ -842,10 +886,17 @@ export function agentLaunchArgs(
   const inheritGlobalContext =
     frontmatter.inheritGlobalContext ?? inheritProjectContext;
   if (inheritProjectContext !== true || inheritGlobalContext !== true) {
+    if (omp)
+      throw new Error("OMP cannot selectively suppress context-file discovery");
     args.push("--no-context-files");
     if (inheritProjectContext === true || inheritGlobalContext === true) {
       const agentDir = getAgentDir();
-      for (const context of loadProjectContextFiles({ cwd, agentDir })) {
+      const contexts =
+        options.contextFiles ??
+        contextFileApi.loadProjectContextFiles?.({ cwd, agentDir });
+      if (!contexts)
+        throw new Error("launch context files were not discovered");
+      for (const context of contexts) {
         const isGlobal = resolve(dirname(context.path)) === resolve(agentDir);
         if (
           (isGlobal && inheritGlobalContext === true) ||
@@ -887,24 +938,33 @@ export function agentLaunchArgs(
           `required tools cannot be excluded by patterns`,
       );
   }
+  if (omp && excluded.length > 0 && !explicitTools && !noTools)
+    throw new Error(
+      `agent ${agent.name} uses excludeTools without an explicit tools allowlist, which OMP cannot preserve`,
+    );
   if (noTools || explicitTools) {
     const configured = configuredTools.filter(
       (tool) =>
-        (!managedAgent || tool !== "agent") && !requiredToolSet.has(tool),
+        (!managedAgent || tool !== "agent") &&
+        !requiredToolSet.has(tool) &&
+        (!omp ||
+          !excluded.some((pattern) => matchesToolPattern(pattern, tool))),
     );
     const selected = [...new Set([...configured, ...requiredTools])];
     if (selected.length) {
-      if (!selected.some((tool) => tool.startsWith("mcp__"))) {
+      if (!omp && !selected.some((tool) => tool.startsWith("mcp__"))) {
         selected.push("mcp__");
         if (!excluded.includes("mcp__")) excluded.push("mcp__");
       }
       args.push("--tools", selected.join(","));
     }
   }
-  if (excluded.length) args.push("--exclude-tools", excluded.join(","));
+  if (!omp && excluded.length) args.push("--exclude-tools", excluded.join(","));
 
   const noSkills = frontmatter.noSkills ?? frontmatter.inheritSkills !== true;
   if (noSkills) args.push("--no-skills");
+  if (omp && (frontmatter.skills?.length ?? 0) > 0)
+    throw new Error("OMP cannot explicitly load agent skills");
   for (const skill of frontmatter.skills ?? []) args.push("--skill", skill);
 
   // A model whose provider comes from an extension cannot resolve inside a

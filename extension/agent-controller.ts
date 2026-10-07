@@ -1,17 +1,15 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
-  ProjectedSessionEntry,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import {
-  buildSessionProjection,
   CURRENT_SESSION_VERSION,
   parseSessionEntries,
   SessionManager,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
-import { contentText } from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai/utils/text";
 import { realpathSync, statSync } from "node:fs";
 import { watchFile, unwatchFile, type Stats, unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
@@ -111,6 +109,7 @@ import { fileURLToPath } from "node:url";
 import {
   contextAgentDefinitions,
   agentLaunchArgs,
+  contextFilesForAgentLaunch,
   agentDefinitionEnabled,
   agentDefinitionDelegationEnabled,
   agentDefinitionMetadata,
@@ -1315,45 +1314,45 @@ function truncateTranscriptToolResult(text: string): {
   };
 }
 
-function formatPersistedTranscript(entries: readonly ProjectedSessionEntry[]): {
+function formatPersistedTranscript(
+  messages: readonly ReturnType<
+    SessionManager["buildSessionContext"]
+  >["messages"][number][],
+): {
   text: string;
   truncated: boolean;
 } {
   const blocks: string[] = [];
   let truncated = false;
-  for (const { sourceEntry, messages } of entries) {
+  for (const message of messages) {
     if (
-      sourceEntry.type === "compaction" ||
-      sourceEntry.type === "branch_summary"
+      message.role === "compactionSummary" ||
+      message.role === "branchSummary"
     ) {
-      if (sourceEntry.summary.trim())
+      if (message.summary?.trim())
         blocks.push(
-          `${sourceEntry.type === "compaction" ? "compaction" : "branch"} summary:\n${sourceEntry.summary.trim()}`,
+          `${message.role === "compactionSummary" ? "compaction" : "branch"} summary:\n${message.summary.trim()}`,
         );
       continue;
     }
-    for (const message of messages) {
-      if (message.role === "user") {
-        const text = contentText(message.content, "").trim();
-        if (text && !parseControlMarker(text)) blocks.push(`user:\n${text}`);
-      } else if (message.role === "assistant") {
-        for (const part of message.content ?? []) {
-          if (part.type === "text" && part.text.trim())
-            blocks.push(`assistant:\n${part.text.trim()}`);
-          else if (part.type === "toolCall")
-            blocks.push(
-              `tool ${part.name}:\n${JSON.stringify(part.arguments)}`,
-            );
-        }
-      } else if (message.role === "toolResult") {
-        const result = truncateTranscriptToolResult(
-          contentText(message.content, "").trim(),
-        );
-        truncated ||= result.truncated;
-        blocks.push(
-          `tool result ${message.toolName}${message.isError ? " [error]" : ""}:${result.text ? `\n${result.text}` : ""}`,
-        );
+    if (message.role === "user") {
+      const text = contentText(message.content, "").trim();
+      if (text && !parseControlMarker(text)) blocks.push(`user:\n${text}`);
+    } else if (message.role === "assistant") {
+      for (const part of message.content ?? []) {
+        if (part.type === "text" && part.text.trim())
+          blocks.push(`assistant:\n${part.text.trim()}`);
+        else if (part.type === "toolCall")
+          blocks.push(`tool ${part.name}:\n${JSON.stringify(part.arguments)}`);
       }
+    } else if (message.role === "toolResult") {
+      const result = truncateTranscriptToolResult(
+        contentText(message.content, "").trim(),
+      );
+      truncated ||= result.truncated;
+      blocks.push(
+        `tool result ${message.toolName}${message.isError ? " [error]" : ""}:${result.text ? `\n${result.text}` : ""}`,
+      );
     }
   }
   return { text: blocks.join("\n\n"), truncated };
@@ -1364,9 +1363,14 @@ export function readPersistedTranscript(
   readFile: (path: string) => string,
   isFile: (path: string) => boolean,
 ): { transcript: string; truncated: boolean } {
-  const entries = readPersistedSessionEntries(target, readFile, isFile);
+  readPersistedSessionEntries(target, readFile, isFile);
+  const session = SessionManager.open(target.piSessionFile!);
+  if (session.getSessionId() !== target.piSessionId)
+    throw new Error(
+      "Persisted Pi session is missing a matching current session header",
+    );
   const formatted = formatPersistedTranscript(
-    buildSessionProjection(entries.slice(1) as SessionEntry[]).entries,
+    session.buildSessionContext().messages,
   );
   const bounded = truncateTail(formatted.text, {
     maxBytes: TRANSCRIPT_MAX_BYTES,
@@ -5631,6 +5635,10 @@ export function createAgentController(
             : {}),
           sharedPromptPath: promptPaths[effectiveDefinition.body ? 1 : 0],
           cwd: agentCwd,
+          contextFiles: await contextFilesForAgentLaunch(
+            effectiveDefinition,
+            agentCwd,
+          ),
           managedAgent: true,
           approveProject:
             agentContext.projectTrusted && sameCwd(agentCwd, ctx.cwd),

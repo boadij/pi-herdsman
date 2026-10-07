@@ -33,7 +33,8 @@ import {
 import { OperationError } from "./errors.ts";
 import { sameObservedSessionPath, verifiedHerdrAgent } from "./herdr.ts";
 import { ProcessLockOccupiedError } from "./lock.ts";
-import { contentText, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai/utils/text";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { prepareMessageInput } from "./core.ts";
 import {
   createAgentController,
@@ -57,6 +58,7 @@ import type {
 import type { RuntimeBuild } from "./compatibility.ts";
 import {
   agentLaunchArgs,
+  contextFilesForAgentLaunch,
   configuredModel,
   discoverManagedLeadDefinition,
   expandAgentBodyFiles,
@@ -445,8 +447,7 @@ type LeadCoordinationBaseHost = {
   ): Promise<{ inline: { bytes: number }; mailbox: { bytes: number } }>;
   chiefMessageBytes: typeof import("./supervision.ts").chiefMessageBytes;
   coordinationMessageMaxBytes: number;
-  buildSessionProjection: typeof import("@earendil-works/pi-coding-agent").buildSessionProjection;
-  contentText: typeof import("@earendil-works/pi-ai").contentText;
+  contentText: typeof import("@earendil-works/pi-ai/utils/text").contentText;
   supervisorStateType: string;
   sameManagerDescriptor: typeof import("./supervision.ts").sameManagerDescriptor;
   requireCompatibleBuild: typeof import("./compatibility.ts").requireCompatibleBuild;
@@ -4398,6 +4399,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           const launchArgs = agentLaunchArgs(effectiveDefinition, {
             ...(body ? { bodyPromptPath: promptPaths.at(-1)! } : {}),
             cwd: cwd!,
+            contextFiles: await contextFilesForAgentLaunch(
+              effectiveDefinition,
+              cwd!,
+            ),
             requiredTools: host.leadCoordinationTools,
             ...(operation.action === "delegate"
               ? { inheritedThinking: pi.getThinkingLevel() }
@@ -5049,7 +5054,6 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     listPeerLeadRecords,
     publishProjectMessage,
     resolveMessageFiles,
-    buildSessionProjection,
     contentText,
     supervisorStateType,
     workspacePresentationProvenance,
@@ -5611,17 +5615,14 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
     ctx: ExtensionContext,
     customType: string,
   ): string | undefined => {
-    const entry = [
-      ...buildSessionProjection(ctx.sessionManager.getBranch()).entries,
-    ]
+    const message = ctx.sessionManager
+      .buildSessionContext()
+      .messages.slice()
       .reverse()
       .find(
         (candidate: any) =>
-          candidate.sourceEntry.type === "custom_message" &&
-          candidate.sourceEntry.customType === customType &&
-          candidate.messages.length > 0,
+          candidate.role === "custom" && candidate.customType === customType,
       );
-    const message = entry?.messages[0];
     return message ? contentText(message.content, "") : undefined;
   };
   const prepareLeadSupervisorStateMessage = async (ctx: ExtensionContext) => {

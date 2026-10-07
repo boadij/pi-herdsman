@@ -99,6 +99,33 @@ test("runtime build identity includes exact executable bytes", () => {
   assert.equal(isRuntimeBuild(first), true);
 });
 
+test("extension loads without optional entry-renderer registration", () => {
+  const environment = {
+    HERDR_ENV: process.env.HERDR_ENV,
+    HERDR_PANE_ID: process.env.HERDR_PANE_ID,
+    PI_HERDSMAN_MAILBOX: process.env.PI_HERDSMAN_MAILBOX,
+  };
+  delete process.env.HERDR_ENV;
+  delete process.env.HERDR_PANE_ID;
+  delete process.env.PI_HERDSMAN_MAILBOX;
+  try {
+    const pi = fakePi();
+    delete (pi.pi as any).registerEntryRenderer;
+    registerExtension!(pi.pi as never);
+    assert.equal(pi.entryRenderers.length, 0);
+    assert.ok(
+      pi.messageRenderers.some(
+        ({ customType }) => customType === "pi-herdsman-agent-result",
+      ),
+    );
+  } finally {
+    for (const [key, value] of Object.entries(environment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 function assertToolResult(result: any): asserts result is {
   content: { type: "text"; text: string }[];
   details?: Record<string, unknown>;
@@ -725,7 +752,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     details: { fromSessionId: "lead-session" },
   };
   const click = (button: "left" | "right") => ({
-    type: "click",
+    type: "click" as const,
     button,
     x: 0,
     y: 0,
@@ -759,6 +786,11 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     first.render(120).join("\n"),
     /from session: lead-session/,
   );
+  assert.doesNotMatch(
+    second.render(120).join("\n"),
+    /from session: lead-session/,
+  );
+  assert.equal(typeof first.handleMouse, "function");
   assert.equal(first.handleMouse(click("right"))?.handled, undefined);
   assert.doesNotMatch(
     first.render(120).join("\n"),
@@ -766,10 +798,6 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   );
   assert.equal(first.handleMouse(click("left"))?.handled, true);
   assert.match(first.render(120).join("\n"), /from session: lead-session/);
-  assert.doesNotMatch(
-    second.render(120).join("\n"),
-    /from session: lead-session/,
-  );
   assert.equal(first.handleMouse(click("left"))?.handled, true);
   assert.doesNotMatch(
     first.render(120).join("\n"),

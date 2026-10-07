@@ -7,7 +7,7 @@ import {
   truncateLine,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
-import { contentText } from "@earendil-works/pi-ai";
+import { contentText } from "@earendil-works/pi-ai/utils/text";
 import * as PiTui from "@earendil-works/pi-tui";
 import {
   Container,

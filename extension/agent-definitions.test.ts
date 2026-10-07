@@ -16,6 +16,8 @@ import {
   agentDefinitionMetadata,
   agentDefinitionEnabled,
   agentLaunchArgs,
+  agentLaunchArgsForRuntime,
+  contextFilesForAgentLaunch,
   AGENT_COORDINATION_TOOLS,
   discoverAgent,
   discoverAgentDefinitions,
@@ -383,7 +385,7 @@ test("rejects malformed capability fields", () => {
     );
 });
 
-test("selects global and project context independently in native order", () => {
+test("selects global and project context independently in native order", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-herdsman-context-"));
   const agentDir = join(root, "custom-agent-dir");
   const project = join(root, "project");
@@ -400,25 +402,28 @@ test("selects global and project context independently in native order", () => {
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
-    const launch = (
+    const launch = async (
       name: string,
       frontmatter: Record<string, string | boolean>,
-    ) =>
-      agentLaunchArgs(
-        { name, path: "/agent.md", frontmatter, body: "Prompt" },
-        { bodyPromptPath: "/prompt", cwd },
-      );
+    ) => {
+      const agent = { name, path: "/agent.md", frontmatter, body: "Prompt" };
+      return agentLaunchArgs(agent, {
+        bodyPromptPath: "/prompt",
+        cwd,
+        contextFiles: await contextFilesForAgentLaunch(agent, cwd),
+      });
+    };
     const noContext = ["--no-context-files"];
     const append = (path: string) => ["--append-system-prompt", path];
     const noSkills = ["--no-skills"];
 
-    assert.deepEqual(launch("agent", {}), [
+    assert.deepEqual(await launch("agent", {}), [
       "--append-system-prompt",
       "/prompt",
       ...noContext,
       ...noSkills,
     ]);
-    assert.deepEqual(launch("delegate", {}), [
+    assert.deepEqual(await launch("delegate", {}), [
       "--append-system-prompt",
       "/prompt",
       ...noSkills,
@@ -446,7 +451,7 @@ test("selects global and project context independently in native order", () => {
         ],
       ] as const)
         assert.deepEqual(
-          launch("agent", { ...frontmatter, systemPromptMode }),
+          await launch("agent", { ...frontmatter, systemPromptMode }),
           [...prompt, ...contexts, ...noSkills],
         );
     }
@@ -1550,6 +1555,74 @@ test("passes native capability combinations through to Pi", () => {
       "--extension",
       "explicit-extension",
     ],
+  );
+});
+
+test("OMP launch keeps native allowlists and fails closed on unsupported capabilities", () => {
+  const agent = {
+    name: "custom",
+    path: "/custom.md",
+    body: "",
+    frontmatter: {
+      inheritProjectContext: true,
+      inheritGlobalContext: true,
+      tools: ["read", "grep"],
+      excludeTools: ["grep"],
+      noSkills: true,
+    },
+  };
+  const args = agentLaunchArgsForRuntime(
+    agent,
+    { approveProject: true, managedAgent: true },
+    true,
+  );
+  assert.ok(!args.includes("--approve"));
+  assert.ok(!args.includes("--no-context-files"));
+  assert.ok(!args.includes("--exclude-tools"));
+  assert.ok(!args.includes("mcp__"));
+  assert.ok(args.includes("--tools"));
+  assert.ok(args.includes("read,ask_owner"));
+  assert.throws(
+    () =>
+      agentLaunchArgsForRuntime(
+        {
+          ...agent,
+          frontmatter: {
+            ...agent.frontmatter,
+            inheritGlobalContext: false,
+          },
+        },
+        {},
+        true,
+      ),
+    /OMP cannot selectively suppress context-file discovery/,
+  );
+  assert.throws(
+    () =>
+      agentLaunchArgsForRuntime(
+        {
+          ...agent,
+          frontmatter: { ...agent.frontmatter, skills: ["explicit"] },
+        },
+        {},
+        true,
+      ),
+    /OMP cannot explicitly load agent skills/,
+  );
+  assert.throws(
+    () =>
+      agentLaunchArgsForRuntime(
+        {
+          ...agent,
+          frontmatter: {
+            ...agent.frontmatter,
+            tools: undefined,
+          },
+        },
+        {},
+        true,
+      ),
+    /OMP cannot preserve/,
   );
 });
 

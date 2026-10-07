@@ -1,5 +1,6 @@
 import {
   getAgentDir,
+  SessionManager,
   type ExecResult,
   type ExtensionAPI,
   type ExtensionContext,
@@ -20,6 +21,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { claimProcessLock, ProcessLockOccupiedError } from "./lock.ts";
 import { fail, OperationError } from "./errors.ts";
 import { herdsmanTempRoot } from "./storage.ts";
+import { isOmpRuntime } from "./host-runtime.ts";
 
 const HERDR_VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-preview(?:\.[0-9A-Za-z-]+)?)?$/;
@@ -200,10 +202,23 @@ const LIFECYCLE_SUBSCRIPTIONS = [
 const LIFECYCLE_SUBSCRIPTION_ID = "pi-herdsman:lifecycle";
 const LIFECYCLE_RECONNECT_MS = 1_000;
 const MAX_EVENT_BUFFER_BYTES = 1024 * 1024;
-const HERDR_AGENT_STATE_EXTENSION = join(
+export function herdrManagedLaunchTarget(
+  agentDir: string,
+  omp: boolean,
+): { kind: "pi" | "omp"; stateExtension: string } {
+  return {
+    kind: omp ? "omp" : "pi",
+    stateExtension: join(
+      agentDir,
+      "extensions",
+      omp ? "herdr-omp-agent-state.ts" : "herdr-agent-state.ts",
+    ),
+  };
+}
+
+const HERDR_MANAGED_LAUNCH = herdrManagedLaunchTarget(
   getAgentDir(),
-  "extensions",
-  "herdr-agent-state.ts",
+  isOmpRuntime,
 );
 function error(operation: string, message: string, details?: unknown): never {
   throw new OperationError({
@@ -1441,7 +1456,7 @@ export async function startHerdrAgent(
             "start",
             attempt.herdrAgent,
             "--kind",
-            "pi",
+            HERDR_MANAGED_LAUNCH.kind,
             "--pane",
             paneId,
             "--timeout",
@@ -1451,7 +1466,7 @@ export async function startHerdrAgent(
               ? ["--extension", options.extensionPath]
               : []),
             "--extension",
-            HERDR_AGENT_STATE_EXTENSION,
+            HERDR_MANAGED_LAUNCH.stateExtension,
             ...(options.agentArgs ?? []),
           ],
           {
@@ -1658,7 +1673,7 @@ export async function startHerdrAgentInPane(
             "start",
             attempt.herdrAgent,
             "--kind",
-            "pi",
+            HERDR_MANAGED_LAUNCH.kind,
             "--pane",
             options.paneId,
             "--timeout",
@@ -1668,7 +1683,7 @@ export async function startHerdrAgentInPane(
               ? ["--extension", options.extensionPath]
               : []),
             "--extension",
-            HERDR_AGENT_STATE_EXTENSION,
+            HERDR_MANAGED_LAUNCH.stateExtension,
             ...(options.agentArgs ?? []),
           ],
           {
@@ -2024,7 +2039,7 @@ type RunningAgentProof = {
 
 export function sessionIdentity(
   value: unknown,
-): { kind: "id" | "path"; value: string } | undefined {
+): { kind: "id" | "path"; value: string; runtime: "pi" | "omp" } | undefined {
   if (!value || typeof value !== "object") return undefined;
   const session = value as {
     source?: unknown;
@@ -2034,17 +2049,30 @@ export function sessionIdentity(
   };
   const kind = session.kind;
   const sessionValue = session.value;
-  if (session.source !== "herdr:pi" || session.agent !== "pi") return undefined;
+  const runtime =
+    session.source === "herdr:pi" && session.agent === "pi"
+      ? "pi"
+      : session.source === "herdr:omp" && session.agent === "omp"
+        ? "omp"
+        : undefined;
+  if (!runtime) return undefined;
   return (kind === "id" || kind === "path") &&
     typeof sessionValue === "string" &&
     sessionValue.length > 0
-    ? { kind, value: sessionValue }
+    ? { kind, value: sessionValue, runtime }
     : undefined;
 }
 export function herdrSessionId(agent: any): string | undefined {
   const session = sessionIdentity(agent?.agent_session);
   if (!session) return undefined;
   if (session.kind === "id") return session.value;
+  if (session.runtime === "omp") {
+    try {
+      return SessionManager.open(session.value).getSessionId() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
   try {
     return readPiSessionHeaderId(session.value);
   } catch {
@@ -2161,6 +2189,12 @@ export function matchesExpectedSession(
     typeof expected.path === "string" && expected.path.length > 0;
   if (hasExpectedPath) {
     if (!sameObservedSessionPath(session.value, expected.path)) return false;
+    if (session.runtime === "omp")
+      return (
+        typeof expected.id !== "string" ||
+        expected.id.length === 0 ||
+        herdrSessionId({ agent_session: observed }) === expected.id
+      );
     if (typeof expected.id !== "string" || expected.id.length === 0)
       return true;
   }
