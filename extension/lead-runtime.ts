@@ -1788,17 +1788,17 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
       }
     },
-    async runAgentsCommand(
+    async runHerdsmanCommand(
       rawArgs: string,
       ctx: ExtensionCommandContext,
     ): Promise<void> {
       if (!ctx.hasUI) return;
       const usage =
-        "Usage: /agents stats | definitions | placement [tab|subtree|split] | stop";
-      const placementUsage = "Usage: /agents placement [tab|subtree|split]";
+        "Usage: /herdsman [stats | definitions | placement [tab|subtree|split] | stop]";
+      const placementUsage = "Usage: /herdsman placement [tab|subtree|split]";
       const args = rawArgs.trim() ? rawArgs.trim().split(/\s+/u) : [];
       try {
-        if (!args.length) return void (await this.openAgentsMenu(ctx));
+        if (!args.length) return void (await this.openHerdsmanMenu(ctx));
         if (args[0] === "stats" && args.length === 1)
           return void (await this.showSessionStats(ctx));
         if (args[0] === "definitions" && args.length === 1)
@@ -1819,21 +1819,6 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         if (args[0] === "stop" && args.length === 1)
           return void (await this.confirmAndStopAll(ctx));
         ctx.ui.notify(usage, "error");
-      } catch (error) {
-        ctx.ui.notify(String(error), "error");
-      }
-    },
-    async runHerdsmanCommand(
-      rawArgs: string,
-      ctx: ExtensionCommandContext,
-    ): Promise<void> {
-      if (!ctx.hasUI) return;
-      if (rawArgs.trim()) {
-        ctx.ui.notify("Usage: /herdsman", "error");
-        return;
-      }
-      try {
-        await this.openHerdsmanMenu(ctx);
       } catch (error) {
         ctx.ui.notify(String(error), "error");
       }

@@ -4157,7 +4157,7 @@ test("Chief activation rejects owned work outside the current workspace", async 
   setLeadEnvironment();
 });
 
-test("lead commands separate Herdsman discovery from Agent grammar", async () => {
+test("Herdsman and agents share command handling and grammar", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -4174,26 +4174,22 @@ test("lead commands separate Herdsman discovery from Agent grammar", async () =>
   assert.ok(command);
   const herdsman = pi.commandOptions.get("herdsman");
   assert.ok(herdsman);
-  assert.equal(command.description, "Manage Herdsman Agents");
+  assert.equal(command.description, "Alias for /herdsman");
   assert.equal(herdsman.description, "Open Pi Herdsman");
-  assert.notEqual(herdsman.handler, command.handler);
-  assert.equal(herdsman.getArgumentCompletions, undefined);
-  assert.deepEqual(
-    await herdsman.handler("anything", fakeContext() as any),
-    undefined,
-  );
-  assert.deepEqual(command.getArgumentCompletions(""), [
+  assert.equal(command.handler, herdsman.handler);
+  assert.equal(command.getArgumentCompletions, herdsman.getArgumentCompletions);
+  assert.deepEqual(herdsman.getArgumentCompletions(""), [
     { value: "stats", label: "stats" },
     { value: "definitions", label: "definitions" },
     { value: "placement", label: "placement" },
     { value: "stop", label: "stop" },
   ]);
-  assert.deepEqual(command.getArgumentCompletions("placement "), [
+  assert.deepEqual(herdsman.getArgumentCompletions("placement "), [
     { value: "placement tab", label: "tab" },
     { value: "placement subtree", label: "subtree" },
     { value: "placement split", label: "split" },
   ]);
-  assert.deepEqual(command.getArgumentCompletions("placement s"), [
+  assert.deepEqual(herdsman.getArgumentCompletions("placement s"), [
     { value: "placement subtree", label: "subtree" },
     { value: "placement split", label: "split" },
   ]);
@@ -4204,12 +4200,12 @@ test("lead commands separate Herdsman discovery from Agent grammar", async () =>
   context.ui.notify = (message: string) => notices.push(message);
   await command.handler("", context);
   await command.handler("agents extra", context);
-  await command.handler("placement invalid", context);
+  await herdsman.handler("placement invalid", context);
   await herdsman.handler("anything", context);
   assert.deepEqual(notices, [
-    "Usage: /agents stats | definitions | placement [tab|subtree|split] | stop",
-    "Usage: /agents placement [tab|subtree|split]",
-    "Usage: /herdsman",
+    "Usage: /herdsman [stats | definitions | placement [tab|subtree|split] | stop]",
+    "Usage: /herdsman placement [tab|subtree|split]",
+    "Usage: /herdsman [stats | definitions | placement [tab|subtree|split] | stop]",
   ]);
 });
 
@@ -5002,9 +4998,12 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
     prompts.push({ label, options });
     if (prompts.length === 1)
       return options.find((option) => option === "Settings");
+    if (prompts.length === 3)
+      return options.find((option) => option === "Settings");
     return undefined;
   };
   await command.handler("", context);
+  await pi.commandOptions.get("agents").handler("", context);
   assert.equal(prompts[0]?.label, `Pi Herdsman · v${packageMetadata.version}`);
   assert.deepEqual(prompts[0]?.options, [
     "Agents",
@@ -5020,6 +5019,9 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
     "Context retirement  on",
     "Message limits",
   ]);
+  assert.equal(prompts[2]?.label, prompts[0]?.label);
+  assert.deepEqual(prompts[2]?.options, prompts[0]?.options);
+  assert.equal(prompts[3]?.label, "Settings");
   await pi.events.get("session_shutdown")?.[0]();
 });
 
@@ -5056,21 +5058,26 @@ test("Herdsman root renders when status and definition metadata fail", async () 
   assert.deepEqual(notices, []);
 });
 
-test("plain /agents is the focused Running, Layout, Stop all menu", async () => {
+test("Herdsman Agents row opens the focused Running, Layout, Stop all menu", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
-  let menu: { label: string; options: string[] } | undefined;
+  const menus: { label: string; options: string[] }[] = [];
+  let openedAgents = false;
   context.ui.select = async (label: string, options: string[]) => {
-    menu = { label, options };
+    menus.push({ label, options });
+    if (label.startsWith("Pi Herdsman") && !openedAgents) {
+      openedAgents = true;
+      return "Agents";
+    }
     return undefined;
   };
   try {
-    await pi.commandOptions.get("agents").handler("", context);
-    assert.equal(menu?.label, "Agents");
+    await pi.commandOptions.get("herdsman").handler("", context);
+    const menu = menus.find(({ label }) => label === "Agents");
     assert.deepEqual(
       menu?.options.map((option) => option.replace(/\s{2,}.*/u, "")),
       ["Running", "Layout", "Stop all…"],
@@ -5769,18 +5776,29 @@ test("Running uses compact native options and focuses the freshly verified pane"
     exec: leadExec(label, "working", DEFAULT_PI_SESSION_ID),
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman");
   const prompts: { label: string; options: string[] }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
+  const notices: string[] = [];
+  context.ui.notify = (message: string) => notices.push(message);
+  let rootSelection = true;
+  let agentsSelection = true;
   context.ui.select = async (prompt: string, options: string[]) => {
     prompts.push({ label: prompt, options });
-    if (prompts.length === 1) {
+    if (prompt.startsWith("Pi Herdsman")) {
+      if (!rootSelection) return undefined;
+      rootSelection = false;
+      return "Agents";
+    }
+    if (prompt === "Agents") {
+      if (!agentsSelection) return undefined;
+      agentsSelection = false;
       assert.equal(options[0], "Running  1 working");
       return options.find((option) => option.startsWith("Running"));
     }
-    if (prompts.length === 2) {
+    if (prompt === "Running") {
       const expected = renderRunningOptions(
         buildStatusRows(
           [
@@ -5795,7 +5813,7 @@ test("Running uses compact native options and focuses the freshly verified pane"
           { now: Date.now() },
         ),
       )[0];
-      assert.equal(prompts[1]?.label, "Running");
+      assert.equal(prompts[2]?.label, "Running");
       assert.equal(options[0], expected);
       assert.match(options[0]!, /└─ agent\s+running-menu-agent\s+● working/);
       assert.doesNotMatch(options[0]!, /⠋|gpt|high|0s|Implement/);
@@ -5812,6 +5830,7 @@ test("Running uses compact native options and focuses the freshly verified pane"
           args[1] === "focus" &&
           args[2] === identity.paneId,
       ),
+      JSON.stringify({ prompts, notices }),
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -5823,17 +5842,27 @@ test("Running explains how to delegate when no agents are running", async () => 
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman");
   const notices: string[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
   context.ui.notify = (message: string) => notices.push(message);
-  let selection = 0;
-  context.ui.select = async (_prompt: string, options: string[]) =>
-    selection++ === 0
-      ? options.find((option) => option.startsWith("Running"))
-      : undefined;
+  let rootSelection = true;
+  let agentsSelection = true;
+  context.ui.select = async (prompt: string, options: string[]) => {
+    if (prompt.startsWith("Pi Herdsman")) {
+      if (!rootSelection) return undefined;
+      rootSelection = false;
+      return "Agents";
+    }
+    if (prompt === "Agents") {
+      if (!agentsSelection) return undefined;
+      agentsSelection = false;
+      return options.find((option) => option.startsWith("Running"));
+    }
+    return undefined;
+  };
 
   await command.handler("", context);
 
@@ -5911,6 +5940,7 @@ test("Running rejects duplicate rendered labels before focus", async (t) => {
   context.mode = "rpc";
   const notices: string[] = [];
   let rootSelections = 0;
+  let agentsSelections = 0;
   const runningSelections: string[] = [];
   context.ui.notify = (message: string) => notices.push(message);
   context.ui.select = async (prompt: string, options: string[]) => {
@@ -5918,14 +5948,22 @@ test("Running rejects duplicate rendered labels before focus", async (t) => {
       runningSelections.push(prompt);
       return options[0];
     }
-    rootSelections++;
-    return rootSelections === 1
-      ? options.find((option) => option.startsWith("Running"))
-      : undefined;
+    if (prompt.startsWith("Pi Herdsman")) {
+      rootSelections++;
+      return rootSelections === 1 ? "Agents" : undefined;
+    }
+    if (prompt === "Agents") {
+      agentsSelections++;
+      return agentsSelections === 1
+        ? options.find((option) => option.startsWith("Running"))
+        : undefined;
+    }
+    return undefined;
   };
   try {
-    await pi.commandOptions.get("agents").handler("", context);
+    await pi.commandOptions.get("herdsman").handler("", context);
     assert.equal(rootSelections, 2);
+    assert.equal(agentsSelections, 2);
     assert.equal(renderedRunningOptions, 1);
     assert.deepEqual(runningSelections, []);
     assert.equal(
@@ -6001,18 +6039,25 @@ test("Running excludes lost and unknown durable generations", async () => {
         : { stdout: "{}", stderr: "", code: 0 },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman");
   const prompts: { label: string; options: string[] }[] = [];
   const notices: string[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
   context.ui.notify = (message: string) => notices.push(message);
+  let rootSelections = 0;
+  let agentsSelections = 0;
   context.ui.select = async (label: string, options: string[]) => {
     prompts.push({ label, options });
+    if (label.startsWith("Pi Herdsman")) {
+      rootSelections++;
+      return rootSelections === 1 ? "Agents" : undefined;
+    }
     assert.equal(label, "Agents");
     assert.ok(options.includes("Running  1 unknown · 1 lost"));
-    return prompts.length === 1
+    agentsSelections++;
+    return agentsSelections === 1
       ? options.find((option) => option.startsWith("Running"))
       : undefined;
   };
@@ -6020,7 +6065,12 @@ test("Running excludes lost and unknown durable generations", async () => {
     await command.handler("", context);
     assert.deepEqual(
       prompts.map(({ label }) => label),
-      ["Agents", "Agents"],
+      [
+        `Pi Herdsman · v${packageMetadata.version}`,
+        "Agents",
+        "Agents",
+        `Pi Herdsman · v${packageMetadata.version}`,
+      ],
     );
     assert.ok(notices.some((message) => message.includes("No running agents")));
     assert.equal(
@@ -6115,21 +6165,27 @@ test("Running warns when the selected agent is replaced before focus", async () 
     },
   });
   registerExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman");
   const notices: { message: string; level?: string }[] = [];
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "rpc";
   context.ui.notify = (message: string, level?: string) =>
     notices.push({ message, level });
-  let selection = 0;
-  context.ui.select = async (_prompt: string, options: string[]) => {
-    if (selection === 0) {
-      selection++;
+  let rootSelection = true;
+  let agentsSelection = true;
+  context.ui.select = async (prompt: string, options: string[]) => {
+    if (prompt.startsWith("Pi Herdsman")) {
+      if (!rootSelection) return undefined;
+      rootSelection = false;
+      return "Agents";
+    }
+    if (prompt === "Agents") {
+      if (!agentsSelection) return undefined;
+      agentsSelection = false;
       return options.find((option) => option.startsWith("Running"));
     }
-    if (selection === 1) {
-      selection++;
+    if (prompt === "Running") {
       currentIdentity = replacementIdentity;
       writeAgentState(
         mailbox,
@@ -6306,7 +6362,7 @@ test("Running selects duplicate TUI labels by stable value and revalidates ident
     },
   });
   registerTuiDuplicateExtension!(pi.pi as never);
-  const command = pi.commandOptions.get("agents");
+  const command = pi.commandOptions.get("herdsman");
   const context = fakeContext() as any;
   context.hasUI = true;
   context.mode = "tui";
@@ -6326,7 +6382,12 @@ test("Running selects duplicate TUI labels by stable value and revalidates ident
       );
       const lines = () => component.render(200);
       const call = customCall++;
-      if (call === 0 || call === 2) {
+      if (call === 0 || call === 3) {
+        selectTuiItem(component, "Agents");
+        component.handleInput("\r");
+        return;
+      }
+      if (call === 1 || call === 4) {
         selectTuiItem(component, "Running");
         component.handleInput("\r");
         return;
@@ -6335,7 +6396,7 @@ test("Running selects duplicate TUI labels by stable value and revalidates ident
         .map((line, index) => ({ line, index }))
         .filter(({ line }) => /^(?:→ |  )same running option$/u.test(line));
       assert.equal(duplicateRows.length, 2);
-      const stableValue = call === 1 ? "0" : "1";
+      const stableValue = call === 2 ? "0" : "1";
       const targetIndex = duplicateRows[Number(stableValue)]!.index;
       while (
         lines().findIndex((line) => /^→ same running option$/u.test(line)) !==
@@ -6355,7 +6416,7 @@ test("Running selects duplicate TUI labels by stable value and revalidates ident
       .filter((args) => args[0] === "agent" && args[1] === "focus")
       .map((args) => args[2]);
     assert.deepEqual(focusedPanes, ["reviewer-task-pane", "scout-task-pane"]);
-    assert.equal(customCall, 4);
+    assert.equal(customCall, 6);
     assert.ok(
       pi.calls.some(
         (args) =>

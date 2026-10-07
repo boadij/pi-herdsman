@@ -2,9 +2,9 @@
 
 [Documentation index](../README.md)
 
-`/herdsman` is the canonical discovery and control entry. It accepts no
-arguments and opens the product menu. `/agents` is the focused Agent command
-and expert shortcut namespace.
+`/herdsman` is the canonical human discovery and control command. `/agents` is
+an alias retained for users familiar with the previous entry point; it accepts
+the same arguments and runs the same behavior.
 
 It is separate from the structured model-facing Agent tools.
 
@@ -16,11 +16,10 @@ Herdsman package version.
 
 ```text
 /herdsman
-/agents
-/agents stats
-/agents definitions
-/agents placement [tab|subtree|split]
-/agents stop
+/herdsman stats
+/herdsman definitions
+/herdsman placement [tab|subtree|split]
+/herdsman stop
 /manager
 /manager leave
 /chief
@@ -28,13 +27,16 @@ Herdsman package version.
 /takeover
 ```
 
+For the Herdsman commands above, replacing `/herdsman` with `/agents` is
+equivalent. The `/manager`, `/chief`, and `/takeover` commands are unchanged.
+
 `/herdsman` opens the native Pi menu titled with the running Pi Herdsman package
 version. Its six destinations are `Agents`, `Project manager`, `Session stats`,
 `Definitions`, `Settings`, and `Advanced…`. Active role state is secondary row
 metadata; the TUI updates contextual help for the selected row.
 
-`/agents` opens the focused `Running`, `Layout`, and `Stop all…` menu. Its
-running count and current layout are secondary metadata. The root does not
+Selecting `Agents` opens the focused `Running`, `Layout`, and `Stop all…` menu.
+Its running count and current layout are secondary metadata. The root does not
 depend on Agent status or definitions to render.
 
 `Settings` contains `Manager auto-start`, `Context retirement`, and `Message
@@ -43,7 +45,7 @@ mailbox payload limits. It is available only to a lead Pi session with UI.
 Current values and presets show a rough token equivalent using four UTF-8
 bytes per token. The enforced limits are bytes, not tokens.
 
-## `/agents stats`
+## `/herdsman stats`
 
 Shows accumulated Pi-native token usage and cost for the current Pi session plus
 transitively owned managed-Agent Pi sessions whose exact persisted identity can
@@ -72,7 +74,7 @@ Lead's Agent tree. Manager aggregation uses the scope-specific warning
 `Coverage incomplete: some managed project session usage is unavailable.`
 Ordinary usage retains its owned-session warning.
 
-## `/agents definitions`
+## `/herdsman definitions`
 
 Opens a flat native Definitions list of effective definitions, with reserved
 `managed-lead` first. Project definitions are included when Pi considers the
@@ -100,7 +102,7 @@ Bundled implementation paths are intentionally hidden from the human overview.
 Structured `list_agents` keeps exact deterministic metadata, including exact
 source and skill paths when available.
 
-`/agents definitions` does not probe runtime tool availability.
+`/herdsman definitions` does not probe runtime tool availability.
 
 Selecting an ordinary Agent definition opens:
 
@@ -143,30 +145,31 @@ Standalone global definitions are editable too. Removing a model or thinking
 field selects `Inherit current session`; removing any other field inherits its
 lower-precedence value.
 
-## `/agents` Running
+## `/herdsman` → Agents → Running
 
 Select a live managed agent from the shared status projection to focus its pane.
 Pi Herdsman refreshes and verifies the exact label, pane, and session identity
 before issuing herdr's focus command. If the agent changed, no focus command
 is sent.
 
-## `/agents placement`
+## `/herdsman placement`
 
 Selecting Layout opens a native selector showing the effective setting.
 When unset, the effective setting is `subtree`.
 Explicit values continue to set directly:
 
 ```text
-/agents placement tab
-/agents placement subtree
-/agents placement split
+/herdsman placement tab
+/herdsman placement subtree
+/herdsman placement split
 ```
 
 See [Configuration](configuration.md).
 
-## `/agents stop`
+## `/herdsman stop`
 
-Destructive lead-only emergency control.
+Destructive lead-only emergency control. The same operation is available as
+`/agents stop` through the alias.
 
 It aborts the current lead turn and attempts to close the exactly proven owned
 agent tree.

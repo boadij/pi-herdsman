@@ -268,10 +268,10 @@ In a lead session with UI:
 
 ### `/herdsman` and `/agents`
 
-Verify `/herdsman` opens the six destinations `Agents`, `Project manager`,
-`Session stats`, `Definitions`, `Settings`, and `Advanced…`. Verify active role
-state is secondary metadata and selected-row contextual help updates in the
-TUI. `/agents` must open only `Running`, `Layout`, and
+Verify both `/herdsman` and `/agents` open the same six destinations `Agents`,
+`Project manager`, `Session stats`, `Definitions`, `Settings`, and `Advanced…`.
+Verify active role state is secondary metadata and selected-row contextual help
+updates in the TUI. `/herdsman → Agents` opens only `Running`, `Layout`, and
 `Stop all…`, with the running count and effective placement as secondary
 metadata. Settings contains only Manager auto-start, Context retirement, and
 Message limits.
@@ -280,7 +280,7 @@ Navigate to Project manager and Chief mode from the menus. Confirm their
 Start, Overview, and Leave actions use the existing `/manager` and `/chief`
 role behavior.
 
-### `/agents definitions`
+### `/herdsman definitions`
 
 Verify the native Definitions list shows:
 
@@ -307,12 +307,12 @@ removes only the selected field, fresh definition delegations inherit the
 spawning controller's current value, continuations restore the saved session's
 value, and running agents are not mutated.
 
-### `/agents placement`
+### `/herdsman placement`
 
 Open the native selector, change to the alternate value, verify, then restore
 the original value.
 
-### `/agents stop`
+### `/herdsman stop`
 
 With disposable owned agents, verify the owned tree closes while an unrelated
 herdr agent remains untouched.

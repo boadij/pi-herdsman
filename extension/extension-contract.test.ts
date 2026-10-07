@@ -804,7 +804,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   delete process.env.HERDR_PANE_ID;
   const unmanaged = fakePi();
   registerExtension!(unmanaged.pi as never);
-  assert.deepEqual(unmanaged.commands, ["agents", "herdsman"]);
+  assert.deepEqual(unmanaged.commands, ["herdsman", "agents"]);
   assert.deepEqual(unmanaged.tools, []);
   assert.equal(unmanaged.events.size, 0);
   const notices: string[] = [];
@@ -815,8 +815,9 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   const herdsmanCommand = unmanaged.commandOptions.get("herdsman");
   assert.ok(agentsCommand);
   assert.ok(herdsmanCommand);
-  assert.equal(agentsCommand.description, "Manage Herdsman Agents");
+  assert.equal(agentsCommand.description, "Alias for /herdsman");
   assert.equal(herdsmanCommand.description, "Set up Pi Herdsman");
+  assert.equal(agentsCommand.handler, herdsmanCommand.handler);
   const levels: string[] = [];
   context.ui.notify = (message: string, level?: string) => {
     notices.push(message);
@@ -834,7 +835,9 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   assert.match(notices[0]!, /herdr integration install pi/);
   await herdsmanCommand.handler("anything", context);
   assert.equal(notices[1], "Usage: /herdsman");
-  assert.deepEqual(levels, ["error"]);
+  await agentsCommand.handler("anything", context);
+  assert.equal(notices[2], notices[1]);
+  assert.deepEqual(levels, ["error", "error"]);
 });
 
 test("managed agents receive no peer tool and Chiefs expose only staff actively", async () => {
