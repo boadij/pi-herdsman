@@ -86,7 +86,23 @@ test("status breadcrumb trusts only validated Lead ancestry", () => {
   );
 });
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
-  pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
+  pi.tools.find(
+    (candidate) =>
+      candidate.name ===
+      (
+        {
+          list: "list_agents",
+          delegate: "delegate_agent",
+          continue: "continue_agent",
+          steer: "steer_agent",
+          interrupt: "interrupt_agent",
+          reply: "reply_agent",
+          close: "close_agent",
+          inspect: "inspect_agent",
+          transcript: "read_agent_transcript",
+        } as Record<string, string>
+      )[name],
+  )!;
 
 test("managed agents cancel native session replacement", () => {
   setAgentEnvironment();
@@ -1070,7 +1086,7 @@ test("agent bounds result persistence failure and exposes owner recovery evidenc
     recovered.resultError?.nextAction ?? "",
     /mailbox persistence failure described by result_error/,
   );
-  assert.match(recovered.resultError?.nextAction ?? "", /agent_close/);
+  assert.match(recovered.resultError?.nextAction ?? "", /close_agent/);
 
   agent.events.get("session_shutdown")?.[0]();
   const root = fakePi({
@@ -1141,7 +1157,7 @@ test("agent rejects task replay while result persistence recovery is present", (
     retrySafe: false,
     cleanupSafe: true,
     nextAction:
-      "Resolve the mailbox persistence failure described by result_error, then use agent_close before starting another assignment.",
+      "Resolve the mailbox persistence failure described by result_error, then use close_agent before starting another assignment.",
   };
   writeAgentState(mailbox, { ...managedState(label), resultError: recovery });
 
@@ -3226,18 +3242,18 @@ test("a stray agent variable does not suppress the active Lead tool surface", as
   registerExtension!(lead.pi as never);
   await lead.events.get("session_start")![0](undefined, fakeContext());
   assert.deepEqual(lead.pi.getActiveTools(), [
-    "agent_list",
-    "agent_delegate",
-    "agent_continue",
-    "agent_steer",
-    "agent_interrupt",
-    "agent_reply",
-    "agent_close",
-    "agent_inspect",
-    "agent_transcript",
-    "supervisor_message",
-    "peer_list",
-    "peer_message",
+    "list_agents",
+    "delegate_agent",
+    "continue_agent",
+    "steer_agent",
+    "interrupt_agent",
+    "reply_agent",
+    "close_agent",
+    "inspect_agent",
+    "read_agent_transcript",
+    "message_supervisor",
+    "list_peers",
+    "message_peer",
   ]);
   assert.deepEqual(lead.commands, ["takeover", "agents", "herdsman"]);
   lead.events.get("session_shutdown")?.[0]();
@@ -4020,7 +4036,7 @@ test("owner ask waits while busy and delivers once after settlement", async () =
     assert.ok(delivered);
     assert.match(
       delivered.content,
-      new RegExp(`Use agent_reply with agent="${label}"`),
+      new RegExp(`Use reply_agent with agent="${label}"`),
     );
     assert.doesNotMatch(delivered.content, /agent action/i);
     assert.equal(

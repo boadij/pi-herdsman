@@ -125,10 +125,7 @@ try {
     throw new Error(
       `Pi failed to load packaged skills: ${diagnostics.map(({ message, path }) => `${path}: ${message}`).join(", ")}`,
     );
-  const expectedSkill = resolve(
-    root,
-    "skills/agent-definitions/SKILL.md",
-  );
+  const expectedSkill = resolve(root, "skills/agent-definitions/SKILL.md");
   if (
     skills.length !== 1 ||
     skills[0]?.name !== "agent-definitions" ||

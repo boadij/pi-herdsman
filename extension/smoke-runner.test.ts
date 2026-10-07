@@ -202,13 +202,13 @@ test("continuation task parser correlates tool call, successful session result a
           {
             type: "toolCall",
             id: "other-call",
-            name: "agent_continue",
+            name: "continue_agent",
             arguments: { task: "wrong task" },
           },
           {
             type: "toolCall",
             id: "continue-call",
-            name: "agent_continue",
+            name: "continue_agent",
             arguments: { session: "/saved/child.jsonl", task },
           },
         ],
@@ -220,7 +220,7 @@ test("continuation task parser correlates tool call, successful session result a
       parentId: "call",
       message: {
         role: "toolResult",
-        toolName: "agent_continue",
+        toolName: "continue_agent",
         toolCallId: "continue-call",
         details: { ok: true, action: "continue", session_id: "child" },
       },
@@ -957,11 +957,33 @@ test("manager-recovery starts without a chat prompt", () => {
   assert.equal(initialPromptForScenario("manager-recovery", {}), undefined);
 });
 
+test("manager-recovery uses nonblocking messages only when information cannot wait for the automatic result", () => {
+  const marker = "MANAGER_RECOVERY_CONTEXT_test";
+  const leadPrompt = managerRecoveryPostRecoveryPrompt();
+  assert.match(leadPrompt, /message_supervisor/);
+  assert.match(
+    leadPrompt,
+    /must reach the Manager before your normal result boundary/i,
+  );
+  assert.match(leadPrompt, /if information can wait.*do not send it early/i);
+  assert.match(leadPrompt, /automatic result handoff/i);
+  assert.doesNotMatch(leadPrompt, new RegExp(marker));
+
+  const managerPrompt = managerRecoveryReviewPrompt("branch-for-review");
+  assert.match(managerPrompt, /message_staff/);
+  assert.match(managerPrompt, /nonblocking/i);
+  assert.match(managerPrompt, /automatic result handoff/i);
+  assert.doesNotMatch(managerPrompt, new RegExp(marker));
+});
+
 test("manager-recovery starts work by task and branch, then resumes by branch only", () => {
   const branch = "herdsman/smoke-manager-recovery-exact";
   const marker = "MANAGER_RECOVERY_CONTEXT_test";
   const prompt = managerRecoveryFreshPrompt(branch);
-  assert.match(prompt, /staff_delegate exactly once to start new project work/);
+  assert.match(
+    prompt,
+    /delegate_project exactly once to start new project work/,
+  );
   assert.match(prompt, /`task` argument/);
   assert.match(
     prompt,
@@ -971,7 +993,7 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   assert.doesNotMatch(prompt, /`assignment`/);
   assert.match(
     prompt,
-    /after staff_delegate returns, end this turn immediately/,
+    /after delegate_project returns, end this turn immediately/,
   );
   assert.match(prompt, /Wait until the exact MANAGER_RECOVERY_READY message/);
   assert.doesNotMatch(prompt, new RegExp(marker));
@@ -981,7 +1003,7 @@ test("manager-recovery starts work by task and branch, then resumes by branch on
   const resume = managerRecoveryResumePrompt(branch);
   assert.match(
     resume,
-    /staff_resume using only:\n\{"branch":"herdsman\/smoke-manager-recovery-exact"\}/,
+    /resume_project using only:\n\{"branch":"herdsman\/smoke-manager-recovery-exact"\}/,
   );
   assert.match(resume, /PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED/);
   assert.doesNotMatch(resume, /supervisor_result|supervisor_ask/);
@@ -993,14 +1015,14 @@ test("manager-recovery stops by Lead session and resumes by branch", () => {
   const session = "lead-session-exact";
   const marker = "MANAGER_RECOVERY_CONTEXT_test";
   const close = managerRecoveryStopPrompt(session);
-  assert.match(close, /staff_stop exactly once/);
+  assert.match(close, /stop_lead exactly once/);
   assert.ok(close.includes(JSON.stringify({ session })));
   assert.match(close, /PI_HERDSMAN_MANAGER_RECOVERY_PAUSED/);
   const review = managerRecoveryReviewPrompt(branch);
-  assert.match(review, /staff_message/);
+  assert.match(review, /message_staff/);
   assert.doesNotMatch(review, new RegExp(marker));
   const resume = managerRecoveryResumeOnlyPrompt(branch);
-  assert.match(resume, /staff_resume exactly once/);
+  assert.match(resume, /resume_project exactly once/);
   assert.ok(resume.includes(JSON.stringify({ branch })));
   assert.match(resume, /exact full branch string/);
   assert.match(resume, /Copy that branch string verbatim/);
@@ -1027,10 +1049,9 @@ test("manager-recovery seeds continuity only in the Lead conversation, then reca
   const recallPrompt = managerRecoveryPostRecoveryPrompt();
   assert.doesNotMatch(recallPrompt, new RegExp(marker));
   assert.match(recallPrompt, /recall the exact context marker/i);
-  assert.match(
-    recallPrompt,
-    /call supervisor_message with exactly that marker/i,
-  );
+  assert.match(recallPrompt, /send it now with message_supervisor/i);
+  assert.match(recallPrompt, /automatic result handoff/i);
+  assert.match(recallPrompt, /do not send it early/i);
 });
 
 test("manager-recovery waits for the exact automatic project message turn to settle", () => {
@@ -1094,7 +1115,7 @@ test("manager-recovery diagnostics capture the resume argument and result", () =
           {
             type: "toolCall",
             id: "resume-call",
-            name: "staff_resume",
+            name: "resume_project",
             arguments: { branch: "herdsman/smoke-manager-recovery-exac" },
           },
         ],
@@ -1106,7 +1127,7 @@ test("manager-recovery diagnostics capture the resume argument and result", () =
       parentId: "call",
       message: {
         role: "toolResult",
-        toolName: "staff_resume",
+        toolName: "resume_project",
         toolCallId: "resume-call",
         isError: true,
         content: [{ type: "text", text: "No existing work was found." }],
@@ -1140,7 +1161,7 @@ test("manager-recovery post-recovery prompt recalls the marker from prior contex
   assert.match(prompt, /prior conversation context/i);
 });
 
-test("smoke parses successful staff_stop results only", () => {
+test("smoke parses successful stop_lead results only", () => {
   const result = {
     ok: true,
     action: "stop",
@@ -1150,15 +1171,15 @@ test("smoke parses successful staff_stop results only", () => {
   const resumed = { ok: true, action: "resume", branch: "feat/example" };
   const contents = [
     {
-      toolName: "staff_stop",
+      toolName: "stop_lead",
       content: [
         { type: "text", text: "Lead stopped; project work preserved." },
       ],
       details: result,
     },
-    { toolName: "staff_resume", details: resumed },
-    { toolName: "staff_delegate", content: JSON.stringify(result) },
-    { toolName: "staff_stop", isError: true, content: JSON.stringify(result) },
+    { toolName: "resume_project", details: resumed },
+    { toolName: "delegate_project", content: JSON.stringify(result) },
+    { toolName: "stop_lead", isError: true, content: JSON.stringify(result) },
   ]
     .map((message) =>
       JSON.stringify({
@@ -1167,16 +1188,14 @@ test("smoke parses successful staff_stop results only", () => {
       }),
     )
     .join("\n");
-  assert.deepEqual(staffActionResults(contents, "staff_stop", "stop"), [
-    result,
-  ]);
-  assert.deepEqual(staffActionResults(contents, "staff_resume", "resume"), [
+  assert.deepEqual(staffActionResults(contents, "stop_lead", "stop"), [result]);
+  assert.deepEqual(staffActionResults(contents, "resume_project", "resume"), [
     resumed,
   ]);
 });
 
 test("manager-recovery selects the resume result descended from its exact prompt", () => {
-  const gracefulPrompt = "resume after staff_stop";
+  const gracefulPrompt = "resume after stop_lead";
   const recoveryPrompt = "resume after executor loss";
   const entries = [
     {
@@ -1190,7 +1209,7 @@ test("manager-recovery selects the resume result descended from its exact prompt
       parentId: "graceful-prompt",
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", id: "resume-1", name: "staff_resume" }],
+        content: [{ type: "toolCall", id: "resume-1", name: "resume_project" }],
       },
     },
     {
@@ -1199,7 +1218,7 @@ test("manager-recovery selects the resume result descended from its exact prompt
       parentId: "graceful-call",
       message: {
         role: "toolResult",
-        toolName: "staff_resume",
+        toolName: "resume_project",
         toolCallId: "resume-1",
         details: { ok: true, action: "resume", session: "lead" },
       },
@@ -1225,7 +1244,7 @@ test("manager-recovery selects the resume result descended from its exact prompt
       parentId: "recovery-prompt",
       message: {
         role: "assistant",
-        content: [{ type: "toolCall", id: "resume-2", name: "staff_resume" }],
+        content: [{ type: "toolCall", id: "resume-2", name: "resume_project" }],
       },
     },
     {
@@ -1234,7 +1253,7 @@ test("manager-recovery selects the resume result descended from its exact prompt
       parentId: "recovery-call",
       message: {
         role: "toolResult",
-        toolName: "staff_resume",
+        toolName: "resume_project",
         toolCallId: "resume-2",
         details: { ok: true, action: "resume", session: "lead" },
       },
@@ -1253,11 +1272,11 @@ test("manager-recovery selects the resume result descended from its exact prompt
   const contents = entries.map((entry) => JSON.stringify(entry)).join("\n");
 
   assert.equal(
-    staffActionResults(contents, "staff_resume", "resume").length,
+    staffActionResults(contents, "resume_project", "resume").length,
     2,
   );
   assert.deepEqual(
-    staffActionResults(contents, "staff_resume", "resume", recoveryPrompt),
+    staffActionResults(contents, "resume_project", "resume", recoveryPrompt),
     [{ ok: true, action: "resume", session: "lead" }],
   );
   assert.equal(
@@ -1270,27 +1289,27 @@ test("manager-recovery selects the resume result descended from its exact prompt
   );
 });
 
-test("staff delegate results retain only valid successful delegation payloads in order", () => {
+test("delegate project results retain only valid successful delegation payloads in order", () => {
   const messages = [
     { toolName: "unrelated", content: '{"ok":true,"action":"delegate"}' },
-    { toolName: "staff_delegate", content: "not JSON" },
+    { toolName: "delegate_project", content: "not JSON" },
     {
-      toolName: "staff_delegate",
+      toolName: "delegate_project",
       content: "not JSON",
       details: { ok: true, action: "delegate", session: "must-not-match" },
     },
     {
-      toolName: "staff_delegate",
+      toolName: "delegate_project",
       isError: true,
       content: '{"ok":true,"action":"delegate"}',
     },
     {
-      toolName: "staff_delegate",
+      toolName: "delegate_project",
       content:
         '{"ok":true,"action":"delegate","branch":"feat/fresh","session":"fresh"}',
     },
     {
-      toolName: "staff_delegate",
+      toolName: "delegate_project",
       content:
         '{"ok":true,"action":"delegate","branch":"feat/fresh","session":"fresh","state":"working"}',
     },
@@ -1550,7 +1569,7 @@ test("smoke branch cleanup treats only a proven absent local branch as already c
   );
 });
 
-test("Manager recovery READY requires a successful supervisor_message tool result", () => {
+test("Manager recovery READY requires a successful message_supervisor tool result", () => {
   const ready = "MANAGER_RECOVERY_READY";
   const promptOnly = JSON.stringify({
     type: "message",
@@ -1564,7 +1583,7 @@ test("Manager recovery READY requires a successful supervisor_message tool resul
         {
           type: "toolCall",
           id: "ready-call",
-          name: "supervisor_message",
+          name: "message_supervisor",
           arguments: { message: ready },
         },
       ],
@@ -1575,7 +1594,7 @@ test("Manager recovery READY requires a successful supervisor_message tool resul
       type: "message",
       message: {
         role: "toolResult",
-        toolName: "supervisor_message",
+        toolName: "message_supervisor",
         toolCallId: "ready-call",
         isError,
         content: "Message sent to supervisor.",
@@ -1734,7 +1753,7 @@ test("Manager READY answer follows delivered message even on a separate followUp
           {
             type: "toolCall",
             id: "finish-tool-call",
-            name: "staff_message",
+            name: "message_staff",
             arguments: { message: "MANAGER_RECOVERY_FINISH" },
           },
         ],

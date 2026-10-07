@@ -16,7 +16,7 @@ authority. Missing or ambiguous assignment evidence fails closed.
 The relationship belongs to the project Manager role, not an individual
 Manager process, so it survives Manager replacement. Lead ownership of its
 Agent tree remains separate from Manager supervision: Managers never own Lead
-Agents; `staff_stop` may stop the assigned Lead's owned Agent tree as part of
+Agents; `stop_lead` may stop the assigned Lead's owned Agent tree as part of
 stopping project execution. Chief supervises unassigned ordinary Leads,
 including those in the same project scope as an active Manager; assigned Leads
 do not fall back to Chief when Manager is unavailable.
@@ -25,10 +25,11 @@ Every completed direct turn by an assigned Lead automatically returns its
 meaningful assistant response to the Manager role as a nonterminal project
 message. When a herd run owns the work, its settlement remains the single
 automatic handoff for that run; direct turn settlement does not produce a
-second handoff. These results do not resolve project work. `supervisor_message`
-is for nonblocking material coordination before that normal result boundary;
-it queues the message without waiting for a Manager reply or blocking project
-work.
+second handoff. These results do not resolve project work. A managed Lead may
+use nonblocking `message_supervisor` for a timely question, clarification,
+warning, or other information the Manager needs before the normal result
+boundary. Routine information that can wait should be included in the automatic
+result instead; the two messages are not deduplicated.
 
 The assigned Lead may explicitly release Manager authority with confirmed
 `/takeover`. Takeover removes the current project assignment and its pending

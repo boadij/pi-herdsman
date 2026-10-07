@@ -25,6 +25,7 @@ import type {
 import {
   leadSupervisorState as resolveLeadSupervisorState,
   projectTaskSummary,
+  staffToolName,
   supervisorStateMessage,
   verifyManagerCoordinationAuthority,
   verifyRemoteChiefAuthority,
@@ -543,6 +544,8 @@ type LeadInboxHost = LeadInboxBaseHost & {
   currentChiefAuthority: LeadRoleTransitionRuntime["currentChiefAuthority"];
   currentManager: LeadRoleTransitionRuntime["currentManager"];
   managerForScope: LeadRoleTransitionRuntime["managerForScope"];
+  currentWorktreeScope: LeadRoleTransitionRuntime["currentWorktreeScope"];
+  projectAssignmentForScope: LeadRoleTransitionRuntime["projectAssignmentForScope"];
   currentPeerPresenceValid(ctx: ExtensionContext): Promise<boolean>;
   drainProjectMessages(ctx: ExtensionContext): Promise<number>;
 };
@@ -1047,7 +1050,7 @@ export function createLeadAgentEventRuntime(host: {
           `## Available agent definitions\n\n` +
           `<agent_definitions>\n${JSON.stringify(roster.definitions, null, 2)}\n</agent_definitions>\n\n` +
           `This is the session-start definition snapshot. ` +
-          `Use agent_list for live Agent state or to refresh ` +
+          `Use list_agents for live Agent state or to refresh ` +
           `Agent definitions after configuration changes.`,
       };
     },
@@ -2115,13 +2118,13 @@ export function registerLeadRuntime(
     managerForScope: (
       ...args: Parameters<typeof roleTransitions.managerForScope>
     ) => roleTransitions.managerForScope(...args),
-    currentPeerPresenceValid: (ctx: ExtensionContext) =>
-      coordinationRuntime.currentPeerPresenceValid(ctx),
     currentWorktreeScope: (ctx: ExtensionContext) =>
       roleTransitions.currentWorktreeScope(ctx),
     projectAssignmentForScope: (
       ...args: Parameters<typeof roleTransitions.projectAssignmentForScope>
     ) => roleTransitions.projectAssignmentForScope(...args),
+    currentPeerPresenceValid: (ctx: ExtensionContext) =>
+      coordinationRuntime.currentPeerPresenceValid(ctx),
     drainProjectMessages: (ctx: ExtensionContext) =>
       coordinationRuntime.drainProjectMessages(ctx),
   };
@@ -2674,22 +2677,20 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         throw error;
       }
     });
-    return {
-      ...host.projectSupervision({
-        agents,
-        managedAgents: agentEvidence,
-        coordinationStates,
-        workspaceProvenance,
-        excludedSessionIds: new Set([
-          ...host
-            .listManagerDescriptors(host.supervisionRuntime())
-            .map((manager) => manager.piSessionId),
-          ...(host.currentChief() ? [host.currentChief()!.piSessionId] : []),
-        ]),
-        managedAgentSessionIds,
-      }),
-      ...(diagnostics ? { diagnostics } : {}),
-    };
+    const snapshot = host.projectSupervision({
+      agents,
+      managedAgents: agentEvidence,
+      coordinationStates,
+      workspaceProvenance,
+      excludedSessionIds: new Set([
+        ...host
+          .listManagerDescriptors(host.supervisionRuntime())
+          .map((manager) => manager.piSessionId),
+        ...(host.currentChief() ? [host.currentChief()!.piSessionId] : []),
+      ]),
+      managedAgentSessionIds,
+    });
+    return { ...snapshot, ...(diagnostics ? { diagnostics } : {}) };
   };
   const directReports = async (
     ctx: ExtensionContext,
@@ -3918,7 +3919,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     signal?: AbortSignal,
   ) => {
     const operationName =
-      operation.action === "resume" ? "staff_resume" : "staff_delegate";
+      operation.action === "resume" ? "resume_project" : "delegate_project";
     const manager = await currentManager(ctx);
     if (
       !manager ||
@@ -3950,11 +3951,11 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       throw new Error("Project assignment belongs to another repository");
     if (operation.action === "delegate" && existing)
       throw new Error(
-        `Work already exists on ${operation.branch}; resume it with staff_resume.`,
+        `Work already exists on ${operation.branch}; resume it with resume_project.`,
       );
     if (operation.action === "resume" && !existing)
       throw new Error(
-        `No existing work was found on ${operation.branch}; start it with staff_delegate and a task.`,
+        `No existing work was found on ${operation.branch}; start it with delegate_project and a task.`,
       );
     const presentationTask =
       operation.action === "resume"
@@ -4085,9 +4086,9 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       const limits = await messageLimits(ctx);
       const prepared = prepareMessageInput(
         operation.task,
-        resolveMessageFiles(ctx, operation.files, "staff_delegate"),
+        resolveMessageFiles(ctx, operation.files, "delegate_project"),
         ctx.cwd,
-        "staff_delegate",
+        "delegate_project",
         "Task",
         {
           inlineLimitBytes: limits.inline.bytes,
@@ -4669,9 +4670,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
                 leads: "leads" in report ? report.leads : [],
               }
             : {}),
-          available_tools: report.availableActions.map(
-            (action: string) => `staff_${action}`,
-          ),
+          available_tools: report.availableActions.map(staffToolName),
         })),
       });
     }
@@ -4680,7 +4679,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     );
     if (!lead)
       throw new Error(
-        "Lead target was not found or is no longer eligible. Retry with session set to the exact full Pi session ID shown as session in a fresh automatic supervision snapshot or returned by staff_list; never use display_name.",
+        "Lead target was not found or is no longer eligible. Retry with session set to the exact full Pi session ID shown as session in a fresh automatic supervision snapshot or returned by list_staff; never use display_name.",
       );
     const sameLeadIdentity = (
       candidate: typeof lead,
@@ -4867,7 +4866,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     requireCompatibleBuild(
       HERDSMAN_BUILD,
       targetState?.build,
-      "staff_message",
+      "message_staff",
       `${targetState?.role ?? "Lead"} ${reportSession(writeLead)}`,
     );
     const record: ChiefMessageRecord = {
@@ -5595,7 +5594,7 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
           ctx,
           assignment,
           params.message,
-          resolveMessageFiles(ctx, params.files, "supervisor_message"),
+          resolveMessageFiles(ctx, params.files, "message_supervisor"),
         );
         if (!published)
           throw new Error(
@@ -5618,8 +5617,8 @@ export function createLeadCoordinationRuntime(host: LeadCoordinationHost) {
       const prepared = await prepareCoordinationInput(
         ctx,
         params.message,
-        resolveMessageFiles(ctx, params.files, "supervisor_message"),
-        "supervisor_message",
+        resolveMessageFiles(ctx, params.files, "message_supervisor"),
+        "message_supervisor",
         "Message",
         (candidate, resultBindings) => ({
           version: 2,
@@ -5934,10 +5933,9 @@ delegating or continuing managed Agent work, the herd run owns that handoff
 until it settles; summarize outcome, validation, and important unresolved
 points in your response.
 
-Use supervisor_message only for nonblocking material coordination that should
-reach Manager before the normal result boundary—not routine status or a
-duplicate handoff. It queues coordination but does not wait for a Manager reply
-or block project work.
+If the Manager needs coordination, a question, clarification, warning, or FYI
+before the normal result boundary, use message_supervisor. If it can wait, let
+the automatic result handoff carry it.
 Undelivered project handoffs survive Manager absence. Once delivered, they
 are not automatically replayed to later Managers. Settlement is nonterminal; do not infer project closure from runtime state.`;
 }
@@ -6029,7 +6027,6 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           entry?.details?.leaseId === record.leaseId &&
           entry?.details?.fromSessionId === record.fromSessionId &&
           entry?.details?.leadSessionId === record.leadSessionId &&
-          entry?.details?.askId === record.askId &&
           entry?.details?.branch === record.branch,
       );
   const projectAssignmentAuthorized = (
@@ -7016,7 +7013,7 @@ export function createLeadRoleTransitions(
     assignment: ProjectAssignment,
     message: string,
     files: readonly MessageFileInput[] = [],
-    operation = "supervisor_message",
+    operation = "message_supervisor",
   ): Promise<ProjectMessage | undefined> => {
     const sessionId = ctx.sessionManager.getSessionId();
     const runtime = host.supervisionRuntime();

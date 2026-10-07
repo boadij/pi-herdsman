@@ -132,8 +132,8 @@ The breadcrumb uses validated definition/agent ancestry. The root is `lead` when
 
 Delegating-agent and leaf panes can append a compact summary of their current
 Pi active tools as muted bracketed metadata after the current identity.
-Ordinary tool names retain Pi's order. Multiple `agent_*` semantic coordination
-tools are collapsed into one `agent_*×N` display token. This is presentation
+Ordinary tool names retain Pi's order. Multiple Agent ownership coordination
+tools are collapsed into one Agent-tools display token. This is presentation
 only: `ownTools` and Pi's active-tool state remain exact.
 
 When width is limited, complete metadata items are omitted before breadcrumb

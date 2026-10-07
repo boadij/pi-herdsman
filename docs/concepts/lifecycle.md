@@ -49,7 +49,7 @@ settling
 cleanup → gone
 ```
 
-`agent_reply` is not a new assignment and does not create another final result.
+`reply_agent` is not a new assignment and does not create another final result.
 
 ## Public state is a safe-control projection
 
@@ -146,21 +146,21 @@ turn. For stale attention:
 
 1. Read the bounded evidence supplied with the first stale attention.
 2. If that evidence is absent or insufficient, use one bounded diagnostic read:
-   `agent_transcript` for persisted history or `agent_inspect` for live terminal/process
+   `read_agent_transcript` for persisted history or `inspect_agent` for live terminal/process
    state.
 3. Continue waiting while evidence positively supports legitimate long-running work.
-4. Use `agent_steer` to queue a cooperative correction when the current operation
+4. Use `steer_agent` to queue a cooperative correction when the current operation
    can safely finish first.
 5. A repeated reminder for the same stale episode is additional evidence: an
    unchanged episode means no qualifying execution boundary has occurred, so
    steering queued during it cannot yet have affected the current operation.
    Do not repeat reads solely because of a reminder.
-6. Otherwise use `agent_interrupt` to abandon the current operation and continue
+6. Otherwise use `interrupt_agent` to abandon the current operation and continue
    the same assignment; it supersedes earlier undelivered steering.
-7. Use `agent_close` only when abandoning the assignment is intended.
+7. Use `close_agent` only when abandoning the assignment is intended.
 
-For other attention, use `agent_transcript` for persisted Pi conversation and tool
-history and `agent_inspect` for live terminal/process state as needed. Use `agent_reply` only
+For other attention, use `read_agent_transcript` for persisted Pi conversation and tool
+history and `inspect_agent` for live terminal/process state as needed. Use `reply_agent` only
 for the exact pending owner question. Do not poll or keep the turn alive solely
 to wait for agent progress.
 
@@ -198,7 +198,7 @@ exactly-once delivery for both completed and failed terminal results.
 ## Session continuation
 
 Agent cleanup does not delete the Pi session. To continue completed context,
-use the exact returned session with `agent_continue`; Pi Herdsman starts a new agent
+use the exact returned session with `continue_agent`; Pi Herdsman starts a new agent
 generation for the new assignment. The continuation uses the saved cwd, session
 history, definition, and logical label together with the current effective
 authorized definition configuration. Its omitted model and thinking fields
@@ -211,26 +211,26 @@ assignment ownership.
 
 ## Steering and interruption
 
-`agent_steer` queues a cooperative change to the current assignment. It does not
+`steer_agent` queues a cooperative change to the current assignment. It does not
 create another result or cancel the current Pi operation. Pi delivers steering
 after the current assistant turn and its tool calls reach the steering boundary.
 Acceptance by Herdsman therefore does not mean the current operation has
 observed the steering message.
 
-`agent_interrupt` changes the same active assignment preemptively. It requests
+`interrupt_agent` changes the same active assignment preemptively. It requests
 cancellation of the current Pi operation, supersedes earlier steering that Pi
 has not yet delivered, and supplies the replacement instruction that continues
 the same assignment. The generation, active task
 request, ownership, Pi session, and final-result obligation remain unchanged.
 
-Neither action creates another assignment. `agent_close` is the operation that
+Neither action creates another assignment. `close_agent` is the operation that
 abandons the managed generation.
 
 Steering is at-least-once at the agent boundary: an agent can apply a steer
 before its acknowledgement write is recorded. If that acknowledgement write
 fails, retrying the same request may apply the steer again.
 
-Use `agent_steer` only when `agent_list` reports `agent_steer` in `available_tools`.
+Use `steer_agent` only when `list_agents` reports `steer_agent` in `available_tools`.
 
 ## Delegating agent completion
 

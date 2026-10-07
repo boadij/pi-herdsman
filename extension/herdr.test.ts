@@ -143,7 +143,7 @@ test("lists all Herdr agents without changing the current-workspace view", async
   }
 });
 
-test("agent list fails closed when the native agents array is absent", async () => {
+test("list agents fails closed when the native agents array is absent", async () => {
   for (const result of [{}, { agents: null }, { agents: {} }]) {
     const pi = {
       exec: async () => ({

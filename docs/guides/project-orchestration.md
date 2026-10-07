@@ -53,8 +53,8 @@ project-work handles. A branch is optional when starting new work. If omitted,
 Pi Herdsman can generate one. The first delegation can create the first linked
 worktree, and an unoccupied existing worktree for the branch is reused.
 
-Start new work with `staff_delegate`. Resume existing work with
-`staff_resume` using its branch. If its worktree is missing, Herdsman recreates
+Start new work with `delegate_project`. Resume existing work with
+`resume_project` using its branch. If its worktree is missing, Herdsman recreates
 it from the existing branch and resumes the exact persisted Pi session when
 available. The saved session cwd is used when history exists; if the branch
 itself is unavailable, recreation fails closed.
@@ -65,8 +65,8 @@ overlay. A trusted project may therefore configure the Lead that works on its
 branch. A Lead that is already live is not hot-reconfigured; changed launch
 policy takes effect on its next start.
 
-See [`staff_delegate`](../reference/staff.md#staff_delegate) and
-[`staff_resume`](../reference/staff.md#staff_resume).
+See [`delegate_project`](../reference/staff.md#delegate_project) and
+[`resume_project`](../reference/staff.md#resume_project).
 
 ## Run independent work in parallel
 
@@ -91,14 +91,14 @@ handoff remains pending until a Manager can receive it. When managed Agent work
 is active, the herd run owns that handoff until it settles; the response
 summarizes outcome, validation, and important unresolved points. These
 nonterminal handoffs do not close project work: assignments remain open through
-review and requested corrections. Leads use `supervisor_message` for material
-coordination that should reach Manager before the normal result boundary, such
-as a blocker, warning, scope conflict, risk, decision request, or important
-evidence—not to duplicate an automatic result. Managers should treat routine
-progress and conversational results as informational and act only when useful
-coordination is needed. Such messages remain pending while Manager is absent
-and are delivered to the next Manager that can receive them. Already-delivered
-messages are Pi conversation history, not pending Herdsman coordination.
+review and requested corrections. Routine information that can wait should go
+through the automatic result handoff. A managed Lead may use nonblocking
+`message_supervisor` for a timely question, clarification, warning, or other
+information the Manager needs before that boundary; the Lead may choose to wait
+for a response through `message_staff`. A later automatic result may repeat
+some information; separate messages and results are not deduplicated.
+Managers should treat routine results as informational and act when useful
+coordination is needed.
 
 Use the current supervision state rather than repeatedly listing or inspecting
 reports to poll for progress. Inspect live terminal or persisted transcript
@@ -106,19 +106,19 @@ evidence only when it materially matters.
 
 ## Pause and resume
 
-`staff_stop` stops a Lead and its owned Agent execution tree while preserving
+`stop_lead` stops a Lead and its owned Agent execution tree while preserving
 the assignment, Pi session, Git branch, and worktree. Resume the same work with
-`staff_resume` using its branch. `staff_stop` does not resolve project work.
+`resume_project` using its branch. `stop_lead` does not resolve project work.
 
-See [`staff_stop`](../reference/staff.md#staff_stop) and
-[`staff_resume`](../reference/staff.md#staff_resume).
+See [`stop_lead`](../reference/staff.md#stop_lead) and
+[`resume_project`](../reference/staff.md#resume_project).
 
 ## Retire project work
 
-Successful Herdr worktree removal retires the matching project assignment and
+Successful Herdr worktree removal retires the matching project assignment,
 any still-pending messages; the Git branch remains. A worktree that is merely
 missing does not imply retirement, so the assignment remains recoverable with
-`staff_resume` when its branch is available. An assigned Lead can explicitly
+`resume_project` when its branch is available. An assigned Lead can explicitly
 release Manager control with `/takeover`; after confirmation, the assignment
 and pending project messages are removed while its Pi session, conversation,
 branch, worktree, running process, and owned Agents remain. Takeover does not

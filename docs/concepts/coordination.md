@@ -109,29 +109,29 @@ again when the work is observed or resumed. For an assigned project, Herdsman
 automatically returns each completed direct Lead response as a project message
 for the Manager role. If managed Agent work is active, the herd run owns that
 handoff until it settles, and the settled response should summarize outcome,
-validation, and important unresolved points. Use `supervisor_message` for
-material coordination that should reach Manager before the normal result
-boundary; do not duplicate an automatic result handoff. These handoffs are
-advisory and do not resolve the assignment. Assigned Lead messages sent with
-`supervisor_message` remain pending
-while the Manager is absent and are delivered to the next Manager that can
-receive them. Already-delivered messages are Pi conversation history, not
-pending Herdsman coordination.
+validation, and important unresolved points. Routine information that can wait
+should go through the automatic result; timely questions, clarifications, or
+warnings may use nonblocking `message_supervisor`. This is ordinary
+coordination, not assignment state; there is no deduplication between a
+message and a later result.
 Project assignments end only on explicit events, not settlement or review:
 successful Herdr worktree removal or user-confirmed `/takeover` by the assigned
 Lead. Takeover removes the assignment and pending project messages while
-preserving the session, conversation, branch, worktree, running process, and
-Lead-owned Agents; it does not imply completion or acceptance. See
+preserving the session, conversation, branch, worktree,
+running process, and Lead-owned Agents; it does not imply completion or
+acceptance. See
 [Project orchestration](../guides/project-orchestration.md) for the workflow.
 
-`staff_stop` pauses assigned execution while preserving the assignment, Pi
-session, branch, and worktree. Successful Herdr worktree removal retires the
-matching assignment and any still-pending project messages while preserving
-the Git branch. Explicit `/takeover` by the assigned Lead is a separate
-assignment-release path. Manually continuing the exact assigned Pi session
-remains managed; `managed-lead` is launch policy, not authority.
+`stop_lead` pauses assigned execution while preserving the assignment, Pi
+session, branch, and worktree; `resume_project` resumes the existing
+assignment. These operations do not change project authority. Successful
+Herdr worktree removal retires the matching assignment and any still-pending
+project messages while preserving the Git branch. Explicit `/takeover` by the
+assigned Lead is a separate assignment-release path. Manually continuing the
+exact assigned Pi session remains managed; `managed-lead` is launch policy,
+not authority.
 A worktree that is merely missing does not retire the assignment; it remains
-recoverable through `staff_resume`.
+recoverable through `resume_project`.
 
 For the task-oriented workflow, see
 [Project orchestration](../guides/project-orchestration.md). Exact operations
@@ -141,16 +141,24 @@ live in [Staff tools](../reference/staff.md).
 
 Coordination crosses one authority edge at a time:
 
-| Direction | Interface              | Boundary                                             |
-| --------- | ---------------------- | ---------------------------------------------------- |
-| Down      | `staff_*`              | Chief -> direct Manager/Lead, Manager -> direct Lead |
-| Up        | `supervisor_*`         | Lead -> Manager or Chief, Manager -> Chief           |
-| Sideways  | `peer_*`               | Lead <-> Lead or Manager <-> Manager                 |
-| Ownership | `agent_*`, `ask_owner` | owner <-> directly owned Agent                       |
+| Direction | Interface                                   | Boundary                             |
+| --------- | ------------------------------------------- | ------------------------------------ |
+| Up        | `message_supervisor` / automatic results    | Lead -> Manager                      |
+| Down      | `message_staff` / project operations        | Manager -> Lead                      |
+| Up        | `message_supervisor`                        | Lead -> Chief; Manager -> Chief      |
+| Sideways  | `message_peer`                              | Lead <-> Lead or Manager <-> Manager |
+| Ownership | Agent controls / `reply_agent`; `ask_owner` | owner <-> directly owned Agent       |
 
 A supervisor may observe bounded descendant state without gaining descendant
 control. Questions and messages are not implicitly forwarded through
 intermediate coordinators.
+
+Managed Leads use nonblocking `message_supervisor` for timely coordination
+with Manager; Manager uses nonblocking `message_staff` for requests,
+clarifications, instructions, or steering. Routine information that can wait
+belongs in the automatic result. Legitimate messages and later results are not
+deduplicated. Manager has direct-report and project tools; Chief has
+direct-report tools but no project tools.
 
 ## Usage follows ownership
 

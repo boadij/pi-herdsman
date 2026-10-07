@@ -1691,6 +1691,7 @@ export type ProjectAssignment = Readonly<{
   piSessionFile?: string;
   resultBindings?: ResultBinding[];
 }>;
+
 export const PROJECT_ASSIGNMENT_MAX_BYTES = 1024 * 1024;
 const PROJECT_ASSIGNMENT_FILE_MAX_BYTES = PROJECT_ASSIGNMENT_MAX_BYTES * 2;
 
@@ -2148,9 +2149,9 @@ export async function leadSupervisorState<S, A>(
     const chief = await host.currentChiefAuthority(ctx, true);
     if (chief)
       return `<supervisor_state>\nsupervisor: chief\navailability: available\n</supervisor_state>`;
-    return `<supervisor_state>\nsupervisor: none\navailability: unavailable\nguidance: continue independently; do not use supervisor_message until a supervisor is available\n</supervisor_state>`;
+    return `<supervisor_state>\nsupervisor: none\navailability: unavailable\nguidance: continue independently; do not use message_supervisor until a supervisor is available\n</supervisor_state>`;
   } catch {
-    return `<supervisor_state>\nsupervisor: unverified\navailability: unknown\nguidance: continue independently; do not use supervisor_message until a supervisor is verified\n</supervisor_state>`;
+    return `<supervisor_state>\nsupervisor: unverified\navailability: unknown\nguidance: continue independently; do not use message_supervisor until a supervisor is verified\n</supervisor_state>`;
   }
 }
 
@@ -2182,6 +2183,19 @@ export type SupervisedLead = {
   availableActions: Array<"inspect" | "transcript" | "message">;
   agents: Array<{ id: string; label: string; state: RuntimeState }>;
 };
+
+export function staffToolName(
+  action: "inspect" | "transcript" | "message",
+): string {
+  switch (action) {
+    case "inspect":
+      return "inspect_staff";
+    case "transcript":
+      return "read_staff_transcript";
+    case "message":
+      return "message_staff";
+  }
+}
 /** Chief can act on these Managers only; nested Leads are observational. */
 export type SupervisedManager = {
   session: string;
@@ -2675,7 +2689,7 @@ export function serializeSupervision(snapshot: SupervisionSnapshot) {
       pane_id: r.paneId,
       runtime_state: r.runtimeState,
       agent_counts: r.agentCounts,
-      available_tools: r.availableActions.map((action) => `staff_${action}`),
+      available_tools: r.availableActions.map(staffToolName),
       agents: r.agents,
     })),
   };

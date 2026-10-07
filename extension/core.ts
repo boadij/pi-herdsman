@@ -14,6 +14,19 @@ import { resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import type { ResultBinding } from "./storage.ts";
 import { resolveResultRef } from "./storage.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+export function currentTurnIsSoleToolCall(
+  ctx: ExtensionContext,
+  name: string,
+): boolean {
+  const turn = (
+    ctx.sessionManager.getBranch().at(-1) as { message?: any } | undefined
+  )?.message;
+  if (turn?.role !== "assistant" || !Array.isArray(turn.content)) return false;
+  const calls = turn.content.filter((part: any) => part?.type === "toolCall");
+  return calls.length === 1 && calls[0]?.name === name;
+}
 
 export const FILE_HANDOFF_GUIDANCE =
   "Pass every user-supplied or already-available artifact relevant to the " +

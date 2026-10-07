@@ -138,7 +138,23 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
 }
 const { updateConfig } = await import("./config.ts");
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
-  pi.tools.find((candidate) => candidate.name === `agent_${name}`)!;
+  pi.tools.find(
+    (candidate) =>
+      candidate.name ===
+      (
+        {
+          list: "list_agents",
+          delegate: "delegate_agent",
+          continue: "continue_agent",
+          steer: "steer_agent",
+          interrupt: "interrupt_agent",
+          reply: "reply_agent",
+          close: "close_agent",
+          inspect: "inspect_agent",
+          transcript: "read_agent_transcript",
+        } as Record<string, string>
+      )[name],
+  )!;
 const ownershipResult = (
   child: string,
   owner = LEAD_SESSION_ID,
@@ -293,7 +309,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     });
     assert.equal(listChiefMessagePaths(runtime, leadId).length, 0);
     const tool = pi.tools.find(
-      (candidate) => candidate.name === "supervisor_message",
+      (candidate) => candidate.name === "message_supervisor",
     )!;
     const send = (message: string) =>
       tool.execute("message", { message }, undefined, undefined, ctx);
@@ -744,7 +760,7 @@ test("project Lead observes Manager availability across turnover without exposin
       /project_messages: retained for the Manager role/,
     );
     const savedWhileUnknown = await pi.tools
-      .find((tool) => tool.name === "supervisor_message")!
+      .find((tool) => tool.name === "message_supervisor")!
       .execute(
         "message",
         { message: "RETAINED_WITH_UNVERIFIED_MANAGER" },
@@ -779,7 +795,7 @@ test("project Lead observes Manager availability across turnover without exposin
       /project_messages: retained for the Manager role/,
     );
     const saved = await pi.tools
-      .find((tool) => tool.name === "supervisor_message")!
+      .find((tool) => tool.name === "message_supervisor")!
       .execute(
         "message",
         { message: "RETAINED_WITHOUT_MANAGER" },
@@ -834,7 +850,7 @@ test("project Lead observes Manager availability across turnover without exposin
   }
 });
 
-test("unassigned Lead routes supervisor messages directly to Chief", async () => {
+test("unassigned Lead routes message supervisors directly to Chief", async () => {
   setLeadEnvironment();
   const socket = join(tmpdir(), `unassigned-routing-${randomUUID()}.sock`);
   process.env.HERDR_SOCKET_PATH = socket;
@@ -950,7 +966,7 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
       build: OTHER_HERDSMAN_BUILD,
     });
     const supervisorMessage = pi.tools.find(
-      (tool) => tool.name === "supervisor_message",
+      (tool) => tool.name === "message_supervisor",
     )!;
     await assert.rejects(
       supervisorMessage.execute(
@@ -979,7 +995,7 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
       workspaceId: WORKSPACE,
     });
     const result = await pi.tools
-      .find((tool) => tool.name === "supervisor_message")!
+      .find((tool) => tool.name === "message_supervisor")!
       .execute(
         "message",
         { message: "UNASSIGNED_DIRECT_TO_CHIEF" },
@@ -1005,7 +1021,7 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
     assert.match(unverifiedChief.content, /availability: unknown/);
     await assert.rejects(
       pi.tools
-        .find((tool) => tool.name === "supervisor_message")!
+        .find((tool) => tool.name === "message_supervisor")!
         .execute(
           "message",
           { message: "UNVERIFIED_CHIEF_MUST_REJECT" },
@@ -1030,7 +1046,7 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
     );
     await assert.rejects(
       pi.tools
-        .find((tool) => tool.name === "supervisor_message")!
+        .find((tool) => tool.name === "message_supervisor")!
         .execute(
           "message",
           { message: "UNVERIFIED_DESCRIPTOR_MUST_REJECT" },
@@ -1047,7 +1063,7 @@ test("unassigned Lead routes supervisor messages directly to Chief", async () =>
     assert.match(noSupervisor.content, /availability: unavailable/);
     await assert.rejects(
       pi.tools
-        .find((tool) => tool.name === "supervisor_message")!
+        .find((tool) => tool.name === "message_supervisor")!
         .execute(
           "message",
           { message: "NO_SUPERVISOR_MUST_REJECT" },
@@ -1157,7 +1173,7 @@ test("legacy Lead pendingAsk state is normalized and does not block messaging", 
     );
 
     const result = await pi.tools
-      .find((tool) => tool.name === "supervisor_message")!
+      .find((tool) => tool.name === "message_supervisor")!
       .execute(
         "message",
         { message: "LEGACY_STATE_MESSAGE_OK" },
@@ -1616,7 +1632,7 @@ for (const reachable of [true, false]) {
         try {
           await lead.events.get("session_start")![0](undefined, leadCtx);
           const result = await lead.tools
-            .find((tool) => tool.name === "supervisor_message")!
+            .find((tool) => tool.name === "message_supervisor")!
             .execute(
               "message",
               { message: "reachable before chat" },
@@ -1649,7 +1665,10 @@ for (const reachable of [true, false]) {
           realFs.existsSync(managerDescriptorPath(runtime, WORKSPACE)),
           false,
         );
-        assert.equal(pi.pi.getActiveTools().includes("staff_delegate"), false);
+        assert.equal(
+          pi.pi.getActiveTools().includes("delegate_project"),
+          false,
+        );
       }
     } finally {
       await pi.events.get("session_shutdown")?.[0]();
@@ -1916,7 +1935,7 @@ for (const scenario of [
         assert.equal(realFs.existsSync(sessionPath), true);
       }
       const saved = await pi.tools
-        .find((tool) => tool.name === "supervisor_message")!
+        .find((tool) => tool.name === "message_supervisor")!
         .execute(
           "message",
           { message: "Ready for review" },
@@ -2172,9 +2191,11 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     const ctx = fakeContext(pi.entries) as any;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
-    const staff = pi.tools.find((tool) => tool.name === "staff_delegate")!;
-    const staffResume = pi.tools.find((tool) => tool.name === "staff_resume")!;
-    const staffListTool = pi.tools.find((tool) => tool.name === "staff_list")!;
+    const staff = pi.tools.find((tool) => tool.name === "delegate_project")!;
+    const staffResume = pi.tools.find(
+      (tool) => tool.name === "resume_project",
+    )!;
+    const staffListTool = pi.tools.find((tool) => tool.name === "list_staff")!;
     await assert.rejects(
       staff.execute(
         "delegate",
@@ -2325,7 +2346,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
       pending.id,
     );
     await pi.commandOptions.get("manager").handler("leave", ctx);
-    assert.equal(pi.pi.getActiveTools().includes("staff_delegate"), false);
+    assert.equal(pi.pi.getActiveTools().includes("delegate_project"), false);
     assert.equal(
       listProjectAssignments(supervisionRuntime(), "repo-key").find(
         (item) => item.id === pending.id,
@@ -2355,7 +2376,7 @@ test("Manager retry correlates an ambiguous worktree create by persisted branch"
     };
     await leadPi.events.get("session_start")![0](undefined, leadContext);
     const message = await leadPi.tools
-      .find((tool) => tool.name === "supervisor_message")!
+      .find((tool) => tool.name === "message_supervisor")!
       .execute(
         "message",
         { message: "Ready for review without Manager" },
@@ -3140,8 +3161,10 @@ async function runManagerStartupScenario(
     ctx.isProjectTrusted = () => projectTrusted;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
-    const staff = pi.tools.find((tool) => tool.name === "staff_delegate")!;
-    const staffResume = pi.tools.find((tool) => tool.name === "staff_resume")!;
+    const staff = pi.tools.find((tool) => tool.name === "delegate_project")!;
+    const staffResume = pi.tools.find(
+      (tool) => tool.name === "resume_project",
+    )!;
     const staleId = randomUUID();
     const activeMode = [
       "active-loss",
@@ -3327,7 +3350,7 @@ async function runManagerStartupScenario(
       await assert.rejects(
         () =>
           pi.tools
-            .find((tool) => tool.name === "staff_stop")!
+            .find((tool) => tool.name === "stop_lead")!
             .execute("close", { session: staleId }, undefined, undefined, ctx),
         /not an exact current project assignment/,
       );
@@ -3363,13 +3386,13 @@ async function runManagerStartupScenario(
       if (mode === "active-live-mismatch") {
         await assert.rejects(execute(), (error: any) => {
           assert.equal(error.detail.category, "incompatible_build");
-          assert.equal(error.detail.operation, "staff_resume");
+          assert.equal(error.detail.operation, "resume_project");
           return true;
         });
         return;
       }
       if (mode.startsWith("active-live-inspect-")) {
-        const inspect = pi.tools.find((tool) => tool.name === "staff_inspect")!;
+        const inspect = pi.tools.find((tool) => tool.name === "inspect_staff")!;
         const pending = inspect.execute(
           "inspect",
           { session: staleId },
@@ -3489,7 +3512,7 @@ async function runManagerStartupScenario(
             `${projectAssignmentPath(supervisionRuntime(), "repo-key", assignment.branch)}.lock`,
             { name: "test takeover assignment lock" },
           );
-          await assert.rejects(control("staff_stop", { session: staleId }));
+          await assert.rejects(control("stop_lead", { session: staleId }));
           removeProjectAssignment(
             supervisionRuntime(),
             "repo-key",
@@ -3511,13 +3534,13 @@ async function runManagerStartupScenario(
             ).result.panes.some((pane: any) => pane.pane_id === "child-pane"),
           );
         } else if (mode === "close-failure") {
-          await assert.rejects(control("staff_stop", { session: staleId }));
+          await assert.rejects(control("stop_lead", { session: staleId }));
           assert.equal(
             listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
             staleId,
           );
         } else if (mode === "close-resume") {
-          const closed = await control("staff_stop", { session: staleId });
+          const closed = await control("stop_lead", { session: staleId });
           assert.equal(closed.details.branch, "smoke/recover");
           assert.equal(
             listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
@@ -4003,7 +4026,7 @@ async function runManagerStartupScenario(
         updatedAt: Date.now(),
       });
       const staffMessage = pi.tools.find(
-        (tool) => tool.name === "staff_message",
+        (tool) => tool.name === "message_staff",
       )!;
       await assert.rejects(
         staffMessage.execute(
@@ -4044,7 +4067,7 @@ async function runManagerStartupScenario(
           undefined,
           ctx,
         ),
-        /Work already exists.*staff_resume/,
+        /Work already exists.*resume_project/,
       );
       assert.equal(createCalls, createCallsBeforeDuplicate);
       const assignmentsBeforeMissingResume = listProjectAssignments(
@@ -4061,7 +4084,7 @@ async function runManagerStartupScenario(
           undefined,
           ctx,
         ),
-        /No existing work.*staff_delegate/,
+        /No existing work.*delegate_project/,
       );
       assert.deepEqual(
         listProjectAssignments(supervisionRuntime(), "repo-key"),
@@ -4110,7 +4133,7 @@ async function runManagerStartupScenario(
       assert.equal(realFs.existsSync(childSessionPath), true);
       assert.equal(assignment.id, childSession);
       const closed = await pi.tools
-        .find((tool) => tool.name === "staff_stop")!
+        .find((tool) => tool.name === "stop_lead")!
         .execute("close", { session: childSession }, undefined, undefined, ctx);
       assert.equal(closed.details.ok, true);
       assert.equal(started, false);
@@ -4140,7 +4163,7 @@ test("Manager activates only after mocked Lead-state publication", () =>
   runManagerStartupScenario("success"));
 test("Manager preserves project assignment and skips notification for incompatible Lead", () =>
   runManagerStartupScenario("incompatible-build"));
-test("Manager staff message does not publish to incompatible Lead", () =>
+test("Manager message staff does not publish to incompatible Lead", () =>
   runManagerStartupScenario("staff-message-mismatch"));
 test("Manager delegates large attachment evidence outside coordination limits", () =>
   runManagerStartupScenario(
@@ -4240,7 +4263,7 @@ test("Manager inspection rejects evidence after assignment revocation", () =>
   runManagerStartupScenario("active-live-inspect-revoked"));
 test("Manager inspection rejects evidence after lease replacement", () =>
   runManagerStartupScenario("active-live-inspect-lease-replaced"));
-test("Manager resume reports incompatible Lead builds as staff_resume", () =>
+test("Manager resume reports incompatible Lead builds as resume_project", () =>
   runManagerStartupScenario("active-live-mismatch"));
 test("Manager rejects stopping an unassigned direct Lead", () =>
   runManagerStartupScenario("unassigned-close"));
@@ -4600,7 +4623,7 @@ test("trusted same-cwd project assignment launches with native approval", async 
       JSON.stringify({ result: result.details, entries: pi.entries }),
     );
     assert.ok(startArgs[0]?.includes("--approve"));
-    const tool = pi.tools.find((candidate) => candidate.name === "agent_steer");
+    const tool = pi.tools.find((candidate) => candidate.name === "steer_agent");
     const rendered = tool.renderCall(
       { agent: result.details.agent, message: "Continue." },
       {
@@ -4609,7 +4632,7 @@ test("trusted same-cwd project assignment launches with native approval", async 
       },
       { argsComplete: true },
     );
-    assert.match(rendered.render(160).join("\n"), /agent steer\s+project-only/);
+    assert.match(rendered.render(160).join("\n"), /steer agent\s+project-only/);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
@@ -5630,7 +5653,7 @@ test("owned continuation requires a matching persisted child edge", () => {
             type: "message",
             message: {
               role: "toolResult",
-              toolName: "agent_delegate",
+              toolName: "delegate_agent",
               details: {
                 ok: true,
                 owner_session_id: LEAD_SESSION_ID,
@@ -5985,7 +6008,7 @@ test("delegate schema rejects an empty task", () => {
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const schema = pi.tools.find(
-    (candidate) => candidate.name === "agent_delegate",
+    (candidate) => candidate.name === "delegate_agent",
   )!.parameters;
   assert.equal(
     Value.Check(schema, { definition: "agent", task: "work" }),
@@ -6593,9 +6616,9 @@ test("registered agent validates duplicate agents and selectors before lifecycle
   registerExtension!(duplicate.pi as never);
   await duplicate.events.get("session_start")![0](undefined, fakeContext());
   const tool = duplicate.tools.find(
-    (candidate) => candidate.name === "agent_delegate",
+    (candidate) => candidate.name === "delegate_agent",
   )!;
-  assert.equal(tool.name, "agent_delegate");
+  assert.equal(tool.name, "delegate_agent");
   assert.equal(
     duplicate.tools.some((candidate) => candidate.name === "subagent"),
     false,
@@ -6628,7 +6651,7 @@ test("registered agent validates duplicate agents and selectors before lifecycle
   );
   assert.equal(missingAgentTask.details.error.category, "invalid_request");
   const continueTool = duplicate.tools.find(
-    (candidate) => candidate.name === "agent_continue",
+    (candidate) => candidate.name === "continue_agent",
   )!;
   const substitutedResume = await continueTool.execute(
     "id",
@@ -6888,7 +6911,7 @@ test("registered lead exposes only explicit live controls", async () => {
     false,
   );
   const tool = accepting.tools.find(
-    (candidate) => candidate.name === "agent_list",
+    (candidate) => candidate.name === "list_agents",
   )!;
   const context = fakeContext(accepting.entries);
   await accepting.events.get("session_start")![0](
@@ -6896,32 +6919,32 @@ test("registered lead exposes only explicit live controls", async () => {
     fakeContext(accepting.entries),
   );
   assert.deepEqual(accepting.pi.getActiveTools(), [
-    "agent_list",
-    "agent_delegate",
-    "agent_continue",
-    "agent_steer",
-    "agent_interrupt",
-    "agent_reply",
-    "agent_close",
-    "agent_inspect",
-    "agent_transcript",
-    "supervisor_message",
-    "peer_list",
-    "peer_message",
+    "list_agents",
+    "delegate_agent",
+    "continue_agent",
+    "steer_agent",
+    "interrupt_agent",
+    "reply_agent",
+    "close_agent",
+    "inspect_agent",
+    "read_agent_transcript",
+    "message_supervisor",
+    "list_peers",
+    "message_peer",
   ]);
   const listed = await tool.execute("id", {}, undefined, undefined, context);
   assert.deepEqual(listed.details.agents[0].available_tools, [
-    "agent_inspect",
-    "agent_steer",
-    "agent_interrupt",
-    "agent_close",
+    "inspect_agent",
+    "steer_agent",
+    "interrupt_agent",
+    "close_agent",
   ]);
   writeAgentState(mailbox, {
     ...readAgentState(mailbox)!,
     build: OTHER_HERDSMAN_BUILD,
   });
   const steerTool = accepting.tools.find(
-    (candidate) => candidate.name === "agent_steer",
+    (candidate) => candidate.name === "steer_agent",
   )!;
   const rejectedSteer = await steerTool.execute(
     "id",
@@ -6933,7 +6956,7 @@ test("registered lead exposes only explicit live controls", async () => {
   assert.equal(rejectedSteer.details.error.category, "incompatible_build");
   assert.equal(steerSubmitted, undefined);
   assert.ok(
-    accepting.tools.some((candidate) => candidate.name === "agent_close"),
+    accepting.tools.some((candidate) => candidate.name === "close_agent"),
   );
   writeAgentState(mailbox, {
     ...readAgentState(mailbox)!,
@@ -6965,7 +6988,7 @@ test("registered lead exposes only explicit live controls", async () => {
     /Assignment request: /,
   );
   const rendered = accepting.tools
-    .find((candidate) => candidate.name === "agent_steer")!
+    .find((candidate) => candidate.name === "steer_agent")!
     .renderResult(
       { content: steer.content, details: steer.details },
       { expanded: true, isPartial: false },
@@ -7242,7 +7265,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       "blocked",
       JSON.stringify(listed.details),
     );
-    assert.ok(listed.details.agents[0].available_tools.includes("agent_steer"));
+    assert.ok(listed.details.agents[0].available_tools.includes("steer_agent"));
     const listedChild = (listed.details.agents as any[]).find(
       (agent) => agent.agent === child.agentLabel,
     );
@@ -7258,15 +7281,15 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     assert.equal(workingParent.details.agents[0].state, "working");
     assert.ok(
-      workingParent.details.agents[0].available_tools.includes("agent_steer"),
+      workingParent.details.agents[0].available_tools.includes("steer_agent"),
     );
     assert.ok(
       workingParent.details.agents[0].available_tools.includes(
-        "agent_interrupt",
+        "interrupt_agent",
       ),
     );
     assert.equal(
-      listed.details.agents[0].available_tools.includes("agent_interrupt"),
+      listed.details.agents[0].available_tools.includes("interrupt_agent"),
       false,
     );
 
@@ -7285,7 +7308,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     assert.equal(noChildWork.details.agents[0].state, "settling");
     assert.ok(
-      !noChildWork.details.agents[0].available_tools.includes("agent_steer"),
+      !noChildWork.details.agents[0].available_tools.includes("steer_agent"),
     );
 
     writeAgentState(foreignChildMailbox, {
@@ -7303,7 +7326,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     assert.ok(
       !foreignWorkspaceChild.details.agents[0].available_tools.includes(
-        "agent_steer",
+        "steer_agent",
       ),
     );
     resetAgentMailbox(foreignChildMailbox);
@@ -7322,7 +7345,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     assert.ok(
       !otherOwnerChild.details.agents[0].available_tools.includes(
-        "agent_steer",
+        "steer_agent",
       ),
     );
     writeAgentState(childMailbox, child);
@@ -7340,7 +7363,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     assert.ok(
       !noParentAssignment.details.agents[0].available_tools.includes(
-        "agent_steer",
+        "steer_agent",
       ),
     );
     writeAgentState(parentMailbox, parent);
@@ -7367,7 +7390,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     assert.equal(handoffPending.details.agents[0].state, "settling");
     assert.ok(
-      !handoffPending.details.agents[0].available_tools.includes("agent_steer"),
+      !handoffPending.details.agents[0].available_tools.includes("steer_agent"),
     );
     removeRequest(parentMailbox, handoffRequestId);
 
@@ -7409,7 +7432,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     assert.equal(completedChild.details.agents[0].state, "blocked");
     assert.ok(
-      completedChild.details.agents[0].available_tools.includes("agent_steer"),
+      completedChild.details.agents[0].available_tools.includes("steer_agent"),
     );
     assert.equal(
       readAgentState(childMailbox)?.completedRequestId,
@@ -7443,8 +7466,8 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     assert.equal(ownerAsk.details.agents[0].state, "blocked");
     assert.deepEqual(ownerAsk.details.agents[0].available_tools, [
-      "agent_inspect",
-      "agent_reply",
+      "inspect_agent",
+      "reply_agent",
     ]);
     removeAsk(parentMailbox, ownerAskId);
     writeAgentState(parentMailbox, parent);
@@ -7476,7 +7499,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     assert.equal(completionWithChild.details.agents[0].state, "settling");
     assert.ok(
       !completionWithChild.details.agents[0].available_tools.includes(
-        "agent_steer",
+        "steer_agent",
       ),
     );
     writeAgentState(parentMailbox, parent);
@@ -7495,7 +7518,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     assert.equal(
       completedChildWithoutResult.details.agents[0].available_tools.includes(
-        "agent_steer",
+        "steer_agent",
       ),
       false,
     );
@@ -7526,7 +7549,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     );
     assert.equal(ownCompletion.details.agents[0].state, "settling");
     assert.ok(
-      !ownCompletion.details.agents[0].available_tools.includes("agent_steer"),
+      !ownCompletion.details.agents[0].available_tools.includes("steer_agent"),
     );
     const rejected = await agentTool(pi, "steer").execute(
       "steer",
@@ -7576,7 +7599,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       fakeContext(),
     );
     assert.ok(
-      !restartedList.details.agents[0].available_tools.includes("agent_steer"),
+      !restartedList.details.agents[0].available_tools.includes("steer_agent"),
     );
     restarted.events.get("session_shutdown")?.[0]();
 
@@ -7590,7 +7613,7 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
     ).execute("list", {}, undefined, undefined, fakeContext());
     assert.ok(
       recoveredPositiveList.details.agents[0].available_tools.includes(
-        "agent_steer",
+        "steer_agent",
       ),
     );
     recoveredPositive.events.get("session_shutdown")?.[0]();
@@ -7852,7 +7875,7 @@ test("assignment status normalization fails closed safely", async () => {
       assert.equal(handoffList.details.agents[0].state, "settling");
       assert.equal(
         handoffList.details.agents[0].available_tools.includes(
-          "agent_delegate",
+          "delegate_agent",
         ),
         false,
       );
@@ -7873,7 +7896,7 @@ test("assignment status normalization fails closed safely", async () => {
       assert.equal(activeList.details.agents[0].state, "settling");
       assert.equal(activeList.details.agents[0].active_request_id, requestA);
       assert.equal(
-        activeList.details.agents[0].available_tools.includes("agent_delegate"),
+        activeList.details.agents[0].available_tools.includes("delegate_agent"),
         false,
       );
 
@@ -7903,7 +7926,7 @@ test("assignment status normalization fails closed safely", async () => {
       assert.equal(completedList.details.agents[0].state, "settling");
       assert.equal(
         completedList.details.agents[0].available_tools.includes(
-          "agent_delegate",
+          "delegate_agent",
         ),
         false,
       );
@@ -7918,8 +7941,8 @@ test("assignment status normalization fails closed safely", async () => {
       );
       assert.equal(settledList.details.agents[0].state, "settling");
       assert.deepEqual(settledList.details.agents[0].available_tools, [
-        "agent_inspect",
-        "agent_close",
+        "inspect_agent",
+        "close_agent",
       ]);
     } finally {
       pi.events.get("session_shutdown")?.[0]();
@@ -7928,7 +7951,7 @@ test("assignment status normalization fails closed safely", async () => {
   })();
 });
 
-test("agent list schema rejects unknown fields", () => {
+test("list agents schema rejects unknown fields", () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -8031,7 +8054,9 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       fakeContext(pi.entries),
     );
     assert.equal(
-      before.details.agents[0].available_tools.includes("agent_transcript"),
+      before.details.agents[0].available_tools.includes(
+        "read_agent_transcript",
+      ),
       false,
     );
     const pending = await agentTool(pi, "transcript").execute(
@@ -8057,7 +8082,7 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       fakeContext(pi.entries),
     );
     assert.equal(
-      ready.details.agents[0].available_tools.includes("agent_transcript"),
+      ready.details.agents[0].available_tools.includes("read_agent_transcript"),
       true,
     );
     const result = await agentTool(pi, "transcript").execute(
@@ -8244,7 +8269,9 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
       fakeContext(pi.entries),
     );
     assert.equal(
-      emptyList.details.agents[0].available_tools.includes("agent_transcript"),
+      emptyList.details.agents[0].available_tools.includes(
+        "read_agent_transcript",
+      ),
       false,
     );
     const emptyBefore = readFileSync(identity.piSessionFile, "utf8");

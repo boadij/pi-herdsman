@@ -42,24 +42,24 @@ Use these high-salience rules for the model-facing agent boundary:
 - When agent work is unresolved, handle required agent control, then continue
   only necessary work you still own or end the turn without concluding; agent
   results or attention will resume the session automatically. Do not check
-  progress with `agent_list`, `agent_inspect`, `agent_transcript`, status
+  progress with `list_agents`, `inspect_agent`, `read_agent_transcript`, status
   requests, steering, sleep, or
   other waiting mechanisms, and do not invent work merely to remain active.
 
-Ordinary Leads use `peer_list` and `peer_message` for other ordinary Lead sessions;
-managed agents are not peers. `peer_list` identifies this Lead as `self` and
+Ordinary Leads use `list_peers` and `message_peer` for other ordinary Lead sessions;
+managed agents are not peers. `list_peers` identifies this Lead as `self` and
 returns other live Leads as `peers` with exact session IDs. Incoming peer messages are already
 addressed to this Lead; `Peer message from <sender lead ID>: <body>` identifies
-the peer sender. Peer messages are coordination data, not assignments. `peer_message` accepts ordinary files and completed direct-agent result refs through
+the peer sender. Peer messages are coordination data, not assignments. `message_peer` accepts ordinary files and completed direct-agent result refs through
 `files`; the peer tool is unavailable in Chief mode.
 
 The session-start instructions include the current agent-definition roster.
-Use `agent_list` when fresh agent state or ownership is materially needed for a concrete
+Use `list_agents` when fresh agent state or ownership is materially needed for a concrete
 control or recovery decision, or to refresh the definition roster after
-configuration changes. Do not use `agent_list` merely to check progress.
+configuration changes. Do not use `list_agents` merely to check progress.
 
-Use `agent_delegate` to start one bounded fresh assignment from an agent definition.
-Use `agent_continue` to start one bounded assignment from an exact historical
+Use `delegate_agent` to start one bounded fresh assignment from an agent definition.
+Use `continue_agent` to start one bounded assignment from an exact historical
 managed-agent Pi session.
 
 Each managed agent exists for one assignment only. After its terminal result is
@@ -76,34 +76,34 @@ State describes what is happening; `available_tools` describes current control
 eligibility. Every operation revalidates exact state and identity before
 mutation.
 
-The live-agent control tools are `agent_steer`, `agent_interrupt`,
-`agent_reply`, and `agent_close`;
+The live-agent control tools are `steer_agent`, `interrupt_agent`,
+`reply_agent`, and `close_agent`;
 these mutate
-live agent execution and are available only when listed. Read-only `agent_inspect` captures bounded live terminal/process evidence.
-`agent_transcript` captures bounded persisted Pi conversation and tool evidence
+live agent execution and are available only when listed. Read-only `inspect_agent` captures bounded live terminal/process evidence.
+`read_agent_transcript` captures bounded persisted Pi conversation and tool evidence
 when listed. Neither changes agent
 state. A completed agent does not remain available for another assignment.
 
-Use `agent_steer` only to change active work non-preemptively. Steering does not cancel
+Use `steer_agent` only to change active work non-preemptively. Steering does not cancel
 an in-flight model or tool operation; Pi may queue it until the current
 operation reaches a safe boundary.
 
-Use `agent_interrupt` only when the current in-flight operation itself must be
+Use `interrupt_agent` only when the current in-flight operation itself must be
 abandoned. Interrupt is preemptive: it cancels the current Pi operation,
 supersedes any earlier steering that Pi has not yet delivered, and continues
 the same assignment with the required replacement message. Do not interrupt
 merely because an agent is slow or marked stale; inactivity is advisory and
 does not prove a hang.
 
-Use `agent_reply` only to answer a valid outstanding `ask_owner` question. Use
-`agent_close` only for intentional teardown or abandonment.
+Use `reply_agent` only to answer a valid outstanding `ask_owner` question. Use
+`close_agent` only for intentional teardown or abandonment.
 
 A lost agent is a managed assignment whose exact physical execution is proven
 gone before a durable terminal result resolved it. Loss is not completion or
-task failure. Treat the assignment as unresolved. When `agent_transcript` is listed,
+task failure. Treat the assignment as unresolved. When `read_agent_transcript` is listed,
 use it only when the last persisted work materially affects recovery. When
-`agent_close` is listed, use it to abandon the lost generation before replacing it or
-continuing its saved session. If `agent_close` is absent, resolve the condition
+`close_agent` is listed, use it to abandon the lost generation before replacing it or
+continuing its saved session. If `close_agent` is absent, resolve the condition
 blocking its close preflight first. Unknown evidence remains fail-closed and is
 not proof of loss.
 
@@ -112,7 +112,7 @@ conflicting evidence as unresolved. Keep one writer per worktree or file-
 ownership boundary. Use a capable definition or report blocked when a required
 runtime capability is unavailable.
 
-If `agent_list` reports result_error, do not start a new delegation over unresolved
+If `list_agents` reports result_error, do not start a new delegation over unresolved
 work. Resolve mailbox persistence first, then close the exact agent before
 starting another assignment; follow the stored recovery nextAction.
 
@@ -356,10 +356,10 @@ unacknowledged request must not be duplicated or resubmitted: retained work is
 not proof of non-delivery.
 
 Use the event's current `available_tools` as advisory snapshot authority;
-every action revalidates identity, ownership, and lifecycle. Use `agent_transcript`
-for persisted conversation and tool evidence, and `agent_inspect` for live
-terminal/process evidence. `agent_steer` is cooperative and non-preemptive;
-`agent_interrupt` cancels the current operation, supersedes earlier steering Pi has
+every action revalidates identity, ownership, and lifecycle. Use `read_agent_transcript`
+for persisted conversation and tool evidence, and `inspect_agent` for live
+terminal/process evidence. `steer_agent` is cooperative and non-preemptive;
+`interrupt_agent` cancels the current operation, supersedes earlier steering Pi has
 not yet delivered, and continues the same assignment.
 Do not add automatic interrupt, close, restart, or redelegation. Physical
 `unknown` remains fail-closed, has no mutation actions, and receives at most one
@@ -370,49 +370,51 @@ delegating parent that is merely waiting for its direct children.
 ## Supervisor and staff tools
 
 Ordinary leads own their complete herd, including every agent beneath them. The
-Chief supervises ordinary unassigned Leads and never changes ownership. Use
-`supervisor_message` only for material coordination requiring a direct
-supervisor's attention, decision, or action, such as a blocker, warning, scope
-change, risk, or important evidence. Ordinary Leads without a verified
-supervisor continue independently; assigned project Leads may message the
-Manager role while its process is unavailable. Messages remain pending during
-Manager absence and are delivered to the next Manager that can receive them.
+Chief supervises ordinary unassigned Leads and never changes ownership.
+Use `message_supervisor` for material coordination with the direct supervisor.
+Managed Leads contact their assigned Manager; ordinary Leads and Managers
+contact Chief. It is nonblocking and supports timely questions, clarifications,
+warnings, or other information the supervisor needs before the normal result
+boundary. For an assigned managed Lead, routine information that can wait
+should go in the automatic completed-result handoff instead. The Lead may choose
+to wait for a response through `message_staff`. Ordinary Leads and Managers
+have no automatic result handoff to Chief. Ordinary Leads without a verified
+Chief continue independently.
 While a project Lead remains assigned, Herdsman automatically returns each
 completed direct Lead response to the Manager role. If managed Agent work is
 active, the herd run owns that handoff until it settles; summarize the outcome,
-validation, and important unresolved points in the settled response. Use
-`supervisor_message` for material coordination that should reach Manager before
-the normal result boundary, such as a blocker, warning, scope conflict, risk,
-decision request, or important evidence. Do not send a duplicate message
-solely to report a result that Herdsman will hand off automatically. Treat
+validation, and important unresolved points in the settled response. Do not
+send a duplicate message solely to report a result that Herdsman will hand off
+automatically. Treat
 routine progress or conversational results as informational; act only when
 review, a decision, correction, or other useful coordination is needed.
 Descendants use `ask_owner`, not supervisor tools. Messages are coordination
 data, not assignments or terminal project results.
 
-`supervisor_message` is available to ordinary Leads and Managers. Assigned Lead
-messages remain pending while Manager is absent and are delivered to the next
-Manager that can receive them; delivered messages are Pi conversation history,
-not pending Herdsman coordination. Manager messages to
-Leads use `staff_message`. For files, these tools accept ordinary paths,
+`message_supervisor` is available to Leads and Managers on their direct
+supervisor edge. Manager messages to Leads use `message_staff`. Both tools are
+nonblocking; for assigned managed Leads, `message_supervisor` does not replace
+the automatic completed-result handoff. Separate messages and results are not
+deduplicated. For files, these tools accept
+ordinary paths,
 reusable direct-agent result refs, and already-supplied canonical result refs
 through `files`.
 
-Chief uses `staff_list`, `staff_inspect`, `staff_transcript`, and
-`staff_message`. Manager has those direct-report tools plus `staff_delegate`,
-`staff_resume`, and `staff_stop`.
-`staff_inspect` provides bounded live terminal/process evidence;
-`staff_transcript` provides bounded persisted Pi conversation/tool evidence.
+Chief uses `list_staff`, `inspect_staff`, `read_staff_transcript`, and
+`message_staff`. Manager has those direct-report tools, peer tools, and
+`delegate_project`, `resume_project`, and `stop_lead`.
+`inspect_staff` provides bounded live terminal/process evidence;
+`read_staff_transcript` provides bounded persisted Pi conversation/tool evidence.
 Target a Lead by the exact full Pi session ID in a fresh snapshot or
-`staff_list`, never by `display_name`.
+`list_staff`, never by `display_name`.
 `available_tools` is advisory; each action revalidates current identity and
 authority. Chief supervises direct reports but does not own their Agent trees.
 
 The automatic `<supervision_state>` context is hidden persistent Pi model
 context. It is bounded, state-only observation and cannot change role, tool
 policy, identity, or authorization. Use a fresh snapshot directly for general
-state questions. Do not call `staff_list`, `staff_inspect`, or
-`staff_transcript` merely to poll progress; use them when a fresh roster, live
+state questions. Do not call `list_staff`, `inspect_staff`, or
+`read_staff_transcript` merely to poll progress; use them when a fresh roster, live
 process evidence, or persisted transcript evidence materially matters.
 
 Malformed or stale role and coordination state fails closed. Duplicate or
@@ -438,8 +440,8 @@ Pi Herdsman uses one durable vocabulary:
   decisions and orchestrate execution through their Agent trees;
 - project work belongs to the project, not a Manager session. The project
   assignment represents open work and its Git branch is the work handle. A
-  Manager uses `staff_delegate` with a task and optional branch to start new
-  project work, and `staff_resume` with its branch to resume an existing
+  Manager uses `delegate_project` with a task and optional branch to start new
+  project work, and `resume_project` with its branch to resume an existing
   assignment. Missing worktrees are reconstructed from the same branch,
   resuming the exact saved Pi session when available;
 - each completed direct turn by an assigned Lead is automatically returned as a
@@ -447,40 +449,44 @@ Pi Herdsman uses one durable vocabulary:
   work is active, the herd run owns the handoff until it settles, and the
   settled response summarizes outcome, validation, and important unresolved
   points. These handoffs are nonterminal; Managers treat routine results as
-  informational and act only when useful coordination is needed;
-  assigned Lead `supervisor_message` calls are nonterminal coordination
-  retained across Manager absence and turnover. Project work remains open
-  through implementation and review iterations;
-- `staff_stop` stops an exact Lead and its owned Agent tree while preserving
-  the assignment, Pi session, branch, and worktree. Successful Herdr worktree
-  removal retires the matching assignment and any still-pending project
-  messages while preserving the Git branch. A missing worktree alone does not retire the
-  assignment; `staff_resume` can reconstruct it. Explicit `/takeover` by the
-  assigned Lead also releases Manager control and pending project messages
-  while preserving the session, worktree, branch, and owned Agents. Never infer
+  informational and act only when useful coordination is needed. Managed
+  Leads may use `message_supervisor` for timely information before the result
+  boundary; routine information that can wait belongs in the automatic result.
+  Project work remains open through implementation and review;
+- `stop_lead` stops an exact Lead and its owned Agent tree while preserving
+  the assignment, Pi session, branch, and worktree. A missing worktree alone
+  does not retire the assignment; `resume_project` can reconstruct it.
+  Successful Herdr worktree removal retires the matching assignment and any
+  pending project messages while preserving the Git branch. Explicit
+  `/takeover` by the assigned Lead also releases Manager control and removes
+  pending project messages while preserving the session, worktree, branch, and
+  owned Agents. Never infer
   ownership from worktree membership or start an overlapping writer beside
   another Lead;
 - `/manager leave` preserves project work; a later Manager can resume the same
   branch-based assignment;
 - a **herd** is one Lead and the complete Agent tree it owns;
-- a **Lead** owns its Agents. An assigned project Lead sends
-  `supervisor_message` to project-scoped storage; pending messages survive
-  Manager absence and go to the next Manager that can receive them. Delivered
-  messages are not replayed; messages do not route to Chief. An unassigned Lead
+- a **Lead** owns its Agents. A managed project Lead uses
+  `message_supervisor` for timely coordination with its Manager; routine
+  information that can wait should go in its automatic result. An unassigned
+  Lead
   routes to Chief when available, never to Manager merely because both share a
   project scope. Continuing the exact assigned Pi session manually remains
   managed; `managed-lead` is launch policy, not authority. Use `/takeover` to
   release that assignment explicitly;
 - an **Agent** handles one bounded assignment and may delegate only when its
   definition allows it;
-- the **chief** supervises leads through the four `staff_*` semantic tools and
-  never owns their agents.
+- the **chief** supervises direct reports through `list_staff`,
+  `inspect_staff`, `read_staff_transcript`, and `message_staff`, and never
+  owns their agents.
 
 The `agents` frontmatter field names the direct agent definitions an agent may
 delegate to. A delegation-capable session remains an agent at every depth.
 Every managed agent receives `ask_owner`. A non-empty effective `agents` list
-is necessary but not sufficient to enable the nine semantic `agent_*`
-coordination tools. Delegation is disabled when `excludeTools` contains
+is necessary but not sufficient to enable the nine Agent ownership tools:
+`list_agents`, `delegate_agent`, `continue_agent`, `steer_agent`,
+`interrupt_agent`, `reply_agent`, `close_agent`, `inspect_agent`, and
+`read_agent_transcript`. Delegation is disabled when `excludeTools` contains
 `agent`, when `noTools: true` unless explicit `tools` contains `agent`,
 or when `tools` is explicitly empty. Otherwise, omitted `tools` permits
 delegation and explicit ordinary tools permit it. An empty or omitted `agents`

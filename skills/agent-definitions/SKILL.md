@@ -12,7 +12,7 @@ this skill does not define a second schema or management API.
 ## Workflow
 
 1. Inspect the current effective definition before changing it.
-   - In an ordinary Lead session, use `agent_list` first. It refreshes the
+   - In an ordinary Lead session, use `list_agents` first. It refreshes the
      definition roster and returns effective metadata plus contributing source
      paths.
    - `managed-lead` is intentionally excluded from the Agent roster. Inspect
@@ -47,10 +47,10 @@ this skill does not define a second schema or management API.
      restrictions.
 
 4. Validate through Herdsman's existing definition engine.
-   - After an edit in a Lead session, call `agent_list` again. Treat any
+   - After an edit in a Lead session, call `list_agents` again. Treat any
      discovery or validation failure as a failed edit and repair or restore the
      target file.
-   - If `agent_list` is unavailable, do not claim that the effective Herdsman
+   - If `list_agents` is unavailable, do not claim that the effective Herdsman
      definition set was runtime-validated. The next normal definition discovery
      will validate it.
 

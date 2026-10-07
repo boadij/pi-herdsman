@@ -95,7 +95,7 @@ The details view can show:
 
 Bundled implementation paths are intentionally hidden from the human overview.
 
-Structured `agent_list` keeps exact deterministic metadata, including exact
+Structured `list_agents` keeps exact deterministic metadata, including exact
 source and skill paths when available.
 
 `/agents definitions` does not probe runtime tool availability.
@@ -174,7 +174,7 @@ It reports discarded active work or durable pending results when present.
 Cleanup uses existing exact ownership proofs and proceeds conservatively across
 independent failures.
 
-Use ordinary `agent_close` for normal targeted model-driven control.
+Use ordinary `close_agent` for normal targeted model-driven control.
 
 ## Project Manager and Chief
 
@@ -209,7 +209,7 @@ by current project assignments; physical worktree scope alone grants no
 authority. Project assignments survive Manager replacement and manual
 continuation of the exact assigned Pi session. `managed-lead` is launch policy,
 not authority. Successful Herdr worktree removal retires an assignment; a
-missing worktree alone leaves it recoverable with `staff_resume`.
+missing worktree alone leaves it recoverable with `resume_project`.
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
 While Chief, `/chief` opens the overview and `/chief leave` exits the mode.
@@ -222,13 +222,14 @@ by its current project assignments.
 
 Available in Lead mode with an interactive UI. On an assigned managed Lead,
 prompts for confirmation before removing that exact session's project
-assignment and any pending project messages. A successful takeover ends
-Manager control and automatic project-result forwarding while preserving the
-Pi session, conversation, branch, worktree, running process, and Lead-owned
-Agents. It does not imply project completion, and it does not restart Pi or
-change the current launch configuration. On an unassigned Lead it reports that
-the Lead is not managed. In Manager or Chief mode it reports `Takeover is
-available only in Lead mode.` Without an interactive confirmation UI it
+assignment and any pending project messages. A successful takeover ends Manager
+control and automatic project-result
+forwarding while preserving the Pi session, conversation, branch, worktree,
+running process, and Lead-owned Agents. Takeover does not imply project
+completion, and it does not restart Pi or change the current launch
+configuration. On an unassigned Lead it
+reports that the Lead is not managed. In Manager or Chief mode it reports
+`Takeover is available only in Lead mode.` Without an interactive confirmation UI it
 reports `Takeover requires an interactive UI.` Cancellation leaves state
 unchanged.
 

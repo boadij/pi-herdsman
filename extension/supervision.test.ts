@@ -214,7 +214,15 @@ test("chief message admission accepts exactly 8 KiB and rejects the next byte", 
 
 test("coordination records require branch only for project message kinds", () => {
   const runtime = supervisionRuntime(socket());
-  for (const kind of COORDINATION_MESSAGE_KINDS) {
+  const kinds = [
+    "chief_message",
+    "lead_message",
+    "manager_message",
+    "project_assignment",
+    "peer_message",
+  ] as const;
+  assert.deepEqual(COORDINATION_MESSAGE_KINDS, kinds);
+  for (const kind of kinds) {
     const projectMessage = kind === "project_assignment";
     const record = message({
       kind,
@@ -252,6 +260,11 @@ test("coordination records require branch only for project message kinds", () =>
       /Invalid Chief message record/,
       kind,
     );
+  assert.throws(
+    () =>
+      writeCoordinationMessage({ ...message(), askId: id() } as never, runtime),
+    /Invalid Chief message record/,
+  );
 });
 
 test("peer lead presence requires a live generation and excludes corruption", () => {
@@ -372,7 +385,7 @@ test("peer lead enumeration scans every canonical record before liveness filteri
   }
 });
 
-test("peer message records use strict validation and the shared UTF-8 bound", () => {
+test("message peer records use strict validation and the shared UTF-8 bound", () => {
   const runtime = supervisionRuntime(socket());
   const record = message({
     kind: "peer_message",
@@ -394,7 +407,11 @@ test("peer message records use strict validation and the shared UTF-8 bound", ()
     /Invalid Chief message record/,
   );
   assert.throws(
-    () => writeCoordinationMessage({ ...record, askId: id() }, runtime),
+    () =>
+      writeCoordinationMessage(
+        { ...record, unsupportedField: true } as never,
+        runtime,
+      ),
     /Invalid Chief message record/,
   );
   assert.throws(
@@ -439,7 +456,7 @@ test("peer message records use strict validation and the shared UTF-8 bound", ()
   );
 });
 
-test("generic coordination transport orders and renders peer messages", async () => {
+test("generic coordination transport orders and renders message peers", async () => {
   const runtime = supervisionRuntime(socket());
   const older = message({
     id: id(),
@@ -795,8 +812,8 @@ test("supervision authority is coordinator state, not metadata", () => {
   assert.equal(serialized.session, piSessionId);
   assert.equal("lead" in serialized, false);
   assert.deepEqual(serialized.available_tools, [
-    "staff_inspect",
-    "staff_message",
+    "inspect_staff",
+    "message_staff",
   ]);
   assert.equal(snapshot.leads[0].displayName, "api/lead");
   assert.equal("display_name" in snapshot.leads[0], false);
@@ -888,9 +905,9 @@ test("live lead actions advertise transcript for persisted session candidates", 
     assert.equal(serializedLead.session, "lead");
     assert.equal("lead" in serializedLead, false);
     assert.deepEqual(serializedLead.available_tools, [
-      "staff_inspect",
-      ...(piSessionFile ? ["staff_transcript"] : []),
-      "staff_message",
+      "inspect_staff",
+      ...(piSessionFile ? ["read_staff_transcript"] : []),
+      "message_staff",
     ]);
     const serialized = JSON.stringify(serializeSupervision(snapshot));
     assert.equal(serialized.includes("piSessionFile"), false);
