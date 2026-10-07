@@ -262,17 +262,25 @@ Also verify a controller with two already-known independent delegated objectives
 may delegate A and B before ending its turn. It must not create a third
 assignment merely to increase concurrency.
 
-## Lead `/agents` commands
+## Lead command menus
 
 In a lead session with UI:
 
-### `/agents definitions`
+### `/herdsman` and `/agents`
 
-Verify the root `/agents` menu has exactly five destinations: `Running`,
-`Session stats`, `Definitions`, `Settings`, and `Stop all…`. Counts and setting
-values are secondary row metadata, and selected-row contextual help updates in
-the TUI. Verify Settings contains Manager auto-start, Layout, Context
-retirement, and Message limits.
+Verify `/herdsman` opens the six destinations `Agents`, `Project manager`,
+`Session stats`, `Definitions`, `Settings`, and `Advanced…`. Verify counts and
+active role state are secondary metadata and selected-row contextual help
+updates in the TUI. `/agents` must open only `Running`, `Layout`, and
+`Stop all…`, with the running count and effective placement as secondary
+metadata. Settings contains only Manager auto-start, Context retirement, and
+Message limits.
+
+Navigate to Project manager and Chief mode from the menus. Confirm their
+Start, Overview, and Leave actions use the existing `/manager` and `/chief`
+role behavior.
+
+### `/agents definitions`
 
 Verify the native Definitions list shows:
 

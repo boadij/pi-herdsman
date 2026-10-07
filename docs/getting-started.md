@@ -80,24 +80,17 @@ to the exact owner when they need attention.
 The exact assignment behavior is documented in
 [Lifecycle](concepts/lifecycle.md).
 
-## 4. Open the Agent menu
+## 4. Open Pi Herdsman
 
 Run:
 
 ```text
-/agents
+/herdsman
 ```
 
-The native menu provides Running, Session stats, Definitions, Settings, and Stop all.
-
-Use `Running` to focus a verified live Agent. Use `Session stats` to inspect
-Pi-native token usage and cost for the current Pi session plus transitively
-owned managed-Agent sessions. In active Manager mode, it also includes the Lead
-sessions in current durable project assignments and each Lead's transitively
-owned Agent sessions. Use `Definitions` to inspect or override the effective
-bundled, project, and global roster. Use `Settings` for Manager auto-start,
-Layout, context retirement, and message limits; `Layout` controls placement for
-future Lead-direct Agents.
+The menu starts with `Agents`, `Project manager`, `Session stats`, `Definitions`,
+`Settings`, and `Advanced…`. Direct commands remain available when you already
+know which operation you want.
 
 See [Commands](reference/commands.md) for the exact human-facing behavior.
 
@@ -135,6 +128,8 @@ an eligible Lead in the primary workspace can enter Manager mode:
 ```text
 /manager
 ```
+
+Manager mode is also discoverable through `/herdsman → Project manager`.
 
 Manager coordinates durable branch-based work across Leads. It does not own
 their Agents or implement through an Agent tree of its own. No prior chat turn

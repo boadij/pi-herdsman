@@ -5323,10 +5323,10 @@ export function createAgentController(
       if (!agentDefinitionEnabled(definition))
         fail(
           "invalid_request",
-          `Agent definition ${agentDefinition} is disabled; enable it through /agents → Definitions or choose another enabled definition`,
+          `Agent definition ${agentDefinition} is disabled; enable it through /herdsman → Definitions or choose another enabled definition`,
           p.action,
           {
-            nextAction: `Enable ${agentDefinition} through /agents → Definitions or choose another enabled definition.`,
+            nextAction: `Enable ${agentDefinition} through /herdsman → Definitions or choose another enabled definition.`,
           },
         );
       try {

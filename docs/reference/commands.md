@@ -2,21 +2,20 @@
 
 [Documentation index](../README.md)
 
-`/agents` is the human-facing agent-management command namespace.
-
-`/herdsman` is a discovery alias for `/agents`. It accepts the same arguments
-and runs the same command behavior; help and usage text continue to use
-`/agents` as the canonical name.
+`/herdsman` is the canonical discovery and control entry. It accepts no
+arguments and opens the product menu. `/agents` is the focused Agent command
+and expert shortcut namespace.
 
 It is separate from the structured model-facing Agent tools.
 
-Agent-management commands require a lead Pi session with UI. Outside Herdr,
-plain `/agents` and its `/herdsman` alias remain available as a setup
-diagnostic that includes the running Pi Herdsman package version.
+Management menus require a lead Pi session with UI. Outside Herdr, both
+commands remain available as setup diagnostics that include the running Pi
+Herdsman package version.
 
 ## Usage
 
 ```text
+/herdsman
 /agents
 /agents stats
 /agents definitions
@@ -29,15 +28,17 @@ diagnostic that includes the running Pi Herdsman package version.
 /takeover
 ```
 
-The plain command opens a native Pi selection menu titled with the running
-Pi Herdsman package version for both `/agents` and `/herdsman`. Its five
-destinations are `Running`, `Session stats`, `Definitions`, `Settings`, and
-`Stop all…`. Selection values such as counts and current settings are secondary
-metadata; the TUI updates contextual help for the selected row.
+`/herdsman` opens the native Pi menu titled with the running Pi Herdsman package
+version. Its six destinations are `Agents`, `Project manager`, `Session stats`,
+`Definitions`, `Settings`, and `Advanced…`. Counts and active state are
+secondary row metadata; the TUI updates contextual help for the selected row.
 
-`Settings` contains `Manager auto-start`, `Layout`, `Context retirement`, and
-`Message limits`. The Message limits view edits the user-wide inline attachment
-and mailbox payload limits. It is available only to a lead Pi session with UI.
+`/agents` opens the focused `Running`, `Layout`, and `Stop all…` menu. Its
+running count and current layout are secondary metadata.
+
+`Settings` contains `Manager auto-start`, `Context retirement`, and `Message
+limits`. The Message limits view edits the user-wide inline attachment and
+mailbox payload limits. It is available only to a lead Pi session with UI.
 Current values and presets show a rough token equivalent using four UTF-8
 bytes per token. The enforced limits are bytes, not tokens.
 
@@ -176,6 +177,12 @@ independent failures.
 
 Use ordinary `close_agent` for normal targeted model-driven control.
 
+`Project manager` offers `Start Manager mode` when inactive, or `Overview` and
+`Leave Manager mode` while active. `Advanced…` opens `Chief mode`, which offers
+the corresponding Chief start, overview, and leave actions. These menu actions
+use the same transitions as `/manager` and `/chief`; they do not add role
+eligibility or authority rules.
+
 ## Project Manager and Chief
 
 By default, a session starts as a Lead. A Lead in an ordinary Git primary Herdr
@@ -196,7 +203,7 @@ relinquishes the lease and restores the exact Lead tool baseline, including
 opens the overview without changing the role or lease. See
 [Coordination](../concepts/coordination.md) for the role and project boundaries.
 
-The `/agents` Manager auto-start setting optionally makes a new session attempt
+The `Manager auto-start` setting optionally makes a new session attempt
 that same Manager startup when it has no persisted role intent and starts in the
 project's primary workspace. Explicit persisted Lead, Manager, or Chief intent
 takes precedence. Ineligible or contended optional startup remains an ordinary

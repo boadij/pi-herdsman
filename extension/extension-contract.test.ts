@@ -815,7 +815,8 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
   const herdsmanCommand = unmanaged.commandOptions.get("herdsman");
   assert.ok(agentsCommand);
   assert.ok(herdsmanCommand);
-  assert.equal(herdsmanCommand.description, "Alias for /agents");
+  assert.equal(agentsCommand.description, "Manage Herdsman Agents");
+  assert.equal(herdsmanCommand.description, "Set up Pi Herdsman");
   assert.equal(herdsmanCommand.handler, agentsCommand.handler);
   await herdsmanCommand.handler("", context);
   assert.equal(notices.length, 1);
