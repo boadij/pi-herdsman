@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.22.0](https://github.com/boadij/pi-herdsman/compare/v0.21.3...v0.22.0) (2026-10-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* adopt verb-first coordination semantics ([#297](https://github.com/boadij/pi-herdsman/issues/297))
+
+### Features
+
+* adopt verb-first coordination semantics ([#297](https://github.com/boadij/pi-herdsman/issues/297)) ([05eec19](https://github.com/boadij/pi-herdsman/commit/05eec19182f4d65c2f5d6c291efc3eb444110610))
+* **lead:** add configurable execution profiles ([#304](https://github.com/boadij/pi-herdsman/issues/304)) ([96041a0](https://github.com/boadij/pi-herdsman/commit/96041a0e58ca84ccf00d4d4697a523dba4a759c5))
+* **manager:** define managed Lead authority and takeover ([#284](https://github.com/boadij/pi-herdsman/issues/284)) ([c063fec](https://github.com/boadij/pi-herdsman/commit/c063fec3412b43131e262ceab37c8503f7947184))
+* **ui:** show effective Lead execution mode in status widget ([#318](https://github.com/boadij/pi-herdsman/issues/318)) ([72a1fd2](https://github.com/boadij/pi-herdsman/commit/72a1fd23e3804caf76f1dceaad8f769c6a77367f))
+
+
+### Fixes
+
+* **config:** preserve agent-definition key order ([#308](https://github.com/boadij/pi-herdsman/issues/308)) ([cfefb54](https://github.com/boadij/pi-herdsman/commit/cfefb54d8da8e7cb6d760751ae84b46691e81e9e))
+* **context:** deliver retirement guidance before continuation ([#310](https://github.com/boadij/pi-herdsman/issues/310)) ([c0df272](https://github.com/boadij/pi-herdsman/commit/c0df27207d54ecb0baa5c991fdc7e65c1750c4d5))
+* **manager:** clarify project report evidence boundaries ([#315](https://github.com/boadij/pi-herdsman/issues/315)) ([5f48aa9](https://github.com/boadij/pi-herdsman/commit/5f48aa985aff93bdae67f24768fd519e92275387))
+* **runtime:** adopt Pi 1.1.0 with cancellation-safe settlement ([#305](https://github.com/boadij/pi-herdsman/issues/305)) ([b452e9b](https://github.com/boadij/pi-herdsman/commit/b452e9bfa710ba464dffd8badea67214526b3d47))
+* **ui:** align Agent Definition click expansion ([#296](https://github.com/boadij/pi-herdsman/issues/296)) ([2136666](https://github.com/boadij/pi-herdsman/commit/2136666ae95b46bc20765ba737c3619ad8d2b715)), closes [#295](https://github.com/boadij/pi-herdsman/issues/295)
+
+
+### Refactoring
+
+* **ui:** make /herdsman the progressive entry point ([#300](https://github.com/boadij/pi-herdsman/issues/300)) ([3603d9f](https://github.com/boadij/pi-herdsman/commit/3603d9fca8b5bbe1cc9682d8c1ca8087dd96c9d6))
+
+
+### Documentation
+
+* define progressive product power ([#299](https://github.com/boadij/pi-herdsman/issues/299)) ([6454f43](https://github.com/boadij/pi-herdsman/commit/6454f43bf0b5543fa2fb1706bf8ca3e6d3d96dde))
+
+
+### Other Changes
+
+* **agent-definitions:** standardize frontmatter key order and array syntax ([23fec74](https://github.com/boadij/pi-herdsman/commit/23fec74bbd5bc45b8484dae6034bdf108ca6b2f6))
+* **test:** generalize bundled definition path assertion ([#314](https://github.com/boadij/pi-herdsman/issues/314)) ([a61afef](https://github.com/boadij/pi-herdsman/commit/a61afef35cdd78e5ac8153f26c69ff31833e3f14))
+
 ## [0.21.3](https://github.com/boadij/pi-herdsman/compare/v0.21.2...v0.21.3) (2026-10-06)
 
 
