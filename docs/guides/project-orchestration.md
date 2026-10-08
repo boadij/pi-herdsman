@@ -100,14 +100,17 @@ for a response through `message_staff`. A later automatic result may repeat
 some information; separate messages and results are not deduplicated.
 
 Automatic project reports transfer summary text only, not files. A result
-reference mentioned in a report is informational and does not make that result
-available to the Manager. When asking the reporting Lead to revisit its own
-result, the Manager can mention the reference in `message_staff.message`
-without attaching it. Use `message_staff.files` only for evidence available on
-the Manager's current Pi branch through either its direct Agent completion or
-an explicitly imported result binding. If the Manager needs an artifact for
-review or onward delegation, the Lead
-explicitly transfers it through `message_supervisor.files`.
+reference mentioned in a report is informational; mentioning it does not itself
+make that result available, though the Manager may already have its binding from
+an earlier handoff. When asking the reporting Lead to revisit its own result,
+the Manager can mention the reference in `message_staff.message` without
+attaching it. Use `message_staff.files` to transfer relevant readable local
+files or result references resolvable on the current Pi branch. A semantic
+result reference is resolvable when the branch contains its direct Agent
+completion or an explicitly imported binding; already-supplied canonical result
+references may also be passed through. If the Manager needs an artifact for
+review or onward delegation, the Lead explicitly transfers it through
+`message_supervisor.files`.
 
 Only a Lead turn confirmed as not aborted contributes a completed response.
 Cancellation is reported as a factual, nonterminal project message without

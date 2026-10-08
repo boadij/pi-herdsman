@@ -238,14 +238,17 @@ definition overrides still apply.
 ## Result handoff
 
 Automatic project reports are summary text with no file attachments. A result
-reference mentioned in report text is informational and is not evidence
-available in the receiving session. When asking the reporting Lead to revisit
-its own result, a Manager can mention the reference in `message_staff.message`
-without attaching it. Use `message_staff.files` only for evidence available on
-the current Pi branch through either its direct Agent completion or an
-explicitly imported result binding. A Lead that
-needs to provide an artifact for review or onward delegation explicitly sends
-the evidence through `message_supervisor.files`.
+reference mentioned in report text is informational; mentioning it does not
+itself make the result available, though the Manager may already have its
+binding from an earlier handoff. When asking the reporting Lead to revisit its
+own result, a Manager can mention the reference in `message_staff.message`
+without attaching it. Use `message_staff.files` to transfer relevant readable
+local files or result references resolvable on the current Pi branch. A semantic
+result reference is resolvable when the branch contains its direct Agent
+completion or an explicitly imported binding; already-supplied canonical result
+references may also be passed through. A Lead that needs to provide an artifact
+for review or onward delegation explicitly sends the evidence through
+`message_supervisor.files`.
 
 A direct-agent completion that has a reusable persisted result exposes an exact
 ref such as `result:global-peer-fix#1`. Pass relevant direct-agent results

@@ -1447,11 +1447,11 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /mention the\s+reference in message_staff\.message without attaching it/,
+      /mention the reference in\s+message_staff\.message without attaching it/,
     );
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /message_staff\.files only for evidence available on the current Pi branch through\s+either its direct Agent completion or an explicitly imported result binding/,
+      /message_staff\.files for relevant\s+readable local files, canonical result refs already supplied as evidence, or\s+semantic result refs resolvable on the current Pi branch through a direct Agent\s+completion or explicitly imported result binding/,
     );
     assert.doesNotMatch(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
