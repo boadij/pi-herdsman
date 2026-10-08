@@ -2038,7 +2038,7 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
   assert.equal(set.changed, true);
   assert.equal(
     readFileSync(path, "utf8"),
-    "---\r\nname: reviewer\r\nthinking: low\r\ndescription: keep\r\nbodyMode: append\r\nmodel: provider/model\r\n---\r\n\r\nKeep this body.\r\n",
+    original.replace("model: old/model", "model: provider/model"),
   );
   const reset = withPiAgentDir(root, () =>
     updateAgentOverride(
@@ -2058,6 +2058,46 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
     readFileSync(path, "utf8"),
     original.replace("model: old/model\r\n", ""),
   );
+  const formatted =
+    "---\nname: reviewer\n\n# Execution settings\nmodel: provider/old-model\nthinking: low\nenabled: false\n\n# Capabilities\ntools:\n  - read\n---\n\nKeep this body.\n";
+  for (const [field, oldValue, newValue] of [
+    ["thinking", "low", "high"],
+    ["enabled", "false", "true"],
+  ] as const) {
+    const fieldRoot = mkdtempSync(join(tmpdir(), `pi-herdsman-${field}-`));
+    const fieldPath = join(fieldRoot, "reviewer.md");
+    writeFileSync(fieldPath, formatted);
+    withPiAgentDir(fieldRoot, () =>
+      updateAgentOverride(
+        { ...overrideDefinition, overrideSource: fieldPath },
+        field,
+        field === "enabled" ? newValue === "true" : newValue,
+      ),
+    );
+    assert.equal(
+      readFileSync(fieldPath, "utf8"),
+      formatted.replace(`${field}: ${oldValue}`, `${field}: ${newValue}`),
+    );
+  }
+  for (const [syntax, unsafe] of [
+    ["quoted", '"model": old/model'],
+    ["multiline", "model: |\n  old/model"],
+  ] as const) {
+    const unsafeRoot = mkdtempSync(join(tmpdir(), `pi-herdsman-${syntax}-`));
+    const unsafePath = join(unsafeRoot, "reviewer.md");
+    const unsafeOriginal = `---\nname: reviewer\n${unsafe}\nthinking: low\n---\n`;
+    writeFileSync(unsafePath, unsafeOriginal);
+    assert.throws(() =>
+      withPiAgentDir(unsafeRoot, () =>
+        updateAgentOverride(
+          { ...overrideDefinition, overrideSource: unsafePath },
+          "model",
+          "provider/model",
+        ),
+      ),
+    );
+    assert.equal(readFileSync(unsafePath, "utf8"), unsafeOriginal);
+  }
   const createRoot = mkdtempSync(
     join(tmpdir(), "pi-herdsman-override-create-"),
   );

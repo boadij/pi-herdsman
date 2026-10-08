@@ -679,30 +679,36 @@ export function updateAgentOverride(
     throw new Error(`invalid agent override frontmatter: ${path}`);
   const eol = content.match(/\r\n|\n|\r/u)?.[0] ?? "\n";
   const fieldLine = new RegExp(`^${field}:\\s*`);
-  const hadField = lines
-    .slice(1, closing)
-    .some((match) => fieldLine.test(match[0].replace(/\r?\n|\r$/u, "")));
-  const retained = lines.filter(
-    (match, index) =>
-      index <= 0 ||
-      index >= closing ||
-      !fieldLine.test(match[0].replace(/\r?\n|\r$/u, "")),
+  const existingIndex = lines.findIndex(
+    (line, index) =>
+      index > 0 &&
+      index < closing &&
+      fieldLine.test(line[0].replace(/\r?\n|\r$/u, "")),
   );
-  let updated = retained.join("");
-  if (value !== undefined) {
-    const closingLine = retained.findIndex(
-      (match, index) =>
-        index > 0 && match[0].replace(/\r?\n|\r$/u, "").trim() === "---",
-    );
-    const before = retained
-      .slice(0, closingLine)
-      .map((match) => match[0])
-      .join("");
-    const after = retained
-      .slice(closingLine)
-      .map((match) => match[0])
-      .join("");
-    updated = `${before}${field}: ${value}${eol}${after}`;
+  const hadField = existingIndex !== -1;
+  if (
+    !hadField &&
+    Object.hasOwn(parsePiFrontmatter(content).frontmatter, field)
+  ) {
+    throw new Error(`cannot safely edit ${field} in ${path}`);
+  }
+  const updated = lines
+    .map((line, index) => {
+      if (index === existingIndex) {
+        if (value === undefined) return "";
+        const ending = line[0].match(/\r\n|\n|\r$/u)?.[0] ?? "";
+        return `${field}: ${value}${ending}`;
+      }
+      if (index === closing && !hadField && value !== undefined)
+        return `${field}: ${value}${eol}${line[0]}`;
+      return line[0];
+    })
+    .join("");
+  const parsed = parsePiFrontmatter(updated).frontmatter;
+  if (
+    value === undefined ? Object.hasOwn(parsed, field) : parsed[field] !== value
+  ) {
+    throw new Error(`invalid ${field} override in ${path}`);
   }
   if (value === undefined && !hadField)
     return { path, changed: false, content: readFileSync(path, "utf8") };
