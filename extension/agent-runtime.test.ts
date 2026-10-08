@@ -3826,6 +3826,66 @@ test("overflow retry bridges queued retirement guidance once and only when absen
   );
 });
 
+test("overflow reminder is deduplicated only against the effective instruction", () => {
+  const sessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const fullGuidance = {
+    type: "custom_message",
+    customType: "pi-herdsman-agent-context-retired",
+    content:
+      "Context pressure has retired this session. Do not start new work or new agents. Finish the current coherent operation.",
+    display: false,
+    details: { sessionId },
+  };
+
+  for (const effectiveMessages of [
+    [
+      {
+        role: "custom",
+        customType: fullGuidance.customType,
+        content: fullGuidance.content,
+        details: fullGuidance.details,
+      },
+    ],
+    [{ role: "user", content: "retry" }],
+  ]) {
+    const entries: any[] = [
+      {
+        type: "custom",
+        customType: fullGuidance.customType,
+        data: { sessionId },
+      },
+      fullGuidance,
+    ];
+    const branch: any[] = [fullGuidance];
+    const context = fakeAgentContext(entries, branch);
+    const queued: any[] = [];
+    const agent = fakePi({
+      entries,
+      sendMessage: (message: any) => queued.push(message),
+    });
+    registerManagedAgentContextHandlers(agent.pi as never, {
+      contextRetirementEnabled: () => true,
+      hasActiveAssignment: () => true,
+    });
+
+    agent.events.get("session_before_compact")![0](
+      { reason: "overflow", willRetry: true },
+      context,
+    );
+    assert.equal(queued.length, 1);
+    const bridged = agent.events.get("context")![0](
+      { messages: effectiveMessages },
+      context,
+    ) as any;
+    assert.ok(
+      bridged,
+      "the overflow reminder remains distinct from full guidance",
+    );
+    assert.equal(bridged.messages.length, effectiveMessages.length + 1);
+    assert.match(bridged.messages.at(-1).content, /This session is retired/);
+  }
+});
+
 test("agent settlement clears an overflow retry bridge when no retry context runs", () => {
   const entries: any[] = [];
   const context = fakeAgentContext(entries);
@@ -3904,7 +3964,11 @@ test("threshold retirement bridges guidance into the next request once", () => {
 
   const alreadyVisibleEntries: any[] = [];
   const alreadyVisibleContext = fakeAgentContext(alreadyVisibleEntries);
-  const alreadyVisibleAgent = fakePi({ entries: alreadyVisibleEntries });
+  const alreadyVisibleQueued: any[] = [];
+  const alreadyVisibleAgent = fakePi({
+    entries: alreadyVisibleEntries,
+    sendMessage: (message: any) => alreadyVisibleQueued.push(message),
+  });
   registerManagedAgentContextHandlers(alreadyVisibleAgent.pi as never, {
     contextRetirementEnabled: () => true,
     hasActiveAssignment: () => true,
@@ -3920,6 +3984,7 @@ test("threshold retirement bridges guidance into the next request once", () => {
           {
             role: "custom",
             customType: "pi-herdsman-agent-context-retired",
+            content: alreadyVisibleQueued[0].content,
             details: {
               sessionId: alreadyVisibleContext.sessionManager.getSessionId(),
             },
@@ -3933,7 +3998,7 @@ test("threshold retirement bridges guidance into the next request once", () => {
   );
 });
 
-test("Pi 1.1.0 threshold lifecycle bridges retirement into the next provider request", async () => {
+test("Pi 1.1.0 delivers retirement before an adversarial Agent continues tool use", async () => {
   const faux = fauxProvider({
     provider: "herdsman-retirement-test",
     models: [{ id: "small-context", contextWindow: 4096, maxTokens: 128 }],
@@ -3974,6 +4039,7 @@ test("Pi 1.1.0 threshold lifecycle bridges retirement into the next provider req
   });
   await resourceLoader.reload();
   const providerRequests: any[][] = [];
+  let unnecessaryReads = 0;
   const responseWithUsage = (
     message: ReturnType<typeof fauxAssistantMessage>,
   ) => ({
@@ -4000,7 +4066,31 @@ test("Pi 1.1.0 threshold lifecycle bridges retirement into the next provider req
       lifecycle.push("continuation-provider-request");
       providerRequests.push(context.messages as any[]);
       return responseWithUsage(
-        fauxAssistantMessage("Retired; returning the handoff."),
+        fauxAssistantMessage([fauxToolCall("read_file", {})], {
+          stopReason: "toolUse",
+        }),
+      );
+    },
+    (context) => {
+      providerRequests.push(context.messages as any[]);
+      return responseWithUsage(
+        fauxAssistantMessage([fauxToolCall("read_file", {})], {
+          stopReason: "toolUse",
+        }),
+      );
+    },
+    (context) => {
+      providerRequests.push(context.messages as any[]);
+      return responseWithUsage(
+        fauxAssistantMessage([fauxToolCall("read_file", {})], {
+          stopReason: "toolUse",
+        }),
+      );
+    },
+    (context) => {
+      providerRequests.push(context.messages as any[]);
+      return responseWithUsage(
+        fauxAssistantMessage("Incomplete; further investigation required."),
       );
     },
   ]);
@@ -4012,7 +4102,7 @@ test("Pi 1.1.0 threshold lifecycle bridges retirement into the next provider req
     settingsManager,
     resourceLoader,
     sessionManager: SessionManager.inMemory(WORKSPACE),
-    tools: ["inflate_context"],
+    tools: ["inflate_context", "read_file"],
     customTools: [
       {
         name: "inflate_context",
@@ -4023,6 +4113,16 @@ test("Pi 1.1.0 threshold lifecycle bridges retirement into the next provider req
         execute: async () => ({
           content: [{ type: "text", text: "context pressure ".repeat(750) }],
         }),
+      },
+      {
+        name: "read_file",
+        label: "read file",
+        description: "Read a file as ordinary post-retirement work.",
+        parameters: Type.Object({}),
+        execute: async () => {
+          unnecessaryReads++;
+          return { content: [{ type: "text", text: "file contents" }] };
+        },
       },
     ],
   });
@@ -4040,22 +4140,43 @@ test("Pi 1.1.0 threshold lifecycle bridges retirement into the next provider req
     );
     assert.equal(
       faux.state.callCount,
-      2,
-      "a continuation request follows the tool batch",
+      5,
+      "the adversarial model continues through three unnecessary tool requests before handing off",
     );
-    assert.equal(providerRequests.length, 1);
+    assert.equal(providerRequests.length, 4);
+    assert.equal(
+      unnecessaryReads,
+      3,
+      "ordinary execution tools remain available after retirement",
+    );
     assert.ok(
       session.sessionManager
         .buildSessionProjection()
         .messages.some((message: any) => message.role === "toolResult"),
       "the threshold follows completion of the tool batch",
     );
-    const retirementGuidance = providerRequests[0].filter((message) =>
-      JSON.stringify(message).includes(
-        "Context pressure has retired this session.",
-      ),
+    for (const request of providerRequests) {
+      assert.ok(
+        request.some((message) =>
+          JSON.stringify(message).includes(
+            "Context pressure has retired this session.",
+          ),
+        ),
+        "every provider request after retirement contains the durable or bridged instruction",
+      );
+    }
+    assert.ok(
+      session.sessionManager
+        .buildSessionProjection()
+        .messages.some(
+          (message: any) =>
+            message.role === "assistant" &&
+            JSON.stringify(message).includes(
+              "Incomplete; further investigation required.",
+            ),
+        ),
+      "the resulting final response truthfully reports incomplete work",
     );
-    assert.equal(retirementGuidance.length, 1);
   } finally {
     await session.dispose();
   }

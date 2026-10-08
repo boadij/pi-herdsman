@@ -2422,17 +2422,10 @@ export function registerManagedAgentContextHandlers(
       (message: any) =>
         message.role === "custom" &&
         message.customType === AGENT_CONTEXT_RETIRED_ENTRY &&
-        message.details?.sessionId === pending.sessionId,
+        message.details?.sessionId === pending.sessionId &&
+        contentText(message.content ?? "", "") === pending.content,
     );
-    if (alreadyVisible) {
-      if (sessionRetirementGuidanceVisible(ctx, sessionId))
-        queuedGuidanceSessionId = undefined;
-      return;
-    }
-    if (sessionRetirementGuidanceVisible(ctx, sessionId)) {
-      queuedGuidanceSessionId = undefined;
-      return;
-    }
+    if (alreadyVisible) return;
     return {
       messages: [
         ...event.messages,
