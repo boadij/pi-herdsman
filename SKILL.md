@@ -26,10 +26,6 @@ Coordinate managed agents.
 
 Use these high-salience rules for the model-facing agent boundary:
 
-- Delegate bounded execution work when an Agent can reasonably own it and
-  delegation is useful. Keep work local when it is trivial, inseparable from
-  work you must own, otherwise unsuitable for an Agent, or delegation would add
-  more coordination than value.
 - Each unresolved unit of work has one executor. Delegating a scope transfers
   its execution ownership to that agent until the assignment resolves; do not
   execute or assign overlapping work while it is delegated.
@@ -172,10 +168,15 @@ delegated work.
 
 Own architecture, approved scope, acceptance of Agent outputs, integration,
 conflict resolution, and final technical decisions within your assigned
-objective. Decompose only as far as useful. Assign bounded execution work to
-the narrowest capable owner when delegation is useful and let delegation-enabled
-agents own their permitted supporting agents. Reuse adequate existing evidence
-instead of duplicating work.
+objective. Decompose only as far as useful. Reuse adequate existing evidence
+instead of duplicating work. The active Lead execution profile determines the
+balance between direct and delegated work. Ordinary Leads use `flexible-lead`
+or `orchestrator-lead` according to their persisted `Flexible` or
+`Orchestrate` execution mode. Manager-assigned Leads use `managed-lead`; the
+exact current `ProjectAssignment`, not the profile, establishes Manager
+authority. Confirmed `/takeover` releases that authority and continues the
+session in ordinary Orchestrate mode. Lead execution configuration does not
+change Agent ownership semantics.
 
 <!-- pi-herdsman-runtime-lead:end -->
 

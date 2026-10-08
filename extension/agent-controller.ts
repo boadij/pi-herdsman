@@ -231,6 +231,7 @@ export function createAgentStatusRuntime() {
   let statusRefresh = false;
   let statusInFlight = false;
   let requestActive = false;
+  let statusPrimed = false;
   let lastValidStatus: StatusSnapshot = {
     agents: [],
     stale: false,
@@ -355,9 +356,21 @@ export function createAgentStatusRuntime() {
       if (requestActive && statusContext)
         void refresh(statusContext, statusGeneration);
     },
+    prime: (ctx: ExtensionContext) => {
+      if (ctx.mode !== "tui" || !ctx.hasUI) return;
+      const generation = statusGeneration;
+      statusContext = ctx;
+      requestActive = true;
+      statusPrimed = true;
+      void refresh(ctx, generation);
+    },
     start: (ctx: ExtensionContext) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
-      const generation = ++statusGeneration;
+      const primed = statusPrimed && ctx === statusContext;
+      const generation =
+        ctx === statusContext && requestActive
+          ? statusGeneration
+          : ++statusGeneration;
       statusContext = ctx;
       ctx.ui.setWidget("pi-herdsman", (tui: any, theme: any) => {
         const widget = createStatusWidget(() => tui.requestRender(), theme);
@@ -370,7 +383,8 @@ export function createAgentStatusRuntime() {
       });
       requestActive = true;
       statusTimer = setInterval(() => void refresh(ctx, generation), 2000);
-      void refresh(ctx, generation);
+      statusPrimed = false;
+      if (!primed) void refresh(ctx, generation);
     },
     clear: () => {
       clearTimer();
@@ -378,6 +392,7 @@ export function createAgentStatusRuntime() {
       statusWidget?.dispose();
       statusWidget = undefined;
       requestActive = false;
+      statusPrimed = false;
     },
     prepareSession: (ctx: ExtensionContext, beforeActivate?: () => void) => {
       clearTimer();
@@ -387,6 +402,7 @@ export function createAgentStatusRuntime() {
       statusWidgetGeneration = 0;
       statusContext = undefined;
       requestActive = false;
+      statusPrimed = false;
       lastValidStatus = {
         agents: [],
         stale: false,
@@ -408,6 +424,7 @@ export function createAgentStatusRuntime() {
       statusWidgetGeneration = 0;
       statusContext = undefined;
       requestActive = false;
+      statusPrimed = false;
     },
   };
 }
@@ -638,9 +655,7 @@ export const AGENT_HANDOFF_GUIDANCE =
 export const LEAD_SCOPE_DESCRIPTION = `Own architecture, approved scope, acceptance of Agent outputs, integration, conflict resolution,
 and final technical decisions within your assigned objective. Integrate resolved Agent results and
 carry relevant evidence into onward handoffs. Decompose only as far as useful.
-Assign bounded execution work to the narrowest capable owner when delegation is useful and let
-delegation-enabled agents own their permitted supporting agents. Reuse adequate existing evidence
-instead of duplicating work.`;
+Reuse adequate existing evidence instead of duplicating work.`;
 export const DELEGATING_AGENT_SCOPE_DESCRIPTION = `Own the assigned objective and your direct permitted agents. While direct assignments are unresolved, your execution scope is limited to the non-delegated remainder. Agent-started
 agents are leaves. Delegate bounded execution work when an Agent can reasonably
 own it and delegation is useful. Keep work local when it is trivial,
@@ -4517,11 +4532,14 @@ export function createAgentController(
     context: ExtensionContext,
     signal: AbortSignal,
   ): Promise<void> => {
+    if (signal.aborted) return;
     for (const label of [...runtimes.keys()]) invalidateRuntime(label);
     let snapshot: ManagedAgentSnapshotCollection;
     try {
       snapshot = await snapshots(context, signal);
+      if (signal.aborted) return;
     } catch (error) {
+      if (signal.aborted) return;
       options.appendError(context, "pi_herdsman_recovery_error", error);
       options.onChanged();
       return;
@@ -4531,6 +4549,7 @@ export function createAgentController(
     for (const { path, state } of snapshot.mailboxes.filter(
       ({ state }) => state.ownerSessionId === owner,
     )) {
+      if (signal.aborted) return;
       try {
         const match = snapshot.agents.find(
           (candidate) =>
@@ -4573,7 +4592,9 @@ export function createAgentController(
         if (match.presence.kind === "live") {
           validateIdentity(runtime, state, match.presence.agent);
           await validateIntegration(runtime, context, { signal });
+          if (signal.aborted) return;
         } else validateIdentity(runtime, state);
+        if (signal.aborted) return;
         runtimes.set(runtime.label, runtime);
         if (runtime.activeRequestId) {
           watchResult(runtime, context, signal);
@@ -4585,6 +4606,7 @@ export function createAgentController(
         const result = readResult(runtime.mailboxPath, requestId);
         if (result) {
           await deliverResult(runtime, context, result, signal);
+          if (signal.aborted) return;
           continue;
         }
         if (!hasDeliveredResult(entries, resultIdentity(runtime, requestId)))
@@ -4598,13 +4620,18 @@ export function createAgentController(
             context,
             signal,
           ))
-        )
+        ) {
+          if (signal.aborted) return;
           scheduleResultCleanupRetry(runtime, { requestId }, context, signal);
+        }
+        if (signal.aborted) return;
       } catch (error) {
+        if (signal.aborted) return;
         invalidateRuntime(state.agentLabel);
         options.appendError(context, "pi_herdsman_recovery_error", error);
       }
     }
+    if (signal.aborted) return;
     options.onChanged();
   };
   const resultStatus = (
@@ -6082,7 +6109,7 @@ export function createAgentController(
       promptSnippet:
         "Delegate and coordinate work with owned asynchronous agents",
       promptGuidelines: [
-        AGENT_DELEGATION_GUIDANCE,
+        ...(controllerScope.kind === "lead" ? [] : [AGENT_DELEGATION_GUIDANCE]),
         AGENT_EXECUTION_OWNERSHIP_GUIDANCE,
         AGENT_HANDOFF_GUIDANCE,
         AGENT_UNRESOLVED_GUIDANCE,

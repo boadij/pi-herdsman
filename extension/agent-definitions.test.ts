@@ -19,7 +19,12 @@ import {
   AGENT_COORDINATION_TOOLS,
   discoverAgent,
   discoverAgentDefinitions,
-  discoverManagedLeadDefinition,
+  discoverLeadDefinition,
+  discoverLeadDefinitions,
+  FLEXIBLE_LEAD_DEFINITION_NAME,
+  ORCHESTRATOR_LEAD_DEFINITION_NAME,
+  isReservedLeadDefinition,
+  MANAGED_LEAD_DEFINITION_NAME,
   expandAgentBodyFiles,
   mergeFrontmatter,
   projectAgentDefinition,
@@ -486,14 +491,16 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   mkdirSync(projectAgents, { recursive: true });
   mkdirSync(globalAgents);
 
-  const bundled = withPiAgentDir(global, () => discoverManagedLeadDefinition());
+  const bundled = withPiAgentDir(global, () =>
+    discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME),
+  );
   assert.equal(bundled.name, "managed-lead");
   assert.deepEqual(bundled.frontmatter.tools, ["read", "ls", "find", "grep"]);
   assert.equal(bundled.frontmatter.systemPromptMode, "append");
   assert.equal(bundled.frontmatter.inheritProjectContext, true);
   assert.equal(bundled.frontmatter.inheritGlobalContext, true);
   assert.equal(bundled.frontmatter.enabled, undefined);
-  assert.equal(bundled.body, "");
+  assert.match(bundled.body, /Delegate bounded project execution/);
   assert.equal(
     withPiAgentDir(global, () =>
       discoverAgentDefinitions().some(({ name }) => name === "managed-lead"),
@@ -516,11 +523,16 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     "---\nname: managed-lead\nthinking: high\nbodyMode: append\n---\nGlobal policy",
   );
   const effective = withPiAgentDir(global, () =>
-    discoverManagedLeadDefinition({ projectRoot: project }),
+    discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME, {
+      projectRoot: project,
+    }),
   );
   assert.deepEqual(effective.frontmatter.tools, ["read", "grep"]);
   assert.equal(effective.frontmatter.thinking, "high");
-  assert.equal(effective.body, "Project policy\n\nGlobal policy");
+  assert.equal(
+    effective.body,
+    `${bundled.body}\n\nProject policy\n\nGlobal policy`,
+  );
   assert.equal(effective.projectSource, projectPath);
   assert.equal(effective.overrideSource, globalPath);
 
@@ -529,7 +541,9 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   assert.throws(
     () =>
       withPiAgentDir(global, () =>
-        discoverManagedLeadDefinition({ projectRoot: project }),
+        discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME, {
+          projectRoot: project,
+        }),
       ),
     new RegExp(projectPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
   );
@@ -554,7 +568,10 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
       `---\nname: managed-lead\n${field}: ${value}\n---`,
     );
     assert.throws(
-      () => withPiAgentDir(global, () => discoverManagedLeadDefinition()),
+      () =>
+        withPiAgentDir(global, () =>
+          discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME),
+        ),
       new RegExp(`managed Lead field ${field}: is not supported`),
     );
   }
@@ -563,11 +580,66 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     "---\nname: managed-lead\nsystemPromptMode: replace\n---",
   );
   assert.throws(
-    () => withPiAgentDir(global, () => discoverManagedLeadDefinition()),
+    () =>
+      withPiAgentDir(global, () =>
+        discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME),
+      ),
     new RegExp(
       `${globalPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} managed Lead field systemPromptMode: must be append`,
     ),
   );
+});
+
+test("reserves independent ordinary Lead runtime profiles with narrow fields", () => {
+  const global = mkdtempSync(join(tmpdir(), "pi-herdsman-lead-profiles-"));
+  const agents = join(global, "agents");
+  mkdirSync(agents);
+  const names = withPiAgentDir(global, () =>
+    discoverLeadDefinitions().map(({ name }) => name),
+  );
+  assert.deepEqual(names, [
+    FLEXIBLE_LEAD_DEFINITION_NAME,
+    ORCHESTRATOR_LEAD_DEFINITION_NAME,
+    MANAGED_LEAD_DEFINITION_NAME,
+  ]);
+  assert.equal(isReservedLeadDefinition("orchestrator-lead"), true);
+  assert.equal(isReservedLeadDefinition("agent"), false);
+  assert.equal(
+    withPiAgentDir(global, () =>
+      discoverAgentDefinitions().some(({ name }) =>
+        names.includes(name as any),
+      ),
+    ),
+    false,
+  );
+  const [flexible, orchestrator] = withPiAgentDir(global, () =>
+    discoverLeadDefinitions(),
+  );
+  assert.equal(flexible!.frontmatter.tools, undefined);
+  assert.deepEqual(orchestrator!.frontmatter.tools, [
+    "read",
+    "ls",
+    "find",
+    "grep",
+  ]);
+  for (const [field, value] of [
+    ["model", '"provider/model"'],
+    ["thinking", '"low"'],
+    ["systemPromptMode", '"append"'],
+    ["noTools", "false"],
+    ["extensions", '["custom"]'],
+    ["skills", '["custom"]'],
+    ["inheritGlobalContext", "false"],
+  ]) {
+    writeFileSync(
+      join(agents, "orchestrator-lead.md"),
+      `---\nname: orchestrator-lead\n${field}: ${value}\n---\n`,
+    );
+    assert.throws(
+      () => withPiAgentDir(global, () => discoverLeadDefinitions()),
+      new RegExp(`orchestrator-lead field ${field}: is not supported`),
+    );
+  }
 });
 
 test("bundled definitions carry portable capabilities and role contracts", () => {

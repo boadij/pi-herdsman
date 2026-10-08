@@ -76,7 +76,25 @@ const BUILTIN_AGENT_DIR = fileURLToPath(
   new URL("./agent-definitions", import.meta.url),
 );
 
+export const FLEXIBLE_LEAD_DEFINITION_NAME = "flexible-lead";
+export const ORCHESTRATOR_LEAD_DEFINITION_NAME = "orchestrator-lead";
 export const MANAGED_LEAD_DEFINITION_NAME = "managed-lead";
+const RESERVED_LEAD_DEFINITION_NAMES = new Set([
+  FLEXIBLE_LEAD_DEFINITION_NAME,
+  ORCHESTRATOR_LEAD_DEFINITION_NAME,
+  MANAGED_LEAD_DEFINITION_NAME,
+]);
+
+export function isReservedLeadDefinition(name: string): boolean {
+  return RESERVED_LEAD_DEFINITION_NAMES.has(name);
+}
+const RUNTIME_LEAD_FIELDS = new Set([
+  "name",
+  "description",
+  "bodyMode",
+  "tools",
+  "excludeTools",
+]);
 
 export type FrontmatterValue =
   string | boolean | string[] | { [key: string]: unknown };
@@ -294,13 +312,41 @@ function normalizedToolNames(tools: readonly string[] | undefined): string[] {
     .filter(Boolean);
 }
 
-function matchesToolPattern(pattern: string, name: string): boolean {
+export function matchesToolPattern(pattern: string, name: string): boolean {
   if (!pattern.includes("*")) return pattern === name;
   const source = pattern
     .split("*")
     .map((part) => part.replace(/[.+?^${}()|[\]\\]/gu, "\\$&"))
     .join(".*");
   return new RegExp(`^${source}$`, "u").test(name);
+}
+
+export function configuredToolPolicy(
+  definition: AgentDefinition,
+  requiredTools: readonly string[],
+): { explicit: boolean; tools: string[]; excluded: string[] } {
+  const configured = normalizedToolNames(definition.frontmatter.tools);
+  const required = new Set(requiredTools);
+  const excluded = normalizedToolNames(definition.frontmatter.excludeTools)
+    .filter((pattern) => !required.has(pattern))
+    .filter((pattern, index, all) => all.indexOf(pattern) === index);
+  for (const pattern of excluded) {
+    if (!pattern.includes("*")) continue;
+    const matched = requiredTools.find((tool) =>
+      matchesToolPattern(pattern, tool),
+    );
+    if (matched)
+      throw new Error(
+        `agent ${definition.name} excludeTools pattern ${JSON.stringify(pattern)} ` +
+          `matches required tool ${JSON.stringify(matched)}; ` +
+          `required tools cannot be excluded by patterns`,
+      );
+  }
+  return {
+    explicit: definition.frontmatter.tools !== undefined,
+    tools: configured.filter((tool) => !required.has(tool)),
+    excluded,
+  };
 }
 
 function readOptionalAgentDefinitions(root: string): AgentDefinition[] {
@@ -350,7 +396,7 @@ function validateEffectiveAgentReferences(
   definitions: readonly AgentDefinition[],
 ): void {
   const agents = definitions.filter(
-    (definition) => definition.name !== MANAGED_LEAD_DEFINITION_NAME,
+    ({ name }) => !isReservedLeadDefinition(name),
   );
   const names = new Set(agents.map((definition) => definition.name));
   for (const definition of agents)
@@ -374,6 +420,19 @@ function validateManagedLeadLayer(definition: AgentDefinition): void {
       );
 }
 
+function validateRuntimeLeadLayer(definition: AgentDefinition): void {
+  if (
+    definition.name !== FLEXIBLE_LEAD_DEFINITION_NAME &&
+    definition.name !== ORCHESTRATOR_LEAD_DEFINITION_NAME
+  )
+    return;
+  for (const field of Object.keys(definition.frontmatter))
+    if (!RUNTIME_LEAD_FIELDS.has(field))
+      throw new Error(
+        `${definition.path} ${definition.name} field ${field}: is not supported`,
+      );
+}
+
 function discoverEffectiveDefinitions(
   options: DiscoverAgentDefinitionsOptions = {},
 ): AgentDefinition[] {
@@ -392,8 +451,10 @@ function discoverEffectiveDefinitions(
       definition.extensionSource = definition.path;
     validateDefinition(definition);
   }
-  for (const definition of [...bundled, ...project, ...user])
+  for (const definition of [...bundled, ...project, ...user]) {
     validateManagedLeadLayer(definition);
+    validateRuntimeLeadLayer(definition);
+  }
   applyDefinitionLayer(definitions, project, "projectSource");
   applyDefinitionLayer(definitions, user, "overrideSource");
   const effective = [...definitions.values()].sort((left, right) =>
@@ -407,37 +468,60 @@ export function discoverAgentDefinitions(
   options: DiscoverAgentDefinitionsOptions = {},
 ): AgentDefinition[] {
   return discoverEffectiveDefinitions(options)
-    .filter((definition) => definition.name !== MANAGED_LEAD_DEFINITION_NAME)
-    .map((definition) => ({
-      ...definition,
-      frontmatter: {
-        ...definition.frontmatter,
-        enabled: definition.frontmatter.enabled ?? true,
-      },
-    }));
+    .filter(({ name }) => !isReservedLeadDefinition(name))
+    .map((definition) => withDefaultEnabled(definition));
 }
 
-export function discoverManagedLeadDefinition(
-  options: DiscoverAgentDefinitionsOptions = {},
-): AgentDefinition {
-  const definition = discoverEffectiveDefinitions(options).find(
-    (candidate) => candidate.name === MANAGED_LEAD_DEFINITION_NAME,
-  );
-  if (!definition)
-    throw new Error(
-      `managed Lead definition ${MANAGED_LEAD_DEFINITION_NAME} not found`,
-    );
-  return definition;
+function withDefaultEnabled(definition: AgentDefinition): AgentDefinition {
+  return {
+    ...definition,
+    frontmatter: {
+      ...definition.frontmatter,
+      enabled: definition.frontmatter.enabled ?? true,
+    },
+  };
 }
 
 export async function contextAgentDefinitions(ctx: ExtensionContext) {
   const projectTrusted = ctx.isProjectTrusted();
+  const effective = discoverEffectiveDefinitions(
+    projectTrusted ? { projectRoot: ctx.cwd } : {},
+  );
   return {
     projectTrusted,
-    definitions: discoverAgentDefinitions(
-      projectTrusted ? { projectRoot: ctx.cwd } : {},
+    definitions: effective
+      .filter(({ name }) => !isReservedLeadDefinition(name))
+      .map(withDefaultEnabled),
+    leadDefinitions: effective.filter(({ name }) =>
+      isReservedLeadDefinition(name),
     ),
   };
+}
+
+export type LeadDefinitionName =
+  | typeof FLEXIBLE_LEAD_DEFINITION_NAME
+  | typeof ORCHESTRATOR_LEAD_DEFINITION_NAME
+  | typeof MANAGED_LEAD_DEFINITION_NAME;
+
+export function discoverLeadDefinition(
+  name: LeadDefinitionName,
+  options: DiscoverAgentDefinitionsOptions = {},
+): AgentDefinition {
+  const definition = discoverEffectiveDefinitions(options).find(
+    (candidate) => candidate.name === name,
+  );
+  if (!definition) throw new Error(`Lead definition ${name} not found`);
+  return definition;
+}
+
+export function discoverLeadDefinitions(
+  options: DiscoverAgentDefinitionsOptions = {},
+): AgentDefinition[] {
+  return [
+    FLEXIBLE_LEAD_DEFINITION_NAME,
+    ORCHESTRATOR_LEAD_DEFINITION_NAME,
+    MANAGED_LEAD_DEFINITION_NAME,
+  ].map((name) => discoverLeadDefinition(name as LeadDefinitionName, options));
 }
 
 export function discoverAgent(
@@ -769,6 +853,7 @@ export type AgentLaunchOptions = {
   bodyPromptPath?: string;
   sharedPromptPath?: string;
   cwd?: string;
+  loadProjectContextFiles?: typeof loadProjectContextFiles;
   managedAgent?: boolean;
   approveProject?: boolean;
   inheritedModel?: string;
@@ -845,7 +930,9 @@ export function agentLaunchArgs(
     args.push("--no-context-files");
     if (inheritProjectContext === true || inheritGlobalContext === true) {
       const agentDir = getAgentDir();
-      for (const context of loadProjectContextFiles({ cwd, agentDir })) {
+      for (const context of (
+        options.loadProjectContextFiles ?? loadProjectContextFiles
+      )({ cwd, agentDir })) {
         const isGlobal = resolve(dirname(context.path)) === resolve(agentDir);
         if (
           (isGlobal && inheritGlobalContext === true) ||
@@ -856,13 +943,6 @@ export function agentLaunchArgs(
     }
   }
   if (sharedPromptPath) args.push("--append-system-prompt", sharedPromptPath);
-  const explicitTools = frontmatter.tools !== undefined;
-  const configuredTools = normalizedToolNames(frontmatter.tools);
-  const noTools =
-    frontmatter.noTools === true ||
-    (explicitTools && configuredTools.length === 0);
-  if (noTools) args.push("--no-tools");
-  if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");
   const requiredTools = [
     ...(managedAgent
       ? agentDefinitionDelegationEnabled(agent)
@@ -871,26 +951,16 @@ export function agentLaunchArgs(
       : []),
     ...(options.requiredTools ?? []),
   ].filter((tool, index, all) => all.indexOf(tool) === index);
-  const requiredToolSet = new Set(requiredTools);
-  const excluded = normalizedToolNames(frontmatter.excludeTools)
-    .filter((pattern) => !requiredToolSet.has(pattern))
-    .filter((pattern, index, all) => all.indexOf(pattern) === index);
-  for (const pattern of excluded) {
-    if (!pattern.includes("*")) continue;
-    const required = requiredTools.find((tool) =>
-      matchesToolPattern(pattern, tool),
-    );
-    if (required)
-      throw new Error(
-        `agent ${agent.name} excludeTools pattern ${JSON.stringify(pattern)} ` +
-          `matches required tool ${JSON.stringify(required)}; ` +
-          `required tools cannot be excluded by patterns`,
-      );
-  }
-  if (noTools || explicitTools) {
-    const configured = configuredTools.filter(
-      (tool) =>
-        (!managedAgent || tool !== "agent") && !requiredToolSet.has(tool),
+  const policy = configuredToolPolicy(agent, requiredTools);
+  const noTools =
+    frontmatter.noTools === true ||
+    (policy.explicit && normalizedToolNames(frontmatter.tools).length === 0);
+  if (noTools) args.push("--no-tools");
+  if (frontmatter.noBuiltinTools) args.push("--no-builtin-tools");
+  const excluded = policy.excluded;
+  if (noTools || policy.explicit) {
+    const configured = policy.tools.filter(
+      (tool) => !managedAgent || tool !== "agent",
     );
     const selected = [...new Set([...configured, ...requiredTools])];
     if (selected.length) {

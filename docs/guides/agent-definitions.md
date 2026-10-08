@@ -53,11 +53,14 @@ agent directory's `agents/` subdirectory.
 A project or global definition whose `name` matches a lower-precedence
 definition overlays it. An unmatched definition is standalone.
 
-`managed-lead` is the one reserved exception: it uses the same source and
-overlay engine to configure Manager-created project Leads, but it is not an
-Agent available through discovery or delegation. It appears first in the flat
-Definitions list with Model, Thinking, and Details settings. See
-[Customizing bundled agents](customizing-agents.md#managed-project-lead).
+`flexible-lead`, `orchestrator-lead`, and `managed-lead` are reserved Lead
+definitions. They use the layered definition engine but are not Agents
+available through discovery or delegation. The first two configure ordinary
+Lead runtime instructions and ordinary tools; `managed-lead` configures launch
+policy for Manager-assigned project Leads. They appear first in the flat
+Definitions list in that order. The ordinary profiles offer Details only;
+`managed-lead` offers Model, Thinking, and Details. See
+[Customizing bundled agents](customizing-agents.md#lead-execution-profiles).
 
 ### Permission-aware extensions
 
@@ -246,8 +249,8 @@ path resolution rules.
 References are resolved from the Markdown file that declares them.
 
 The bundled Agent definitions are `generalist`, `implementer`,
-`researcher`, `reviewer`, and `scout`. The reserved bundled
-`managed-lead` definition is excluded from this roster. The session-start
+`researcher`, `reviewer`, and `scout`. All three reserved Lead definitions are
+excluded from this roster. The session-start
 agent-definition roster and the `list_agents` result use the same metadata
 projection.
 
@@ -276,7 +279,8 @@ project/global Markdown definitions and existing Herdsman validation rather than
 a separate configuration interface.
 
 The human `Definitions` menu is a flat list of actionable definitions, with
-reserved `managed-lead` first. Each row identifies its contributing source or
+reserved `flexible-lead`, `orchestrator-lead`, and `managed-lead` first in that
+order. Each row identifies its contributing source or
 sources as `bundled`, `project`, and/or `global`. Model, thinking, and enabled
 settings can be changed through the menu, but edits always write global
 overrides. `Inherit current session` removes only that field. Unset model and

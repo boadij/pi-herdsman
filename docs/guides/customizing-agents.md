@@ -8,17 +8,61 @@ roles, in the order `bundled < project < global`.
 This allows local customization while continuing to inherit future bundled
 changes for omitted fields.
 
+## Lead execution profiles
+
+The reserved `flexible-lead` and `orchestrator-lead` definitions configure
+ordinary, unassigned Lead sessions. The session's persisted execution mode
+selects exactly one: `flexible` uses `flexible-lead`; `orchestrate` uses
+`orchestrator-lead`. These are standalone runtime profiles, not Agents or
+launch definitions, and they never inherit from or compose with one another.
+They can customize instructions and ordinary tool selection only. Their
+frontmatter supports `name`, `description`, `body`, `tools`, and
+`excludeTools`; `bodyMode` is supported on matching overlays. Fields affecting
+model, thinking, system-prompt launch mode, skills, extensions, context
+inheritance, or Agent/permission policy are not supported.
+
+The bundled `flexible-lead` leaves `tools` unspecified, preserving Pi's normal
+ordinary tool baseline, and supplies flexible direct/delegated-work guidance.
+The bundled `orchestrator-lead` selects `read`, `ls`, `find`, and `grep` and
+guides the Lead to delegate bounded execution whenever an Agent can reasonably
+own it. Example user overlay:
+
+```markdown
+---
+name: orchestrator-lead
+bodyMode: append
+tools: ["read", "ls", "find", "grep", "bash"]
+---
+
+Use the repository's documented smoke command when validating integration work.
+```
+
+An explicit tool list selects registered ordinary tools; exclusions are then
+applied. Herdsman-owned tools cannot be enabled through a profile, and required
+Lead coordination tools are retained. A configured tool that is not registered
+is simply unavailable. Profile resolution respects project trust. Definition
+changes take effect when the profile is next resolved: at session start/resume,
+or when a user explicitly selects an execution mode with `/lead` (including
+reselecting the current mode).
+
+Ordinary Leads persist their execution mode separately from role/authority
+state and retain their ordinary tool baseline while a restrictive profile is
+active. The user-wide `defaultLeadExecution` setting seeds future ordinary
+sessions only; it does not replace a saved session choice. Assigned project
+Leads use `managed-lead` instead.
+
 ## Managed project Lead
 
-`managed-lead` is the reserved definition for Manager-created project Leads.
-It follows the same `bundled < project < global` precedence, but it is launch
+`managed-lead` is the reserved definition for Manager-created/assigned project
+Leads. Every assigned Lead uses it, independently of the ordinary execution
+mode. It follows the same `bundled < project < global` precedence, but it is launch
 configuration rather than an Agent role: it is excluded from the Agent roster
 and cannot be delegated to. It appears first in the flat Definitions list, with
 Model, Thinking, and Details settings but no `Enabled` action. These settings
 do not add it to Agent discovery or delegation.
 
-The bundled default gives the Lead read-only inspection tools plus mandatory
-Herdsman coordination tools. Executable project work is delegated to managed
+The bundled default is orchestration-focused: it gives the Lead read-only
+inspection tools plus mandatory Herdsman coordination tools. Executable project work is delegated to managed
 Agents by default. Manager owns project supervision and assignment
 boundaries; the Lead owns technical decisions and execution orchestration.
 Herdsman automatically hands off the normal assignment response, deferring it
@@ -43,6 +87,18 @@ Also require an independent reviewer before accepting implementation output.
 A project override lives at `<project>/.pi/agents/managed-lead.md` and is
 resolved from the delegated worktree when the project is trusted. The global
 override remains `~/.pi/agent/agents/managed-lead.md`.
+
+`managed-lead` is an independent full launch definition, not an extension of
+either ordinary runtime profile. For example, a minimal body customization is:
+
+```markdown
+---
+name: managed-lead
+bodyMode: append
+---
+
+Include the team's branch-validation checklist in the final handoff.
+```
 
 `managed-lead` does not support `enabled`, `agents`, or `permission`.
 Its ordinary tool policy may be overridden, but Herdsman's mandatory Lead
@@ -251,9 +307,18 @@ Lead Pi sessions with UI can use:
 /agents definitions
 ```
 
-The native Definitions menu is a flat list, with `managed-lead` first. Each
+The native Definitions menu is a flat list, with `flexible-lead`,
+`orchestrator-lead`, and `managed-lead` first in that order. Each
 definition identifies its contributing source or sources as `bundled`,
 `project`, and/or `global`. Select a definition to open:
+
+```text
+flexible-lead / orchestrator-lead: Details…
+managed-lead: Model / Thinking / Details…
+ordinary Agent: Model / Thinking / Enabled / Details…
+```
+
+Ordinary Agent launch settings are:
 
 ```text
 Model

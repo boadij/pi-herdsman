@@ -9,9 +9,10 @@ Manager controls the Leads named by current project assignments; project scope
 alone grants no authority over a Lead. Project Leads own technical decisions
 and orchestrate execution through their Agent trees.
 
-Manager-created project Leads are launched from the reserved `managed-lead`
-definition. The bundled default keeps direct Lead work read-only and delegates
-executable project work to managed Agents while the Lead retains decomposition,
+Manager-assigned project Leads use only the reserved `managed-lead` definition,
+regardless of an ordinary Lead's saved execution preference. The bundled
+default keeps direct Lead work read-only and delegates executable project work
+to managed Agents while the Lead retains decomposition,
 architecture, scope, technical direction, integration, conflict resolution,
 acceptance, and final technical decisions. Project and global overlays can
 deliberately customize that launch policy; see
@@ -121,8 +122,11 @@ missing does not imply retirement, so the assignment remains recoverable with
 `resume_project` when its branch is available. An assigned Lead can explicitly
 release Manager control with `/takeover`; after confirmation, the assignment
 and pending project messages are removed while its Pi session, conversation,
-branch, worktree, running process, and owned Agents remain. Takeover does not
-claim the work is complete or accepted. These are distinct explicit assignment
+branch, worktree, running process, and owned Agents remain. The continuing
+session becomes an ordinary Lead in `Orchestrate` mode using
+`orchestrator-lead`. This does not change launch-time model, thinking,
+extensions, skills, or context, and does not claim the work is complete or
+accepted. Takeover and worktree removal are distinct explicit assignment
 release paths; settlement, review, and user interaction do not release an
 assignment.
 
@@ -148,8 +152,9 @@ Manager process replacement. A Manager does not become Chief and does not
 forward assigned Leads into a parallel Chief control path.
 
 Manually continuing the exact assigned Pi session within valid project scope
-keeps it managed. The `managed-lead` definition controls launch configuration,
-not authority; only the current `ProjectAssignment` establishes Manager control.
+keeps it managed. Execution profiles configure behavior, not authority: only
+the current exact `ProjectAssignment` establishes Manager control (see
+[Coordination](../concepts/coordination.md)).
 
 See [Coordination](../concepts/coordination.md) and
 [Commands](../reference/commands.md).

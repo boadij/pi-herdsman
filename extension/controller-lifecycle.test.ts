@@ -1239,6 +1239,13 @@ test("staged fresh assignment bridges pending start through working", async (t) 
       fixture.context,
     );
   try {
+    await t.waitFor(() =>
+      assert.equal(
+        fixture.initialStatusStarted,
+        true,
+        "session status must start its initial snapshot before delegation",
+      ),
+    );
     const starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
       {
@@ -1518,6 +1525,13 @@ test("staged fresh assignment removes a fast completion without observing workin
       fixture.context,
     );
   try {
+    await t.waitFor(() =>
+      assert.equal(
+        fixture.initialStatusStarted,
+        true,
+        "session status must start its initial snapshot before delegation",
+      ),
+    );
     const starting = registeredAgentTool(fixture.pi, "delegate").execute(
       "id",
       {
