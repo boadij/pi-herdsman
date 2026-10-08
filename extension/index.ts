@@ -360,6 +360,7 @@ const LEAD_SUPERVISOR_PEER_GUIDANCE =
 const LEAD_ROLE_CHARTER = `## Lead role
 ${LEAD_SCOPE_DESCRIPTION}
 ${LEAD_SUPERVISOR_PEER_GUIDANCE}
+For assigned project work, automatic result handoffs contain summary text but no file attachments. When the Manager needs an actual artifact for review, decision-making, or onward delegation, explicitly transfer the relevant evidence through message_supervisor.files.
 ${FILE_HANDOFF_GUIDANCE}`;
 const MANAGER_ROLE_CHARTER = `## Manager role
 Manage project work by branch. Use delegate_project with a task and optional branch
@@ -379,6 +380,13 @@ Act only when review, a decision, correction, or other useful coordination is
 needed. Undelivered project handoffs survive Manager absence. Once a handoff
 has been delivered, it is not automatically replayed to later Managers. Review
 received handoffs and request corrections with message_staff when needed.
+
+Automatic project reports are summaries, not evidence transfers. A result
+reference mentioned in report text is not necessarily available in this
+session. When asking the reporting Lead to revisit its own result, mention the
+reference in message_staff.message without attaching it. Use
+message_staff.files only for evidence already available in this session through
+an explicit handoff.
 
 Project execution belongs to project Leads and their Agent trees. Your role
 is orchestration, review, decisions, and integration. Lead messages are
@@ -972,7 +980,7 @@ export default function (pi: ExtensionAPI): void {
       }),
       {
         description:
-          "File or result evidence transferred to the recipient. Copy result refs exactly. Files do not grant runtime capabilities.",
+          "Explicit evidence transfer. Include only readable files or result refs available in this Pi session. A ref mentioned only in text is not transferred evidence. Copy refs exactly. Files do not grant runtime capabilities.",
       },
     ),
   );

@@ -4280,7 +4280,13 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
       ctx.sessionManager.getSessionId(),
     );
     if (!assignment) return;
-    await host.publishProjectMessage(ctx, assignment, message, [], "herd_run");
+    await host.publishProjectMessage(
+      ctx,
+      assignment,
+      `Project report (no files attached):\n\n${message}`,
+      [],
+      "herd_run",
+    );
   };
   const maybeFinish = (ctx: ExtensionContext): void => {
     if (herdRunStartedAt === undefined || !leadSettled) return;

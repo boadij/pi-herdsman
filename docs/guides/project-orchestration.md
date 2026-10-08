@@ -90,14 +90,24 @@ While a Lead remains assigned, Herdsman automatically returns every completed
 direct Lead response to the Manager role. If no Manager is available, the
 handoff remains pending until a Manager can receive it. When managed Agent work
 is active, the herd run owns that handoff until it settles; the response
-summarizes outcome, validation, and important unresolved points. These
-nonterminal handoffs do not close project work: assignments remain open through
+is labeled `Project report (no files attached):` and summarizes outcome,
+validation, and important unresolved points. These nonterminal handoffs do not
+close project work: assignments remain open through
 review and requested corrections. Routine information that can wait should go
 through the automatic result handoff. A managed Lead may use nonblocking
 `message_supervisor` for a timely question, clarification, warning, or other
 information the Manager needs before that boundary; the Lead may choose to wait
 for a response through `message_staff`. A later automatic result may repeat
 some information; separate messages and results are not deduplicated.
+
+Automatic project reports transfer summary text only, not files. A result
+reference mentioned in a report is informational and does not make that result
+available to the Manager. When asking the reporting Lead to revisit its own
+result, the Manager can mention the reference in `message_staff.message`
+without attaching it. Use `message_staff.files` only for evidence already
+available in the Manager's current Pi session through an explicit handoff. If
+the Manager needs an artifact for review or onward delegation, the Lead
+explicitly transfers it through `message_supervisor.files`.
 
 Only a Lead turn confirmed as not aborted contributes a completed response.
 Cancellation is reported as a factual, nonterminal project message without

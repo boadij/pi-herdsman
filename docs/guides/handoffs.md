@@ -237,6 +237,15 @@ definition overrides still apply.
 
 ## Result handoff
 
+Automatic project reports are summary text with no file attachments. A result
+reference mentioned in report text is informational and is not evidence
+available in the receiving session. When asking the reporting Lead to revisit
+its own result, a Manager can mention the reference in `message_staff.message`
+without attaching it. Use `message_staff.files` only for evidence already
+available in the current Pi session through an explicit handoff. A Lead that
+needs to provide an artifact for review or onward delegation explicitly sends
+the evidence through `message_supervisor.files`.
+
 A direct-agent completion that has a reusable persisted result exposes an exact
 ref such as `result:global-peer-fix#1`. Pass relevant direct-agent results
 through `files` using the exact refs shown by the completions:
@@ -274,6 +283,9 @@ evidence, especially for a transitive handoff:
 refs in the form `result:<agent>#<index>`, and canonical
 `result:<request-id>` references already supplied as evidence. Semantic refs
 resolve against the caller's current Pi branch to a hidden canonical binding.
+A reference appearing only in message text is not such a binding; the current
+Pi session must already have received the reference through an explicit
+evidence handoff before it can forward it in `files`.
 A canonical result reference resolves internally to the normal private result file under Pi
 Herdsman's durable data directory; it is still validated, canonicalized, and
 deduplicated like any other file. Preserve the exact reference already supplied

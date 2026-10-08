@@ -1854,7 +1854,10 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
       assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 1),
     );
     const [handoff] = listProjectMessages(runtime, "repo-key", branch);
-    assert.equal(handoff.text, "Herd run settled.");
+    assert.equal(
+      handoff.text,
+      "Project report (no files attached):\n\nHerd run settled.",
+    );
     assert.doesNotMatch(handoff.text, /UNVERIFIED_RESTORED_SUMMARY/);
     assert.equal(
       listProjectAssignments(runtime, "repo-key").some(
@@ -2084,7 +2087,10 @@ test("assigned project herd settlement publishes one nonterminal current-run han
       assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 1),
     );
     const [message] = listProjectMessages(runtime, "repo-key", branch);
-    assert.match(message.text, /^Herd run settled\./);
+    assert.match(
+      message.text,
+      /^Project report \(no files attached\):\n\nHerd run settled\./,
+    );
     assert.match(message.text, /CURRENT_ROUND_SUMMARY/);
     assert.doesNotMatch(message.text, /OLD_ROUND_SUMMARY/);
     assert.doesNotMatch(message.text, /list_agents/);
@@ -2184,7 +2190,10 @@ test("each direct managed Lead turn returns its response", async () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
     const [response] = listProjectMessages(runtime, "repo-key", branch);
     assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 1);
-    assert.equal(response.text, "The assigned work is complete.");
+    assert.equal(
+      response.text,
+      "Project report (no files attached):\n\nThe assigned work is complete.",
+    );
 
     const acknowledgement = {
       customType: "pi-herdsman-manager_message",
@@ -2216,7 +2225,7 @@ test("each direct managed Lead turn returns its response", async () => {
     );
     assert.equal(
       listProjectMessages(runtime, "repo-key", branch)[1].text,
-      "You're welcome.",
+      "Project report (no files attached):\n\nYou're welcome.",
     );
 
     await emit("agent_start");
@@ -2233,7 +2242,7 @@ test("each direct managed Lead turn returns its response", async () => {
     assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 3);
     assert.equal(
       listProjectMessages(runtime, "repo-key", branch)[2].text,
-      "Lead execution was cancelled before a completed response.",
+      "Project report (no files attached):\n\nLead execution was cancelled before a completed response.",
     );
     assert.equal(
       listProjectAssignments(runtime, "repo-key").some(
