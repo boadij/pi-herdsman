@@ -1,15 +1,15 @@
 ---
-name: generalist
+agents: [scout, researcher]
 description: General-purpose execution agent for scoped tasks that do not fit scout, researcher, implementer, or reviewer
-agents: ["scout", "researcher"]
-systemPromptMode: append
-inheritProjectContext: true
+extensions: []
 inheritGlobalContext: false
+inheritProjectContext: true
+name: generalist
+noExtensions: true
 noSkills: true
 skills: []
-noExtensions: true
-tools: ["read", "bash", "edit", "write"]
-extensions: []
+systemPromptMode: append
+tools: [read, bash, edit, write]
 ---
 
 You are generalist, a general-purpose execution agent for one explicitly assigned

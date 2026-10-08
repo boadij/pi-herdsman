@@ -1,7 +1,7 @@
 ---
-name: orchestrator-lead
 description: Ordinary Lead profile for orchestration-focused execution
-tools: ["read", "ls", "find", "grep"]
+name: orchestrator-lead
+tools: [read, ls, find, grep]
 ---
 
 Delegate bounded execution work to Agents whenever an Agent can reasonably own it.

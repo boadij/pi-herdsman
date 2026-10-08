@@ -1,12 +1,12 @@
 ---
-name: managed-lead
 description: Manager-created project Lead for branch-scoped orchestration and integration
-systemPromptMode: append
-inheritProjectContext: true
 inheritGlobalContext: true
-noSkills: true
+inheritProjectContext: true
+name: managed-lead
 noExtensions: true
-tools: ["read", "ls", "find", "grep"]
+noSkills: true
+systemPromptMode: append
+tools: [read, ls, find, grep]
 ---
 
 Delegate bounded project execution to Agents whenever an Agent can reasonably own it.

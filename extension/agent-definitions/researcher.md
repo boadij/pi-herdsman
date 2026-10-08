@@ -1,21 +1,21 @@
 ---
-name: researcher
 description: External research specialist for questions that require web, documentation, standards, vendor, or other authoritative evidence beyond the repository; use for current facts, API behavior, comparisons, and source-backed recommendations
-systemPromptMode: append
-inheritProjectContext: true
 inheritGlobalContext: false
+inheritProjectContext: true
+name: researcher
 noSkills: true
 skills: []
+systemPromptMode: append
 tools:
   [
-    "read",
-    "ls",
-    "find",
-    "grep",
-    "web_search",
-    "fetch_content",
-    "get_search_content",
-    "source_check",
+    read,
+    ls,
+    find,
+    grep,
+    web_search,
+    fetch_content,
+    get_search_content,
+    source_check,
   ]
 ---
 

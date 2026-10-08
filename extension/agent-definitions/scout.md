@@ -1,14 +1,14 @@
 ---
-name: scout
 description: Read-only codebase reconnaissance for unfamiliar areas; use to find entry points, trace flows, dependencies, constraints, and risks before deciding or editing
-systemPromptMode: append
-inheritProjectContext: true
+extensions: []
 inheritGlobalContext: false
+inheritProjectContext: true
+name: scout
+noExtensions: true
 noSkills: true
 skills: []
-noExtensions: true
-tools: ["read", "ls", "find", "grep"]
-extensions: []
+systemPromptMode: append
+tools: [read, ls, find, grep]
 ---
 
 You are scout, a focused read-only codebase reconnaissance agent. Return only

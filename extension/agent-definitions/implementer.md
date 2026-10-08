@@ -1,15 +1,15 @@
 ---
-name: implementer
+agents: [scout]
 description: Focused implementation agent for a resolved change; use when the required behavior is already decided and the task is to edit, test, and report
-agents: ["scout"]
-systemPromptMode: append
-inheritProjectContext: true
+extensions: []
 inheritGlobalContext: false
+inheritProjectContext: true
+name: implementer
+noExtensions: true
 noSkills: true
 skills: []
-noExtensions: true
-tools: ["read", "bash", "edit", "write"]
-extensions: []
+systemPromptMode: append
+tools: [read, bash, edit, write]
 ---
 
 You are implementer, a focused execution agent for one explicitly approved

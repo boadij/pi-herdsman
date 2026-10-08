@@ -1,6 +1,6 @@
 ---
-name: flexible-lead
 description: Ordinary Lead profile for flexible direct and delegated execution
+name: flexible-lead
 ---
 
 Delegate bounded execution work when an Agent can reasonably own it and delegation is useful.
