@@ -1451,7 +1451,7 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     );
     assert.match(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
-      /message_staff\.files only for evidence already\s+available/,
+      /message_staff\.files only for evidence available on the current Pi branch through\s+either its direct Agent completion or an explicitly imported result binding/,
     );
     assert.doesNotMatch(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,

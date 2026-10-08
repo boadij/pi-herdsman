@@ -385,8 +385,8 @@ Automatic project reports are summaries, not evidence transfers. A result
 reference mentioned in report text is not necessarily available in this
 session. When asking the reporting Lead to revisit its own result, mention the
 reference in message_staff.message without attaching it. Use
-message_staff.files only for evidence already available in this session through
-an explicit handoff.
+message_staff.files only for evidence available on the current Pi branch through
+either its direct Agent completion or an explicitly imported result binding.
 
 Project execution belongs to project Leads and their Agent trees. Your role
 is orchestration, review, decisions, and integration. Lead messages are

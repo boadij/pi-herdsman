@@ -241,8 +241,9 @@ Automatic project reports are summary text with no file attachments. A result
 reference mentioned in report text is informational and is not evidence
 available in the receiving session. When asking the reporting Lead to revisit
 its own result, a Manager can mention the reference in `message_staff.message`
-without attaching it. Use `message_staff.files` only for evidence already
-available in the current Pi session through an explicit handoff. A Lead that
+without attaching it. Use `message_staff.files` only for evidence available on
+the current Pi branch through either its direct Agent completion or an
+explicitly imported result binding. A Lead that
 needs to provide an artifact for review or onward delegation explicitly sends
 the evidence through `message_supervisor.files`.
 

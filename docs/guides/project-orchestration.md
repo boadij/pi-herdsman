@@ -103,9 +103,10 @@ Automatic project reports transfer summary text only, not files. A result
 reference mentioned in a report is informational and does not make that result
 available to the Manager. When asking the reporting Lead to revisit its own
 result, the Manager can mention the reference in `message_staff.message`
-without attaching it. Use `message_staff.files` only for evidence already
-available in the Manager's current Pi session through an explicit handoff. If
-the Manager needs an artifact for review or onward delegation, the Lead
+without attaching it. Use `message_staff.files` only for evidence available on
+the Manager's current Pi branch through either its direct Agent completion or
+an explicitly imported result binding. If the Manager needs an artifact for
+review or onward delegation, the Lead
 explicitly transfers it through `message_supervisor.files`.
 
 Only a Lead turn confirmed as not aborted contributes a completed response.
