@@ -233,6 +233,70 @@ test("ordinary Lead profile switches retain the saved tool baseline", async () =
   }
 });
 
+test("ordinary mode activation rolls back state and tools when projection fails", async () => {
+  setLeadEnvironment();
+  const entries: any[] = [];
+  const baseline = ["read", "bash"];
+  const pi = fakeChiefPi({ activeTools: baseline, entries });
+  const context = fakeContext(entries) as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    const priorState = sessionLeadExecutionState(entries);
+    const priorTools = pi.pi.getActiveTools();
+    const notices: string[] = [];
+    context.ui.notify = (message: string) => notices.push(message);
+    const setActiveTools = pi.pi.setActiveTools.bind(pi.pi);
+    pi.pi.setActiveTools = (tools: string[]) => {
+      if (tools.includes("ls")) throw new Error("target projection failed");
+      setActiveTools(tools);
+    };
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    assert.ok(
+      notices.some((message) => message.includes("target projection failed")),
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), priorTools);
+    assert.deepEqual(sessionLeadExecutionState(entries), priorState);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("failed ordinary mode rollback invalidates execution and fails closed", async () => {
+  setLeadEnvironment();
+  const entries: any[] = [];
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"], entries });
+  const context = fakeContext(entries) as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    let calls = 0;
+    const notices: string[] = [];
+    context.ui.notify = (message: string) => notices.push(message);
+    const setActiveTools = pi.pi.setActiveTools.bind(pi.pi);
+    pi.pi.setActiveTools = (tools: string[]) => {
+      calls++;
+      if (calls <= 2) throw new Error("projection failed");
+      setActiveTools(tools);
+    };
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    assert.ok(notices.some((message) => message.includes("projection failed")));
+    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+    assert.deepEqual(sessionLeadExecutionState(entries)?.mode, "flexible");
+    const prompt: any = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](prompt, context);
+    assert.equal(
+      prompt.systemPromptOptions.sections.pi_herdsman_lead_execution,
+      undefined,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
 test("a restricted Flexible definition cannot replace the ordinary tool baseline", async (t) => {
   setLeadEnvironment();
   const cwd = mkdtempSync(join(tmpdir(), "herdsman-flexible-profile-"));
@@ -2667,6 +2731,7 @@ async function managerDelegateAssignmentTest(
   let started = false;
   let manager1Shutdown = false;
   let failScopeLookup = false;
+  let unavailableScope = false;
   let lifecycleServer: ReturnType<typeof createServer> | undefined;
   const lifecycleClients = new Set<any>();
   let lifecycleClient: any;
@@ -2689,19 +2754,21 @@ async function managerDelegateAssignmentTest(
   };
   const exec = (command: string, args: string[]) => {
     if (
-      failScopeLookup &&
+      (failScopeLookup || unavailableScope) &&
       command === "herdr" &&
       args[0] === "worktree" &&
       args[1] === "list"
     )
-      return {
-        stdout: JSON.stringify({
-          id: AGENT_ID,
-          error: { code: "unavailable", message: "scope lookup failure" },
-        }),
-        stderr: "",
-        code: 1,
-      };
+      return unavailableScope
+        ? nonGitWorkspaceResponse()
+        : {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              error: { code: "unavailable", message: "scope lookup failure" },
+            }),
+            stderr: "",
+            code: 1,
+          };
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
@@ -3200,6 +3267,17 @@ async function managerDelegateAssignmentTest(
         ),
       );
       assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
+      unavailableScope = true;
+      const unavailableNotices: string[] = [];
+      leadCtx.ui.notify = (message: string) => unavailableNotices.push(message);
+      await lead.commandOptions.get("lead").handler("flexible", leadCtx);
+      assert.ok(
+        unavailableNotices.some((message) =>
+          message.includes("Cannot verify the current project assignment"),
+        ),
+      );
+      assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
+      unavailableScope = false;
       leadCtx.mode = "rpc";
       let managedPresentation: string[] = [];
       leadCtx.ui.select = async (title: string, items: string[]) => {
@@ -4600,13 +4678,23 @@ test("malformed selected branch withdraws stale Chief authority", async () => {
     context.sessionManager.getBranch = () => [
       {
         type: "custom",
-        customType: "pi-herdsman-role",
-        data: { role: "chief" },
+        customType: "pi-herdsman-lead-execution",
+        data: { mode: "broken", leadTools: ["read"] },
       },
     ];
     pi.pi.setActiveTools(["read", "bash"]);
     await pi.events.get("session_tree")![0](undefined, context);
     assert.equal(pi.pi.getActiveTools().includes("list_staff"), false);
+    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+    const ordinaryPrompt: any = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](ordinaryPrompt, context);
+    assert.equal(
+      ordinaryPrompt.systemPromptOptions.sections.pi_herdsman_lead_execution,
+      undefined,
+    );
     assert.ok(
       entries.some(
         (entry: any) => entry.customType === "pi_herdsman_role_error",
@@ -4620,8 +4708,9 @@ test("malformed selected branch withdraws stale Chief authority", async () => {
     });
     replacement.release();
     assert.equal(
-      readPeerLeadRecord(peerRuntime(), context.sessionManager.getSessionId()),
-      undefined,
+      readPeerLeadRecord(peerRuntime(), context.sessionManager.getSessionId())
+        ?.role,
+      "lead",
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
