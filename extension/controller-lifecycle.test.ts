@@ -2088,6 +2088,7 @@ test("assigned project herd settlement publishes one nonterminal current-run han
     assert.match(message.text, /CURRENT_ROUND_SUMMARY/);
     assert.doesNotMatch(message.text, /OLD_ROUND_SUMMARY/);
     assert.doesNotMatch(message.text, /list_agents/);
+    assert.equal(message.resultBindings, undefined);
     assert.equal(
       listProjectAssignments(runtime, "repo-key").some(
         (assignment) => assignment.id === LEAD_SESSION_ID,

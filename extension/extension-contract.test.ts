@@ -622,6 +622,10 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     (tool) => tool.name === "message_staff",
   )!;
   assert.ok(historicalStaffMessage);
+  assert.match(
+    (historicalStaffMessage.parameters as any).properties.files.description,
+    /Explicit evidence transfer.*available in this Pi session.*ref mentioned only in text is not transferred evidence/,
+  );
   assert.equal(historicalStaffMessage.defaultActive, false);
   assert.equal(typeof historicalStaffMessage.renderCall, "function");
   assert.equal(typeof historicalStaffMessage.renderResult, "function");
@@ -2890,6 +2894,14 @@ test("definition roster matches live list and rejects stale sessions", async () 
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /carry relevant evidence into onward handoffs/,
+  );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /For assigned project work, automatic result handoffs contain summary text but no file attachments\./,
+  );
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /explicitly transfer the relevant evidence through message_supervisor\.files\./,
   );
   assert.match(
     promptEvent.systemPromptOptions.sections.pi_herdsman_role,

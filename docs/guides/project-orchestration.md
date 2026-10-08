@@ -90,14 +90,27 @@ While a Lead remains assigned, Herdsman automatically returns every completed
 direct Lead response to the Manager role. If no Manager is available, the
 handoff remains pending until a Manager can receive it. When managed Agent work
 is active, the herd run owns that handoff until it settles; the response
-summarizes outcome, validation, and important unresolved points. These
-nonterminal handoffs do not close project work: assignments remain open through
+summarizes outcome, validation, and important unresolved points. These nonterminal handoffs do not
+close project work: assignments remain open through
 review and requested corrections. Routine information that can wait should go
 through the automatic result handoff. A managed Lead may use nonblocking
 `message_supervisor` for a timely question, clarification, warning, or other
 information the Manager needs before that boundary; the Lead may choose to wait
 for a response through `message_staff`. A later automatic result may repeat
 some information; separate messages and results are not deduplicated.
+
+Automatic project reports transfer summary text only, not files. A result
+reference mentioned in a report is informational; mentioning it does not itself
+make that result available, though the Manager may already have its binding from
+an earlier handoff. When asking the reporting Lead to revisit its own result,
+the Manager can mention the reference in `message_staff.message` without
+attaching it. Use `message_staff.files` to transfer relevant readable local
+files or result references resolvable on the current Pi branch. A semantic
+result reference is resolvable when the branch contains its direct Agent
+completion or an explicitly imported binding; already-supplied canonical result
+references may also be passed through. If the Manager needs an artifact for
+review or onward delegation, the Lead explicitly transfers it through
+`message_supervisor.files`.
 
 Only a Lead turn confirmed as not aborted contributes a completed response.
 Cancellation is reported as a factual, nonterminal project message without
