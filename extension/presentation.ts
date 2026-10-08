@@ -3540,16 +3540,21 @@ export class StatusWidget {
     const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
     const run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
     const suffixText = s.identityOnly || !suffix ? "" : `  ${suffix}`;
+    const breadcrumbSegments = s.breadcrumb ?? ["?"];
+    const identity = renderBreadcrumb(
+      [breadcrumbSegments.at(-1) ?? "?"],
+      availableWidth,
+    );
     const executionFits =
       !!execution &&
       availableWidth >=
         visibleWidth(execution) +
-          visibleWidth("●") +
+          visibleWidth(identity) +
           visibleWidth(run) +
           visibleWidth(suffixText);
     const shownExecution = executionFits ? execution : "";
     const breadcrumb = renderBreadcrumb(
-      s.breadcrumb ?? ["?"],
+      breadcrumbSegments,
       Math.max(
         0,
         availableWidth -

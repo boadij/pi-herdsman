@@ -2564,6 +2564,9 @@ test("Status widget renders complete execution metadata without changing ownersh
     );
   assert.match(widget.render(8)[0]!, /scout/);
 
+  widget.setSnapshot({ ...snapshot, execution: { kind: "managed" } });
+  assert.equal(widget.render(11)[0], "● lead");
+
   widget.setSnapshot({
     ...snapshot,
     execution: { kind: "managed" },
