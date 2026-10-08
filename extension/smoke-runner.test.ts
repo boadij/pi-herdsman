@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import {
   assistantResultForSession,
-  assistantTurnSettledForSession,
+  assistantResponseCompletedForSession,
   bestEffortProcessDiagnostics,
   chiefTreeFooter,
   chiefTreeSelectedRow,
@@ -1097,7 +1097,7 @@ test("manager-recovery waits for the exact automatic project message turn to set
   );
 });
 
-test("manager-recovery waits for review assistant completion after message_staff", () => {
+test("manager-recovery detects review assistant response completion after message_staff", () => {
   const prompt = managerRecoveryReviewPrompt("branch-a");
   const entries = [
     { id: "user", type: "message", message: { role: "user", content: prompt } },
@@ -1122,9 +1122,12 @@ test("manager-recovery waits for review assistant completion after message_staff
     contents: messages.map((entry) => JSON.stringify(entry)).join("\n"),
   });
 
-  assert.equal(assistantTurnSettledForSession(session(entries), prompt), false);
   assert.equal(
-    assistantTurnSettledForSession(
+    assistantResponseCompletedForSession(session(entries), prompt),
+    false,
+  );
+  assert.equal(
+    assistantResponseCompletedForSession(
       session([
         ...entries,
         {

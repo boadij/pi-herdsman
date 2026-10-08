@@ -1295,34 +1295,12 @@ export function assistantResultForSession(session, prompt, marker) {
   return assistantResultForPrompt(session.contents, prompt, marker);
 }
 
-export function assistantTurnSettledForSession(session, prompt) {
-  const entries = sessionEntries(session.contents);
-  const user = entries.find(
-    (entry) =>
-      entry.type === "message" &&
-      entry.message?.role === "user" &&
-      messageText(entry.message.content) === prompt,
+// Transcript evidence of a completed response, not Pi's whole-run settlement signal.
+export function assistantResponseCompletedForSession(session, prompt) {
+  return (
+    assistantResultsForPrompt(session.contents, prompt, "", () => true).length >
+    0
   );
-  if (!user) return false;
-  const byId = new Map(
-    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
-  );
-  return entries.some((entry) => {
-    if (
-      entry.type !== "message" ||
-      entry.message?.role !== "assistant" ||
-      entry.message.stopReason !== "stop"
-    )
-      return false;
-    let parentId = entry.parentId;
-    const visited = new Set();
-    while (parentId && !visited.has(parentId)) {
-      if (parentId === user.id) return true;
-      visited.add(parentId);
-      parentId = byId.get(parentId)?.parentId;
-    }
-    return false;
-  });
 }
 
 function summarizeSession(contents) {
@@ -3028,9 +3006,10 @@ async function runManagerRecoverySmoke(ctx) {
       ? session
       : null;
   });
-  await waitFor("review-turn-settled", async () => {
+  await waitFor("review-response-completed", async () => {
     const session = await rootSnapshot();
-    return session && assistantTurnSettledForSession(session, reviewPrompt)
+    return session &&
+      assistantResponseCompletedForSession(session, reviewPrompt)
       ? session
       : null;
   });
