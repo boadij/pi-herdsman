@@ -2058,6 +2058,16 @@ test("merges effective frontmatter and preserves narrow override mutations", () 
     readFileSync(path, "utf8"),
     original.replace("model: old/model\r\n", ""),
   );
+  const multilineOriginal = "---\nname: reviewer\nthinking: >-\n  high\n---\n";
+  writeFileSync(path, multilineOriginal);
+  assert.throws(
+    () =>
+      withPiAgentDir(root, () =>
+        updateAgentOverride(overrideDefinition, "thinking", undefined),
+      ),
+    /cannot safely remove multiline thinking/u,
+  );
+  assert.equal(readFileSync(path, "utf8"), multilineOriginal);
   const formatted =
     "---\nname: reviewer\n\n# Execution settings\nmodel: provider/old-model\nthinking: low\nenabled: false\n\n# Capabilities\ntools:\n  - read\n---\n\nKeep this body.\n";
   for (const [field, oldValue, newValue] of [

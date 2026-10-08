@@ -686,6 +686,13 @@ export function updateAgentOverride(
       fieldLine.test(line[0].replace(/\r?\n|\r$/u, "")),
   );
   const hadField = existingIndex !== -1;
+  if (value === undefined && hadField) {
+    const next = lines
+      .slice(existingIndex + 1, closing)
+      .find(([text]) => text.trim() && !text.trimStart().startsWith("#"));
+    if (next && /^[ \t]/u.test(next[0]))
+      throw new Error(`cannot safely remove multiline ${field} in ${path}`);
+  }
   if (
     !hadField &&
     Object.hasOwn(parsePiFrontmatter(content).frontmatter, field)
