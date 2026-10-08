@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Box as TuiBox, Component } from "@earendil-works/pi-tui";
 import { createHash, randomUUID } from "node:crypto";
+import type { LeadExecutionMode } from "./core.ts";
 import {
   chmodSync,
   closeSync,
@@ -118,7 +119,7 @@ export interface StatusAgent {
   parentLabel?: string;
 }
 export type StatusExecution =
-  { kind: "managed" } | { kind: "ordinary"; mode: "flexible" | "orchestrate" };
+  { kind: "managed" } | { kind: "ordinary"; mode: LeadExecutionMode };
 export interface StatusSnapshot {
   agents: StatusAgent[];
   stale: boolean;
