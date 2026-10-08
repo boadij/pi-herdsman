@@ -90,8 +90,7 @@ While a Lead remains assigned, Herdsman automatically returns every completed
 direct Lead response to the Manager role. If no Manager is available, the
 handoff remains pending until a Manager can receive it. When managed Agent work
 is active, the herd run owns that handoff until it settles; the response
-is labeled `Project report (no files attached):` and summarizes outcome,
-validation, and important unresolved points. These nonterminal handoffs do not
+summarizes outcome, validation, and important unresolved points. These nonterminal handoffs do not
 close project work: assignments remain open through
 review and requested corrections. Routine information that can wait should go
 through the automatic result handoff. A managed Lead may use nonblocking

@@ -405,7 +405,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     );
     assert.equal(
       listProjectMessages(runtime, "repo-key", "smoke/routing")[2].text,
-      "Project report (no files attached):\n\nManual continuation result.",
+      "Manual continuation result.",
     );
 
     ctx.hasUI = true;

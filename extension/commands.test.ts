@@ -1445,6 +1445,14 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
       /Manager role[\s\S]*Manage project work by branch[\s\S]*delegate_project with a task and optional branch\s+to start new project work\. Use resume_project with its branch to resume existing\s+project work\.[\s\S]*Project execution belongs to project Leads and their Agent trees[\s\S]*Lead messages are\s+coordination and review handoffs, not project completion\. Escalate to Chief with\s+message_supervisor/i,
     );
+    assert.match(
+      managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
+      /mention the\s+reference in message_staff\.message without attaching it/,
+    );
+    assert.match(
+      managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
+      /message_staff\.files only for evidence already\s+available/,
+    );
     assert.doesNotMatch(
       managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
       /Lead role[\s\S]*## Manager role/,

@@ -283,9 +283,10 @@ evidence, especially for a transitive handoff:
 refs in the form `result:<agent>#<index>`, and canonical
 `result:<request-id>` references already supplied as evidence. Semantic refs
 resolve against the caller's current Pi branch to a hidden canonical binding.
-A reference appearing only in message text is not such a binding; the current
-Pi session must already have received the reference through an explicit
-evidence handoff before it can forward it in `files`.
+A result reference mentioned only in message text does not establish a reusable
+binding. A semantic result reference can be forwarded through `files` when the
+current Pi branch contains either its direct Agent completion or an explicitly
+imported result binding.
 A canonical result reference resolves internally to the normal private result file under Pi
 Herdsman's durable data directory; it is still validated, canonicalized, and
 deduplicated like any other file. Preserve the exact reference already supplied
