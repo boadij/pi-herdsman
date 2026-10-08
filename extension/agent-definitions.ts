@@ -256,6 +256,11 @@ function validateDefinition(
           : "must be an array of non-empty strings",
       );
   }
+  if (
+    frontmatter.tools !== undefined &&
+    normalizedToolNames(frontmatter.tools).some((tool) => /^[+-]/u.test(tool))
+  )
+    invalid("tools", "must be an allowlist without +name/-name modifiers");
   if (frontmatter.model !== undefined) {
     if (typeof frontmatter.model !== "string" || !frontmatter.model)
       invalid("model", "must be a non-empty string");

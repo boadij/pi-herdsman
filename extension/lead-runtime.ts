@@ -1265,9 +1265,9 @@ export function createLeadAgentEventRuntime(host: {
       host.consumeChiefStartPreflight(ctx);
       host.herdRun.agentStarted();
     },
-    async agentSettled(ctx: ExtensionContext): Promise<void> {
+    async agentSettled(ctx: ExtensionContext, aborted: boolean): Promise<void> {
       host.controller.settleAsks(ctx, host.controller.sessionSignal());
-      host.herdRun.agentSettled(ctx);
+      host.herdRun.agentSettled(ctx, aborted);
       await host.controller
         .settleResults(ctx, host.controller.sessionSignal())
         .catch(() => {});
@@ -3143,8 +3143,8 @@ export function registerLeadRuntime(
   pi.on("agent_start", (_event: unknown, ctx: ExtensionContext) =>
     agentEvents.agentStart(ctx),
   );
-  pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) =>
-    agentEvents.agentSettled(ctx),
+  pi.on("agent_settled", (event: { aborted: boolean }, ctx: ExtensionContext) =>
+    agentEvents.agentSettled(ctx, event.aborted),
   );
   pi.on("tool_call", (event: any, ctx: ExtensionContext) =>
     agentEvents.toolCall(event, ctx),
@@ -4254,6 +4254,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
   let leadAgentStartedAt: number | undefined;
   let herdRunStartedAt: number | undefined;
   let leadSettled = true;
+  let lastSettledRun: { aborted: boolean; summary?: string } | undefined;
   const latestMeaningfulAssistantResponse = (
     ctx: ExtensionContext,
     startedAt: number,
@@ -4281,16 +4282,6 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     if (!assignment) return;
     await host.publishProjectMessage(ctx, assignment, message, [], "herd_run");
   };
-  const publishSettledProjectHandoff = async (
-    ctx: ExtensionContext,
-    startedAt: number,
-  ): Promise<void> => {
-    const summary = latestMeaningfulAssistantResponse(ctx, startedAt);
-    await publishProjectHandoff(
-      ctx,
-      summary ? `Herd run settled.\n\n${summary}` : "Herd run settled.",
-    );
-  };
   const maybeFinish = (ctx: ExtensionContext): void => {
     if (herdRunStartedAt === undefined || !leadSettled) return;
     const sessionId = ctx.sessionManager.getSessionId();
@@ -4316,7 +4307,14 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
       herdRunStartedAt = undefined;
       host.requestStatusRefresh();
       host.queueLeadPresentation(ctx);
-      void publishSettledProjectHandoff(ctx, startedAt).catch((error) =>
+      const outcome = lastSettledRun;
+      lastSettledRun = undefined;
+      const message = outcome?.aborted
+        ? "Lead execution was cancelled before a completed response."
+        : outcome?.summary
+          ? `Herd run settled.\n\n${outcome.summary}`
+          : "Herd run settled.";
+      void publishProjectHandoff(ctx, message).catch((error) =>
         host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error),
       );
     } catch (error) {
@@ -4346,16 +4344,23 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
       leadAgentStartedAt = Date.now();
       leadSettled = false;
     },
-    agentSettled: (ctx: ExtensionContext) => {
+    agentSettled: (ctx: ExtensionContext, aborted: boolean) => {
       const turnStartedAt = leadAgentStartedAt;
       leadAgentStartedAt = undefined;
       const herdOwnsHandoff = herdRunStartedAt !== undefined;
+      const summary =
+        !aborted && turnStartedAt !== undefined
+          ? latestMeaningfulAssistantResponse(ctx, turnStartedAt)
+          : undefined;
+      if (herdOwnsHandoff) lastSettledRun = { aborted, summary };
       leadSettled = true;
       maybeFinish(ctx);
       if (!herdOwnsHandoff && turnStartedAt !== undefined) {
-        const response = latestMeaningfulAssistantResponse(ctx, turnStartedAt);
-        if (response)
-          void publishProjectHandoff(ctx, response).catch((error) =>
+        const message = aborted
+          ? "Lead execution was cancelled before a completed response."
+          : summary;
+        if (message)
+          void publishProjectHandoff(ctx, message).catch((error) =>
             host.appendDurableError(
               host.pi,
               ctx,
@@ -4372,6 +4377,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         sessionId,
         host.entryName,
       );
+      lastSettledRun = undefined;
       leadSettled = herdRunStartedAt === undefined;
     },
     finishIfIdle: (ctx: ExtensionContext) => {
@@ -4384,6 +4390,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     shutdown: () => {
       leadAgentStartedAt = undefined;
       herdRunStartedAt = undefined;
+      lastSettledRun = undefined;
       leadSettled = true;
     },
   };

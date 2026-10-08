@@ -1295,6 +1295,36 @@ export function assistantResultForSession(session, prompt, marker) {
   return assistantResultForPrompt(session.contents, prompt, marker);
 }
 
+export function assistantTurnSettledForSession(session, prompt) {
+  const entries = sessionEntries(session.contents);
+  const user = entries.find(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "user" &&
+      messageText(entry.message.content) === prompt,
+  );
+  if (!user) return false;
+  const byId = new Map(
+    entries.filter((entry) => entry.id).map((entry) => [entry.id, entry]),
+  );
+  return entries.some((entry) => {
+    if (
+      entry.type !== "message" ||
+      entry.message?.role !== "assistant" ||
+      entry.message.stopReason !== "stop"
+    )
+      return false;
+    let parentId = entry.parentId;
+    const visited = new Set();
+    while (parentId && !visited.has(parentId)) {
+      if (parentId === user.id) return true;
+      visited.add(parentId);
+      parentId = byId.get(parentId)?.parentId;
+    }
+    return false;
+  });
+}
+
 function summarizeSession(contents) {
   const entries = sessionEntries(contents);
   const header = entries.find((entry) => entry.type === "session");
@@ -2995,6 +3025,12 @@ async function runManagerRecoverySmoke(ctx) {
         entry.message.toolName === "message_staff" &&
         !entry.message.isError,
     )
+      ? session
+      : null;
+  });
+  await waitFor("review-turn-settled", async () => {
+    const session = await rootSnapshot();
+    return session && assistantTurnSettledForSession(session, reviewPrompt)
       ? session
       : null;
   });

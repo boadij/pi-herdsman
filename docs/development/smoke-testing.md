@@ -64,6 +64,18 @@ snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
 replace the broader manual Chief supervision checks below.
 
+For runtime changes to settlement or tool selection, verify cancellation does
+not deliver partial assistant text as a successful result and verify the
+explicit tool allowlist excludes a disposable forbidden MCP probe. The
+`tool-policy-diagnostic.mjs --provider-tools-check` diagnostic exercises the
+provider-tool name extractor, while `--dispatch-check` runs Pi's native agent
+loop with a forbidden tool call and verifies it cannot execute. For the full
+runtime check, load the diagnostic extension with a disposable
+`mcp__policy_probe__forbidden` tool as described in
+[Customizing bundled agents](../guides/customizing-agents.md); verify it is
+absent from the explicit allowlist's active and provider tool sets and remains
+available only when the allowlist is omitted.
+
 Each scenario is one acceptance invocation. Smoke reports immediate failures,
 inactivity stalls, and hard timeouts separately. Provider-backed stages allow
 longer silence because Pi persists ordinary messages at `message_end`; local

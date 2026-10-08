@@ -426,7 +426,7 @@ test("managed interrupt continues the same assignment after abort settlement", a
       },
       context,
     );
-    await agent.events.get("agent_settled")![0](undefined, context);
+    await agent.events.get("agent_settled")![0]({ aborted: true }, context);
     assert.equal(readResult(mailbox, assignmentRequestId), undefined);
     assert.equal(readAgentState(mailbox)?.activeRequestId, assignmentRequestId);
     assert.equal(readAgentState(mailbox)?.completedRequestId, undefined);
@@ -447,7 +447,7 @@ test("managed interrupt continues the same assignment after abort settlement", a
       },
       context,
     );
-    await agent.events.get("agent_settled")![0](undefined, context);
+    await agent.events.get("agent_settled")![0]({ aborted: false }, context);
     assert.equal(readResult(mailbox, assignmentRequestId)?.status, "completed");
     assert.equal(
       readResult(mailbox, assignmentRequestId)?.text,
@@ -771,7 +771,7 @@ test("registered agent writes state, handles input, and settles one result", asy
   const started = readAgentState(mailbox);
   assert.equal(started?.agentLabel, "registered-agent");
   assert.equal(started?.activeRequestId, undefined);
-  await agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   const idleAfterStartup = readAgentState(mailbox);
   assert.equal(idleAfterStartup?.activeRequestId, undefined);
   assert.equal(idleAfterStartup?.completedRequestId, undefined);
@@ -833,13 +833,72 @@ test("registered agent writes state, handles input, and settles one result", asy
     },
     context,
   );
-  await agent.events.get("agent_settled")![0](undefined, context);
-  await agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   const result = readResult(mailbox, request.requestId);
   assert.equal(result?.status, "completed");
   assert.equal(result?.text, "done");
   assert.equal(readAgentState(mailbox)?.completedRequestId, request.requestId);
   assert.equal(readAgentState(mailbox)?.lastActivityAt, undefined);
+});
+
+test("aborted settlement fails an assignment despite meaningful assistant text", async () => {
+  const mailbox = setAgentEnvironment("aborted-result-agent");
+  const agent = fakePi();
+  const context = fakeContext();
+  registerExtension!(agent.pi as never);
+  agent.events.get("session_start")![0](undefined, context);
+  await new Promise((resolve) => setImmediate(resolve));
+  const state = readAgentState(mailbox)!;
+  const request: RequestRecord = {
+    version: 5,
+    runId: state.runId,
+    requestId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    kind: "task",
+    text: "do the work",
+    createdAt: Date.now(),
+  };
+  writeRequest(mailbox, request);
+  agent.events.get("input")![0](
+    { text: controlMarker(request.requestId) },
+    context,
+  );
+  agent.events.get("message_end")![0](
+    { message: { role: "assistant", content: "apparently successful answer" } },
+    context,
+  );
+  await agent.events.get("agent_settled")![0]({ aborted: true }, context);
+  assert.equal(readResult(mailbox, request.requestId)?.status, "failed");
+  assert.deepEqual(readResult(mailbox, request.requestId)?.error, {
+    code: "aborted",
+    message: "Agent execution was cancelled",
+  });
+  assert.equal(readResult(mailbox, request.requestId)?.text, undefined);
+  assert.equal(
+    readResult(mailbox, request.requestId)?.requestId,
+    request.requestId,
+  );
+  assert.equal(readResult(mailbox, request.requestId)?.runId, request.runId);
+  assert.equal(
+    readResult(mailbox, request.requestId)?.ownerSessionId,
+    request.ownerSessionId,
+  );
+  assert.equal(
+    readResult(mailbox, request.requestId)?.workspaceId,
+    request.workspaceId,
+  );
+  assert.equal(
+    readResult(mailbox, request.requestId)?.agentLabel,
+    request.agentLabel,
+  );
+  assert.equal(readResult(mailbox, request.requestId)?.paneId, request.paneId);
+  assert.equal(readAgentState(mailbox)?.completedRequestId, request.requestId);
+  agent.events.get("session_shutdown")?.[0]();
+  resetAgentMailbox(mailbox);
 });
 
 test("result persistence waits for the assignment lock", async (t) => {
@@ -873,7 +932,7 @@ test("result persistence waits for the assignment lock", async (t) => {
   );
   const release = claimProcessLock(assignmentLockPathForTest(mailbox));
   try {
-    await agent.events.get("agent_settled")![0](undefined, context);
+    await agent.events.get("agent_settled")![0]({ aborted: false }, context);
     assert.equal(readResult(mailbox, request.requestId), undefined);
     assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
   } finally {
@@ -922,7 +981,7 @@ test("assignment-lock contention does not consume result write attempts", async 
     support.failNextMailboxWrite = false;
   });
   try {
-    await agent.events.get("agent_settled")![0](undefined, context);
+    await agent.events.get("agent_settled")![0]({ aborted: false }, context);
     for (let attempt = 0; attempt < 10; attempt++) {
       t.mock.timers.tick(250);
       await Promise.resolve();
@@ -984,7 +1043,7 @@ test("result persistence does not recreate a removed mailbox", async () => {
     context,
   );
   realFs.rmSync(mailbox, { recursive: true, force: true });
-  await agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   assert.equal(realFs.existsSync(mailbox), false);
   assert.equal(readResult(mailbox, request.requestId), undefined);
   agent.events.get("session_shutdown")?.[0]();
@@ -1065,7 +1124,7 @@ test("agent bounds result persistence failure and exposes owner recovery evidenc
   );
   realFs.mkdirSync(join(mailbox, `result-${request.requestId}.json`));
   t.mock.timers.enable({ apis: ["setInterval"] });
-  await agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   for (let attempt = 0; attempt < 7; attempt++) {
     t.mock.timers.tick(250);
     await Promise.resolve();
@@ -1326,7 +1385,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     readPendingAsk(mailbox, waiting!)?.question ?? "",
     /registered-ask-options\.md/,
   );
-  await agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   assert.equal(readResult(mailbox, assignment.requestId), undefined);
 
   const reply: RequestRecord = {
@@ -1362,7 +1421,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
     { message: { role: "assistant", content: "ALPHA" } },
     context,
   );
-  await agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   assert.equal(readResult(mailbox, assignment.requestId)?.text, "ALPHA");
   realFs.rmSync(askFile, { force: true });
 });
@@ -1807,7 +1866,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       context,
     );
     const settle = pi.events.get("agent_settled")![0];
-    await settle(undefined, context);
+    await settle({ aborted: false }, context);
     assert.equal(readResult(parentMailbox, parentRequestId), undefined);
     assert.equal(
       readAgentState(parentMailbox)?.activeRequestId,
@@ -1892,7 +1951,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       customType: "pi-herdsman-agent-result",
       details: resultEntryDetails(childOne, childOne.activeRequestId!),
     });
-    await settle(undefined, context);
+    await settle({ aborted: false }, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sent.length, 1);
@@ -1949,7 +2008,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       ),
       false,
     );
-    await settle(undefined, context);
+    await settle({ aborted: false }, context);
     assert.equal(pi.sent.length, 3);
     entries.push({
       message: {
@@ -1957,7 +2016,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
         details: resultEntryDetails(childTwo, childTwo.activeRequestId!),
       },
     });
-    await settle(undefined, context);
+    await settle({ aborted: false }, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     // The parent observes durable child delivery but does not own child
@@ -1992,7 +2051,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       customType: "pi-herdsman-agent-result",
       details: resultEntryDetails(childThree, thirdRequestId),
     });
-    await settle(undefined, context);
+    await settle({ aborted: false }, context);
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pi.sent.length, 4);
@@ -2031,7 +2090,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
       /1 direct agent assignment remains unresolved/,
     );
     assert.equal(earlyResultStatus, "failed");
-    await settle(undefined, context);
+    await settle({ aborted: false }, context);
     assert.deepEqual(
       pi.sentMessageCalls.map(({ message }) => (message as any).customType),
       [
@@ -2188,7 +2247,7 @@ test("startup and completion metadata omit unavailable model and thinking values
     context,
   );
   const callsBeforeSettlement = agent.calls.length;
-  await agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   await new Promise((resolve) => setImmediate(resolve));
 
   const completion = agent.calls
@@ -2261,7 +2320,7 @@ test("startup and completion metadata preserve available model and thinking valu
     context,
   );
   const callsBeforeSettlement = agent.calls.length;
-  await agent.events.get("agent_settled")![0](undefined, context);
+  await agent.events.get("agent_settled")![0]({ aborted: false }, context);
   const laterCalls = agent.calls.slice(callsBeforeSettlement);
   assert.equal(
     laterCalls.some(
@@ -2498,7 +2557,7 @@ test("failed completion metadata cannot be bypassed by presentation updates", as
   const callsBeforeSettlement = agent.calls.length;
   assert.equal(readAgentState(mailbox)?.activeRequestId, request.requestId);
   completionMetadataStarted = true;
-  agent.events.get("agent_settled")![0](undefined, context);
+  agent.events.get("agent_settled")![0]({ aborted: false }, context);
   await t.waitFor(
     () =>
       assert.ok(
@@ -3767,7 +3826,7 @@ test("agent settlement clears an overflow retry bridge when no retry context run
     ),
     undefined,
   );
-  agent.events.get("agent_settled")![0](undefined, context);
+  agent.events.get("agent_settled")![0]({ aborted: false }, context);
   assert.equal(
     agent.events.get("context")![0](
       { messages: [{ role: "user", content: "later work" }] },
@@ -3977,7 +4036,7 @@ test("owner ask resolved while busy is not delivered after settlement", async ()
     removeAsk(mailbox, waiting.pendingAskId!);
     (context as any).isIdle = () => true;
     for (const handler of pi.events.get("agent_settled") ?? [])
-      await handler(undefined, context);
+      await handler({ aborted: false }, context);
     assert.equal(pi.sent.length, 0);
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -4029,7 +4088,7 @@ test("owner ask waits while busy and delivers once after settlement", async () =
     assert.equal(pi.sent.length, 0);
     idle = true;
     for (const handler of pi.events.get("agent_settled") ?? [])
-      await handler(undefined, context);
+      await handler({ aborted: false }, context);
     const delivered = pi.sent.find(
       (message: any) => message.customType === "pi-herdsman-agent-ask",
     ) as any;

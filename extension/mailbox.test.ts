@@ -483,6 +483,23 @@ test("rejects unsafe IDs and invalid conditional results", () => {
       } as never),
     /completed result/,
   );
+  const abortedResult = {
+    version: 5 as const,
+    runId: state.runId,
+    requestId: state.runId,
+    ownerSessionId: state.ownerSessionId,
+    workspaceId: state.workspaceId,
+    agentLabel: state.agentLabel,
+    paneId: state.paneId,
+    status: "failed" as const,
+    error: {
+      code: "aborted" as const,
+      message: "Agent execution was cancelled",
+    },
+    completedAt: Date.now(),
+  };
+  writeResult(path, abortedResult);
+  assert.deepEqual(readResult(path, state.runId), abortedResult);
   writeFileSync(
     join(path, "state.json"),
     JSON.stringify({

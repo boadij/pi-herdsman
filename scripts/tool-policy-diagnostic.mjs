@@ -36,8 +36,7 @@ if (process.argv.includes("--provider-tools-check")) {
 }
 
 if (process.argv.includes("--dispatch-check")) {
-  const { runAgentLoop } =
-    await import("../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-agent-core/dist/index.js");
+  const { runAgentLoop } = await import("@earendil-works/pi-agent-core");
   const { createAssistantMessageEventStream } =
     await import("../node_modules/@earendil-works/pi-ai/dist/index.js");
   const directory = mkdtempSync(
@@ -140,16 +139,17 @@ const expectedProvider = new Set(
 const forbidden = new Set(
   (process.env.POLICY_FORBIDDEN ?? "").split(",").filter(Boolean),
 );
+const forbiddenMode = process.env.POLICY_FORBIDDEN_MODE ?? "absent";
 const control = process.env.POLICY_CONTROL;
 
 if (
   !evidenceFile ||
-  !expectedLaunch.size ||
-  !expectedActive.size ||
-  !forbidden.size
+  process.env.POLICY_LAUNCH === undefined ||
+  !forbidden.size ||
+  !["absent", "present"].includes(forbiddenMode)
 )
   throw new Error(
-    "POLICY_EVIDENCE, POLICY_LAUNCH, POLICY_ACTIVE, and POLICY_FORBIDDEN are required",
+    "POLICY_EVIDENCE, POLICY_LAUNCH, POLICY_ACTIVE, POLICY_FORBIDDEN, and a valid POLICY_FORBIDDEN_MODE are required",
   );
 
 const names = (tools) =>
@@ -163,8 +163,19 @@ const fail = (message) => {
   throw new Error(message);
 };
 const check = (kind, values) => {
-  const bad = values.filter((name) => forbidden.has(name));
-  if (bad.length) fail(`${kind} contains forbidden tool(s): ${bad.join(",")}`);
+  if (kind === "tool call") {
+    if (
+      forbiddenMode === "absent" &&
+      values.some((name) => forbidden.has(name))
+    )
+      fail(`${kind} contains forbidden tool(s): ${values.join(",")}`);
+    return;
+  }
+  const present = values.filter((name) => forbidden.has(name));
+  if (forbiddenMode === "present" ? !present.length : present.length)
+    fail(
+      `${kind} ${forbiddenMode === "present" ? "omits" : "contains"} forbidden tool(s): ${[...forbidden].join(",")}`,
+    );
 };
 const same = (actual, expected) =>
   actual.length === expected.size && actual.every((name) => expected.has(name));
@@ -186,8 +197,8 @@ export default function (pi) {
     const all = names(pi.getAllTools());
     if (!same(launch, expectedLaunch))
       fail(`launch tools differ: ${launch.join(",")}`);
-    check("active", active);
-    if (!same(active, expectedActive))
+    if (forbiddenMode === "absent") check("active", active);
+    if (expectedActive.size && !same(active, expectedActive))
       fail(`active tools differ: ${active.join(",")}`);
     write({ event: "session_start", launch, active, all });
   });

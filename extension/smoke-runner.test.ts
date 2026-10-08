@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import {
   assistantResultForSession,
+  assistantTurnSettledForSession,
   bestEffortProcessDiagnostics,
   chiefTreeFooter,
   chiefTreeSelectedRow,
@@ -1093,6 +1094,49 @@ test("manager-recovery waits for the exact automatic project message turn to set
       "CONTEXT_MARKER",
     ),
     false,
+  );
+});
+
+test("manager-recovery waits for review assistant completion after message_staff", () => {
+  const prompt = managerRecoveryReviewPrompt("branch-a");
+  const entries = [
+    { id: "user", type: "message", message: { role: "user", content: prompt } },
+    {
+      id: "call",
+      parentId: "user",
+      type: "message",
+      message: { role: "assistant", stopReason: "toolUse", content: [] },
+    },
+    {
+      id: "receipt",
+      parentId: "call",
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "message_staff",
+        isError: false,
+      },
+    },
+  ];
+  const session = (messages) => ({
+    contents: messages.map((entry) => JSON.stringify(entry)).join("\n"),
+  });
+
+  assert.equal(assistantTurnSettledForSession(session(entries), prompt), false);
+  assert.equal(
+    assistantTurnSettledForSession(
+      session([
+        ...entries,
+        {
+          id: "final",
+          parentId: "receipt",
+          type: "message",
+          message: { role: "assistant", stopReason: "stop", content: "Done." },
+        },
+      ]),
+      prompt,
+    ),
+    true,
   );
 });
 
