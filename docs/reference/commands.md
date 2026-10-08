@@ -20,6 +20,7 @@ Herdsman package version.
 /herdsman definitions
 /herdsman placement [tab|subtree|split]
 /herdsman stop
+/lead [flexible|orchestrate]
 /manager
 /manager leave
 /chief
@@ -31,16 +32,31 @@ For the Herdsman commands above, replacing `/herdsman` with `/agents` is
 equivalent. The `/manager`, `/chief`, and `/takeover` commands are unchanged.
 
 `/herdsman` opens the native Pi menu titled with the running Pi Herdsman package
-version. Its six destinations are `Agents`, `Project manager`, `Session stats`,
-`Definitions`, `Settings`, and `Advanced…`. Active role state is secondary row
+version. Its seven destinations are `Execution`, `Agents`, `Project manager`,
+`Session stats`, `Definitions`, `Settings`, and `Advanced…`. Active role state is secondary row
 metadata; the TUI updates contextual help for the selected row.
+
+`Execution` shows the current ordinary Lead mode (`Flexible` or `Orchestrate`).
+Selecting it opens the same selector as `/lead`. A Lead with an exact current
+project assignment instead shows `Managed`; its contextual help identifies
+`managed-lead` and offers no ordinary mode choices.
+
+`/lead` opens the Execution selector. `/lead flexible` and `/lead orchestrate`
+select that mode directly; repeating the current mode explicitly refreshes its
+effective definition. Ordinary mode changes are persisted for the current
+session. An assigned Lead uses `managed-lead`; `/lead flexible` or
+`/lead orchestrate` cannot change that policy, and `/takeover` is the way to
+release Manager authority. In Manager or Chief mode, `/lead` changes the
+underlying ordinary Lead preference without replacing the active role tools.
 
 Selecting `Agents` opens the focused `Running`, `Layout`, and `Stop all…` menu.
 Its running count and current layout are secondary metadata. The root does not
 depend on Agent status or definitions to render.
 
-`Settings` contains `Manager auto-start`, `Context retirement`, and `Message
-limits`. The Message limits view edits the user-wide inline attachment and
+`Settings` contains `Default Lead execution`, `Manager auto-start`, `Context
+retirement`, and `Message limits`. The default is `Flexible` and applies only
+when a future ordinary Lead session has no persisted execution choice; changing
+it does not change the current session. The Message limits view edits the user-wide inline attachment and
 mailbox payload limits. It is available only to a lead Pi session with UI.
 Current values and presets show a rough token equivalent using four UTF-8
 bytes per token. The enforced limits are bytes, not tokens.
@@ -77,23 +93,23 @@ Ordinary usage retains its owned-session warning.
 ## `/herdsman definitions`
 
 Opens a flat native Definitions list of effective definitions, with reserved
-`managed-lead` first. Project definitions are included when Pi considers the
+`flexible-lead`, `orchestrator-lead`, and `managed-lead` first in that order.
+Project definitions are included when Pi considers the
 project trusted. Each definition shows its contributing source or sources as
 `bundled`, `project`, and/or `global`. Edits write global overrides only.
 
-The reserved managed Lead is not an Agent and remains excluded from Agent
-discovery and delegation. It supports `Model`, `Thinking`, and `Details`, but
-has no `Enabled` action. Global override edits affect future Lead launches,
-not Leads already running.
+The three reserved Lead definitions are not Agents and remain excluded from
+Agent discovery and delegation. `flexible-lead` and `orchestrator-lead` support
+`Details` only; `managed-lead` supports `Model`, `Thinking`, and `Details`, but
+has no `Enabled` action. Definition edits take effect at the next applicable
+profile resolution, not by watching files while a profile is active.
 
-The details view can show:
+The details view shows applicable effective metadata:
 
 - name and description;
-- configured or inherited model and thinking;
-- declared tool policy represented by definition metadata (not a complete
-  runtime capability probe);
-- named skills;
-- declared direct delegation;
+- configured or inherited model and thinking for launch definitions;
+- declared tool policy and expanded instructions;
+- named skills and declared direct delegation when supported by the definition;
 - overridden/custom state;
 - override/custom source path when relevant.
 
@@ -122,22 +138,25 @@ model is known.
 Selecting the managed Lead opens the same Model, Thinking, and Details actions,
 without `Enabled`.
 
+Selecting either ordinary Lead profile opens `Details` only.
+
 When Pi provides an explicit scoped-model list, that scope is used. Otherwise
 available models are offered.
 
 Thinking options use the effective model's supported levels when resolvable,
 or Pi Herdsman's validated vocabulary when not.
 
-The command edits only the selected top-level `model`, `thinking`, or `enabled`
-line in the global Markdown override. It preserves unrelated frontmatter and
-the complete body.
+The command edits only the selected supported top-level `model`, `thinking`,
+or `enabled` line in the global Markdown override. Runtime profiles have no
+editable frontmatter action. Edits preserve unrelated frontmatter and the
+complete body.
 
 Details re-resolves the selected definition when opened, so it reflects current
 overlays and body references even if the menu remained open while configuration
 changed.
 
-Changes apply to future assignments, not already-running agents or the lead Pi
-session. Fresh `delegate` assignments inherit the spawning controller's
+Model, thinking, and enabled changes apply to future assignments, not
+already-running agents or the lead Pi session. Fresh `delegate` assignments inherit the spawning controller's
 current settings when fields are unset; `continue` restores the saved
 session's settings.
 
@@ -236,13 +255,16 @@ prompts for confirmation before removing that exact session's project
 assignment and any pending project messages. A successful takeover ends Manager
 control and automatic project-result
 forwarding while preserving the Pi session, conversation, branch, worktree,
-running process, and Lead-owned Agents. Takeover does not imply project
-completion, and it does not restart Pi or change the current launch
-configuration. On an unassigned Lead it
+running process, and Lead-owned Agents. The session then uses ordinary
+`Orchestrate` execution through `orchestrator-lead`; this changes runtime
+instructions and ordinary active-tool projection, not launch-time model,
+thinking, extensions, skills, or context. Takeover does not imply project
+completion, and it does not restart Pi. On an unassigned Lead it
 reports that the Lead is not managed. In Manager or Chief mode it reports
 `Takeover is available only in Lead mode.` Without an interactive confirmation UI it
 reports `Takeover requires an interactive UI.` Cancellation leaves state
-unchanged.
+unchanged. The `orchestrator-lead` profile is resolved before releasing the
+assignment; if it is invalid, takeover does not remove Manager authority.
 
 Successful Herdr worktree removal and explicit `/takeover` are distinct
 assignment-release paths. Settlement, review, or user interaction does not

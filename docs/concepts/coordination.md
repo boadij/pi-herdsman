@@ -38,6 +38,15 @@ its definition permits.
 
 A Lead and its recursively owned Agent hierarchy form a **herd**.
 
+Lead execution configuration is separate from role and authority. An ordinary
+Lead uses its session's `Flexible` or `Orchestrate` preference, selecting
+`flexible-lead` or `orchestrator-lead`; a Manager-assigned Lead uses
+`managed-lead`. These definitions configure execution, not ownership or
+supervision. Only the exact current `ProjectAssignment` establishes Manager
+authority, and Lead-owned Agent trees remain governed by the existing durable
+ownership model. Confirmed `/takeover` releases that assignment and continues
+the session as ordinary `Orchestrate` execution.
+
 ### Manager
 
 Manager is a dedicated project-coordination mode. It controls only Leads named

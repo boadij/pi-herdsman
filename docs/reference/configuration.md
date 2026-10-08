@@ -25,6 +25,7 @@ schema is:
 
 ```json
 {
+  "defaultLeadExecution": "flexible",
   "spawnPlacement": "subtree",
   "contextRetirement": true,
   "autoActivateManager": false,
@@ -37,6 +38,7 @@ An absent file means these defaults:
 
 | Field                        |            Default | Allowed values                                    |
 | ---------------------------- | -----------------: | ------------------------------------------------- |
+| `defaultLeadExecution`       |         `flexible` | `flexible`, `orchestrate`                         |
 | `spawnPlacement`             |          `subtree` | `tab`, `subtree`, `split`                         |
 | `contextRetirement`          |               true | boolean                                           |
 | `autoActivateManager`        |              false | boolean                                           |
@@ -46,6 +48,12 @@ An absent file means these defaults:
 Malformed JSON, a non-object root, unknown fields, and invalid known values
 are errors. Reads do not create the directory or file. Herdsman's human
 configuration controls update this single file atomically.
+
+`defaultLeadExecution` selects the initial profile only for a future ordinary
+Lead session that has no persisted execution choice. Its values select
+`flexible-lead` or `orchestrator-lead`; it does not change a running session,
+and an existing session choice takes precedence. Manager-created assigned Leads
+use `managed-lead` instead.
 
 `inlineAttachmentLimitBytes` applies per file. Eligible complete strict UTF-8
 files are embedded only when the complete durable payload fits; other files

@@ -647,6 +647,7 @@ test("registered lead and unmanaged roles expose the correct surface", async () 
     "agents",
     "chief",
     "herdsman",
+    "lead",
     "manager",
     "takeover",
   ]);
@@ -2869,37 +2870,47 @@ test("definition roster matches live list and rejects stale sessions", async () 
     getSessionId: () => sessionId,
   };
   await pi.events.get("session_start")![0](undefined, context);
+  const promptEvent = {
+    systemPrompt: "base",
+    systemPromptOptions: { sections: {} },
+  };
   const prompt = await pi.events.get("before_agent_start")![0](
-    { systemPrompt: "base" },
+    promptEvent,
     context,
   );
+  assert.equal(prompt, undefined);
   assert.match(
-    prompt?.systemPrompt ?? "",
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /Use message_supervisor for material nonblocking coordination with your direct supervisor\./,
   );
   assert.match(
-    prompt?.systemPrompt ?? "",
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /integration, validation, or onward handoff/,
   );
   assert.match(
-    prompt?.systemPrompt ?? "",
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /carry relevant evidence into onward handoffs/,
   );
-  assert.match(prompt?.systemPrompt ?? "", /list_peers\/message_peer/);
+  assert.match(
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /list_peers\/message_peer/,
+  );
   assert.doesNotMatch(
-    prompt?.systemPrompt ?? "",
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /project-assignment delivery/,
   );
   assert.doesNotMatch(
-    prompt?.systemPrompt ?? "",
+    promptEvent.systemPromptOptions.sections.pi_herdsman_role,
     /available direct supervisor/,
   );
-  assert.match(prompt?.systemPrompt ?? "", /## Available agent definitions/);
-  assert.match(prompt?.systemPrompt ?? "", /<agent_definitions>/);
+  assert.match(
+    promptEvent.systemPromptOptions.sections.agent_definitions,
+    /Use list_agents for live Agent state/,
+  );
   const roster = JSON.parse(
-    prompt.systemPrompt.match(
-      /<agent_definitions>\n([\s\S]*?)\n<\/agent_definitions>/,
-    )[1],
+    promptEvent.systemPromptOptions.sections.agent_definitions.split(
+      "\n\nThis is the session-start definition snapshot.",
+    )[0],
   );
   const listResult = await pi.tools
     .find((tool) => tool.name === "list_agents")!
@@ -2910,18 +2921,34 @@ test("definition roster matches live list and rejects stale sessions", async () 
     JSON.stringify(listResult.details),
   );
   sessionId = randomUUID();
+  const staleEvent = {
+    systemPrompt: "base",
+    systemPromptOptions: { sections: {} },
+  };
   const stalePrompt = await pi.events.get("before_agent_start")![0](
-    { systemPrompt: "base" },
+    staleEvent,
     context,
   );
-  assert.match(stalePrompt?.systemPrompt ?? "", /## Lead role/);
-  assert.doesNotMatch(stalePrompt?.systemPrompt ?? "", /<agent_definitions>/);
+  assert.equal(stalePrompt, undefined);
+  assert.match(
+    staleEvent.systemPromptOptions.sections.pi_herdsman_role,
+    /## Lead role/,
+  );
+  assert.equal(
+    staleEvent.systemPromptOptions.sections.agent_definitions,
+    undefined,
+  );
   await pi.events.get("session_start")![0](undefined, context);
+  const restartedEvent = {
+    systemPrompt: "base",
+    systemPromptOptions: { sections: {} },
+  };
   const restartedPrompt = await pi.events.get("before_agent_start")![0](
-    { systemPrompt: "base" },
+    restartedEvent,
     context,
   );
-  assert.match(restartedPrompt?.systemPrompt ?? "", /<agent_definitions>/);
+  assert.equal(restartedPrompt, undefined);
+  assert.ok(restartedEvent.systemPromptOptions.sections.agent_definitions);
   assert.equal(pi.events.has("context"), false);
   pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_PANE_ID;

@@ -12,7 +12,12 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { claimProcessLock } from "./lock.ts";
 import { herdsmanConfigPath } from "./storage.ts";
-import { isSpawnPlacement, type SpawnPlacement } from "./core.ts";
+import {
+  isLeadExecutionMode,
+  isSpawnPlacement,
+  type LeadExecutionMode,
+  type SpawnPlacement,
+} from "./core.ts";
 
 const DEFAULT_BYTE_LIMIT = 128 * 1024;
 export const MIN_BYTE_LIMIT = 1024;
@@ -20,6 +25,7 @@ export const MAX_BYTE_LIMIT = 1024 * 1024;
 
 export type HerdsmanConfig = {
   spawnPlacement: SpawnPlacement;
+  defaultLeadExecution: LeadExecutionMode;
   contextRetirement: boolean;
   autoActivateManager: boolean;
   inlineAttachmentLimitBytes: number;
@@ -28,6 +34,7 @@ export type HerdsmanConfig = {
 
 export const DEFAULT_CONFIG: HerdsmanConfig = {
   spawnPlacement: "subtree",
+  defaultLeadExecution: "flexible",
   contextRetirement: true,
   autoActivateManager: false,
   inlineAttachmentLimitBytes: DEFAULT_BYTE_LIMIT,
@@ -46,6 +53,7 @@ export function validByteLimit(value: unknown): value is number {
 type ConfigKey = keyof HerdsmanConfig;
 const CONFIG_KEYS = new Set<ConfigKey>([
   "spawnPlacement",
+  "defaultLeadExecution",
   "contextRetirement",
   "autoActivateManager",
   "inlineAttachmentLimitBytes",
@@ -72,6 +80,11 @@ function parseRawConfig(content: string): Partial<HerdsmanConfig> {
     if (!isSpawnPlacement(record.spawnPlacement))
       throw new Error("Invalid Pi Herdsman config field spawnPlacement");
     result.spawnPlacement = record.spawnPlacement;
+  }
+  if ("defaultLeadExecution" in record) {
+    if (!isLeadExecutionMode(record.defaultLeadExecution))
+      throw new Error("Invalid Pi Herdsman config field defaultLeadExecution");
+    result.defaultLeadExecution = record.defaultLeadExecution;
   }
   if ("contextRetirement" in record) {
     if (typeof record.contextRetirement !== "boolean")
@@ -147,12 +160,17 @@ export function updateConfig<K extends ConfigKey>(
     if (value !== undefined) {
       if (key === "spawnPlacement" && !isSpawnPlacement(value))
         throw new Error("Invalid Pi Herdsman config field spawnPlacement");
+      if (key === "defaultLeadExecution" && !isLeadExecutionMode(value))
+        throw new Error(
+          "Invalid Pi Herdsman config field defaultLeadExecution",
+        );
       if (key === "contextRetirement" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field contextRetirement");
       if (key === "autoActivateManager" && typeof value !== "boolean")
         throw new Error("Invalid Pi Herdsman config field autoActivateManager");
       if (
         key !== "spawnPlacement" &&
+        key !== "defaultLeadExecution" &&
         key !== "contextRetirement" &&
         key !== "autoActivateManager" &&
         !validByteLimit(value)

@@ -63,29 +63,62 @@ Precedence is `bundled < project < global`.
 All effective Agent definitions are sorted and validated together, including
 every `agents` reference.
 
-### Reserved managed Lead definition
+### Reserved Lead definitions
 
-`managed-lead` is a reserved definition used only when Manager starts or
-resumes a project Lead. It uses the same bundled, project, and global overlay
-engine, but it is excluded from the Agent roster: it cannot be selected by
-`delegate_agent`, referenced from `agents`, or disabled. The Definitions UI
-places it first in the flat definitions list and supports editing only its
-`model` and `thinking` settings; it has no `Enabled` action.
+`flexible-lead`, `orchestrator-lead`, and `managed-lead` are reserved Lead
+definitions, not Agents. They are excluded from the Agent roster and cannot be
+selected by `delegate_agent`, referenced from `agents`, or disabled. The
+Definitions UI lists them first in this order: `flexible-lead`,
+`orchestrator-lead`, `managed-lead`. The two ordinary runtime profiles provide
+`Details` only; `managed-lead` additionally provides `Model` and `Thinking`.
 
-For project work, the project layer is resolved from the delegated worktree when
-that project is trusted. The effective definition is launch configuration only;
-it is not persisted into the project assignment. A running Lead is not
-hot-reconfigured when definition files change. Manager supervises project scope
-and assignment boundaries; the assigned Lead owns technical decisions and
-execution orchestration. Project assignment handoff and settlement behavior is
-described in [Project orchestration](../guides/project-orchestration.md).
+Ordinary unassigned Leads use their persisted execution choice: `flexible`
+selects `flexible-lead` and `orchestrate` selects `orchestrator-lead`. A future
+ordinary Lead with no saved choice uses the user-wide `defaultLeadExecution`
+setting. Exactly assigned project Leads use `managed-lead` instead. Execution
+choice is separate from Manager authority: only the current exact
+`ProjectAssignment` establishes that authority (see [ADR 0017](../adr/0017-use-project-assignments-for-managed-lead-authority.md)).
 
-`managed-lead` does not support `enabled`, `agents`, or `permission`.
-Its system prompt must use `append`; an override that selects `replace` is
-rejected so project or global policy cannot remove the Lead runtime contract.
-Other launch-policy fields in this schema retain their normal composition
-semantics. Herdsman always preserves the Lead coordination tools required by the
-runtime role even when an explicit tool allowlist or exclusion policy is used.
+The ordinary definitions are runtime profiles, not Pi launch definitions.
+They may configure only `name`, `description`, `body`, `bodyMode` on matching
+overlays, `tools`, and `excludeTools`. They reject `model`, `thinking`,
+`systemPromptMode`, `enabled`, `permission`, `agents`, `noTools`,
+`noBuiltinTools`, `skills`, `noSkills`, `inheritSkills`, `extensions`,
+`noExtensions`, `inheritGlobalContext`, and `inheritProjectContext`.
+`bodyMode` is valid only on a matching overlay as described below.
+
+For an ordinary runtime profile, omitted `tools` preserves the ordinary Lead
+tool baseline. An explicit `tools` list selects only matching registered
+ordinary tools, then `excludeTools` is applied. Herdsman-owned tools cannot be
+activated through this policy; mandatory Lead coordination tools are restored
+after filtering and cannot be excluded. Unregistered configured tools remain
+unavailable rather than widening the selected policy.
+
+If a persisted ordinary mode resolves to an invalid profile, Herdsman keeps the
+saved mode rather than silently switching to the other profile. The ordinary
+Lead fails closed to mandatory Lead coordination tools only and surfaces the
+definition error. Repair the selected definition, or explicitly choose the
+other mode with `/lead`; either action resolves the profile again.
+
+`managed-lead` is used only for Manager-created/assigned project Leads. It uses
+the same bundled, project, and global overlay engine as other definitions, but
+is a full launch definition with the launch-policy fields below. A trusted
+project layer is resolved from the delegated worktree. The effective
+definition is launch configuration, not assignment state. A running managed
+Lead is not hot-reconfigured when definition files change.
+
+`managed-lead` supports the ordinary launch-policy fields, except it does not
+support `enabled`, `agents`, or `permission`. Its system prompt must use
+`append`; an override that selects `replace` is rejected so project or global
+policy cannot remove the Lead runtime contract. Herdsman always preserves the
+Lead coordination tools required by the runtime role even when an explicit tool
+allowlist or exclusion policy is used.
+
+Managed Lead project assignment handoff and settlement behavior is described
+in [Project orchestration](../guides/project-orchestration.md). Runtime
+profiles modify execution instructions and ordinary tool projection only;
+reserved Lead definitions do not compose or inherit from one another (see
+[ADR 0018](../adr/0018-use-standalone-lead-execution-profiles.md)).
 
 ## Execution settings
 

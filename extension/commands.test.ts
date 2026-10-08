@@ -77,7 +77,6 @@ import support, {
   listResponse,
   managedState,
   nativeSessions,
-  projectContextCwds,
   readAgentState,
   readResult,
   realFs,
@@ -97,6 +96,315 @@ import support, {
   writeResult,
   writeAgentState,
 } from "./support.ts";
+import {
+  createLeadToolState,
+  sessionLeadExecutionState,
+} from "./lead-runtime.ts";
+
+const leadTools = [
+  "list_agents",
+  "delegate_agent",
+  "continue_agent",
+  "steer_agent",
+  "interrupt_agent",
+  "reply_agent",
+  "close_agent",
+  "inspect_agent",
+  "read_agent_transcript",
+  "message_supervisor",
+  "list_peers",
+  "message_peer",
+];
+const managerTools = [
+  "message_supervisor",
+  "list_peers",
+  "message_peer",
+  "list_staff",
+  "inspect_staff",
+  "read_staff_transcript",
+  "message_staff",
+  "delegate_project",
+  "resume_project",
+  "stop_lead",
+];
+const chiefTools = [
+  "list_staff",
+  "inspect_staff",
+  "read_staff_transcript",
+  "message_staff",
+];
+
+test("Lead execution state is strict and profile tools preserve only Lead capabilities", () => {
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-lead-execution",
+      data: { mode: "orchestrate", leadTools: ["read", "bash"] },
+    },
+  ];
+  assert.deepEqual(sessionLeadExecutionState(entries), {
+    mode: "orchestrate",
+    leadTools: ["read", "bash"],
+  });
+  assert.throws(
+    () =>
+      sessionLeadExecutionState([
+        { ...entries[0], data: { mode: "invalid", leadTools: [] } },
+      ]),
+    /invalid pi-herdsman-lead-execution entry/,
+  );
+  const state = createLeadToolState(
+    () =>
+      [
+        "read",
+        "bash",
+        "grep",
+        "delegate_agent",
+        "message_supervisor",
+        "list_staff",
+      ].map((name) => ({ name })),
+    ["delegate_agent", "list_staff"],
+    ["delegate_agent", "message_supervisor"],
+  );
+  const baseline = ["read", "bash", "grep"];
+  const projection = state.projectLeadTools(baseline, {
+    name: "orchestrator-lead",
+    path: "orchestrator-lead.md",
+    frontmatter: {
+      name: "orchestrator-lead",
+      tools: ["read", "list_staff", "delegate_agent", "missing"],
+      excludeTools: ["read"],
+    },
+    body: "",
+  });
+  assert.deepEqual(projection, ["delegate_agent", "message_supervisor"]);
+  assert.deepEqual(
+    state.projectLeadTools(baseline, {
+      name: "orchestrator-lead",
+      path: "orchestrator-lead.md",
+      frontmatter: {
+        name: "orchestrator-lead",
+        tools: ["b*", "gr*"],
+        excludeTools: ["gr*"],
+      },
+      body: "",
+    }),
+    ["bash", "delegate_agent", "message_supervisor"],
+  );
+  assert.deepEqual(
+    state.projectLeadTools(baseline, {
+      name: "flexible-lead",
+      path: "flexible-lead.md",
+      frontmatter: { name: "flexible-lead" },
+      body: "",
+    }),
+    [...baseline, "delegate_agent", "message_supervisor"],
+  );
+});
+
+test("ordinary Lead profile switches retain the saved tool baseline", async () => {
+  setLeadEnvironment();
+  const entries: any[] = [];
+  const baseline = ["read", "bash", "edit", "write"];
+  const pi = fakeChiefPi({ activeTools: baseline, entries });
+  const context = fakeContext(entries) as any;
+  context.hasUI = true;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "ls",
+      "find",
+      "grep",
+      ...leadTools,
+    ]);
+    const persisted = sessionLeadExecutionState(entries);
+    assert.equal(persisted?.mode, "orchestrate");
+    assert.deepEqual(persisted?.leadTools, baseline);
+    await pi.commandOptions.get("lead").handler("flexible", context);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, baseline);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("Manager transitions and mode changes preserve the ordinary Lead baseline", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "manager-baseline-pane";
+  process.env.HERDR_TAB_ID = "manager-baseline-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-baseline-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const baseline = ["read", "bash"];
+  const pi = fakeChiefPi({
+    activeTools: baseline,
+    exec: (_command, args) =>
+      args[0] === "workspace" && args[1] === "get"
+        ? respond({ workspace: { worktree: { repo_key: "repo-key" } } })
+        : args[0] === "worktree" && args[1] === "list"
+          ? respond({
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: "repo-key",
+                repo_name: "project",
+              },
+              worktrees: [],
+            })
+          : isAgentList(args)
+            ? respond({ agents: [managerAgentIdentity()] })
+            : args[0] === "agent" && args[1] === "get"
+              ? respond({ agent: managerAgentIdentity() })
+              : isApiSnapshot(args)
+                ? respond({ snapshot: { agents: [], panes: [] } })
+                : respond({}),
+  });
+  const context = fakeContext(pi.entries) as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "ls",
+      "find",
+      "grep",
+      ...leadTools,
+    ]);
+    await pi.commandOptions.get("manager").handler("", context);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...managerTools]);
+    await pi.commandOptions.get("lead").handler("flexible", context);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...managerTools]);
+    assert.deepEqual(sessionLeadExecutionState(pi.entries), {
+      mode: "flexible",
+      leadTools: baseline,
+    });
+    await pi.commandOptions.get("manager").handler("leave", context);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    assert.deepEqual(
+      sessionLeadExecutionState(pi.entries)?.leadTools,
+      baseline,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+  }
+});
+
+test("Chief transitions and mode changes preserve the ordinary Lead baseline", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-baseline-pane";
+  process.env.HERDR_TAB_ID = "chief-baseline-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `chief-baseline-${randomUUID()}.sock`,
+  );
+  const baseline = ["read", "bash"];
+  const pi = fakeChiefPi({ activeTools: baseline });
+  const context = fakeContext(pi.entries) as any;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("chief").handler("", context);
+    assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
+    await pi.commandOptions.get("lead").handler("flexible", context);
+    assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
+    assert.deepEqual(sessionLeadExecutionState(pi.entries), {
+      mode: "flexible",
+      leadTools: baseline,
+    });
+    await pi.commandOptions.get("chief").handler("leave", context);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    assert.deepEqual(
+      sessionLeadExecutionState(pi.entries)?.leadTools,
+      baseline,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("persisted Chief restores the saved ordinary execution profile on exit", async () => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "persisted-chief-profile-pane";
+  process.env.HERDR_TAB_ID = "persisted-chief-profile-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `persisted-chief-profile-${randomUUID()}.sock`,
+  );
+  const baseline = ["read", "bash"];
+  const entries: any[] = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: { role: "chief", leadTools: baseline },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-lead-execution",
+      data: { mode: "orchestrate", leadTools: baseline },
+    },
+  ];
+  const pi = fakeChiefPi({ activeTools: chiefTools, entries });
+  const context = fakeContext(entries) as any;
+  context.hasUI = true;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), chiefTools);
+    assert.equal(
+      entries.some(
+        (entry) => entry.customType === "pi_herdsman_definition_error",
+      ),
+      false,
+    );
+
+    await pi.commandOptions.get("chief").handler("leave", context);
+
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "ls",
+      "find",
+      "grep",
+      ...leadTools,
+    ]);
+    assert.deepEqual(sessionLeadExecutionState(entries), {
+      mode: "orchestrate",
+      leadTools: baseline,
+    });
+    const promptEvent = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {} },
+    };
+    await pi.events.get("before_agent_start")![0](promptEvent, context);
+    assert.match(
+      promptEvent.systemPromptOptions.sections.pi_herdsman_lead_execution,
+      /Do not keep otherwise delegable execution local/,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    setLeadEnvironment();
+  }
+});
 const claimChiefLease = (identity: any) =>
   claimChiefLeaseRaw({ ...identity, build: identity.build ?? HERDSMAN_BUILD });
 const writeLeadCoordinationState = (runtime: any, state: any) =>
@@ -183,6 +491,13 @@ test("session stats sums Pi usage entries and proven nested sessions once", asyn
     customType: "pi-herdsman-agent-definition",
     data: { sessionId: id, label, definition: "scout" },
   });
+  const writeSession = (id: string, path: string, sessionEntries: unknown[]) =>
+    writeFileSync(
+      path,
+      [{ type: "session", id }, ...sessionEntries]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
   nativeSessions.set(childPath, {
     id: childId,
     path: childPath,
@@ -210,6 +525,9 @@ test("session stats sums Pi usage entries and proven nested sessions once", asyn
       },
     ],
   });
+  for (const session of nativeSessions.values())
+    if (session.path === childPath || session.path === nestedPath)
+      writeSession(session.id, session.path, session.entries ?? []);
   const entries = [
     {
       type: "message",
@@ -263,6 +581,11 @@ test("session stats sums Pi usage entries and proven nested sessions once", asyn
         usage: usage(9),
       },
     ];
+    writeSession(
+      nestedId,
+      nestedPath,
+      nativeSessions.get(nestedPath)!.entries!,
+    );
     await pi.commandOptions.get("agents").handler("stats", context);
     assert.match(notices[1]!, /Managed agents · 1 session/);
     assert.match(notices[1]!, /Coverage incomplete/);
@@ -326,7 +649,7 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
   context.hasUI = true;
   const notices: string[] = [];
   context.ui.notify = (message: string) => notices.push(message);
-  const dir = mkdtempSync(join(tmpdir(), "herdsman-manager-usage-"));
+  const dir = realFs.mkdtempSync(join("/tmp", "herdsman-manager-usage-"));
   let restoreListAll: (() => void) | undefined;
   const leadA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
   const leadB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -364,6 +687,13 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       },
     },
   });
+  const writeSession = (id: string, path: string, sessionEntries: unknown[]) =>
+    writeFileSync(
+      path,
+      [{ type: "session", id }, ...sessionEntries]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
   nativeSessions.set(paths[leadA]!, {
     id: leadA,
     path: paths[leadA]!,
@@ -397,6 +727,10 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       { type: "usage", provider: "test", model: "agent", usage: usage(13) },
     ],
   });
+  for (const id of [leadA, leadB, agentX, agentY]) {
+    const session = nativeSessions.get(paths[id]!)!;
+    writeSession(session.id, session.path, session.entries ?? []);
+  }
   try {
     registerExtension!(manager.pi as never);
     await manager.events.get("session_start")![0](undefined, context);
@@ -416,11 +750,21 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
       });
     assert.deepEqual(
       listProjectAssignments(supervisionRuntime(), "repo-key").map(
-        (item) => item.id,
+        ({ id, piSessionFile }) => [id, piSessionFile],
       ),
-      [leadA, leadA, leadB],
+      [
+        [leadA, paths[leadA]],
+        [leadA, undefined],
+        [leadB, paths[leadB]],
+      ],
     );
     const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+    assert.deepEqual(
+      [leadA, leadB].map((id) =>
+        SessionManager.open(paths[id]!).getSessionId(),
+      ),
+      [leadA, leadB],
+    );
     const originalListAll = SessionManager.listAll;
     restoreListAll = () => (SessionManager.listAll = originalListAll);
     SessionManager.listAll = async () => {
@@ -445,6 +789,11 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
         { type: "usage", provider: "test", model: "lead", usage: usage(99) },
       ],
     });
+    writeSession(
+      leadA,
+      conflictPath,
+      nativeSessions.get(conflictPath)!.entries ?? [],
+    );
     writeProjectAssignment(supervisionRuntime(), {
       version: 2,
       id: leadA,
@@ -498,6 +847,11 @@ test("active Manager stats aggregates unique assigned Lead trees and omits unava
         receipt(leadB, agentY, "y"),
       ],
     });
+    writeSession(
+      leadA,
+      paths[leadB]!,
+      nativeSessions.get(paths[leadB]!)!.entries ?? [],
+    );
     await manager.commandOptions.get("agents").handler("stats", context);
     assert.match(notices.at(-1)!, /Coverage incomplete/);
     assert.doesNotMatch(notices.at(-1)!, /Managed Leads · 2 sessions/);
@@ -578,38 +932,6 @@ test("session stats marks malformed owned completed results incomplete", async (
     await pi.events.get("session_shutdown")?.[0]();
   }
 });
-const leadTools = [
-  "list_agents",
-  "delegate_agent",
-  "continue_agent",
-  "steer_agent",
-  "interrupt_agent",
-  "reply_agent",
-  "close_agent",
-  "inspect_agent",
-  "read_agent_transcript",
-  "message_supervisor",
-  "list_peers",
-  "message_peer",
-];
-const managerTools = [
-  "message_supervisor",
-  "list_peers",
-  "message_peer",
-  "list_staff",
-  "inspect_staff",
-  "read_staff_transcript",
-  "message_staff",
-  "delegate_project",
-  "resume_project",
-  "stop_lead",
-];
-const chiefTools = [
-  "list_staff",
-  "inspect_staff",
-  "read_staff_transcript",
-  "message_staff",
-];
 function managerAgentIdentity() {
   return {
     pane_id: process.env.HERDR_PANE_ID,
@@ -702,21 +1024,31 @@ test("active Manager supervision refreshes serialize and coalesce concurrent req
   maxActive = 0;
   gateRefresh = true;
   const beforeStart = pi.events.get("before_agent_start")![0];
-  const firstCaller = beforeStart(
-    { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-    context,
-  );
+  const promptEvents: any[] = [];
+  const firstEvent = {
+    systemPrompt: "base",
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  promptEvents.push(firstEvent);
+  const firstCaller = beforeStart(firstEvent, context);
   await gatedSnapshotStarted.promise;
-  const callers = Array.from({ length: 4 }, () =>
-    beforeStart(
-      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
-      context,
-    ),
-  );
+  const callers = Array.from({ length: 4 }, () => {
+    const event = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    promptEvents.push(event);
+    return beforeStart(event, context);
+  });
   release.resolve();
   const results = await Promise.all([firstCaller, ...callers]);
   assert.ok(
-    results.every((result) => /Manager role/.test(result?.systemPrompt ?? "")),
+    results.every((result, index) => {
+      assert.equal(result, undefined);
+      return /Manager role/.test(
+        promptEvents[index].systemPromptOptions.sections.pi_herdsman_role,
+      );
+    }),
   );
   assert.equal(maxActive, 1);
   assert.equal(snapshots - refreshSnapshotBase, 2);
@@ -783,6 +1115,8 @@ function fakeChiefPi(options: Parameters<typeof fakePi>[0] = {}) {
           ...initialTools,
           "read",
           "bash",
+          "ls",
+          "find",
           "grep",
           "foreign_tool",
           "list_agents",
@@ -918,13 +1252,22 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       first.pi.getAllTools().some((tool) => tool.name === "delegate_project"),
       true,
     );
+    const leadPromptEvent = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
     const leadPrompt = await first.events.get("before_agent_start")![0](
-      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+      leadPromptEvent,
       ctx1,
     );
+    assert.equal(leadPrompt, undefined);
     assert.match(
-      leadPrompt.systemPrompt,
+      leadPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
       /Own architecture, approved scope, acceptance of Agent outputs, integration, conflict resolution/,
+    );
+    assert.match(
+      leadPromptEvent.systemPromptOptions.sections.pi_herdsman_lead_execution,
+      /Delegate bounded execution work when an Agent can reasonably own it/,
     );
     await first.commandOptions.get("manager").handler("", ctx1);
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...managerTools]);
@@ -937,23 +1280,33 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       true,
     );
     assert.equal(first.pi.getActiveTools().includes("delegate_agent"), false);
+    const managerPromptEvent = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
     const managerPrompt = await first.events.get("before_agent_start")![0](
-      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+      managerPromptEvent,
       ctx1,
     );
+    assert.equal(managerPrompt, undefined);
     assert.match(
-      managerPrompt.systemPrompt,
+      managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
       /Manager role[\s\S]*Manage project work by branch[\s\S]*delegate_project with a task and optional branch\s+to start new project work\. Use resume_project with its branch to resume existing\s+project work\.[\s\S]*Project execution belongs to project Leads and their Agent trees[\s\S]*Lead messages are\s+coordination and review handoffs, not project completion\. Escalate to Chief with\s+message_supervisor/i,
     );
     assert.doesNotMatch(
-      managerPrompt.systemPrompt,
+      managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
       /Lead role[\s\S]*## Manager role/,
     );
     assert.doesNotMatch(
-      managerPrompt.systemPrompt,
+      managerPromptEvent.systemPromptOptions.sections.pi_herdsman_role,
       /Available agent definitions/,
     );
-    assert.equal(managerPrompt.message, undefined);
+    assert.equal(
+      managerPromptEvent.systemPromptOptions.sections
+        .pi_herdsman_lead_execution,
+      undefined,
+    );
+    assert.equal(managerPrompt?.message, undefined);
     const managerContext = first.sentMessageCalls.findLast(
       ({ message }: any) =>
         message?.customType === "pi-herdsman-supervision-context",
@@ -2029,9 +2382,11 @@ test("malformed Lead coordination blocks Manager auto-start", async () => {
       },
     ],
     exec: (command, args) => {
-      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
         topologyLookups++;
-      if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
+      }
+      if (command === "herdr" && args[0] === "workspace" && args[1] === "get") {
+        topologyLookups++;
         return {
           stdout: JSON.stringify({
             id: AGENT_ID,
@@ -2040,6 +2395,7 @@ test("malformed Lead coordination blocks Manager auto-start", async () => {
           stderr: "",
           code: 0,
         };
+      }
       return undefined;
     },
   });
@@ -2049,7 +2405,7 @@ test("malformed Lead coordination blocks Manager auto-start", async () => {
       undefined,
       fakeContext(pi.entries) as any,
     );
-    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
     assert.equal(topologyLookups, 0);
     assert.equal(
       readManagerDescriptor(supervisionRuntime(), WORKSPACE),
@@ -2062,6 +2418,66 @@ test("malformed Lead coordination blocks Manager auto-start", async () => {
           entry.data?.instanceId === "invalid",
       ),
     );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+    updateConfig("autoActivateManager", undefined);
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  }
+});
+
+test("malformed Lead coordination skips fallback topology restoration when auto-start is disabled", async () => {
+  setLeadEnvironment();
+  updateConfig("autoActivateManager", false);
+  process.env.HERDR_PANE_ID = "malformed-fallback-pane";
+  process.env.HERDR_TAB_ID = "malformed-fallback-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `malformed-fallback-${randomUUID()}.sock`,
+  );
+  let topologyLookups = 0;
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-lead-state",
+        data: { instanceId: "invalid" },
+      },
+    ],
+    exec: (command, args) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
+        topologyLookups++;
+      }
+      if (command === "herdr" && args[0] === "workspace" && args[1] === "get") {
+        topologyLookups++;
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { workspace: { worktree: { repo_key: "repo-key" } } },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return undefined;
+    },
+  });
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](
+      undefined,
+      fakeContext(pi.entries) as any,
+    );
+    assert.deepEqual(pi.pi.getActiveTools(), ["read"]);
+    assert.equal(topologyLookups, 0);
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE),
+      undefined,
+    );
+    assert.equal(readPeerLeadRecord(peerRuntime(), LEAD_SESSION_ID), undefined);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     updateConfig("autoActivateManager", undefined);
@@ -2147,11 +2563,11 @@ async function managerDelegateAssignmentTest(
     `delegate-project-${randomUUID()}.sock`,
   );
   const childWorkspace = `child-${randomUUID()}`;
-  const childCwd = mkdtempSync(join(tmpdir(), "pi-herdsman-manager-child-"));
+  const childCwd = realFs.mkdtempSync(join(PI_AGENT_ROOT, "manager-child-"));
   t.after(() => rmSync(childCwd, { recursive: true, force: true }));
   const managedLeadDir = join(childCwd, ".pi", "agents");
-  mkdirSync(managedLeadDir, { recursive: true });
-  writeFileSync(
+  realFs.mkdirSync(managedLeadDir, { recursive: true });
+  realFs.writeFileSync(
     join(managedLeadDir, "managed-lead.md"),
     "---\nname: managed-lead\nthinking: low\nbodyMode: append\n---\n\nTARGET_WORKTREE_MANAGED_LEAD",
   );
@@ -2313,12 +2729,12 @@ async function managerDelegateAssignmentTest(
       assert.equal(args.includes("--approve"), projectTrusted);
       assert.equal(args.includes("--no-approve"), !projectTrusted);
       const promptIndex = args.indexOf("--append-system-prompt");
+      assert.notEqual(promptIndex, -1);
+      const childPrompt = readFileSync(args[promptIndex + 1]!, "utf8");
       if (projectTrusted) {
-        assert.notEqual(promptIndex, -1);
-        const childPrompt = readFileSync(args[promptIndex + 1]!, "utf8");
         assert.match(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
       } else {
-        assert.equal(promptIndex, -1);
+        assert.doesNotMatch(childPrompt, /TARGET_WORKTREE_MANAGED_LEAD/);
       }
       writeLeadCoordinationState(supervisionRuntime(), {
         version: 1,
@@ -3611,7 +4027,7 @@ test("Chief shutdown releases its lease when ordinary tool restoration fails", a
   delete process.env.HERDR_PANE_ID;
 });
 
-test("Chief activation keeps its durable baseline when rollback restoration fails", async () => {
+test("Chief activation rollback fails closed when its restrictive projection fails", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -3627,10 +4043,16 @@ test("Chief activation keeps its durable baseline when rollback restoration fail
   context.ui.notify = (message: string) => notices.push(message);
   registerExtension!(pi.pi as never);
   await pi.events.get("session_start")![0](undefined, context);
-  const baseline = pi.pi.getActiveTools();
+  await pi.commandOptions.get("lead").handler("orchestrate", context);
+  const projected = pi.pi.getActiveTools();
+  assert.deepEqual(projected, ["read", "ls", "find", "grep", ...leadTools]);
+  assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
+    "read",
+    "bash",
+  ]);
   const setActiveTools = pi.pi.setActiveTools;
   let activationAttempted = false;
-  let failures = 1;
+  let projectionFailures = 2;
   pi.pi.setActiveTools = (next: string[]) => {
     if (next.includes("list_staff")) {
       activationAttempted = true;
@@ -3638,19 +4060,38 @@ test("Chief activation keeps its durable baseline when rollback restoration fail
     }
     if (
       activationAttempted &&
-      failures > 0 &&
-      next.join("|") === baseline.join("|")
+      projectionFailures > 0 &&
+      next.includes("read")
     ) {
-      failures--;
-      throw new Error("Chief baseline restoration failed");
+      projectionFailures--;
+      throw new Error("Lead profile restoration failed");
     }
     setActiveTools(next);
   };
 
   await pi.commandOptions.get("chief").handler("", context);
 
-  assert.deepEqual(pi.pi.getActiveTools(), baseline);
-  assert.deepEqual(notices, ["Chief activation failed"]);
+  assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+  assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
+    "read",
+    "bash",
+  ]);
+  const savedRole = [...entries]
+    .reverse()
+    .find((entry: any) => entry.customType === "pi-herdsman-role");
+  assert.equal(savedRole?.data.role, "lead");
+  assert.deepEqual(savedRole?.data.leadTools, ["read", "bash"]);
+  assert.ok(
+    entries.some(
+      (entry: any) =>
+        entry.customType === "pi_herdsman_role_error" &&
+        entry.data.error.includes("Lead profile restoration failed"),
+    ),
+  );
+  assert.deepEqual(notices, [
+    "Lead execution: orchestrate",
+    "Chief activation failed",
+  ]);
   const lease = claimChiefLease({
     piSessionId: context.sessionManager.getSessionId(),
     paneId: "chief-pane",
@@ -3659,7 +4100,13 @@ test("Chief activation keeps its durable baseline when rollback restoration fail
   });
   lease.release();
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), baseline);
+  assert.deepEqual(pi.pi.getActiveTools(), [
+    "read",
+    "ls",
+    "find",
+    "grep",
+    ...leadTools,
+  ]);
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
   delete process.env.HERDR_PANE_ID;
@@ -3734,6 +4181,7 @@ test("Chief tool activation failure restores ordinary Lead tools", async () => {
   registerExtension!(pi.pi as never);
   try {
     await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
     const ordinaryTools = pi.pi.getActiveTools();
     const setActiveTools = pi.pi.setActiveTools;
     pi.pi.setActiveTools = (next: string[]) => {
@@ -3745,13 +4193,15 @@ test("Chief tool activation failure restores ordinary Lead tools", async () => {
     await pi.commandOptions.get("chief").handler("", context);
 
     assert.deepEqual(pi.pi.getActiveTools(), ordinaryTools);
-    assert.deepEqual(notices, ["Chief tool activation failed"]);
+    assert.deepEqual(notices, [
+      "Lead execution: orchestrate",
+      "Chief tool activation failed",
+    ]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
-    setLeadEnvironment();
   }
 });
 
@@ -3940,17 +4390,18 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
 
   await pi.commandOptions.get("chief").handler("leave", context);
 
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "list_staff",
-    "inspect_staff",
-    "read_staff_transcript",
-    "message_staff",
-  ]);
+  const restoredLeadTools = [...new Set([...baseline, ...leadTools])];
+  assert.deepEqual(pi.pi.getActiveTools(), restoredLeadTools);
+  assert.ok(leadTools.every((name) => restoredLeadTools.includes(name)));
+  assert.equal(
+    chiefTools.some((name) => restoredLeadTools.includes(name)),
+    false,
+  );
   assert.deepEqual(
     entries
       .filter((entry: any) => entry.customType === "pi-herdsman-role")
       .at(-1)?.data,
-    { role: "lead", leadTools: baseline },
+    { role: "lead", leadTools: ["read", "bash"] },
   );
   const lease = claimChiefLease({
     piSessionId: context.sessionManager.getSessionId(),
@@ -3960,7 +4411,7 @@ test("manual chief leave completes lead cleanup when tool restoration fails", as
   });
   lease.release();
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), baseline);
+  assert.deepEqual(pi.pi.getActiveTools(), restoredLeadTools);
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
   delete process.env.HERDR_PANE_ID;
@@ -3981,7 +4432,6 @@ test("lead session-start retries an exact baseline after restoration fails", asy
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
-    setLeadEnvironment();
   });
   const context = fakeContext(entries) as any;
   context.mode = "rpc";
@@ -3990,9 +4440,9 @@ test("lead session-start retries an exact baseline after restoration fails", asy
   const start = pi.events.get("session_start")![0];
   await start(undefined, context);
   await pi.commandOptions.get("chief").handler("", context);
+  const ordinaryBaseline = ["read", "bash"];
   const baseline = [
-    "read",
-    "bash",
+    ...ordinaryBaseline,
     "list_agents",
     "delegate_agent",
     "continue_agent",
@@ -4009,7 +4459,7 @@ test("lead session-start retries an exact baseline after restoration fails", asy
   entries.push({
     type: "custom",
     customType: "pi-herdsman-role",
-    data: { role: "lead", leadTools: baseline },
+    data: { role: "lead", leadTools: ordinaryBaseline },
   });
   const setActiveTools = pi.pi.setActiveTools;
   let failRestore = true;
@@ -4023,12 +4473,11 @@ test("lead session-start retries an exact baseline after restoration fails", asy
 
   await start(undefined, context);
 
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "list_staff",
-    "inspect_staff",
-    "read_staff_transcript",
-    "message_staff",
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), leadTools);
+  assert.equal(
+    chiefTools.some((name) => pi.pi.getActiveTools().includes(name)),
+    false,
+  );
   assert.ok(
     entries.some(
       (entry: any) =>
@@ -4173,7 +4622,13 @@ test("Herdsman and agents share command handling and grammar", async () => {
   const command = pi.commandOptions.get("agents");
   assert.ok(command);
   const herdsman = pi.commandOptions.get("herdsman");
+  const lead = pi.commandOptions.get("lead");
   assert.ok(herdsman);
+  assert.ok(lead);
+  assert.deepEqual(lead.getArgumentCompletions(""), [
+    { value: "flexible", label: "flexible" },
+    { value: "orchestrate", label: "orchestrate" },
+  ]);
   assert.equal(command.description, "Alias for /herdsman");
   assert.equal(herdsman.description, "Open Pi Herdsman");
   assert.equal(command.handler, herdsman.handler);
@@ -4419,7 +4874,7 @@ test("Lead resume repairs stale staff from its durable displaced loadout", async
   const role = entries
     .filter((entry: any) => entry.customType === "pi-herdsman-role")
     .at(-1) as any;
-  assert.deepEqual(role.data, { role: "lead", leadTools: ordinaryTools });
+  assert.deepEqual(role.data, { role: "lead", leadTools: ["read", "bash"] });
 
   const reloaded = fakeChiefPi({
     activeTools: [
@@ -5006,6 +5461,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   await pi.commandOptions.get("agents").handler("", context);
   assert.equal(prompts[0]?.label, `Pi Herdsman · v${packageMetadata.version}`);
   assert.deepEqual(prompts[0]?.options, [
+    "Execution  Flexible",
     "Agents",
     "Project manager",
     "Session stats",
@@ -5015,6 +5471,7 @@ test("Herdsman menu opens the progressive discovery menu", async () => {
   ]);
   assert.equal(prompts[1]?.label, "Settings");
   assert.deepEqual(prompts[1]?.options, [
+    "Default Lead execution  Flexible",
     "Manager auto-start  off",
     "Context retirement  on",
     "Message limits",
@@ -5037,6 +5494,7 @@ test("Herdsman root renders when status and definition metadata fail", async () 
     contextAgentDefinitions: async () => {
       throw new Error("definitions unavailable");
     },
+    leadExecutionPresentation: () => ({ managed: false, mode: "flexible" }),
     roleActive: () => false,
     selectMenu: async (_ctx: unknown, _title: string, items: any[]) => {
       rootLabels = items.map(({ label }) => label);
@@ -5048,6 +5506,7 @@ test("Herdsman root renders when status and definition metadata fail", async () 
     ui: { notify: (message: string) => notices.push(message) },
   } as any);
   assert.deepEqual(rootLabels, [
+    "Execution",
     "Agents",
     "Project manager",
     "Session stats",
@@ -5121,6 +5580,10 @@ test("Herdsman role menus dispatch through the shared role transition", async ()
       let rootSelection = true;
       const host = {
         version: packageMetadata.version,
+        leadExecutionPresentation: () => ({
+          managed: false,
+          mode: "flexible",
+        }),
         roleActive: (selectedRole: string) =>
           selectedRole === role && scenario.active,
         transitionRole: async (selectedRole: string, leave: boolean) => {
@@ -5199,18 +5662,12 @@ test("Herdsman TUI selectors use stable values and current preselection", async 
           break;
         case 1:
           component.handleInput("\u001b[B");
-          component.handleInput("\r");
-          break;
-        case 2: {
-          component.handleInput("\u001b[B");
-          component.handleInput("\r");
-          break;
-        }
-        case 3:
+          renders.push(component.render(200));
           component.handleInput("\u001b");
           break;
-        default:
+        case 2:
           component.handleInput("\u001b");
+          break;
       }
     });
   try {
@@ -5220,8 +5677,10 @@ test("Herdsman TUI selectors use stable values and current preselection", async 
         line.includes(`Pi Herdsman · v${packageMetadata.version}`),
       ),
     );
+    assert.ok(renders[1]?.some((line) => /^→ Flexible\s+current/u.test(line)));
+    assert.ok(renders[2]?.some((line) => /^→ Orchestrate/u.test(line)));
     assert.ok(
-      renders[2]?.some((line) => /^→ Subtree tabs\s+current/u.test(line)),
+      renders[3]?.some((line) => /^→ Execution\s+Flexible/u.test(line)),
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -5249,7 +5708,7 @@ test("Herdsman root contextual help follows the selected row", async () => {
       );
       const snapshot = () => component.render(200);
       observed.push(snapshot());
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 6; i++) {
         component.handleInput("\u001b[B");
         observed.push(snapshot());
       }
@@ -5259,25 +5718,29 @@ test("Herdsman root contextual help follows the selected row", async () => {
     await pi.commandOptions.get("herdsman").handler("", context);
     const help = (index: number) =>
       observed[index]?.find((line) =>
-        /Manage running Agents, layout, and the owned Agent tree|Coordinate durable project work|Show Pi-native token usage|Inspect effective Agent and managed Lead definitions|Configure future-session/u.test(
+        /Choose this ordinary Lead session|Manage running Agents, layout, and the owned Agent tree|Coordinate durable project work|Show Pi-native token usage|Inspect effective Agent and Lead definitions|Configure future-session/u.test(
           line,
         ),
       ) ?? "";
     assert.match(
       help(0),
-      /Manage running Agents, layout, and the owned Agent tree\./u,
+      /Choose this ordinary Lead session's execution profile\./u,
     );
     assert.match(
       help(1),
-      /Coordinate durable project work across dedicated Lead sessions\./u,
+      /Manage running Agents, layout, and the owned Agent tree\./u,
     );
     assert.match(
       help(2),
-      /Show Pi-native token usage and cost for this session and managed work\./u,
+      /Coordinate durable project work across dedicated Lead sessions\./u,
     );
     assert.match(
       help(3),
-      /Inspect effective Agent and managed Lead definitions and edit global overrides\./u,
+      /Show Pi-native token usage and cost for this session and managed work\./u,
+    );
+    assert.match(
+      help(4),
+      /Inspect effective Agent and Lead definitions and edit global overrides\./u,
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -5286,12 +5749,7 @@ test("Herdsman root contextual help follows the selected row", async () => {
 
 test("Definitions contextual help uses the selected definition description", async () => {
   setLeadEnvironment();
-  const definitionPath = join(PI_AGENTS_DIR, "help-agent.md");
-  const description = "Existing definition description for contextual help.";
-  realFs.writeFileSync(
-    definitionPath,
-    `---\nname: help-agent\ndescription: ${description}\n---\nInstructions.\n`,
-  );
+  const selectedName = "generalist";
   const pi = fakePi();
   registerExtension!(pi.pi as never);
   const context = fakeContext() as any;
@@ -5300,9 +5758,9 @@ test("Definitions contextual help uses the selected definition description", asy
   const { contextAgentDefinitions } = await import("./agent-definitions.ts");
   const definitions = await contextAgentDefinitions(context);
   const expectedHelp = definitions.definitions.find(
-    ({ name }) => name === "help-agent",
+    ({ name }) => name === selectedName,
   )?.frontmatter.description;
-  assert.equal(expectedHelp, description);
+  assert.equal(typeof expectedHelp, "string");
 
   const observed: string[][] = [];
   let customCalls = 0;
@@ -5319,9 +5777,17 @@ test("Definitions contextual help uses the selected definition description", asy
       );
       const call = customCalls++;
       if (call === 0) {
-        for (let i = 0; i < 3; i++) component.handleInput("\u001b[B");
-        component.handleInput("\r");
-        return;
+        for (let attempts = 0; attempts < 20; attempts++) {
+          const selected = component
+            .render(200)
+            .find((line: string) => line.trimStart().startsWith("→"));
+          if (selected?.includes("Definitions")) {
+            component.handleInput("\r");
+            return;
+          }
+          component.handleInput("\u001b[B");
+        }
+        throw new Error("TUI item was not selected: Definitions");
       }
       if (call > 1) {
         component.handleInput("\u001b");
@@ -5333,13 +5799,13 @@ test("Definitions contextual help uses the selected definition description", asy
         const selected = rendered.find((line: string) =>
           line.trimStart().startsWith("→"),
         );
-        if (selected?.includes("help-agent")) {
+        if (selected?.includes(selectedName)) {
           component.handleInput("\u001b");
           return;
         }
         component.handleInput("\u001b[B");
       }
-      throw new Error("TUI item was not selected: help-agent");
+      throw new Error(`TUI item was not selected: ${selectedName}`);
     });
   try {
     await pi.commandOptions.get("herdsman").handler("", context);
@@ -5350,7 +5816,6 @@ test("Definitions contextual help uses the selected definition description", asy
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
-    realFs.rmSync(definitionPath, { force: true });
   }
 });
 
@@ -5430,6 +5895,15 @@ test("definition pickers preselect configured values and honor cancellation", as
       ],
     };
     let customCalls = 0;
+    let finishInteractions!: () => void;
+    let failInteractions!: (error: Error) => void;
+    const interactionsComplete = new Promise<void>((resolve, reject) => {
+      finishInteractions = resolve;
+      failInteractions = reject;
+    });
+    context.ui.notify = (message: string) => {
+      if (message.startsWith("Error:")) failInteractions(new Error(message));
+    };
     const keybindings = {
       matches: (data: string, key: string) =>
         ({
@@ -5465,15 +5939,30 @@ test("definition pickers preselect configured values and honor cancellation", as
           assert.match(line ?? "", /^→/u);
           component.handleInput("\r");
         } else component.handleInput("\u001b");
+        if (call === 4) finishInteractions();
       });
+    let interactionTimeout!: ReturnType<typeof setTimeout>;
+    const interactionTimeoutExpired = new Promise<never>((_resolve, reject) => {
+      interactionTimeout = setTimeout(
+        () => reject(new Error("TUI definition picker interaction timed out")),
+        5000,
+      );
+    });
     try {
-      await pi.commandOptions.get("agents").handler("definitions", context);
+      const handlerCompletion = pi.commandOptions
+        .get("agents")
+        .handler("definitions", context);
+      await Promise.race([
+        Promise.all([handlerCompletion, interactionsComplete]),
+        interactionTimeoutExpired,
+      ]);
       assert.equal(customCalls, 5, JSON.stringify(scenario));
       assert.equal(
         discoverAgent("preselect-agent").frontmatter[scenario.property],
         scenario.expected,
       );
     } finally {
+      clearTimeout(interactionTimeout);
       await pi.events.get("session_shutdown")?.[0]();
       realFs.rmSync(definitionPath, { force: true });
     }
@@ -5610,6 +6099,7 @@ test("settings navigation exposes message limits and one rough token formatter",
     await command.handler("", context);
     assert.equal(prompts[1]?.label, "Settings");
     assert.deepEqual(prompts[1]?.options, [
+      "Default Lead execution  Flexible",
       "Manager auto-start  off",
       "Context retirement  on",
       "Message limits",
@@ -5733,7 +6223,7 @@ test("message limit edits stay in the submenu with the edited field selected", a
       renders.push(component.render(200));
       switch (customCalls++) {
         case 0:
-          for (let i = 0; i < 4; i++) component.handleInput("\u001b[B");
+          for (let i = 0; i < 5; i++) component.handleInput("\u001b[B");
           component.handleInput("\r");
           break;
         case 1:
@@ -5771,7 +6261,10 @@ test("Running uses compact native options and focuses the freshly verified pane"
   const label = "running-menu-agent";
   const identity = defaultFixtureIdentity;
   const mailbox = agentMailboxPath(WORKSPACE, label);
-  writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
+  writeAgentState(mailbox, {
+    ...managedState(label, REQUEST_ID, identity),
+    agentDefinition: "agent",
+  });
   const pi = fakePi({
     exec: leadExec(label, "working", DEFAULT_PI_SESSION_ID),
   });
@@ -6558,7 +7051,7 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
   }
 });
 
-test("Definitions contextual help distinguishes managed Lead and Agent launches", async () => {
+test("Definitions contextual help distinguishes managed Lead and Agent launches across visits", async () => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
@@ -6639,6 +7132,8 @@ test("Definitions contextual help distinguishes managed Lead and Agent launches"
       }
     });
   try {
+    // The TUI Escape key closes this command's menu; reopen it for the Agent case.
+    await command.handler("definitions", context);
     await command.handler("definitions", context);
     assert.equal(customCall, 4);
   } finally {
@@ -7316,7 +7811,9 @@ test("Definitions is a flat provenance list and selection reopens the list", asy
       ["Definitions", "group:Custom", "Definitions"],
     );
     const definitions = prompts[0]!.options;
-    assert.match(definitions[0] ?? "", /^managed-lead\b.*bundled/iu);
+    assert.match(definitions[0] ?? "", /^flexible-lead\b.*bundled/iu);
+    assert.match(definitions[1] ?? "", /^orchestrator-lead\b.*bundled/iu);
+    assert.match(definitions[2] ?? "", /^managed-lead\b.*bundled/iu);
     assert.ok(
       definitions.some((option) => /group:Custom.*global/u.test(option)),
     );
@@ -7809,7 +8306,14 @@ test("status session preparation drops the previous session snapshot", async (t)
 
   const firstContext = context();
   runtime.prepareSession(firstContext);
+  runtime.prime(firstContext);
+  assert.equal(pending.length, 1, "priming starts the initial snapshot");
   runtime.start(firstContext);
+  assert.equal(
+    pending.length,
+    1,
+    "starting the widget preserves the primed request without overlap",
+  );
   pending[0]!.resolve({
     agents: [{ label: "old-agent", definition: "scout", state: "working" }],
     stale: false,
@@ -7895,6 +8399,7 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
   const activeTimers = new Set<ReturnType<typeof setInterval>>();
   const pendingLists: {
     resolve: (value: { stdout: string; stderr: string; code: number }) => void;
+    signal?: AbortSignal;
   }[] = [];
   const widgets: StatusWidget[] = [];
   const factories: ((tui: any, theme: any) => StatusWidget)[] = [];
@@ -7916,11 +8421,12 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
   }) as typeof clearInterval;
   try {
     const pi = fakePi({
-      exec: (command, args) => {
-        if (command === "herdr" && isApiSnapshot(args))
+      exec: (command, args, options) => {
+        if (command === "herdr" && isApiSnapshot(args)) {
           return new Promise((resolve) =>
-            pendingLists.push({ resolve }),
+            pendingLists.push({ resolve, signal: options?.signal }),
           ) as any;
+        }
         if (command === "herdr" && isPaneList(args))
           return {
             stdout: JSON.stringify({
@@ -7942,8 +8448,13 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
         return { stdout: "{}", stderr: "", code: 0 };
       },
     });
-    const makeContext = () => {
+    const makeContext = (sessionId: string) => {
       const context = fakeContext() as any;
+      context.sessionManager = {
+        ...context.sessionManager,
+        getSessionId: () => sessionId,
+        getSessionFile: () => `/tmp/${sessionId}.jsonl`,
+      };
       context.mode = "tui";
       context.hasUI = true;
       context.ui = {
@@ -7969,9 +8480,11 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
       await pi.events.get("session_shutdown")?.[0]();
     });
     const start = pi.events.get("session_start")![0];
-    const firstStart = start(undefined, makeContext());
+    const firstSessionId = "first-lead-session";
+    const currentSessionId = "current-lead-session";
+    const firstStart = start(undefined, makeContext(firstSessionId));
     await Promise.resolve();
-    const secondStart = start(undefined, makeContext());
+    const secondStart = start(undefined, makeContext(currentSessionId));
     await Promise.resolve();
 
     assert.equal(widgets.length, 2);
@@ -7996,32 +8509,44 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
       "a stale factory widget is disposed immediately",
     );
     assert.equal(activeTimers.size, 1);
-    for (const pending of pendingLists.splice(0, 2))
-      pending.resolve({
-        stdout: JSON.stringify({
-          id: 1,
-          result: {
-            snapshot: { agents: [], panes: [] },
-          },
-        }),
-        stderr: "",
-        code: 0,
-      });
+    const resolveInventory = (pending: (typeof pendingLists)[number]) =>
+      pending.resolve(
+        pending.signal?.aborted
+          ? {
+              stdout: "",
+              stderr: "superseded inventory failed",
+              code: 1,
+            }
+          : {
+              stdout: JSON.stringify({
+                id: 1,
+                result: {
+                  snapshot: { agents: [], panes: [] },
+                },
+              }),
+              stderr: "",
+              code: 0,
+            },
+      );
+    for (const pending of pendingLists.splice(0, 2)) resolveInventory(pending);
     await Promise.resolve();
     await Promise.resolve();
     assert.equal(widgets[1].render(120)[0], "● lead  unavailable");
-    for (const pending of pendingLists.splice(0))
-      pending.resolve({
-        stdout: JSON.stringify({
-          id: 1,
-          result: {
-            snapshot: { agents: [], panes: [] },
-          },
-        }),
-        stderr: "",
-        code: 0,
-      });
+    const resolvePendingLists = () => {
+      for (const pending of pendingLists.splice(0)) resolveInventory(pending);
+    };
+    // Session startup also performs a recovery inventory after definitions resolve.
+    for (let index = 0; index < 5; index++) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      resolvePendingLists();
+    }
     await Promise.all([firstStart, secondStart]);
+    assert.ok(
+      !pi.entries.some(
+        (entry: any) => entry.customType === "pi_herdsman_recovery_error",
+      ),
+      "a rejected superseded inventory is ignored rather than recorded as a recovery error",
+    );
     for (let index = 0; index < 5; index++)
       await new Promise<void>((resolve) => setImmediate(resolve));
     assert.doesNotMatch(widgets[1].render(120)[0], /unavailable/);
@@ -8034,6 +8559,140 @@ test("repeated lead starts replace the widget and ignore old refreshes", async (
     globalThis.setInterval = originalSetInterval;
     globalThis.clearInterval = originalClearInterval;
   }
+});
+
+test("superseded lead startup cannot recover or publish over current session", async () => {
+  const { createLeadSessionStartRuntime } = await import("./lead-runtime.ts");
+  let resolveOldDefinitions!: (value: {
+    definitions: AgentDefinition[];
+    leadDefinitions: AgentDefinition[];
+    projectTrusted: boolean;
+  }) => void;
+  const oldDefinitions = new Promise<{
+    definitions: AgentDefinition[];
+    leadDefinitions: AgentDefinition[];
+    projectTrusted: boolean;
+  }>((resolve) => (resolveOldDefinitions = resolve));
+  let currentAbortController: AbortController | undefined;
+  const recovered: string[] = [];
+  const prepared: string[] = [];
+  const published: string[] = [];
+  const pendingTransitions: boolean[] = [];
+  const host = {
+    diagnostic() {},
+    controller: {
+      abortSession() {
+        currentAbortController?.abort();
+      },
+      clearPendingStarts() {},
+      beginSession() {
+        currentAbortController = new AbortController();
+        return currentAbortController.signal;
+      },
+      sessionStart() {},
+      recoverRuntimes(ctx: any, signal: AbortSignal) {
+        assert.equal(signal.aborted, false);
+        recovered.push(ctx.sessionManager.getSessionId());
+      },
+      startHealthScanner() {},
+    },
+    leadInboxRuntime: { beginSession() {}, start() {} },
+    leadStatusRuntime: {
+      prepareSession() {},
+      prime() {},
+      setSnapshot() {},
+      start() {},
+      requestRefresh() {},
+    },
+    isLead: () => true,
+    isManagedAgent: () => false,
+    clearLeadExecution() {},
+    setLeadExecutionPending(pending: boolean) {
+      pendingTransitions.push(pending);
+    },
+    hasLeadExecutionState: () => false,
+    clearDefinitionRoster() {},
+    clearChiefStartPreflight() {},
+    roleTransitions: {
+      beginSessionRole: () => ({
+        previousChiefMode: "inactive",
+        previousControllerRole: "lead",
+      }),
+      reconcileRoleTools() {},
+      activeManager: () => false,
+      canRestoreChiefState: () => false,
+      resolveControllerRole: async () => undefined,
+      finalizeOptionalManagerStartup() {},
+      suspendMalformedRole() {},
+      shouldRestoreChief: () => false,
+      chiefModeActive: () => false,
+      chiefModeInactive: () => true,
+      canStartChiefInbox: () => false,
+      mayPublishLeadPresence: () => false,
+    },
+    sessionLeadRoleState: () => undefined,
+    normalizeBaseTools: (tools: string[]) => tools,
+    normalizeLeadTools: (tools: string[]) => tools,
+    setLeadTools() {},
+    activeTools: () => [],
+    failClosedRole: async () => undefined,
+    publishLeadRole() {},
+    activateChief: async () => undefined,
+    restoreLeadExecution: async () => undefined,
+    enterSuspended() {},
+    enterLead() {},
+    schedulePeerPresence: async () => undefined,
+    herdRun: { restoreSession() {}, finishIfIdle() {} },
+    queueLeadPresentation() {},
+    setOwnTools() {},
+    initialStatusBreadcrumb: () => [],
+    ownToolsSnapshot: () => ({}),
+    startSupervisionUI() {},
+    discoverSessionDefinitions(ctx: any) {
+      return ctx.sessionManager.getSessionId() === "old-session"
+        ? oldDefinitions
+        : Promise.resolve({
+            definitions: [],
+            leadDefinitions: [],
+            projectTrusted: true,
+          });
+    },
+    prepareLeadExecution: async (ctx: any, signal: AbortSignal) => {
+      assert.equal(signal.aborted, false);
+      prepared.push(ctx.sessionManager.getSessionId());
+    },
+    visibleAgentDefinitionMetadata: async (ctx: any) => [
+      { sessionId: ctx.sessionManager.getSessionId() },
+    ],
+    setDefinitionRoster(roster: { sessionId: string }) {
+      published.push(roster.sessionId);
+    },
+    appendRoleError() {},
+    appendDefinitionError() {},
+    autoActivateManager: () => false,
+  } as any;
+  const runtime = createLeadSessionStartRuntime(host);
+  const contextFor = (sessionId: string) => {
+    const ctx = fakeContext() as any;
+    ctx.sessionManager = {
+      ...ctx.sessionManager,
+      getSessionId: () => sessionId,
+    };
+    return ctx;
+  };
+  const oldStart = runtime.sessionStart(contextFor("old-session"));
+  const currentStart = runtime.sessionStart(contextFor("current-session"));
+  await currentStart;
+  resolveOldDefinitions({
+    definitions: [],
+    leadDefinitions: [],
+    projectTrusted: true,
+  });
+  await oldStart;
+  assert.deepEqual(recovered, ["current-session"]);
+  assert.deepEqual(prepared, ["current-session"]);
+  assert.deepEqual(published, ["current-session"]);
+  assert.deepEqual(pendingTransitions, [true, true, false]);
 });
 
 test("TUI status refresh consumes the coherent Herdr session snapshot", async (t) => {
@@ -8058,7 +8717,6 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   resetAgentMailbox(mailbox);
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   const calls: string[][] = [];
-  const definitionReadsBeforeStatus = support.agentDefinitionReadCount;
   let refreshTimer: TimerHandler | undefined;
   const originalSetInterval = globalThis.setInterval;
   globalThis.setInterval = ((callback: TimerHandler) => {
@@ -8219,9 +8877,15 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   assert.match(rendered, /1 working/);
   assert.match(rendered, /sleep-smoke-a/);
   assert.doesNotMatch(rendered, /\[read, bash, ask_owner\]/);
-  assert.ok(
-    support.agentDefinitionReadCount > definitionReadsBeforeStatus,
-    "session-start roster should discover agent definitions once",
+  const promptEvent = {
+    systemPrompt: "base",
+    systemPromptOptions: { sections: {}, contextFiles: [] },
+  };
+  await pi.events.get("before_agent_start")![0](promptEvent, context);
+  assert.match(
+    promptEvent.systemPromptOptions.sections.agent_definitions,
+    /"name":\s*"agent"/,
+    "session-start roster should be available to the Lead prompt",
   );
   const listed = await agentTool(pi, "list").execute(
     "id",
@@ -8232,8 +8896,10 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   );
   assert.equal(listed.details.ok, true, JSON.stringify(listed.details));
   assert.ok(
-    support.agentDefinitionReadCount > definitionReadsBeforeStatus,
-    "list agents should continue to discover agent definitions",
+    listed.details.agent_definitions.some(
+      (definition: any) => definition.name === "agent",
+    ),
+    "list agents should continue to expose discovered definitions",
   );
   await pi.events.get("session_shutdown")?.[0]();
 });
@@ -8369,38 +9035,17 @@ test("zero-runtime reconciliation requests one status refresh", async (t) => {
 });
 
 test("fresh assignment refreshes the widget after validation", async (t) => {
-  setLeadEnvironment();
   const previousPlacement = readConfig().spawnPlacement;
-  updateConfig("spawnPlacement", "subtree");
   const label = "fresh-start-widget-agent";
-  const sessionPath = join(
-    tmpdir(),
-    `pi-herdsman-${label}-${randomUUID()}.jsonl`,
-  );
-  realFs.writeFileSync(
-    sessionPath,
-    JSON.stringify({
-      type: "session",
-      id: DEFAULT_PI_SESSION_ID,
-    }),
-    "utf8",
-  );
+  let sessionPath = "";
   const mailbox = agentMailboxPath(WORKSPACE, label);
   const agentsDir = PI_AGENTS_DIR;
   const definitionPath = `${agentsDir}/agent.md`;
-  const hadAgentsDir = realFs.existsSync(agentsDir);
-  const hadDefinition = realFs.existsSync(definitionPath);
-  const previousDefinition = hadDefinition
-    ? realFs.readFileSync(definitionPath, "utf8")
-    : undefined;
-  realFs.mkdirSync(agentsDir, { recursive: true });
-  realFs.writeFileSync(
-    definitionPath,
-    "---\nname: agent\ninheritProjectContext: true\ninheritGlobalContext: false\n---\nagent instructions\n",
-  );
-  projectContextCwds.length = 0;
-  const requestedCwd = PI_AGENT_ROOT;
-  resetAgentMailbox(mailbox);
+  let hadAgentsDir = false;
+  let hadDefinition = false;
+  let previousDefinition: string | undefined;
+  let requestedCwd = "";
+  let pi: ReturnType<typeof fakePi> | undefined;
   let live = false;
   let listCount = 0;
   let resolveInitialStatus: ((value: ExecResult) => void) | undefined;
@@ -8471,149 +9116,114 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
   };
   let startedRunId = AGENT_ID;
   let startedOwnerSessionId = LEAD_SESSION_ID;
-  const pi = fakePi({
-    exec: (command, args, options) => {
-      if (command === "herdr" && isApiSnapshot(args)) {
-        listCount++;
-        if (listCount === 1)
-          return new Promise<ExecResult>((resolve) => {
-            resolveInitialStatus = resolve;
-          });
-        return {
-          stdout: snapshot(live),
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "herdr" && isTabList(args))
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: {
-              tabs: [
-                {
-                  tab_id: "startup-tab",
-                  label: "agents",
-                  workspace_id: WORKSPACE,
-                },
-              ],
-            },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      if (command === "herdr" && args[0] === "tab" && args[1] === "create") {
-        const value = (key: string) =>
-          args
-            .slice(0, -1)
-            .find((arg) => arg.startsWith(`${key}=`))
-            ?.slice(key.length + 1);
-        startedRunId = value("PI_HERDSMAN_RUN_ID") ?? startedRunId;
-        startedOwnerSessionId =
-          value("PI_HERDSMAN_OWNER_SESSION_ID") ?? startedOwnerSessionId;
-        herdrAgent.name = runScopedHerdrAlias(WORKSPACE, label, startedRunId);
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: {
-              tab: { tab_id: "startup-tab" },
-              root_pane: {
-                pane_id: "startup-pane",
-                terminal_id: "startup-terminal",
-              },
-            },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (command === "herdr" && isPaneList(args))
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: {
-              panes: [
-                {
-                  pane_id: "startup-pane",
-                  tab_id: "startup-tab",
-                  workspace_id: WORKSPACE,
-                  terminal_id: "startup-terminal",
-                  cwd: requestedCwd,
-                  foreground_cwd: requestedCwd,
-                  agent_status: "unknown",
-                },
-              ],
-            },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      if (
-        command === "herdr" &&
-        args[0] === "pane" &&
-        args[1] === "process-info"
-      )
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: { process_info: processInfo },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      if (command === "herdr" && args[0] === "pane" && args[1] === "split") {
-        const value = (key: string) =>
-          args
-            .slice(0, -1)
-            .find((arg) => arg.startsWith(`${key}=`))
-            ?.slice(key.length + 1);
-        startedRunId = value("PI_HERDSMAN_RUN_ID") ?? startedRunId;
-        startedOwnerSessionId =
-          value("PI_HERDSMAN_OWNER_SESSION_ID") ?? startedOwnerSessionId;
-        herdrAgent.name = runScopedHerdrAlias(WORKSPACE, label, startedRunId);
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: {
-              pane: {
-                pane_id: "startup-pane",
-                terminal_id: "startup-terminal",
-              },
-            },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      }
-      if (
-        command === "herdr" &&
-        args[0] === "pane" &&
-        (args[1] === "run" || args[1] === "wait-output")
-      ) {
-        if (args[1] === "run") {
-          const value = (key: string) =>
-            new RegExp(`${key}='([^']*)'`).exec(args.at(-1) ?? "")?.[1];
-          startedRunId = value("PI_HERDSMAN_RUN_ID") ?? startedRunId;
-          startedOwnerSessionId =
-            value("PI_HERDSMAN_OWNER_SESSION_ID") ?? startedOwnerSessionId;
-          herdrAgent.name = runScopedHerdrAlias(WORKSPACE, label, startedRunId);
+  let widget: StatusWidget | undefined;
+  try {
+    setLeadEnvironment();
+    resetAgentMailbox(mailbox);
+    updateConfig("spawnPlacement", "subtree");
+    sessionPath = join(tmpdir(), `pi-herdsman-${label}-${randomUUID()}.jsonl`);
+    realFs.writeFileSync(
+      sessionPath,
+      JSON.stringify({
+        type: "session",
+        id: DEFAULT_PI_SESSION_ID,
+      }),
+      "utf8",
+    );
+    hadAgentsDir = realFs.existsSync(agentsDir);
+    hadDefinition = realFs.existsSync(definitionPath);
+    previousDefinition = hadDefinition
+      ? realFs.readFileSync(definitionPath, "utf8")
+      : undefined;
+    realFs.mkdirSync(agentsDir, { recursive: true });
+    realFs.writeFileSync(
+      definitionPath,
+      "---\nname: agent\ninheritProjectContext: true\ninheritGlobalContext: false\n---\nagent instructions\n",
+    );
+    assert.equal(
+      discoverAgent("agent").frontmatter.inheritProjectContext,
+      true,
+    );
+    assert.equal(
+      discoverAgent("agent").frontmatter.inheritGlobalContext,
+      false,
+    );
+    requestedCwd = realFs.mkdtempSync(
+      join(tmpdir(), "pi-herdsman-requested-cwd-"),
+    );
+    const projectContextPath = join(requestedCwd, "AGENTS.md");
+    realFs.writeFileSync(projectContextPath, "requested-CWD project context\n");
+    const { agentLaunchArgs } = await import("./agent-definitions.ts");
+    const discoveredCwds: string[] = [];
+    const contextArgs = agentLaunchArgs(discoverAgent("agent"), {
+      bodyPromptPath: "/tmp/agent-prompt.md",
+      cwd: requestedCwd,
+      loadProjectContextFiles: ({ cwd }) => {
+        discoveredCwds.push(cwd);
+        return [
+          {
+            path: projectContextPath,
+            content: "requested-CWD project context",
+          },
+        ];
+      },
+    });
+    assert.deepEqual(discoveredCwds, [requestedCwd]);
+    assert.ok(
+      contextArgs.includes(projectContextPath),
+      "project context discovered at requestedCwd should be appended to launch args",
+    );
+    herdrAgent.agent_session.value = sessionPath;
+    herdrAgent.cwd = requestedCwd;
+    pi = fakePi({
+      exec: (command, args, options) => {
+        if (command === "herdr" && isApiSnapshot(args)) {
+          listCount++;
+          if (listCount === 1)
+            return new Promise<ExecResult>((resolve) => {
+              resolveInitialStatus = resolve;
+            });
+          return {
+            stdout: snapshot(live),
+            stderr: "",
+            code: 0,
+          };
         }
-        return { stdout: "{}", stderr: "", code: 0 };
-      }
-      if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
-        integrationGetCount++;
-        if (failValidation) {
-          live = false;
+        if (command === "herdr" && isTabList(args))
           return {
             stdout: JSON.stringify({
               id: AGENT_ID,
               result: {
-                agent: {
-                  ...herdrAgent,
-                  agent_session: {
-                    ...herdrAgent.agent_session,
-                    value: "/tmp/validation-mismatch.jsonl",
+                tabs: [
+                  {
+                    tab_id: "startup-tab",
+                    label: "agents",
+                    workspace_id: WORKSPACE,
                   },
+                ],
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        if (command === "herdr" && args[0] === "tab" && args[1] === "create") {
+          const value = (key: string) =>
+            args
+              .slice(0, -1)
+              .find((arg) => arg.startsWith(`${key}=`))
+              ?.slice(key.length + 1);
+          startedRunId = value("PI_HERDSMAN_RUN_ID") ?? startedRunId;
+          startedOwnerSessionId =
+            value("PI_HERDSMAN_OWNER_SESSION_ID") ?? startedOwnerSessionId;
+          herdrAgent.name = runScopedHerdrAlias(WORKSPACE, label, startedRunId);
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                tab: { tab_id: "startup-tab" },
+                root_pane: {
+                  pane_id: "startup-pane",
+                  terminal_id: "startup-terminal",
                 },
               },
             }),
@@ -8621,99 +9231,195 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
             code: 0,
           };
         }
-        const response = {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: { agent: herdrAgent },
-          }),
-          stderr: "",
-          code: 0,
-        };
-        if (integrationGetCount === 1)
-          return new Promise<ExecResult>((resolve) => {
-            resolveIntegration = () => resolve(response);
-          });
-        return response;
-      }
-      if (
-        command === "herdr" &&
-        args[0] === "agent" &&
-        args[1] === "send-keys"
-      ) {
-        live = false;
-        return { stdout: "{}", stderr: "", code: 0 };
-      }
-      if (command === "herdr" && args[0] === "pane" && args[1] === "get")
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: {
-              pane: {
-                pane_id: "startup-pane",
-                tab_id: "startup-tab",
-                workspace_id: WORKSPACE,
-                terminal_id: "startup-terminal",
-                cwd: requestedCwd,
+        if (command === "herdr" && isPaneList(args))
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                panes: [
+                  {
+                    pane_id: "startup-pane",
+                    tab_id: "startup-tab",
+                    workspace_id: WORKSPACE,
+                    terminal_id: "startup-terminal",
+                    cwd: requestedCwd,
+                    foreground_cwd: requestedCwd,
+                    agent_status: "unknown",
+                  },
+                ],
               },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        if (
+          command === "herdr" &&
+          args[0] === "pane" &&
+          args[1] === "process-info"
+        )
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { process_info: processInfo },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        if (command === "herdr" && args[0] === "pane" && args[1] === "split") {
+          const value = (key: string) =>
+            args
+              .slice(0, -1)
+              .find((arg) => arg.startsWith(`${key}=`))
+              ?.slice(key.length + 1);
+          startedRunId = value("PI_HERDSMAN_RUN_ID") ?? startedRunId;
+          startedOwnerSessionId =
+            value("PI_HERDSMAN_OWNER_SESSION_ID") ?? startedOwnerSessionId;
+          herdrAgent.name = runScopedHerdrAlias(WORKSPACE, label, startedRunId);
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                pane: {
+                  pane_id: "startup-pane",
+                  terminal_id: "startup-terminal",
+                },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (
+          command === "herdr" &&
+          args[0] === "pane" &&
+          (args[1] === "run" || args[1] === "wait-output")
+        ) {
+          if (args[1] === "run") {
+            const value = (key: string) =>
+              new RegExp(`${key}='([^']*)'`).exec(args.at(-1) ?? "")?.[1];
+            startedRunId = value("PI_HERDSMAN_RUN_ID") ?? startedRunId;
+            startedOwnerSessionId =
+              value("PI_HERDSMAN_OWNER_SESSION_ID") ?? startedOwnerSessionId;
+            herdrAgent.name = runScopedHerdrAlias(
+              WORKSPACE,
+              label,
+              startedRunId,
+            );
+          }
+          return { stdout: "{}", stderr: "", code: 0 };
+        }
+        if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+          integrationGetCount++;
+          if (failValidation) {
+            live = false;
+            return {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: {
+                  agent: {
+                    ...herdrAgent,
+                    agent_session: {
+                      ...herdrAgent.agent_session,
+                      value: "/tmp/validation-mismatch.jsonl",
+                    },
+                  },
+                },
+              }),
+              stderr: "",
+              code: 0,
+            };
+          }
+          const response = {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: { agent: herdrAgent },
+            }),
+            stderr: "",
+            code: 0,
+          };
+          if (integrationGetCount === 1)
+            return new Promise<ExecResult>((resolve) => {
+              resolveIntegration = () => resolve(response);
+            });
+          return response;
+        }
+        if (
+          command === "herdr" &&
+          args[0] === "agent" &&
+          args[1] === "send-keys"
+        ) {
+          live = false;
+          return { stdout: "{}", stderr: "", code: 0 };
+        }
+        if (command === "herdr" && args[0] === "pane" && args[1] === "get")
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                pane: {
+                  pane_id: "startup-pane",
+                  tab_id: "startup-tab",
+                  workspace_id: WORKSPACE,
+                  terminal_id: "startup-terminal",
+                  cwd: requestedCwd,
+                },
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
+          live = true;
+          writeAgentState(mailbox, {
+            version: 5,
+            build: HERDSMAN_BUILD,
+            runId: startedRunId,
+            ownerSessionId: startedOwnerSessionId,
+            workspaceId: WORKSPACE,
+            agentLabel: label,
+            paneId: "startup-pane",
+            piSessionId: DEFAULT_PI_SESSION_ID,
+            piSessionFile: sessionPath,
+            cwd: requestedCwd,
+            updatedAt: Date.now(),
+          });
+          return {
+            stdout: JSON.stringify({
+              id: AGENT_ID,
+              result: {
+                tab_id: "startup-tab",
+                tab_label: "agents",
+                pane_id: "startup-pane",
+                cwd: requestedCwd,
+                herdr_agent: herdrAlias(label),
+                created_tab: false,
+                created_pane: false,
+                agent: herdrAgent,
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }
+        return startup.exec(command, args, options);
+      },
+    });
+    const context = fakeContext() as any;
+    context.cwd = requestedCwd;
+    context.mode = "tui";
+    context.hasUI = true;
+    context.ui = {
+      setWidget: (_key: string, content: unknown) => {
+        if (typeof content === "function")
+          widget = content(
+            { requestRender: () => undefined },
+            {
+              fg: (_color: string, text: string) => text,
+              bold: (text: string) => text,
             },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      if (command === "herdr" && args[0] === "agent" && args[1] === "start") {
-        live = true;
-        writeAgentState(mailbox, {
-          version: 5,
-          build: HERDSMAN_BUILD,
-          runId: startedRunId,
-          ownerSessionId: startedOwnerSessionId,
-          workspaceId: WORKSPACE,
-          agentLabel: label,
-          paneId: "startup-pane",
-          piSessionId: DEFAULT_PI_SESSION_ID,
-          piSessionFile: sessionPath,
-          cwd: requestedCwd,
-          updatedAt: Date.now(),
-        });
-        return {
-          stdout: JSON.stringify({
-            id: AGENT_ID,
-            result: {
-              tab_id: "startup-tab",
-              tab_label: "agents",
-              pane_id: "startup-pane",
-              cwd: requestedCwd,
-              herdr_agent: herdrAlias(label),
-              created_tab: false,
-              created_pane: false,
-              agent: herdrAgent,
-            },
-          }),
-          stderr: "",
-          code: 0,
-        };
-      }
-      return startup.exec(command, args, options);
-    },
-  });
-  const context = fakeContext() as any;
-  context.cwd = requestedCwd;
-  context.mode = "tui";
-  context.hasUI = true;
-  let widget: StatusWidget | undefined;
-  context.ui = {
-    setWidget: (_key: string, content: unknown) => {
-      if (typeof content === "function")
-        widget = content(
-          { requestRender: () => undefined },
-          {
-            fg: (_color: string, text: string) => text,
-            bold: (text: string) => text,
-          },
-        );
-    },
-  };
-  try {
+          );
+      },
+    };
     registerExtension!(pi.pi as never);
     await pi.events.get("session_start")![0](undefined, context);
     const starting = agentTool(pi, "delegate").execute(
@@ -8764,14 +9470,14 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
     assert.equal(pi.sentMessageCalls.length, 1);
-    assert.deepEqual(
-      {
-        discoveryCwds: projectContextCwds,
-        splitForMismatchedCwd: pi.calls.some(
-          (args) => args[0] === "pane" && args[1] === "split",
-        ),
-      },
-      { discoveryCwds: [requestedCwd], splitForMismatchedCwd: false },
+    const launch = pi.calls.find(
+      (args) => args[0] === "agent" && args[1] === "start",
+    );
+    assert.ok(launch, JSON.stringify(pi.calls));
+    assert.ok(launch.includes("--approve"), "trusted cwd should be approved");
+    assert.equal(
+      pi.calls.some((args) => args[0] === "pane" && args[1] === "split"),
+      false,
     );
     const getIndexes = pi.calls.flatMap((args, index) =>
       args[0] === "agent" && args[1] === "get" ? [index] : [],
@@ -8828,14 +9534,14 @@ test("fresh assignment refreshes the widget after validation", async (t) => {
     assert.match(widget!.render(160).join("\n"), /lead/);
   } finally {
     updateConfig("spawnPlacement", previousPlacement);
-    await pi.events.get("session_shutdown")?.[0]();
+    await pi?.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(mailbox);
-    realFs.rmSync(sessionPath, { force: true });
-    if (hadDefinition)
+    if (sessionPath) realFs.rmSync(sessionPath, { force: true });
+    if (requestedCwd)
+      realFs.rmSync(requestedCwd, { recursive: true, force: true });
+    if (hadDefinition && previousDefinition !== undefined)
       realFs.writeFileSync(definitionPath, previousDefinition!);
-    else if (!hadAgentsDir) {
-      realFs.unlinkSync(definitionPath);
-      realFs.rmdirSync(agentsDir);
-    } else realFs.unlinkSync(definitionPath);
+    else if (hadAgentsDir) realFs.rmSync(definitionPath, { force: true });
+    else realFs.rmSync(agentsDir, { recursive: true, force: true });
   }
 });

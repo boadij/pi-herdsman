@@ -72,8 +72,12 @@ function assertWidgetContent(content: unknown): void {
   component.invalidate();
 }
 export const realFs = await import("node:fs");
+const systemTmpDir = tmpdir();
 export const testTmpRoot = realFs.mkdtempSync(
-  join(tmpdir(), "pi-herdsman-test-"),
+  join(systemTmpDir, "pi-herdsman-test-"),
+);
+export const PI_AGENT_ROOT = realFs.mkdtempSync(
+  join(systemTmpDir, "pi-herdsman-pi-agent-"),
 );
 process.env.TMPDIR = testTmpRoot;
 const {
@@ -83,9 +87,6 @@ const {
   visibleWidth: tuiVisibleWidth,
 } = await import("@earendil-works/pi-tui");
 export { tuiVisibleWidth };
-export const PI_AGENT_ROOT = realFs.mkdtempSync(
-  join(tmpdir(), "pi-herdsman-pi-agent-"),
-);
 process.env.PI_CODING_AGENT_DIR = PI_AGENT_ROOT;
 export const PI_AGENTS_DIR = join(PI_AGENT_ROOT, "agents");
 realFs.mkdirSync(PI_AGENTS_DIR);
@@ -101,7 +102,12 @@ const {
   parseSessionEntries: nativeParseSessionEntries,
   truncateTail: nativeTruncateTail,
 } = await import("@earendil-works/pi-coding-agent");
-after(() => realFs.rmSync(testTmpRoot, { recursive: true, force: true }));
+after(() => {
+  realFs.rmSync(testTmpRoot, { recursive: true, force: true });
+});
+process.on("exit", () =>
+  realFs.rmSync(PI_AGENT_ROOT, { recursive: true, force: true }),
+);
 mock.module("node:fs", {
   namedExports: {
     accessSync: realFs.accessSync,
@@ -696,6 +702,7 @@ export function fakeContext(
     abort: () => undefined,
     isProjectTrusted: () => true,
     isIdle: () => true,
+    waitForIdle: async () => undefined,
     getContextUsage: () => ({ tokens: 2, contextWindow: 10, percent: null }),
     sessionManager: {
       getSessionId: () => LEAD_SESSION_ID,
@@ -2318,6 +2325,9 @@ export function createStagedAssignmentFixture(
     },
     get preSubmitValidationReady(): boolean {
       return preSubmitValidationReady;
+    },
+    get initialStatusStarted(): boolean {
+      return !holdInitialStatus;
     },
     get acceptedRequestIdWritten(): string {
       assert.ok(

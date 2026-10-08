@@ -268,13 +268,21 @@ In a lead session with UI:
 
 ### `/herdsman` and `/agents`
 
-Verify both `/herdsman` and `/agents` open the same six destinations `Agents`,
-`Project manager`, `Session stats`, `Definitions`, `Settings`, and `Advanced…`.
+Verify both `/herdsman` and `/agents` open the same seven destinations
+`Execution`, `Agents`, `Project manager`, `Session stats`, `Definitions`,
+`Settings`, and `Advanced…`.
 Verify active role state is secondary metadata and selected-row contextual help
 updates in the TUI. `/herdsman → Agents` opens only `Running`, `Layout`, and
 `Stop all…`, with the running count and effective placement as secondary
-metadata. Settings contains only Manager auto-start, Context retirement, and
-Message limits.
+metadata. `Execution` shows the current ordinary mode and opens the Flexible /
+Orchestrate selector; an assigned Lead shows Managed with `managed-lead` help
+and no ordinary mode choices. `/lead` opens the same selector, while
+`/lead flexible` and `/lead orchestrate` select directly through that control.
+Verify assigned Leads cannot switch out of Managed and that takeover starts
+ordinary Orchestrate execution. Settings contains Default Lead execution,
+Manager auto-start, Context retirement, and Message limits. Verify changing
+the default affects a future ordinary session without changing the current
+session.
 
 Navigate to Project manager and Chief mode from the menus. Confirm their
 Start, Overview, and Leave actions use the existing `/manager` and `/chief`
@@ -284,7 +292,9 @@ role behavior.
 
 Verify the native Definitions list shows:
 
-- actionable definitions in one flat list, with `managed-lead` first;
+- actionable definitions in one flat list, with reserved
+  `flexible-lead`, `orchestrator-lead`, and `managed-lead` first in that
+  canonical order;
 - contributing source words `bundled`, `project`, and `global`, including
   combinations where multiple sources contribute;
 - unpadded definition-name labels, with model, thinking, and provenance as
@@ -293,7 +303,10 @@ Verify the native Definitions list shows:
 - `Inherit current session` for model and thinking;
 - selected-row contextual help and width-safe layout in narrow panes.
 
-The reserved `managed-lead` remains non-Agent and has no Enabled action.
+All three reserved Lead definitions remain non-Agent. `flexible-lead` and
+`orchestrator-lead` have Details only; `managed-lead` has Model, Thinking, and
+Details, but no Enabled action. Runtime-profile definitions reject launch-only
+fields such as model, thinking, extensions, skills, and context inheritance.
 
 Structured `list_agents` should still retain exact deterministic metadata.
 

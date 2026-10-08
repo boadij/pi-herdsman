@@ -372,11 +372,17 @@ export function displayIdentity(
   return `${agentDefinition}:${label}`;
 }
 export type SpawnPlacement = "tab" | "subtree" | "split";
+export type LeadExecutionMode = "flexible" | "orchestrate";
 export function hasTaskText(task: string | undefined): boolean {
   return task !== undefined && !!task.trim();
 }
 export function isSpawnPlacement(value: unknown): value is SpawnPlacement {
   return value === "tab" || value === "subtree" || value === "split";
+}
+export function isLeadExecutionMode(
+  value: unknown,
+): value is LeadExecutionMode {
+  return value === "flexible" || value === "orchestrate";
 }
 export function spawnPlacementMenuOptions(
   current: SpawnPlacement,

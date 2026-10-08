@@ -80,6 +80,7 @@ test("missing config resolves to defaults without creating storage", () => {
   resetConfig();
   assert.deepEqual(readConfig(), DEFAULT_CONFIG);
   assert.equal(readConfig().contextRetirement, true);
+  assert.equal(readConfig().defaultLeadExecution, "flexible");
   assert.equal(readConfig().autoActivateManager, false);
   assert.equal(realFs.existsSync(herdsmanDataRoot()), false);
 });
@@ -90,6 +91,7 @@ test("partial and complete valid configs overlay defaults", () => {
     herdsmanConfigPath(),
     JSON.stringify({
       spawnPlacement: "split",
+      defaultLeadExecution: "flexible",
       contextRetirement: false,
       autoActivateManager: false,
     }),
@@ -104,6 +106,7 @@ test("partial and complete valid configs overlay defaults", () => {
     herdsmanConfigPath(),
     JSON.stringify({
       spawnPlacement: "tab",
+      defaultLeadExecution: "orchestrate",
       inlineAttachmentLimitBytes: MIN_BYTE_LIMIT,
       mailboxPayloadLimitBytes: MAX_BYTE_LIMIT,
       autoActivateManager: true,
@@ -111,6 +114,7 @@ test("partial and complete valid configs overlay defaults", () => {
   );
   assert.deepEqual(readConfig(), {
     spawnPlacement: "tab",
+    defaultLeadExecution: "orchestrate",
     contextRetirement: true,
     autoActivateManager: true,
     inlineAttachmentLimitBytes: MIN_BYTE_LIMIT,
@@ -122,6 +126,7 @@ test("invalid values, malformed JSON, non-object roots, and unknown keys fail cl
   realFs.mkdirSync(herdsmanDataRoot(), { recursive: true });
   for (const [content, message] of [
     ['{"spawnPlacement":"invalid"}', "spawnPlacement"],
+    ['{"defaultLeadExecution":"invalid"}', "defaultLeadExecution"],
     [
       `{"inlineAttachmentLimitBytes":${MIN_BYTE_LIMIT - 1}}`,
       "inlineAttachmentLimitBytes",
@@ -146,10 +151,16 @@ test("invalid values, malformed JSON, non-object roots, and unknown keys fail cl
   assert.equal(validByteLimit(MIN_BYTE_LIMIT), true);
   assert.equal(validByteLimit(MAX_BYTE_LIMIT), true);
   assert.equal(validByteLimit(MIN_BYTE_LIMIT + 0.5), false);
+  realFs.writeFileSync(herdsmanConfigPath(), "{}");
+  assert.throws(
+    () => updateConfig("defaultLeadExecution", "invalid" as never),
+    /defaultLeadExecution/,
+  );
 });
 
 test("updates preserve configured keys, reset one key, and delete the final config", () => {
   updateConfig("spawnPlacement", "tab");
+  updateConfig("defaultLeadExecution", "orchestrate");
   updateConfig("contextRetirement", false);
   updateConfig("autoActivateManager", true);
   updateConfig("mailboxPayloadLimitBytes", 64 * 1024);
@@ -157,15 +168,18 @@ test("updates preserve configured keys, reset one key, and delete the final conf
     JSON.parse(realFs.readFileSync(herdsmanConfigPath(), "utf8")),
     {
       spawnPlacement: "tab",
+      defaultLeadExecution: "orchestrate",
       contextRetirement: false,
       autoActivateManager: true,
       mailboxPayloadLimitBytes: 64 * 1024,
     },
   );
   assert.equal(readConfig().spawnPlacement, "tab");
+  assert.equal(readConfig().defaultLeadExecution, "orchestrate");
   assert.equal(readConfig().contextRetirement, false);
   assert.equal(readConfig().autoActivateManager, true);
   updateConfig("spawnPlacement", undefined);
+  updateConfig("defaultLeadExecution", undefined);
   assert.deepEqual(
     JSON.parse(realFs.readFileSync(herdsmanConfigPath(), "utf8")),
     {

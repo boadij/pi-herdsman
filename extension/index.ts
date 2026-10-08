@@ -84,6 +84,7 @@ import {
   taskAcceptanceAllowed,
   agentControlState,
   isSpawnPlacement,
+  type LeadExecutionMode,
   type SpawnPlacement,
 } from "./core.ts";
 import {
@@ -94,7 +95,7 @@ import {
   agentDefinitionMetadata,
   configuredModel,
   contextAgentDefinitions,
-  discoverManagedLeadDefinition,
+  discoverLeadDefinition,
   discoverAgentDefinitions,
   expandAgentBodyFiles,
   projectAgentDefinition,
@@ -103,6 +104,7 @@ import {
   validateAgentDefinitionReferences,
   VALID_THINKING_LEVELS,
   writePrivatePromptSnapshots,
+  type AgentDefinition,
 } from "./agent-definitions.ts";
 import {
   captureStartupDiagnostic,
@@ -1632,7 +1634,12 @@ export default function (pi: ExtensionAPI): void {
       selectModelMenu,
       readConfig,
       contextAgentDefinitions,
-      discoverManagedLeadDefinition,
+      discoverLeadDefinition,
+      setLeadExecutionMode: (
+        ctx: ExtensionCommandContext,
+        mode: LeadExecutionMode,
+      ) => leadRuntimes.setLeadExecutionMode(ctx, mode),
+      leadExecutionPresentation: () => leadRuntimes.leadExecutionPresentation(),
       agentDefinitionEnabled,
       agentDefinitionMetadata,
       expandAgentBodyFiles,
@@ -1653,21 +1660,28 @@ export default function (pi: ExtensionAPI): void {
       updateMessageLimit: (key: string, value: number | undefined) =>
         updateConfig(key as any, value),
       updateConfig: (key: string, value: unknown) =>
-        updateConfig(
-          key as "spawnPlacement" | "contextRetirement" | "autoActivateManager",
-          value as any,
-        ),
+        updateConfig(key as any, value as any),
       collectOwnedSessionUsage,
       formatSessionUsage,
     };
     if (controllerScope.kind === "lead") {
+      pi.registerCommand("lead", {
+        description: "Choose the ordinary Lead execution profile",
+        getArgumentCompletions: (prefix: string) =>
+          (["flexible", "orchestrate"] as const)
+            .filter((value) => value.startsWith(prefix.trim()))
+            .map((value) => ({ value, label: value })),
+        handler: async (rawArgs: string, ctx: ExtensionCommandContext) => {
+          await leadCommandRuntime.runLeadExecutionCommand(rawArgs, ctx);
+        },
+      });
       pi.registerCommand("takeover", {
         description:
           "Release Manager control while preserving this Lead and its work",
         handler: async (args, ctx) => {
           if (args.trim()) throw new Error("/takeover takes no arguments");
-          await roleTransitions.takeover(ctx);
-          leadRuntimes.statusRuntime.requestRefresh();
+          if (await leadRuntimes.takeover(ctx))
+            leadRuntimes.statusRuntime.requestRefresh();
         },
       });
       if (process.env.HERDR_PANE_ID)
@@ -2015,9 +2029,12 @@ export default function (pi: ExtensionAPI): void {
         },
         initialStatusBreadcrumb: () => initialStatusBreadcrumb,
         ownToolsSnapshot,
-        visibleAgentDefinitionMetadata: async (ctx: ExtensionContext) =>
+        visibleAgentDefinitionMetadata: async (
+          ctx: ExtensionContext,
+          definitions?: AgentDefinition[],
+        ) =>
           visibleAgentDefinitionMetadata(
-            (await contextAgentDefinitions(ctx)).definitions,
+            definitions ?? (await contextAgentDefinitions(ctx)).definitions,
             controllerScope,
           ),
         appendDefinitionError: (ctx: ExtensionContext, error: unknown) =>
