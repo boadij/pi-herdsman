@@ -4,7 +4,20 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test } from "node:test";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import type {
   AskRecord,
   RequestRecord,
@@ -3745,7 +3758,8 @@ test("overflow retry bridges queued retirement guidance once and only when absen
     details: { sessionId },
   };
   const entries: any[] = [staleGuidance];
-  const context = fakeAgentContext(entries, []);
+  const branch: any[] = [];
+  const context = fakeAgentContext(entries, branch);
   const pending: any[] = [];
   let streaming = true;
   const agent = fakePi({
@@ -3784,7 +3798,9 @@ test("overflow retry bridges queued retirement guidance once and only when absen
   );
 
   streaming = false;
-  entries.push({ type: "custom_message", ...pending.shift() });
+  const durableGuidance = { type: "custom_message", ...pending.shift() };
+  entries.push(durableGuidance);
+  branch.push(durableGuidance);
   assert.equal(
     entries.filter((entry) => entry.type === "custom_message").length,
     2,
@@ -3834,6 +3850,247 @@ test("agent settlement clears an overflow retry bridge when no retry context run
     ),
     undefined,
   );
+});
+
+test("threshold retirement bridges guidance into the next request once", () => {
+  const entries: any[] = [];
+  const context = fakeAgentContext(entries);
+  const queued: any[] = [];
+  const agent = fakePi({
+    entries,
+    sendMessage(message: any) {
+      queued.push(message);
+    },
+  });
+  registerManagedAgentContextHandlers(agent.pi as never, {
+    contextRetirementEnabled: () => true,
+    hasActiveAssignment: () => true,
+  });
+
+  const compact = agent.events.get("session_before_compact")![0];
+  assert.deepEqual(compact({ reason: "threshold" }, context), {
+    cancel: true,
+  });
+  assert.deepEqual(compact({ reason: "threshold" }, context), {
+    cancel: true,
+  });
+  assert.equal(queued.length, 1, "queued guidance is not duplicated");
+  const request = { messages: [{ role: "user", content: "after threshold" }] };
+  const bridged = agent.events.get("context")![0](request, context) as any;
+  assert.equal(bridged.messages.length, 2);
+  assert.equal(bridged.messages[1].content, queued[0].content);
+  assert.equal(
+    bridged.messages[1].details.sessionId,
+    context.sessionManager.getSessionId(),
+  );
+  assert.equal(agent.events.get("context")![0](request, context), undefined);
+
+  assert.deepEqual(compact({ reason: "threshold" }, context), {
+    cancel: true,
+  });
+  assert.equal(
+    agent.events.get("context")![0](request, context),
+    undefined,
+    "a consumed bridge is not re-armed while durable guidance is still queued",
+  );
+  assert.equal(queued.length, 1);
+
+  entries.push({ type: "custom_message", ...queued[0] });
+  assert.deepEqual(compact({ reason: "threshold" }, context), {
+    cancel: true,
+  });
+  assert.equal(queued.length, 1, "durable guidance is not queued twice");
+  assert.equal(agent.events.get("context")![0](request, context), undefined);
+
+  const alreadyVisibleEntries: any[] = [];
+  const alreadyVisibleContext = fakeAgentContext(alreadyVisibleEntries);
+  const alreadyVisibleAgent = fakePi({ entries: alreadyVisibleEntries });
+  registerManagedAgentContextHandlers(alreadyVisibleAgent.pi as never, {
+    contextRetirementEnabled: () => true,
+    hasActiveAssignment: () => true,
+  });
+  alreadyVisibleAgent.events.get("session_before_compact")![0](
+    { reason: "threshold" },
+    alreadyVisibleContext,
+  );
+  assert.equal(
+    alreadyVisibleAgent.events.get("context")![0](
+      {
+        messages: [
+          {
+            role: "custom",
+            customType: "pi-herdsman-agent-context-retired",
+            details: {
+              sessionId: alreadyVisibleContext.sessionManager.getSessionId(),
+            },
+          },
+        ],
+      },
+      alreadyVisibleContext,
+    ),
+    undefined,
+    "already-effective durable guidance is not duplicated",
+  );
+});
+
+test("Pi 1.1.0 threshold lifecycle bridges retirement into the next provider request", async () => {
+  const faux = fauxProvider({
+    provider: "herdsman-retirement-test",
+    models: [{ id: "small-context", contextWindow: 4096, maxTokens: 128 }],
+  });
+  const modelRuntime = await ModelRuntime.create({
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(faux.provider);
+  const model = faux.getModel();
+  assert.ok(model);
+  const settingsManager = SettingsManager.inMemory({
+    compaction: { enabled: true, reserveTokens: 1024, keepRecentTokens: 0 },
+  });
+  const thresholdEvents: string[] = [];
+  const lifecycle: string[] = [];
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    settingsManager,
+    noExtensions: true,
+    noContextFiles: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    extensionFactories: [
+      (api) => {
+        api.on("session_before_compact", (event) => {
+          thresholdEvents.push(event.reason);
+          lifecycle.push(`compact:${event.reason}`);
+        });
+        registerManagedAgentContextHandlers(api, {
+          contextRetirementEnabled: () => true,
+          hasActiveAssignment: () => true,
+        });
+      },
+    ],
+  });
+  await resourceLoader.reload();
+  const providerRequests: any[][] = [];
+  const responseWithUsage = (
+    message: ReturnType<typeof fauxAssistantMessage>,
+  ) => ({
+    ...message,
+    usage: {
+      input: 32,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 33,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  });
+  faux.setResponses([
+    () => {
+      lifecycle.push("first-provider-request");
+      return responseWithUsage(
+        fauxAssistantMessage([fauxToolCall("inflate_context", {})], {
+          stopReason: "toolUse",
+        }),
+      );
+    },
+    (context) => {
+      lifecycle.push("continuation-provider-request");
+      providerRequests.push(context.messages as any[]);
+      return responseWithUsage(
+        fauxAssistantMessage("Retired; returning the handoff."),
+      );
+    },
+  ]);
+  const { session } = await createAgentSession({
+    cwd: WORKSPACE,
+    agentDir: testTmpRoot,
+    modelRuntime,
+    model,
+    settingsManager,
+    resourceLoader,
+    sessionManager: SessionManager.inMemory(WORKSPACE),
+    tools: ["inflate_context"],
+    customTools: [
+      {
+        name: "inflate_context",
+        label: "inflate context",
+        description:
+          "Return enough text to cross the preventive compaction threshold.",
+        parameters: Type.Object({}),
+        execute: async () => ({
+          content: [{ type: "text", text: "context pressure ".repeat(750) }],
+        }),
+      },
+    ],
+  });
+  try {
+    await session.prompt("Run the context inflation tool, then finish.");
+
+    assert.ok(thresholdEvents.includes("threshold"));
+    assert.ok(thresholdEvents.every((reason) => reason === "threshold"));
+    assert.ok(
+      lifecycle.indexOf("first-provider-request") <
+        lifecycle.indexOf("compact:threshold") &&
+        lifecycle.indexOf("compact:threshold") <
+          lifecycle.indexOf("continuation-provider-request"),
+      lifecycle.join(" -> "),
+    );
+    assert.equal(
+      faux.state.callCount,
+      2,
+      "a continuation request follows the tool batch",
+    );
+    assert.equal(providerRequests.length, 1);
+    assert.ok(
+      session.sessionManager
+        .buildSessionProjection()
+        .messages.some((message: any) => message.role === "toolResult"),
+      "the threshold follows completion of the tool batch",
+    );
+    const retirementGuidance = providerRequests[0].filter((message) =>
+      JSON.stringify(message).includes(
+        "Context pressure has retired this session.",
+      ),
+    );
+    assert.equal(retirementGuidance.length, 1);
+  } finally {
+    await session.dispose();
+  }
+});
+
+test("retired Agents cannot start fresh assignments but may coordinate children", () => {
+  const entries: any[] = [];
+  const context = fakeAgentContext(entries);
+  const agent = fakePi({ entries });
+  let enabled = true;
+  let active = true;
+  registerManagedAgentContextHandlers(agent.pi as never, {
+    contextRetirementEnabled: () => enabled,
+    hasActiveAssignment: () => active,
+  });
+  const toolCall = agent.events.get("tool_call")![0];
+  assert.equal(toolCall({ toolName: "delegate_agent" }, context), undefined);
+  agent.pi.appendEntry("pi-herdsman-agent-context-retired", {
+    sessionId: context.sessionManager.getSessionId(),
+  });
+  for (const toolName of ["delegate_agent", "continue_agent"]) {
+    assert.deepEqual(toolCall({ toolName }, context), {
+      block: true,
+      reason:
+        "This Agent session is retired. Complete the current work and return a handoff.",
+    });
+  }
+  for (const toolName of ["steer_agent", "reply_agent", "inspect_agent"]) {
+    assert.equal(toolCall({ toolName }, context), undefined);
+  }
+  enabled = false;
+  assert.equal(toolCall({ toolName: "delegate_agent" }, context), undefined);
+  enabled = true;
+  active = false;
+  assert.equal(toolCall({ toolName: "continue_agent" }, context), undefined);
 });
 
 test("agent persists one identity entry before mailbox initialization", async () => {

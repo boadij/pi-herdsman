@@ -2338,7 +2338,9 @@ export function registerManagedAgentContextHandlers(
     hasActiveAssignment(): boolean;
   },
 ): void {
-  let overflowRetryGuidance: string | undefined;
+  let pendingGuidance: { sessionId: string; content: string } | undefined;
+  let queuedGuidanceSessionId: string | undefined;
+  let bridgedGuidanceSessionId: string | undefined;
   pi.on(
     "session_before_compact",
     (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
@@ -2352,9 +2354,13 @@ export function registerManagedAgentContextHandlers(
       const guided = sessionRetirementGuidanceVisible(ctx, sessionId);
       let guidance: string | undefined;
       if (!retired) pi.appendEntry(AGENT_CONTEXT_RETIRED_ENTRY, { sessionId });
-      if (!guided) guidance = CONTEXT_RETIREMENT_INSTRUCTION;
-      else if (event.reason === "overflow")
+      if (guided) queuedGuidanceSessionId = undefined;
+      if (!guided) {
+        if (queuedGuidanceSessionId !== sessionId)
+          guidance = CONTEXT_RETIREMENT_INSTRUCTION;
+      } else if (event.reason === "overflow") {
         guidance = CONTEXT_RETIREMENT_REMINDER;
+      }
       if (guidance) {
         pi.sendMessage(
           {
@@ -2365,33 +2371,101 @@ export function registerManagedAgentContextHandlers(
           },
           { triggerTurn: false },
         );
-        if (event.reason === "overflow" && event.willRetry)
-          overflowRetryGuidance = guidance;
+        queuedGuidanceSessionId = sessionId;
+      }
+      if (event.reason === "threshold") {
+        if (
+          !guided &&
+          bridgedGuidanceSessionId !== sessionId &&
+          !pendingGuidance
+        )
+          pendingGuidance = {
+            sessionId,
+            content: CONTEXT_RETIREMENT_INSTRUCTION,
+          };
+      } else if (event.reason === "overflow" && event.willRetry) {
+        pendingGuidance = {
+          sessionId,
+          content: guided
+            ? CONTEXT_RETIREMENT_REMINDER
+            : CONTEXT_RETIREMENT_INSTRUCTION,
+        };
       }
       if (event.reason === "threshold") return { cancel: true };
     },
   );
   pi.on("session_compact_failed", (event: SessionCompactFailedEvent) => {
-    if (event.reason === "overflow") overflowRetryGuidance = undefined;
+    if (event.reason === "overflow") {
+      pendingGuidance = undefined;
+      queuedGuidanceSessionId = undefined;
+      bridgedGuidanceSessionId = undefined;
+    }
   });
   pi.on("agent_settled", () => {
-    overflowRetryGuidance = undefined;
+    pendingGuidance = undefined;
+    queuedGuidanceSessionId = undefined;
+    bridgedGuidanceSessionId = undefined;
   });
-  pi.on("context", (event: ContextEvent) => {
-    if (!overflowRetryGuidance) return;
-    const content = overflowRetryGuidance;
-    overflowRetryGuidance = undefined;
+  pi.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
+    const pending = pendingGuidance;
+    if (!pending) return;
+    pendingGuidance = undefined;
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (
+      !options.contextRetirementEnabled() ||
+      !options.hasActiveAssignment() ||
+      sessionId !== pending.sessionId
+    )
+      return;
+    bridgedGuidanceSessionId = sessionId;
+    const alreadyVisible = event.messages.some(
+      (message: any) =>
+        message.role === "custom" &&
+        message.customType === AGENT_CONTEXT_RETIRED_ENTRY &&
+        message.details?.sessionId === pending.sessionId,
+    );
+    if (alreadyVisible) {
+      if (sessionRetirementGuidanceVisible(ctx, sessionId))
+        queuedGuidanceSessionId = undefined;
+      return;
+    }
+    if (sessionRetirementGuidanceVisible(ctx, sessionId)) {
+      queuedGuidanceSessionId = undefined;
+      return;
+    }
     return {
       messages: [
         ...event.messages,
         {
           role: "custom",
           customType: AGENT_CONTEXT_RETIRED_ENTRY,
-          content,
+          content: pending.content,
           display: false,
+          details: { sessionId: pending.sessionId },
           timestamp: Date.now(),
         },
       ],
+    };
+  });
+  pi.on("tool_call", (event: any, ctx: ExtensionContext) => {
+    if (
+      !options.contextRetirementEnabled() ||
+      !options.hasActiveAssignment() ||
+      (event.toolName !== "delegate_agent" &&
+        event.toolName !== "continue_agent")
+    )
+      return;
+    if (
+      !sessionContextRetired(
+        ctx.sessionManager.getEntries(),
+        ctx.sessionManager.getSessionId(),
+      )
+    )
+      return;
+    return {
+      block: true,
+      reason:
+        "This Agent session is retired. Complete the current work and return a handoff.",
     };
   });
   pi.on("session_before_switch", () => ({ cancel: true }));

@@ -21,11 +21,12 @@ enabled, a retired managed session is not eligible for historical
 `agent_continue`; follow-up work must use a fresh Agent with the relevant
 handoff, result, and files.
 
-Model-visible retirement guidance must become durable conversation history
-before subsequent provider work. Retirement must not rely on repeatedly
-injecting the full instruction through request-local context transformation.
-Any later reinforcement should extend the history rather than rewrite it, in
-accordance with ADR 0009.
+Model-visible retirement guidance must remain durable conversation history.
+When Pi defers appending queued guidance until after the active run, Herdsman
+may bridge it into the next provider request once so retirement takes effect
+without waiting for that append. This one-request bridge is not repeated
+injection; later requests use durable history. Any later reinforcement should
+extend the history rather than rewrite it, in accordance with ADR 0009.
 
 Manual compaction does not trigger retirement.
 
@@ -55,11 +56,12 @@ threshold compaction is suppressed while the active assignment finalizes,
 manual compaction is not treated as retirement, and overflow recovery remains
 available.
 
-Retirement guidance is behavioral context and should be visible to the model,
-but repeatedly reconstructing it as transient request-local context makes the
-effective conversation differ from its persisted history and unnecessarily
-reduces prompt-cache continuity. Durable model-visible history represents the
-transition directly and follows ADR 0009.
+Retirement guidance is behavioral context and should be visible to the model.
+Pi may defer a queued message while a run is active, so Herdsman bridges the
+instruction once into the next provider request when necessary. Durable
+model-visible history represents the transition for subsequent requests and
+follows ADR 0009; repeated transient injection would unnecessarily reduce
+prompt-cache continuity.
 
 Overflow is intentionally different from threshold pressure. At threshold,
 Herdsman still has enough context capacity to finish deliberately. During a
@@ -77,9 +79,8 @@ impossible, so Pi's native emergency recovery must remain available.
   recovery remains necessary and Pi already provides the appropriate
   cancellable lifecycle boundary.
 - Continue injecting retirement guidance transiently into every provider
-  request: rejected because durable model-visible history can express the same
-  lifecycle transition while preserving inspectability and prompt-cache
-  continuity.
+  request: rejected because a one-request bridge is sufficient to cover Pi's
+  deferred append while preserving durable history and prompt-cache continuity.
 - Cancel overflow compaction as well as threshold compaction: rejected because
   an actual overflow may require context reduction before any further provider
   request can succeed.
@@ -99,8 +100,10 @@ handoff.
 The full pre-retirement context remains available unless a genuine overflow
 requires Pi's recovery path.
 
-Retirement instructions become part of durable model-visible session history
-rather than a moving request-local suffix.
+Retirement instructions become part of durable model-visible session history.
+A one-request bridge ensures prompt delivery when Pi has not appended queued
+guidance before the next request; it is consumed once and does not become a
+moving request-local suffix.
 
 Completed retired sessions require fresh delegation for follow-up while context
 retirement remains enabled.
