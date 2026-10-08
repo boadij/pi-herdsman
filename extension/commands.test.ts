@@ -526,19 +526,31 @@ test("persisted Chief restores the saved ordinary execution profile on exit", as
       false,
     );
 
+    const restoredTools = ["read", "ls", "find", "grep", ...leadTools];
+    const setActiveTools = pi.pi.setActiveTools;
+    let failRestore = true;
+    pi.pi.setActiveTools = (next: string[]) => {
+      if (failRestore && next.join("|") === restoredTools.join("|")) {
+        failRestore = false;
+        throw new Error("ordinary profile restoration failed");
+      }
+      setActiveTools(next);
+    };
+
     await pi.commandOptions.get("chief").handler("leave", context);
 
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      "read",
-      "ls",
-      "find",
-      "grep",
-      ...leadTools,
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), restoredTools);
     assert.deepEqual(sessionLeadExecutionState(entries), {
       mode: "orchestrate",
       leadTools: baseline,
     });
+    assert.ok(
+      entries.some(
+        (entry: any) =>
+          entry.customType === "pi_herdsman_role_error" &&
+          entry.data.error.includes("ordinary profile restoration failed"),
+      ),
+    );
     const promptEvent = {
       systemPrompt: "base",
       systemPromptOptions: { sections: {} },

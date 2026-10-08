@@ -103,24 +103,25 @@ boundary. It does not add a socket transport or another agent-control protocol.
 
 A refresh failure never mutates mailbox/control eligibility.
 
-## Breadcrumb
+## Lead execution
 
-An ordinary Lead's header may include contextual `· managed` metadata when its
-exact Pi session is named by the current project assignment, for example:
+An ordinary Lead's header may include its verified effective execution mode:
+`· flexible`, `· orchestrate`, or `· managed`. The managed mode is shown when
+the exact Pi session is named by the current project assignment, for example:
 
 ```text
 ● lead · managed
 ```
 
-This marker is derived from current project assignment state and disappears
-after explicit `/takeover` without restarting Pi. It is presentation only, not
-authority. It appears separately from Agent ownership ancestry; a managed Lead
-with descendants retains an ownership breadcrumb such as `lead → implementer`
-and renders `· managed` as contextual metadata, never as an added breadcrumb
-segment. The marker participates in width-aware metadata truncation rather than
-overflowing a narrow header. A manually continued exact assigned session
-remains marked managed; the `managed-lead` launch definition is not used to
-derive the marker.
+The execution label is presentation only, not authority. Ordinary modes are
+shown only when the current project assignment has been verified absent and
+the selected Lead profile is valid; assignment or profile uncertainty omits the
+label. The label appears separately from Agent ownership ancestry; a Lead with
+descendants retains an ownership breadcrumb such as `lead → implementer` and
+renders execution as contextual metadata, never as an added breadcrumb segment.
+The complete label is omitted when it cannot fit rather than being partially
+truncated. A manually continued exact assigned session remains marked managed;
+the `managed-lead` launch definition is not used to derive the marker.
 
 Example:
 

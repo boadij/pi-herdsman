@@ -420,6 +420,13 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     await t.waitFor(() =>
       assert.doesNotMatch(statusWidget!.render(160)[0], /managed/),
     );
+    await t.waitFor(() =>
+      assert.match(statusWidget!.render(160)[0], /^● lead · orchestrate/),
+    );
+    await pi.commandOptions.get("lead")!.handler("flexible", ctx);
+    await t.waitFor(() =>
+      assert.match(statusWidget!.render(160)[0], /^● lead · flexible/),
+    );
 
     for (const handler of pi.events.get("agent_start") ?? [])
       await handler(undefined, ctx);

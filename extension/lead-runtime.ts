@@ -2599,24 +2599,19 @@ export function registerLeadRuntime(
       controller.runtimeForLabel(label),
   ): Promise<StatusSnapshot> => {
     let assignment: ProjectAssignment | undefined;
-    if (roleTransitions && activeLeadRole(options.leadRuntime) === "lead") {
+    const isLead =
+      roleTransitions && activeLeadRole(options.leadRuntime) === "lead";
+    let assignmentVerified = false;
+    if (isLead) {
       const sessionId = ctx.sessionManager.getSessionId();
       const workspaceId = process.env.HERDR_WORKSPACE_ID;
+      assignmentVerified = !workspaceId && !leadExecution?.managed;
       if (workspaceId) {
         if (
           statusWorktreeScope?.sessionId === sessionId &&
           statusWorktreeScope.workspaceId === workspaceId
         ) {
-          if (statusWorktreeScope.scope) {
-            try {
-              assignment = roleTransitions.projectAssignmentForScope(
-                statusWorktreeScope.scope,
-                sessionId,
-              );
-            } catch {
-              // Ambiguous assignment evidence must not claim Manager control.
-            }
-          }
+          assignmentVerified = true;
         } else if (
           statusWorktreeScopeRequest?.sessionId !== sessionId ||
           statusWorktreeScopeRequest.workspaceId !== workspaceId
@@ -2653,6 +2648,27 @@ export function registerLeadRuntime(
       true,
       allowTranscriptDefinitionFallback,
     );
+    if (
+      isLead &&
+      process.env.HERDR_WORKSPACE_ID &&
+      statusWorktreeScope?.sessionId === ctx.sessionManager.getSessionId() &&
+      statusWorktreeScope.workspaceId === process.env.HERDR_WORKSPACE_ID
+    ) {
+      if (statusWorktreeScope.scope) {
+        try {
+          assignment = roleTransitions.projectAssignmentForScope(
+            statusWorktreeScope.scope,
+            ctx.sessionManager.getSessionId(),
+          );
+          assignmentVerified = true;
+        } catch {
+          assignmentVerified = false;
+          // Ambiguous assignment evidence must not claim Manager control.
+        }
+      } else {
+        assignmentVerified = true;
+      }
+    }
     const snapshot = buildAgentStatusSnapshot(view, ctx, {
       ...options.statusSnapshotHost,
       scope: { kind: "lead" },
@@ -2660,7 +2676,15 @@ export function registerLeadRuntime(
       runtimeForLabel,
       herdStartedAt: () => herdRunRuntime?.startedAt(),
     });
-    return { ...snapshot, ...(assignment ? { managed: true } : {}) };
+    const execution =
+      isLead && assignmentVerified
+        ? assignment
+          ? { kind: "managed" as const }
+          : leadExecution?.valid
+            ? { kind: "ordinary" as const, mode: leadExecution.mode }
+            : undefined
+        : undefined;
+    return { ...snapshot, ...(execution ? { execution } : {}) };
   };
   statusRuntime.configure({
     ...options.statusSnapshotHost,
@@ -2931,6 +2955,7 @@ export function registerLeadRuntime(
       if (signal?.aborted) return;
       if (assignment) {
         leadExecution = { mode, valid: false, managed: true };
+        statusRuntime.requestRefresh();
         return;
       }
     } catch (error) {
@@ -2940,6 +2965,7 @@ export function registerLeadRuntime(
         valid: false,
         managed: !!leadExecution?.managed,
       };
+      statusRuntime.requestRefresh();
       options.sessionStartOptions.appendRoleError(ctx, error);
       return;
     }
@@ -2953,9 +2979,11 @@ export function registerLeadRuntime(
         valid: true,
         managed: false,
       };
+      statusRuntime.requestRefresh();
     } catch (error) {
       if (signal?.aborted) return;
       leadExecution = { mode, valid: false, managed: false };
+      statusRuntime.requestRefresh();
       options.sessionStartOptions.appendDefinitionError(ctx, error);
     }
   };
@@ -2993,6 +3021,7 @@ export function registerLeadRuntime(
       persistLeadExecution(mode, baseline);
       leadToolState.setLeadTools(baseline);
       leadExecution = { mode, definition, valid: true, managed: false };
+      statusRuntime.requestRefresh();
     } catch (error) {
       leadExecution = previousExecution;
       try {

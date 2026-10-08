@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { Box as TuiBox, Component } from "@earendil-works/pi-tui";
 import { createHash, randomUUID } from "node:crypto";
+import type { LeadExecutionMode } from "./core.ts";
 import {
   chmodSync,
   closeSync,
@@ -117,6 +118,8 @@ export interface StatusAgent {
   inactiveMs?: number;
   parentLabel?: string;
 }
+export type StatusExecution =
+  { kind: "managed" } | { kind: "ordinary"; mode: LeadExecutionMode };
 export interface StatusSnapshot {
   agents: StatusAgent[];
   stale: boolean;
@@ -126,7 +129,7 @@ export interface StatusSnapshot {
   ownTools?: string[];
   identityOnly?: boolean;
   refreshedAt?: number;
-  managed?: boolean;
+  execution?: StatusExecution;
 }
 export interface CompletionMessageDetails {
   requestId: string;
@@ -3532,28 +3535,48 @@ export class StatusWidget {
       ? "unavailable"
       : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
     const availableWidth = Math.max(0, width);
-    const breadcrumb = renderBreadcrumb(s.breadcrumb ?? ["?"], availableWidth);
-    const managed = s.managed ? " · managed" : "";
+    const execution = s.execution
+      ? ` · ${s.execution.kind === "managed" ? "managed" : s.execution.mode}`
+      : "";
     const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
-    const run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
+    let run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
     const suffixText = s.identityOnly || !suffix ? "" : `  ${suffix}`;
+    const breadcrumbSegments = s.breadcrumb ?? ["?"];
+    const breadcrumb = renderBreadcrumb(breadcrumbSegments, availableWidth);
+    const remainingWidth = Math.max(
+      0,
+      availableWidth - visibleWidth(breadcrumb),
+    );
+    const executionFits =
+      !!execution &&
+      visibleWidth(execution) + visibleWidth(suffixText) <= remainingWidth;
+    const shownExecution = executionFits ? execution : "";
     const tools = renderToolMetadata(
       s.ownTools,
       Math.max(
         0,
-        availableWidth -
-          visibleWidth(breadcrumb) -
-          visibleWidth(managed) -
-          visibleWidth(run) -
+        remainingWidth -
+          visibleWidth(shownExecution) -
           visibleWidth(suffixText),
       ),
     );
+    if (
+      visibleWidth(breadcrumb) +
+        visibleWidth(shownExecution) +
+        visibleWidth(tools) +
+        visibleWidth(run) +
+        visibleWidth(suffixText) >
+      availableWidth
+    )
+      run = "";
     const styledBreadcrumb = this.theme.fg("success", breadcrumb);
-    const styledManaged = managed ? this.theme.fg("muted", managed) : "";
+    const styledExecution = shownExecution
+      ? this.theme.fg("muted", shownExecution)
+      : "";
     const styledTools = tools ? this.theme.fg("muted", tools) : "";
     const styledRun = run ? this.theme.fg("accent", run) : "";
     const styledSuffix = suffixText ? this.theme.fg("muted", suffixText) : "";
-    const header = `${styledBreadcrumb}${styledManaged}${styledTools}${styledRun}${styledSuffix}`;
+    const header = `${styledBreadcrumb}${styledExecution}${styledTools}${styledRun}${styledSuffix}`;
     const out = [truncateToWidth(header, availableWidth, "…")];
     if (s.identityOnly) return out;
     out.push(

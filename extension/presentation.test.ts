@@ -2513,7 +2513,7 @@ test("Status widgets preserve parent families and settling counts", (t) => {
   }
 });
 
-test("Status widget renders managed metadata without changing ownership ancestry", (t) => {
+test("Status widget renders complete execution metadata without changing ownership ancestry", (t) => {
   const calls: string[] = [];
   const widget = new StatusWidget(undefined, {
     fg: (color: string, text: string) => {
@@ -2529,17 +2529,24 @@ test("Status widget renders managed metadata without changing ownership ancestry
     unavailable: false,
     breadcrumb: ["lead"],
   };
-  widget.setSnapshot({ ...snapshot, managed: true });
+  widget.setSnapshot({ ...snapshot, execution: { kind: "managed" } });
   assert.equal(widget.render(160)[0], "● lead · managed");
   assert.ok(calls.includes("success:● lead"));
   assert.ok(calls.includes("muted: · managed"));
+  for (const [mode, label] of [
+    ["flexible", "flexible"],
+    ["orchestrate", "orchestrate"],
+  ] as const) {
+    widget.setSnapshot({ ...snapshot, execution: { kind: "ordinary", mode } });
+    assert.equal(widget.render(160)[0], `● lead · ${label}`);
+  }
   widget.setSnapshot(snapshot);
   assert.equal(widget.render(160)[0], "● lead");
 
   const breadcrumb = ["lead", "implementer", "scout"];
   widget.setSnapshot({
     ...snapshot,
-    managed: true,
+    execution: { kind: "managed" },
     breadcrumb,
     ownTools: ["read", "bash"],
     identityOnly: true,
@@ -2550,21 +2557,59 @@ test("Status widget renders managed metadata without changing ownership ancestry
   );
   assert.deepEqual(breadcrumb, ["lead", "implementer", "scout"]);
   assert.equal(widget.render(41)[0], "● lead → implementer → scout · managed");
+  assert.doesNotMatch(widget.render(8)[0]!, /· managed/);
   for (let width = 0; width <= 160; width++)
     assert.ok(
       widget.render(width).every((line) => visibleWidth(line) <= width),
     );
   assert.match(widget.render(8)[0]!, /scout/);
 
+  widget.setSnapshot({ ...snapshot, execution: { kind: "managed" } });
+  assert.equal(widget.render(11)[0], "● lead");
+
   widget.setSnapshot({
     ...snapshot,
-    managed: true,
+    execution: { kind: "managed" },
     agents: [
       { label: "implementer", definition: "implementer", state: "blocked" },
     ],
   });
   assert.match(widget.render(160)[0]!, /^● lead · managed  1 blocked$/);
   assert.match(widget.render(160)[1]!, /└─ .*implementer/);
+});
+
+test("Status widget keeps execution metadata ahead of elapsed time when narrow", (t) => {
+  const widget = new StatusWidget();
+  t.after(() => widget.dispose());
+  const snapshot = {
+    agents: [],
+    stale: false,
+    unavailable: false,
+    breadcrumb: ["lead"],
+    execution: { kind: "managed" as const },
+  };
+  widget.setSnapshot(snapshot);
+  const width = visibleWidth(widget.render(160)[0]!);
+
+  widget.setSnapshot({ ...snapshot, herdRunStartedAt: Date.now() - 30_000 });
+  const header = widget.render(width)[0]!;
+  assert.match(header, /· managed/);
+  assert.doesNotMatch(header, /\d+s/);
+  assert.ok(visibleWidth(header) <= width);
+});
+
+test("Status widget preserves Lead identity below the active-agent suffix width", (t) => {
+  const widget = new StatusWidget();
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [{ label: "worker", definition: "agent", state: "working" }],
+    stale: false,
+    unavailable: false,
+    breadcrumb: ["lead"],
+  });
+  const header = widget.render(10)[0]!;
+  assert.match(header, /lead/);
+  assert.ok(visibleWidth(header) <= 10);
 });
 
 test("Status widget headers keep tools separate from child metadata", (t) => {
