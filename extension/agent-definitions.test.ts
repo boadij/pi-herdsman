@@ -145,6 +145,17 @@ Prompt`).find(({ name }) => name === "custom")!;
   );
 });
 
+test("explicit tools are closed allowlists without Pi modifiers", () => {
+  for (const tools of [["+read"], ["-write"], ["read,+bash"], ["read,-write"]])
+    assert.throws(
+      () =>
+        discoverAgentDefinitionsWithContents(
+          `---\nname: custom\ntools: [${tools.map((tool) => JSON.stringify(tool)).join(", ")}]\n---`,
+        ),
+      /must be an allowlist without \+name\/-name modifiers/,
+    );
+});
+
 test("loads multiline flow arrays and preserves compact arrays", () => {
   const definition = discoverAgentDefinitionsWithContents(`---
 name: custom

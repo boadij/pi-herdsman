@@ -111,7 +111,7 @@ export interface ResultRecord {
   status: "completed" | "failed";
   text?: string;
   error?: {
-    code: "empty_result" | "result_too_large" | "write_failure";
+    code: "empty_result" | "result_too_large" | "write_failure" | "aborted";
     message: string;
   };
   contextUsage?: {
@@ -545,7 +545,12 @@ function validate(
       throw new Error("Invalid completed result");
     if (v.status === "failed") {
       const error = v.error as Record<string, unknown> | undefined;
-      const codes = ["empty_result", "result_too_large", "write_failure"];
+      const codes = [
+        "empty_result",
+        "result_too_large",
+        "write_failure",
+        "aborted",
+      ];
       if (
         !error ||
         Object.keys(error).some((key) => !["code", "message"].includes(key)) ||

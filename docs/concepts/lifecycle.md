@@ -14,7 +14,7 @@ accepted
   ↓
 working
   ↓
-agent completes
+agent completes without cancellation
   ↓
 settling
   ↓ result delivered once
@@ -32,6 +32,11 @@ evidence remains `unknown`.
 
 The authoritative final result is correlated to the accepted assignment request
 ID.
+
+An aborted Pi execution is not successful assignment completion, even when the
+conversation contains assistant text. The assignment remains active when an
+accepted interrupt replacement continues the work; otherwise its terminal
+result records cancellation as a failure.
 
 ## Clarification flow
 

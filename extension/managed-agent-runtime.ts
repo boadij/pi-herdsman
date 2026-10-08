@@ -1446,7 +1446,10 @@ export function registerManagedAgentSettlementHandlers(
       release?.();
     }
   };
-  const settleCurrentAgent = (ctx: ExtensionContext): void => {
+  const settleCurrentAgent = (
+    ctx: ExtensionContext,
+    aborted: boolean,
+  ): void => {
     const state = execution.assignment;
     if (
       !state?.activeRequestId ||
@@ -1463,6 +1466,7 @@ export function registerManagedAgentSettlementHandlers(
       )
     )
       return;
+    const completed = !aborted && Boolean(execution.latest);
     const result: ResultRecord = {
       version: 5,
       runId: state.runId,
@@ -1471,13 +1475,15 @@ export function registerManagedAgentSettlementHandlers(
       workspaceId: state.workspaceId,
       agentLabel: state.agentLabel,
       paneId: state.paneId,
-      status: execution.latest ? "completed" : "failed",
-      ...(execution.latest
+      status: completed ? "completed" : "failed",
+      ...(completed
         ? { text: execution.latest }
         : {
             error: {
-              code: "empty_result",
-              message: "Agent produced no assistant text",
+              code: aborted ? "aborted" : "empty_result",
+              message: aborted
+                ? "Agent execution was cancelled"
+                : "Agent produced no assistant text",
             },
           }),
       contextUsage: ctx.getContextUsage(),
@@ -1598,17 +1604,20 @@ export function registerManagedAgentSettlementHandlers(
     if (execution.pendingResult && !execution.retryTimer)
       execution.retryTimer = setInterval(flush, 250);
   };
-  pi.on("agent_settled", async (_event: unknown, ctx: ExtensionContext) => {
-    if (execution.pendingInterruptReplacement) {
-      const replacement = execution.pendingInterruptReplacement;
-      execution.pendingInterruptReplacement = undefined;
-      execution.latest = "";
-      pi.sendUserMessage(replacement);
-      return;
-    }
-    settleCurrentAgent(ctx);
-    await options.settleControllerResults(ctx).catch(() => {});
-  });
+  pi.on(
+    "agent_settled",
+    async (event: { aborted: boolean }, ctx: ExtensionContext) => {
+      if (execution.pendingInterruptReplacement) {
+        const replacement = execution.pendingInterruptReplacement;
+        execution.pendingInterruptReplacement = undefined;
+        execution.latest = "";
+        pi.sendUserMessage(replacement);
+        return;
+      }
+      settleCurrentAgent(ctx, event.aborted);
+      await options.settleControllerResults(ctx).catch(() => {});
+    },
+  );
   return {
     cleanup() {
       if (execution.retryTimer) clearInterval(execution.retryTimer);

@@ -98,6 +98,12 @@ through the automatic result handoff. A managed Lead may use nonblocking
 information the Manager needs before that boundary; the Lead may choose to wait
 for a response through `message_staff`. A later automatic result may repeat
 some information; separate messages and results are not deduplicated.
+
+Only a Lead turn confirmed as not aborted contributes a completed response.
+Cancellation is reported as a factual, nonterminal project message without
+including partial assistant output. A restored unfinished herd run has no
+verified prior summary, so it uses a generic settlement handoff unless a later
+Lead response settles successfully.
 Managers should treat routine results as informational and act when useful
 coordination is needed.
 

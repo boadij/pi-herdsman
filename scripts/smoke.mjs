@@ -1295,6 +1295,14 @@ export function assistantResultForSession(session, prompt, marker) {
   return assistantResultForPrompt(session.contents, prompt, marker);
 }
 
+// Transcript evidence of a completed response, not Pi's whole-run settlement signal.
+export function assistantResponseCompletedForSession(session, prompt) {
+  return (
+    assistantResultsForPrompt(session.contents, prompt, "", () => true).length >
+    0
+  );
+}
+
 function summarizeSession(contents) {
   const entries = sessionEntries(contents);
   const header = entries.find((entry) => entry.type === "session");
@@ -2995,6 +3003,13 @@ async function runManagerRecoverySmoke(ctx) {
         entry.message.toolName === "message_staff" &&
         !entry.message.isError,
     )
+      ? session
+      : null;
+  });
+  await waitFor("review-response-completed", async () => {
+    const session = await rootSnapshot();
+    return session &&
+      assistantResponseCompletedForSession(session, reviewPrompt)
       ? session
       : null;
   });

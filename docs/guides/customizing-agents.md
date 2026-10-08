@@ -278,12 +278,14 @@ discovery.
 
 For an integration-level smoke check, load the repository's
 `scripts/tool-policy-diagnostic.mjs` extension and set `POLICY_EVIDENCE`,
-`POLICY_LAUNCH`, `POLICY_ACTIVE`, `POLICY_PROVIDER`, and `POLICY_FORBIDDEN` to
+`POLICY_LAUNCH`, `POLICY_FORBIDDEN`, and (for closed mode) `POLICY_ACTIVE` to
 the expected tool-name sets before launching Pi with the same `--tools` and
-extension arguments as the target agent. The diagnostic asserts the launch
-allowlist and active set, records callable provider names and tool-call
-outcomes, fails on forbidden active/provider/call names, and can verify an
-allowed control with
+extension arguments as the target agent. For ambient mode, leave
+`POLICY_LAUNCH` empty, omit `POLICY_ACTIVE`, and set
+`POLICY_FORBIDDEN_MODE=present`; closed mode defaults to `absent`. The
+diagnostic records active and provider-visible tool names plus tool-call
+outcomes, checks that the disposable probe is absent or present as selected,
+and can verify an allowed control with
 `POLICY_CONTROL`; it does not capture prompts or secrets. The hook observes
 Pi's provider-request payload, not a provider's final HTTP or WebSocket
 serialization.

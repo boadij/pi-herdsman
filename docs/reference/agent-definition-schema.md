@@ -37,6 +37,9 @@ skills:
 
 Unknown frontmatter fields fail validation.
 
+An explicit `tools` list is a closed allowlist. Tool entries cannot use Pi's
+`+name` or `-name` modifier syntax, including inside comma-separated values.
+
 Malformed files fail discovery; Pi Herdsman does not silently drop one invalid
 definition and return a partial roster.
 

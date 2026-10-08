@@ -1670,7 +1670,10 @@ test("lead herd runs start once and stay open through intermediate settlement", 
     ) as any[];
   const emit = async (name: string) => {
     for (const handler of pi.events.get(name) ?? [])
-      await handler(undefined, context);
+      await handler(
+        name === "agent_settled" ? { aborted: false } : undefined,
+        context,
+      );
   };
   registerExtension!(pi.pi as never);
   try {
@@ -1775,6 +1778,17 @@ test("lead herd runs start once and stay open through intermediate settlement", 
 test("restored herd run keeps its start and closes after settlement", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "lead-pane";
+  const socket = join(tmpdir(), `restored-handoff-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `restored-${randomUUID()}`;
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+  });
   const startedAt = 1_700_000_000_000;
   const entries: unknown[] = [
     {
@@ -1786,10 +1800,37 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
         startedAt,
       },
     },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        timestamp: startedAt + 1,
+        content: [{ type: "text", text: "UNVERIFIED_RESTORED_SUMMARY" }],
+      },
+    },
   ];
   const label = "agent";
   const startup = startupExecutor(label, () => DEFAULT_PI_SESSION_ID);
-  const pi = fakePi({ entries, exec: startup.exec });
+  const exec = async (command: string, args: string[]) => {
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            source: {
+              repo_key: "repo-key",
+              repo_name: "project",
+              source_workspace_id: WORKSPACE,
+            },
+            worktrees: [],
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    return startup.exec(command, args);
+  };
+  const pi = fakePi({ entries, exec });
   const context = fakeContext(entries);
   const herdEntries = () =>
     entries.filter(
@@ -1800,7 +1841,7 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
     for (const handler of pi.events.get("agent_settled") ?? [])
-      await handler(undefined, context);
+      await handler({ aborted: false }, context);
     await t.waitFor(() =>
       assert.equal(
         herdEntries().filter((entry) => entry.data?.phase === "finished")
@@ -1808,6 +1849,19 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
         1,
         "restored herd run did not finish after settlement",
       ),
+    );
+    await t.waitFor(() =>
+      assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 1),
+    );
+    const [handoff] = listProjectMessages(runtime, "repo-key", branch);
+    assert.equal(handoff.text, "Herd run settled.");
+    assert.doesNotMatch(handoff.text, /UNVERIFIED_RESTORED_SUMMARY/);
+    assert.equal(
+      listProjectAssignments(runtime, "repo-key").some(
+        (assignment) => assignment.id === LEAD_SESSION_ID,
+      ),
+      true,
+      "restored handoff must not resolve the project assignment",
     );
     const finished = herdEntries().find(
       (entry) => entry.data?.phase === "finished",
@@ -1840,7 +1894,56 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
   } finally {
     pi.events.get("session_shutdown")?.[0]();
     resetAgentMailbox(startup.mailbox);
+    removeProjectAssignment(runtime, "repo-key", branch);
+    removeProjectMessages(runtime, "repo-key", branch);
+    delete process.env.HERDR_SOCKET_PATH;
   }
+});
+
+test("aborted Lead settlement waits for active child work before finishing the herd", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  let childActive = true;
+  const herd = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    entryName: "pi-herdsman-herd-run",
+    hasPendingStarts: () => false,
+    listAgentStates: () =>
+      childActive
+        ? [{ state: { ownerSessionId: LEAD_SESSION_ID } } as any]
+        : [],
+    currentWorktreeScope: async () => undefined,
+    projectAssignmentForScope: () => undefined,
+    publishProjectMessage: async () => undefined,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: () => {},
+  });
+  const finished = () =>
+    pi.entries.filter(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "finished",
+    ).length;
+
+  herd.agentStarted();
+  herd.begin(context);
+  herd.agentSettled(context, true);
+  assert.equal(
+    finished(),
+    0,
+    "aborted Lead settlement must not finish while child work is active",
+  );
+
+  childActive = false;
+  herd.maybeFinish(context);
+  assert.equal(
+    finished(),
+    1,
+    "settling child work should allow the herd to finish",
+  );
 });
 
 test("assigned project herd settlement publishes one nonterminal current-run handoff", async (t) => {
@@ -1912,7 +2015,10 @@ test("assigned project herd settlement publishes one nonterminal current-run han
     ) as any[];
   const emit = async (name: string, event?: unknown) => {
     for (const handler of pi.events.get(name) ?? [])
-      await handler(event, context);
+      await handler(
+        name === "agent_settled" ? (event ?? { aborted: false }) : event,
+        context,
+      );
   };
 
   registerExtension!(pi.pi as never);
@@ -2045,7 +2151,10 @@ test("each direct managed Lead turn returns its response", async () => {
   )();
   const emit = async (name: string, event?: unknown) => {
     for (const handler of pi.events.get(name) ?? [])
-      await handler(event, context);
+      await handler(
+        name === "agent_settled" ? (event ?? { aborted: false }) : event,
+        context,
+      );
   };
   registerExtension!(pi.pi as never);
   try {
@@ -2108,6 +2217,29 @@ test("each direct managed Lead turn returns its response", async () => {
     assert.equal(
       listProjectMessages(runtime, "repo-key", branch)[1].text,
       "You're welcome.",
+    );
+
+    await emit("agent_start");
+    branchEntries.push({
+      type: "message",
+      message: {
+        role: "assistant",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "partial cancelled response" }],
+      },
+    });
+    await emit("agent_settled", { aborted: true });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(listProjectMessages(runtime, "repo-key", branch).length, 3);
+    assert.equal(
+      listProjectMessages(runtime, "repo-key", branch)[2].text,
+      "Lead execution was cancelled before a completed response.",
+    );
+    assert.equal(
+      listProjectAssignments(runtime, "repo-key").some(
+        (assignment) => assignment.id === LEAD_SESSION_ID,
+      ),
+      true,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
@@ -2179,7 +2311,10 @@ test("automatic project handoff cannot recreate messages under assignment resolu
   };
   const emit = async (name: string) => {
     for (const handler of pi.events.get(name) ?? [])
-      await handler(undefined, context);
+      await handler(
+        name === "agent_settled" ? { aborted: false } : undefined,
+        context,
+      );
   };
   registerExtension!(pi.pi as never);
   try {
@@ -2367,7 +2502,7 @@ test("completed and mismatched herd history does not resurrect", async () => {
       for (const handler of pi.events.get("session_start") ?? [])
         await handler(undefined, context);
       for (const handler of pi.events.get("agent_settled") ?? [])
-        await handler(undefined, context);
+        await handler({ aborted: false }, context);
       assert.equal(
         entries.filter(
           (entry: any) =>
@@ -2407,14 +2542,14 @@ test("restored herd waits for direct durable cleanup before finishing", async (t
     for (const handler of pi.events.get("session_start") ?? [])
       await handler(undefined, context);
     for (const handler of pi.events.get("agent_settled") ?? [])
-      await handler(undefined, context);
+      await handler({ aborted: false }, context);
     assert.equal(
       herdEntries().filter((entry) => entry.data?.phase === "finished").length,
       0,
     );
     resetAgentMailbox(startup.mailbox);
     for (const handler of pi.events.get("agent_settled") ?? [])
-      await handler(undefined, context);
+      await handler({ aborted: false }, context);
     await t.waitFor(() =>
       assert.equal(
         herdEntries().filter((entry) => entry.data?.phase === "finished")
@@ -2678,7 +2813,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     ).length;
     for (let attempt = 0; attempt < 3; attempt++)
       for (const handler of leadAgent.events.get("agent_settled") ?? [])
-        await handler(undefined, leadContext);
+        await handler({ aborted: false }, leadContext);
     assert.equal(
       leadAgent.entries.filter(
         (entry: any) => entry.customType === "pi_herdsman_cleanup_error",
@@ -2919,7 +3054,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       childResultContext,
     );
     await childAgent.events.get("agent_settled")![0](
-      undefined,
+      { aborted: false },
       childResultContext,
     );
     assert.equal(readResult(childMailbox, childRequestId)?.text, "ALPHA");
@@ -2955,7 +3090,7 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       parentResultContext,
     );
     await parentAgent.events.get("agent_settled")![0](
-      undefined,
+      { aborted: false },
       parentResultContext,
     );
     assert.equal(

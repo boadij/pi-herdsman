@@ -396,7 +396,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       },
     });
     for (const handler of pi.events.get("agent_settled") ?? [])
-      await handler(undefined, ctx);
+      await handler({ aborted: false }, ctx);
     await t.waitFor(() =>
       assert.equal(
         listProjectMessages(runtime, "repo-key", "smoke/routing").length,
@@ -432,7 +432,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       },
     });
     for (const handler of pi.events.get("agent_settled") ?? [])
-      await handler(undefined, ctx);
+      await handler({ aborted: false }, ctx);
     await new Promise((resolve) => setTimeout(resolve, 25));
     assert.equal(
       listProjectMessages(runtime, "repo-key", "smoke/routing").length,
