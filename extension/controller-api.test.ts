@@ -186,6 +186,12 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
   const chiefId = randomUUID();
   const managerId = randomUUID();
   const leadId = randomUUID();
+  const previousDiagnostics = process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
+  const previousConsoleError = console.error;
+  const diagnosticOutput: string[] = [];
+  process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = "1";
+  console.error = (...values: unknown[]) =>
+    diagnosticOutput.push(values.join(" "));
   const runtime = supervisionRuntime();
   const chief = claimChiefLease({
     piSessionId: chiefId,
@@ -281,10 +287,11 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       assert.match(statusWidget!.render(160)[0], /^● lead · managed/),
     );
     ctx.isIdle = () => false;
+    const managerMessageId = randomUUID();
     writeChiefMessage(
       {
         version: 2,
-        id: randomUUID(),
+        id: managerMessageId,
         leaseId: manager.descriptor.leaseId,
         kind: "manager_message",
         fromSessionId: managerId,
@@ -308,6 +315,67 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       });
     });
     assert.equal(listChiefMessagePaths(runtime, leadId).length, 0);
+    const diagnosticEvents = diagnosticOutput
+      .filter((line) => line.startsWith("[pi-herdsman-manager-diagnostic] "))
+      .map((line) =>
+        JSON.parse(line.slice("[pi-herdsman-manager-diagnostic] ".length)),
+      )
+      .filter((event) => event.recordId === managerMessageId);
+    assert.deepEqual(
+      diagnosticEvents.map(({ stage, outcome }) => [stage, outcome]),
+      [
+        ["authorization", "authorized"],
+        ["pi_send", "invoking"],
+        ["pi_send", "returned"],
+        ["disposition", "removed_after_send"],
+      ],
+    );
+    assert.equal(
+      (ctx.sessionManager.getBranch() as any[]).some(
+        (entry) => entry?.details?.id === managerMessageId,
+      ),
+      false,
+    );
+    assert.equal(
+      diagnosticOutput.join("\n").includes("change direction now"),
+      false,
+    );
+    await t.test(
+      "diagnostic logger failures do not block delivery",
+      async () => {
+        console.error = () => {
+          throw new Error("diagnostic logger failed");
+        };
+        const loggerFailureId = randomUUID();
+        try {
+          writeChiefMessage(
+            {
+              version: 2,
+              id: loggerFailureId,
+              leaseId: manager.descriptor.leaseId,
+              kind: "manager_message",
+              fromSessionId: managerId,
+              toSessionId: leadId,
+              leadSessionId: leadId,
+              text: "logger-failure-test",
+              createdAt: Date.now(),
+            },
+            runtime,
+          );
+          await t.waitFor(() => {
+            assert.ok(
+              pi.sentMessageCalls.some(
+                ({ message }: any) => message?.details?.id === loggerFailureId,
+              ),
+            );
+            assert.equal(listChiefMessagePaths(runtime, leadId).length, 0);
+          });
+        } finally {
+          console.error = (...values: unknown[]) =>
+            diagnosticOutput.push(values.join(" "));
+        }
+      },
+    );
     const tool = pi.tools.find(
       (candidate) => candidate.name === "message_supervisor",
     )!;
@@ -338,10 +406,11 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       ],
     );
     const staleText = "must be rejected after takeover";
+    const staleMessageId = randomUUID();
     writeChiefMessage(
       {
         version: 2,
-        id: randomUUID(),
+        id: staleMessageId,
         leaseId: manager.descriptor.leaseId,
         kind: "manager_message",
         fromSessionId: managerId,
@@ -356,6 +425,24 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     await t.waitFor(() =>
       assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
     );
+    const rejectedEvents = diagnosticOutput
+      .filter((line) => line.startsWith("[pi-herdsman-manager-diagnostic] "))
+      .map((line) =>
+        JSON.parse(line.slice("[pi-herdsman-manager-diagnostic] ".length)),
+      )
+      .filter((event) => event.recordId === staleMessageId);
+    assert.deepEqual(
+      rejectedEvents.map(({ stage, outcome }) => [stage, outcome]),
+      [
+        ["authorization", "rejected"],
+        ["disposition", "quarantined_removed"],
+      ],
+    );
+    assert.equal(
+      rejectedEvents.find(({ stage }) => stage === "authorization").reason,
+      "recipient_authorization_false",
+    );
+    assert.equal(diagnosticOutput.join("\n").includes(staleText), false);
     assert.equal(
       pi.sentMessageCalls.some(({ message }: any) =>
         message?.content?.includes(staleText),
@@ -446,6 +533,10 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       manager.release();
     }
     chief.release();
+    console.error = previousConsoleError;
+    if (previousDiagnostics === undefined)
+      delete process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS;
+    else process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS = previousDiagnostics;
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }

@@ -161,6 +161,18 @@ export type ChiefInboxDrainOptions = {
   ) => void | Promise<void>;
   accepted?: (record: ChiefMessageRecord) => void | Promise<void>;
   rejected?: (record: ChiefMessageRecord) => void | Promise<void>;
+  diagnostic?: (
+    record: ChiefMessageRecord,
+    stage: "authorization" | "disposition",
+    outcome:
+      | "authorized"
+      | "rejected"
+      | "authorization_error"
+      | "quarantined_removed"
+      | "removed_after_send"
+      | "removed_already_delivered"
+      | "removal_error",
+  ) => void;
   cleanupError?: (error: unknown) => void | Promise<void>;
   /** Guards state belonging to one lead session/generation transaction. */
   transaction?: {
@@ -744,6 +756,24 @@ function deliveredMessageContent(record: CoordinationMessageRecord): string {
 export async function drainCoordinationInbox(
   options: ChiefInboxDrainOptions,
 ): Promise<number> {
+  const diagnostic = (
+    record: ChiefMessageRecord,
+    stage: "authorization" | "disposition",
+    outcome:
+      | "authorized"
+      | "rejected"
+      | "authorization_error"
+      | "quarantined_removed"
+      | "removed_after_send"
+      | "removed_already_delivered"
+      | "removal_error",
+  ): void => {
+    try {
+      options.diagnostic?.(record, stage, outcome);
+    } catch {
+      // Diagnostics must not affect authorization or inbox cleanup.
+    }
+  };
   let delivered = 0;
   for (const path of listChiefMessagePaths(
     options.runtime,
@@ -797,9 +827,11 @@ export async function drainCoordinationInbox(
     try {
       authorized = await options.isAuthorized(record);
     } catch {
+      diagnostic(record, "authorization", "authorization_error");
       await clearTransaction();
       continue;
     }
+    diagnostic(record, "authorization", authorized ? "authorized" : "rejected");
     if (!authorized) {
       try {
         await options.transaction?.revalidate(token, "before-rejection");
@@ -823,6 +855,7 @@ export async function drainCoordinationInbox(
           record.id,
           record,
         );
+        diagnostic(record, "disposition", "quarantined_removed");
         await options.transaction?.clear(token);
       } catch (cleanupError) {
         try {
@@ -832,7 +865,8 @@ export async function drainCoordinationInbox(
       await clearTransaction();
       continue;
     }
-    if (!options.isDelivered(record.id)) {
+    const wasDelivered = options.isDelivered(record.id);
+    if (!wasDelivered) {
       try {
         await options.transaction?.revalidate(token, "before-send");
         assertChiefMessageNotQuarantined(
@@ -903,7 +937,13 @@ export async function drainCoordinationInbox(
     }
     try {
       removeChiefMessage(options.runtime, options.sessionId, record.id, record);
+      diagnostic(
+        record,
+        "disposition",
+        wasDelivered ? "removed_already_delivered" : "removed_after_send",
+      );
     } catch (removalError) {
+      diagnostic(record, "disposition", "removal_error");
       try {
         await options.cleanupError?.(removalError);
       } catch {}

@@ -2292,22 +2292,31 @@ export function registerLeadRuntime(
     "inbox_candidates",
     "inbox_drain_complete",
     "inbox_catch",
+    "inbox_record_stage",
   ]);
   const managerDiagnostic = (
     event: string,
     details: Record<string, boolean | string | number> = {},
   ): void => {
+    const recordKey =
+      typeof details.recordId === "string" && typeof details.stage === "string"
+        ? `${event}:${details.recordId}:${details.stage}:${details.outcome ?? ""}`
+        : event;
     if (
       process.env.PI_HERDSMAN_MANAGER_DIAGNOSTICS !== "1" ||
       !managerDiagnosticAllowlist.has(event) ||
-      managerDiagnosticEvents.has(event) ||
-      managerDiagnosticEvents.size >= 16
+      managerDiagnosticEvents.has(recordKey) ||
+      managerDiagnosticEvents.size >= 64
     )
       return;
-    managerDiagnosticEvents.add(event);
-    console.error(
-      `[pi-herdsman-manager-diagnostic] ${JSON.stringify({ event, ...details })}`,
-    );
+    managerDiagnosticEvents.add(recordKey);
+    try {
+      console.error(
+        `[pi-herdsman-manager-diagnostic] ${JSON.stringify({ event, ...details })}`,
+      );
+    } catch {
+      // Diagnostics must never affect message delivery or inbox cleanup.
+    }
   };
   const roleHost = options.roleTransitionHost;
   let leadMetadataQueue = Promise.resolve();
@@ -7039,6 +7048,17 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           managerDiagnostic("inbox_catch", { category: "cleanup" });
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         },
+        diagnostic: (record, stage, outcome) => {
+          if (record.kind !== "manager_message") return;
+          managerDiagnostic("inbox_record_stage", {
+            recordId: record.id,
+            stage,
+            outcome,
+            ...(outcome === "rejected"
+              ? { reason: "recipient_authorization_false" }
+              : {}),
+          });
+        },
         deliveryMode: (record: ChiefMessageRecord) => {
           const role = activeRole();
           const supervisorDownlink =
@@ -7181,7 +7201,22 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               };
             }
             importResultBindings(pi, ctx, resultBindings, record.kind);
-            const result = await pi.sendMessage(payload, options);
+            if (record.kind === "manager_message")
+              managerDiagnostic("inbox_record_stage", {
+                recordId: record.id,
+                stage: "pi_send",
+                outcome: "invoking",
+                triggerTurn: options?.triggerTurn === true,
+              });
+            const sendResult = pi.sendMessage(payload, options);
+            if (record.kind === "manager_message")
+              managerDiagnostic("inbox_record_stage", {
+                recordId: record.id,
+                stage: "pi_send",
+                outcome: "returned",
+                triggerTurn: options?.triggerTurn === true,
+              });
+            const result = await sendResult;
             if (projectAssignment)
               managerDiagnostic("project_assignment_send", {
                 outcome: "resolved",

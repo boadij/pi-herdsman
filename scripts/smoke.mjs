@@ -65,6 +65,7 @@ export function parseSmokeArgs(args) {
       model: { type: "string" },
       "manager-ready-timeout-ms": { type: "string" },
       "manager-recovery-diagnostics": { type: "boolean" },
+      "manager-recovery-preserve": { type: "boolean" },
     },
   });
   const scenario = parseScenario(positionals);
@@ -82,8 +83,10 @@ export function parseSmokeArgs(args) {
     throw new Error(
       `--manager-ready-timeout-ms must be a positive integer no greater than ${MAX_MANAGER_READY_TIMEOUT_MS}, and is only valid for manager-recovery`,
     );
+  const managerRecoveryPreserve = values["manager-recovery-preserve"] ?? false;
   const managerRecoveryDiagnostics =
-    values["manager-recovery-diagnostics"] ?? false;
+    managerRecoveryPreserve ||
+    (values["manager-recovery-diagnostics"] ?? false);
   if (managerRecoveryDiagnostics && scenario !== "manager-recovery")
     throw new Error(
       "--manager-recovery-diagnostics is only valid for manager-recovery",
@@ -93,6 +96,7 @@ export function parseSmokeArgs(args) {
     model: values.model,
     managerReadyTimeoutMs,
     managerRecoveryDiagnostics,
+    managerRecoveryPreserve,
   };
 }
 
@@ -1812,8 +1816,10 @@ export function managerRecoveryStopPrompt(session) {
   return `Pause the existing project work. Call stop_lead exactly once using only ${JSON.stringify({ session })}. After stop_lead succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_PAUSED.`;
 }
 
-export function managerRecoveryReviewPrompt(branch) {
-  return `Use message_staff to send a nonblocking request for the Lead to confirm readiness for review of ${branch}. Routine information that can wait should be left to the Lead's automatic result handoff. Then end the turn.`;
+export function managerRecoveryReviewPrompt(branch, diagnostic = false) {
+  return diagnostic
+    ? `Use message_staff to send exactly PI_HERDSMAN_IDLE_REVIEW_${branch} to the Lead as a nonblocking request for readiness for review. Routine information that can wait should be left to the Lead's automatic result handoff. Then end the turn.`
+    : `Use message_staff to send a nonblocking request for the Lead to confirm readiness for review of ${branch}. Routine information that can wait should be left to the Lead's automatic result handoff. Then end the turn.`;
 }
 
 export function managerRecoveryResumeOnlyPrompt(branch) {
@@ -2909,6 +2915,21 @@ async function runManagerRecoverySmoke(ctx) {
   );
   const initialPid = initialProcesses[0].pid;
   assert.ok(initialPid);
+  if (ctx.managerRecoveryPreserve) {
+    assert.ok(
+      Array.isArray(initialProcesses[0].argv),
+      "Lead argv was not observable",
+    );
+    const profile = JSON.parse(
+      await readFile(ctx.managerRecoveryProfilePath, "utf8"),
+    );
+    profile.extensionArgv.lead = initialProcesses[0].argv;
+    profile.leadArgvObservedAfterStartup = true;
+    await writeFile(
+      ctx.managerRecoveryProfilePath,
+      `${JSON.stringify(profile, null, 2)}\n`,
+    );
+  }
   const pane = (await nestedCommand(ctx, ["pane", "list"])).panes.find(
     (item) => item.pane_id === paneId,
   );
@@ -2930,6 +2951,8 @@ async function runManagerRecoverySmoke(ctx) {
     "supervision-v2",
     hash(nestedHerdrApiSocketPath(ctx.paths, ctx.sessionName)),
   );
+  if (ctx.managerRecoveryPreserve)
+    ctx.managerRecovery = { ...ctx.managerRecovery, runtimeRoot: runtime };
   const assignmentPath = join(
     runtime,
     "assignments",
@@ -2991,9 +3014,35 @@ async function runManagerRecoverySmoke(ctx) {
       ? session
       : null;
   });
-  const reviewPrompt = managerRecoveryReviewPrompt(branch);
+  const idleLead = (await agents()).find(
+    (agent) => agent.workspace_id === workspaceId && agent.pane_id === paneId,
+  );
+  if (ctx.managerRecoveryPreserve)
+    assert.ok(["idle", "done"].includes(idleLead?.agent_status));
+  const preReviewSession = await rootSnapshot();
+  assert.ok(preReviewSession, "Manager session was unavailable before review");
+  const setupMessageStaffCount = sessionEntries(
+    preReviewSession.contents,
+  ).filter(
+    (entry) =>
+      entry.type === "message" &&
+      entry.message?.role === "toolResult" &&
+      entry.message.toolName === "message_staff" &&
+      !entry.message.isError,
+  ).length;
+  if (ctx.managerRecoveryPreserve)
+    assert.equal(
+      setupMessageStaffCount,
+      0,
+      "setup must not send message_staff",
+    );
+  ctx.managerRecovery = { ...ctx.managerRecovery, setupMessageStaffCount };
+  const reviewPrompt = managerRecoveryReviewPrompt(
+    branch,
+    ctx.managerRecoveryPreserve,
+  );
   await promptRoot(reviewPrompt);
-  await waitFor("review-message", async () => {
+  const reviewMessageSession = await waitFor("review-message", async () => {
     const session = await rootSnapshot();
     if (!session) return null;
     return sessionEntries(session.contents).some(
@@ -3006,6 +3055,122 @@ async function runManagerRecoverySmoke(ctx) {
       ? session
       : null;
   });
+  if (ctx.managerRecoveryPreserve) {
+    const reviewMessageResult = sessionEntries(
+      reviewMessageSession.contents,
+    ).findLast(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message?.role === "toolResult" &&
+        entry.message.toolName === "message_staff" &&
+        !entry.message.isError,
+    );
+    const reviewMessageId = reviewMessageResult?.message?.details?.id;
+    assert.match(reviewMessageId ?? "", /^[0-9a-f-]{36}$/i);
+    const reviewMarker = `PI_HERDSMAN_IDLE_REVIEW_${branch}`;
+    const reviewInboxPath = join(
+      runtime,
+      "inbox",
+      hash(first.session),
+      `${reviewMessageId}.json`,
+    );
+    const receivedLeadSession = await waitFor("review-downlink", async () => {
+      const session = await exactIsolatedSession(ctx, first.session);
+      if (!session) return null;
+      const entries = sessionEntries(session.contents);
+      const messageIndex = entries.findIndex(
+        (entry) =>
+          entry.type === "custom_message" &&
+          entry.customType === "pi-herdsman-manager_message" &&
+          entry.details?.id === reviewMessageId &&
+          String(entry.content).includes(reviewMarker),
+      );
+      return messageIndex >= 0 &&
+        entries
+          .slice(messageIndex + 1)
+          .some(
+            (entry) =>
+              entry.type === "message" &&
+              entry.message?.role === "assistant" &&
+              entry.message.stopReason === "stop",
+          )
+        ? session
+        : null;
+    });
+    const receivedEntries = sessionEntries(receivedLeadSession.contents);
+    const receivedMessageIndex = receivedEntries.findIndex(
+      (entry) =>
+        entry.type === "custom_message" &&
+        entry.customType === "pi-herdsman-manager_message" &&
+        entry.details?.id === reviewMessageId,
+    );
+    const leadReply = receivedEntries
+      .slice(receivedMessageIndex + 1)
+      .findLast(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "assistant" &&
+          entry.message.stopReason === "stop",
+      );
+    assert.ok(leadReply);
+    await assert.rejects(lstat(reviewInboxPath), { code: "ENOENT" });
+    await assert.rejects(lstat(`${reviewInboxPath}.quarantine`), {
+      code: "ENOENT",
+    });
+    ctx.managerRecovery = {
+      ...ctx.managerRecovery,
+      messageStaffCount: sessionEntries(reviewMessageSession.contents).filter(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message?.role === "toolResult" &&
+          entry.message.toolName === "message_staff" &&
+          !entry.message.isError,
+      ).length,
+      messageId: reviewMessageId,
+      recipientSessionId: first.session,
+      managerSessionId: sessionEntries(reviewMessageSession.contents).find(
+        (entry) => entry.type === "session",
+      )?.id,
+      managerSessionPath: reviewMessageSession.path,
+      inboxPath: reviewInboxPath,
+      leadSessionPath: receivedLeadSession.path,
+      leadReplyPersisted: true,
+    };
+    assert.equal(ctx.managerRecovery.messageStaffCount, 1);
+    await captureManagerLeadDiagnostics(ctx, paneId);
+    ctx.managerRecovery.evidenceRoot = ctx.paths.root;
+    ctx.managerRecovery.tracePath = join(
+      ctx.paths.root,
+      "manager-lead-trace.json",
+    );
+    const profile = JSON.parse(
+      await readFile(ctx.managerRecoveryProfilePath, "utf8"),
+    );
+    profile.counts = {
+      setupMessageStaff: setupMessageStaffCount,
+      reviewMessageStaff: ctx.managerRecovery.messageStaffCount,
+    };
+    profile.manager = {
+      sessionId: ctx.managerRecovery.managerSessionId,
+      sessionPath: ctx.managerRecovery.managerSessionPath,
+    };
+    profile.lead = {
+      sessionId: first.session,
+      paneId,
+      pid: initialPid,
+      sessionPath: receivedLeadSession.path,
+    };
+    await writeFile(
+      ctx.managerRecoveryProfilePath,
+      `${JSON.stringify(profile, null, 2)}\n`,
+    );
+    await writeFile(
+      ctx.managerRecovery.tracePath,
+      `${JSON.stringify(ctx.managerRecovery, null, 2)}\n`,
+      { flag: "wx" },
+    );
+    return;
+  }
   await waitFor("review-response-completed", async () => {
     const session = await rootSnapshot();
     return session &&
@@ -4114,6 +4279,7 @@ async function main() {
     managerReadyTimeoutMs:
       args.managerReadyTimeoutMs ?? DEFAULT_MANAGER_READY_TIMEOUT_MS,
     managerRecoveryDiagnostics: args.managerRecoveryDiagnostics,
+    managerRecoveryPreserve: args.managerRecoveryPreserve,
     expectedPackage: `${pkg.name}@${pkg.version}`,
     owned,
     preflight: preflightEvidence,
@@ -4136,6 +4302,50 @@ async function main() {
         chiefTreeProbeSource(ctx.chiefTreeResultFile),
         { flag: "wx" },
       );
+    if (ctx.managerRecoveryPreserve) {
+      const managerArgv = candidateArgs({
+        candidateExtension: ctx.candidateExtension,
+        herdrStateExtension: ctx.herdrStateExtension,
+        model: ctx.model,
+      });
+      const extensions = [ctx.candidateExtension, ctx.herdrStateExtension];
+      const profile = {
+        recordedBeforePairStartup: true,
+        runtime: {
+          piVersion: preflightEvidence.piVersion,
+          herdrClientVersion: preflightEvidence.herdrClientVersion,
+        },
+        herdsmanBuild: {
+          version: pkg.version,
+          extensionPath: ctx.candidateExtension,
+          extensionSha256: createHash("sha256")
+            .update(await readFile(ctx.candidateExtension))
+            .digest("hex"),
+        },
+        extensionArgv: {
+          manager: managerArgv,
+          lead: { expectedExtensions: extensions },
+        },
+        extensions: await Promise.all(
+          extensions.map(async (path) => ({
+            path,
+            sha256: createHash("sha256")
+              .update(await readFile(path))
+              .digest("hex"),
+          })),
+        ),
+        counts: { setupMessageStaff: 0, reviewMessageStaff: 1 },
+      };
+      ctx.managerRecoveryProfilePath = join(
+        paths.root,
+        "extension-profile.json",
+      );
+      await writeFile(
+        ctx.managerRecoveryProfilePath,
+        `${JSON.stringify(profile, null, 2)}\n`,
+        { flag: "wx" },
+      );
+    }
     await startNestedHerdr(
       paths,
       owned,
@@ -4145,6 +4355,33 @@ async function main() {
     ctx.sessionName = owned.sessionName;
     await waitForNestedHerdr(ctx);
     ctx.rootPaneId = await startCandidate(ctx);
+    if (ctx.managerRecoveryPreserve) {
+      const observed = await nestedCommand(ctx, [
+        "pane",
+        "process-info",
+        "--pane",
+        ctx.rootPaneId,
+      ]);
+      const processes = candidateProcess(
+        observed,
+        ctx.candidateExtension,
+        ctx.herdrStateExtension,
+      );
+      assert.equal(processes.length, 1, "Manager process argv was ambiguous");
+      assert.ok(
+        Array.isArray(processes[0].argv),
+        "Manager argv was not observable",
+      );
+      const profile = JSON.parse(
+        await readFile(ctx.managerRecoveryProfilePath, "utf8"),
+      );
+      profile.extensionArgv.manager = processes[0].argv;
+      profile.managerArgvObservedAfterStartup = true;
+      await writeFile(
+        ctx.managerRecoveryProfilePath,
+        `${JSON.stringify(profile, null, 2)}\n`,
+      );
+    }
     await runScenario(ctx, scenario);
     console.log(`smoke ${scenario}: PASS`);
     console.log(`model: ${ctx.model}`);
@@ -4192,12 +4429,37 @@ async function main() {
       );
     }
   } finally {
-    const cleanupError = await cleanup(paths, owned, ctx);
-    if (cleanupError) {
-      console.error(`cleanup: FAIL ${cleanupEvidence(owned)}\n${cleanupError}`);
-      process.exitCode = 1;
+    if (args.managerRecoveryPreserve) {
+      console.log(
+        `cleanup: SKIPPED (--manager-recovery-preserve); diagnostic mode retains the isolated session, its resources, and temporary evidence for manual inspection/cleanup: ${JSON.stringify(
+          {
+            root: paths.root,
+            profile: ctx.managerRecoveryProfilePath,
+            trace: ctx.managerRecovery?.tracePath,
+            sessionName: owned.sessionName,
+            hostTabId: owned.hostTabId,
+            hostPaneId: owned.hostPaneId,
+            sessionDirectory: paths.piSessions,
+            inboxRoot: ctx.managerRecovery?.runtimeRoot
+              ? join(ctx.managerRecovery.runtimeRoot, "inbox")
+              : undefined,
+            managerSessionPath: ctx.managerRecovery?.managerSessionPath,
+            manager: ctx.managerRecovery?.managerSessionId,
+            lead: ctx.managerRecovery?.sessionId,
+            messageId: ctx.managerRecovery?.messageId,
+          },
+        )}`,
+      );
     } else {
-      console.log(`cleanup: PASS ${cleanupEvidence(owned)}`);
+      const cleanupError = await cleanup(paths, owned, ctx);
+      if (cleanupError) {
+        console.error(
+          `cleanup: FAIL ${cleanupEvidence(owned)}\n${cleanupError}`,
+        );
+        process.exitCode = 1;
+      } else {
+        console.log(`cleanup: PASS ${cleanupEvidence(owned)}`);
+      }
     }
     if (failure) process.exitCode = 1;
   }

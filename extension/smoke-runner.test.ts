@@ -433,6 +433,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
     model: undefined,
     managerReadyTimeoutMs: undefined,
     managerRecoveryDiagnostics: false,
+    managerRecoveryPreserve: false,
   });
   for (const scenario of [
     "core",
@@ -448,6 +449,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
       model: "provider/model:high",
       managerReadyTimeoutMs: undefined,
       managerRecoveryDiagnostics: false,
+      managerRecoveryPreserve: false,
     },
   );
   assert.deepEqual(
@@ -457,6 +459,7 @@ test("smoke CLI parses scenarios and one-off model overrides", async () => {
       model: "provider/model:xhigh",
       managerReadyTimeoutMs: undefined,
       managerRecoveryDiagnostics: false,
+      managerRecoveryPreserve: false,
     },
   );
   assert.throws(() => parseSmokeArgs(["core", "extra"]));
@@ -478,6 +481,7 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
       model: undefined,
       managerReadyTimeoutMs: 45_000,
       managerRecoveryDiagnostics: true,
+      managerRecoveryPreserve: false,
     },
   );
   for (const timeout of ["0", "-1", "1.5", "600001", "many"])
@@ -495,6 +499,23 @@ test("manager-recovery timeout is bounded and scoped to its ready handshake", ()
   );
   assert.throws(
     () => parseSmokeArgs(["core", "--manager-recovery-diagnostics"]),
+    /only valid for manager-recovery/,
+  );
+});
+
+test("manager recovery preserve mode enables diagnostics and is scenario-scoped", () => {
+  assert.deepEqual(
+    parseSmokeArgs(["manager-recovery", "--manager-recovery-preserve"]),
+    {
+      scenario: "manager-recovery",
+      model: undefined,
+      managerReadyTimeoutMs: undefined,
+      managerRecoveryDiagnostics: true,
+      managerRecoveryPreserve: true,
+    },
+  );
+  assert.throws(
+    () => parseSmokeArgs(["core", "--manager-recovery-preserve"]),
     /only valid for manager-recovery/,
   );
 });
@@ -975,6 +996,10 @@ test("manager-recovery uses nonblocking messages only when information cannot wa
   assert.match(managerPrompt, /nonblocking/i);
   assert.match(managerPrompt, /automatic result handoff/i);
   assert.doesNotMatch(managerPrompt, new RegExp(marker));
+  assert.match(
+    managerRecoveryReviewPrompt("branch-for-review", true),
+    /PI_HERDSMAN_IDLE_REVIEW_branch-for-review/,
+  );
 });
 
 test("manager-recovery starts work by task and branch, then resumes by branch only", () => {
