@@ -2599,9 +2599,13 @@ export function registerLeadRuntime(
       controller.runtimeForLabel(label),
   ): Promise<StatusSnapshot> => {
     let assignment: ProjectAssignment | undefined;
-    if (roleTransitions && activeLeadRole(options.leadRuntime) === "lead") {
+    const isLead =
+      roleTransitions && activeLeadRole(options.leadRuntime) === "lead";
+    let assignmentVerified = false;
+    if (isLead) {
       const sessionId = ctx.sessionManager.getSessionId();
       const workspaceId = process.env.HERDR_WORKSPACE_ID;
+      assignmentVerified = !workspaceId && !leadExecution?.managed;
       if (workspaceId) {
         if (
           statusWorktreeScope?.sessionId === sessionId &&
@@ -2613,9 +2617,12 @@ export function registerLeadRuntime(
                 statusWorktreeScope.scope,
                 sessionId,
               );
+              assignmentVerified = true;
             } catch {
               // Ambiguous assignment evidence must not claim Manager control.
             }
+          } else {
+            assignmentVerified = true;
           }
         } else if (
           statusWorktreeScopeRequest?.sessionId !== sessionId ||
@@ -2660,7 +2667,15 @@ export function registerLeadRuntime(
       runtimeForLabel,
       herdStartedAt: () => herdRunRuntime?.startedAt(),
     });
-    return { ...snapshot, ...(assignment ? { managed: true } : {}) };
+    const execution =
+      isLead && assignmentVerified
+        ? assignment
+          ? { kind: "managed" as const }
+          : leadExecution?.valid
+            ? { kind: "ordinary" as const, mode: leadExecution.mode }
+            : undefined
+        : undefined;
+    return { ...snapshot, ...(execution ? { execution } : {}) };
   };
   statusRuntime.configure({
     ...options.statusSnapshotHost,
@@ -2931,6 +2946,7 @@ export function registerLeadRuntime(
       if (signal?.aborted) return;
       if (assignment) {
         leadExecution = { mode, valid: false, managed: true };
+        statusRuntime.requestRefresh();
         return;
       }
     } catch (error) {
@@ -2940,6 +2956,7 @@ export function registerLeadRuntime(
         valid: false,
         managed: !!leadExecution?.managed,
       };
+      statusRuntime.requestRefresh();
       options.sessionStartOptions.appendRoleError(ctx, error);
       return;
     }
@@ -2953,9 +2970,11 @@ export function registerLeadRuntime(
         valid: true,
         managed: false,
       };
+      statusRuntime.requestRefresh();
     } catch (error) {
       if (signal?.aborted) return;
       leadExecution = { mode, valid: false, managed: false };
+      statusRuntime.requestRefresh();
       options.sessionStartOptions.appendDefinitionError(ctx, error);
     }
   };
@@ -2993,6 +3012,7 @@ export function registerLeadRuntime(
       persistLeadExecution(mode, baseline);
       leadToolState.setLeadTools(baseline);
       leadExecution = { mode, definition, valid: true, managed: false };
+      statusRuntime.requestRefresh();
     } catch (error) {
       leadExecution = previousExecution;
       try {
@@ -3032,6 +3052,7 @@ export function registerLeadRuntime(
         managed: false,
       };
       pi.setActiveTools(targetTools);
+      statusRuntime.requestRefresh();
     } catch (error) {
       leadExecution = { mode: "orchestrate", valid: false, managed: false };
       try {

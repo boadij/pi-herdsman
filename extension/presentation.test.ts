@@ -2513,7 +2513,7 @@ test("Status widgets preserve parent families and settling counts", (t) => {
   }
 });
 
-test("Status widget renders managed metadata without changing ownership ancestry", (t) => {
+test("Status widget renders complete execution metadata without changing ownership ancestry", (t) => {
   const calls: string[] = [];
   const widget = new StatusWidget(undefined, {
     fg: (color: string, text: string) => {
@@ -2529,17 +2529,24 @@ test("Status widget renders managed metadata without changing ownership ancestry
     unavailable: false,
     breadcrumb: ["lead"],
   };
-  widget.setSnapshot({ ...snapshot, managed: true });
+  widget.setSnapshot({ ...snapshot, execution: { kind: "managed" } });
   assert.equal(widget.render(160)[0], "● lead · managed");
   assert.ok(calls.includes("success:● lead"));
   assert.ok(calls.includes("muted: · managed"));
+  for (const [mode, label] of [
+    ["flexible", "flexible"],
+    ["orchestrate", "orchestrate"],
+  ] as const) {
+    widget.setSnapshot({ ...snapshot, execution: { kind: "ordinary", mode } });
+    assert.equal(widget.render(160)[0], `● lead · ${label}`);
+  }
   widget.setSnapshot(snapshot);
   assert.equal(widget.render(160)[0], "● lead");
 
   const breadcrumb = ["lead", "implementer", "scout"];
   widget.setSnapshot({
     ...snapshot,
-    managed: true,
+    execution: { kind: "managed" },
     breadcrumb,
     ownTools: ["read", "bash"],
     identityOnly: true,
@@ -2550,6 +2557,7 @@ test("Status widget renders managed metadata without changing ownership ancestry
   );
   assert.deepEqual(breadcrumb, ["lead", "implementer", "scout"]);
   assert.equal(widget.render(41)[0], "● lead → implementer → scout · managed");
+  assert.doesNotMatch(widget.render(8)[0]!, /· managed/);
   for (let width = 0; width <= 160; width++)
     assert.ok(
       widget.render(width).every((line) => visibleWidth(line) <= width),
@@ -2558,7 +2566,7 @@ test("Status widget renders managed metadata without changing ownership ancestry
 
   widget.setSnapshot({
     ...snapshot,
-    managed: true,
+    execution: { kind: "managed" },
     agents: [
       { label: "implementer", definition: "implementer", state: "blocked" },
     ],

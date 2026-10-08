@@ -43,8 +43,11 @@ assignment.
 
 Manually continuing the exact assigned Pi session keeps it managed. The
 `managed-lead` definition remains launch policy and does not establish or
-release authority. Status derives its contextual `· managed` marker from the
-current assignment; Agent ancestry remains ownership-only.
+release authority. Status derives the Lead's effective execution label from
+verified current assignment evidence and valid ordinary execution state. An
+assigned Lead shows `· managed`; ordinary modes are shown only when assignment
+absence and the selected profile are verified. Agent ancestry remains
+ownership-only.
 
 ## Rationale
 

@@ -117,6 +117,8 @@ export interface StatusAgent {
   inactiveMs?: number;
   parentLabel?: string;
 }
+export type StatusExecution =
+  { kind: "managed" } | { kind: "ordinary"; mode: "flexible" | "orchestrate" };
 export interface StatusSnapshot {
   agents: StatusAgent[];
   stale: boolean;
@@ -126,7 +128,7 @@ export interface StatusSnapshot {
   ownTools?: string[];
   identityOnly?: boolean;
   refreshedAt?: number;
-  managed?: boolean;
+  execution?: StatusExecution;
 }
 export interface CompletionMessageDetails {
   requestId: string;
@@ -3532,28 +3534,49 @@ export class StatusWidget {
       ? "unavailable"
       : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
     const availableWidth = Math.max(0, width);
-    const breadcrumb = renderBreadcrumb(s.breadcrumb ?? ["?"], availableWidth);
-    const managed = s.managed ? " · managed" : "";
+    const execution = s.execution
+      ? ` · ${s.execution.kind === "managed" ? "managed" : s.execution.mode}`
+      : "";
     const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
     const run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
     const suffixText = s.identityOnly || !suffix ? "" : `  ${suffix}`;
+    const executionFits =
+      !!execution &&
+      availableWidth >=
+        visibleWidth(execution) +
+          visibleWidth("●") +
+          visibleWidth(run) +
+          visibleWidth(suffixText);
+    const shownExecution = executionFits ? execution : "";
+    const breadcrumb = renderBreadcrumb(
+      s.breadcrumb ?? ["?"],
+      Math.max(
+        0,
+        availableWidth -
+          visibleWidth(shownExecution) -
+          visibleWidth(run) -
+          visibleWidth(suffixText),
+      ),
+    );
     const tools = renderToolMetadata(
       s.ownTools,
       Math.max(
         0,
         availableWidth -
           visibleWidth(breadcrumb) -
-          visibleWidth(managed) -
+          visibleWidth(shownExecution) -
           visibleWidth(run) -
           visibleWidth(suffixText),
       ),
     );
     const styledBreadcrumb = this.theme.fg("success", breadcrumb);
-    const styledManaged = managed ? this.theme.fg("muted", managed) : "";
+    const styledExecution = shownExecution
+      ? this.theme.fg("muted", shownExecution)
+      : "";
     const styledTools = tools ? this.theme.fg("muted", tools) : "";
     const styledRun = run ? this.theme.fg("accent", run) : "";
     const styledSuffix = suffixText ? this.theme.fg("muted", suffixText) : "";
-    const header = `${styledBreadcrumb}${styledManaged}${styledTools}${styledRun}${styledSuffix}`;
+    const header = `${styledBreadcrumb}${styledExecution}${styledTools}${styledRun}${styledSuffix}`;
     const out = [truncateToWidth(header, availableWidth, "…")];
     if (s.identityOnly) return out;
     out.push(
