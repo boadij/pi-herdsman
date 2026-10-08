@@ -843,6 +843,7 @@ export function createLeadSessionTreeRuntime(host: {
     LeadRoleTransitionRuntime,
     "branchRoleObservation" | "reconcileBranchRole"
   >;
+  reconcileBranchExecution(ctx: ExtensionContext): Promise<void>;
   isLead(): boolean;
   appendRoleError(ctx: ExtensionContext, error: unknown): void;
 }) {
@@ -860,6 +861,7 @@ export function createLeadSessionTreeRuntime(host: {
       if (roleAtTreeChange.watchBeforeReconcile) watchActiveAsks();
       if (host.isLead()) {
         try {
+          await host.reconcileBranchExecution(ctx);
           await host.roleTransitions.reconcileBranchRole(ctx);
         } catch (error) {
           host.appendRoleError(ctx, error);
@@ -2558,6 +2560,10 @@ export function registerLeadRuntime(
     ) => {
       void roleTransitions
         .retireRemovedProjectWork(removed, ctx, signal)
+        .then(async () => {
+          await restoreLeadExecution(ctx, signal);
+          if (!signal.aborted) roleTransitions.reconcileRoleTools();
+        })
         .catch((error) =>
           options.controllerServices.appendError(
             ctx,
@@ -2914,7 +2920,11 @@ export function registerLeadRuntime(
       }
     } catch (error) {
       if (signal?.aborted) return;
-      leadExecution = { mode, valid: false, managed: false };
+      leadExecution = {
+        mode,
+        valid: false,
+        managed: !!leadExecution?.managed,
+      };
       options.sessionStartOptions.appendRoleError(ctx, error);
       return;
     }
@@ -2938,10 +2948,12 @@ export function registerLeadRuntime(
     ctx: ExtensionCommandContext,
     mode: LeadExecutionMode,
   ): Promise<void> => {
-    if (leadExecution?.managed || (await currentProjectAssignment(ctx)))
+    const assignment = await currentProjectAssignment(ctx);
+    if (assignment)
       throw new Error(
         "Managed Leads use managed-lead; use /takeover to release Manager authority.",
       );
+    if (leadExecution?.managed) await restoreLeadExecution(ctx);
     await ctx.waitForIdle();
     const definition = resolveExecutionDefinition(ctx, mode);
     const saved =
@@ -2951,6 +2963,8 @@ export function registerLeadRuntime(
       leadExecution?.mode === "flexible" &&
       !leadExecution.managed &&
       leadExecution.valid &&
+      leadExecution.definition.frontmatter.tools === undefined &&
+      leadExecution.definition.frontmatter.excludeTools === undefined &&
       activeLeadRole(leadRuntime) === "lead"
         ? leadToolState.normalizeBaseTools(pi.getActiveTools())
         : [...saved];
@@ -2977,21 +2991,46 @@ export function registerLeadRuntime(
       leadToolState.normalizeBaseTools(pi.getActiveTools());
     const targetTools = leadToolState.projectLeadTools(baseline, definition);
     if (!(await roleTransitions.takeover(ctx))) return false;
-    persistLeadExecution("orchestrate", baseline);
-    leadToolState.setLeadTools(baseline);
-    leadExecution = {
-      mode: "orchestrate",
-      definition,
-      valid: true,
-      managed: false,
-    };
     try {
+      persistLeadExecution("orchestrate", baseline);
+      leadToolState.setLeadTools(baseline);
+      leadExecution = {
+        mode: "orchestrate",
+        definition,
+        valid: true,
+        managed: false,
+      };
       pi.setActiveTools(targetTools);
     } catch (error) {
-      pi.setActiveTools(leadToolState.normalizeLeadTools([]));
-      options.sessionStartOptions.appendDefinitionError(ctx, error);
+      leadExecution = { mode: "orchestrate", valid: false, managed: false };
+      try {
+        pi.setActiveTools(leadToolState.normalizeLeadTools([]));
+      } catch {
+        // Preserve the original transition failure.
+      }
+      try {
+        options.sessionStartOptions.appendDefinitionError(ctx, error);
+      } catch {
+        // Preserve the original transition failure.
+      }
+      throw error;
     }
     return true;
+  };
+  const reconcileBranchExecution = async (ctx: ExtensionContext) => {
+    const saved = sessionLeadExecutionState(ctx.sessionManager.getBranch());
+    const baseline = saved
+      ? [...saved.leadTools]
+      : leadToolState.normalizeBaseTools(pi.getActiveTools());
+    const mode =
+      saved?.mode ?? options.commandHost.readConfig().defaultLeadExecution;
+    leadToolState.setLeadTools(baseline);
+    leadExecution = { mode, valid: false, managed: !!leadExecution?.managed };
+    await restoreLeadExecution(ctx);
+    if (leadExecution && !leadExecution.managed && leadExecution.valid)
+      pi.setActiveTools(
+        leadToolState.projectLeadTools(baseline, leadExecution.definition),
+      );
   };
   const agentEvents = createLeadAgentEventRuntime({
     ...options.agentEventOptions,
@@ -3032,6 +3071,7 @@ export function registerLeadRuntime(
   const sessionTree = createLeadSessionTreeRuntime({
     ...options.sessionTreeOptions,
     roleTransitions,
+    reconcileBranchExecution,
     controller,
   });
   const shutdown = createLeadShutdownRuntime({

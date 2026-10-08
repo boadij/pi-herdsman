@@ -9,6 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { mock, test, type TestContext } from "node:test";
@@ -232,6 +233,92 @@ test("ordinary Lead profile switches retain the saved tool baseline", async () =
   }
 });
 
+test("a restricted Flexible definition cannot replace the ordinary tool baseline", async (t) => {
+  setLeadEnvironment();
+  const cwd = mkdtempSync(join(tmpdir(), "herdsman-flexible-profile-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+  writeFileSync(
+    join(cwd, ".pi", "agents", "flexible-lead.md"),
+    "---\nname: flexible-lead\ntools: [read]\n---\nrestricted flexible\n",
+  );
+  const baseline = ["read", "bash", "edit", "write"];
+  const pi = fakeChiefPi({ activeTools: baseline });
+  const context = fakeContext(pi.entries) as any;
+  context.cwd = cwd;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    await pi.commandOptions.get("lead").handler("flexible", context);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", ...leadTools]);
+    assert.deepEqual(
+      sessionLeadExecutionState(pi.entries)?.leadTools,
+      baseline,
+    );
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
+test("session tree navigation restores each branch's execution mode, baseline, and guidance", async () => {
+  setLeadEnvironment();
+  const branchEntry = (mode: string, leadTools: string[]) => [
+    {
+      type: "custom",
+      customType: "pi-herdsman-lead-execution",
+      data: { mode, leadTools },
+    },
+  ];
+  let branch = branchEntry("flexible", ["read", "bash"]);
+  const pi = fakeChiefPi({ activeTools: ["read", "bash"] });
+  const context = fakeContext(pi.entries, branch) as any;
+  context.sessionManager.getBranch = () => branch;
+  registerExtension!(pi.pi as never);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+    await pi.commandOptions.get("lead").handler("orchestrate", context);
+    branch = branchEntry("flexible", ["read", "bash"]);
+    await pi.events.get("session_tree")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), ["read", "bash", ...leadTools]);
+    let event: any = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, context);
+    assert.match(
+      event.systemPromptOptions.sections.pi_herdsman_lead_execution,
+      /Delegate bounded execution work when an Agent/u,
+    );
+
+    branch = branchEntry("orchestrate", ["read", "edit"]);
+    await pi.events.get("session_tree")![0](undefined, context);
+    assert.deepEqual(pi.pi.getActiveTools(), [
+      "read",
+      "ls",
+      "find",
+      "grep",
+      ...leadTools,
+    ]);
+    event = {
+      systemPrompt: "base",
+      systemPromptOptions: { sections: {}, contextFiles: [] },
+    };
+    await pi.events.get("before_agent_start")![0](event, context);
+    assert.match(
+      event.systemPromptOptions.sections.pi_herdsman_lead_execution,
+      /Do not keep otherwise delegable execution local/u,
+    );
+    assert.deepEqual(sessionLeadExecutionState(branch)?.leadTools, [
+      "read",
+      "edit",
+    ]);
+  } finally {
+    await pi.events.get("session_shutdown")?.[0]();
+  }
+});
+
 test("Manager transitions and mode changes preserve the ordinary Lead baseline", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "manager-baseline-pane";
@@ -446,11 +533,12 @@ const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>
         } as Record<string, string>
       )[name],
   )!;
-test("session stats sums Pi usage entries and proven nested sessions once", async () => {
+test("session stats sums Pi usage entries and proven nested sessions once", async (t) => {
   setLeadEnvironment();
   const pi = fakePi();
   registerExtension!(pi.pi as never);
-  const dir = mkdtempSync(join(tmpdir(), "herdsman-usage-"));
+  const dir = mkdtempSync(join(PI_AGENT_ROOT, "herdsman-usage-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const childPath = join(dir, "child.jsonl");
   const nestedPath = join(dir, "nested.jsonl");
   writeFileSync(childPath, "");
@@ -2558,10 +2646,11 @@ async function managerDelegateAssignmentTest(
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "root-pane";
   process.env.HERDR_TAB_ID = "root-tab";
-  process.env.HERDR_SOCKET_PATH = join(
-    tmpdir(),
-    `delegate-project-${randomUUID()}.sock`,
-  );
+  process.env.HERDR_SOCKET_PATH =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\herdr-${randomUUID()}`
+      : `/tmp/herdr-${randomUUID()}.sock`;
+  const lifecycleSocketPath = process.env.HERDR_SOCKET_PATH;
   const childWorkspace = `child-${randomUUID()}`;
   const childCwd = realFs.mkdtempSync(join(PI_AGENT_ROOT, "manager-child-"));
   t.after(() => rmSync(childCwd, { recursive: true, force: true }));
@@ -2577,6 +2666,11 @@ async function managerDelegateAssignmentTest(
   let created = false;
   let started = false;
   let manager1Shutdown = false;
+  let failScopeLookup = false;
+  let lifecycleServer: ReturnType<typeof createServer> | undefined;
+  const lifecycleClients = new Set<any>();
+  let lifecycleClient: any;
+  let lifecycleSubscriptions = 0;
   const respond = (result: unknown) => ({
     stdout: JSON.stringify({ id: AGENT_ID, result }),
     stderr: "",
@@ -2594,6 +2688,20 @@ async function managerDelegateAssignmentTest(
     tab_id: "root-tab",
   };
   const exec = (command: string, args: string[]) => {
+    if (
+      failScopeLookup &&
+      command === "herdr" &&
+      args[0] === "worktree" &&
+      args[1] === "list"
+    )
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          error: { code: "unavailable", message: "scope lookup failure" },
+        }),
+        stderr: "",
+        code: 1,
+      };
     if (command === "herdr" && args[0] === "workspace" && args[1] === "get")
       return respond({
         workspace: {
@@ -2960,9 +3068,29 @@ async function managerDelegateAssignmentTest(
     process.env.HERDR_WORKSPACE_ID = childWorkspace;
     process.env.HERDR_PANE_ID = "child-pane";
     process.env.HERDR_TAB_ID = "child-tab";
-    const lead = fakeChiefPi({ activeTools: ["read"], exec });
+    lifecycleServer = createServer((socket) => {
+      lifecycleClients.add(socket);
+      lifecycleClient = socket;
+      socket.once("close", () => lifecycleClients.delete(socket));
+      socket.setEncoding("utf8");
+      let buffer = "";
+      socket.on("data", (chunk: string) => {
+        buffer += chunk;
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) return;
+        const request = JSON.parse(buffer.slice(0, newline));
+        lifecycleSubscriptions++;
+        socket.write(`${JSON.stringify({ id: request.id, result: {} })}\n`);
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      lifecycleServer!.once("error", reject);
+      lifecycleServer!.listen(process.env.HERDR_SOCKET_PATH!, resolve);
+    });
+    let lead = fakeChiefPi({ activeTools: ["read"], exec });
     registerExtension!(lead.pi as never);
-    const leadCtx = fakeContext() as any;
+    let leadCtx = fakeContext() as any;
+    leadCtx.hasUI = true;
     leadCtx.sessionManager.getSessionId = () => childSession;
     leadCtx.sessionManager.getSessionFile = childSessionPath;
     try {
@@ -3023,11 +3151,153 @@ async function managerDelegateAssignmentTest(
         listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
         childSession,
       );
+      const publishRetirement = () => {
+        lifecycleClient.write(
+          `${JSON.stringify({
+            event: "worktree_removed",
+            data: {
+              type: "worktree_removed",
+              workspace_id: childWorkspace,
+              workspace: {
+                workspace_id: childWorkspace,
+                worktree: {
+                  repo_key: "repo-key",
+                  checkout_path: childCwd,
+                  is_linked_worktree: true,
+                },
+              },
+              worktree: {
+                path: childCwd,
+                branch: assignment!.branch,
+                is_linked_worktree: true,
+              },
+              forced: false,
+            },
+          })}\n`,
+        );
+      };
+      await t.waitFor(() => assert.ok(lifecycleSubscriptions > 0));
+      failScopeLookup = true;
+      publishRetirement();
+      await t.waitFor(() =>
+        assert.ok(
+          lead.entries.some((entry: any) =>
+            String(entry.data?.error).includes("scope lookup failure"),
+          ) || !listProjectAssignments(supervisionRuntime(), "repo-key").length,
+          JSON.stringify(lead.entries),
+        ),
+      );
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), "repo-key").length,
+        1,
+      );
+      const lookupNotices: string[] = [];
+      leadCtx.ui.notify = (message: string) => lookupNotices.push(message);
+      await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
+      assert.ok(
+        lookupNotices.some((message) =>
+          message.includes("scope lookup failure"),
+        ),
+      );
+      assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
+      leadCtx.mode = "rpc";
+      let managedPresentation: string[] = [];
+      leadCtx.ui.select = async (title: string, items: string[]) => {
+        if (title.startsWith("Pi Herdsman")) managedPresentation = items;
+        return undefined;
+      };
+      await lead.commandOptions.get("herdsman").handler("", leadCtx);
+      assert.ok(
+        managedPresentation.some((item) => /^Execution\s+Managed$/u.test(item)),
+      );
+
+      failScopeLookup = false;
+      publishRetirement();
+      await t.waitFor(() =>
+        assert.equal(
+          listProjectAssignments(supervisionRuntime(), "repo-key").length,
+          0,
+        ),
+      );
+      await t.waitFor(() =>
+        assert.deepEqual(lead.pi.getActiveTools(), [
+          "read",
+          "ls",
+          "find",
+          "grep",
+          ...leadTools,
+        ]),
+      );
+      await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
+      assert.deepEqual(lead.pi.getActiveTools(), [
+        "read",
+        "ls",
+        "find",
+        "grep",
+        ...leadTools,
+      ]);
+      managedPresentation = [];
+      await lead.commandOptions.get("herdsman").handler("", leadCtx);
+      assert.ok(
+        managedPresentation.some((item) =>
+          /^Execution\s+Orchestrate$/u.test(item),
+        ),
+      );
+      await lead.events.get("session_shutdown")?.[0]();
+      writeProjectAssignment(supervisionRuntime(), assignment!);
+      lead = fakeChiefPi({ activeTools: ["read"], exec });
+      registerExtension!(lead.pi as never);
+      leadCtx = fakeContext() as any;
+      leadCtx.hasUI = true;
+      leadCtx.sessionManager.getSessionId = () => childSession;
+      leadCtx.sessionManager.getSessionFile = childSessionPath;
+      await lead.events.get("session_start")![0](undefined, leadCtx);
+      const originalAppend = lead.pi.appendEntry;
+      let injected = false;
+      lead.pi.appendEntry = (type: string, data: unknown) => {
+        if (type === "pi-herdsman-lead-execution" && !injected) {
+          injected = true;
+          throw new Error("injected execution persistence failure");
+        }
+        originalAppend(type, data);
+      };
+      await assert.rejects(
+        () => lead.commandOptions.get("takeover").handler("", leadCtx),
+        /injected execution persistence failure/u,
+      );
+      lead.pi.appendEntry = originalAppend;
+      assert.equal(injected, true);
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), "repo-key").length,
+        0,
+      );
+      assert.deepEqual(lead.pi.getActiveTools(), leadTools);
+      assert.ok(
+        lead.entries.some(
+          (entry: any) =>
+            entry.customType === "pi_herdsman_definition_error" &&
+            entry.data?.error ===
+              "Error: injected execution persistence failure",
+        ),
+      );
+      await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
     } finally {
       await lead.events.get("session_shutdown")?.[0]();
     }
   } finally {
     if (!manager1Shutdown) await pi.events.get("session_shutdown")?.[0]();
+    for (const client of lifecycleClients) client.destroy();
+    if (lifecycleServer?.listening)
+      await new Promise<void>((resolve) =>
+        lifecycleServer!.close(() => resolve()),
+      );
+    if (process.platform !== "win32") {
+      try {
+        realFs.unlinkSync(lifecycleSocketPath!);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_TAB_ID;
     delete process.env.HERDR_PANE_ID;
