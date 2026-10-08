@@ -3538,42 +3538,36 @@ export class StatusWidget {
       ? ` · ${s.execution.kind === "managed" ? "managed" : s.execution.mode}`
       : "";
     const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
-    const run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
+    let run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
     const suffixText = s.identityOnly || !suffix ? "" : `  ${suffix}`;
     const breadcrumbSegments = s.breadcrumb ?? ["?"];
-    const identity = renderBreadcrumb(
-      [breadcrumbSegments.at(-1) ?? "?"],
-      availableWidth,
+    const breadcrumb = renderBreadcrumb(breadcrumbSegments, availableWidth);
+    const remainingWidth = Math.max(
+      0,
+      availableWidth - visibleWidth(breadcrumb),
     );
     const executionFits =
       !!execution &&
-      availableWidth >=
-        visibleWidth(execution) +
-          visibleWidth(identity) +
-          visibleWidth(run) +
-          visibleWidth(suffixText);
+      visibleWidth(execution) + visibleWidth(suffixText) <= remainingWidth;
     const shownExecution = executionFits ? execution : "";
-    const breadcrumb = renderBreadcrumb(
-      breadcrumbSegments,
-      Math.max(
-        0,
-        availableWidth -
-          visibleWidth(shownExecution) -
-          visibleWidth(run) -
-          visibleWidth(suffixText),
-      ),
-    );
     const tools = renderToolMetadata(
       s.ownTools,
       Math.max(
         0,
-        availableWidth -
-          visibleWidth(breadcrumb) -
+        remainingWidth -
           visibleWidth(shownExecution) -
-          visibleWidth(run) -
           visibleWidth(suffixText),
       ),
     );
+    if (
+      visibleWidth(breadcrumb) +
+        visibleWidth(shownExecution) +
+        visibleWidth(tools) +
+        visibleWidth(run) +
+        visibleWidth(suffixText) >
+      availableWidth
+    )
+      run = "";
     const styledBreadcrumb = this.theme.fg("success", breadcrumb);
     const styledExecution = shownExecution
       ? this.theme.fg("muted", shownExecution)

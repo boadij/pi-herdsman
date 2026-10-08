@@ -2578,6 +2578,40 @@ test("Status widget renders complete execution metadata without changing ownersh
   assert.match(widget.render(160)[1]!, /└─ .*implementer/);
 });
 
+test("Status widget keeps execution metadata ahead of elapsed time when narrow", (t) => {
+  const widget = new StatusWidget();
+  t.after(() => widget.dispose());
+  const snapshot = {
+    agents: [],
+    stale: false,
+    unavailable: false,
+    breadcrumb: ["lead"],
+    execution: { kind: "managed" as const },
+  };
+  widget.setSnapshot(snapshot);
+  const width = visibleWidth(widget.render(160)[0]!);
+
+  widget.setSnapshot({ ...snapshot, herdRunStartedAt: Date.now() - 30_000 });
+  const header = widget.render(width)[0]!;
+  assert.match(header, /· managed/);
+  assert.doesNotMatch(header, /\d+s/);
+  assert.ok(visibleWidth(header) <= width);
+});
+
+test("Status widget preserves Lead identity below the active-agent suffix width", (t) => {
+  const widget = new StatusWidget();
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [{ label: "worker", definition: "agent", state: "working" }],
+    stale: false,
+    unavailable: false,
+    breadcrumb: ["lead"],
+  });
+  const header = widget.render(10)[0]!;
+  assert.match(header, /lead/);
+  assert.ok(visibleWidth(header) <= 10);
+});
+
 test("Status widget headers keep tools separate from child metadata", (t) => {
   const semanticTools = [
     "read",

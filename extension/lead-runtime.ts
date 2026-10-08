@@ -2611,19 +2611,7 @@ export function registerLeadRuntime(
           statusWorktreeScope?.sessionId === sessionId &&
           statusWorktreeScope.workspaceId === workspaceId
         ) {
-          if (statusWorktreeScope.scope) {
-            try {
-              assignment = roleTransitions.projectAssignmentForScope(
-                statusWorktreeScope.scope,
-                sessionId,
-              );
-              assignmentVerified = true;
-            } catch {
-              // Ambiguous assignment evidence must not claim Manager control.
-            }
-          } else {
-            assignmentVerified = true;
-          }
+          assignmentVerified = true;
         } else if (
           statusWorktreeScopeRequest?.sessionId !== sessionId ||
           statusWorktreeScopeRequest.workspaceId !== workspaceId
@@ -2660,6 +2648,27 @@ export function registerLeadRuntime(
       true,
       allowTranscriptDefinitionFallback,
     );
+    if (
+      isLead &&
+      process.env.HERDR_WORKSPACE_ID &&
+      statusWorktreeScope?.sessionId === ctx.sessionManager.getSessionId() &&
+      statusWorktreeScope.workspaceId === process.env.HERDR_WORKSPACE_ID
+    ) {
+      if (statusWorktreeScope.scope) {
+        try {
+          assignment = roleTransitions.projectAssignmentForScope(
+            statusWorktreeScope.scope,
+            ctx.sessionManager.getSessionId(),
+          );
+          assignmentVerified = true;
+        } catch {
+          assignmentVerified = false;
+          // Ambiguous assignment evidence must not claim Manager control.
+        }
+      } else {
+        assignmentVerified = true;
+      }
+    }
     const snapshot = buildAgentStatusSnapshot(view, ctx, {
       ...options.statusSnapshotHost,
       scope: { kind: "lead" },
@@ -3052,7 +3061,6 @@ export function registerLeadRuntime(
         managed: false,
       };
       pi.setActiveTools(targetTools);
-      statusRuntime.requestRefresh();
     } catch (error) {
       leadExecution = { mode: "orchestrate", valid: false, managed: false };
       try {
