@@ -42,6 +42,48 @@ session.
 Each accepted definition delegation creates one agent generation for one
 assignment. The terminal result is delivered once and the agent is cleaned up.
 
+## Managed-agent bootstrap extension contract
+
+Extensions that are already loaded in both the delegating controller and a
+child may participate in fresh initialization through Pi's event bus channel
+`pi-herdsman:managed-agent-bootstrap`. The protocol version is `1`. This is
+available only for fresh `agent_delegate`; continuation never prepares,
+initializes, or commits bootstrap participants.
+
+During synchronous `prepare` event dispatch, listeners may synchronously call
+`register(id, prepare)`. IDs must be unique within a spawn and match
+`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`. Herdsman then sequentially awaits each
+registered callback. Return `undefined` to opt out, or return an opaque string
+payload and optional parent-side commit callback:
+
+```ts
+pi.events.on("pi-herdsman:managed-agent-bootstrap", (event) => {
+  if (event.protocol !== 1 || event.phase !== "prepare") return;
+  event.register("example/child-state", async () => {
+    const prepared = await prepareChild(event.agent);
+    return {
+      payload: serialize(prepared),
+      commit: () => adoptChild(prepared),
+    };
+  });
+});
+```
+
+For each prepared participant, the child receives an `initialize` event before
+Herdsman writes its normal `state.json` readiness record. Exactly one matching
+child extension must synchronously call `accept(initialize)` during event
+dispatch; Herdsman invokes and awaits that initializer before readiness. The
+participant owns payload serialization, compatibility, and interpretation.
+The aggregate bootstrap sidecar is limited to 64 KiB.
+
+A prepared participant without exactly one child initializer, a rejected or
+throwing initializer, a build/identity mismatch, invalid participant data, or
+an oversized payload fails startup. No task is delivered and the existing
+startup rollback applies. After normal child readiness and identity/integration
+validation, Herdsman awaits parent commit callbacks before it delivers the
+first assignment. Bootstrap storage is transient and removed before readiness.
+With no participant data, delegation follows its ordinary startup path.
+
 ## `continue_agent`
 
 ```json

@@ -28,6 +28,9 @@ export function currentTurnIsSoleToolCall(
   return calls.length === 1 && calls[0]?.name === name;
 }
 
+export const MANAGED_AGENT_BOOTSTRAP_EVENT =
+  "pi-herdsman:managed-agent-bootstrap";
+
 export const FILE_HANDOFF_GUIDANCE =
   "Pass every user-supplied or already-available artifact relevant to the " +
   "recipient's assignment, decisions, integration, validation, or onward " +

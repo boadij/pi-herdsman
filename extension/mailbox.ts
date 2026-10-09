@@ -124,6 +124,18 @@ export interface ResultRecord {
   completedAt: number;
 }
 
+export interface ManagedAgentBootstrapRecord {
+  version: 5;
+  build: RuntimeBuild;
+  runId: string;
+  ownerSessionId: string;
+  workspaceId: string;
+  agentLabel: string;
+  participants: Array<{ id: string; payload: string }>;
+}
+export const MANAGED_AGENT_BOOTSTRAP_LIMIT_BYTES = 64 * 1024;
+const BOOTSTRAP_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PREFIX = "__PI_HERDSMAN_AGENT_V5__:";
@@ -136,6 +148,7 @@ export class MailboxClaimOccupiedError extends Error {
   readonly code = "MAILBOX_CLAIM_OCCUPIED";
 }
 const LIMITS = {
+  bootstrap: MANAGED_AGENT_BOOTSTRAP_LIMIT_BYTES,
   state: 64 * 1024,
   request: MAILBOX_PROTOCOL_LIMIT_BYTES,
   ask: MAILBOX_PROTOCOL_LIMIT_BYTES,
@@ -323,6 +336,49 @@ function validate(
   if (Buffer.byteLength(text, "utf8") > LIMITS[kind])
     throw new Error("Mailbox record is too large");
   const v = value as Record<string, any>;
+  if (kind === "bootstrap") {
+    const allowed = [
+      "version",
+      "build",
+      "runId",
+      "ownerSessionId",
+      "workspaceId",
+      "agentLabel",
+      "participants",
+    ];
+    if (Object.keys(v).some((key) => !allowed.includes(key)))
+      throw new Error("Unknown mailbox field");
+    if (!isRuntimeBuild(v.build))
+      throw new Error("Invalid runtime build identity");
+    for (const field of [
+      "runId",
+      "ownerSessionId",
+      "workspaceId",
+      "agentLabel",
+    ])
+      if (typeof v[field] !== "string" || !(v[field] as string).trim())
+        throw new Error(`Invalid mailbox field: ${field}`);
+    if (!UUID.test(v.runId as string)) throw new Error("Invalid mailbox UUID");
+    if (!Array.isArray(v.participants) || !v.participants.length)
+      throw new Error("Invalid bootstrap participants");
+    const ids = new Set<string>();
+    for (const participant of v.participants) {
+      if (
+        !participant ||
+        typeof participant !== "object" ||
+        Object.keys(participant).some(
+          (key) => !["id", "payload"].includes(key),
+        ) ||
+        typeof participant.id !== "string" ||
+        !BOOTSTRAP_ID.test(participant.id) ||
+        ids.has(participant.id) ||
+        typeof participant.payload !== "string"
+      )
+        throw new Error("Invalid or duplicate bootstrap participant");
+      ids.add(participant.id);
+    }
+    return;
+  }
   const allowed =
     kind === "state"
       ? [
@@ -720,6 +776,7 @@ export function resetAgentMailbox(path: string): void {
   for (const name of [
     "state.json",
     "ask.json",
+    "bootstrap.json",
     ...readdirSync(path).filter((x: string) =>
       /^(request|result)-.*\.json$/.test(x),
     ),
@@ -729,6 +786,29 @@ export function resetAgentMailbox(path: string): void {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     }
+  }
+}
+export function writeAgentBootstrap(
+  path: string,
+  record: ManagedAgentBootstrapRecord,
+): void {
+  atomic(file(path, "bootstrap.json"), record, "bootstrap");
+}
+export function readAgentBootstrap(
+  path: string,
+): ManagedAgentBootstrapRecord | undefined {
+  const value = read<ManagedAgentBootstrapRecord>(
+    file(path, "bootstrap.json"),
+    "bootstrap",
+  );
+  if (value) validate(value, "bootstrap");
+  return value;
+}
+export function removeAgentBootstrap(path: string): void {
+  try {
+    unlinkSync(file(path, "bootstrap.json"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 export function removeAgentMailbox(path: string): void {
