@@ -2645,6 +2645,7 @@ async function runManagerStartupScenario(
             "reconcile-replacement",
             "reconcile-detached-unrelated",
             "reconcile-session-unreadable",
+            "reconcile-assignment-lock",
           ].includes(mode) && !mode.startsWith("active-missing");
         const worktrees = [
           `worktree ${gitCwd}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0\0`,
@@ -3354,18 +3355,8 @@ async function runManagerStartupScenario(
       await pi.tools
         .find((tool) => tool.name === "list_staff")!
         .execute("list", {}, undefined, undefined, ctx);
+      let assignments = listProjectAssignments(supervisionRuntime(), repoKey);
       if (releaseAssignmentLock) {
-        assert.deepEqual(
-          listProjectAssignments(supervisionRuntime(), repoKey).map(
-            ({ id }) => id,
-          ),
-          [reconciliationId],
-        );
-        releaseAssignmentLock();
-        releaseAssignmentLock = undefined;
-      }
-      const assignments = listProjectAssignments(supervisionRuntime(), repoKey);
-      if (mode === "reconcile-assignment-lock") {
         assert.deepEqual(
           assignments.map(({ id }) => id),
           [reconciliationId],
@@ -3378,6 +3369,29 @@ async function runManagerStartupScenario(
           ).length,
           1,
         );
+        releaseAssignmentLock();
+        releaseAssignmentLock = undefined;
+        if (mode === "reconcile-assignment-lock") {
+          await pi.tools
+            .find((tool) => tool.name === "list_staff")!
+            .execute("list", {}, undefined, undefined, ctx);
+          assert.deepEqual(
+            listProjectAssignments(supervisionRuntime(), repoKey),
+            [],
+          );
+          assert.deepEqual(
+            listProjectMessages(
+              supervisionRuntime(),
+              repoKey,
+              reconciliationBranch,
+            ),
+            [],
+          );
+          assignments = listProjectAssignments(supervisionRuntime(), repoKey);
+        }
+      }
+      if (mode === "reconcile-assignment-lock") {
+        assert.deepEqual(assignments, []);
       } else if (
         mode === "reconcile-absent" ||
         mode === "reconcile-prunable-absent" ||
