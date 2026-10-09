@@ -77,7 +77,8 @@ import {
   setLeadEnvironment,
   setAgentEnvironment,
   startupExecutor,
-  watchedResultPaths,
+  watchedMailboxDirectories,
+  emitMailboxChange,
   agentMailboxPath,
   writeAsk,
   writePromptDefinition,
@@ -1470,11 +1471,7 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
       await handler(undefined, context);
     const recovered = readAgentState(startup.mailbox)!;
     assert.ok(recovered.activeRequestId);
-    assert.ok(
-      watchedResultPaths.has(
-        `${startup.mailbox}/result-${recovered.activeRequestId}.json`,
-      ),
-    );
+    assert.ok(watchedMailboxDirectories.has(startup.mailbox));
     const listed = await pi.tools
       .find((tool) => tool.name === "list_agents")!
       .execute("list", {}, undefined, undefined, context);
@@ -2773,13 +2770,8 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     const leadContext = fakeContext();
     t.mock.timers.enable({ apis: ["setTimeout"] });
     await leadAgent.events.get("session_start")![0](undefined, leadContext);
-    const statePath = join(parentMailbox, "state.json");
-    const askWatcher = watchedResultPaths.get(statePath);
-    assert.equal(
-      typeof askWatcher,
-      "function",
-      "pending ask keeps its file watcher",
-    );
+    const askWatcher = watchedMailboxDirectories.get(parentMailbox);
+    assert.equal(askWatcher?.size, 2, "pending ask keeps its mailbox observer");
     assert.equal(
       failInitialAskDelivery,
       false,
@@ -2800,7 +2792,8 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       ...readAgentState(parentMailbox)!,
       build: OTHER_HERDSMAN_BUILD,
     });
-    askWatcher!(realFs.statSync(statePath), realFs.statSync(statePath));
+    emitMailboxChange(parentMailbox, "state.json");
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const incompatibleList = await registeredAgentTool(
       leadAgent,
       "list",
@@ -2862,7 +2855,8 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       ...incompatibleState,
       build: HERDSMAN_BUILD,
     });
-    askWatcher!(realFs.statSync(statePath), realFs.statSync(statePath));
+    emitMailboxChange(parentMailbox, "state.json");
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const compatibleList = await registeredAgentTool(leadAgent, "list").execute(
       "list-compatible-ask",
       {},

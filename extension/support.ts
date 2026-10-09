@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -18,7 +19,8 @@ import { OperationError } from "./errors.ts";
 import { runtimeBuild } from "./compatibility.ts";
 import { herdsmanTempRoot } from "./storage.ts";
 
-export const watchedResultPaths = new Map<string, Function>();
+export const watchedMailboxDirectories = new Map<string, Set<Function>>();
+export let failNextMailboxWatch = false;
 export const projectContextCwds: string[] = [];
 export const nativeSessions = new Map<
   string,
@@ -40,6 +42,19 @@ export let resultRemovalAttempts = 0;
 export let agentDefinitionReadCount = 0;
 export let configReadHook: (() => void) | undefined;
 export let agentStateReadHook: ((path: string) => void) | undefined;
+
+export function emitMailboxChange(directory: string, filename?: string): void {
+  for (const listener of watchedMailboxDirectories.get(directory) ?? [])
+    listener("rename", filename);
+}
+
+export function emitMailboxWatchError(
+  directory: string,
+  error = new Error("injected mailbox watcher failure"),
+): void {
+  for (const listener of watchedMailboxDirectories.get(directory) ?? [])
+    (listener as { emitError?: (error: unknown) => void }).emitError?.(error);
+}
 
 export type WidgetComponent = {
   render(width: number): string[];
@@ -175,13 +190,28 @@ mock.module("node:fs", {
       }
       return realFs.writeSync(...args);
     },
-    watch: realFs.watch,
-    watchFile: (path: string, _options: unknown, listener: Function) => {
-      watchedResultPaths.set(path, listener);
-    },
-    unwatchFile: (path: string, listener: Function) => {
-      if (watchedResultPaths.get(path) === listener)
-        watchedResultPaths.delete(path);
+    watch: (directory: string, _options: unknown, listener: Function) => {
+      if (failNextMailboxWatch) {
+        failNextMailboxWatch = false;
+        throw new Error("injected mailbox watcher creation failure");
+      }
+      const emitter = new EventEmitter();
+      const callback = listener as Function & {
+        emitError?: (error: unknown) => void;
+      };
+      callback.emitError = (error) => emitter.emit("error", error);
+      const listeners = watchedMailboxDirectories.get(directory) ?? new Set();
+      listeners.add(callback);
+      watchedMailboxDirectories.set(directory, listeners);
+      let closed = false;
+      return Object.assign(emitter, {
+        close() {
+          if (closed) return;
+          closed = true;
+          listeners.delete(callback);
+          if (!listeners.size) watchedMailboxDirectories.delete(directory);
+        },
+      });
     },
   },
 });
@@ -2392,10 +2422,7 @@ export function createStagedAssignmentFixture(
         text: "completed before working was observed",
         completedAt: Date.now(),
       });
-      watchedResultPaths.get(`${startup.mailbox}/result-${requestId}.json`)?.(
-        {},
-        {},
-      );
+      emitMailboxChange(startup.mailbox, `result-${requestId}.json`);
     },
     shutdown() {
       pi.events.get("session_shutdown")?.[0]();
@@ -2978,6 +3005,12 @@ export default {
   },
   set failNextMailboxWrite(value: boolean) {
     failNextMailboxWrite = value;
+  },
+  get failNextMailboxWatch() {
+    return failNextMailboxWatch;
+  },
+  set failNextMailboxWatch(value: boolean) {
+    failNextMailboxWatch = value;
   },
   get failNextRequestRemoval() {
     return failNextRequestRemoval;
