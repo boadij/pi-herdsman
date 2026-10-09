@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { test } from "node:test";
+import { createServer, type Socket } from "node:net";
 import packageMetadata from "../package.json" with { type: "json" };
 import {
   buildSessionProjection,
@@ -3941,6 +3942,147 @@ test("delegating managed agents refresh their status widget after controller cha
   const result = await delegated;
   assert.equal(result.details.ok, false);
   assert.match(result.details.error.message, /intentional test launch failure/);
+});
+
+test("presentation event bursts coalesce to one controller snapshot refresh", async (t) => {
+  const label = "presentation-burst-agent";
+  const mailbox = setAgentEnvironment(label, ["child"]);
+  const socketPath =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\herdsman-${randomUUID()}`
+      : `/tmp/h-${randomUUID()}.sock`;
+  process.env.HERDR_SOCKET_PATH = socketPath;
+  const sessionFile = join(
+    testTmpRoot,
+    `presentation-burst-${randomUUID()}.jsonl`,
+  );
+  writeFileSync(
+    sessionFile,
+    JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      timestamp: new Date().toISOString(),
+      cwd: "/tmp",
+    }) + "\n",
+  );
+  const parent = {
+    ...managedState(label),
+    ownerSessionId: process.env.PI_HERDSMAN_OWNER_SESSION_ID!,
+    runId: process.env.PI_HERDSMAN_RUN_ID!,
+    paneId: process.env.HERDR_PANE_ID!,
+    piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    piSessionFile: sessionFile,
+  };
+  writeAgentState(mailbox, parent);
+  const server = createServer();
+  const sockets = new Set<Socket>();
+  let subscribed!: () => void;
+  const subscriptionReady = new Promise<void>(
+    (resolve) => (subscribed = resolve),
+  );
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline));
+      socket.write(
+        JSON.stringify({
+          id: request.id,
+          result: { type: "subscription_started" },
+        }) + "\n",
+      );
+      subscribed();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { sessionId: parent.piSessionId, definition: "agent", label },
+    },
+  ];
+  let snapshotCalls = 0;
+  const lifecycle = delegatedLifecycleExecutor(parent);
+  const pi = fakePi({
+    entries,
+    exec: (command, args, options) => {
+      if (command === "herdr" && isApiSnapshot(args)) snapshotCalls++;
+      return lifecycle.exec(command, args, options);
+    },
+  });
+  const context = fakeAgentContext(entries) as any;
+  context.sessionManager.getSessionFile = () => sessionFile;
+  context.mode = "tui";
+  context.hasUI = true;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalSetInterval = globalThis.setInterval;
+  let presentationTimer: TimerHandler | undefined;
+  globalThis.setInterval = (() => ({})) as typeof setInterval;
+  t.after(async () => {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.setInterval = originalSetInterval;
+    pi.events.get("session_shutdown")?.[0]();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(sessionFile, { force: true });
+    setLeadEnvironment();
+  });
+  registerExtension!(pi.pi as never);
+  for (const start of pi.events.get("session_start") ?? [])
+    await start(undefined, context);
+  await subscriptionReady;
+  await t.waitFor(() => assert.ok(snapshotCalls > 0));
+  for (let turn = 0; turn < 4; turn++)
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  const beforeBurst = snapshotCalls;
+
+  globalThis.setTimeout = ((
+    handler: TimerHandler,
+    delay?: number,
+    ...args: any[]
+  ) => {
+    if (typeof handler === "function") {
+      presentationTimer = () => handler(...args);
+      return { unref() {} } as ReturnType<typeof setTimeout>;
+    }
+    return originalSetTimeout(handler, delay, ...args);
+  }) as typeof setTimeout;
+  const socket = [...sockets][0]!;
+  socket.write(
+    Array.from(
+      { length: 8 },
+      () =>
+        JSON.stringify({
+          event: "pane_updated",
+          data: { type: "pane_updated" },
+        }) + "\n",
+    ).join(""),
+  );
+  for (let turn = 0; turn < 4 && !presentationTimer; turn++)
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    snapshotCalls,
+    beforeBurst,
+    "presentation refresh waits for its coalescing boundary",
+  );
+  assert.equal(typeof presentationTimer, "function");
+  presentationTimer!();
+  await t.waitFor(() => assert.equal(snapshotCalls, beforeBurst + 1));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    snapshotCalls,
+    beforeBurst + 1,
+    "one event burst must not trigger one snapshot per notification",
+  );
 });
 
 for (const delegationEnabled of [false, true]) {

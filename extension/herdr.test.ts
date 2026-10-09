@@ -227,6 +227,12 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
       if (connections === 1) {
         socket.write(
           JSON.stringify({
+            event: "pane_updated",
+            data: { type: "pane_updated" },
+          }) + "\n",
+        );
+        socket.write(
+          JSON.stringify({
             id: request.id,
             error: {
               code: "events_lost",
@@ -295,7 +301,7 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
   try {
     watchHerdrLifecycle(socketPath, controller.signal, (removed, category) => {
       changes.push({ removed, category });
-      if (changes.length >= 7 && connections >= 2) ready();
+      if (changes.length >= 6 && connections >= 2) ready();
     });
     await reconnected;
     assert.equal(request.method, "events.subscribe");
@@ -323,14 +329,13 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
       ],
     );
     assert.equal(connections, 2);
-    assert.equal(changes.length, 7);
+    assert.equal(changes.length, 6);
     assert.deepEqual(
       changes.map((change) => change.category),
       [
         "reconcile",
         "reconcile",
         "reconcile",
-        "presentation",
         "lifecycle",
         "lifecycle",
         "lifecycle",
@@ -339,15 +344,185 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
     assert.equal(changes[0]?.removed, undefined);
     assert.equal(changes[1]?.removed, undefined);
     assert.equal(changes[2]?.removed, undefined);
-    assert.equal(changes[3]?.removed, undefined);
-    assert.deepEqual(changes[4]?.removed, {
+    assert.deepEqual(changes[3]?.removed, {
       repoKey: "repo-key",
       branch: "feat/example",
     });
+    assert.equal(changes[4]?.removed, undefined);
     assert.equal(changes[5]?.removed, undefined);
-    assert.equal(changes[6]?.removed, undefined);
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    assert.equal(changes.length, 6);
   } finally {
     clearTimeout(timeout);
+    controller.abort();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (globalThis.process.platform !== "win32")
+      rmSync(socketPath, { force: true });
+  }
+});
+
+test("lifecycle watcher coalesces presentation bursts and cancels on abort", async () => {
+  const socketPath =
+    globalThis.process.platform === "win32"
+      ? `\\\\.\\pipe\\pi-herdsman-${randomUUID()}`
+      : join(tmpdir(), `pi-herdsman-${randomUUID()}.sock`);
+  const server = createServer();
+  const sockets = new Set<Socket>();
+  const controller = new AbortController();
+  let client: Socket | undefined;
+  const changes: string[] = [];
+  server.on("connection", (socket) => {
+    client = socket;
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline));
+      socket.write(
+        JSON.stringify({
+          id: request.id,
+          result: { type: "subscription_started" },
+        }) + "\n",
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  const waitForChangeCount = async (count: number): Promise<void> => {
+    const end = Date.now() + 5_000;
+    while (changes.length < count && Date.now() < end)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(changes.length, count);
+  };
+  try {
+    watchHerdrLifecycle(socketPath, controller.signal, (_removed, category) => {
+      changes.push(category ?? "lifecycle");
+    });
+    await waitForChangeCount(1);
+    client!.write(
+      JSON.stringify({ event: "pane_closed", data: { type: "pane_closed" } }) +
+        "\n",
+    );
+    await waitForChangeCount(2);
+    assert.deepEqual(changes, ["reconcile", "lifecycle"]);
+
+    client!.write(
+      [
+        { event: "pane_updated" },
+        { event: "pane_closed", data: { type: "pane_closed" } },
+      ]
+        .map((event) => JSON.stringify(event) + "\n")
+        .join(""),
+    );
+    await waitForChangeCount(3);
+    assert.deepEqual(changes, ["reconcile", "lifecycle", "lifecycle"]);
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    assert.equal(changes.length, 3);
+
+    client!.write(
+      [
+        { event: "pane_updated" },
+        { event: "workspace_metadata_updated" },
+        { event: "pane_agent_status_changed" },
+      ]
+        .map((event) => JSON.stringify(event) + "\n")
+        .join(""),
+    );
+    await waitForChangeCount(4);
+    assert.deepEqual(changes, [
+      "reconcile",
+      "lifecycle",
+      "lifecycle",
+      "presentation",
+    ]);
+
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    client!.write(JSON.stringify({ event: "pane_updated" }) + "\n");
+    await waitForChangeCount(5);
+    assert.deepEqual(changes, [
+      "reconcile",
+      "lifecycle",
+      "lifecycle",
+      "presentation",
+      "presentation",
+    ]);
+
+    client!.write(JSON.stringify({ event: "pane_updated" }) + "\n");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    assert.equal(changes.length, 5);
+  } finally {
+    controller.abort();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (globalThis.process.platform !== "win32")
+      rmSync(socketPath, { force: true });
+  }
+});
+
+test("lifecycle watcher reconciles once on unexpected disconnect", async () => {
+  const socketPath =
+    globalThis.process.platform === "win32"
+      ? `\\\\.\\pipe\\pi-herdsman-${randomUUID()}`
+      : join(tmpdir(), `pi-herdsman-${randomUUID()}.sock`);
+  const server = createServer();
+  const sockets = new Set<Socket>();
+  const controller = new AbortController();
+  const changes: string[] = [];
+  let connections = 0;
+  let reconnected!: () => void;
+  const didReconnect = new Promise<void>((resolve) => {
+    reconnected = resolve;
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    const connection = ++connections;
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline));
+      socket.write(
+        JSON.stringify({
+          id: request.id,
+          result: { type: "subscription_started" },
+        }) + "\n",
+      );
+      if (connection === 1) socket.end();
+      else reconnected();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  try {
+    watchHerdrLifecycle(socketPath, controller.signal, (_removed, category) => {
+      changes.push(category ?? "lifecycle");
+    });
+    await Promise.race([
+      didReconnect,
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("lifecycle watcher did not reconnect")),
+          5_000,
+        ),
+      ),
+    ]);
+    const end = Date.now() + 1_000;
+    while (changes.length < 3 && Date.now() < end)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(connections, 2);
+    assert.deepEqual(changes, ["reconcile", "reconcile", "reconcile"]);
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(changes.length, 3);
+  } finally {
     controller.abort();
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));

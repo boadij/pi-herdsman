@@ -211,6 +211,7 @@ const HERDR_EVENT_SUBSCRIPTIONS = [
 ] as const;
 const HERDR_EVENT_SUBSCRIPTION_ID = "pi-herdsman:events";
 const HERDR_EVENT_RECONNECT_MS = 1_000;
+const PRESENTATION_MIN_INTERVAL_MS = 2_000;
 const LIFECYCLE_EVENTS = new Set([
   "workspace_created",
   "workspace_closed",
@@ -803,11 +804,34 @@ export function watchHerdrLifecycle(
 ): void {
   let socket: Socket | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let presentationTimer: ReturnType<typeof setTimeout> | undefined;
+  let nextPresentationAt = 0;
+
+  const invalidatePresentation = (): void => {
+    if (presentationTimer || signal.aborted) return;
+    presentationTimer = setTimeout(
+      () => {
+        presentationTimer = undefined;
+        if (signal.aborted) return;
+        nextPresentationAt = Date.now() + PRESENTATION_MIN_INTERVAL_MS;
+        onChange(undefined, "presentation");
+      },
+      Math.max(0, nextPresentationAt - Date.now()),
+    );
+    presentationTimer.unref?.();
+  };
+
+  const flushPresentation = (): void => {
+    if (presentationTimer) clearTimeout(presentationTimer);
+    presentationTimer = undefined;
+    nextPresentationAt = Date.now() + PRESENTATION_MIN_INTERVAL_MS;
+  };
 
   const connect = (): void => {
     if (signal.aborted) return;
     let buffer = "";
     let subscribed = false;
+    let disconnectReported = false;
     const current = createConnection(socketPath);
     socket = current;
     current.setEncoding("utf8");
@@ -845,8 +869,11 @@ export function watchHerdrLifecycle(
           return;
         }
         if (message?.id === HERDR_EVENT_SUBSCRIPTION_ID && message?.error) {
-          if (message.error.code === "events_lost" && !signal.aborted)
+          if (message.error.code === "events_lost" && !signal.aborted) {
+            disconnectReported = true;
+            flushPresentation();
             onChange(undefined, "reconcile");
+          }
           drop();
           return;
         }
@@ -860,6 +887,7 @@ export function watchHerdrLifecycle(
             return;
           }
           subscribed = true;
+          flushPresentation();
           onChange(undefined, "reconcile");
           continue;
         }
@@ -870,13 +898,22 @@ export function watchHerdrLifecycle(
           : PRESENTATION_EVENTS.has(event)
             ? "presentation"
             : undefined;
-        if (category) onChange(removedHerdrWorktree(message), category);
+        if (category === "presentation") invalidatePresentation();
+        else if (category) {
+          flushPresentation();
+          onChange(removedHerdrWorktree(message), category);
+        }
       }
     });
     current.on("error", drop);
     current.once("close", () => {
       if (socket === current) socket = undefined;
       if (signal.aborted) return;
+      if (subscribed && !disconnectReported) {
+        disconnectReported = true;
+        flushPresentation();
+        onChange(undefined, "reconcile");
+      }
       retry = setTimeout(connect, HERDR_EVENT_RECONNECT_MS);
       retry.unref?.();
     });
@@ -886,6 +923,7 @@ export function watchHerdrLifecycle(
     "abort",
     () => {
       if (retry) clearTimeout(retry);
+      if (presentationTimer) clearTimeout(presentationTimer);
       socket?.destroy();
     },
     { once: true },
