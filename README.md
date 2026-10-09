@@ -17,9 +17,10 @@ and project orchestration.
 
 ## Demo
 
-_Concept animation, not a live recording._
+_Realtime live demo of a manager > lead > agent workflow._
 
-![Pi Herdsman delegating a coding task to an asynchronous subagent while the lead Pi session remains interactive.](docs/assets/demo.gif)
+[![Live demo](https://github.com/user-attachments/assets/e1355ace-aaba-418e-a1d0-1246f1840fc6)](https://github.com/user-attachments/assets/d6ee6687-a96d-493e-ae75-429f586be393)
+
 
 ## What Pi Herdsman gives you
 
