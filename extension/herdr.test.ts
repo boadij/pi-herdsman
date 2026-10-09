@@ -576,6 +576,10 @@ test("lifecycle watcher retries protocol errors and ignores post-abort data", as
   });
   let callbacks = 0;
   server.on("connection", (socket) => {
+    socket.on("error", (error: NodeJS.ErrnoException) => {
+      if (controller.signal.aborted && error.code === "ECONNRESET") return;
+      throw error;
+    });
     sockets.add(socket);
     socket.once("close", () => {
       sockets.delete(socket);
