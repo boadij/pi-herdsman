@@ -88,6 +88,7 @@ const {
   removeProjectAssignment,
   listProjectMessages,
   writeProjectMessage,
+  removeProjectMessages,
   projectAssignmentPath,
   writeChiefMessage: writeChiefMessageRaw,
   chiefMessageBytes,
@@ -201,6 +202,12 @@ test("Git worktree porcelain inventory rejects incomplete or ambiguous records",
   assert.deepEqual(
     parseGitWorktreeInventory(`worktree ${linked}\0HEAD ${hash}\0detached\0\0`),
     [{ path: linked, detached: true }],
+  );
+  assert.deepEqual(
+    parseGitWorktreeInventory(
+      `worktree ${linked}\0HEAD ${hash}\0detached\0prunable gitdir file points to non-existent location\0\0`,
+    ),
+    [{ path: linked, detached: true, prunable: true }],
   );
 });
 const ownershipResult = (
@@ -528,7 +535,8 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
   process.env.HERDR_PANE_ID = "lead-pane";
   process.env.HERDR_TAB_ID = "lead-tab";
   const runtime = supervisionRuntime();
-  const repoKey = "repo-key";
+  const repoKey = realFs.mkdtempSync(join(tmpdir(), "pr334-removal-repo-"));
+  const managerId = randomUUID();
   const branch = "feat/retirement";
   const assignment = {
     version: 2 as const,
@@ -551,7 +559,13 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
 
   const server = createServer();
   const sockets = new Set<Socket>();
+  let managerLease: ReturnType<typeof claimManagerLease> | undefined;
+  let managerAvailable = false;
   let notifyWorktreeList!: () => void;
+  let notifyGitInventory!: () => void;
+  let gitInventoryRequested = new Promise<void>((resolve) => {
+    notifyGitInventory = resolve;
+  });
   let subscribed!: () => void;
   let removedWorkspaceMissing = false;
   let worktreeListRequested = new Promise<void>((resolve) => {
@@ -560,6 +574,22 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
   const subscriptionReady = new Promise<void>((resolve) => {
     subscribed = resolve;
   });
+  const waitFor = async (promise: Promise<void>, label: string) => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`Timed out waiting for ${label}`)),
+            2_000,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
   server.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
@@ -582,6 +612,60 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
 
   const exec = (_command: string, args: string[]) => {
+    if (managerAvailable && isAgentList(args))
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            agents: [
+              {
+                agent_session: {
+                  source: "herdr:pi",
+                  agent: "pi",
+                  kind: "id",
+                  value: managerId,
+                },
+                pane_id: "manager-pane",
+                tab_id: "manager-tab",
+                workspace_id: WORKSPACE,
+              },
+            ],
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (managerAvailable && args[0] === "agent" && args[1] === "get")
+      return {
+        stdout: JSON.stringify({
+          id: AGENT_ID,
+          result: {
+            agent: {
+              agent_session: {
+                source: "herdr:pi",
+                agent: "pi",
+                kind: "id",
+                value: managerId,
+              },
+              pane_id: "manager-pane",
+              tab_id: "manager-tab",
+              workspace_id: WORKSPACE,
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+      };
+    if (_command === "git" && args[0] === "rev-parse")
+      return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
+    if (_command === "git" && args[0] === "worktree" && args[1] === "list") {
+      notifyGitInventory();
+      return {
+        stdout: `worktree ${repoKey}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0\0`,
+        stderr: "",
+        code: 0,
+      };
+    }
     if (args[0] === "worktree" && args[1] === "list") {
       notifyWorktreeList();
       if (removedWorkspaceMissing)
@@ -603,6 +687,7 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
               repo_key: repoKey,
               repo_name: "project",
               source_workspace_id: WORKSPACE,
+              source_checkout_path: repoKey,
             },
             worktrees: [{ open_workspace_id: "linked-workspace" }],
           },
@@ -620,11 +705,14 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
   const pi = fakeChiefPi({ exec });
   registerExtension!(pi.pi as never);
   const ctx = fakeContext() as any;
+  const eventAbortController = new AbortController();
+  ctx.signal = eventAbortController.signal;
   ctx.sessionManager = {
     ...ctx.sessionManager,
     getSessionId: () => assignment.id,
     getSessionFile: () => `/tmp/${assignment.id}.jsonl`,
   };
+  let releaseRetirementLock: (() => void) | undefined;
   try {
     await pi.events.get("session_start")![0](undefined, ctx);
     await subscriptionReady;
@@ -674,18 +762,66 @@ test("worktree removal does not retire an assignment without Manager-scoped Git 
       notifyWorktreeList = resolve;
     });
     publishRemoval(branch);
-    await worktreeListRequested;
+    await waitFor(worktreeListRequested, "worktree topology");
     writeProjectAssignment(runtime, replacement);
     releaseLock();
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.deepEqual(listProjectAssignments(runtime, repoKey), [replacement]);
     assert.equal(listProjectMessages(runtime, repoKey, branch).length, 2);
+
+    removeProjectAssignment(runtime, repoKey, branch);
+    removeProjectMessages(runtime, repoKey, branch);
+    managerLease = claimManagerLease({
+      piSessionId: managerId,
+      paneId: "manager-pane",
+      tabId: "manager-tab",
+      workspaceId: WORKSPACE,
+      repoKey,
+    });
+    writeLeadCoordinationState(runtime, {
+      version: 1,
+      role: "manager",
+      instanceId: randomUUID(),
+      piSessionId: managerId,
+      updatedAt: Date.now(),
+    });
+    managerAvailable = true;
+    writeProjectAssignment(runtime, replacement);
+    writeProjectMessage(message(randomUUID()), runtime);
+    releaseRetirementLock = claimProcessLock(
+      `${projectAssignmentPath(runtime, repoKey, branch)}.lock`,
+      { name: "test removal-event assignment lock" },
+    );
+    worktreeListRequested = new Promise<void>((resolve) => {
+      notifyWorktreeList = resolve;
+    });
+    gitInventoryRequested = new Promise<void>((resolve) => {
+      notifyGitInventory = resolve;
+    });
+    publishRemoval(branch);
+    await waitFor(worktreeListRequested, "worktree topology");
+    await waitFor(gitInventoryRequested, "Git inventory");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), [replacement]);
+    assert.equal(listProjectMessages(runtime, repoKey, branch).length, 1);
+    releaseRetirementLock();
+    releaseRetirementLock = undefined;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (!listProjectAssignments(runtime, repoKey).length) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.deepEqual(listProjectAssignments(runtime, repoKey), []);
+    assert.equal(listProjectMessages(runtime, repoKey, branch).length, 0);
   } finally {
+    eventAbortController.abort();
+    releaseRetirementLock?.();
+    managerLease?.release();
     await pi.events.get("session_shutdown")?.[0]();
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     if (process.platform !== "win32")
       realFs.rmSync(socketPath, { force: true });
+    realFs.rmSync(repoKey, { recursive: true, force: true });
     delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   }
@@ -3143,6 +3279,7 @@ async function runManagerStartupScenario(
     exec,
   });
   registerExtension!(pi.pi as never);
+  let releaseAssignmentLock: (() => void) | undefined;
   try {
     const activeBranch: any[] = pi.entries;
     const ctx = fakeContext(pi.entries, activeBranch) as any;
@@ -3204,16 +3341,16 @@ async function runManagerStartupScenario(
       );
     }
     ctx.isProjectTrusted = () => projectTrusted;
+    releaseAssignmentLock =
+      mode === "reconcile-assignment-lock"
+        ? claimProcessLock(
+            `${projectAssignmentPath(supervisionRuntime(), repoKey, reconciliationBranch)}.lock`,
+            { name: "test assignment lock" },
+          )
+        : undefined;
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     if (mode.startsWith("reconcile-")) {
-      const releaseAssignmentLock =
-        mode === "reconcile-assignment-lock"
-          ? claimProcessLock(
-              `${projectAssignmentPath(supervisionRuntime(), repoKey, reconciliationBranch)}.lock`,
-              { name: "test assignment lock" },
-            )
-          : undefined;
       await pi.tools
         .find((tool) => tool.name === "list_staff")!
         .execute("list", {}, undefined, undefined, ctx);
@@ -3225,22 +3362,28 @@ async function runManagerStartupScenario(
           [reconciliationId],
         );
         releaseAssignmentLock();
+        releaseAssignmentLock = undefined;
       }
       const assignments = listProjectAssignments(supervisionRuntime(), repoKey);
-      if (
+      if (mode === "reconcile-assignment-lock") {
+        assert.deepEqual(
+          assignments.map(({ id }) => id),
+          [reconciliationId],
+        );
+        assert.equal(
+          listProjectMessages(
+            supervisionRuntime(),
+            repoKey,
+            reconciliationBranch,
+          ).length,
+          1,
+        );
+      } else if (
         mode === "reconcile-absent" ||
         mode === "reconcile-prunable-absent" ||
         mode === "reconcile-detached-unrelated" ||
-        mode === "reconcile-session-unreadable" ||
-        mode === "reconcile-assignment-lock"
+        mode === "reconcile-session-unreadable"
       ) {
-        if (mode === "reconcile-assignment-lock") {
-          assert.deepEqual(
-            assignments.map(({ id }) => id),
-            [reconciliationId],
-          );
-          return;
-        }
         if (mode === "reconcile-absent") {
           assert.ok(gitInventoryCalls >= 2);
           assert.deepEqual(parseGitWorktreeInventory(gitListOutput), [
@@ -4291,6 +4434,7 @@ async function runManagerStartupScenario(
       );
     }
   } finally {
+    releaseAssignmentLock?.();
     realFs.rmSync(attachmentPath, { force: true });
     if (previousConfig !== undefined)
       realFs.writeFileSync(configPath, previousConfig);

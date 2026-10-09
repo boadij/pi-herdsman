@@ -7920,8 +7920,7 @@ export function parseGitWorktreeInventory(output: string):
         : !head ||
           !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head) ||
           (!branch && !detached)) ||
-      (branch !== undefined && !branch) ||
-      (prunable && !branch)
+      (branch !== undefined && !branch)
     )
       return undefined;
     worktrees.push({
