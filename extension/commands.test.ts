@@ -183,6 +183,15 @@ test("Lead execution state is strict and profile tools preserve only Lead capabi
     state.projectLeadTools(baseline, {
       name: "orchestrator-lead",
       path: "orchestrator-lead.md",
+      frontmatter: { name: "orchestrator-lead", tools: [] },
+      body: "",
+    }),
+    ["delegate_agent", "message_supervisor"],
+  );
+  assert.deepEqual(
+    state.projectLeadTools(baseline, {
+      name: "orchestrator-lead",
+      path: "orchestrator-lead.md",
       frontmatter: {
         name: "orchestrator-lead",
         tools: ["b*", "gr*"],
@@ -215,13 +224,7 @@ test("ordinary Lead profile switches retain the saved tool baseline", async () =
     await pi.events.get("session_start")![0](undefined, context);
     assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
     await pi.commandOptions.get("lead").handler("orchestrate", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      "read",
-      "ls",
-      "find",
-      "grep",
-      ...leadTools,
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
     const persisted = sessionLeadExecutionState(entries);
     assert.equal(persisted?.mode, "orchestrate");
     assert.deepEqual(persisted?.leadTools, baseline);
@@ -248,7 +251,7 @@ test("ordinary mode activation rolls back state and tools when projection fails"
     context.ui.notify = (message: string) => notices.push(message);
     const setActiveTools = pi.pi.setActiveTools.bind(pi.pi);
     pi.pi.setActiveTools = (tools: string[]) => {
-      if (tools.includes("ls")) throw new Error("target projection failed");
+      if (!tools.includes("read")) throw new Error("target projection failed");
       setActiveTools(tools);
     };
     await pi.commandOptions.get("lead").handler("orchestrate", context);
@@ -358,13 +361,7 @@ test("session tree navigation restores each branch's execution mode, baseline, a
 
     branch = branchEntry("orchestrate", ["read", "edit"]);
     await pi.events.get("session_tree")![0](undefined, context);
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      "read",
-      "ls",
-      "find",
-      "grep",
-      ...leadTools,
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
     event = {
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
@@ -424,13 +421,7 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
   try {
     await pi.events.get("session_start")![0](undefined, context);
     await pi.commandOptions.get("lead").handler("orchestrate", context);
-    assert.deepEqual(pi.pi.getActiveTools(), [
-      "read",
-      "ls",
-      "find",
-      "grep",
-      ...leadTools,
-    ]);
+    assert.deepEqual(pi.pi.getActiveTools(), leadTools);
     await pi.commandOptions.get("manager").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...managerTools]);
     await pi.commandOptions.get("lead").handler("flexible", context);
@@ -526,7 +517,7 @@ test("persisted Chief restores the saved ordinary execution profile on exit", as
       false,
     );
 
-    const restoredTools = ["read", "ls", "find", "grep", ...leadTools];
+    const restoredTools = leadTools;
     const setActiveTools = pi.pi.setActiveTools;
     let failRestore = true;
     pi.pi.setActiveTools = (next: string[]) => {
@@ -3010,11 +3001,8 @@ async function managerDelegateAssignmentTest(
       assert.equal(childSession, assignment.id);
       const toolsIndex = args.indexOf("--tools");
       assert.notEqual(toolsIndex, -1);
+      assert.equal(args.includes("--no-tools"), true);
       assert.deepEqual(args[toolsIndex + 1]!.split(","), [
-        "read",
-        "ls",
-        "find",
-        "grep",
         ...leadTools,
         "mcp__",
       ]);
@@ -3421,6 +3409,8 @@ async function managerDelegateAssignmentTest(
         listProjectAssignments(supervisionRuntime(), repoKey).length,
         1,
       );
+      assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
+      await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
       assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
       managedPresentation = [];
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
@@ -4499,7 +4489,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   await pi.events.get("session_start")![0](undefined, context);
   await pi.commandOptions.get("lead").handler("orchestrate", context);
   const projected = pi.pi.getActiveTools();
-  assert.deepEqual(projected, ["read", "ls", "find", "grep", ...leadTools]);
+  assert.deepEqual(projected, leadTools);
   assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
     "read",
     "bash",
@@ -4515,7 +4505,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
     if (
       activationAttempted &&
       projectionFailures > 0 &&
-      next.includes("read")
+      next.includes("delegate_agent")
     ) {
       projectionFailures--;
       throw new Error("Lead profile restoration failed");
@@ -4554,13 +4544,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   });
   lease.release();
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "read",
-    "ls",
-    "find",
-    "grep",
-    ...leadTools,
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), leadTools);
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
   delete process.env.HERDR_PANE_ID;

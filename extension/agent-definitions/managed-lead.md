@@ -6,7 +6,7 @@ name: managed-lead
 noExtensions: true
 noSkills: true
 systemPromptMode: append
-tools: [read, ls, find, grep]
+tools: []
 ---
 
 Delegate bounded project execution to Agents whenever an Agent can reasonably own it.
