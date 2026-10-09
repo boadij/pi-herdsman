@@ -159,7 +159,11 @@ mock.module("node:fs", {
     readdirSync: realFs.readdirSync,
     realpathSync: realFs.realpathSync,
     renameSync: realFs.renameSync,
-    rmSync: realFs.rmSync,
+    rmSync: (path: string, options?: any) => {
+      if (failProjectMessageRemoval && String(path).includes(".messages"))
+        throw new Error("injected project message removal failure");
+      return realFs.rmSync(path, options);
+    },
     rmdirSync: realFs.rmdirSync,
     statSync: realFs.statSync,
     unlinkSync: (path: string) => {

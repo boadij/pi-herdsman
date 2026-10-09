@@ -56,9 +56,10 @@ managed descendants do not load the probe.
 The available scenarios are `core` (nested delegation and candidate-extension
 propagation), `continuation` (persisted Pi-session continuation across managed
 generations), `chief-tree` (current Chief/session_tree behavior), and
-`manager-recovery` (Manager delegation, review messaging, `stop_lead`, missing
-worktree reconstruction with exact Pi-session continuity, retained project
-messages across Manager turnover, and Herdr-driven project retirement).
+`manager-recovery` (Manager delegation, review messaging, `stop_lead`, verified
+pause/resume with an intact checkout, Manager turnover with a pending project
+message, verified missing-worktree retirement without recreating the assignment,
+and refusal to resume retired work).
 `chief-tree` records ordinary Lead, Chief, and post-`session_tree` tool
 snapshots and verifies Chief differs from Lead while selecting a pre-Chief
 branch restores ordinary Lead tools. It does not
@@ -366,11 +367,11 @@ After every smoke:
 ## Project Manager / Chief supervision live matrix
 
 `manager-recovery` is the canonical automated live Manager lifecycle check. It
-covers fresh delegation, project review messaging, pause/resume, missing
-worktree recovery without an explicit Herdr removal event, exact Pi-session
-continuity, pending project messages across Manager absence and delivery,
-retirement after
-successful Herdr worktree removal, and exact cleanup.
+covers fresh delegation, project review messaging, pause/resume, Manager
+turnover while a project message is pending and its later delivery, missing
+worktree retirement without an explicit Herdr removal event, refusal to resume
+the retired assignment, exact Pi-session continuity before retirement, and
+exact cleanup.
 
 The broader matrix below remains optional exploratory acceptance for supervision
 behavior not covered by the automated scenarios. A NOT RUN entry is not a claim

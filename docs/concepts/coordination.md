@@ -123,9 +123,9 @@ should go through the automatic result; timely questions, clarifications, or
 warnings may use nonblocking `message_supervisor`. This is ordinary
 coordination, not assignment state; there is no deduplication between a
 message and a later result.
-Project assignments end only on explicit events, not settlement or review:
-successful Herdr worktree removal or user-confirmed `/takeover` by the assigned
-Lead. Takeover removes the assignment and pending project messages while
+Project assignments end on successful Herdr worktree removal, verified Git
+checkout absence, or user-confirmed `/takeover` by the assigned Lead—not on
+settlement or review. Takeover removes the assignment and pending project messages while
 preserving the session, conversation, branch, worktree,
 running process, and Lead-owned Agents; it does not imply completion or
 acceptance. See
@@ -133,14 +133,18 @@ acceptance. See
 
 `stop_lead` pauses assigned execution while preserving the assignment, Pi
 session, branch, and worktree; `resume_project` resumes the existing
-assignment. These operations do not change project authority. Successful
-Herdr worktree removal retires the matching assignment and any still-pending
-project messages while preserving the Git branch. Explicit `/takeover` by the
+assignment while its checkout exists. These operations do not change project
+authority. Successful Herdr worktree removal or verified checkout absence
+retires the matching assignment and any still-pending project messages while
+preserving the Git branch. Explicit `/takeover` by the
 assigned Lead is a separate assignment-release path. Manually continuing the
 exact assigned Pi session remains managed; `managed-lead` is launch policy,
 not authority.
-A worktree that is merely missing does not retire the assignment; it remains
-recoverable through `resume_project`.
+A complete Git worktree inventory that verifies the checkout is absent retires
+the exact assignment and pending project messages, even when a Herdr removal
+event was missed. Failed or ambiguous inventory preserves the assignment.
+`resume_project` cannot restore a retired assignment; a new delegation may
+reuse the remaining Git branch.
 
 For the task-oriented workflow, see
 [Project orchestration](../guides/project-orchestration.md). Exact operations

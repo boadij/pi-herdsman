@@ -40,9 +40,9 @@ Returns a fresh direct-report projection and fresh `available_tools`. For
 Manager, `work` lists durable project assignments by branch with derived status
 and a bounded task summary. Status is `active`, `paused`, or `conflict`; active
 work may include the live Lead's separate `runtime_state`. Paused work remains
-listed without a running Lead. A missing worktree can be reconstructed when
-resuming the assignment and its branch remains available. Work items do not
-expose assignment session IDs, workspace IDs, or pane IDs.
+listed without a running Lead. Verified checkout absence retires the assignment;
+unavailable or ambiguous Git inventory preserves it. Work items do not expose
+assignment session IDs, workspace IDs, or pane IDs.
 
 For Manager, `open_workspaces` separately reports current Herdr topology. It is
 not assignment ownership. A branch is the project-work handle; a report's
@@ -122,11 +122,10 @@ Manager only. Resume existing unresolved project work using its exact branch:
 
 The assignment must already exist; resume does not create or replace it.
 Resuming already-running work returns the current exact Lead instead of
-starting another. A stopped Lead is relaunched with the same assignment. If
-the worktree is missing, Herdsman recreates it from the existing branch and
-resumes the exact saved Pi session; its saved cwd is used when available. If
-the branch no longer exists, recovery fails closed rather than creating it
-from the current default branch.
+starting another. A stopped Lead is relaunched with the same assignment while
+its worktree exists. Verified checkout absence retires the assignment rather
+than recreating it. A retired assignment cannot be resumed; new work may use
+`delegate_project` with the remaining branch.
 
 ## `stop_lead`
 
@@ -139,9 +138,9 @@ execution tree. The assignment, Pi session, Git branch, and worktree are
 preserved. Resume the work with
 `resume_project` using its branch. An unassigned Lead is not a Manager staff-stop
 target. Failed or ambiguous cleanup does not retire an assignment. Successful
-Herdr worktree removal retires the assignment and removes pending project
-messages; a missing worktree alone leaves the assignment recoverable with
-`resume_project`. The
+Herdr worktree removal or verified checkout absence retires the assignment and
+removes pending project messages. Failed or ambiguous inventory preserves the
+assignment. The
 assigned Lead may separately release Manager authority through confirmed
 `/takeover`, which removes the assignment and pending project messages without
 stopping the session or owned Agents.

@@ -518,14 +518,11 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     bodyPromptPath: "/prompt",
   });
   assert.equal(launchArgs.includes("--no-tools"), true);
-  assert.deepEqual(
-    launchArgs[launchArgs.indexOf("--tools") + 1]?.split(","),
-    [...requiredTools, "mcp__"],
-  );
-  assert.equal(
-    launchArgs[launchArgs.indexOf("--exclude-tools") + 1],
+  assert.deepEqual(launchArgs[launchArgs.indexOf("--tools") + 1]?.split(","), [
+    ...requiredTools,
     "mcp__",
-  );
+  ]);
+  assert.equal(launchArgs[launchArgs.indexOf("--exclude-tools") + 1], "mcp__");
   assert.equal(bundled.frontmatter.systemPromptMode, "append");
   assert.equal(bundled.frontmatter.inheritProjectContext, true);
   assert.equal(bundled.frontmatter.inheritGlobalContext, true);

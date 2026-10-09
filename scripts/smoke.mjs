@@ -1800,6 +1800,10 @@ export function managerRecoveryResumePrompt(branch) {
   return `Resume the existing work on branch ${branch}.\n\nCall resume_project using only:\n${JSON.stringify({ branch })}\n\nDo not start new work.\n\nAfter recovery succeeds, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED and end the turn.`;
 }
 
+export function managerRecoveryRetiredResumePrompt(branch) {
+  return `Attempt to resume the retired assignment on ${branch}. Call resume_project exactly once using only ${JSON.stringify({ branch })}. Do not delegate new work. After the tool fails because there is no assignment, reply exactly PI_HERDSMAN_MANAGER_RECOVERY_RETIRED and end the turn.`;
+}
+
 export function managerRecoveryPostRecoveryPrompt() {
   return "Recall the exact context marker you were instructed to remember before recovery using your prior conversation context. This information must reach the Manager before your normal result boundary, so send it now with message_supervisor. If information can wait until the normal result boundary, do not send it early; let the automatic result handoff carry it. Use exactly the recalled marker as the message and no other tool.";
 }
@@ -2936,6 +2940,29 @@ async function runManagerRecoverySmoke(ctx) {
     hash(repoKey),
     `${hash(branch)}.json`,
   );
+  const primaryBranch = rootTopology.worktrees.find(
+    (item) => item.open_workspace_id === ctx.rootWorkspaceId,
+  )?.branch;
+  assert.equal(typeof primaryBranch, "string");
+  const unrelatedAssignment = {
+    version: 2,
+    id: randomUUID(),
+    repoKey,
+    branch: primaryBranch,
+    text: "unrelated primary-worktree assignment",
+  };
+  const unrelatedAssignmentPath = join(
+    runtime,
+    "assignments",
+    hash(repoKey),
+    `${hash(primaryBranch)}.json`,
+  );
+  await mkdir(dirname(unrelatedAssignmentPath), { recursive: true });
+  await writeFile(
+    unrelatedAssignmentPath,
+    `${JSON.stringify(unrelatedAssignment)}\n`,
+    { flag: "wx" },
+  );
   const managerPath = join(
     runtime,
     "managers",
@@ -3140,7 +3167,41 @@ async function runManagerRecoverySmoke(ctx) {
     },
     15_000,
   );
-  await assertUnchangedAssignment();
+  markStage(ctx, "manager-away-before-project-message");
+  await promptAgent(paneId, managerRecoveryPostRecoveryPrompt());
+  const retainedMessagesDirectory = join(
+    dirname(assignmentPath),
+    `${hash(branch)}.messages`,
+  );
+  const retainedRecord = await waitFor("project-message-retained", async () => {
+    try {
+      const names = await readdir(retainedMessagesDirectory);
+      const records = [];
+      for (const name of names) {
+        if (!name.endsWith(".json")) continue;
+        try {
+          records.push(
+            JSON.parse(
+              await readFile(join(retainedMessagesDirectory, name), "utf8"),
+            ),
+          );
+        } catch (error) {
+          if (error.code !== "ENOENT" && !(error instanceof SyntaxError))
+            throw error;
+        }
+      }
+      return retainedProjectMessageRecord(
+        records,
+        branch,
+        first.session,
+        contextMarker,
+      );
+    } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }
+  });
+  assert.equal(retainedRecord.text, contextMarker);
   assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
   let retainedLead = false;
   for (const agent of await agents())
@@ -3165,6 +3226,25 @@ async function runManagerRecoverySmoke(ctx) {
       }
     },
     15_000,
+  );
+  markStage(ctx, "project-message-delivery");
+  const delivered = await waitFor("project-message-delivery", async () => {
+    const session = await rootSnapshot();
+    if (!session) return null;
+    return projectMessageEntries(session.contents, branch, first.session).some(
+      (entry) => entry.details?.id === retainedRecord.id,
+    )
+      ? session
+      : null;
+  });
+  const deliveredRecord = projectMessageEntries(
+    delivered.contents,
+    branch,
+    first.session,
+  ).find((entry) => entry.details?.id === retainedRecord.id);
+  assert.equal(
+    deliveredRecord.content,
+    `Project ${branch} from lead ${first.session}:\n\n${contextMarker}`,
   );
   await assertUnchangedAssignment();
   assert.equal((await candidatePids(paneId)).includes(resumedPid), true);
@@ -3231,174 +3311,14 @@ async function runManagerRecoverySmoke(ctx) {
   );
 
   markStage(ctx, "missing-worktree");
-  await nestedCommand(ctx, ["workspace", "close", workspaceId]);
-  await run("git", ["worktree", "remove", "--force", worktreePath], {
-    cwd: ctx.primaryCheckoutPath,
-  });
+  await nestedCommand(ctx, ["worktree", "remove", "--workspace", workspaceId]);
   assert.equal((await matchingWorktrees()).length, 0);
-  await assertUnchangedAssignment();
-
-  const recoveryPrompt = managerRecoveryResumePrompt(branch);
-  markStage(ctx, "assignment-recovery");
-  await promptRoot(recoveryPrompt);
-  markStage(ctx, "recovered-identity-validation");
-  const recovery = await waitFor("recovery", async () => {
-    const session = await rootSnapshot();
-    const results =
-      session &&
-      staffActionResults(
-        session.contents,
-        "resume_project",
-        "resume",
-        recoveryPrompt,
-      );
-    return results?.length === 1 &&
-      assistantResultForSession(
-        session,
-        recoveryPrompt,
-        "PI_HERDSMAN_MANAGER_RECOVERY_RECOVERED",
-      )
-      ? { session, results }
-      : null;
-  });
-  const recovered = recovery.results[0];
-  assert.equal(recovered.session, first.session);
-  assert.equal(recovered.branch, first.branch);
-  assert.ok(recovered.workspace_id);
-  assert.equal(recovery.results.length, 1);
-  const afterWorktrees = await matchingWorktrees();
-  assert.equal(afterWorktrees.length, 1);
-  assert.equal(
-    afterWorktrees[0].path ?? afterWorktrees[0].worktree_path,
-    worktreePath,
-  );
-  let recoveredAgent;
-  for (const agent of await agents())
-    if ((await agentSessionId(ctx, agent)) === first.session) {
-      recoveredAgent = agent;
-      break;
-    }
-  assert.ok(recoveredAgent);
-  assert.equal(await agentSessionId(ctx, recoveredAgent), first.session);
-  assert.equal(recoveredAgent.workspace_id, recovered.workspace_id);
-  const recoveredPaneId = recoveredAgent.pane_id;
-  const recoveredPane = (await nestedCommand(ctx, ["pane", "list"])).panes.find(
-    (item) => item.pane_id === recoveredPaneId,
-  );
-  assert.ok(recoveredPane);
-  assert.equal(recoveredPane.workspace_id, recovered.workspace_id);
-  assert.equal(resolve(recoveredPane.cwd), resolve(worktreePath));
-  const recoveredProcesses = await waitFor("new-pid", async () => {
-    const processes = candidateProcess(
-      await paneInfo(recoveredPaneId),
-      ctx.candidateExtension,
-      ctx.herdrStateExtension,
-    );
-    return processes.length === 1 && processes[0].pid !== resumedPid
-      ? processes
-      : null;
-  });
-  const recoveredPid = recoveredProcesses[0].pid;
-  assert.notEqual(recoveredPid, initialPid);
-  assert.notEqual(recoveredPid, resumedPid);
-  ctx.managerRecovery.recoveredPid = recoveredPid;
-  await assertUnchangedAssignment();
-
-  markStage(ctx, "manager-away-before-project-message");
-  const currentLease = await managerLease();
-  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
-  await waitFor(
-    "manager-left-before-project-message",
-    async () => {
-      try {
-        await lstat(managerPath);
-        return false;
-      } catch (error) {
-        if (error.code === "ENOENT") return true;
-        throw error;
-      }
-    },
-    15_000,
-  );
-  await promptAgent(recoveredPaneId, managerRecoveryPostRecoveryPrompt());
+  markStage(ctx, "assignment-absence-reconciliation");
+  ctx.owned.managerWorktreeRetirementRequested = true;
   const messagesDirectory = join(
     dirname(assignmentPath),
     `${hash(branch)}.messages`,
   );
-  const retainedRecord = await waitFor("project-message-retained", async () => {
-    try {
-      const names = await readdir(messagesDirectory);
-      const records = [];
-      for (const name of names) {
-        if (!name.endsWith(".json")) continue;
-        try {
-          records.push(
-            JSON.parse(await readFile(join(messagesDirectory, name), "utf8")),
-          );
-        } catch (error) {
-          if (error.code !== "ENOENT" && !(error instanceof SyntaxError))
-            throw error;
-        }
-      }
-      return retainedProjectMessageRecord(
-        records,
-        branch,
-        first.session,
-        contextMarker,
-      );
-    } catch (error) {
-      if (error.code === "ENOENT") return null;
-      throw error;
-    }
-  });
-  assert.ok(retainedRecord);
-  assert.equal(retainedRecord.text, contextMarker);
-  markStage(ctx, "replacement-manager-reentry");
-  await submitPaneCommand(ctx, ctx.rootPaneId, "/manager");
-  await waitFor(
-    "replacement-manager-reentered",
-    async () => {
-      try {
-        const lease = await managerLease();
-        return lease !== currentLease ? lease : null;
-      } catch (error) {
-        if (error.code === "ENOENT") return null;
-        throw error;
-      }
-    },
-    15_000,
-  );
-  markStage(ctx, "project-message-delivery");
-  const delivered = await waitFor("project-message-delivery", async () => {
-    const session = await rootSnapshot();
-    if (!session) return null;
-    const records = projectMessageEntries(
-      session.contents,
-      branch,
-      first.session,
-    );
-    return records.some((entry) => entry.details?.id === retainedRecord.id)
-      ? session
-      : null;
-  });
-  const deliveredRecords = projectMessageEntries(
-    delivered.contents,
-    branch,
-    first.session,
-  ).filter((entry) => entry.details?.id === retainedRecord.id);
-  assert.equal(deliveredRecords.length, 1);
-  assert.equal(
-    deliveredRecords[0].content,
-    `Project ${branch} from lead ${first.session}:\n\n${contextMarker}`,
-  );
-  markStage(ctx, "project-retirement");
-  ctx.owned.managerWorktreeRetirementRequested = true;
-  await nestedCommand(ctx, [
-    "worktree",
-    "remove",
-    "--workspace",
-    recovered.workspace_id,
-  ]);
   await waitFor(
     "assignment-removed",
     async () => {
@@ -3414,6 +3334,10 @@ async function runManagerRecoverySmoke(ctx) {
   );
   await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
   await assert.rejects(lstat(messagesDirectory), { code: "ENOENT" });
+  assert.deepEqual(
+    JSON.parse(await readFile(unrelatedAssignmentPath, "utf8")),
+    unrelatedAssignment,
+  );
   assert.equal((await matchingWorktrees()).length, 0);
   await run(
     "git",
@@ -3421,6 +3345,27 @@ async function runManagerRecoverySmoke(ctx) {
     { cwd: ctx.primaryCheckoutPath },
   );
   ctx.managerRecovery.retired = branch;
+  const retiredResumePrompt = managerRecoveryRetiredResumePrompt(branch);
+  markStage(ctx, "retired-assignment-resume-rejected");
+  await promptRoot(retiredResumePrompt);
+  const rejectedResume = await waitFor(
+    "retired-assignment-resume-rejected",
+    async () => {
+      const session = await rootSnapshot();
+      const attempts = session
+        ? managerRecoveryResumeDiagnostics(
+            session.contents,
+            retiredResumePrompt,
+          )
+        : [];
+      return attempts.length === 1 && attempts[0].result?.isError
+        ? attempts[0]
+        : null;
+    },
+  );
+  assert.equal(rejectedResume.branch, branch);
+  assert.equal((await matchingWorktrees()).length, 0);
+  await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
   markStage(ctx, "manager-leave-command-submission");
   await submitPaneCommand(ctx, ctx.rootPaneId, "/manager leave");
   markStage(ctx, "manager-leave-output-wait");

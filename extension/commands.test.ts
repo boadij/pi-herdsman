@@ -2818,6 +2818,12 @@ async function managerDelegateAssignmentTest(
       ? `\\\\.\\pipe\\herdr-${randomUUID()}`
       : `/tmp/herdr-${randomUUID()}.sock`;
   const lifecycleSocketPath = process.env.HERDR_SOCKET_PATH;
+  const repoKey = join(
+    PI_AGENT_ROOT,
+    `herdsman-command-repo-key-${randomUUID()}`,
+  );
+  realFs.mkdirSync(repoKey);
+  t.after(() => rmSync(repoKey, { recursive: true, force: true }));
   const childWorkspace = `child-${randomUUID()}`;
   const childCwd = realFs.mkdtempSync(join(PI_AGENT_ROOT, "manager-child-"));
   t.after(() => rmSync(childCwd, { recursive: true, force: true }));
@@ -2831,10 +2837,12 @@ async function managerDelegateAssignmentTest(
   let primaryWorkspace = WORKSPACE;
   const childSessionPath = () => join(tmpdir(), `${childSession}.jsonl`);
   let created = false;
+  let createdBranch = "";
   let started = false;
   let manager1Shutdown = false;
   let failScopeLookup = false;
   let unavailableScope = false;
+  let topologyRequests = 0;
   let lifecycleServer: ReturnType<typeof createServer> | undefined;
   const lifecycleClients = new Set<any>();
   let lifecycleClient: any;
@@ -2856,6 +2864,12 @@ async function managerDelegateAssignmentTest(
     tab_id: "root-tab",
   };
   const exec = (command: string, args: string[]) => {
+    if (command === "git") {
+      if (args[0] === "rev-parse")
+        return { stdout: `${repoKey}\n`, stderr: "", code: 0 };
+      if (args[0] === "symbolic-ref")
+        return { stdout: `${createdBranch}\n`, stderr: "", code: 0 };
+    }
     if (
       (failScopeLookup || unavailableScope) &&
       command === "herdr" &&
@@ -2877,7 +2891,7 @@ async function managerDelegateAssignmentTest(
         workspace: {
           workspace_id: args[2],
           worktree: {
-            repo_key: "repo-key",
+            repo_key: repoKey,
             is_linked_worktree: args[2] === childWorkspace,
             checkout_path:
               args[2] === childWorkspace ? childCwd : "/tmp/manager-root",
@@ -2887,12 +2901,14 @@ async function managerDelegateAssignmentTest(
           ? { root_pane: { pane_id: "child-pane", tab_id: "child-tab" } }
           : {}),
       });
-    if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+    if (command === "herdr" && args[0] === "worktree" && args[1] === "list") {
+      topologyRequests++;
       return respond({
         source: {
           source_workspace_id: primaryWorkspace,
-          repo_key: "repo-key",
+          repo_key: repoKey,
           repo_name: "project",
+          source_checkout_path: "/tmp/manager-root",
         },
         worktrees: created
           ? [
@@ -2904,10 +2920,8 @@ async function managerDelegateAssignmentTest(
               },
               {
                 open_workspace_id: childWorkspace,
-                branch: listProjectAssignments(
-                  supervisionRuntime(),
-                  "repo-key",
-                )[0]?.branch,
+                branch: listProjectAssignments(supervisionRuntime(), repoKey)[0]
+                  ?.branch,
                 path: childCwd,
                 is_linked_worktree: true,
               },
@@ -2919,21 +2933,17 @@ async function managerDelegateAssignmentTest(
             ]
           : [],
       });
+    }
     if (command === "herdr" && args[0] === "worktree" && args[1] === "create") {
       const branchIndex = args.indexOf("--branch");
-      const [assignment] = listProjectAssignments(
-        supervisionRuntime(),
-        "repo-key",
-      );
-      assert.ok(assignment);
-      assert.equal(args[branchIndex + 1], assignment.branch);
-      assert.equal(assignment.branch, args[branchIndex + 1]);
+      createdBranch = args[branchIndex + 1]!;
+      assert.ok(createdBranch);
       created = true;
       return respond({
         workspace: { workspace_id: childWorkspace },
         tab: { tab_id: "child-tab" },
         root_pane: { pane_id: "child-pane", tab_id: "child-tab" },
-        worktree: { branch: assignment.branch, path: childCwd },
+        worktree: { branch: createdBranch, path: childCwd },
       });
     }
     if (command === "herdr" && args[0] === "pane" && args[1] === "list")
@@ -2977,9 +2987,14 @@ async function managerDelegateAssignmentTest(
       started = true;
       const [assignment] = listProjectAssignments(
         supervisionRuntime(),
-        "repo-key",
+        repoKey,
       );
       assert.ok(assignment);
+      const assignmentLease = claimProcessLock(
+        `${projectAssignmentPath(supervisionRuntime(), repoKey, assignment.branch)}.lock`,
+        { name: "test startup assignment lock release" },
+      );
+      assignmentLease();
       const sessionIdIndex = args.indexOf("--session-id");
       assert.notEqual(sessionIdIndex, -1);
       childSession = args[sessionIdIndex + 1]!;
@@ -3123,10 +3138,7 @@ async function managerDelegateAssignmentTest(
       ctx,
     );
     assert.equal(outcome.details.ok, true);
-    const assignment = listProjectAssignments(
-      supervisionRuntime(),
-      "repo-key",
-    )[0];
+    const assignment = listProjectAssignments(supervisionRuntime(), repoKey)[0];
     assert.ok(assignment);
     const staffListTool = pi.tools.find((tool) => tool.name === "list_staff")!;
     const staffList = await staffListTool.execute(
@@ -3173,11 +3185,7 @@ async function managerDelegateAssignmentTest(
       realFs.realpathSync(childSessionPath()),
     );
     const assignmentBytes = readFileSync(
-      projectAssignmentPath(
-        supervisionRuntime(),
-        "repo-key",
-        assignment.branch,
-      ),
+      projectAssignmentPath(supervisionRuntime(), repoKey, assignment.branch),
       "utf8",
     );
     assert.deepEqual(Object.keys(JSON.parse(assignmentBytes)).sort(), [
@@ -3226,7 +3234,7 @@ async function managerDelegateAssignmentTest(
       undefined,
     );
     assert.equal(
-      listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
+      listProjectAssignments(supervisionRuntime(), repoKey)[0]?.id,
       childSession,
     );
     await pi.events.get("session_shutdown")?.[0]();
@@ -3310,14 +3318,14 @@ async function managerDelegateAssignmentTest(
       const { listProjectMessages } = await import("./supervision.ts");
       const retained = listProjectMessages(
         supervisionRuntime(),
-        "repo-key",
+        repoKey,
         assignment!.branch,
       );
       assert.equal(retained.length, 1);
       assert.equal(retained[0]!.fromSessionId, childSession);
       assert.equal(retained[0]!.text, "Ready for review");
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), "repo-key")[0]?.id,
+        listProjectAssignments(supervisionRuntime(), repoKey)[0]?.id,
         childSession,
       );
       const publishRetirement = () => {
@@ -3330,7 +3338,7 @@ async function managerDelegateAssignmentTest(
               workspace: {
                 workspace_id: childWorkspace,
                 worktree: {
-                  repo_key: "repo-key",
+                  repo_key: repoKey,
                   checkout_path: childCwd,
                   is_linked_worktree: true,
                 },
@@ -3352,12 +3360,12 @@ async function managerDelegateAssignmentTest(
         assert.ok(
           lead.entries.some((entry: any) =>
             String(entry.data?.error).includes("scope lookup failure"),
-          ) || !listProjectAssignments(supervisionRuntime(), "repo-key").length,
+          ) || !listProjectAssignments(supervisionRuntime(), repoKey).length,
           JSON.stringify(lead.entries),
         ),
       );
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), "repo-key").length,
+        listProjectAssignments(supervisionRuntime(), repoKey).length,
         1,
       );
       const lookupNotices: string[] = [];
@@ -3392,24 +3400,22 @@ async function managerDelegateAssignmentTest(
       );
 
       failScopeLookup = false;
+      const requestsBeforeRemoval = topologyRequests;
       publishRetirement();
       await t.waitFor(() =>
-        assert.equal(
-          listProjectAssignments(supervisionRuntime(), "repo-key").length,
-          0,
-        ),
+        assert.ok(topologyRequests > requestsBeforeRemoval),
       );
-      await t.waitFor(() =>
-        assert.deepEqual(lead.pi.getActiveTools(), leadTools),
+      assert.equal(
+        listProjectAssignments(supervisionRuntime(), repoKey).length,
+        1,
       );
+      assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
       await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
-      assert.deepEqual(lead.pi.getActiveTools(), leadTools);
+      assert.deepEqual(lead.pi.getActiveTools(), ["read", ...leadTools]);
       managedPresentation = [];
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
       assert.ok(
-        managedPresentation.some((item) =>
-          /^Execution\s+Orchestrate$/u.test(item),
-        ),
+        managedPresentation.some((item) => /^Execution\s+Managed$/u.test(item)),
       );
       await lead.events.get("session_shutdown")?.[0]();
       writeProjectAssignment(supervisionRuntime(), assignment!);
@@ -3436,7 +3442,7 @@ async function managerDelegateAssignmentTest(
       lead.pi.appendEntry = originalAppend;
       assert.equal(injected, true);
       assert.equal(
-        listProjectAssignments(supervisionRuntime(), "repo-key").length,
+        listProjectAssignments(supervisionRuntime(), repoKey).length,
         0,
       );
       assert.deepEqual(lead.pi.getActiveTools(), leadTools);
