@@ -3400,22 +3400,10 @@ async function managerDelegateAssignmentTest(
         ),
       );
       await t.waitFor(() =>
-        assert.deepEqual(lead.pi.getActiveTools(), [
-          "read",
-          "ls",
-          "find",
-          "grep",
-          ...leadTools,
-        ]),
+        assert.deepEqual(lead.pi.getActiveTools(), leadTools),
       );
       await lead.commandOptions.get("lead").handler("orchestrate", leadCtx);
-      assert.deepEqual(lead.pi.getActiveTools(), [
-        "read",
-        "ls",
-        "find",
-        "grep",
-        ...leadTools,
-      ]);
+      assert.deepEqual(lead.pi.getActiveTools(), leadTools);
       managedPresentation = [];
       await lead.commandOptions.get("herdsman").handler("", leadCtx);
       assert.ok(
