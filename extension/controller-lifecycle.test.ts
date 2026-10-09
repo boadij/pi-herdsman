@@ -77,7 +77,8 @@ import {
   setLeadEnvironment,
   setAgentEnvironment,
   startupExecutor,
-  watchedResultPaths,
+  watchedMailboxDirectories,
+  emitMailboxChange,
   agentMailboxPath,
   writeAsk,
   writePromptDefinition,
@@ -1470,11 +1471,7 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
       await handler(undefined, context);
     const recovered = readAgentState(startup.mailbox)!;
     assert.ok(recovered.activeRequestId);
-    assert.ok(
-      watchedResultPaths.has(
-        `${startup.mailbox}/result-${recovered.activeRequestId}.json`,
-      ),
-    );
+    assert.ok(watchedMailboxDirectories.has(startup.mailbox));
     const listed = await pi.tools
       .find((tool) => tool.name === "list_agents")!
       .execute("list", {}, undefined, undefined, context);
@@ -1514,29 +1511,8 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
   }
 });
 
-test("staged fresh assignment removes a fast completion without observing working", async (t) => {
-  const originalSetInterval = globalThis.setInterval;
-  let statusRefreshCallback: (() => void) | undefined;
-  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
-    if (delay === 10_000) {
-      assert.equal(typeof callback, "function");
-      statusRefreshCallback = callback as () => void;
-      return { unref: () => undefined } as ReturnType<typeof setInterval>;
-    }
-    return originalSetInterval(callback, delay);
-  }) as typeof setInterval;
-  t.after(() => {
-    globalThis.setInterval = originalSetInterval;
-  });
+test("staged fresh assignment removes a fast completion during the initial result check", async (t) => {
   const fixture = createStagedAssignmentFixture("agent", true);
-  const list = () =>
-    registeredAgentTool(fixture.pi, "list").execute(
-      "id",
-      {},
-      undefined,
-      undefined,
-      fixture.context,
-    );
   try {
     await t.waitFor(() =>
       assert.equal(
@@ -1580,22 +1556,12 @@ test("staged fresh assignment removes a fast completion without observing workin
     fixture.releaseAcknowledgement();
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    const requestId = result.details.request_id;
+    assert.equal(result.details.request_id, fixture.requestId);
+    const requestId = fixture.requestId;
     assert.equal(requestId, fixture.requestId);
     assert.equal(requestId, fixture.acceptedRequestIdWritten);
-    assert.equal(readAgentState(fixture.mailbox)?.activeRequestId, undefined);
 
     fixture.releaseInitialStatus();
-    const beforeCompletion = await list();
-    assert.equal(beforeCompletion.details.agents[0].state, "settling");
-    assert.equal(fixture.workingObservations, 0);
-    await t.waitFor(() =>
-      assert.match(fixture.widgetValue.render(160).join("\n"), /starting/),
-    );
-    const renderedBeforeCompletion = fixture.widgetValue.render(160).join("\n");
-    assert.match(renderedBeforeCompletion, /starting/);
-    assert.doesNotMatch(renderedBeforeCompletion, /settling/);
-    fixture.completeFast(requestId);
     await t.waitFor(
       () =>
         assert.ok(
@@ -1606,48 +1572,54 @@ test("staged fresh assignment removes a fast completion without observing workin
         ),
       { timeout: 5000 },
     );
+    assert.equal(watchedMailboxDirectories.has(fixture.mailbox), false);
     assert.equal(requestId, fixture.requestId);
     assert.equal(fixture.workingObservations, 0);
     await t.waitFor(() =>
-      assert.equal(
-        readAgentState(fixture.mailbox),
-        undefined,
-        "fast completion cleanup did not remove the mailbox",
+      assert.doesNotMatch(
+        fixture.widgetValue.render(160).join("\n"),
+        /starting/,
       ),
     );
-    const afterCleanup = await list();
-    assert.deepEqual(afterCleanup.details.agents, []);
-    assert.equal(readAgentState(fixture.mailbox), undefined);
-    assert.equal(realFs.existsSync(fixture.mailbox), false);
-    const renderedAfterCleanup = fixture.widgetValue.render(160).join("\n");
-    assert.doesNotMatch(renderedAfterCleanup, /starting/);
-    assert.doesNotMatch(renderedAfterCleanup, /working/);
-    const laterRefresh = await list();
-    assert.deepEqual(laterRefresh.details.agents, []);
-    const snapshotsBeforeRefresh =
-      fixture.pi.calls.filter(isApiSnapshot).length;
-    const rendersBeforeRefresh = fixture.renderRequests;
-    assert.ok(
-      statusRefreshCallback,
-      "status refresh interval was not captured",
+  } finally {
+    fixture.shutdown();
+  }
+});
+
+test("staged fresh assignment ignores a mismatched completion before delivery", async (t) => {
+  const fixture = createStagedAssignmentFixture("agent", true, true);
+  try {
+    await t.waitFor(() => assert.equal(fixture.initialStatusStarted, true));
+    fixture.releaseInitialStatus();
+    const starting = registeredAgentTool(fixture.pi, "delegate").execute(
+      "id",
+      { definition: "agent", task: "reject mismatched completion" },
+      undefined,
+      undefined,
+      fixture.context,
     );
-    statusRefreshCallback();
-    await t.waitFor(
-      () => {
-        assert.ok(
-          fixture.pi.calls.filter(isApiSnapshot).length >
-            snapshotsBeforeRefresh,
-          "status refresh did not read a later snapshot",
-        );
-        assert.ok(
-          fixture.renderRequests > rendersBeforeRefresh,
-          "status refresh did not update the widget",
-        );
-        const rendered = fixture.widgetValue.render(160).join("\n");
-        assert.doesNotMatch(rendered, /starting/);
-        assert.doesNotMatch(rendered, /working/);
-      },
-      { timeout: 1_000 },
+    await t.waitFor(() =>
+      assert.ok(
+        fixture.pi.calls.some(
+          (args) => args[0] === "agent" && args[1] === "start",
+        ),
+      ),
+    );
+    fixture.releaseStart();
+    await t.waitFor(() => assert.ok(fixture.preSubmitValidationReady));
+    fixture.releasePreSubmitValidation();
+    await t.waitFor(() => assert.ok(fixture.requestObserved));
+    fixture.releaseAcknowledgement();
+    const result = await starting;
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await t.waitFor(() =>
+      assert.match(fixture.widgetValue.render(160).join("\n"), /starting/),
+    );
+    assert.equal(
+      fixture.pi.sent.some(
+        (message: any) => message.customType === "pi-herdsman-agent-result",
+      ),
+      false,
     );
   } finally {
     fixture.shutdown();
@@ -2791,13 +2763,8 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
     const leadContext = fakeContext();
     t.mock.timers.enable({ apis: ["setTimeout"] });
     await leadAgent.events.get("session_start")![0](undefined, leadContext);
-    const statePath = join(parentMailbox, "state.json");
-    const askWatcher = watchedResultPaths.get(statePath);
-    assert.equal(
-      typeof askWatcher,
-      "function",
-      "pending ask keeps its file watcher",
-    );
+    const askWatcher = watchedMailboxDirectories.get(parentMailbox);
+    assert.equal(askWatcher?.size, 2, "pending ask keeps its mailbox observer");
     assert.equal(
       failInitialAskDelivery,
       false,
@@ -2818,7 +2785,8 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       ...readAgentState(parentMailbox)!,
       build: OTHER_HERDSMAN_BUILD,
     });
-    askWatcher!(realFs.statSync(statePath), realFs.statSync(statePath));
+    emitMailboxChange(parentMailbox, "state.json");
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const incompatibleList = await registeredAgentTool(
       leadAgent,
       "list",
@@ -2880,7 +2848,8 @@ test("registered extensions preserve adjacent ask escalation and assignment resu
       ...incompatibleState,
       build: HERDSMAN_BUILD,
     });
-    askWatcher!(realFs.statSync(statePath), realFs.statSync(statePath));
+    emitMailboxChange(parentMailbox, "state.json");
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const compatibleList = await registeredAgentTool(leadAgent, "list").execute(
       "list-compatible-ask",
       {},

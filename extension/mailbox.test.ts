@@ -5,6 +5,8 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
+  rmSync,
   rmdirSync,
   statSync,
   unlinkSync,
@@ -37,6 +39,7 @@ import {
   removeAsk,
   resetAgentMailbox,
   unacknowledgedRequestExists,
+  observeMailbox,
   writeResult,
   waitForState,
   writeRequest,
@@ -73,6 +76,36 @@ test("V5 markers require canonical UUIDs and never contain task text", () => {
   assert.equal(parseControlMarker(`${controlMarker(id)} task`), undefined);
   assert.equal(parseControlMarker("__PI_HERDSMAN_AGENT_V5__:bad"), undefined);
   assert.equal(parseControlMarker("__PI_HERDSMAN_AGENT_V5__:"), undefined);
+});
+test("mailbox observer reconciles an atomically published relevant file", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "herdsman-observe-"));
+  let reconciliations = 0;
+  let finish!: () => void;
+  let fail!: (error: unknown) => void;
+  const observed = new Promise<void>((resolve, reject) => {
+    finish = resolve;
+    fail = reject;
+  });
+  const stop = observeMailbox(
+    directory,
+    (filename) => filename === "request.json",
+    () => {
+      reconciliations++;
+      finish();
+    },
+    fail,
+  );
+  const keepAlive = setTimeout(() => {}, 5_000);
+  try {
+    writeFileSync(join(directory, "request.tmp"), "durable");
+    renameSync(join(directory, "request.tmp"), join(directory, "request.json"));
+    await observed;
+    assert.equal(reconciliations, 1);
+  } finally {
+    stop();
+    clearTimeout(keepAlive);
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 test("runtime build identity includes exact executable bytes", () => {
   const path = join(tmpdir(), `herdsman-build-${randomUUID()}.js`);

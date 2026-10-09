@@ -11,6 +11,8 @@ import {
   rmdirSync,
   statSync,
   unlinkSync,
+  watch,
+  type FSWatcher,
   writeSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -140,6 +142,74 @@ const LIMITS = {
   result: 4 * 1024 * 1024,
 };
 const root = join(herdsmanDataRoot(), "runtime", "mailboxes-v5");
+
+export function observeMailbox(
+  directory: string,
+  relevant: (filename: string) => boolean,
+  reconcile: () => void,
+  onError: (error: unknown) => void,
+): () => void {
+  let watcher: FSWatcher | undefined;
+  let scheduled: ReturnType<typeof setImmediate> | undefined;
+  let stopped = false;
+  let errorReported = false;
+
+  const schedule = () => {
+    if (stopped || scheduled) return;
+    scheduled = setImmediate(() => {
+      scheduled = undefined;
+      if (stopped) return;
+      try {
+        reconcile();
+      } catch (error) {
+        onError(error);
+      }
+    });
+  };
+
+  const attach = () => {
+    if (stopped || watcher) return;
+    try {
+      const next = watch(
+        directory,
+        { persistent: false },
+        (_event, filename) => {
+          const name = filename?.toString();
+          if (!name || relevant(name)) schedule();
+        },
+      );
+      next.on("error", (error) => {
+        next.close();
+        if (watcher === next) watcher = undefined;
+        if (!stopped && !errorReported) {
+          errorReported = true;
+          onError(error);
+        }
+      });
+      watcher = next;
+    } catch (error) {
+      if (!errorReported) {
+        errorReported = true;
+        onError(error);
+      }
+    }
+  };
+
+  attach();
+  const timer = setInterval(() => {
+    attach();
+    schedule();
+  }, 1_000);
+  timer.unref?.();
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    if (scheduled) clearImmediate(scheduled);
+    watcher?.close();
+    watcher = undefined;
+  };
+}
 
 export function agentMailboxPath(
   workspaceId: string,
