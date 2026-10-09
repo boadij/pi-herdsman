@@ -47,7 +47,7 @@ assignment. The terminal result is delivered once and the agent is cleaned up.
 Extensions that are already loaded in both the delegating controller and a
 child may participate in fresh initialization through Pi's event bus channel
 `pi-herdsman:managed-agent-bootstrap`. The protocol version is `1`. This is
-available only for fresh `agent_delegate`; continuation never prepares,
+available only for fresh `delegate_agent`; continuation never prepares,
 initializes, or commits bootstrap participants.
 
 During synchronous `prepare` event dispatch, listeners may synchronously call
@@ -57,7 +57,8 @@ registered callback. Return `undefined` to opt out, or return an opaque string
 payload and optional parent-side commit callback:
 
 ```ts
-pi.events.on("pi-herdsman:managed-agent-bootstrap", (event) => {
+pi.events.on("pi-herdsman:managed-agent-bootstrap", (value) => {
+  const event = value as any;
   if (event.protocol !== 1 || event.phase !== "prepare") return;
   event.register("example/child-state", async () => {
     const prepared = await prepareChild(event.agent);
@@ -68,6 +69,9 @@ pi.events.on("pi-herdsman:managed-agent-bootstrap", (event) => {
   });
 });
 ```
+
+Preparation must be safe to abandon if launch fails; durable parent-side
+finalization belongs in the optional commit callback.
 
 For each prepared participant, the child receives an `initialize` event before
 Herdsman writes its normal `state.json` readiness record. Exactly one matching
