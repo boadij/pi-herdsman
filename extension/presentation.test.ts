@@ -5052,12 +5052,24 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   assert.ok(
     staleManagerHeader.includes("<muted>manager · pi-herdsman · stale</muted>"),
   );
-  const widgetRows = createSupervisionWidget(
+  const widget = createSupervisionWidget(
     () => snapshot,
     () => "fresh",
     "manager",
     theme,
-  ).render(100);
+  );
+  const originalNow = Date.now;
+  let widgetRows: string[];
+  try {
+    Date.now = () => now;
+    widgetRows = widget.render(100);
+    assert.match(widgetRows[1]!, /14m/);
+    Date.now = () => now + 60_000;
+    widgetRows = widget.render(100);
+    assert.match(widgetRows[1]!, /15m/);
+  } finally {
+    Date.now = originalNow;
+  }
   assert.ok(widgetRows[1]!.includes("<success>●</success>"));
 
   const chiefRows = renderSupervisionLeads(

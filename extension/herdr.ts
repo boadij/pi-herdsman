@@ -189,16 +189,51 @@ const MAX_PROCESS_CMDLINE_BYTES = 4 * 1024;
 const POLL_INTERVAL = 75;
 const INITIAL_RATIO = 0.65;
 const AGENT_SPLIT_RATIO = 0.5;
-const LIFECYCLE_SUBSCRIPTIONS = [
+const HERDR_EVENT_SUBSCRIPTIONS = [
+  { type: "workspace.created" },
+  { type: "workspace.updated" },
+  { type: "workspace.metadata_updated" },
+  { type: "workspace.renamed" },
+  { type: "pane.created" },
   { type: "pane.closed" },
   { type: "pane.exited" },
   { type: "pane.moved" },
+  { type: "pane.updated" },
+  { type: "pane.agent_detected" },
+  { type: "pane.agent_status_changed" },
+  { type: "tab.created" },
   { type: "tab.closed" },
+  { type: "tab.renamed" },
   { type: "workspace.closed" },
+  { type: "worktree.created" },
+  { type: "worktree.opened" },
   { type: "worktree.removed" },
 ] as const;
-const LIFECYCLE_SUBSCRIPTION_ID = "pi-herdsman:lifecycle";
-const LIFECYCLE_RECONNECT_MS = 1_000;
+const HERDR_EVENT_SUBSCRIPTION_ID = "pi-herdsman:events";
+const HERDR_EVENT_RECONNECT_MS = 1_000;
+const PRESENTATION_MIN_INTERVAL_MS = 2_000;
+const LIFECYCLE_EVENTS = new Set([
+  "workspace_created",
+  "workspace_closed",
+  "pane_created",
+  "pane_closed",
+  "pane_exited",
+  "pane_moved",
+  "tab_created",
+  "tab_closed",
+  "worktree_created",
+  "worktree_opened",
+  "worktree_removed",
+]);
+const PRESENTATION_EVENTS = new Set([
+  "workspace_updated",
+  "workspace_metadata_updated",
+  "workspace_renamed",
+  "pane_updated",
+  "pane_agent_detected",
+  "pane_agent_status_changed",
+  "tab_renamed",
+]);
 const MAX_EVENT_BUFFER_BYTES = 1024 * 1024;
 const HERDR_AGENT_STATE_EXTENSION = join(
   getAgentDir(),
@@ -762,15 +797,41 @@ export async function herdrSessionSnapshot(
 export function watchHerdrLifecycle(
   socketPath: string,
   signal: AbortSignal,
-  onChange: (removed?: RemovedHerdrWorktree) => void,
+  onChange: (
+    removed?: RemovedHerdrWorktree,
+    category?: "lifecycle" | "presentation" | "reconcile",
+  ) => void,
 ): void {
   let socket: Socket | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let presentationTimer: ReturnType<typeof setTimeout> | undefined;
+  let nextPresentationAt = 0;
+
+  const invalidatePresentation = (): void => {
+    if (presentationTimer || signal.aborted) return;
+    presentationTimer = setTimeout(
+      () => {
+        presentationTimer = undefined;
+        if (signal.aborted) return;
+        nextPresentationAt = Date.now() + PRESENTATION_MIN_INTERVAL_MS;
+        onChange(undefined, "presentation");
+      },
+      Math.max(0, nextPresentationAt - Date.now()),
+    );
+    presentationTimer.unref?.();
+  };
+
+  const flushPresentation = (): void => {
+    if (presentationTimer) clearTimeout(presentationTimer);
+    presentationTimer = undefined;
+    nextPresentationAt = Date.now() + PRESENTATION_MIN_INTERVAL_MS;
+  };
 
   const connect = (): void => {
     if (signal.aborted) return;
     let buffer = "";
     let subscribed = false;
+    let disconnectReported = false;
     const current = createConnection(socketPath);
     socket = current;
     current.setEncoding("utf8");
@@ -782,9 +843,9 @@ export function watchHerdrLifecycle(
     current.once("connect", () => {
       current.write(
         `${JSON.stringify({
-          id: LIFECYCLE_SUBSCRIPTION_ID,
+          id: HERDR_EVENT_SUBSCRIPTION_ID,
           method: "events.subscribe",
-          params: { subscriptions: LIFECYCLE_SUBSCRIPTIONS },
+          params: { subscriptions: HERDR_EVENT_SUBSCRIPTIONS },
         })}\n`,
       );
     });
@@ -807,27 +868,53 @@ export function watchHerdrLifecycle(
           drop();
           return;
         }
+        if (message?.id === HERDR_EVENT_SUBSCRIPTION_ID && message?.error) {
+          if (message.error.code === "events_lost" && !signal.aborted) {
+            disconnectReported = true;
+            flushPresentation();
+            onChange(undefined, "reconcile");
+          }
+          drop();
+          return;
+        }
         if (!subscribed) {
           if (
-            message?.id !== LIFECYCLE_SUBSCRIPTION_ID ||
-            message?.error ||
-            !message?.result
+            signal.aborted ||
+            message?.id !== HERDR_EVENT_SUBSCRIPTION_ID ||
+            message?.result?.type !== "subscription_started"
           ) {
             drop();
             return;
           }
           subscribed = true;
-          onChange();
+          flushPresentation();
+          onChange(undefined, "reconcile");
           continue;
         }
-        onChange(removedHerdrWorktree(message));
+        if (signal.aborted) return;
+        const event = message?.event;
+        const category = LIFECYCLE_EVENTS.has(event)
+          ? "lifecycle"
+          : PRESENTATION_EVENTS.has(event)
+            ? "presentation"
+            : undefined;
+        if (category === "presentation") invalidatePresentation();
+        else if (category) {
+          flushPresentation();
+          onChange(removedHerdrWorktree(message), category);
+        }
       }
     });
     current.on("error", drop);
     current.once("close", () => {
       if (socket === current) socket = undefined;
       if (signal.aborted) return;
-      retry = setTimeout(connect, LIFECYCLE_RECONNECT_MS);
+      if (subscribed && !disconnectReported) {
+        disconnectReported = true;
+        flushPresentation();
+        onChange(undefined, "reconcile");
+      }
+      retry = setTimeout(connect, HERDR_EVENT_RECONNECT_MS);
       retry.unref?.();
     });
   };
@@ -836,6 +923,7 @@ export function watchHerdrLifecycle(
     "abort",
     () => {
       if (retry) clearTimeout(retry);
+      if (presentationTimer) clearTimeout(presentationTimer);
       socket?.destroy();
     },
     { once: true },

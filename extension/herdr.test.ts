@@ -203,7 +203,10 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
   const sockets = new Set<Socket>();
   let connections = 0;
   let request: any;
-  const changes: (RemovedHerdrWorktree | undefined)[] = [];
+  const changes: {
+    removed: RemovedHerdrWorktree | undefined;
+    category: string | undefined;
+  }[] = [];
   server.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
@@ -215,8 +218,19 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
       request = JSON.parse(buffer.slice(0, newline));
-      socket.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+      socket.write(
+        JSON.stringify({
+          id: request.id,
+          result: { type: "subscription_started" },
+        }) + "\n",
+      );
       if (connections === 1) {
+        socket.write(
+          JSON.stringify({
+            event: "pane_updated",
+            data: { type: "pane_updated" },
+          }) + "\n",
+        );
         socket.write(
           JSON.stringify({
             id: request.id,
@@ -252,6 +266,7 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
         };
         socket.write(
           [
+            { event: "pane_updated", data: { type: "pane_updated" } },
             valid,
             {
               ...valid,
@@ -284,8 +299,8 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
     timeout.unref();
   });
   try {
-    watchHerdrLifecycle(socketPath, controller.signal, (removed) => {
-      changes.push(removed);
+    watchHerdrLifecycle(socketPath, controller.signal, (removed, category) => {
+      changes.push({ removed, category });
       if (changes.length >= 6 && connections >= 2) ready();
     });
     await reconnected;
@@ -293,27 +308,323 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
     assert.deepEqual(
       request.params.subscriptions.map((entry: any) => entry.type),
       [
+        "workspace.created",
+        "workspace.updated",
+        "workspace.metadata_updated",
+        "workspace.renamed",
+        "pane.created",
         "pane.closed",
         "pane.exited",
         "pane.moved",
+        "pane.updated",
+        "pane.agent_detected",
+        "pane.agent_status_changed",
+        "tab.created",
         "tab.closed",
+        "tab.renamed",
         "workspace.closed",
+        "worktree.created",
+        "worktree.opened",
         "worktree.removed",
       ],
     );
     assert.equal(connections, 2);
     assert.equal(changes.length, 6);
-    assert.equal(changes[0], undefined);
-    assert.equal(changes[1], undefined);
-    assert.equal(changes[2], undefined);
-    assert.deepEqual(changes[3], {
+    assert.deepEqual(
+      changes.map((change) => change.category),
+      [
+        "reconcile",
+        "reconcile",
+        "reconcile",
+        "lifecycle",
+        "lifecycle",
+        "lifecycle",
+      ],
+    );
+    assert.equal(changes[0]?.removed, undefined);
+    assert.equal(changes[1]?.removed, undefined);
+    assert.equal(changes[2]?.removed, undefined);
+    assert.deepEqual(changes[3]?.removed, {
       repoKey: "repo-key",
       branch: "feat/example",
     });
-    assert.equal(changes[4], undefined);
-    assert.equal(changes[5], undefined);
+    assert.equal(changes[4]?.removed, undefined);
+    assert.equal(changes[5]?.removed, undefined);
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    assert.equal(changes.length, 6);
   } finally {
     clearTimeout(timeout);
+    controller.abort();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (globalThis.process.platform !== "win32")
+      rmSync(socketPath, { force: true });
+  }
+});
+
+test("lifecycle watcher coalesces presentation bursts and cancels on abort", async (t) => {
+  const socketPath =
+    globalThis.process.platform === "win32"
+      ? `\\\\.\\pipe\\pi-herdsman-${randomUUID()}`
+      : join(tmpdir(), `pi-herdsman-${randomUUID()}.sock`);
+  const server = createServer();
+  const sockets = new Set<Socket>();
+  const controller = new AbortController();
+  let client: Socket | undefined;
+  const changes: string[] = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let presentationTimer: (() => void) | undefined;
+  let activePresentationTimer: object | undefined;
+  const clearedPresentationTimers = new Set<object>();
+  globalThis.setTimeout = ((
+    handler: TimerHandler,
+    delay?: number,
+    ...args: any[]
+  ) => {
+    if (delay !== undefined && delay > 1_000 && typeof handler === "function") {
+      const timer = { unref() {} };
+      activePresentationTimer = timer;
+      presentationTimer = () => handler(...args);
+      return timer as ReturnType<typeof setTimeout>;
+    }
+    return originalSetTimeout(handler, delay, ...args);
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((
+    timer: ReturnType<typeof setTimeout> | undefined,
+  ) => {
+    if (timer && timer === activePresentationTimer) {
+      clearedPresentationTimers.add(timer);
+      activePresentationTimer = undefined;
+      presentationTimer = undefined;
+      return;
+    }
+    originalClearTimeout(timer);
+  }) as typeof clearTimeout;
+  server.on("connection", (socket) => {
+    client = socket;
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline));
+      socket.write(
+        JSON.stringify({
+          id: request.id,
+          result: { type: "subscription_started" },
+        }) + "\n",
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  const send = (events: object[]) =>
+    client!.write(events.map((event) => JSON.stringify(event) + "\n").join(""));
+  const waitForTimer = async () => {
+    for (let turn = 0; turn < 10 && !presentationTimer; turn++)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(typeof presentationTimer, "function");
+  };
+  const firePresentationTimer = () => {
+    const fire = presentationTimer;
+    assert.equal(typeof fire, "function");
+    presentationTimer = undefined;
+    activePresentationTimer = undefined;
+    fire!();
+  };
+  try {
+    watchHerdrLifecycle(socketPath, controller.signal, (_removed, category) => {
+      changes.push(category ?? "lifecycle");
+    });
+    await t.waitFor(() => assert.equal(changes.length, 1));
+    send([{ event: "pane_closed", data: { type: "pane_closed" } }]);
+    await t.waitFor(() => assert.equal(changes.length, 2));
+    assert.deepEqual(changes, ["reconcile", "lifecycle"]);
+
+    send([
+      { event: "pane_updated" },
+      { event: "pane_closed", data: { type: "pane_closed" } },
+    ]);
+    await t.waitFor(() => assert.equal(changes.length, 3));
+    assert.deepEqual(changes, ["reconcile", "lifecycle", "lifecycle"]);
+
+    send([
+      { event: "pane_updated" },
+      { event: "workspace_metadata_updated" },
+      { event: "pane_agent_status_changed" },
+    ]);
+    await waitForTimer();
+    assert.equal(changes.length, 3, "presentation burst waits for its timer");
+    firePresentationTimer();
+    await t.waitFor(() => assert.equal(changes.length, 4));
+    assert.deepEqual(changes, [
+      "reconcile",
+      "lifecycle",
+      "lifecycle",
+      "presentation",
+    ]);
+
+    send([{ event: "pane_updated" }]);
+    await waitForTimer();
+    firePresentationTimer();
+    await t.waitFor(() => assert.equal(changes.length, 5));
+    assert.deepEqual(changes, [
+      "reconcile",
+      "lifecycle",
+      "lifecycle",
+      "presentation",
+      "presentation",
+    ]);
+
+    send([{ event: "pane_updated" }]);
+    await waitForTimer();
+    const pendingBeforeLifecycle = activePresentationTimer;
+    send([{ event: "pane_closed", data: { type: "pane_closed" } }]);
+    await t.waitFor(() => assert.equal(changes.length, 6));
+    assert.ok(pendingBeforeLifecycle);
+    assert.ok(clearedPresentationTimers.has(pendingBeforeLifecycle));
+    assert.equal(changes[5], "lifecycle", "lifecycle delivery is immediate");
+    assert.equal(changes.length, 6, "lifecycle cancels pending presentation");
+
+    send([{ event: "pane_updated" }]);
+    await waitForTimer();
+    const pendingBeforeAbort = activePresentationTimer;
+    controller.abort();
+    assert.ok(pendingBeforeAbort);
+    assert.ok(clearedPresentationTimers.has(pendingBeforeAbort));
+    assert.equal(changes.length, 6, "abort cancels pending presentation");
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    controller.abort();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (globalThis.process.platform !== "win32")
+      rmSync(socketPath, { force: true });
+  }
+});
+
+test("lifecycle watcher reconciles once on unexpected disconnect", async (t) => {
+  const socketPath =
+    globalThis.process.platform === "win32"
+      ? `\\\\.\\pipe\\pi-herdsman-${randomUUID()}`
+      : join(tmpdir(), `pi-herdsman-${randomUUID()}.sock`);
+  const server = createServer();
+  const sockets = new Set<Socket>();
+  const controller = new AbortController();
+  const changes: string[] = [];
+  let connections = 0;
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    const connection = ++connections;
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline));
+      socket.write(
+        JSON.stringify({
+          id: request.id,
+          result: { type: "subscription_started" },
+        }) + "\n",
+      );
+      if (connection === 1) socket.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  try {
+    watchHerdrLifecycle(socketPath, controller.signal, (_removed, category) => {
+      changes.push(category ?? "lifecycle");
+    });
+    await t.waitFor(() => assert.equal(connections, 2), { timeout: 5_000 });
+    await t.waitFor(() => assert.equal(changes.length, 3));
+    assert.deepEqual(changes, ["reconcile", "reconcile", "reconcile"]);
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(changes.length, 3);
+  } finally {
+    controller.abort();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (globalThis.process.platform !== "win32")
+      rmSync(socketPath, { force: true });
+  }
+});
+
+test("lifecycle watcher retries protocol errors and ignores post-abort data", async () => {
+  const socketPath =
+    globalThis.process.platform === "win32"
+      ? `\\\\.\\pipe\\pi-herdsman-${randomUUID()}`
+      : join(tmpdir(), `pi-herdsman-${randomUUID()}.sock`);
+  const server = createServer();
+  const sockets = new Set<Socket>();
+  const controller = new AbortController();
+  let connections = 0;
+  let secondConnection!: () => void;
+  let secondClosed!: () => void;
+  const reconnected = new Promise<void>((resolve) => {
+    secondConnection = resolve;
+  });
+  const closed = new Promise<void>((resolve) => {
+    secondClosed = resolve;
+  });
+  let callbacks = 0;
+  server.on("connection", (socket) => {
+    socket.on("error", (error: NodeJS.ErrnoException) => {
+      if (controller.signal.aborted && error.code === "ECONNRESET") return;
+      throw error;
+    });
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+      if (connections === 2) secondClosed();
+    });
+    connections++;
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline));
+      if (connections === 1) {
+        socket.end(
+          JSON.stringify({
+            id: request.id,
+            error: { code: "invalid_request", message: "rejected" },
+          }) + "\n",
+        );
+      } else {
+        secondConnection();
+        socket.write(
+          [
+            {
+              id: request.id,
+              result: { type: "subscription_started" },
+            },
+            { event: "pane_updated", data: { type: "pane_updated" } },
+          ]
+            .map((message) => JSON.stringify(message) + "\n")
+            .join(""),
+        );
+        controller.abort();
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  try {
+    watchHerdrLifecycle(socketPath, controller.signal, () => callbacks++);
+    await reconnected;
+    await closed;
+    assert.equal(connections, 2);
+    assert.equal(callbacks, 0);
+  } finally {
     controller.abort();
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));

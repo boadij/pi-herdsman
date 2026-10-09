@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { test } from "node:test";
+import { createServer, type Socket } from "node:net";
 import packageMetadata from "../package.json" with { type: "json" };
 import {
   buildSessionProjection,
@@ -1608,10 +1609,24 @@ test("active chief describes authoritative remote ask projection", async () => {
     activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
     allTools: REGISTERED_ROLE_TOOLS,
   });
+  const originalSetInterval = globalThis.setInterval;
+  const installedIntervals: number[] = [];
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+    installedIntervals.push(delay ?? 0);
+    return {} as ReturnType<typeof setInterval>;
+  }) as typeof setInterval;
+  const restoreSetInterval = () => {
+    globalThis.setInterval = originalSetInterval;
+  };
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   context.ui.notify = () => undefined;
-  await pi.events.get("session_start")![0](undefined, context);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+  } finally {
+    restoreSetInterval();
+  }
+  assert.deepEqual(installedIntervals, []);
   const tool = pi.tools.find((candidate) => candidate.name === "message_staff");
   const inspectTool = pi.tools.find(
     (candidate) => candidate.name === "inspect_staff",
@@ -1690,12 +1705,15 @@ test("active chief describes authoritative remote ask projection", async () => {
     "read_staff_transcript",
     "message_staff",
   ]);
+  const snapshotsBeforePreparation = pi.calls.filter(isApiSnapshot).length;
   const beforeStart = await pi.events.get("before_agent_start")![0](
     { systemPromptOptions: { contextFiles: [] } },
     context,
   );
   const chiefPrompt = beforeStart?.systemPrompt;
   assert.equal(beforeStart?.message, undefined);
+  assert.deepEqual(installedIntervals, []);
+  assert.ok(pi.calls.filter(isApiSnapshot).length > snapshotsBeforePreparation);
   const contextCall = pi.sentMessageCalls.findLast(
     ({ message }: any) =>
       message?.customType === "pi-herdsman-supervision-context",
@@ -1747,6 +1765,69 @@ test("active chief describes authoritative remote ask projection", async () => {
   delete process.env.HERDR_TAB_ID;
   delete process.env.HERDR_SOCKET_PATH;
   setLeadEnvironment();
+});
+
+test("idle Chief supervision reconciles at the 10s cadence, not UI redraw ticks", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-scheduler-pane";
+  process.env.HERDR_TAB_ID = "chief-scheduler-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `supervision-scheduler-${randomUUID()}.sock`,
+  );
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: {
+        role: "chief",
+        leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+      },
+    },
+  ];
+  let snapshotCalls = 0;
+  const pi = fakePi({
+    entries,
+    allTools: REGISTERED_ROLE_TOOLS,
+    exec: (_command, args) => {
+      if (isApiSnapshot(args)) snapshotCalls++;
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  const callbacks = new Map<number, TimerHandler>();
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+    callbacks.set(delay ?? 0, callback);
+    return {} as ReturnType<typeof setInterval>;
+  }) as typeof setInterval;
+  t.after(() => {
+    globalThis.setInterval = originalSetInterval;
+    pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  context.hasUI = true;
+  context.ui.setWidget = () => undefined;
+  await pi.events.get("session_start")![0](undefined, context);
+  await pi.events.get("before_agent_start")![0](
+    { systemPromptOptions: { contextFiles: [] } },
+    context,
+  );
+  const afterPreparation = snapshotCalls;
+  assert.equal(typeof callbacks.get(10_000), "function");
+  assert.equal(callbacks.has(2_000), false);
+
+  // Two callback invocations represent 20s of configured interval cadence.
+  for (let tick = 0; tick < 2; tick++) {
+    (callbacks.get(10_000) as () => void)();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.equal(snapshotCalls - afterPreparation, 2);
 });
 
 test("read staff transcript advertises persisted candidates and revalidates the lead", async () => {
@@ -3863,6 +3944,147 @@ test("delegating managed agents refresh their status widget after controller cha
   assert.match(result.details.error.message, /intentional test launch failure/);
 });
 
+test("presentation event bursts coalesce to one controller snapshot refresh", async (t) => {
+  const label = "presentation-burst-agent";
+  const mailbox = setAgentEnvironment(label, ["child"]);
+  const socketPath =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\herdsman-${randomUUID()}`
+      : `/tmp/h-${randomUUID()}.sock`;
+  process.env.HERDR_SOCKET_PATH = socketPath;
+  const sessionFile = join(
+    testTmpRoot,
+    `presentation-burst-${randomUUID()}.jsonl`,
+  );
+  writeFileSync(
+    sessionFile,
+    JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      timestamp: new Date().toISOString(),
+      cwd: "/tmp",
+    }) + "\n",
+  );
+  const parent = {
+    ...managedState(label),
+    ownerSessionId: process.env.PI_HERDSMAN_OWNER_SESSION_ID!,
+    runId: process.env.PI_HERDSMAN_RUN_ID!,
+    paneId: process.env.HERDR_PANE_ID!,
+    piSessionId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    piSessionFile: sessionFile,
+  };
+  writeAgentState(mailbox, parent);
+  const server = createServer();
+  const sockets = new Set<Socket>();
+  let subscribed!: () => void;
+  const subscriptionReady = new Promise<void>(
+    (resolve) => (subscribed = resolve),
+  );
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline));
+      socket.write(
+        JSON.stringify({
+          id: request.id,
+          result: { type: "subscription_started" },
+        }) + "\n",
+      );
+      subscribed();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: { sessionId: parent.piSessionId, definition: "agent", label },
+    },
+  ];
+  let snapshotCalls = 0;
+  const lifecycle = delegatedLifecycleExecutor(parent);
+  const pi = fakePi({
+    entries,
+    exec: (command, args, options) => {
+      if (command === "herdr" && isApiSnapshot(args)) snapshotCalls++;
+      return lifecycle.exec(command, args, options);
+    },
+  });
+  const context = fakeAgentContext(entries) as any;
+  context.sessionManager.getSessionFile = () => sessionFile;
+  context.mode = "tui";
+  context.hasUI = true;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalSetInterval = globalThis.setInterval;
+  let presentationTimer: TimerHandler | undefined;
+  globalThis.setInterval = (() => ({})) as typeof setInterval;
+  t.after(async () => {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.setInterval = originalSetInterval;
+    pi.events.get("session_shutdown")?.[0]();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(sessionFile, { force: true });
+    setLeadEnvironment();
+  });
+  registerExtension!(pi.pi as never);
+  for (const start of pi.events.get("session_start") ?? [])
+    await start(undefined, context);
+  await subscriptionReady;
+  await t.waitFor(() => assert.ok(snapshotCalls > 0));
+  for (let turn = 0; turn < 4; turn++)
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  const beforeBurst = snapshotCalls;
+
+  globalThis.setTimeout = ((
+    handler: TimerHandler,
+    delay?: number,
+    ...args: any[]
+  ) => {
+    if (typeof handler === "function") {
+      presentationTimer = () => handler(...args);
+      return { unref() {} } as ReturnType<typeof setTimeout>;
+    }
+    return originalSetTimeout(handler, delay, ...args);
+  }) as typeof setTimeout;
+  const socket = [...sockets][0]!;
+  socket.write(
+    Array.from(
+      { length: 8 },
+      () =>
+        JSON.stringify({
+          event: "pane_updated",
+          data: { type: "pane_updated" },
+        }) + "\n",
+    ).join(""),
+  );
+  for (let turn = 0; turn < 4 && !presentationTimer; turn++)
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    snapshotCalls,
+    beforeBurst,
+    "presentation refresh waits for its coalescing boundary",
+  );
+  assert.equal(typeof presentationTimer, "function");
+  presentationTimer!();
+  await t.waitFor(() => assert.equal(snapshotCalls, beforeBurst + 1));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    snapshotCalls,
+    beforeBurst + 1,
+    "one event burst must not trigger one snapshot per notification",
+  );
+});
+
 for (const delegationEnabled of [false, true]) {
   test(`${delegationEnabled ? "delegating" : "leaf"} status proves its Lead boundary from coordination state without opening transcripts`, async (t) => {
     const label = delegationEnabled
@@ -3989,7 +4211,7 @@ for (const delegationEnabled of [false, true]) {
     let openCalls = 0;
     let refreshTimer: TimerHandler | undefined;
     globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
-      if (delay === 2000) refreshTimer = callback;
+      if (delay === 10_000) refreshTimer = callback;
       return {} as ReturnType<typeof setInterval>;
     }) as typeof setInterval;
     t.after(() => {

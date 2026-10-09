@@ -1995,6 +1995,98 @@ test("restored Manager registers supervision tools and restores Manager tools", 
   }
 });
 
+test("Manager's lightweight redraw requests rendering without refreshing supervision", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "manager-redraw-pane";
+  process.env.HERDR_TAB_ID = "manager-redraw-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `manager-redraw-${randomUUID()}.sock`,
+  );
+  const respond = (result: unknown) => ({
+    stdout: JSON.stringify({ id: AGENT_ID, result }),
+    stderr: "",
+    code: 0,
+  });
+  const intervals: { callback: TimerHandler; delay?: number }[] = [];
+  const originalSetInterval = globalThis.setInterval;
+  let snapshotCalls = 0;
+  let renderRequests = 0;
+  let component: any;
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+    intervals.push({ callback, delay });
+    return { unref: () => undefined } as any;
+  }) as typeof setInterval;
+  const pi = fakeChiefPi({
+    activeTools: ["read"],
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-role",
+        data: { role: "manager", leadTools: ["read"] },
+      },
+    ],
+    exec: (_command, args) => {
+      if (isApiSnapshot(args)) {
+        snapshotCalls++;
+        return respond({ snapshot: { agents: [], panes: [] } });
+      }
+      if (args[0] === "workspace" && args[1] === "get")
+        return respond({
+          workspace: {
+            worktree: { repo_key: "repo-key", is_linked_worktree: false },
+          },
+        });
+      if (args[0] === "worktree" && args[1] === "list")
+        return respond({
+          source: {
+            source_workspace_id: WORKSPACE,
+            repo_key: "repo-key",
+            repo_name: "project",
+          },
+          worktrees: [],
+        });
+      if (isAgentList(args)) return respond({ agents: [] });
+      return respond({});
+    },
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(pi.entries) as any;
+  context.mode = "tui";
+  context.hasUI = true;
+  context.ui.setWidget = (_key: string, factory: unknown) => {
+    if (typeof factory === "function")
+      component = (factory as Function)(
+        { requestRender: () => renderRequests++ },
+        {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        },
+      );
+  };
+  t.after(async () => {
+    globalThis.setInterval = originalSetInterval;
+    await pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_SOCKET_PATH;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_PANE_ID;
+    setLeadEnvironment();
+  });
+
+  await pi.events.get("session_start")![0](undefined, context);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const redraw = intervals.find(({ delay }) => delay === 2000);
+  assert.ok(redraw, "Manager schedules a 2s redraw interval");
+  assert.equal(typeof component?.render, "function");
+  const snapshotsBeforeRedraw = snapshotCalls;
+  const rendersBeforeRedraw = renderRequests;
+  (redraw.callback as () => void)();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(snapshotCalls, snapshotsBeforeRedraw);
+  assert.ok(renderRequests > rendersBeforeRedraw);
+});
+
 test("Manager auto-start activates after identity and coordination verification without persisting role intent", async () => {
   setLeadEnvironment();
   updateConfig("autoActivateManager", true);
@@ -3167,7 +3259,9 @@ async function managerDelegateAssignmentTest(
         if (newline < 0) return;
         const request = JSON.parse(buffer.slice(0, newline));
         lifecycleSubscriptions++;
-        socket.write(`${JSON.stringify({ id: request.id, result: {} })}\n`);
+        socket.write(
+          `${JSON.stringify({ id: request.id, result: { type: "subscription_started" } })}\n`,
+        );
       });
     });
     await new Promise<void>((resolve, reject) => {
@@ -8728,6 +8822,57 @@ test("status session preparation drops the previous session snapshot", async (t)
   );
 });
 
+test("restarting status runtime replaces and unreferences its timer", async (t) => {
+  const { createAgentStatusRuntime } = await import("./agent-controller.ts");
+  const originalSetInterval = globalThis.setInterval;
+  const originalClearInterval = globalThis.clearInterval;
+  const timers = new Set<ReturnType<typeof setInterval>>();
+  let unrefCalls = 0;
+  globalThis.setInterval = ((callback: TimerHandler) => {
+    const timer = originalSetInterval(callback, 60_000);
+    const unref = timer.unref.bind(timer);
+    timer.unref = () => {
+      unrefCalls++;
+      return unref();
+    };
+    timers.add(timer);
+    return timer;
+  }) as typeof setInterval;
+  globalThis.clearInterval = ((timer) => {
+    timers.delete(timer);
+    originalClearInterval(timer);
+  }) as typeof clearInterval;
+  const runtime = createAgentStatusRuntime();
+  runtime.configure({
+    loadSnapshot: async () => ({
+      agents: [],
+      stale: false,
+      unavailable: false,
+    }),
+    pendingStartEntries: () => [],
+    hasPendingStart: () => false,
+    clearPendingStart: () => false,
+    runtimeForLabel: () => undefined,
+    ownToolsSnapshot: () => ({}),
+  });
+  const ctx = fakeContext() as any;
+  ctx.mode = "tui";
+  ctx.hasUI = true;
+  ctx.ui = { setWidget: () => undefined };
+  t.after(() => {
+    runtime.shutdown();
+    globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
+  });
+
+  runtime.start(ctx);
+  const previous = [...timers][0]!;
+  runtime.start(ctx);
+  assert.equal(timers.size, 1);
+  assert.equal(timers.has(previous), false);
+  assert.equal(unrefCalls, 2);
+});
+
 test("TUI status widget is registered as a Pi component factory", async (t) => {
   setLeadEnvironment();
   let factory: unknown;
@@ -9097,9 +9242,11 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   writeAgentState(mailbox, managedState(label, REQUEST_ID, identity));
   const calls: string[][] = [];
   let refreshTimer: TimerHandler | undefined;
+  const intervalDelays: number[] = [];
   const originalSetInterval = globalThis.setInterval;
-  globalThis.setInterval = ((callback: TimerHandler) => {
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
     refreshTimer = callback;
+    if (delay !== undefined) intervalDelays.push(delay);
     return {} as ReturnType<typeof setInterval>;
   }) as typeof setInterval;
   const herdrAgent = {
@@ -9247,6 +9394,10 @@ test("TUI status refresh consumes the coherent Herdr session snapshot", async (t
   globalThis.setInterval = originalSetInterval;
 
   assert.ok(widget);
+  assert.ok(
+    intervalDelays.includes(10_000),
+    "status reconciles every 10 seconds",
+  );
   assert.ok(calls.some((args) => args[0] === "api" && args[1] === "snapshot"));
   assert.ok(
     pi.execOptions.some((options) => options.timeout === 30_000),

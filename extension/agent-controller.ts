@@ -372,6 +372,7 @@ export function createAgentStatusRuntime() {
         ctx === statusContext && requestActive
           ? statusGeneration
           : ++statusGeneration;
+      clearTimer();
       statusContext = ctx;
       ctx.ui.setWidget("pi-herdsman", (tui: any, theme: any) => {
         const widget = createStatusWidget(() => tui.requestRender(), theme);
@@ -383,7 +384,8 @@ export function createAgentStatusRuntime() {
         return widget;
       });
       requestActive = true;
-      statusTimer = setInterval(() => void refresh(ctx, generation), 2000);
+      statusTimer = setInterval(() => void refresh(ctx, generation), 10_000);
+      statusTimer.unref?.();
       statusPrimed = false;
       if (!primed) void refresh(ctx, generation);
     },
@@ -7257,11 +7259,18 @@ export function createAgentController(
     };
     requestHealthScan();
     if (process.env.HERDR_SOCKET_PATH) {
-      watchHerdrLifecycle(process.env.HERDR_SOCKET_PATH, signal, (removed) => {
-        options.onChanged();
-        requestHealthScan();
-        if (removed) options.onWorktreeRemoved?.(removed, ctx, signal);
-      });
+      watchHerdrLifecycle(
+        process.env.HERDR_SOCKET_PATH,
+        signal,
+        (
+          removed: RemovedHerdrWorktree | undefined,
+          category?: "lifecycle" | "presentation" | "reconcile",
+        ) => {
+          options.onChanged();
+          if (category !== "presentation") requestHealthScan();
+          if (removed) options.onWorktreeRemoved?.(removed, ctx, signal);
+        },
+      );
     }
     schedule();
   };
