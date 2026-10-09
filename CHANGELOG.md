@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.0](https://github.com/boadij/pi-herdsman/compare/v0.22.2...v0.23.0) (2026-10-09)
+
+
+### Features
+
+* **agents:** land managed-agent context sharing ([#329](https://github.com/boadij/pi-herdsman/issues/329)) ([2733566](https://github.com/boadij/pi-herdsman/commit/273356684bd43d91c7478cbd9d5e792f8a24fc01))
+
 ## [0.22.2](https://github.com/boadij/pi-herdsman/compare/v0.22.1...v0.22.2) (2026-10-09)
 
 
