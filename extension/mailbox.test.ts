@@ -95,6 +95,7 @@ test("mailbox observer reconciles an atomically published relevant file", async 
     },
     fail,
   );
+  const keepAlive = setTimeout(() => {}, 5_000);
   try {
     writeFileSync(join(directory, "request.tmp"), "durable");
     renameSync(join(directory, "request.tmp"), join(directory, "request.json"));
@@ -102,6 +103,7 @@ test("mailbox observer reconciles an atomically published relevant file", async 
     assert.equal(reconciliations, 1);
   } finally {
     stop();
+    clearTimeout(keepAlive);
     rmSync(directory, { recursive: true, force: true });
   }
 });
