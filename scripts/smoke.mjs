@@ -2940,6 +2940,29 @@ async function runManagerRecoverySmoke(ctx) {
     hash(repoKey),
     `${hash(branch)}.json`,
   );
+  const primaryBranch = rootTopology.worktrees.find(
+    (item) => item.open_workspace_id === ctx.rootWorkspaceId,
+  )?.branch;
+  assert.equal(typeof primaryBranch, "string");
+  const unrelatedAssignment = {
+    version: 2,
+    id: randomUUID(),
+    repoKey,
+    branch: primaryBranch,
+    text: "unrelated primary-worktree assignment",
+  };
+  const unrelatedAssignmentPath = join(
+    runtime,
+    "assignments",
+    hash(repoKey),
+    `${hash(primaryBranch)}.json`,
+  );
+  await mkdir(dirname(unrelatedAssignmentPath), { recursive: true });
+  await writeFile(
+    unrelatedAssignmentPath,
+    `${JSON.stringify(unrelatedAssignment)}\n`,
+    { flag: "wx" },
+  );
   const managerPath = join(
     runtime,
     "managers",
@@ -3288,10 +3311,7 @@ async function runManagerRecoverySmoke(ctx) {
   );
 
   markStage(ctx, "missing-worktree");
-  await nestedCommand(ctx, ["workspace", "close", workspaceId]);
-  await run("git", ["worktree", "remove", "--force", worktreePath], {
-    cwd: ctx.primaryCheckoutPath,
-  });
+  await nestedCommand(ctx, ["worktree", "remove", "--workspace", workspaceId]);
   assert.equal((await matchingWorktrees()).length, 0);
   markStage(ctx, "assignment-absence-reconciliation");
   ctx.owned.managerWorktreeRetirementRequested = true;
@@ -3314,6 +3334,10 @@ async function runManagerRecoverySmoke(ctx) {
   );
   await assert.rejects(lstat(assignmentPath), { code: "ENOENT" });
   await assert.rejects(lstat(messagesDirectory), { code: "ENOENT" });
+  assert.deepEqual(
+    JSON.parse(await readFile(unrelatedAssignmentPath, "utf8")),
+    unrelatedAssignment,
+  );
   assert.equal((await matchingWorktrees()).length, 0);
   await run(
     "git",

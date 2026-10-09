@@ -435,7 +435,6 @@ type LeadProjectHost = {
     repoKey: string,
     branch: string,
     operation: () => Promise<T> | T,
-    alreadyLocked?: boolean,
   ): Promise<T>;
   stopOwnedAgentsForSession(
     ctx: ExtensionContext,
@@ -647,6 +646,7 @@ type LeadSupervisionHost = {
     sourceCheckoutPath: string,
     alreadyLocked?: boolean,
     onlyBranch?: string,
+    retryLockContention?: boolean,
   ): Promise<void>;
   readChiefDescriptor: typeof import("./supervision.ts").readChiefDescriptor;
   readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
@@ -7992,9 +7992,7 @@ export function createLeadRoleTransitions(
     repoKey: string,
     branch: string,
     operation: () => Promise<T> | T,
-    alreadyLocked = false,
   ): Promise<T> => {
-    if (alreadyLocked) return operation();
     const lease = host.acquireProcessLock(
       `${host.projectAssignmentPath(host.supervisionRuntime(), repoKey, branch)}.lock`,
       { name: "project assignment lock" },
@@ -8306,6 +8304,7 @@ export function createLeadRoleTransitions(
     sourceCheckoutPath: string,
     projectWorkLocked = false,
     onlyBranch?: string,
+    retryLockContention = false,
   ): Promise<void> => {
     const manager = await currentManager(ctx);
     if (
@@ -8325,33 +8324,44 @@ export function createLeadRoleTransitions(
       sourceCheckoutPath,
     );
     if (!initialInventory) return;
-    const knownCheckoutSurvives = (
+    const knownCheckoutPath = (
+      assignment: ProjectAssignment,
+    ): string | undefined => {
+      if (!assignment.piSessionFile) return undefined;
+      try {
+        const session = host.SessionManager.open(assignment.piSessionFile);
+        if (session.getSessionId() !== assignment.id) return undefined;
+        return resolve(session.getCwd());
+      } catch {
+        return undefined;
+      }
+    };
+    const checkoutMaySurvive = (
       assignment: ProjectAssignment,
       inventory: NonNullable<typeof initialInventory>,
     ): boolean => {
-      if (!assignment.piSessionFile) return false;
-      try {
-        const session = host.SessionManager.open(assignment.piSessionFile);
-        if (session.getSessionId() !== assignment.id) return true;
-        const cwd = resolve(session.getCwd());
+      const cwd = knownCheckoutPath(assignment);
+      if (cwd)
         return inventory.some(
           (worktree) =>
             resolve(worktree.path) === cwd &&
             gitPathStatus(worktree.path) !== "absent",
         );
-      } catch {
-        return true;
-      }
+      // Without checkout provenance, any linked checkout could be the assigned one.
+      return inventory.some(
+        (worktree) =>
+          resolve(worktree.path) !== resolve(sourceCheckoutPath) &&
+          gitPathStatus(worktree.path) !== "absent",
+      );
     };
     for (const observed of assignments) {
       if (onlyBranch && observed.branch !== onlyBranch) continue;
-      if (knownCheckoutSurvives(observed, initialInventory)) continue;
+      if (checkoutMaySurvive(observed, initialInventory)) continue;
       const initialMatches = initialInventory.filter(
         (worktree) => worktree.branch === observed.branch,
       );
       if (
         initialMatches.length > 1 ||
-        initialInventory.some((worktree) => worktree.detached) ||
         initialMatches.some(
           (worktree) =>
             worktree.locked ||
@@ -8368,12 +8378,24 @@ export function createLeadRoleTransitions(
         )
           return;
         const retireUnderAssignmentLock = async () => {
+          const latestManager = await currentManager(ctx);
+          if (
+            !latestManager ||
+            !host.sameManagerDescriptor(latestManager, manager)
+          )
+            return;
           const current = host.readProjectAssignment(
             host.supervisionRuntime(),
             repoKey,
             observed.branch,
           );
-          if (current?.id !== observed.id) return;
+          if (
+            !current ||
+            current.repoKey !== repoKey ||
+            current.branch !== observed.branch ||
+            current.id !== observed.id
+          )
+            return;
           const inventory = await gitWorktreeInventory(
             ctx,
             repoKey,
@@ -8381,13 +8403,12 @@ export function createLeadRoleTransitions(
             sourceCheckoutPath,
           );
           if (!inventory) return;
-          if (knownCheckoutSurvives(current, inventory)) return;
+          if (checkoutMaySurvive(current, inventory)) return;
           const matches = inventory.filter(
             (worktree) => worktree.branch === observed.branch,
           );
           if (
             matches.length > 1 ||
-            inventory.some((worktree) => worktree.detached) ||
             matches.some(
               (worktree) =>
                 worktree.locked ||
@@ -8398,11 +8419,23 @@ export function createLeadRoleTransitions(
             return;
           removeProjectAssignmentState(current, ctx);
         };
-        await withProjectAssignmentLock(
-          repoKey,
-          observed.branch,
-          retireUnderAssignmentLock,
-        );
+        const deadline = retryLockContention ? Date.now() + 30_000 : 0;
+        for (;;) {
+          try {
+            await withProjectAssignmentLock(
+              repoKey,
+              observed.branch,
+              retireUnderAssignmentLock,
+            );
+            return;
+          } catch (error) {
+            if (!(error instanceof ProcessLockOccupiedError)) throw error;
+            if (!retryLockContention) return;
+            if (ctx.signal.aborted) throw ctx.signal.reason;
+            if (Date.now() >= deadline) throw error;
+            await host.delay(50, undefined, { signal: ctx.signal });
+          }
+        }
       };
       if (projectWorkLocked) await retireIfAbsent();
       else
@@ -8522,6 +8555,7 @@ export function createLeadRoleTransitions(
       topology.source.source_checkout_path,
       false,
       removed.branch,
+      true,
     );
   };
   const beginShutdownRole = (): void => {

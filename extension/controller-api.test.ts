@@ -2353,6 +2353,10 @@ async function runManagerStartupScenario(
     | "reconcile-detached"
     | "reconcile-unknown"
     | "reconcile-replacement"
+    | "reconcile-reassociated"
+    | "reconcile-detached-unrelated"
+    | "reconcile-session-unreadable"
+    | "reconcile-assignment-lock"
     | "verified-absence-resume"
     | "close-resume"
     | "close-failure"
@@ -2503,6 +2507,8 @@ async function runManagerStartupScenario(
             "reconcile-stale-unprunable",
             "reconcile-unknown",
             "reconcile-replacement",
+            "reconcile-detached-unrelated",
+            "reconcile-session-unreadable",
           ].includes(mode) && !mode.startsWith("active-missing");
         const worktrees = [
           `worktree ${gitCwd}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0\0`,
@@ -2518,11 +2524,14 @@ async function runManagerStartupScenario(
             "reconcile-prunable-absent",
             "reconcile-stale-unprunable",
             "reconcile-detached",
+            "reconcile-reassociated",
+            "reconcile-detached-unrelated",
           ].includes(mode)
             ? [
-                mode === "reconcile-detached"
+                mode === "reconcile-detached" ||
+                mode === "reconcile-detached-unrelated"
                   ? `worktree ${existingGitWorktree}\0HEAD ${"b".repeat(40)}\0detached\0\0`
-                  : `worktree ${existingGitWorktree}\0HEAD ${"b".repeat(40)}\0branch refs/heads/${reconciliationBranch}\0${mode === "reconcile-locked" ? "locked in progress\0" : mode === "reconcile-prunable-absent" ? "prunable missing directory\0" : ""}\0`,
+                  : `worktree ${existingGitWorktree}\0HEAD ${"b".repeat(40)}\0branch refs/heads/${mode === "reconcile-reassociated" ? "feat/reused" : reconciliationBranch}\0${mode === "reconcile-locked" ? "locked in progress\0" : mode === "reconcile-prunable-absent" ? "prunable missing directory\0" : ""}\0`,
               ]
             : []),
         ];
@@ -3164,7 +3173,23 @@ async function runManagerStartupScenario(
         repoKey: repoKey,
         branch: reconciliationBranch,
         text: "orphaned assignment",
+        ...([
+          "reconcile-detached-unrelated",
+          "reconcile-session-unreadable",
+        ].includes(mode)
+          ? { piSessionFile: `/tmp/${reconciliationId}.jsonl` }
+          : {}),
       });
+      if (mode === "reconcile-reassociated") {
+        realFs.mkdirSync(existingGitWorktree, { recursive: true });
+      } else if (mode === "reconcile-detached-unrelated") {
+        nativeSessions.set(reconciliationId, {
+          id: reconciliationId,
+          path: `/tmp/${reconciliationId}.jsonl`,
+          cwd: "/removed/original-checkout",
+          entries: [],
+        });
+      }
       writeProjectMessage(
         {
           version: 2,
@@ -3182,11 +3207,40 @@ async function runManagerStartupScenario(
     await pi.events.get("session_start")![0](undefined, ctx);
     await pi.commandOptions.get("manager").handler("", ctx);
     if (mode.startsWith("reconcile-")) {
+      const releaseAssignmentLock =
+        mode === "reconcile-assignment-lock"
+          ? claimProcessLock(
+              `${projectAssignmentPath(supervisionRuntime(), repoKey, reconciliationBranch)}.lock`,
+              { name: "test assignment lock" },
+            )
+          : undefined;
       await pi.tools
         .find((tool) => tool.name === "list_staff")!
         .execute("list", {}, undefined, undefined, ctx);
+      if (releaseAssignmentLock) {
+        assert.deepEqual(
+          listProjectAssignments(supervisionRuntime(), repoKey).map(
+            ({ id }) => id,
+          ),
+          [reconciliationId],
+        );
+        releaseAssignmentLock();
+      }
       const assignments = listProjectAssignments(supervisionRuntime(), repoKey);
-      if (mode === "reconcile-absent" || mode === "reconcile-prunable-absent") {
+      if (
+        mode === "reconcile-absent" ||
+        mode === "reconcile-prunable-absent" ||
+        mode === "reconcile-detached-unrelated" ||
+        mode === "reconcile-session-unreadable" ||
+        mode === "reconcile-assignment-lock"
+      ) {
+        if (mode === "reconcile-assignment-lock") {
+          assert.deepEqual(
+            assignments.map(({ id }) => id),
+            [reconciliationId],
+          );
+          return;
+        }
         if (mode === "reconcile-absent") {
           assert.ok(gitInventoryCalls >= 2);
           assert.deepEqual(parseGitWorktreeInventory(gitListOutput), [
@@ -4372,6 +4426,10 @@ for (const mode of [
   "reconcile-detached",
   "reconcile-unknown",
   "reconcile-replacement",
+  "reconcile-reassociated",
+  "reconcile-detached-unrelated",
+  "reconcile-session-unreadable",
+  "reconcile-assignment-lock",
 ] as const)
   test(`Manager startup reconciles orphan assignments safely (${mode})`, () =>
     runManagerStartupScenario(mode));
