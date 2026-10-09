@@ -54,8 +54,6 @@ import {
   parseControlMarker,
   readRequest,
   readAgentState,
-  listAgentStates,
-  listAgentStateIssues,
   scanAgentStates,
   removeRequest,
   removeAsk,
@@ -161,7 +159,6 @@ import {
   assertUniqueDurableIdentities,
   persistedTranscriptReady as controllerPersistedTranscriptReady,
   durableIdentityKey,
-  durableParentCandidates,
   readAgentTranscript as controllerReadAgentTranscript,
   readPersistedTranscript as controllerReadPersistedTranscript,
   resolveMessageFiles as controllerResolveMessageFiles,
@@ -2124,7 +2121,6 @@ export default function (pi: ExtensionAPI): void {
           appendDurableError,
         },
         statusSnapshotHost: {
-          hasStateIssues: () => listAgentStateIssues().length > 0,
           environmentIdentity: (ctx: ExtensionContext) =>
             managedAgentEnvironmentIdentity(ctx, HERDSMAN_BUILD),
           identityFromEnvironment: () => ({

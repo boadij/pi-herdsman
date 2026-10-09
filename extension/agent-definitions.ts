@@ -522,11 +522,16 @@ export function discoverLeadDefinition(
 export function discoverLeadDefinitions(
   options: DiscoverAgentDefinitionsOptions = {},
 ): AgentDefinition[] {
+  const definitions = discoverEffectiveDefinitions(options);
   return [
     FLEXIBLE_LEAD_DEFINITION_NAME,
     ORCHESTRATOR_LEAD_DEFINITION_NAME,
     MANAGED_LEAD_DEFINITION_NAME,
-  ].map((name) => discoverLeadDefinition(name as LeadDefinitionName, options));
+  ].map((name) => {
+    const definition = definitions.find((candidate) => candidate.name === name);
+    if (!definition) throw new Error(`Lead definition ${name} not found`);
+    return definition;
+  });
 }
 
 export function discoverAgent(

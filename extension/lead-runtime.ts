@@ -1428,7 +1428,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     async openDefinitionsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedDefinition: string | undefined;
       const loadDefinitions = async () => {
-        const { definitions, projectTrusted } =
+        const { definitions, leadDefinitions } =
           await host.contextAgentDefinitions(ctx);
         return {
           definitions,
@@ -1438,12 +1438,14 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
               ORCHESTRATOR_LEAD_DEFINITION_NAME,
               MANAGED_LEAD_DEFINITION_NAME,
             ] as const
-          ).map((name) =>
-            host.discoverLeadDefinition(
-              name,
-              projectTrusted ? { projectRoot: ctx.cwd } : {},
-            ),
-          ),
+          ).map((name) => {
+            const definition = leadDefinitions.find(
+              (candidate) => candidate.name === name,
+            );
+            if (!definition)
+              throw new Error(`Lead definition ${name} not found`);
+            return definition;
+          }),
         };
       };
       const resolveDefinition = async (name: string) => {

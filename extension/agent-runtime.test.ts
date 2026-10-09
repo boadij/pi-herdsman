@@ -73,7 +73,62 @@ import support, {
   testTmpRoot,
 } from "./support.ts";
 const { updateConfig } = await import("./config.ts");
-const { statusBreadcrumb } = await import("./agent-controller.ts");
+const { statusBreadcrumb, visibleAgentSnapshots } =
+  await import("./agent-controller.ts");
+
+test("Lead visibility follows only uniquely proven workspace-scoped ancestry", () => {
+  const state = (
+    label: string,
+    piSessionId: string,
+    ownerSessionId: string,
+    workspaceId = WORKSPACE,
+  ) => ({
+    ...managedState(label),
+    piSessionId,
+    ownerSessionId,
+    workspaceId,
+  });
+  const make = (state: ManagedAgentState) =>
+    ({ state, listed: { label: state.agentLabel } }) as any;
+  const direct = make(state("direct", "lead-child", LEAD_SESSION_ID));
+  const ambiguous = make(state("ambiguous-a", "ambiguous", LEAD_SESSION_ID));
+  const duplicate = make(state("ambiguous-b", "ambiguous", LEAD_SESSION_ID));
+  const ambiguousDescendant = make(
+    state("ambiguous-descendant", "ambiguous-descendant", "ambiguous"),
+  );
+  const child = make(state("child", "child-session", "lead-child"));
+  const grandchild = make(
+    state("grandchild", "grandchild-session", "child-session"),
+  );
+  const foreignWorkspace = make(
+    state("foreign-child", "foreign-session", "lead-child", "foreign"),
+  );
+  const orphan = make(state("orphan", "orphan-session", "missing"));
+  const cycleA = make(state("cycle-a", "cycle-a-session", "cycle-b-session"));
+  const cycleB = make(state("cycle-b", "cycle-b-session", "cycle-a-session"));
+  const visible = visibleAgentSnapshots(
+    {
+      agents: [
+        grandchild,
+        foreignWorkspace,
+        orphan,
+        cycleA,
+        cycleB,
+        child,
+        ambiguous,
+        duplicate,
+        ambiguousDescendant,
+        direct,
+      ],
+    },
+    { kind: "lead" },
+    LEAD_SESSION_ID,
+  );
+  assert.deepEqual(
+    visible.map(({ state: item }) => item.agentLabel),
+    ["ambiguous-a", "ambiguous-b", "direct", "child", "grandchild"],
+  );
+});
 
 test("status breadcrumb trusts only validated Lead ancestry", () => {
   const state = managedState("scout");
