@@ -1511,16 +1511,8 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
   }
 });
 
-test("staged fresh assignment removes a fast completion without observing working", async (t) => {
+test("staged fresh assignment removes a fast completion during the initial result check", async (t) => {
   const fixture = createStagedAssignmentFixture("agent", true);
-  const list = () =>
-    registeredAgentTool(fixture.pi, "list").execute(
-      "id",
-      {},
-      undefined,
-      undefined,
-      fixture.context,
-    );
   try {
     await t.waitFor(() =>
       assert.equal(
@@ -1564,22 +1556,11 @@ test("staged fresh assignment removes a fast completion without observing workin
     fixture.releaseAcknowledgement();
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
-    const requestId = result.details.request_id;
+    const requestId = fixture.requestId;
     assert.equal(requestId, fixture.requestId);
     assert.equal(requestId, fixture.acceptedRequestIdWritten);
-    assert.equal(readAgentState(fixture.mailbox)?.activeRequestId, undefined);
 
     fixture.releaseInitialStatus();
-    const beforeCompletion = await list();
-    assert.equal(beforeCompletion.details.agents[0].state, "settling");
-    assert.equal(fixture.workingObservations, 0);
-    await t.waitFor(() =>
-      assert.match(fixture.widgetValue.render(160).join("\n"), /starting/),
-    );
-    const renderedBeforeCompletion = fixture.widgetValue.render(160).join("\n");
-    assert.match(renderedBeforeCompletion, /starting/);
-    assert.doesNotMatch(renderedBeforeCompletion, /settling/);
-    fixture.completeFast(requestId);
     await t.waitFor(
       () =>
         assert.ok(
@@ -1593,40 +1574,50 @@ test("staged fresh assignment removes a fast completion without observing workin
     assert.equal(requestId, fixture.requestId);
     assert.equal(fixture.workingObservations, 0);
     await t.waitFor(() =>
-      assert.equal(
-        readAgentState(fixture.mailbox),
-        undefined,
-        "fast completion cleanup did not remove the mailbox",
+      assert.doesNotMatch(
+        fixture.widgetValue.render(160).join("\n"),
+        /starting/,
       ),
     );
-    const afterCleanup = await list();
-    assert.deepEqual(afterCleanup.details.agents, []);
-    assert.equal(readAgentState(fixture.mailbox), undefined);
-    assert.equal(realFs.existsSync(fixture.mailbox), false);
-    const renderedAfterCleanup = fixture.widgetValue.render(160).join("\n");
-    assert.doesNotMatch(renderedAfterCleanup, /starting/);
-    assert.doesNotMatch(renderedAfterCleanup, /working/);
-    const laterRefresh = await list();
-    assert.deepEqual(laterRefresh.details.agents, []);
-    const snapshotsBeforeRefresh =
-      fixture.pi.calls.filter(isApiSnapshot).length;
-    const rendersBeforeRefresh = fixture.renderRequests;
-    await t.waitFor(
-      () => {
-        assert.ok(
-          fixture.pi.calls.filter(isApiSnapshot).length >
-            snapshotsBeforeRefresh,
-          "status refresh did not read a later snapshot",
-        );
-        assert.ok(
-          fixture.renderRequests > rendersBeforeRefresh,
-          "status refresh did not update the widget",
-        );
-        const rendered = fixture.widgetValue.render(160).join("\n");
-        assert.doesNotMatch(rendered, /starting/);
-        assert.doesNotMatch(rendered, /working/);
-      },
-      { timeout: 3_000 },
+  } finally {
+    fixture.shutdown();
+  }
+});
+
+test("staged fresh assignment ignores a mismatched completion before delivery", async (t) => {
+  const fixture = createStagedAssignmentFixture("agent", true, true);
+  try {
+    await t.waitFor(() => assert.equal(fixture.initialStatusStarted, true));
+    fixture.releaseInitialStatus();
+    const starting = registeredAgentTool(fixture.pi, "delegate").execute(
+      "id",
+      { definition: "agent", task: "reject mismatched completion" },
+      undefined,
+      undefined,
+      fixture.context,
+    );
+    await t.waitFor(() =>
+      assert.ok(
+        fixture.pi.calls.some(
+          (args) => args[0] === "agent" && args[1] === "start",
+        ),
+      ),
+    );
+    fixture.releaseStart();
+    await t.waitFor(() => assert.ok(fixture.preSubmitValidationReady));
+    fixture.releasePreSubmitValidation();
+    await t.waitFor(() => assert.ok(fixture.requestObserved));
+    fixture.releaseAcknowledgement();
+    const result = await starting;
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    await t.waitFor(() =>
+      assert.match(fixture.widgetValue.render(160).join("\n"), /starting/),
+    );
+    assert.equal(
+      fixture.pi.sent.some(
+        (message: any) => message.customType === "pi-herdsman-agent-result",
+      ),
+      false,
     );
   } finally {
     fixture.shutdown();

@@ -2165,7 +2165,8 @@ function acceptMailboxRequest(mailbox: string, request: RequestRecord): void {
 
 export function createStagedAssignmentFixture(
   label: string,
-  fastCompletion = false,
+  completeOnAcceptance = false,
+  mismatchResultIdentity = false,
 ) {
   setLeadEnvironment();
   const startupMailbox = agentMailboxPath(WORKSPACE, label);
@@ -2206,12 +2207,27 @@ export function createStagedAssignmentFixture(
       const state = readAgentState(startupMailbox);
       assert.ok(state, "staged request must retain mailbox state");
       acceptedRequestIdWritten = state.activeRequestId;
-      writeAgentState(startupMailbox, {
-        ...state,
-        activeRequestId: undefined,
-        completedRequestId: undefined,
-        updatedAt: Date.now(),
-      });
+      if (!completeOnAcceptance)
+        writeAgentState(startupMailbox, {
+          ...state,
+          activeRequestId: undefined,
+          completedRequestId: undefined,
+          updatedAt: Date.now(),
+        });
+      if (completeOnAcceptance) {
+        writeResult(startupMailbox, {
+          version: 5,
+          runId: state.runId,
+          requestId: mismatchResultIdentity ? randomUUID() : request.requestId,
+          ownerSessionId: state.ownerSessionId,
+          workspaceId: state.workspaceId,
+          agentLabel: state.agentLabel,
+          paneId: state.paneId,
+          status: "completed",
+          text: "completed during the initial result check",
+          completedAt: Date.now(),
+        });
+      }
     },
   );
 
@@ -2399,30 +2415,6 @@ export function createStagedAssignmentFixture(
         completedRequestId: undefined,
         updatedAt: Date.now(),
       });
-    },
-    completeFast(requestId: string) {
-      assert.equal(fastCompletion, true);
-      const state = readAgentState(startup.mailbox);
-      assert.ok(state);
-      writeAgentState(startup.mailbox, {
-        ...state,
-        activeRequestId: undefined,
-        completedRequestId: requestId,
-        updatedAt: Date.now(),
-      });
-      writeResult(startup.mailbox, {
-        version: 5,
-        runId: state.runId,
-        requestId,
-        ownerSessionId: state.ownerSessionId,
-        workspaceId: state.workspaceId,
-        agentLabel: state.agentLabel,
-        paneId: state.paneId,
-        status: "completed",
-        text: "completed before working was observed",
-        completedAt: Date.now(),
-      });
-      emitMailboxChange(startup.mailbox, `result-${requestId}.json`);
     },
     shutdown() {
       pi.events.get("session_shutdown")?.[0]();

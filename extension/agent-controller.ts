@@ -5545,6 +5545,7 @@ export function createAgentController(
       const pendingStart: PendingStart = {
         label,
         definition: agentDefinition,
+        requestId: assignment!.requestId,
         ...(p.task !== undefined ? { task: p.task } : {}),
         startedAt: Date.now(),
         ...(scope.kind === "managed-agent" && process.env.PI_HERDSMAN_LABEL
@@ -5798,7 +5799,7 @@ export function createAgentController(
         });
         runtimes.set(label, runtime);
         options.onChanged();
-        const requestId = await submit(
+        await submit(
           runtime,
           "task",
           assignmentInput!.text,
@@ -5810,7 +5811,6 @@ export function createAgentController(
           p.action,
           assignmentInput!.resultBindings,
         );
-        pendingStart.requestId = requestId;
         accepted = true;
         options.onChanged();
         return {
