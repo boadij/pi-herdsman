@@ -59,7 +59,9 @@ import support, {
   registerManagedAgentContextHandlers,
   setLeadEnvironment,
   setAgentEnvironment,
-  watchedResultPaths,
+  watchedMailboxDirectories,
+  emitMailboxChange,
+  emitMailboxWatchError,
   agentMailboxPath,
   DEFAULT_PI_SESSION_ID,
   startupExecutor,
@@ -169,7 +171,8 @@ test("managed requests pump through Pi semantic input", async (t) => {
       createdAt: Date.now(),
     };
     writeRequest(mailbox, request);
-    t.mock.timers.tick(250);
+    emitMailboxChange(mailbox);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(transformed, { action: "transform", text: request.text });
     assert.ok(
       agent.entries.some(
@@ -190,7 +193,8 @@ test("managed requests pump through Pi semantic input", async (t) => {
       false,
     );
     assert.deepEqual(agent.sentUsers, [controlMarker(request.requestId)]);
-    t.mock.timers.tick(250);
+    emitMailboxChange(mailbox, `request-${request.requestId}.json`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(agent.sentUsers, [controlMarker(request.requestId)]);
     removeRequest(mailbox, request.requestId);
     (context as any).isIdle = () => false;
@@ -202,7 +206,10 @@ test("managed requests pump through Pi semantic input", async (t) => {
       createdAt: Date.now(),
     };
     writeRequest(mailbox, steer);
-    t.mock.timers.tick(250);
+    emitMailboxWatchError(mailbox);
+    support.failNextMailboxWatch = true;
+    t.mock.timers.tick(1_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(readAgentState(mailbox)?.lastAck?.requestId, steer.requestId);
     assert.deepEqual(transformed, {
       action: "transform",
@@ -218,6 +225,8 @@ test("managed requests pump through Pi semantic input", async (t) => {
         options: { deliverAs: "steer" },
       },
     ]);
+    t.mock.timers.tick(1_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     context.isIdle = () => false;
     (context as any).abort = () => {
       aborted++;
@@ -230,7 +239,8 @@ test("managed requests pump through Pi semantic input", async (t) => {
       createdAt: Date.now(),
     };
     writeRequest(mailbox, interrupt);
-    t.mock.timers.tick(250);
+    emitMailboxChange(mailbox, `request-${interrupt.requestId}.json`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(
       readAgentState(mailbox)?.lastAck?.requestId,
       interrupt.requestId,
@@ -251,7 +261,9 @@ test("managed requests pump through Pi semantic input", async (t) => {
       },
     ]);
   } finally {
+    support.failNextMailboxWatch = false;
     agent.events.get("session_shutdown")?.[0]();
+    assert.equal(watchedMailboxDirectories.has(mailbox), false);
     resetAgentMailbox(mailbox);
   }
 });
@@ -670,9 +682,11 @@ test("managed pump retransmits an unacknowledged marker", async (t) => {
     };
     writeRequest(mailbox, request);
     const marker = controlMarker(request.requestId);
-    t.mock.timers.tick(250);
+    emitMailboxChange(mailbox, `request-${request.requestId}.json`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(agent.sentUsers, [marker]);
-    t.mock.timers.tick(250);
+    t.mock.timers.tick(1_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(agent.sentUsers, [marker, marker]);
     assert.ok(readRequest(mailbox, request.requestId));
   } finally {
@@ -714,11 +728,13 @@ test("managed pump retries a request after acknowledgement persistence fails", a
     };
     writeRequest(mailbox, request);
     for (let attempt = 0; attempt < 3; attempt++) {
-      t.mock.timers.tick(250);
+      t.mock.timers.tick(1_000);
+      await new Promise<void>((resolve) => setImmediate(resolve));
       assert.equal(readAgentState(mailbox)?.lastAck, undefined);
     }
     assert.ok(readRequest(mailbox, request.requestId));
-    t.mock.timers.tick(250);
+    t.mock.timers.tick(1_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(agent.sentUsers.length, 4);
     assert.equal(
       agent.entries.filter(
@@ -1416,6 +1432,7 @@ test("agent ask_owner blocks settlement and reply resumes the same assignment", 
   };
   pumpReply = true;
   writeRequest(mailbox, reply);
+  emitMailboxChange(mailbox, `request-${reply.requestId}.json`);
   await t.waitFor(() =>
     assert.equal(
       readAgentState(mailbox)?.lastAck?.requestId,
@@ -1911,7 +1928,7 @@ test("parent settlement waits for agent delivery and ignores result cleanup lag"
         text,
         completedAt: Date.now(),
       });
-      watchedResultPaths.get(`${mailbox}/result-${requestId}.json`)?.({}, {});
+      emitMailboxChange(mailbox, `result-${requestId}.json`);
     };
     const sentContent = (index: number): string =>
       String((pi.sentMessageCalls[index]?.message as any)?.content ?? "");
@@ -2190,7 +2207,7 @@ test("independent producer branches publish globally unique semantic refs", asyn
         text: `result from producer ${producer}`,
         completedAt: Date.now(),
       });
-      watchedResultPaths.get(`${mailbox}/result-${requestId}.json`)?.({}, {});
+      emitMailboxChange(mailbox, `result-${requestId}.json`);
       await new Promise<void>((resolve) => setImmediate(resolve));
       await new Promise<void>((resolve) => setImmediate(resolve));
 

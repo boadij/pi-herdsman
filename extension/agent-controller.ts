@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { contentText } from "@earendil-works/pi-ai";
 import { realpathSync, statSync } from "node:fs";
-import { watchFile, unwatchFile, type Stats, unlinkSync } from "node:fs";
+import { unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve, isAbsolute } from "node:path";
@@ -28,6 +28,7 @@ import {
   agentStatePath,
   listAgentStates,
   listAgentStateIssues,
+  observeMailbox,
   readAgentState,
   removeResult,
   removeAgentMailbox,
@@ -2443,10 +2444,8 @@ export function createAgentController(
   >();
   const runtimes = new Map<string, Runtime>();
   const pendingStarts = new Map<string, PendingStart>();
-  const resultWatchers = new Map<string, (curr: Stats, prev: Stats) => void>();
-  const resultWatchRetries = new Map<string, ReturnType<typeof setTimeout>>();
-  const askWatchers = new Map<string, (curr: Stats, prev: Stats) => void>();
-  const askWatchRetries = new Map<string, ReturnType<typeof setTimeout>>();
+  const resultWatchers = new Map<string, () => void>();
+  const askWatchers = new Map<string, () => void>();
   const resultDeliveryInFlight = new Set<string>();
   const askDeliveryInFlight = new Set<string>();
   const resultDeliveryRetries = new Map<
@@ -3366,7 +3365,8 @@ export function createAgentController(
         runtime.startedAt = Date.now();
         runtime.contextPercent = undefined;
         watchResult(runtime, context, signal);
-        watchAsk(runtime, context, signal);
+        if (runtime.activeRequestId === requestId)
+          watchAsk(runtime, context, signal);
       }
       return requestId;
     } finally {
@@ -4387,21 +4387,13 @@ export function createAgentController(
     if (!id) return;
     cancelResultRetry(resultDeliveryRetries, runtime, id);
     cancelResultRetry(resultCleanupRetries, runtime, id);
-    const path = `${runtime.mailboxPath}/result-${id}.json`;
-    const retry = resultWatchRetries.get(path);
-    if (retry) clearTimeout(retry);
-    resultWatchRetries.delete(path);
-    const watcher = resultWatchers.get(path);
-    if (watcher) unwatchFile(path, watcher);
+    const path = join(runtime.mailboxPath, `result-${id}.json`);
+    resultWatchers.get(path)?.();
     resultWatchers.delete(path);
   };
   const stopAskWatcher = (runtime: Runtime): void => {
     const path = agentStatePath(runtime.mailboxPath);
-    const retry = askWatchRetries.get(path);
-    if (retry) clearTimeout(retry);
-    askWatchRetries.delete(path);
-    const watcher = askWatchers.get(path);
-    if (watcher) unwatchFile(path, watcher);
+    askWatchers.get(path)?.();
     askWatchers.delete(path);
   };
   const invalidateRuntime = (label: string): void => {
@@ -4422,33 +4414,6 @@ export function createAgentController(
     runtime.startedAt = undefined;
     runtimes.delete(label);
   };
-  const watch = (
-    path: string,
-    watchers: Map<string, (curr: Stats, prev: Stats) => void>,
-    retries: Map<string, ReturnType<typeof setTimeout>>,
-    context: ExtensionContext,
-    check: () => void,
-    retry: () => void,
-  ): void => {
-    watchers.set(path, check);
-    try {
-      check();
-      if (watchers.get(path) !== check) return;
-      watchFile(path, { interval: 250 }, check);
-    } catch (error) {
-      watchers.delete(path);
-      options.reportWatcherError(context, error);
-      if (!retries.has(path)) {
-        retries.set(
-          path,
-          setTimeout(() => {
-            retries.delete(path);
-            retry();
-          }, 250),
-        );
-      }
-    }
-  };
   const watchResult = (
     runtime: Runtime,
     context: ExtensionContext,
@@ -4456,7 +4421,8 @@ export function createAgentController(
     requestId = runtime.activeRequestId,
   ): void => {
     if (!requestId) return;
-    const path = `${runtime.mailboxPath}/result-${requestId}.json`;
+    const filename = `result-${requestId}.json`;
+    const path = join(runtime.mailboxPath, filename);
     stopResultWatcher(runtime, requestId);
     const check = () => {
       if (active && runtimes.get(runtime.label) === runtime)
@@ -4465,10 +4431,14 @@ export function createAgentController(
           if (result) void deliverResult(runtime, context, result, signal);
         } catch {}
     };
-    watch(path, resultWatchers, resultWatchRetries, context, check, () => {
-      if (runtime.activeRequestId === requestId && active)
-        watchResult(runtime, context, signal, requestId);
-    });
+    const stop = observeMailbox(
+      runtime.mailboxPath,
+      (name) => name === filename,
+      check,
+      (error) => options.reportWatcherError(context, error),
+    );
+    resultWatchers.set(path, stop);
+    check();
   };
   const watchAsk = (
     runtime: Runtime,
@@ -4488,21 +4458,16 @@ export function createAgentController(
         )
           return;
         options.reportWatcherError(context, error);
-        if (!askWatchRetries.has(path))
-          askWatchRetries.set(
-            path,
-            setTimeout(() => {
-              askWatchRetries.delete(path);
-              if (active && runtimes.get(runtime.label) === runtime)
-                watchAsk(runtime, context, signal);
-            }, 250),
-          );
       }
     };
-    watch(path, askWatchers, askWatchRetries, context, check, () => {
-      if (active && runtimes.get(runtime.label) === runtime)
-        watchAsk(runtime, context, signal);
-    });
+    const stop = observeMailbox(
+      runtime.mailboxPath,
+      (name) => name === "state.json" || name === "ask.json",
+      check,
+      (error) => options.reportWatcherError(context, error),
+    );
+    askWatchers.set(path, stop);
+    check();
   };
   const resultIdentity = (runtime: Runtime, requestId: string) => ({
     runId: runtime.runId,
@@ -5217,6 +5182,8 @@ export function createAgentController(
       runtime.task = undefined;
       runtime.startedAt = undefined;
       runtime.contextPercent = undefined;
+      if (pendingStarts.get(runtime.label)?.requestId === result.requestId)
+        pendingStarts.delete(runtime.label);
       if (!(await finalizeDeliveredResult(runtime, result, context, signal)))
         scheduleResultCleanupRetry(runtime, result, context, signal);
       clearCleanupError(runtime, "Result delivery failed; retrying:");
@@ -5579,6 +5546,7 @@ export function createAgentController(
       const pendingStart: PendingStart = {
         label,
         definition: agentDefinition,
+        requestId: assignment!.requestId,
         ...(p.task !== undefined ? { task: p.task } : {}),
         startedAt: Date.now(),
         ...(scope.kind === "managed-agent" && process.env.PI_HERDSMAN_LABEL
@@ -5844,7 +5812,6 @@ export function createAgentController(
           p.action,
           assignmentInput!.resultBindings,
         );
-        pendingStart.requestId = requestId;
         accepted = true;
         options.onChanged();
         return {
@@ -5856,7 +5823,7 @@ export function createAgentController(
           pane_id: runtime.paneId,
           session_id: runtime.piSessionId,
           session_path: runtime.piSessionFile,
-          request_id: runtime.activeRequestId,
+          request_id: requestId,
         };
       } catch (caught) {
         if (promptWriteFailed) throw caught;
@@ -7412,14 +7379,10 @@ export function createAgentController(
     },
     shutdown() {
       active = false;
-      for (const [path, watcher] of resultWatchers) unwatchFile(path, watcher);
-      for (const [path, watcher] of askWatchers) unwatchFile(path, watcher);
+      for (const watcher of resultWatchers.values()) watcher();
+      for (const watcher of askWatchers.values()) watcher();
       resultWatchers.clear();
       askWatchers.clear();
-      for (const timer of resultWatchRetries.values()) clearTimeout(timer);
-      for (const timer of askWatchRetries.values()) clearTimeout(timer);
-      resultWatchRetries.clear();
-      askWatchRetries.clear();
       for (const timer of resultDeliveryRetries.values()) clearTimeout(timer);
       for (const timer of resultCleanupRetries.values()) clearTimeout(timer);
       for (const timer of askDeliveryRetries.values()) clearTimeout(timer);

@@ -53,6 +53,7 @@ mock.module("node:fs", {
     rmdirSync: realFs.rmdirSync,
     statSync: realFs.statSync,
     unlinkSync: realFs.unlinkSync,
+    watch: realFs.watch,
     writeFileSync: realFs.writeFileSync,
     writeSync: realFs.writeSync,
   },

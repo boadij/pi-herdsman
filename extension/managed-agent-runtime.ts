@@ -14,6 +14,7 @@ import {
   agentMailboxPath,
   controlMarker,
   mailboxRecordBytes,
+  observeMailbox,
   parseControlMarker,
   readPendingAsk,
   readResult,
@@ -370,7 +371,7 @@ export function createManagedAgentExecutionState() {
     resultWriteAttempts: 0,
     retryTimer: undefined as ReturnType<typeof setInterval> | undefined,
     stateRetryTimer: undefined as ReturnType<typeof setInterval> | undefined,
-    requestPumpTimer: undefined as ReturnType<typeof setInterval> | undefined,
+    stopRequestObserver: undefined as (() => void) | undefined,
     stateErrorReported: false,
     resultErrorReported: false,
     agentContext: undefined as ExtensionContext | undefined,
@@ -1855,8 +1856,8 @@ export function registerManagedAgentRuntime(
     }));
   };
   const resetRequestPump = (): void => {
-    if (execution.requestPumpTimer) clearInterval(execution.requestPumpTimer);
-    execution.requestPumpTimer = undefined;
+    execution.stopRequestObserver?.();
+    execution.stopRequestObserver = undefined;
     requestState.reset();
   };
   const clearAgentRuntimes = () => controller?.clearRuntimes();
@@ -2627,12 +2628,13 @@ export function registerManagedAgentSessionStartHandler(
       if (options.delegationEnabled)
         options.startControllerHealthScanner(ctx, metadataSignal);
       execution.initialized = true;
-      options.pumpRequest(ctx);
-      execution.requestPumpTimer = setInterval(
+      execution.stopRequestObserver = observeMailbox(
+        mailbox,
+        (name) => /^request-.*\.json$/.test(name),
         () => options.pumpRequest(ctx),
-        250,
+        (error) => options.appendError(ctx, error),
       );
-      execution.requestPumpTimer.unref?.();
+      options.pumpRequest(ctx);
       if (!options.delegationEnabled && ctx.mode === "tui" && ctx.hasUI)
         options.startLeafStatus(ctx);
       const model = ctx.model
@@ -2652,6 +2654,7 @@ export function registerManagedAgentSessionStartHandler(
       );
     } catch (error) {
       execution.initialized = false;
+      options.resetRequestPump();
       options.statusRuntime.clear();
       options.setControllerReady(false);
       execution.assignment = undefined;

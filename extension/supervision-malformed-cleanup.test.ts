@@ -102,6 +102,7 @@ mock.module("node:fs", {
       }
       return realFs.unlinkSync(...args);
     },
+    watch: realFs.watch,
     writeFileSync: realFs.writeFileSync,
     writeSync: realFs.writeSync,
   },
