@@ -10,8 +10,8 @@ Ordinary Lead execution has two modes: `Flexible` and `Orchestrate`. Each maps
 one-to-one to a standalone reserved definition: `flexible-lead` and
 `orchestrator-lead`. The definitions do not compose or inherit from one
 another. Flexible's bundled definition leaves ordinary tools unspecified so
-Pi's normal selection remains the baseline; Orchestrate provides
-orchestration-first instructions and a conservative ordinary-tool policy.
+Pi's normal selection remains the baseline; Orchestrate uses `tools: []` to
+leave only mandatory coordination tools available by default.
 
 Manager-assigned Leads use only the standalone `managed-lead` launch
 definition. Ordinary execution preference is session state separate from
@@ -49,6 +49,8 @@ Manager authority.
 
 ## Consequences
 
+- Bundled Orchestrate and managed Leads have no ordinary tools by default;
+  project/global definition overlays may explicitly enable them.
 - Runtime profiles may change execution instructions and ordinary active-tool
   selection, but not launch-time model, thinking, extensions, skills, or
   context inheritance.

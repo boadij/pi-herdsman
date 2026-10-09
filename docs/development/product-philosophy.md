@@ -96,6 +96,13 @@ Optional participation may be absent; participating behavior that cannot be
 initialized correctly should fail explicitly rather than continue in a
 partially valid state.
 
+Treat performance and efficiency as design goals across runtime, model-facing
+interactions, and development workflows. As workloads and Agent counts grow,
+avoid unnecessary latency, token use, computation, I/O, and resource
+consumption. Prefer eliminating work over adding caches or infrastructure,
+and justify optimization complexity with evidence. Never trade correctness,
+reliability, security, or recovery for speed.
+
 ## Decision test
 
 For any proposed feature, ask:

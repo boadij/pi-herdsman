@@ -23,9 +23,9 @@ inheritance, or Agent/permission policy are not supported.
 
 The bundled `flexible-lead` leaves `tools` unspecified, preserving Pi's normal
 ordinary tool baseline, and supplies flexible direct/delegated-work guidance.
-The bundled `orchestrator-lead` selects `read`, `ls`, `find`, and `grep` and
-guides the Lead to delegate bounded execution whenever an Agent can reasonably
-own it. Example user overlay:
+The bundled `orchestrator-lead` sets `tools: []`, leaving only mandatory
+Herdsman coordination tools available. Inspection and execution are delegated
+to Agents by default. Example user overlay to opt into direct tools:
 
 ```markdown
 ---
@@ -38,8 +38,11 @@ Use the repository's documented smoke command when validating integration work.
 ```
 
 An explicit tool list selects registered ordinary tools; exclusions are then
-applied. Herdsman-owned tools cannot be enabled through a profile, and required
-Lead coordination tools are retained. A configured tool that is not registered
+applied. At the effective-definition level, `tools: []` disables ordinary
+tools, whereas an absent `tools` field preserves Pi's normal selection.
+Overlays that omit `tools` still inherit the bundled `[]`. Herdsman-owned
+tools cannot be enabled through a profile, and required Lead coordination
+tools are retained. A configured tool that is not registered
 is simply unavailable. Profile resolution respects project trust. Definition
 changes take effect when the profile is next resolved: at session start/resume,
 or when a user explicitly selects an execution mode with `/lead` (including
@@ -61,10 +64,11 @@ and cannot be delegated to. It appears first in the flat Definitions list, with
 Model, Thinking, and Details settings but no `Enabled` action. These settings
 do not add it to Agent discovery or delegation.
 
-The bundled default is orchestration-focused: it gives the Lead read-only
-inspection tools plus mandatory Herdsman coordination tools. Executable project work is delegated to managed
-Agents by default. Manager owns project supervision and assignment
-boundaries; the Lead owns technical decisions and execution orchestration.
+The bundled default is coordination-only (`tools: []`): mandatory Herdsman
+coordination tools remain available, while ordinary inspection and execution
+are delegated to managed Agents. Manager owns project supervision and
+assignment boundaries; the Lead owns technical decisions and execution
+orchestration.
 Herdsman automatically hands off the normal assignment response, deferring it
 until delegated Agent work settles. See [Project orchestration](project-orchestration.md)
 for the automatic result and `message_supervisor` coordination contract.

@@ -55,10 +55,11 @@ Pi Herdsman can generate one. The first delegation can create the first linked
 worktree, and an unoccupied existing worktree for the branch is reused.
 
 Start new work with `delegate_project`. Resume existing work with
-`resume_project` using its branch. If its worktree is missing, Herdsman recreates
-it from the existing branch and resumes the exact persisted Pi session when
-available. The saved session cwd is used when history exists; if the branch
-itself is unavailable, recreation fails closed.
+`resume_project` using its branch. A verified Git inventory showing the
+assignment's worktree checkout is absent retires that assignment and its
+pending project messages; failed or ambiguous inventory preserves it. A retired
+assignment cannot be resumed, but a new delegation may start managed work from
+the remaining Git branch. Retirement does not delete branches or Pi sessions.
 
 Whenever Herdsman actually launches the project Lead process, it resolves the
 current `managed-lead` definition from the target worktree plus the global
@@ -135,10 +136,10 @@ See [`stop_lead`](../reference/staff.md#stop_lead) and
 
 ## Retire project work
 
-Successful Herdr worktree removal retires the matching project assignment,
-any still-pending messages; the Git branch remains. A worktree that is merely
-missing does not imply retirement, so the assignment remains recoverable with
-`resume_project` when its branch is available. An assigned Lead can explicitly
+Successful Herdr worktree removal or verified checkout absence retires the
+matching project assignment and any still-pending messages; the Git branch
+remains. Failed or ambiguous inventory does not imply absence, so the
+assignment is preserved until authoritative evidence is available. An assigned Lead can explicitly
 release Manager control with `/takeover`; after confirmation, the assignment
 and pending project messages are removed while its Pi session, conversation,
 branch, worktree, running process, and owned Agents remain. The continuing

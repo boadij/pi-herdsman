@@ -68,9 +68,10 @@ Successful Herdr worktree removal retires the matching project assignment and
 any still-pending project messages. The assigned Lead can also explicitly
 release Manager control with confirmed `/takeover`, which removes the
 assignment and pending project messages while preserving its session, branch,
-worktree, process, and owned Agents. A missing worktree alone does not retire
-an assignment; `resume_project` can reconstruct the checkout when its branch
-remains available.
+worktree, process, and owned Agents. Verified Git worktree inventory showing
+the checkout absent also retires the assignment. Failed or ambiguous inventory
+preserves it. A retired assignment cannot be resumed, but new work may reuse
+its remaining branch.
 
 An assigned project Lead uses `message_supervisor` for timely Manager
 coordination; an ordinary Lead and a Manager use it to contact Chief. An

@@ -443,8 +443,11 @@ Pi Herdsman uses one durable vocabulary:
   assignment represents open work and its Git branch is the work handle. A
   Manager uses `delegate_project` with a task and optional branch to start new
   project work, and `resume_project` with its branch to resume an existing
-  assignment. Missing worktrees are reconstructed from the same branch,
-  resuming the exact saved Pi session when available;
+  assignment. A successful matching Herdr removal event or verified Git
+  worktree inventory showing the checkout absent retires that assignment and
+  pending project messages. Unavailable or ambiguous inventory preserves the
+  assignment. A retired assignment cannot be resumed, but new work may reuse
+  its remaining Git branch;
 - each completed direct turn by an assigned Lead is automatically returned as a
   project message to the current or a replacement Manager; if managed Agent
   work is active, the herd run owns the handoff until it settles, and the
@@ -455,10 +458,11 @@ Pi Herdsman uses one durable vocabulary:
   boundary; routine information that can wait belongs in the automatic result.
   Project work remains open through implementation and review;
 - `stop_lead` stops an exact Lead and its owned Agent tree while preserving
-  the assignment, Pi session, branch, and worktree. A missing worktree alone
-  does not retire the assignment; `resume_project` can reconstruct it.
-  Successful Herdr worktree removal retires the matching assignment and any
-  pending project messages while preserving the Git branch. Explicit
+  the assignment, Pi session, branch, and worktree. A closed workspace or
+  stopped Lead does not retire an assignment while its checkout exists.
+  Successful Herdr worktree removal or verified checkout absence retires the
+  matching assignment and pending project messages while preserving the Git
+  branch and Pi session. Explicit
   `/takeover` by the assigned Lead also releases Manager control and removes
   pending project messages while preserving the session, worktree, branch, and
   owned Agents. Never infer

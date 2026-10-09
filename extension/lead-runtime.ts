@@ -25,6 +25,7 @@ import type {
 import {
   leadSupervisorState as resolveLeadSupervisorState,
   projectTaskSummary,
+  listProjectAssignments,
   staffToolName,
   supervisorStateMessage,
   verifyManagerCoordinationAuthority,
@@ -88,6 +89,7 @@ import {
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync, unlinkSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import { persistedTranscriptReady as controllerPersistedTranscriptReady } from "./agent-controller.ts";
 
 type LeadIdentityHost = {
@@ -107,6 +109,11 @@ type LeadIdentityHost = {
 };
 
 type LeadTransitionHost = {
+  runHerdr: typeof import("./herdr.ts").runHerdr;
+  SessionManager: Pick<
+    typeof import("@earendil-works/pi-coding-agent").SessionManager,
+    "open"
+  >;
   processRole: string;
   paneId(): string | undefined;
   getSessionName(): string;
@@ -406,6 +413,14 @@ type LeadProjectHost = {
     right: ManagerDescriptor,
   ): boolean;
   worktreeGroupScope: typeof import("./herdr.ts").worktreeGroupScope;
+  reconcileProjectAssignments(
+    ctx: ExtensionContext,
+    repoKey: string,
+    primaryWorkspaceId: string,
+    sourceCheckoutPath: string,
+    alreadyLocked?: boolean,
+    onlyBranch?: string,
+  ): Promise<void>;
   findProjectAssignmentBySession: typeof import("./supervision.ts").findProjectAssignmentBySession;
   supervisionRuntime: typeof import("./supervision.ts").supervisionRuntime;
   readProjectAssignment: typeof import("./supervision.ts").readProjectAssignment;
@@ -624,6 +639,15 @@ type LeadSupervisionHost = {
   presentationReports: typeof import("./presentation.ts").supervisionPresentationReports;
   projectSupervision: typeof import("./supervision.ts").projectSupervision;
   projectWorkSnapshot: typeof import("./supervision.ts").projectWorkSnapshot;
+  reconcileProjectAssignments?(
+    ctx: ExtensionContext,
+    repoKey: string,
+    primaryWorkspaceId: string,
+    sourceCheckoutPath: string,
+    alreadyLocked?: boolean,
+    onlyBranch?: string,
+    retryLockContention?: boolean,
+  ): Promise<void>;
   readChiefDescriptor: typeof import("./supervision.ts").readChiefDescriptor;
   readLeadCoordinationState: typeof import("./supervision.ts").readLeadCoordinationState;
   remoteChiefAgent: LeadIdentityRuntime["remoteChiefAgent"];
@@ -1104,6 +1128,13 @@ export function createLeadSessionStartRuntime(host: {
       });
       const activeManager =
         host.isLead() && host.roleTransitions.activeManager();
+      if (activeManager && !sessionSignal.aborted) {
+        try {
+          await host.roleTransitions.reconcileCurrentManagerAssignments(ctx);
+        } catch (error) {
+          host.appendRoleError(ctx, error);
+        }
+      }
       if (
         host.isLead() &&
         (host.roleTransitions.chiefModeActive() || activeManager)
@@ -2237,6 +2268,9 @@ export function registerLeadRuntime(
     currentManager: (
       ...args: Parameters<typeof roleTransitions.currentManager>
     ) => roleTransitions.currentManager(...args),
+    reconcileProjectAssignments: (
+      ...args: Parameters<typeof roleTransitions.reconcileProjectAssignments>
+    ) => roleTransitions.reconcileProjectAssignments(...args),
     currentChief: (...args: Parameters<typeof roleTransitions.currentChief>) =>
       roleTransitions.currentChief(...args),
     currentChiefAuthority: (
@@ -2726,6 +2760,9 @@ export function registerLeadRuntime(
     currentManager: (
       ...args: Parameters<typeof roleTransitions.currentManager>
     ) => roleTransitions.currentManager(...args),
+    reconcileProjectAssignments: (
+      ...args: Parameters<typeof roleTransitions.reconcileProjectAssignments>
+    ) => roleTransitions.reconcileProjectAssignments(...args),
     sameManagerDescriptor: projectHost.sameManagerDescriptor,
     withProjectWorkLock: (
       ...args: Parameters<typeof roleTransitions.withProjectWorkLock>
@@ -3329,6 +3366,11 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
         manager.workspaceId,
         ctx.signal,
       );
+      if (
+        group.repoKey !== manager.repoKey ||
+        group.primaryWorkspaceId !== manager.workspaceId
+      )
+        throw new Error("Manager workspace is not the assigned project");
       const [leads, topology] = await Promise.all([
         directReports(ctx, suppliedInventory, suppliedAgents),
         host.runHerdr(
@@ -3340,9 +3382,17 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       ]);
       if (
         topology?.source?.repo_key !== group.repoKey ||
+        topology?.source?.source_workspace_id !== group.primaryWorkspaceId ||
         !Array.isArray(topology?.worktrees)
       )
         throw new Error("Herdr worktree topology is not authoritative");
+      if (typeof topology.source.source_checkout_path === "string")
+        await host.reconcileProjectAssignments?.(
+          ctx,
+          group.repoKey,
+          group.primaryWorkspaceId,
+          topology.source.source_checkout_path,
+        );
       const assignments = host.listProjectAssignments(
         host.supervisionRuntime(),
         group.repoKey,
@@ -4625,6 +4675,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     expectedSession,
     liveLead,
     withProjectWorkLock,
+    withProjectAssignmentLock,
   } = host;
   const {
     activeRole,
@@ -4753,26 +4804,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       );
     const primaryWorkspaceId = group.primaryWorkspaceId;
     const runtime = supervisionRuntime();
-    const existing = readProjectAssignment(
-      runtime,
-      manager.repoKey,
-      operation.branch,
-    );
-    if (existing && existing.repoKey !== manager.repoKey)
-      throw new Error("Project assignment belongs to another repository");
-    if (operation.action === "delegate" && existing)
-      throw new Error(
-        `Work already exists on ${operation.branch}; resume it with resume_project.`,
-      );
-    if (operation.action === "resume" && !existing)
-      throw new Error(
-        `No existing work was found on ${operation.branch}; start it with delegate_project and a task.`,
-      );
-    const presentationTask =
-      operation.action === "resume"
-        ? projectTaskSummary(existing!.text)
-        : undefined;
-    const id = operation.action === "resume" ? existing!.id : operation.id;
     const branch = operation.branch;
     const topology = await runHerdr(
       pi,
@@ -4786,9 +4817,40 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
       !Array.isArray(topology?.worktrees)
     )
       throw new Error("Herdr worktree topology is not authoritative");
+    if (operation.action === "resume")
+      await host.reconcileProjectAssignments(
+        ctx,
+        manager.repoKey,
+        primaryWorkspaceId,
+        typeof topology.source.source_checkout_path === "string"
+          ? topology.source.source_checkout_path
+          : "",
+        true,
+        branch,
+      );
+    const existing = readProjectAssignment(runtime, manager.repoKey, branch);
+    if (existing && existing.repoKey !== manager.repoKey)
+      throw new Error("Project assignment belongs to another repository");
+    if (operation.action === "delegate" && existing)
+      throw new Error(
+        `Work already exists on ${branch}; resume it with resume_project.`,
+      );
+    if (operation.action === "resume" && !existing)
+      throw new Error(
+        `No existing work was found on ${branch}; start it with delegate_project and a task.`,
+      );
+    const presentationTask =
+      operation.action === "resume"
+        ? projectTaskSummary(existing!.text)
+        : undefined;
+    const id = operation.action === "resume" ? existing!.id : operation.id;
     const branchWorktrees = topology.worktrees.filter(
       (worktree: any) => worktree?.branch === branch,
     );
+    if (operation.action === "resume" && branchWorktrees.length === 0)
+      throw new Error(
+        "Worktree availability could not be verified; the existing assignment was preserved. Retry when repository access is available.",
+      );
     if (branchWorktrees.length > 1)
       throw new Error(`Multiple Herdr worktrees match branch ${branch}`);
     const live =
@@ -4933,7 +4995,6 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           ? { resultBindings: prepared.resultBindings }
           : {}),
       };
-      writeProjectAssignment(runtime, assignment);
     }
     const promptPaths: string[] = [];
     try {
@@ -4983,6 +5044,8 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
             );
         }
       } else {
+        if (operation.action === "resume")
+          throw new Error("The existing project checkout is unavailable");
         const args = [
           "worktree",
           "create",
@@ -4992,44 +5055,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           assignment.branch,
           "--no-focus",
         ];
-        if (operation.action === "resume") {
-          let savedCwd: string | undefined;
-          if (assignment.piSessionFile) {
-            const saved = SessionManager.open(assignment.piSessionFile);
-            if (saved.getSessionId() !== assignment.id)
-              throw new Error(
-                "Persisted project session identity does not match",
-              );
-            savedCwd = saved.getCwd();
-          } else {
-            const saved = (await SessionManager.listAll()).filter(
-              (session) => session.id === assignment.id,
-            );
-            if (saved.length > 1)
-              throw new Error(
-                `Pi session ${assignment.id} is ambiguous; project work was preserved.`,
-              );
-            if (saved.length === 1) {
-              const sessionFile = saved[0]!.path;
-              if (typeof sessionFile !== "string" || !sessionFile)
-                throw new Error(
-                  "Legacy project session has no exact file path",
-                );
-              const session = SessionManager.open(sessionFile);
-              if (session.getSessionId() !== assignment.id)
-                throw new Error(
-                  "Persisted project session identity does not match",
-                );
-              savedCwd = session.getCwd();
-              assignment = await persistLeadSessionFile(
-                assignment,
-                realpathSync(sessionFile),
-              );
-            }
-          }
-          args.push("--base", assignment.branch);
-          if (savedCwd) args.push("--path", savedCwd);
-        } else args.push("--base", operation.base ?? "HEAD");
+        args.push("--base", operation.base ?? "HEAD");
         const created = await runHerdr(pi, ctx, args, { signal });
         workspaceId = created?.workspace?.workspace_id;
         paneId = created?.root_pane?.pane_id;
@@ -5049,6 +5075,53 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         )
       )
         throw new Error("Herdr did not return exact worktree identities");
+      if (operation.action === "delegate") {
+        const [common, branchResult] = await Promise.all([
+          pi.exec(
+            "git",
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            { cwd: cwd!, signal, timeout: 10_000 },
+          ),
+          pi.exec("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+            cwd: cwd!,
+            signal,
+            timeout: 10_000,
+          }),
+        ]);
+        if (
+          common.code !== 0 ||
+          common.killed ||
+          common.stderr?.trim() ||
+          branchResult.code !== 0 ||
+          branchResult.killed ||
+          branchResult.stderr?.trim() ||
+          !isAbsolute(String(common.stdout ?? "").trim()) ||
+          realpathSync(String(common.stdout).trim()) !==
+            realpathSync(manager.repoKey) ||
+          String(branchResult.stdout ?? "").trim() !== assignment.branch
+        )
+          throw new Error(
+            "Herdr checkout does not match the assigned repository and branch",
+          );
+        const fresh = await currentManager(ctx);
+        if (!fresh || !sameManagerDescriptor(fresh, manager))
+          throw new Error(
+            "Manager changed before project assignment was published",
+          );
+        await withProjectAssignmentLock(
+          manager.repoKey,
+          assignment.branch,
+          () => {
+            if (
+              readProjectAssignment(runtime, manager.repoKey, assignment.branch)
+            )
+              throw new Error(
+                `Work already exists on ${assignment.branch}; resume it with resume_project.`,
+              );
+            writeProjectAssignment(runtime, assignment);
+          },
+        );
+      }
       await assertUnoccupied(workspaceId!);
       let lead: any;
       let startedLead = false;
@@ -7763,6 +7836,109 @@ export async function resolveLeadControllerRole(
   }
 }
 
+function gitPathStatus(path: string): "present" | "absent" | "unknown" {
+  try {
+    return statSync(path).isDirectory() ? "present" : "unknown";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unknown";
+  }
+}
+
+export function parseGitWorktreeInventory(output: string):
+  | {
+      path: string;
+      branch?: string;
+      detached?: boolean;
+      locked?: boolean;
+      prunable?: boolean;
+    }[]
+  | undefined {
+  if (!output.endsWith("\0\0")) return undefined;
+  const fields = output.split("\0");
+  if (fields.pop() !== "") return undefined;
+  const records: string[][] = [];
+  let record: string[] = [];
+  for (const field of fields) {
+    if (field) record.push(field);
+    else if (record.length) {
+      records.push(record);
+      record = [];
+    }
+  }
+  if (record.length) records.push(record);
+  if (!records.length) return undefined;
+  const worktrees: {
+    path: string;
+    branch?: string;
+    detached?: boolean;
+    locked?: boolean;
+    prunable?: boolean;
+  }[] = [];
+  for (const values of records) {
+    if (!values[0]?.startsWith("worktree ")) return undefined;
+    let path: string | undefined;
+    let head: string | undefined;
+    let branch: string | undefined;
+    let bare = false;
+    let detached = false;
+    let locked = false;
+    let prunable = false;
+    const seen = new Set<string>();
+    for (const value of values) {
+      const key = value.startsWith("worktree ")
+        ? "worktree"
+        : value.startsWith("HEAD ")
+          ? "HEAD"
+          : value.startsWith("branch refs/heads/")
+            ? "branch"
+            : value === "detached" || value === "bare"
+              ? value
+              : /^locked(?: |$)/.test(value)
+                ? "locked"
+                : /^prunable(?: |$)/.test(value)
+                  ? "prunable"
+                  : undefined;
+      if (key && seen.has(key)) return undefined;
+      if (key) seen.add(key);
+      if (value.startsWith("worktree ") && !path) path = value.slice(9);
+      else if (value.startsWith("HEAD ") && !head) head = value.slice(5);
+      else if (value.startsWith("branch refs/heads/") && !branch)
+        branch = value.slice("branch refs/heads/".length);
+      else if (value === "detached" || value === "bare") {
+        if (value === "bare") bare = true;
+        else detached = true;
+      } else if (/^locked(?: .*)?$/.test(value)) locked = true;
+      else if (/^prunable(?: .*)?$/.test(value)) prunable = true;
+      else if (!/^[^\s]+(?: .*)?$/.test(value)) return undefined;
+    }
+    if (
+      !path ||
+      !isAbsolute(path) ||
+      (bare
+        ? !!branch || detached
+        : !head ||
+          !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(head) ||
+          (!branch && !detached)) ||
+      (branch !== undefined && !branch)
+    )
+      return undefined;
+    worktrees.push({
+      path,
+      ...(branch ? { branch } : {}),
+      ...(detached ? { detached: true } : {}),
+      ...(locked ? { locked: true } : {}),
+      ...(prunable ? { prunable: true } : {}),
+    });
+  }
+  if (
+    new Set(worktrees.map((worktree) => worktree.path)).size !==
+    worktrees.length
+  )
+    return undefined;
+  return worktrees;
+}
+
 export function createLeadRoleTransitions(
   state: LeadRuntimeState,
   host: LeadTransitionHost,
@@ -8047,7 +8223,7 @@ export function createLeadRoleTransitions(
   };
   const removeProjectAssignmentState = (
     assignment: ProjectAssignment,
-    ctx: ExtensionContext,
+    _ctx: ExtensionContext,
   ): boolean => {
     const runtime = host.supervisionRuntime();
     const current = host.readProjectAssignment(
@@ -8055,22 +8231,242 @@ export function createLeadRoleTransitions(
       assignment.repoKey,
       assignment.branch,
     );
-    if (!current || current.id !== assignment.id) return false;
+    if (
+      !current ||
+      current.repoKey !== assignment.repoKey ||
+      current.branch !== assignment.branch ||
+      current.id !== assignment.id
+    )
+      return false;
+    host.removeProjectMessages(runtime, assignment.repoKey, assignment.branch);
     host.removeProjectAssignment(
       runtime,
       assignment.repoKey,
       assignment.branch,
     );
-    try {
-      host.removeProjectMessages(
-        runtime,
-        assignment.repoKey,
-        assignment.branch,
-      );
-    } catch (error) {
-      host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
-    }
     return true;
+  };
+  const gitWorktreeInventory = async (
+    ctx: ExtensionContext,
+    repoKey: string,
+    primaryWorkspaceId: string,
+    sourceCheckoutPath: string,
+  ) => {
+    if (!isAbsolute(sourceCheckoutPath)) return undefined;
+    try {
+      const scope = await host.worktreeGroupScope(
+        ctx,
+        primaryWorkspaceId,
+        ctx.signal,
+      );
+      if (
+        scope.repoKey !== repoKey ||
+        scope.primaryWorkspaceId !== primaryWorkspaceId
+      )
+        return undefined;
+      const rootResult = await host.pi.exec(
+        "git",
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        { cwd: sourceCheckoutPath, signal: ctx.signal, timeout: 10_000 },
+      );
+      if (
+        rootResult.code !== 0 ||
+        rootResult.killed ||
+        rootResult.stderr?.trim()
+      )
+        return undefined;
+      const commonDir = String(rootResult.stdout ?? "").trim();
+      if (!commonDir || !isAbsolute(commonDir)) return undefined;
+      const result = await host.pi.exec(
+        "git",
+        ["worktree", "list", "--porcelain", "-z"],
+        { cwd: sourceCheckoutPath, signal: ctx.signal, timeout: 10_000 },
+      );
+      if (result.code !== 0 || result.killed || result.stderr?.trim())
+        return undefined;
+      const inventory = parseGitWorktreeInventory(String(result.stdout ?? ""));
+      if (
+        !inventory ||
+        realpathSync(commonDir) !== realpathSync(repoKey) ||
+        gitPathStatus(sourceCheckoutPath) !== "present"
+      )
+        return undefined;
+      return inventory;
+    } catch {
+      return undefined;
+    }
+  };
+  const reconcileProjectAssignments = async (
+    ctx: ExtensionContext,
+    repoKey: string,
+    primaryWorkspaceId: string,
+    sourceCheckoutPath: string,
+    projectWorkLocked = false,
+    onlyBranch?: string,
+    retryLockContention = false,
+  ): Promise<void> => {
+    const manager = await currentManager(ctx);
+    if (
+      !manager ||
+      manager.repoKey !== repoKey ||
+      manager.workspaceId !== primaryWorkspaceId
+    )
+      return;
+    const assignments = listProjectAssignments(
+      host.supervisionRuntime(),
+      repoKey,
+    );
+    const initialInventory = await gitWorktreeInventory(
+      ctx,
+      repoKey,
+      primaryWorkspaceId,
+      sourceCheckoutPath,
+    );
+    if (!initialInventory) return;
+    const knownCheckoutPath = (
+      assignment: ProjectAssignment,
+    ): string | undefined => {
+      if (!assignment.piSessionFile) return undefined;
+      try {
+        const session = host.SessionManager.open(assignment.piSessionFile);
+        if (session.getSessionId() !== assignment.id) return undefined;
+        return resolve(session.getCwd());
+      } catch {
+        return undefined;
+      }
+    };
+    const checkoutMaySurvive = (
+      assignment: ProjectAssignment,
+      inventory: NonNullable<typeof initialInventory>,
+    ): boolean => {
+      const cwd = knownCheckoutPath(assignment);
+      if (cwd)
+        return inventory.some(
+          (worktree) =>
+            resolve(worktree.path) === cwd &&
+            gitPathStatus(worktree.path) !== "absent",
+        );
+      // Without checkout provenance, any linked checkout could be the assigned one.
+      return inventory.some(
+        (worktree) =>
+          resolve(worktree.path) !== resolve(sourceCheckoutPath) &&
+          gitPathStatus(worktree.path) !== "absent",
+      );
+    };
+    for (const observed of assignments) {
+      if (onlyBranch && observed.branch !== onlyBranch) continue;
+      if (checkoutMaySurvive(observed, initialInventory)) continue;
+      const initialMatches = initialInventory.filter(
+        (worktree) => worktree.branch === observed.branch,
+      );
+      if (
+        initialMatches.length > 1 ||
+        initialMatches.some(
+          (worktree) =>
+            worktree.locked ||
+            !worktree.prunable ||
+            gitPathStatus(worktree.path) !== "absent",
+        )
+      )
+        continue;
+      const retireIfAbsent = async () => {
+        const latestManager = await currentManager(ctx);
+        if (
+          !latestManager ||
+          !host.sameManagerDescriptor(latestManager, manager)
+        )
+          return;
+        const retireUnderAssignmentLock = async () => {
+          const latestManager = await currentManager(ctx);
+          if (
+            !latestManager ||
+            !host.sameManagerDescriptor(latestManager, manager)
+          )
+            return;
+          const current = host.readProjectAssignment(
+            host.supervisionRuntime(),
+            repoKey,
+            observed.branch,
+          );
+          if (
+            !current ||
+            current.repoKey !== repoKey ||
+            current.branch !== observed.branch ||
+            current.id !== observed.id
+          )
+            return;
+          const inventory = await gitWorktreeInventory(
+            ctx,
+            repoKey,
+            primaryWorkspaceId,
+            sourceCheckoutPath,
+          );
+          if (!inventory) return;
+          if (checkoutMaySurvive(current, inventory)) return;
+          const matches = inventory.filter(
+            (worktree) => worktree.branch === observed.branch,
+          );
+          if (
+            matches.length > 1 ||
+            matches.some(
+              (worktree) =>
+                worktree.locked ||
+                !worktree.prunable ||
+                gitPathStatus(worktree.path) !== "absent",
+            )
+          )
+            return;
+          removeProjectAssignmentState(current, ctx);
+        };
+        const deadline = retryLockContention ? Date.now() + 30_000 : 0;
+        for (;;) {
+          try {
+            await withProjectAssignmentLock(
+              repoKey,
+              observed.branch,
+              retireUnderAssignmentLock,
+            );
+            return;
+          } catch (error) {
+            if (!(error instanceof ProcessLockOccupiedError)) throw error;
+            if (!retryLockContention) return;
+            if (ctx.signal.aborted) throw ctx.signal.reason;
+            if (Date.now() >= deadline) throw error;
+            await host.delay(50, undefined, { signal: ctx.signal });
+          }
+        }
+      };
+      if (projectWorkLocked) await retireIfAbsent();
+      else
+        await withProjectWorkLock(
+          `${repoKey}\0${observed.branch}`,
+          retireIfAbsent,
+        );
+    }
+  };
+  const reconcileCurrentManagerAssignments = async (
+    ctx: ExtensionContext,
+  ): Promise<void> => {
+    const manager = await currentManager(ctx);
+    if (!manager) return;
+    const topology = await host.runHerdr(
+      host.pi,
+      ctx,
+      ["worktree", "list", "--workspace", manager.workspaceId],
+      { signal: ctx.signal },
+    );
+    if (
+      topology?.source?.repo_key !== manager.repoKey ||
+      topology?.source?.source_workspace_id !== manager.workspaceId ||
+      typeof topology?.source?.source_checkout_path !== "string"
+    )
+      throw new Error("Manager worktree topology is not authoritative");
+    await reconcileProjectAssignments(
+      ctx,
+      manager.repoKey,
+      manager.workspaceId,
+      topology.source.source_checkout_path,
+    );
   };
   const takeover = async (ctx: ExtensionCommandContext): Promise<boolean> => {
     if (
@@ -8127,41 +8523,38 @@ export function createLeadRoleTransitions(
     ctx: ExtensionContext,
     signal: AbortSignal,
   ): Promise<void> => {
-    const runtime = host.supervisionRuntime();
-    const observed = host.readProjectAssignment(
-      runtime,
-      removed.repoKey,
-      removed.branch,
-    );
-    if (!observed) return;
-    const scope = await currentWorktreeScope(ctx);
+    let scope: WorktreeGroupScope | undefined;
+    try {
+      scope = await currentWorktreeScope(ctx);
+    } catch (error) {
+      if (
+        error instanceof OperationError &&
+        error.detail.details?.herdrCode === "workspace_not_found"
+      )
+        return;
+      throw error;
+    }
     if (!scope || scope.repoKey !== removed.repoKey) return;
-    await withProjectWorkLock(
-      `${removed.repoKey}\0${removed.branch}`,
-      async () => {
-        const deadline = Date.now() + 30_000;
-        for (;;) {
-          if (signal.aborted)
-            throw signal.reason ?? new Error("operation aborted");
-          try {
-            await withProjectAssignmentLock(
-              removed.repoKey,
-              removed.branch,
-              async () => {
-                removeProjectAssignmentState(observed, ctx);
-              },
-            );
-            return;
-          } catch (error) {
-            if (
-              !(error instanceof ProcessLockOccupiedError) ||
-              Date.now() >= deadline
-            )
-              throw error;
-            await host.delay(50, undefined, { signal });
-          }
-        }
-      },
+    const topology = await host.runHerdr(
+      host.pi,
+      ctx,
+      ["worktree", "list", "--workspace", scope.primaryWorkspaceId],
+      { signal },
+    );
+    if (
+      topology?.source?.repo_key !== removed.repoKey ||
+      topology?.source?.source_workspace_id !== scope.primaryWorkspaceId ||
+      typeof topology?.source?.source_checkout_path !== "string"
+    )
+      return;
+    await reconcileProjectAssignments(
+      ctx,
+      removed.repoKey,
+      scope.primaryWorkspaceId,
+      topology.source.source_checkout_path,
+      false,
+      removed.branch,
+      true,
     );
   };
   const beginShutdownRole = (): void => {
@@ -8440,6 +8833,11 @@ export function createLeadRoleTransitions(
       host.advancePeerPresenceGeneration();
       if (host.coordinationHealthy()) await host.schedulePeerPresence(ctx);
       await host.publishLeadRole(ctx, "inactive", state.chiefModeGeneration);
+      try {
+        await reconcileCurrentManagerAssignments(ctx);
+      } catch (error) {
+        host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error);
+      }
       return "Manager mode active.";
     } catch (error) {
       state.controllerRole = "lead";
@@ -8816,11 +9214,13 @@ export function createLeadRoleTransitions(
     withProjectAssignmentLock,
     publishProjectMessage,
     currentManager,
+    reconcileCurrentManagerAssignments,
     currentChief,
     currentChiefAuthority,
     currentSupervisor,
     takeover,
     retireRemovedProjectWork,
+    reconcileProjectAssignments,
     clearLeadContext: () => {
       state.leadContext = undefined;
     },
