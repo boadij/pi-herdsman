@@ -26,6 +26,8 @@ import {
   writeResult,
   writeAsk,
   writeAgentState,
+  readAgentBootstrap,
+  removeAgentBootstrap,
   unacknowledgedRequestExists,
   type AskRecord,
   type ManagedAgentState,
@@ -59,6 +61,7 @@ import {
   displayIdentity,
   FILE_HANDOFF_GUIDANCE,
   prepareMessageInput,
+  MANAGED_AGENT_BOOTSTRAP_EVENT,
 } from "./core.ts";
 import { collapseDisplayText, createStatusWidget } from "./presentation.ts";
 import { randomUUID } from "node:crypto";
@@ -2587,8 +2590,58 @@ export function registerManagedAgentSessionStartHandler(
           }
         }
       }
-      if (!existing)
+      if (!existing) {
         validateManagedAgentDefinition(await options.getAgentDefinitions(ctx));
+        const bootstrap = readAgentBootstrap(mailbox);
+        if (bootstrap) {
+          if (
+            bootstrap.runId !== candidate.runId ||
+            bootstrap.ownerSessionId !== candidate.ownerSessionId ||
+            bootstrap.workspaceId !== candidate.workspaceId ||
+            bootstrap.agentLabel !== candidate.agentLabel
+          )
+            throw new Error("Managed-agent bootstrap identity mismatch");
+          if (!sameRuntimeBuild(options.build, bootstrap.build))
+            throw new Error("Managed-agent bootstrap Herdsman build mismatch");
+          for (const participant of bootstrap.participants) {
+            let initializer: (() => void | Promise<void>) | undefined;
+            let acceptCount = 0;
+            let invalidInitializer = false;
+            pi.events.emit(MANAGED_AGENT_BOOTSTRAP_EVENT, {
+              protocol: 1,
+              phase: "initialize",
+              context: ctx,
+              agent: candidate.agentLabel,
+              participant: { id: participant.id, payload: participant.payload },
+              accept(callback: () => void | Promise<void>) {
+                acceptCount++;
+                if (typeof callback !== "function") {
+                  invalidInitializer = true;
+                  return;
+                }
+                if (acceptCount === 1) initializer = callback;
+              },
+            });
+            if (acceptCount === 0 || invalidInitializer)
+              throw new Error(
+                `Managed-agent bootstrap participant "${participant.id}" is unavailable or invalid`,
+              );
+            if (acceptCount > 1)
+              throw new Error(
+                `Managed-agent bootstrap participant "${participant.id}" has multiple initializers`,
+              );
+            try {
+              await initializer!();
+            } catch (error) {
+              throw new Error(
+                `Managed-agent bootstrap participant "${participant.id}" failed: ${String(error)}`,
+                { cause: error },
+              );
+            }
+          }
+          removeAgentBootstrap(mailbox);
+        }
+      }
       const release = options.claimAssignmentLock(mailbox, "session_start", {
         label: execution.assignment.agentLabel,
         paneId: execution.assignment.paneId,
