@@ -11,8 +11,11 @@ reserved name is excluded from the Agent roster and cannot be delegated to or
 referenced through an Agent `agents` allowlist.
 
 The definition owns configurable launch behavior such as prompt body, model,
-thinking, ordinary tools, skills, extensions, and context inheritance. Herdsman
-still owns and enforces project identity, supervision, durable Agent ownership,
+thinking, ordinary tools, skills, extensions, and context inheritance. The
+bundled default selects no ordinary tools (`tools: []`); mandatory Lead
+coordination tools are injected at launch, and overlays can enable direct
+tools explicitly. Herdsman still owns and enforces project identity,
+supervision, durable Agent ownership,
 mandatory Lead coordination tools, handoff behavior, and project/worktree
 lifecycle.
 
