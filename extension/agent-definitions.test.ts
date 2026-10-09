@@ -513,7 +513,10 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     "list_peers",
     "message_peer",
   ];
-  const launchArgs = agentLaunchArgs(bundled, { requiredTools });
+  const launchArgs = agentLaunchArgs(bundled, {
+    requiredTools,
+    bodyPromptPath: "/prompt",
+  });
   assert.equal(launchArgs.includes("--no-tools"), true);
   assert.deepEqual(
     launchArgs[launchArgs.indexOf("--tools") + 1]?.split(","),

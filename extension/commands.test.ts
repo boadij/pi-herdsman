@@ -2986,11 +2986,8 @@ async function managerDelegateAssignmentTest(
       assert.equal(childSession, assignment.id);
       const toolsIndex = args.indexOf("--tools");
       assert.notEqual(toolsIndex, -1);
+      assert.equal(args.includes("--no-tools"), true);
       assert.deepEqual(args[toolsIndex + 1]!.split(","), [
-        "read",
-        "ls",
-        "find",
-        "grep",
         ...leadTools,
         "mcp__",
       ]);
@@ -4498,7 +4495,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   await pi.events.get("session_start")![0](undefined, context);
   await pi.commandOptions.get("lead").handler("orchestrate", context);
   const projected = pi.pi.getActiveTools();
-  assert.deepEqual(projected, ["read", "ls", "find", "grep", ...leadTools]);
+  assert.deepEqual(projected, leadTools);
   assert.deepEqual(sessionLeadExecutionState(entries)?.leadTools, [
     "read",
     "bash",
@@ -4514,7 +4511,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
     if (
       activationAttempted &&
       projectionFailures > 0 &&
-      next.includes("read")
+      next.includes("delegate_agent")
     ) {
       projectionFailures--;
       throw new Error("Lead profile restoration failed");
@@ -4553,13 +4550,7 @@ test("Chief activation rollback fails closed when its restrictive projection fai
   });
   lease.release();
   await pi.events.get("session_start")![0](undefined, context);
-  assert.deepEqual(pi.pi.getActiveTools(), [
-    "read",
-    "ls",
-    "find",
-    "grep",
-    ...leadTools,
-  ]);
+  assert.deepEqual(pi.pi.getActiveTools(), leadTools);
   await pi.events.get("session_shutdown")?.[0]();
   delete process.env.HERDR_SOCKET_PATH;
   delete process.env.HERDR_PANE_ID;
