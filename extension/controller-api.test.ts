@@ -7534,6 +7534,19 @@ test("lead steers a blocked parent waiting for direct-child work", async () => {
       ),
       false,
     );
+    writeFileSync(
+      join(childMailbox, `result-${child.activeRequestId}.json`),
+      "{malformed",
+      "utf8",
+    );
+    const unreadableChildResult = await agentTool(pi, "list").execute(
+      "list",
+      {},
+      undefined,
+      undefined,
+      context,
+    );
+    assert.equal(unreadableChildResult.details.agents[0].state, "blocked");
 
     writeAgentState(parentMailbox, {
       ...parent,

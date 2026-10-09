@@ -28,6 +28,7 @@ import {
   agentStatePath,
   listAgentStates,
   listAgentStateIssues,
+  scanAgentStates,
   observeMailbox,
   readAgentState,
   removeResult,
@@ -126,7 +127,6 @@ import {
 
 export type AgentStatusSnapshotHost = {
   scope: ControllerScope;
-  hasStateIssues?(): boolean;
   listedAgentRecord: ReturnType<
     typeof createAgentController
   >["listedAgentRecord"];
@@ -144,7 +144,7 @@ export function buildAgentStatusSnapshot(
 ): StatusSnapshot {
   const ownerSessionId = ctx.sessionManager.getSessionId();
   const unresolvedMailboxState =
-    host.scope.kind === "lead" && host.hasStateIssues?.();
+    host.scope.kind === "lead" && view.stateIssues.length > 0;
   const listed = view.visible.map((snapshot: VisibleManagedAgentSnapshot) =>
     host.listedAgentRecord(
       view,
@@ -714,17 +714,6 @@ export function durableIdentityKey(state: ManagedAgentState): string {
   return `${state.workspaceId}\0${state.piSessionId}`;
 }
 
-export function durableParentCandidates(
-  snapshot: readonly ManagedAgentSnapshot[],
-  child: ManagedAgentState,
-): ManagedAgentSnapshot[] {
-  return snapshot.filter(
-    ({ state }) =>
-      state.workspaceId === child.workspaceId &&
-      state.piSessionId === child.ownerSessionId,
-  );
-}
-
 function directChildStates(parent: ManagedAgentState) {
   return listAgentStates().filter(
     ({ state }) =>
@@ -910,37 +899,30 @@ export function visibleAgentSnapshots(
   );
   if (scope.kind === "managed-agent") return direct;
   const visible: VisibleManagedAgentSnapshot[] = [...direct];
-  const visibleIdentities = new Set(
-    direct.map(({ state }) => durableIdentityKey(state)),
-  );
-  const pending = agents.filter(
-    ({ state }) => state.ownerSessionId !== ownerSessionId,
-  );
-  while (pending.length) {
-    let progressed = false;
-    for (let index = pending.length - 1; index >= 0; index--) {
-      const agent = pending[index]!;
-      const parents = durableParentCandidates(agents, agent.state);
-      if (parents.length !== 1) continue;
-      const parent = parents[0]!;
-      if (!visibleIdentities.has(durableIdentityKey(parent.state))) continue;
-      visible.push({ ...agent, parentLabel: parent.state.agentLabel });
-      visibleIdentities.add(durableIdentityKey(agent.state));
-      pending.splice(index, 1);
-      progressed = true;
+  const byIdentity = new Map<string, ManagedAgentSnapshot[]>();
+  const childrenByOwner = new Map<string, ManagedAgentSnapshot[]>();
+  for (const agent of agents) {
+    const identity = durableIdentityKey(agent.state);
+    const owner = `${agent.state.workspaceId}\0${agent.state.ownerSessionId}`;
+    const identityCandidates = byIdentity.get(identity) ?? [];
+    identityCandidates.push(agent);
+    byIdentity.set(identity, identityCandidates);
+    const children = childrenByOwner.get(owner) ?? [];
+    children.push(agent);
+    childrenByOwner.set(owner, children);
+  }
+  const seen = new Set<ManagedAgentSnapshot>(direct);
+  for (let index = 0; index < visible.length; index++) {
+    const parent = visible[index]!;
+    const identity = durableIdentityKey(parent.state);
+    if (byIdentity.get(identity)?.length !== 1) continue;
+    for (const child of childrenByOwner.get(identity) ?? []) {
+      if (seen.has(child)) continue;
+      seen.add(child);
+      visible.push({ ...child, parentLabel: parent.state.agentLabel });
     }
-    if (!progressed) break;
   }
   return visible;
-}
-
-export function unknownAgentRecords(): Record<string, unknown>[] {
-  return listAgentStateIssues().map(({ diagnostic }) => ({
-    state: "unknown",
-    available_tools: [],
-    managed: true,
-    diagnostic,
-  }));
 }
 
 export function statusBreadcrumb(
@@ -2032,6 +2014,7 @@ export function prospectiveAssignmentFits(
 export type ManagedAgentSnapshotCollection = {
   agents: ManagedAgentSnapshot[];
   mailboxes: ReturnType<typeof listAgentStates>;
+  stateIssues: ReturnType<typeof scanAgentStates>["issues"];
   liveAgents: any[];
   leadSessionIds: string[];
 };
@@ -2169,13 +2152,27 @@ export async function managedAgentSnapshots(
   const inventory =
     suppliedInventory ?? (await herdrSessionSnapshot(pi, ctx, signal));
   const currentWorkspaceId = process.env.HERDR_WORKSPACE_ID ?? ctx.cwd;
-  const allMailboxes = listAgentStates();
+  const { states: allMailboxes, issues: stateIssues } = scanAgentStates();
   const mailboxes = allWorkspaces
     ? allMailboxes
     : allMailboxes.filter(
         ({ state }) => state.workspaceId === currentWorkspaceId,
       );
-  const agents = mailboxes.map(({ path, state }) => {
+  const pendingOwners = new Set<string>();
+  const completedResultsPending = mailboxes.map(({ path, state }) => {
+    let pending = false;
+    if (state.completedRequestId) {
+      try {
+        pending = !!readResult(path, state.completedRequestId);
+      } catch {
+        pending = true;
+      }
+    }
+    if (state.resultError || state.activeRequestId || pending)
+      pendingOwners.add(`${state.workspaceId}\0${state.ownerSessionId}`);
+    return pending;
+  });
+  const agents = mailboxes.map(({ path, state }, index) => {
     const presence = managedAgentPresence(state, inventory);
     const agent = presence.kind === "live" ? presence.agent : undefined;
     let agentDefinition: string;
@@ -2198,14 +2195,7 @@ export async function managedAgentSnapshots(
     const lifecycleState = agent
       ? normalizeHerdrLifecycleState(agent)
       : "unknown";
-    let completionPending = false;
-    if (state.completedRequestId) {
-      try {
-        completionPending = !!readResult(path, state.completedRequestId);
-      } catch {
-        completionPending = true;
-      }
-    }
+    const completionPending = completedResultsPending[index]!;
     const handoffPending = unacknowledgedRequestExists(path, state);
     const liveState = agent
       ? agentControlState(
@@ -2217,22 +2207,7 @@ export async function managedAgentSnapshots(
           !!state.resultError,
         )
       : "unknown";
-    const pendingDirectChildWork = mailboxes.some(
-      ({ path: childPath, state: child }) => {
-        if (
-          child.workspaceId !== state.workspaceId ||
-          child.ownerSessionId !== state.piSessionId
-        )
-          return false;
-        if (child.resultError || child.activeRequestId) return true;
-        if (!child.completedRequestId) return false;
-        try {
-          return !!readResult(childPath, child.completedRequestId);
-        } catch {
-          return true;
-        }
-      },
-    );
+    const pendingDirectChildWork = pendingOwners.has(durableIdentityKey(state));
     const waitingForChildren =
       liveState === "settling" &&
       !!state.activeRequestId &&
@@ -2302,7 +2277,13 @@ export async function managedAgentSnapshots(
       // Missing lead evidence must remain an unknown breadcrumb.
     }
   }
-  return { agents, mailboxes, liveAgents: inventory.agents, leadSessionIds };
+  return {
+    agents,
+    mailboxes,
+    stateIssues,
+    liveAgents: inventory.agents,
+    leadSessionIds,
+  };
 }
 
 export function listedAgentRecord(
@@ -3667,7 +3648,15 @@ export function createAgentController(
       scope,
       context.sessionManager.getSessionId(),
     );
-    const unknown = scope?.kind === "lead" ? unknownAgentRecords() : [];
+    const unknown =
+      scope?.kind === "lead"
+        ? snapshot.stateIssues.map(({ diagnostic }) => ({
+            state: "unknown",
+            available_tools: [],
+            managed: true,
+            diagnostic,
+          }))
+        : [];
     const unresolved = unknown.length > 0;
     const agents = visible.map((item) =>
       listRecord(
@@ -3791,8 +3780,7 @@ export function createAgentController(
         "Agent belongs to another owner session",
         "transcript",
       );
-    const unresolved =
-      scope?.kind === "lead" && listAgentStateIssues().length > 0;
+    const unresolved = scope?.kind === "lead" && view.stateIssues.length > 0;
     const actions = listedAgentRecord(
       view,
       candidate,
@@ -6713,7 +6701,7 @@ export function createAgentController(
       visible: visibleAgentSnapshots(snapshot, options.scope, ownerSessionId),
     };
     const unresolvedMailboxState =
-      options.scope?.kind === "lead" && listAgentStateIssues().length > 0;
+      options.scope?.kind === "lead" && snapshot.stateIssues.length > 0;
     const now = Date.now();
     const ownedRuns = new Set(
       snapshot.agents
