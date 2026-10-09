@@ -358,3 +358,35 @@ session.
 - [Agent-definition schema](../reference/agent-definition-schema.md)
 - [`/agents` commands](../reference/commands.md)
 - [Agent definitions](agent-definitions.md)
+
+## Optional Pi Codex Conversion context sharing
+
+The Herdsman adapter for Pi Codex Conversion (PCC) is optional and supports
+Remote storage only. PCC's `shareSubagentContext` setting remains authoritative.
+Load the adapter in both the delegating controller and each participating fresh
+managed child; it is shipped at
+`dist/integrations/pi-codex-context-sharing.js` but is not loaded by default.
+For a normal npm Pi installation, reference it explicitly, for example:
+
+```text
+~/.pi/agent/npm/node_modules/pi-herdsman/dist/integrations/pi-codex-context-sharing.js
+```
+
+When a managed Agent definition uses `noExtensions: true`, list both PCC and the
+Herdsman adapter in that definition's `extensions`:
+
+```yaml
+---
+name: shared-worker
+noExtensions: true
+extensions:
+  - "~/.pi/agent/npm/node_modules/@howaboua/pi-codex-conversion/dist/index.js"
+  - "~/.pi/agent/npm/node_modules/pi-herdsman/dist/integrations/pi-codex-context-sharing.js"
+---
+```
+
+An explicit `tools` allowlist must independently permit the tools needed by the
+current PCC execution mode. The adapter does not modify tools or PCC execution
+mode; consult PCC for mode-specific requirements. PCC restores the saved
+context identity on continuation, so no adapter rebind is needed. Local and
+Tree storage are not supported because they require ongoing context routing.
