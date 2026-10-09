@@ -776,7 +776,7 @@ export function createManagedAgentLeafStatus(options: {
         else next.dispose();
         return next;
       });
-      timer = setInterval(() => void refresh(ctx, activeGeneration), 2000);
+      timer = setInterval(() => void refresh(ctx, activeGeneration), 10_000);
       void refresh(ctx, activeGeneration);
     },
   };

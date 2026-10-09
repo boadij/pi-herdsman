@@ -510,7 +510,12 @@ test("removed worktree retires its assignment and messages but preserves a newer
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
       const request = JSON.parse(buffer.slice(0, newline));
-      socket.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+      socket.write(
+        JSON.stringify({
+          id: request.id,
+          result: { type: "subscription_started" },
+        }) + "\n",
+      );
       subscribed();
     });
   });

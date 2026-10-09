@@ -203,7 +203,10 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
   const sockets = new Set<Socket>();
   let connections = 0;
   let request: any;
-  const changes: (RemovedHerdrWorktree | undefined)[] = [];
+  const changes: {
+    removed: RemovedHerdrWorktree | undefined;
+    category: string | undefined;
+  }[] = [];
   server.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
@@ -215,7 +218,12 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
       request = JSON.parse(buffer.slice(0, newline));
-      socket.write(JSON.stringify({ id: request.id, result: {} }) + "\n");
+      socket.write(
+        JSON.stringify({
+          id: request.id,
+          result: { type: "subscription_started" },
+        }) + "\n",
+      );
       if (connections === 1) {
         socket.write(
           JSON.stringify({
@@ -252,6 +260,7 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
         };
         socket.write(
           [
+            { event: "pane_updated", data: { type: "pane_updated" } },
             valid,
             {
               ...valid,
@@ -284,36 +293,133 @@ test("lifecycle watcher subscribes, reconciles, reconnects, and aborts", async (
     timeout.unref();
   });
   try {
-    watchHerdrLifecycle(socketPath, controller.signal, (removed) => {
-      changes.push(removed);
-      if (changes.length >= 6 && connections >= 2) ready();
+    watchHerdrLifecycle(socketPath, controller.signal, (removed, category) => {
+      changes.push({ removed, category });
+      if (changes.length >= 7 && connections >= 2) ready();
     });
     await reconnected;
     assert.equal(request.method, "events.subscribe");
     assert.deepEqual(
       request.params.subscriptions.map((entry: any) => entry.type),
       [
+        "workspace.created",
+        "workspace.updated",
+        "workspace.metadata_updated",
+        "workspace.renamed",
+        "pane.created",
         "pane.closed",
         "pane.exited",
         "pane.moved",
+        "pane.updated",
+        "pane.agent_detected",
+        "pane.agent_status_changed",
+        "tab.created",
         "tab.closed",
+        "tab.renamed",
         "workspace.closed",
+        "worktree.created",
+        "worktree.opened",
         "worktree.removed",
       ],
     );
     assert.equal(connections, 2);
-    assert.equal(changes.length, 6);
-    assert.equal(changes[0], undefined);
-    assert.equal(changes[1], undefined);
-    assert.equal(changes[2], undefined);
-    assert.deepEqual(changes[3], {
+    assert.equal(changes.length, 7);
+    assert.deepEqual(
+      changes.map((change) => change.category),
+      [
+        "reconcile",
+        "reconcile",
+        "reconcile",
+        "presentation",
+        "lifecycle",
+        "lifecycle",
+        "lifecycle",
+      ],
+    );
+    assert.equal(changes[0]?.removed, undefined);
+    assert.equal(changes[1]?.removed, undefined);
+    assert.equal(changes[2]?.removed, undefined);
+    assert.equal(changes[3]?.removed, undefined);
+    assert.deepEqual(changes[4]?.removed, {
       repoKey: "repo-key",
       branch: "feat/example",
     });
-    assert.equal(changes[4], undefined);
-    assert.equal(changes[5], undefined);
+    assert.equal(changes[5]?.removed, undefined);
+    assert.equal(changes[6]?.removed, undefined);
   } finally {
     clearTimeout(timeout);
+    controller.abort();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (globalThis.process.platform !== "win32")
+      rmSync(socketPath, { force: true });
+  }
+});
+
+test("lifecycle watcher retries protocol errors and ignores post-abort data", async () => {
+  const socketPath =
+    globalThis.process.platform === "win32"
+      ? `\\\\.\\pipe\\pi-herdsman-${randomUUID()}`
+      : join(tmpdir(), `pi-herdsman-${randomUUID()}.sock`);
+  const server = createServer();
+  const sockets = new Set<Socket>();
+  const controller = new AbortController();
+  let connections = 0;
+  let secondConnection!: () => void;
+  let secondClosed!: () => void;
+  const reconnected = new Promise<void>((resolve) => {
+    secondConnection = resolve;
+  });
+  const closed = new Promise<void>((resolve) => {
+    secondClosed = resolve;
+  });
+  let callbacks = 0;
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+      if (connections === 2) secondClosed();
+    });
+    connections++;
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const request = JSON.parse(buffer.slice(0, newline));
+      if (connections === 1) {
+        socket.end(
+          JSON.stringify({
+            id: request.id,
+            error: { code: "invalid_request", message: "rejected" },
+          }) + "\n",
+        );
+      } else {
+        secondConnection();
+        socket.write(
+          [
+            {
+              id: request.id,
+              result: { type: "subscription_started" },
+            },
+            { event: "pane_updated", data: { type: "pane_updated" } },
+          ]
+            .map((message) => JSON.stringify(message) + "\n")
+            .join(""),
+        );
+        controller.abort();
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  try {
+    watchHerdrLifecycle(socketPath, controller.signal, () => callbacks++);
+    await reconnected;
+    await closed;
+    assert.equal(connections, 2);
+    assert.equal(callbacks, 0);
+  } finally {
     controller.abort();
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));

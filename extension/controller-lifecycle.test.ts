@@ -1515,6 +1515,19 @@ test("fresh path sessions remain controllable after controller cache loss", asyn
 });
 
 test("staged fresh assignment removes a fast completion without observing working", async (t) => {
+  const originalSetInterval = globalThis.setInterval;
+  let statusRefreshCallback: (() => void) | undefined;
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+    if (delay === 10_000) {
+      assert.equal(typeof callback, "function");
+      statusRefreshCallback = callback as () => void;
+      return { unref: () => undefined } as ReturnType<typeof setInterval>;
+    }
+    return originalSetInterval(callback, delay);
+  }) as typeof setInterval;
+  t.after(() => {
+    globalThis.setInterval = originalSetInterval;
+  });
   const fixture = createStagedAssignmentFixture("agent", true);
   const list = () =>
     registeredAgentTool(fixture.pi, "list").execute(
@@ -1614,6 +1627,11 @@ test("staged fresh assignment removes a fast completion without observing workin
     const snapshotsBeforeRefresh =
       fixture.pi.calls.filter(isApiSnapshot).length;
     const rendersBeforeRefresh = fixture.renderRequests;
+    assert.ok(
+      statusRefreshCallback,
+      "status refresh interval was not captured",
+    );
+    statusRefreshCallback();
     await t.waitFor(
       () => {
         assert.ok(
@@ -1629,7 +1647,7 @@ test("staged fresh assignment removes a fast completion without observing workin
         assert.doesNotMatch(rendered, /starting/);
         assert.doesNotMatch(rendered, /working/);
       },
-      { timeout: 3_000 },
+      { timeout: 1_000 },
     );
   } finally {
     fixture.shutdown();

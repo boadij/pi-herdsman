@@ -96,12 +96,19 @@ Unmanaged or invalid agent environments do not receive the managed widget.
 
 ## Refresh
 
-The widget refreshes managed herdr data plus mailbox state every two seconds.
+Ordinary status refreshes on explicit requests and controller or Herdr
+invalidations, with a 10-second reconciliation while its TUI widget is active.
+Herdr events invalidate the view; presentation-only events refresh status but
+do not trigger health scans.
 
-Refresh performs a bounded herdr pane-list lookup to validate the lead
-boundary. It does not add a socket transport or another agent-control protocol.
+Full Chief/Manager supervision observation is event- and local-invalidation-
+driven, with a 10-second reconciliation while active TUI supervision is
+enabled. The Manager elapsed-time widget redraws every two seconds for
+presentation, without acquiring a new authoritative snapshot.
 
-A refresh failure never mutates mailbox/control eligibility.
+Headless mode has no UI-only periodic supervision observation. Explicit and
+model-context refreshes still acquire fresh state. A refresh failure never
+mutates mailbox/control eligibility.
 
 ## Lead execution
 

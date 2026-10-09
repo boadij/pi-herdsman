@@ -2253,6 +2253,20 @@ export function registerLeadRuntime(
         return !!file?.isFile() && file.size > 0;
       }),
   });
+  const writeProjectAssignment = (
+    ...args: Parameters<typeof options.projectHost.writeProjectAssignment>
+  ) => {
+    options.projectHost.writeProjectAssignment(...args);
+    supervisionUiRuntime.requestRefresh();
+  };
+  const removeProjectAssignment = (
+    ...args: Parameters<
+      typeof options.roleTransitionHost.removeProjectAssignment
+    >
+  ) => {
+    options.roleTransitionHost.removeProjectAssignment(...args);
+    supervisionUiRuntime.requestRefresh();
+  };
   const clearSupervisionUI = (removeWidget = true): void => {
     supervisionUiRuntime.stopPeriodic();
     if (removeWidget && leadRuntime.leadContext)
@@ -2448,6 +2462,7 @@ export function registerLeadRuntime(
   };
   const roleTransitionServices = {
     ...roleHost,
+    removeProjectAssignment,
     controllerScope: { kind: "lead" },
     activationGuard,
     advancePeerPresenceGeneration: () =>
@@ -2564,7 +2579,10 @@ export function registerLeadRuntime(
     ...options.controllerServices,
     scope: { kind: "lead" },
     build: options.build,
-    onChanged: () => statusRuntime.requestRefresh(),
+    onChanged: () => {
+      statusRuntime.requestRefresh();
+      supervisionUiRuntime.requestRefresh();
+    },
     onWorkChanged: (ctx: ExtensionContext) => herdRunRuntime?.maybeFinish(ctx),
     onWorktreeRemoved: (
       removed: RemovedHerdrWorktree,
@@ -2700,6 +2718,7 @@ export function registerLeadRuntime(
   const projectHost = options.projectHost;
   const projectServices = {
     ...projectHost,
+    writeProjectAssignment,
     liveAgent,
     liveLead,
     currentManager: (
@@ -3679,6 +3698,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
   let generationId: string | undefined;
   let stale = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let redrawTimer: ReturnType<typeof setInterval> | undefined;
+  let uiContext: ExtensionContext | undefined;
   let inFlight: Promise<void> | undefined;
   let pending: ExtensionContext | undefined;
   let overviewGeneration = 0;
@@ -4266,15 +4287,35 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     },
     startPeriodic: (ctx: ExtensionContext) => {
       if (timer) clearInterval(timer);
-      timer = setInterval(() => void refresh(ctx), 2000);
+      if (redrawTimer) clearInterval(redrawTimer);
+      timer = undefined;
+      redrawTimer = undefined;
+      uiContext = undefined;
+      if (ctx.mode !== "tui" || !ctx.hasUI) return;
+      uiContext = ctx;
+      timer = setInterval(() => {
+        if (uiContext === ctx) void refresh(ctx);
+      }, 10_000);
       timer.unref?.();
+      if (host.activeRole() === "manager") {
+        redrawTimer = setInterval(() => {
+          if (uiContext === ctx) renderWidget?.();
+        }, 2000);
+        redrawTimer.unref?.();
+      }
+    },
+    requestRefresh: () => {
+      if (uiContext) void refresh(uiContext);
     },
     stopPeriodic: () => {
       pending = undefined;
+      uiContext = undefined;
       renderOverview = undefined;
       renderWidget = undefined;
       if (timer) clearInterval(timer);
       timer = undefined;
+      if (redrawTimer) clearInterval(redrawTimer);
+      redrawTimer = undefined;
     },
   };
 }

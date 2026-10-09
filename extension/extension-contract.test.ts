@@ -1608,10 +1608,24 @@ test("active chief describes authoritative remote ask projection", async () => {
     activeTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
     allTools: REGISTERED_ROLE_TOOLS,
   });
+  const originalSetInterval = globalThis.setInterval;
+  const installedIntervals: number[] = [];
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+    installedIntervals.push(delay ?? 0);
+    return {} as ReturnType<typeof setInterval>;
+  }) as typeof setInterval;
+  const restoreSetInterval = () => {
+    globalThis.setInterval = originalSetInterval;
+  };
   registerExtension!(pi.pi as never);
   const context = fakeContext(entries) as any;
   context.ui.notify = () => undefined;
-  await pi.events.get("session_start")![0](undefined, context);
+  try {
+    await pi.events.get("session_start")![0](undefined, context);
+  } finally {
+    restoreSetInterval();
+  }
+  assert.deepEqual(installedIntervals, []);
   const tool = pi.tools.find((candidate) => candidate.name === "message_staff");
   const inspectTool = pi.tools.find(
     (candidate) => candidate.name === "inspect_staff",
@@ -1690,12 +1704,15 @@ test("active chief describes authoritative remote ask projection", async () => {
     "read_staff_transcript",
     "message_staff",
   ]);
+  const snapshotsBeforePreparation = pi.calls.filter(isApiSnapshot).length;
   const beforeStart = await pi.events.get("before_agent_start")![0](
     { systemPromptOptions: { contextFiles: [] } },
     context,
   );
   const chiefPrompt = beforeStart?.systemPrompt;
   assert.equal(beforeStart?.message, undefined);
+  assert.deepEqual(installedIntervals, []);
+  assert.ok(pi.calls.filter(isApiSnapshot).length > snapshotsBeforePreparation);
   const contextCall = pi.sentMessageCalls.findLast(
     ({ message }: any) =>
       message?.customType === "pi-herdsman-supervision-context",
@@ -1747,6 +1764,69 @@ test("active chief describes authoritative remote ask projection", async () => {
   delete process.env.HERDR_TAB_ID;
   delete process.env.HERDR_SOCKET_PATH;
   setLeadEnvironment();
+});
+
+test("idle Chief supervision reconciles at the 10s cadence, not UI redraw ticks", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "chief-scheduler-pane";
+  process.env.HERDR_TAB_ID = "chief-scheduler-tab";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `supervision-scheduler-${randomUUID()}.sock`,
+  );
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-role",
+      data: {
+        role: "chief",
+        leadTools: REGISTERED_ROLE_TOOLS.map(({ name }) => name),
+      },
+    },
+  ];
+  let snapshotCalls = 0;
+  const pi = fakePi({
+    entries,
+    allTools: REGISTERED_ROLE_TOOLS,
+    exec: (_command, args) => {
+      if (isApiSnapshot(args)) snapshotCalls++;
+      return { stdout: "{}", stderr: "", code: 0 };
+    },
+  });
+  const callbacks = new Map<number, TimerHandler>();
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+    callbacks.set(delay ?? 0, callback);
+    return {} as ReturnType<typeof setInterval>;
+  }) as typeof setInterval;
+  t.after(() => {
+    globalThis.setInterval = originalSetInterval;
+    pi.events.get("session_shutdown")?.[0]();
+    delete process.env.HERDR_PANE_ID;
+    delete process.env.HERDR_TAB_ID;
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  });
+  registerExtension!(pi.pi as never);
+  const context = fakeContext(entries) as any;
+  context.hasUI = true;
+  context.ui.setWidget = () => undefined;
+  await pi.events.get("session_start")![0](undefined, context);
+  await pi.events.get("before_agent_start")![0](
+    { systemPromptOptions: { contextFiles: [] } },
+    context,
+  );
+  const afterPreparation = snapshotCalls;
+  assert.equal(typeof callbacks.get(10_000), "function");
+  assert.equal(callbacks.has(2_000), false);
+
+  // Two callback invocations represent 20s of configured interval cadence.
+  for (let tick = 0; tick < 2; tick++) {
+    (callbacks.get(10_000) as () => void)();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.equal(snapshotCalls - afterPreparation, 2);
 });
 
 test("read staff transcript advertises persisted candidates and revalidates the lead", async () => {
@@ -3989,7 +4069,7 @@ for (const delegationEnabled of [false, true]) {
     let openCalls = 0;
     let refreshTimer: TimerHandler | undefined;
     globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
-      if (delay === 2000) refreshTimer = callback;
+      if (delay === 10_000) refreshTimer = callback;
       return {} as ReturnType<typeof setInterval>;
     }) as typeof setInterval;
     t.after(() => {
