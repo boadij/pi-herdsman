@@ -506,7 +506,26 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME),
   );
   assert.equal(bundled.name, "managed-lead");
-  assert.deepEqual(bundled.frontmatter.tools, ["read", "ls", "find", "grep"]);
+  assert.deepEqual(bundled.frontmatter.tools, []);
+  const requiredTools = [
+    ...AGENT_COORDINATION_TOOLS,
+    "message_supervisor",
+    "list_peers",
+    "message_peer",
+  ];
+  const launchArgs = agentLaunchArgs(bundled, {
+    requiredTools,
+    bodyPromptPath: "/prompt",
+  });
+  assert.equal(launchArgs.includes("--no-tools"), true);
+  assert.deepEqual(
+    launchArgs[launchArgs.indexOf("--tools") + 1]?.split(","),
+    [...requiredTools, "mcp__"],
+  );
+  assert.equal(
+    launchArgs[launchArgs.indexOf("--exclude-tools") + 1],
+    "mcp__",
+  );
   assert.equal(bundled.frontmatter.systemPromptMode, "append");
   assert.equal(bundled.frontmatter.inheritProjectContext, true);
   assert.equal(bundled.frontmatter.inheritGlobalContext, true);
@@ -627,12 +646,7 @@ test("reserves independent ordinary Lead runtime profiles with narrow fields", (
     discoverLeadDefinitions(),
   );
   assert.equal(flexible!.frontmatter.tools, undefined);
-  assert.deepEqual(orchestrator!.frontmatter.tools, [
-    "read",
-    "ls",
-    "find",
-    "grep",
-  ]);
+  assert.deepEqual(orchestrator!.frontmatter.tools, []);
   for (const [field, value] of [
     ["model", '"provider/model"'],
     ["thinking", '"low"'],
