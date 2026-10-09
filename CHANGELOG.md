@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.22.2](https://github.com/boadij/pi-herdsman/compare/v0.22.1...v0.22.2) (2026-10-09)
+
+
+### Fixes
+
+* **manager:** reconcile project assignments with worktrees ([#334](https://github.com/boadij/pi-herdsman/issues/334)) ([bc679d7](https://github.com/boadij/pi-herdsman/commit/bc679d7f55af946b1fd7798ded92ea3e149681d3))
+
+
+### Refactoring
+
+* **lead:** default orchestrators to coordination-only tools ([#336](https://github.com/boadij/pi-herdsman/issues/336)) ([9ee5b39](https://github.com/boadij/pi-herdsman/commit/9ee5b397ac9aa0127dcc2f55f4ad79bbb965576e))
+
+
+### Documentation
+
+* **adr:** define worktree-backed project assignment lifecycle ([#331](https://github.com/boadij/pi-herdsman/issues/331)) ([123848b](https://github.com/boadij/pi-herdsman/commit/123848b506a8da94f48b1a482fd43dcc87c1358d))
+* establish performance and efficiency principle ([#335](https://github.com/boadij/pi-herdsman/issues/335)) ([7d1dfef](https://github.com/boadij/pi-herdsman/commit/7d1dfef0be280d748d21cede5861d35411ff135c))
+
 ## [0.22.1](https://github.com/boadij/pi-herdsman/compare/v0.22.0...v0.22.1) (2026-10-09)
 
 
