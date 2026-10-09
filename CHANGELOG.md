@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.22.1](https://github.com/boadij/pi-herdsman/compare/v0.22.0...v0.22.1) (2026-10-09)
+
+
+### Performance
+
+* **runtime:** reduce idle mailbox polling ([#325](https://github.com/boadij/pi-herdsman/issues/325)) ([4c5c46d](https://github.com/boadij/pi-herdsman/commit/4c5c46dc2bed70408a4b701a7872ed68614fec39))
+* **snapshot:** eliminate redundant scans and traversals ([#328](https://github.com/boadij/pi-herdsman/issues/328)) ([9b9c218](https://github.com/boadij/pi-herdsman/commit/9b9c2186c68477884b009da9d4df0f19db49c8b7)), closes [#321](https://github.com/boadij/pi-herdsman/issues/321)
+* **supervision:** reduce redundant fleet observation ([#326](https://github.com/boadij/pi-herdsman/issues/326)) ([91c5422](https://github.com/boadij/pi-herdsman/commit/91c54221c635efb54138eac5568497db1f7bcd03))
+
+
+### Documentation
+
+* **readme:** Revise demo description and update demo link ([#322](https://github.com/boadij/pi-herdsman/issues/322)) ([d5bf7e6](https://github.com/boadij/pi-herdsman/commit/d5bf7e62885b20b2a1e6aa0b1b6325fb1c51caa6))
+
 ## [0.22.0](https://github.com/boadij/pi-herdsman/compare/v0.21.3...v0.22.0) (2026-10-08)
 
 
