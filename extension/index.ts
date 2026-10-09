@@ -1231,6 +1231,7 @@ export default function (pi: ExtensionAPI): void {
     paneId: () => process.env.HERDR_PANE_ID,
     getSessionName: () => pi.getSessionName(),
     runHerdr,
+    SessionManager,
     reportLeadMetadata,
     workspaceId: () => process.env.HERDR_WORKSPACE_ID,
     identity: {

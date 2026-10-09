@@ -4,10 +4,9 @@
 
 ## Status
 
-Accepted on 2026-10-09; implementation pending in
-[issue #330](https://github.com/boadij/pi-herdsman/issues/330).
-At this decision point, `v0.22.1` still implements the earlier
-event-only retirement and missing-worktree recovery rules.
+Accepted on 2026-10-09 and implemented. Matching Herdr removal events and
+verified Git worktree inventory now retire exact assignments when their
+checkout is removed; incomplete or ambiguous evidence preserves them.
 
 ## Context
 
@@ -23,7 +22,7 @@ assignments when a checkout is otherwise missing, allowing
 `resume_project` to recreate it. Herdr events are not durable, so a missed
 notification can leave an assignment indefinitely, even after the checkout
 has been deleted. That recovery policy does not match the intended meaning
-of project assignments as *currently managed work*.
+of project assignments as _currently managed work_.
 
 ## Decision
 
@@ -40,7 +39,7 @@ either of these is authoritative:
   assignment's checkout no longer exists, even if a removal event was missed
   or the checkout was removed outside Herdr.
 
-A missing *open workspace* is not a missing *worktree*. A failed or partial
+A missing _open workspace_ is not a missing _worktree_. A failed or partial
 inventory, disconnected Herdr instance, ambiguous repository or branch
 identity, or out-of-scope machine is not proof of deletion. In-flight
 worktree creation or restoration must not be mistaken for an abandoned
@@ -54,7 +53,7 @@ conversation, or unrelated work. It does not imply that the task was
 completed, accepted, merged, or discarded.
 
 After authoritative checkout absence retires an assignment,
-`resume_project` cannot reconstruct that *retired assignment*. A later
+`resume_project` cannot reconstruct that _retired assignment_. A later
 delegation can start new managed work from the remaining Git branch. The
 branch and historical conversation are not erased.
 

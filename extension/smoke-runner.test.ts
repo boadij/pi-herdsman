@@ -25,6 +25,7 @@ import {
   managerRecoveryResumeOnlyPrompt,
   managerRecoveryResumeDiagnostics,
   managerRecoveryResumePrompt,
+  managerRecoveryRetiredResumePrompt,
   managerRecoveryReviewPrompt,
   continuationResultsForPrompt,
   continuationSessionEvidence,
@@ -1029,6 +1030,15 @@ test("manager-recovery stops by Lead session and resumes by branch", () => {
   assert.match(resume, /Copy that branch string verbatim/);
   assert.match(resume, /do not shorten, summarize, normalize/);
   assert.match(resume, /PI_HERDSMAN_MANAGER_RECOVERY_RESUMED/);
+});
+
+test("manager-recovery verifies retired assignments cannot be resumed", () => {
+  const branch = "herdsman/smoke-manager-recovery-retired";
+  const prompt = managerRecoveryRetiredResumePrompt(branch);
+  assert.ok(prompt.includes(JSON.stringify({ branch })));
+  assert.match(prompt, /resume_project exactly once/);
+  assert.match(prompt, /Do not delegate new work/);
+  assert.match(prompt, /PI_HERDSMAN_MANAGER_RECOVERY_RETIRED/);
 });
 
 test("manager-recovery seeds continuity only in the Lead conversation, then recalls without revealing it", () => {

@@ -238,8 +238,9 @@ live assigned Lead. Manager staff reports contain only live exact Leads named
 by current project assignments; physical worktree scope alone grants no
 authority. Project assignments survive Manager replacement and manual
 continuation of the exact assigned Pi session. `managed-lead` is launch policy,
-not authority. Successful Herdr worktree removal retires an assignment; a
-missing worktree alone leaves it recoverable with `resume_project`.
+not authority. Successful Herdr worktree removal or verified checkout absence
+retires an assignment; failed or ambiguous inventory preserves it. A retired
+assignment cannot be resumed, though new work may use the remaining Git branch.
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
 While Chief, `/chief` opens the overview and `/chief leave` exits the mode.
