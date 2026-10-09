@@ -1556,6 +1556,7 @@ test("staged fresh assignment removes a fast completion during the initial resul
     fixture.releaseAcknowledgement();
     const result = await starting;
     assert.equal(result.details.ok, true, JSON.stringify(result.details));
+    assert.equal(result.details.request_id, fixture.requestId);
     const requestId = fixture.requestId;
     assert.equal(requestId, fixture.requestId);
     assert.equal(requestId, fixture.acceptedRequestIdWritten);
@@ -1571,6 +1572,7 @@ test("staged fresh assignment removes a fast completion during the initial resul
         ),
       { timeout: 5000 },
     );
+    assert.equal(watchedMailboxDirectories.has(fixture.mailbox), false);
     assert.equal(requestId, fixture.requestId);
     assert.equal(fixture.workingObservations, 0);
     await t.waitFor(() =>

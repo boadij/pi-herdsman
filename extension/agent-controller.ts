@@ -3365,7 +3365,8 @@ export function createAgentController(
         runtime.startedAt = Date.now();
         runtime.contextPercent = undefined;
         watchResult(runtime, context, signal);
-        watchAsk(runtime, context, signal);
+        if (runtime.activeRequestId === requestId)
+          watchAsk(runtime, context, signal);
       }
       return requestId;
     } finally {
@@ -5799,7 +5800,7 @@ export function createAgentController(
         });
         runtimes.set(label, runtime);
         options.onChanged();
-        await submit(
+        const requestId = await submit(
           runtime,
           "task",
           assignmentInput!.text,
@@ -5822,7 +5823,7 @@ export function createAgentController(
           pane_id: runtime.paneId,
           session_id: runtime.piSessionId,
           session_path: runtime.piSessionFile,
-          request_id: runtime.activeRequestId,
+          request_id: requestId,
         };
       } catch (caught) {
         if (promptWriteFailed) throw caught;
