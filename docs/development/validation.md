@@ -110,11 +110,52 @@ process-tree cleanup when the test runner times out or leaks descendants.
 A fresh worktree may not contain `node_modules`.
 
 Before running local validation, ensure dependencies are installed in that
-worktree. If `node_modules` is absent, run:
+worktree. If `node_modules` is absent, run `npm ci` from that checkout.
+
+### Optional setup for newly created worktrees
+
+The repository includes a `post-checkout` hook that runs `npm ci` synchronously
+when Git creates a new linked worktree. It is not enabled automatically. To
+enable it, run these steps from the trusted **primary checkout** (not a linked
+worktree).
+
+First inspect the configured hook directory and its origin:
 
 ```sh
-npm ci
+git config --show-origin --get core.hooksPath
 ```
+
+Inspect its existing executable hooks as well; if `core.hooksPath` is unset,
+inspect the repository's default hooks directory using
+`git rev-parse --git-path hooks`.
+
+If an existing hook configuration or hook manager would be displaced, retain
+that configuration or integrate the script manually; this repository does not
+install a dispatcher. `core.hooksPath` selects the whole hooks directory, so
+changing it can disable other hooks. If no existing configuration would be
+displaced, enable the repository hook locally:
+
+```sh
+git config --local core.hooksPath "$(pwd -P)/.githooks"
+```
+
+This local, optional setting affects only this repository. Its absolute path
+deliberately points all linked worktrees to the same trusted script; ordinary
+worktrees share the repository's common Git configuration. Enabling it is an
+explicit developer trust decision: creating a new linked worktree in this
+repository will run `npm ci`, which may execute dependency lifecycle scripts.
+This authorization comes from the developer, not Pi's Agent approval system.
+Only enable it for a repository and branches whose code you trust. Do not treat
+externally supplied branches as implicitly safe, disable Pi authorization, or
+load secrets from the primary checkout into worktrees. npm must also be
+available in the environment of the Git process that creates the worktree (for
+example, a long-lived Herdr server), not merely in an interactive shell.
+
+The hook applies only to newly created linked worktrees. It does not prepare
+existing worktrees, and an installation failure may leave the new checkout in
+place even though Git reports failure. Inspect that checkout, resolve the
+installation cause, run `npm ci` successfully in it, then retry delegation on
+the existing branch. Do not assume failed creation removed the checkout.
 
 ## Failed or non-converging check
 
