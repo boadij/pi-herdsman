@@ -288,6 +288,30 @@ function fsyncDirectory(directory: string): void {
   }
 }
 
+function publishRecord(path: string, content: string): string {
+  const directory = dirname(path);
+  const temporary = join(directory, `.${basename(path)}.${randomUUID()}.tmp`);
+  let fd: number | undefined;
+  try {
+    fd = openSync(temporary, "wx", 0o600);
+    writeFileSync(fd, content, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(temporary, path);
+    chmodSync(path, 0o600);
+    fsyncDirectory(directory);
+    return path;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    try {
+      unlinkSync(temporary);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 function withChiefMessageLock<T>(path: string, operation: () => T): T {
   const lock = `${path}.lock`;
   // Publish a verified PID/UUID owner so a crash-held lock can be reclaimed
@@ -1155,31 +1179,12 @@ export function writePeerLeadRecord(
   const live = livePeerClaim(runtime, record.piSessionId);
   if (live.pid !== record.claim.pid || live.id !== record.claim.id)
     throw new Error("Peer lead process-lock generation changed");
-  const directory = peerDirectory(runtime);
+  peerDirectory(runtime);
   const path = peerLeadRecordPath(runtime, record.piSessionId);
   const content = `${JSON.stringify(record)}\n`;
   if (Buffer.byteLength(content, "utf8") > PEER_LEAD_RECORD_MAX_BYTES)
     throw new Error("Peer lead record is too large");
-  const temporary = join(directory, `.${basename(path)}.${randomUUID()}.tmp`);
-  let fd: number | undefined;
-  try {
-    fd = openSync(temporary, "wx", 0o600);
-    writeFileSync(fd, content, "utf8");
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = undefined;
-    renameSync(temporary, path);
-    chmodSync(path, 0o600);
-    fsyncDirectory(directory);
-    return path;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-    try {
-      unlinkSync(temporary);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
+  return publishRecord(path, content);
 }
 
 export function removePeerLeadRecord(
@@ -2437,31 +2442,12 @@ export function writeLeadCoordinationState(
 ): string {
   if (!state.build || !validLeadState(state))
     throw new Error("Invalid lead coordination state");
-  const directory = leadStateDirectory(runtime);
+  leadStateDirectory(runtime);
   const path = leadCoordinationStatePath(runtime, state.piSessionId);
   const content = JSON.stringify(state) + "\n";
   if (Buffer.byteLength(content, "utf8") > LEAD_STATE_MAX_BYTES)
     throw new Error("Lead coordination state is too large");
-  const temporary = join(directory, `.${basename(path)}.${randomUUID()}.tmp`);
-  let fd: number | undefined;
-  try {
-    fd = openSync(temporary, "wx", 0o600);
-    writeFileSync(fd, content, "utf8");
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = undefined;
-    renameSync(temporary, path);
-    chmodSync(path, 0o600);
-    fsyncDirectory(directory);
-    return path;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-    try {
-      unlinkSync(temporary);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-    }
-  }
+  return publishRecord(path, content);
 }
 
 /** Remove a failed publication so an older generation cannot remain authority. */
