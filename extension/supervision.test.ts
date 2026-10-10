@@ -1521,6 +1521,38 @@ test("Pi send return is not a receipt; later exact receipt enables safe cleanup"
   assert.equal(accepted, 1);
 });
 
+test("receipt arriving during authorization prevents a duplicate submission", async () => {
+  const runtime = supervisionRuntime(socket());
+  const record = message();
+  const path = writeChiefMessage(record, runtime);
+  let persisted = false;
+  let sent = 0;
+  let accepted = 0;
+
+  assert.equal(
+    await drainCoordinationInbox({
+      runtime,
+      sessionId: record.toSessionId,
+      isAuthorized: async () => {
+        persisted = true;
+        return true;
+      },
+      isDelivered: () => persisted,
+      sendMessage: () => {
+        sent++;
+      },
+      accepted: () => {
+        accepted++;
+      },
+    }),
+    1,
+  );
+
+  assert.equal(sent, 0);
+  assert.equal(accepted, 1);
+  assert.equal(existsSync(path), false);
+});
+
 test("synchronous Pi submission failure retains the inbox record", async () => {
   const runtime = supervisionRuntime(socket());
   const record = message();

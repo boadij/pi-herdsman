@@ -792,8 +792,8 @@ export async function drainCoordinationInbox(
     const deliverAs = options.deliveryMode
       ? options.deliveryMode(record)
       : "followUp";
-    const alreadyDelivered = options.isDelivered(record.id);
-    if (!deliverAs && !alreadyDelivered) {
+    const wasAlreadyDelivered = options.isDelivered(record.id);
+    if (!deliverAs && !wasAlreadyDelivered) {
       await clearTransaction();
       continue;
     }
@@ -836,7 +836,7 @@ export async function drainCoordinationInbox(
       await clearTransaction();
       continue;
     }
-    if (!alreadyDelivered) {
+    if (!options.isDelivered(record.id)) {
       try {
         await options.transaction?.revalidate(token, "before-send");
         assertChiefMessageNotQuarantined(
@@ -844,24 +844,27 @@ export async function drainCoordinationInbox(
           options.sessionId,
           record.id,
         );
-        await options.sendMessage(
-          {
-            customType: `pi-herdsman-${record.kind}`,
-            content: deliveredMessageContent(record),
-            display: true,
-            details: {
-              id: record.id,
-              leaseId: record.leaseId,
-              fromSessionId: record.fromSessionId,
-              toSessionId: record.toSessionId,
-              leadSessionId: record.leadSessionId,
-              ...(record.branch ? { branch: record.branch } : {}),
+        // Authorization may have yielded while Pi persisted an earlier send.
+        if (!options.isDelivered(record.id)) {
+          await options.sendMessage(
+            {
+              customType: `pi-herdsman-${record.kind}`,
+              content: deliveredMessageContent(record),
+              display: true,
+              details: {
+                id: record.id,
+                leaseId: record.leaseId,
+                fromSessionId: record.fromSessionId,
+                toSessionId: record.toSessionId,
+                leadSessionId: record.leadSessionId,
+                ...(record.branch ? { branch: record.branch } : {}),
+              },
             },
-          },
-          { deliverAs: deliverAs ?? "followUp", triggerTurn: true },
-          record,
-        );
-        await options.transaction?.revalidate(token, "after-send");
+            { deliverAs: deliverAs ?? "followUp", triggerTurn: true },
+            record,
+          );
+          await options.transaction?.revalidate(token, "after-send");
+        }
       } catch {
         await clearTransaction();
         continue;
@@ -871,7 +874,7 @@ export async function drainCoordinationInbox(
         await clearTransaction();
         continue;
       }
-      delivered += 1;
+      if (!wasAlreadyDelivered) delivered += 1;
       try {
         await options.transaction?.revalidate(token, "before-accepted");
         assertChiefMessageNotQuarantined(
@@ -887,6 +890,7 @@ export async function drainCoordinationInbox(
       }
     } else {
       try {
+        if (!wasAlreadyDelivered) delivered += 1;
         await options.transaction?.revalidate(token, "already-delivered");
         assertChiefMessageNotQuarantined(
           options.runtime,

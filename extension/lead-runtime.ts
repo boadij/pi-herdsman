@@ -2441,6 +2441,7 @@ export function registerLeadRuntime(
           noResult: true,
           timeout: 10_000,
         });
+        reportedRoleMetadataFailure = undefined;
       })
       .catch((error) => {
         if (
@@ -2492,7 +2493,9 @@ export function registerLeadRuntime(
           leadRuntime.roleSuspended
         )
           return;
-        return roleHost.reportLeadMetadata(pi, ctx, metadata);
+        return roleHost.reportLeadMetadata(pi, ctx, metadata).then(() => {
+          reportedRoleMetadataFailure = undefined;
+        });
       })
       .catch((error) => {
         if (
@@ -7289,14 +7292,17 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         },
         deliveryMode: (record: ChiefMessageRecord) => {
           const attempted = submittedAt.get(record.id);
-          if (
-            attempted !== undefined &&
-            !messageDelivered(ctx, record) &&
-            (!settledSubmissions.has(record.id) ||
+          if (attempted !== undefined && !messageDelivered(ctx, record)) {
+            const elapsed = Date.now() - attempted;
+            const settled = settledSubmissions.has(record.id);
+            // Pi may fail before agent_settled; wait 30s before a quiet retry.
+            if (
               !ctx.isIdle() ||
-              Date.now() - attempted < 1_000)
-          )
-            return undefined;
+              ctx.hasPendingMessages() ||
+              elapsed < (settled ? 1_000 : 30_000)
+            )
+              return undefined;
+          }
           const role = activeRole();
           const supervisorDownlink =
             (role === "lead" &&
@@ -7438,6 +7444,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               };
             }
             importResultBindings(pi, ctx, resultBindings, record.kind);
+            if (messageDelivered(ctx, record)) return;
             let result: void;
             try {
               result = pi.sendMessage(payload, options);
@@ -7495,9 +7502,11 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         },
         accepted: async (record: ChiefMessageRecord) => {
           submittedAt.delete(record.id);
+          settledSubmissions.delete(record.id);
         },
         rejected: (record: ChiefMessageRecord) => {
           submittedAt.delete(record.id);
+          settledSubmissions.delete(record.id);
           if (!record.build || !sameRuntimeBuild(record.build, HERDSMAN_BUILD))
             ctx.ui.notify(
               record.build

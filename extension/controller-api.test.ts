@@ -397,6 +397,52 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
     await t.waitFor(() =>
       assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
     );
+    const fallbackMessage = {
+      ...managerMessage,
+      id: randomUUID(),
+      text: "retry after Pi pre-run failure",
+      createdAt: Date.now(),
+    };
+    writeChiefMessage(fallbackMessage, runtime);
+    await t.waitFor(() =>
+      assert.equal(
+        pi.sentMessageCalls.filter(
+          ({ message }: any) => message?.details?.id === fallbackMessage.id,
+        ).length,
+        1,
+      ),
+    );
+    const originalNow = Date.now;
+    try {
+      let pending = true;
+      ctx.hasPendingMessages = () => pending;
+      Date.now = () => originalNow() + 30_001;
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      assert.equal(
+        pi.sentMessageCalls.filter(
+          ({ message }: any) => message?.details?.id === fallbackMessage.id,
+        ).length,
+        1,
+      );
+      pending = false;
+      await t.waitFor(() =>
+        assert.equal(
+          pi.sentMessageCalls.filter(
+            ({ message }: any) => message?.details?.id === fallbackMessage.id,
+          ).length,
+          2,
+        ),
+      );
+    } finally {
+      Date.now = originalNow;
+    }
+    const fallbackReceipt = pi.sentMessageCalls.find(
+      ({ message }: any) => message?.details?.id === fallbackMessage.id,
+    )!.message as any;
+    pi.entries.push({ type: "custom", ...fallbackReceipt });
+    await t.waitFor(() =>
+      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+    );
     const tool = pi.tools.find(
       (candidate) => candidate.name === "message_supervisor",
     )!;
