@@ -9118,6 +9118,10 @@ test("Lead status child-row focus rechecks the exact Herdr session identity", as
 
 test("managed Lead marker focuses its verified Manager pane", async (t) => {
   setLeadEnvironment();
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `managed-marker-navigation-${randomUUID()}.sock`,
+  );
   const assignedWorkspace = `assigned-${randomUUID()}`;
   const repoKey = `repo-${randomUUID()}`;
   const branch = `branch-${randomUUID()}`;
@@ -9235,6 +9239,7 @@ test("managed Lead marker focuses its verified Manager pane", async (t) => {
     rmSync(projectAssignmentPath(supervisionRuntime(), repoKey, branch), {
       force: true,
     });
+    delete process.env.HERDR_SOCKET_PATH;
     setLeadEnvironment();
   });
   await pi.events.get("session_start")![0](undefined, ctx);
