@@ -1312,7 +1312,18 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
     code: 0,
   });
   const metadataReports: string[][] = [];
+  let failManagerMetadata = false;
   const exec = (command: string, args: string[]) => {
+    if (
+      command === "herdr" &&
+      args[0] === "pane" &&
+      args[1] === "report-metadata" &&
+      failManagerMetadata &&
+      args.includes("pi_herdsman_role=manager")
+    ) {
+      failManagerMetadata = false;
+      return { stdout: "", stderr: "injected metadata failure", code: 1 };
+    }
     if (
       command === "herdr" &&
       args[0] === "pane" &&
@@ -1424,8 +1435,13 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       leadPromptEvent.systemPromptOptions.sections.pi_herdsman_lead_execution,
       /Delegate bounded execution work when an Agent can reasonably own it/,
     );
+    failManagerMetadata = true;
     await first.commandOptions.get("manager").handler("", ctx1);
     assert.deepEqual(first.pi.getActiveTools(), ["read", ...managerTools]);
+    assert.equal(
+      readManagerDescriptor(supervisionRuntime(), WORKSPACE)?.piSessionId,
+      ctx1.sessionManager.getSessionId(),
+    );
     assert.equal(
       first.tools.find((tool) => tool.name === "message_staff"),
       staffMessage,
@@ -1435,6 +1451,16 @@ test("root Lead explicitly enters Manager; a competing root session stays Lead",
       true,
     );
     assert.equal(first.pi.getActiveTools().includes("delegate_agent"), false);
+    assert.ok(
+      first.entries.some(
+        (entry: any) => entry.customType === "pi_herdsman_state_error",
+      ),
+    );
+    await first.events.get("session_start")![0](undefined, ctx1);
+    assert.ok(
+      metadataReports.some((args) => args.includes("pi_herdsman_role=manager")),
+      "a later publication succeeds after the failed report",
+    );
     const managerPromptEvent = {
       systemPrompt: "base",
       systemPromptOptions: { sections: {}, contextFiles: [] },
@@ -1961,7 +1987,8 @@ test("restored Manager registers supervision tools and restores Manager tools", 
   registerExtension!(pi.pi as never);
   try {
     const context = fakeContext(pi.entries) as any;
-    context.sessionManager.getSessionId = () => `manager-${randomUUID()}`;
+    const sessionId = `manager-${randomUUID()}`;
+    context.sessionManager.getSessionId = () => sessionId;
     await pi.events.get("session_start")![0](undefined, context);
     assert.deepEqual(pi.pi.getActiveTools(), ["read", ...managerTools]);
     assert.ok(pi.tools.some((tool) => tool.name === "delegate_project"));
@@ -1976,6 +2003,23 @@ test("restored Manager registers supervision tools and restores Manager tools", 
         .at(-1).data.role,
       "manager",
     );
+    const managerMetadata = pi.calls.findLast(
+      (args) =>
+        args[0] === "pane" &&
+        args[1] === "report-metadata" &&
+        args.includes("pi_herdsman_role=manager"),
+    );
+    assert.ok(managerMetadata);
+    for (const token of [
+      "pi_herdsman_name",
+      "pi_herdsman_ask",
+      "pi_herdsman_herd_run_started_at",
+      "pi_herdsman_context_percent",
+    ])
+      assert.ok(
+        managerMetadata.includes(token),
+        `Manager metadata clears ${token}`,
+      );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     updateConfig("autoActivateManager", undefined);
@@ -4141,10 +4185,13 @@ test("queued peer traffic stays durable through Chief mode and drains after leav
   process.env.HERDR_SOCKET_PATH = socket;
   process.env.HERDR_PANE_ID = "receiver-pane";
   process.env.HERDR_TAB_ID = "receiver-tab";
+  const entries: unknown[] = [];
   const delivered = testGate<void>();
   const receiver = fakeChiefPi({
+    entries,
     sendMessage: (message) => {
       if (String((message as any)?.content ?? "").includes("queued peer")) {
+        entries.push(message);
         const waitForRemoval = () =>
           listCoordinationMessagePaths(runtime, receiverId).length === 0
             ? delivered.resolve()
@@ -4154,7 +4201,7 @@ test("queued peer traffic stays durable through Chief mode and drains after leav
     },
     activeTools: ["read", "bash"],
   });
-  const receiverContext = fakeContext() as any;
+  const receiverContext = fakeContext(entries) as any;
   receiverContext.sessionManager = {
     ...receiverContext.sessionManager,
     getSessionId: () => receiverId,
@@ -4291,12 +4338,15 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
     targetLease.release();
     process.env.HERDR_PANE_ID = "target-pane";
     process.env.HERDR_TAB_ID = "target-tab";
+    const entries: unknown[] = [];
     const delivered = testGate<void>();
     const receiver = fakeChiefPi({
+      entries,
       sendMessage: (message) => {
         if (
           String((message as any)?.content ?? "").includes("sender survived")
         ) {
+          entries.push(message);
           const waitForRemoval = () =>
             listCoordinationMessagePaths(runtime, targetId).length === 0
               ? delivered.resolve()
@@ -4306,7 +4356,7 @@ test("peer delivery survives sender shutdown and is accepted exactly once", asyn
       },
       activeTools: ["read", "bash"],
     });
-    const receiverContext = fakeContext() as any;
+    const receiverContext = fakeContext(entries) as any;
     receiverContext.sessionManager = {
       ...receiverContext.sessionManager,
       getSessionId: () => targetId,

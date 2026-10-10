@@ -772,10 +772,6 @@ export async function drainCoordinationInbox(
       }
       continue;
     }
-    const deliverAs = options.deliveryMode
-      ? options.deliveryMode(record)
-      : "followUp";
-    if (!deliverAs) continue;
     let token: unknown;
     const clearTransaction = async (): Promise<void> => {
       if (token === undefined) return;
@@ -790,6 +786,14 @@ export async function drainCoordinationInbox(
       token = await options.transaction?.begin(record);
       await options.transaction?.revalidate(token, "before-authorization");
     } catch {
+      await clearTransaction();
+      continue;
+    }
+    const deliverAs = options.deliveryMode
+      ? options.deliveryMode(record)
+      : "followUp";
+    const alreadyDelivered = options.isDelivered(record.id);
+    if (!deliverAs && !alreadyDelivered) {
       await clearTransaction();
       continue;
     }
@@ -832,7 +836,7 @@ export async function drainCoordinationInbox(
       await clearTransaction();
       continue;
     }
-    if (!options.isDelivered(record.id)) {
+    if (!alreadyDelivered) {
       try {
         await options.transaction?.revalidate(token, "before-send");
         assertChiefMessageNotQuarantined(
@@ -854,11 +858,16 @@ export async function drainCoordinationInbox(
               ...(record.branch ? { branch: record.branch } : {}),
             },
           },
-          { deliverAs, triggerTurn: true },
+          { deliverAs: deliverAs ?? "followUp", triggerTurn: true },
           record,
         );
         await options.transaction?.revalidate(token, "after-send");
       } catch {
+        await clearTransaction();
+        continue;
+      }
+      if (!options.isDelivered(record.id)) {
+        // Pi submission is not a persistence acknowledgement.
         await clearTransaction();
         continue;
       }
