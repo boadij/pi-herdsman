@@ -105,9 +105,9 @@ Focused tests provide development feedback. Focused tests, smoke testing,
 review, and all intermediate checks must happen before formatting. Do not
 format during those phases. Before handoff, follow the detailed validation
 order in [Development validation](docs/development/validation.md): run
-`prettier . --write` once as the final pre-commit mutation, then run only the
-read-only checks `npm run check` and `git diff --check` before staging or
-committing.
+`npm run format` once as the final pre-commit mutation, then run the read-only
+checks `npm run format:check`, `npm run check`, and `git diff --check` before
+staging or committing.
 
 For changes that cross the real Pi/Herdr runtime boundary, use the isolated live
 smoke harness documented in [Smoke testing](docs/development/smoke-testing.md):
