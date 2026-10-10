@@ -16,9 +16,9 @@ Find improvements worth making, not diagnostics worth silencing. Follow `AGENTS.
 
 ## Scan
 
-Run tools on demand, not in CI. Record versions, commands, scope, and failures. Ensure dependencies for the worktree are present before scanning.
+Run current tool versions on demand, not in CI. Record actual versions, commands, scope, and failures; use historical versions only to reproduce earlier findings. Ensure dependencies for the worktree are present before scanning.
 
-**Knip 6.41.0:** use production mode with Pi's nonstandard entry points. From the repository root:
+**Knip:** use production mode with Pi's nonstandard entry points. From the repository root:
 
 ```sh
 mkdir -p .pi-herdsman
@@ -38,23 +38,23 @@ cat > .pi-herdsman/knip-audit.json <<'JSON'
   ]
 }
 JSON
-npm exec --yes --package=knip@6.41.0 -- knip --production --no-progress --reporter compact --no-exit-code --config .pi-herdsman/knip-audit.json
+npm exec --yes --package=knip -- knip --production --no-progress --reporter compact --no-exit-code --config .pi-herdsman/knip-audit.json
 rm .pi-herdsman/knip-audit.json
 ```
 
 Check entry points against current `package.json`, Pi extension discovery, optional integrations, scripts, and dynamic consumers before interpreting unused-file/export results. These patterns are a starting point, not proof of reachability; test-only utilities and externally invoked maintenance scripts may be intentionally absent from the production graph. If entry points change, adjust the **temporary** config and record the difference.
 
-**jscpd 5.4.1:** look for substantial production duplication, not similar syntax:
+**jscpd:** look for substantial production duplication, not similar syntax:
 
 ```sh
-npm exec --yes --package=jscpd@5.4.1 -- jscpd extension scripts \
+npm exec --yes --package=jscpd -- jscpd extension scripts \
   --format typescript,javascript \
   --ignore '**/*.test.ts,**/*.test.mjs,extension/support.ts' \
   --min-tokens 100 --min-lines 15 --mode mild --threshold 100 \
   --reporters console --no-colors
 ```
 
-**Only when warranted:** use `npx --yes oxlint@1.87.0 -D suspicious -f json extension/ scripts/` for targeted correctness investigations, or a temporary TypeScript check for a specific contract. The earlier broad Oxlint and TypeScript scans were noisy; do not repeat them by default or adopt them as gates.
+**Only when warranted:** use `npx --yes oxlint -D suspicious -f json extension/ scripts/` for targeted correctness investigations, or a temporary TypeScript check for a specific contract. The earlier broad Oxlint and TypeScript scans were noisy; do not repeat them by default or adopt them as gates.
 
 ## Triage
 
