@@ -129,6 +129,30 @@ import {
   type AgentDefinition,
 } from "./agent-definitions.ts";
 
+export const claimDelegationLock = (workspaceId: string, sessionId: string) => {
+  try {
+    const path = join(
+      herdsmanTempRoot(),
+      "locks",
+      `delegation-${createHash("sha256").update(`${workspaceId}\0${sessionId}`).digest("hex")}`,
+    );
+    return claimProcessLock(path, {
+      name: "delegation lifecycle",
+      occupiedMessage: "Delegation lifecycle is already in progress",
+    });
+  } catch (error) {
+    if (error instanceof ProcessLockOccupiedError)
+      fail("agent_busy", error.message, "lifecycle", {
+        details: { workspaceId, parentSessionId: sessionId },
+        nextAction:
+          "Let the current delegation lifecycle finish or stop it through its owning agent, then retry.",
+      });
+    throw error;
+  }
+};
+
+export type StopOwnedAgentsResult = { complete: boolean; summary: string };
+
 export type AgentStatusSnapshotHost = {
   scope: ControllerScope;
   listedAgentRecord: ReturnType<
@@ -2527,27 +2551,6 @@ export function createAgentController(
       throw error;
     }
   };
-  const claimDelegationLock = (workspaceId: string, sessionId: string) => {
-    try {
-      const path = join(
-        herdsmanTempRoot(),
-        "locks",
-        `delegation-${createHash("sha256").update(`${workspaceId}\0${sessionId}`).digest("hex")}`,
-      );
-      return claimProcessLock(path, {
-        name: "delegation lifecycle",
-        occupiedMessage: "Delegation lifecycle is already in progress",
-      });
-    } catch (error) {
-      if (error instanceof ProcessLockOccupiedError)
-        fail("agent_busy", error.message, "lifecycle", {
-          details: { workspaceId, parentSessionId: sessionId },
-          nextAction:
-            "Let the current delegation lifecycle finish or stop it through its owning agent, then retry.",
-        });
-      throw error;
-    }
-  };
   const claimSessionActivationLock = (sessionPath: string): (() => void) => {
     const canonical = canonicalSessionPath(sessionPath);
     try {
@@ -4166,13 +4169,14 @@ export function createAgentController(
       } catch (error) {
         const message = `Agent pane closed but mailbox cleanup failed: ${String(error)}`;
         const runtime = runtimes.get(state.agentLabel);
-        if (runtime) runtime.cleanupError = message;
+        if (runtime?.workspaceId === state.workspaceId)
+          runtime.cleanupError = message;
         if (!report?.onCleanupFailure) throw error;
         options.appendError(context, "pi_herdsman_cleanup_error", error);
         report.onCleanupFailure(state.agentLabel, message);
         return;
       }
-      invalidateRuntime(state.agentLabel);
+      invalidateRuntime(state.agentLabel, state.workspaceId);
       report?.onClosed?.(state.agentLabel);
     } finally {
       release?.();
@@ -4272,9 +4276,9 @@ export function createAgentController(
         );
         return;
       }
-      const parentSnapshot = (await snapshots(context, signal)).agents.find(
-        ({ state }) => sameIdentity(state, current),
-      );
+      const parentSnapshot = (
+        await snapshots(context, signal, true)
+      ).agents.find(({ state }) => sameIdentity(state, current));
       if (!parentSnapshot)
         fail("target_not_found", "Parent agent changed before close", "close");
       await closeSnapshot(context, parentSnapshot, signal, report, true);
@@ -4293,10 +4297,19 @@ export function createAgentController(
   const stopOwnedAgentsForSession = async (
     context: ExtensionContext,
     owner: string,
+    workspaceId: string,
     signal?: AbortSignal,
-  ): Promise<string> => {
-    const snapshot = await snapshots(context, signal);
-    const visible = visibleAgentSnapshots(snapshot, { kind: "lead" }, owner);
+  ): Promise<StopOwnedAgentsResult> => {
+    const snapshot = await snapshots(context, signal, true);
+    if (snapshot.stateIssues.length)
+      throw new Error(
+        "Owned Agent mailbox state is unresolved; work was preserved",
+      );
+    const visible = visibleAgentSnapshots(
+      snapshot,
+      { kind: "lead" },
+      owner,
+    ).filter(({ state }) => state.workspaceId === workspaceId);
     if (
       owner !== context.sessionManager.getSessionId() &&
       visible.some((agent) => agent.presence.kind === "unknown")
@@ -4312,19 +4325,11 @@ export function createAgentController(
           (agent.presence.kind === "lost" ||
             agent.listed.recovery_only !== true),
       );
-    const targets = visible
-      .filter(
-        (agent) =>
-          agent.presence.kind !== "unknown" &&
-          agent.state.ownerSessionId === owner,
-      )
-      .filter(
-        (agent, index, all) =>
-          all.findIndex(
-            (candidate) =>
-              candidate.state.agentLabel === agent.state.agentLabel,
-          ) === index,
-      );
+    const targets = visible.filter(
+      (agent) =>
+        agent.presence.kind !== "unknown" &&
+        agent.state.ownerSessionId === owner,
+    );
     const discarded: string[] = [];
     for (const agent of reportable) {
       const mailbox = agentMailboxPath(
@@ -4356,9 +4361,11 @@ export function createAgentController(
     for (const target of targets) {
       let cleanupFailureReported = false;
       try {
-        const fresh = await snapshots(context, signal);
+        const fresh = await snapshots(context, signal, true);
         const matches = fresh.agents.filter(
-          (candidate) => candidate.state.agentLabel === target.state.agentLabel,
+          (candidate) =>
+            candidate.state.workspaceId === target.state.workspaceId &&
+            candidate.state.agentLabel === target.state.agentLabel,
         );
         if (matches.length !== 1)
           fail("target_not_found", "No exact agent identity matched", "close", {
@@ -4368,13 +4375,7 @@ export function createAgentController(
             },
           });
         const current = matches[0]!.state;
-        if (
-          current.workspaceId !== target.state.workspaceId ||
-          current.runId !== target.state.runId ||
-          current.paneId !== target.state.paneId ||
-          current.piSessionId !== target.state.piSessionId ||
-          !sameSessionPath(current.piSessionFile, target.state.piSessionFile)
-        )
+        if (!sameIdentity(current, target.state))
           fail(
             "target_not_found",
             "Agent identity changed after stop inventory",
@@ -4421,7 +4422,35 @@ export function createAgentController(
       )
         recordFailure(agent.state.agentLabel, "not closed");
     options.onChanged();
-    if (!targets.length) return "No owned agents running.";
+    const finalSnapshot = await snapshots(context, signal, true);
+    const remaining = visibleAgentSnapshots(
+      finalSnapshot,
+      { kind: "lead" },
+      owner,
+    ).filter(({ state }) => state.workspaceId === workspaceId);
+    const trustworthy =
+      finalSnapshot.stateIssues.length === 0 &&
+      !remaining.some(({ presence }) => presence.kind === "unknown");
+    for (const agent of remaining)
+      recordFailure(
+        agent.state.agentLabel,
+        agent.presence.kind === "unknown"
+          ? "presence could not be verified"
+          : "still present after stop",
+      );
+    if (!trustworthy && !failures.size)
+      recordFailure("owned agents", "ownership state could not be verified");
+    const complete =
+      trustworthy && failures.size === 0 && remaining.length === 0;
+    if (!targets.length)
+      return {
+        complete,
+        summary: complete
+          ? "No owned agents running."
+          : `Owned Agent stop incomplete: ${[...failures.values()]
+              .map(({ label, message }) => `${label}: ${message}`)
+              .join("; ")}`,
+      };
     const lines =
       closed.length === reportable.length && !failures.size
         ? [`Stopped ${closed.length} agents`]
@@ -4434,7 +4463,10 @@ export function createAgentController(
     );
     if (discarded.length)
       lines.push("Discarded:", ...discarded.map((entry) => `  ${entry}`));
-    return lines.join("\n");
+    return {
+      complete,
+      summary: lines.join("\n"),
+    };
   };
 
   const stopResultWatcher = (runtime: Runtime, requestId?: string): void => {
@@ -4452,9 +4484,13 @@ export function createAgentController(
     askWatchers.get(path)?.();
     askWatchers.delete(path);
   };
-  const invalidateRuntime = (label: string): void => {
+  const invalidateRuntime = (label: string, workspaceId?: string): void => {
     const runtime = runtimes.get(label);
-    if (!runtime) return;
+    if (
+      !runtime ||
+      (workspaceId !== undefined && runtime.workspaceId !== workspaceId)
+    )
+      return;
     stopResultWatcher(runtime);
     stopAskWatcher(runtime);
     cancelAskRetries(runtime);
@@ -6602,6 +6638,17 @@ export function createAgentController(
         params.action === "inspect"
       )
         return controlAction(ctx, params, signal);
+      if (params.action === "delegate" || params.action === "continue") {
+        const release = claimDelegationLock(
+          options.workspaceId(),
+          ctx.sessionManager.getSessionId(),
+        );
+        try {
+          return await actionUnsafe(ctx, params, signal);
+        } finally {
+          release();
+        }
+      }
       return actionUnsafe(ctx, params, signal);
     }
     if (!ready)
@@ -7475,6 +7522,7 @@ export function createAgentController(
     closeSnapshot,
     closeCascade,
     stopOwnedAgentsForSession,
+    workspaceId: options.workspaceId,
     recoverRuntimes,
     resolveRuntime,
     submit,

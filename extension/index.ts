@@ -915,7 +915,8 @@ export default function (pi: ExtensionAPI): void {
           return !!file?.isFile() && file.size > 0;
         },
       ),
-    workspaceId: () => process.env.PI_HERDSMAN_WORKSPACE_ID!,
+    workspaceId: () =>
+      process.env.PI_HERDSMAN_WORKSPACE_ID ?? process.env.HERDR_WORKSPACE_ID!,
     sendResultMessage: (ctx, _runtime, _result, content, details) => {
       pi.sendMessage(
         {

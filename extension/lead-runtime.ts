@@ -44,6 +44,7 @@ import {
   createAgentController,
   buildAgentStatusSnapshot,
   createAgentStatusRuntime,
+  claimDelegationLock,
   type AgentControllerOptions,
   type AgentStatusSnapshotHost,
   type PendingStart,
@@ -441,8 +442,9 @@ type LeadProjectHost = {
   stopOwnedAgentsForSession(
     ctx: ExtensionContext,
     sessionId: string,
+    workspaceId: string,
     signal?: AbortSignal,
-  ): Promise<string>;
+  ): Promise<import("./agent-controller.ts").StopOwnedAgentsResult>;
   stopProjectLeadPane(
     ctx: ExtensionContext,
     target: HerdrRecord,
@@ -1850,7 +1852,28 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         host.controller.sessionSignal(),
       );
       if (!snapshot.agents.length) {
-        host.presentStopSummary("No owned agents running.");
+        const release = claimDelegationLock(
+          host.controller.workspaceId(),
+          ctx.sessionManager.getSessionId(),
+        );
+        try {
+          const fresh = await host.controller.agentSnapshotView(
+            ctx,
+            { kind: "lead" },
+            host.controller.sessionSignal(),
+          );
+          if (fresh.stateIssues.length)
+            throw new Error(
+              "Owned Agent mailbox state is unresolved; stop not verified",
+            );
+          if (fresh.visible.length) {
+            ctx.ui.notify("Agent state changed; reopen Stop all.", "warning");
+            return;
+          }
+          host.presentStopSummary("No owned agents running.");
+        } finally {
+          release();
+        }
         return;
       }
       const confirmed = await ctx.ui.confirm(
@@ -1859,12 +1882,20 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       );
       if (!confirmed) return;
       ctx.abort();
-      const summary = await host.controller.stopOwnedAgentsForSession(
-        ctx,
-        ctx.sessionManager.getSessionId(),
-        host.controller.sessionSignal(),
-      );
-      host.presentStopSummary(summary);
+      const sessionId = ctx.sessionManager.getSessionId();
+      const workspaceId = host.controller.workspaceId();
+      const release = claimDelegationLock(workspaceId, sessionId);
+      try {
+        const result = await host.controller.stopOwnedAgentsForSession(
+          ctx,
+          sessionId,
+          workspaceId,
+          host.controller.sessionSignal(),
+        );
+        host.presentStopSummary(result.summary);
+      } finally {
+        release();
+      }
       if (host.isLead()) host.maybeFinishHerdRun(ctx);
     },
     async openExecutionMenu(ctx: ExtensionCommandContext): Promise<void> {
@@ -4940,12 +4971,22 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ) => {
-    const summary = await host.stopOwnedAgentsForSession(ctx, session, signal);
-    if (summary.includes("✗") || summary.includes("not closed"))
-      throw new Error(`Agent-tree cleanup failed: ${summary}`);
-    await host.stopProjectLeadPane(ctx, target, session, signal);
-    if ((await host.liveLead(ctx, session)).length)
-      throw new Error("Lead remains live after stop; work was preserved");
+    const release = claimDelegationLock(target.workspace_id, session);
+    try {
+      const result = await host.stopOwnedAgentsForSession(
+        ctx,
+        session,
+        target.workspace_id,
+        signal,
+      );
+      if (!result.complete)
+        throw new Error(`Agent-tree cleanup failed: ${result.summary}`);
+      await host.stopProjectLeadPane(ctx, target, session, signal);
+      if ((await host.liveLead(ctx, session)).length)
+        throw new Error("Lead remains live after stop; work was preserved");
+    } finally {
+      release();
+    }
   };
   const stop = async (
     session: string,
