@@ -9,6 +9,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { Box } from "@earendil-works/pi-tui";
 import {
   collapseDisplayText,
+  nameSessionIfUnset,
   displayHomePath,
   displaySkillName,
   formatElapsed,
@@ -57,6 +58,51 @@ import { herdsmanDataRoot, herdsmanTempRoot, resultPath } from "./storage.ts";
 import { COORDINATION_MESSAGE_KINDS } from "./supervision.ts";
 
 initTheme("dark");
+
+test("automatic session names preserve existing Pi naming decisions", () => {
+  const entries: { type: string; name?: string }[] = [];
+  const names: string[] = [];
+  const pi = {
+    setSessionName(name: string) {
+      names.push(name);
+      entries.push({ type: "session_info", name });
+    },
+  };
+  const ctx = { sessionManager: { getEntries: () => entries } };
+
+  nameSessionIfUnset(pi as never, ctx as never, "reviewer");
+  nameSessionIfUnset(pi as never, ctx as never, "different");
+  assert.deepEqual(names, ["reviewer"]);
+
+  entries.splice(0, entries.length, { type: "session_info", name: "manual" });
+  nameSessionIfUnset(pi as never, ctx as never, "automatic");
+  assert.deepEqual(names, ["reviewer"]);
+  entries.splice(0, entries.length, { type: "session_info", name: "" });
+  nameSessionIfUnset(pi as never, ctx as never, "automatic");
+  assert.deepEqual(names, ["reviewer"]);
+
+  entries.length = 0;
+  nameSessionIfUnset(pi as never, ctx as never, "  reviewer\ncontinued  ");
+  assert.deepEqual(names, ["reviewer", "reviewer continued"]);
+  entries.length = 0;
+  nameSessionIfUnset(pi as never, ctx as never, "x".repeat(100));
+  assert.equal(names[2]?.length, 80);
+  assert.equal(names[2]?.endsWith("…"), true);
+  nameSessionIfUnset(pi as never, ctx as never, " \n ");
+  assert.equal(names.length, 3);
+
+  assert.doesNotThrow(() =>
+    nameSessionIfUnset(
+      {
+        setSessionName() {
+          throw new Error("Pi unavailable");
+        },
+      } as never,
+      { sessionManager: { getEntries: () => [] } } as never,
+      "reviewer",
+    ),
+  );
+});
 
 test("workspace presentation provenance projects acquired Herdr records", () => {
   assert.deepEqual(

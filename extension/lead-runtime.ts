@@ -81,6 +81,7 @@ import type { MessageFileInput } from "./core.ts";
 import type { ManagedAgentState, ResultBinding } from "./mailbox.ts";
 import {
   compactModelToken,
+  nameSessionIfUnset,
   buildStatusRows,
   renderRunningOptions,
   formatStatusCounts,
@@ -3182,6 +3183,7 @@ export function registerLeadRuntime(
       return;
     }
     if (signal.aborted) return;
+    if (assignment) nameSessionIfUnset(pi, ctx, `Lead · ${assignment.branch}`);
     let saved: LeadExecutionSessionState | undefined;
     try {
       saved = sessionLeadExecutionState(ctx.sessionManager.getEntries());
@@ -7724,6 +7726,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
                 record.id !== assignment.id
               )
                 throw new Error("Project assignment changed before delivery");
+              nameSessionIfUnset(pi, ctx, `Lead · ${assignment.branch}`);
               resultBindings = assignment.resultBindings;
               payload = {
                 ...(message as object),

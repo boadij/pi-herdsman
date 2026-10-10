@@ -61,6 +61,10 @@ pending project messages; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, but a new delegation may start managed work from
 the remaining Git branch. Retirement does not delete branches or Pi sessions.
 
+A Lead with a verified project assignment receives a native Pi session name
+from its branch. Existing names, including names explicitly cleared in Pi, are
+preserved; use Pi's `/name` command to choose or change a name.
+
 Whenever Herdsman actually launches the project Lead process, it resolves the
 current `managed-lead` definition from the target worktree plus the global
 overlay. A trusted project may therefore configure the Lead that works on its

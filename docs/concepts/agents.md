@@ -54,6 +54,11 @@ session remains the continuation identity, not a live-control identity. An
 exact active or unresolved managed representation blocks concurrent activation
 of that session.
 
+Herdsman gives a managed Agent session a native Pi session name from its agent
+definition and logical label after validating its identity. An existing Pi
+session name, including an explicitly cleared name, is preserved; use Pi's
+`/name` command to choose or change it.
+
 ### herdr identities
 
 Workspace, tab, pane, generated herdr-agent alias, run ID, and process evidence

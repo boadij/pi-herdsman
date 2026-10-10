@@ -18,6 +18,10 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { Box as TuiBox, Component } from "@earendil-works/pi-tui";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { createHash, randomUUID } from "node:crypto";
 import type { LeadExecutionMode } from "./core.ts";
 import {
@@ -268,6 +272,28 @@ export function collapseDisplayText(
     ? normalized
     : `${characters.slice(0, Math.max(0, maxCharacters - 1)).join("")}…`;
 }
+
+export function nameSessionIfUnset(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  title: string,
+): void {
+  const name = collapseDisplayText(title);
+  if (!name) return;
+
+  try {
+    if (
+      !ctx.sessionManager
+        .getEntries()
+        .some((entry) => entry.type === "session_info")
+    ) {
+      pi.setSessionName(name);
+    }
+  } catch {
+    // Session naming must never interrupt orchestration.
+  }
+}
+
 export function formatElapsed(
   startedAt: number | undefined,
   now: number,
