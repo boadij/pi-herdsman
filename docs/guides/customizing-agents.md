@@ -54,6 +54,38 @@ active. The user-wide `defaultLeadExecution` setting seeds future ordinary
 sessions only; it does not replace a saved session choice. Assigned project
 Leads use `managed-lead` instead.
 
+## Manager and Chief profiles
+
+The reserved `manager` and `chief` definitions customize the existing
+supervisory roles without granting or changing authority. Both support the
+runtime-profile fields described in the [schema](../reference/agent-definition-schema.md).
+Manager preserves the ordinary Lead tool baseline when `tools` is omitted;
+Chief defaults to `tools: []`, leaving only required staff coordination tools.
+Explicit ordinary tool policies cannot activate Herdsman-owned tools or remove
+the role's mandatory coordination tools.
+
+Manager accepts trusted project overlays at `<project>/.pi/agents/manager.md`
+and global overlays at `$PI_CODING_AGENT_DIR/agents/manager.md` (or
+`~/.pi/agent/agents/manager.md`). Chief accepts only global overlays because it
+is workspace-neutral; a project-local `chief.md` is an error. Both resolve
+when the role activates or is restored. Repeating `/manager` or `/chief`
+refreshes an active profile after validating it; a failed refresh keeps the
+previous effective profile. A `bodyMode: replace` overlay replaces customizable
+role guidance only. Runtime-owned authority and role contracts remain active.
+
+For example, this global Chief overlay enables a registered ordinary tool while
+retaining staff coordination tools:
+
+```markdown
+---
+name: chief
+tools: [read]
+bodyMode: append
+---
+
+Use the read tool when a supervised decision requires checking a local artifact.
+```
+
 ## Managed project Lead
 
 `managed-lead` is the reserved definition for Manager-created/assigned project

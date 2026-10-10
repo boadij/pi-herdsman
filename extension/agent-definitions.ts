@@ -79,14 +79,27 @@ const BUILTIN_AGENT_DIR = fileURLToPath(
 export const FLEXIBLE_LEAD_DEFINITION_NAME = "flexible-lead";
 export const ORCHESTRATOR_LEAD_DEFINITION_NAME = "orchestrator-lead";
 export const MANAGED_LEAD_DEFINITION_NAME = "managed-lead";
-const RESERVED_LEAD_DEFINITION_NAMES = new Set([
+export const MANAGER_DEFINITION_NAME = "manager";
+export const CHIEF_DEFINITION_NAME = "chief";
+export const RESERVED_ROLE_DEFINITION_NAMES = [
   FLEXIBLE_LEAD_DEFINITION_NAME,
   ORCHESTRATOR_LEAD_DEFINITION_NAME,
   MANAGED_LEAD_DEFINITION_NAME,
-]);
+  MANAGER_DEFINITION_NAME,
+  CHIEF_DEFINITION_NAME,
+] as const;
+const RESERVED_ROLE_DEFINITION_NAME_SET = new Set<string>(
+  RESERVED_ROLE_DEFINITION_NAMES,
+);
 
-export function isReservedLeadDefinition(name: string): boolean {
-  return RESERVED_LEAD_DEFINITION_NAMES.has(name);
+export function isReservedRoleDefinition(name: string): boolean {
+  return RESERVED_ROLE_DEFINITION_NAME_SET.has(name);
+}
+
+export function isRuntimeRoleDefinition(name: string): boolean {
+  return (
+    isReservedRoleDefinition(name) && name !== MANAGED_LEAD_DEFINITION_NAME
+  );
 }
 const RUNTIME_LEAD_FIELDS = new Set([
   "name",
@@ -401,7 +414,7 @@ function validateEffectiveAgentReferences(
   definitions: readonly AgentDefinition[],
 ): void {
   const agents = definitions.filter(
-    ({ name }) => !isReservedLeadDefinition(name),
+    ({ name }) => !isReservedRoleDefinition(name),
   );
   const names = new Set(agents.map((definition) => definition.name));
   for (const definition of agents)
@@ -425,12 +438,8 @@ function validateManagedLeadLayer(definition: AgentDefinition): void {
       );
 }
 
-function validateRuntimeLeadLayer(definition: AgentDefinition): void {
-  if (
-    definition.name !== FLEXIBLE_LEAD_DEFINITION_NAME &&
-    definition.name !== ORCHESTRATOR_LEAD_DEFINITION_NAME
-  )
-    return;
+function validateRuntimeRoleLayer(definition: AgentDefinition): void {
+  if (!isRuntimeRoleDefinition(definition.name)) return;
   for (const field of Object.keys(definition.frontmatter))
     if (!RUNTIME_LEAD_FIELDS.has(field))
       throw new Error(
@@ -458,8 +467,15 @@ function discoverEffectiveDefinitions(
   }
   for (const definition of [...bundled, ...project, ...user]) {
     validateManagedLeadLayer(definition);
-    validateRuntimeLeadLayer(definition);
+    validateRuntimeRoleLayer(definition);
   }
+  const projectChief = project.find(
+    ({ name }) => name === CHIEF_DEFINITION_NAME,
+  );
+  if (projectChief)
+    throw new Error(
+      `${projectChief.path} chief definition: project overrides are not supported; configure chief globally instead`,
+    );
   applyDefinitionLayer(definitions, project, "projectSource");
   applyDefinitionLayer(definitions, user, "overrideSource");
   const effective = [...definitions.values()].sort((left, right) =>
@@ -473,7 +489,7 @@ export function discoverAgentDefinitions(
   options: DiscoverAgentDefinitionsOptions = {},
 ): AgentDefinition[] {
   return discoverEffectiveDefinitions(options)
-    .filter(({ name }) => !isReservedLeadDefinition(name))
+    .filter(({ name }) => !isReservedRoleDefinition(name))
     .map((definition) => withDefaultEnabled(definition));
 }
 
@@ -495,41 +511,39 @@ export async function contextAgentDefinitions(ctx: ExtensionContext) {
   return {
     projectTrusted,
     definitions: effective
-      .filter(({ name }) => !isReservedLeadDefinition(name))
+      .filter(({ name }) => !isReservedRoleDefinition(name))
       .map(withDefaultEnabled),
-    leadDefinitions: effective.filter(({ name }) =>
-      isReservedLeadDefinition(name),
+    roleDefinitions: effective.filter(({ name }) =>
+      isReservedRoleDefinition(name),
     ),
   };
 }
 
-export type LeadDefinitionName =
+export type RoleDefinitionName =
   | typeof FLEXIBLE_LEAD_DEFINITION_NAME
   | typeof ORCHESTRATOR_LEAD_DEFINITION_NAME
-  | typeof MANAGED_LEAD_DEFINITION_NAME;
+  | typeof MANAGED_LEAD_DEFINITION_NAME
+  | typeof MANAGER_DEFINITION_NAME
+  | typeof CHIEF_DEFINITION_NAME;
 
-export function discoverLeadDefinition(
-  name: LeadDefinitionName,
+export function discoverRoleDefinition(
+  name: RoleDefinitionName,
   options: DiscoverAgentDefinitionsOptions = {},
 ): AgentDefinition {
   const definition = discoverEffectiveDefinitions(options).find(
     (candidate) => candidate.name === name,
   );
-  if (!definition) throw new Error(`Lead definition ${name} not found`);
+  if (!definition) throw new Error(`role definition ${name} not found`);
   return definition;
 }
 
-export function discoverLeadDefinitions(
+export function discoverRoleDefinitions(
   options: DiscoverAgentDefinitionsOptions = {},
 ): AgentDefinition[] {
   const definitions = discoverEffectiveDefinitions(options);
-  return [
-    FLEXIBLE_LEAD_DEFINITION_NAME,
-    ORCHESTRATOR_LEAD_DEFINITION_NAME,
-    MANAGED_LEAD_DEFINITION_NAME,
-  ].map((name) => {
+  return [...RESERVED_ROLE_DEFINITION_NAMES].map((name) => {
     const definition = definitions.find((candidate) => candidate.name === name);
-    if (!definition) throw new Error(`Lead definition ${name} not found`);
+    if (!definition) throw new Error(`role definition ${name} not found`);
     return definition;
   });
 }

@@ -19,12 +19,14 @@ import {
   AGENT_COORDINATION_TOOLS,
   discoverAgent,
   discoverAgentDefinitions,
-  discoverLeadDefinition,
-  discoverLeadDefinitions,
+  discoverRoleDefinition,
+  discoverRoleDefinitions,
   FLEXIBLE_LEAD_DEFINITION_NAME,
   ORCHESTRATOR_LEAD_DEFINITION_NAME,
-  isReservedLeadDefinition,
+  isReservedRoleDefinition,
   MANAGED_LEAD_DEFINITION_NAME,
+  MANAGER_DEFINITION_NAME,
+  CHIEF_DEFINITION_NAME,
   expandAgentBodyFiles,
   mergeFrontmatter,
   projectAgentDefinition,
@@ -503,7 +505,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   mkdirSync(globalAgents);
 
   const bundled = withPiAgentDir(global, () =>
-    discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME),
+    discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
   );
   assert.equal(bundled.name, "managed-lead");
   assert.deepEqual(bundled.frontmatter.tools, []);
@@ -550,7 +552,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     "---\nname: managed-lead\nthinking: high\nbodyMode: append\n---\nGlobal policy",
   );
   const effective = withPiAgentDir(global, () =>
-    discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME, {
+    discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME, {
       projectRoot: project,
     }),
   );
@@ -568,7 +570,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   assert.throws(
     () =>
       withPiAgentDir(global, () =>
-        discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME, {
+        discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME, {
           projectRoot: project,
         }),
       ),
@@ -597,7 +599,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
     assert.throws(
       () =>
         withPiAgentDir(global, () =>
-          discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME),
+          discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
         ),
       new RegExp(`managed Lead field ${field}: is not supported`),
     );
@@ -609,7 +611,7 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   assert.throws(
     () =>
       withPiAgentDir(global, () =>
-        discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME),
+        discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
       ),
     new RegExp(
       `${globalPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} managed Lead field systemPromptMode: must be append`,
@@ -617,20 +619,24 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   );
 });
 
-test("reserves independent ordinary Lead runtime profiles with narrow fields", () => {
+test("reserves independent runtime role profiles with narrow fields", () => {
   const global = mkdtempSync(join(tmpdir(), "pi-herdsman-lead-profiles-"));
   const agents = join(global, "agents");
   mkdirSync(agents);
   const names = withPiAgentDir(global, () =>
-    discoverLeadDefinitions().map(({ name }) => name),
+    discoverRoleDefinitions().map(({ name }) => name),
   );
   assert.deepEqual(names, [
     FLEXIBLE_LEAD_DEFINITION_NAME,
     ORCHESTRATOR_LEAD_DEFINITION_NAME,
     MANAGED_LEAD_DEFINITION_NAME,
+    MANAGER_DEFINITION_NAME,
+    CHIEF_DEFINITION_NAME,
   ]);
-  assert.equal(isReservedLeadDefinition("orchestrator-lead"), true);
-  assert.equal(isReservedLeadDefinition("agent"), false);
+  assert.equal(isReservedRoleDefinition("orchestrator-lead"), true);
+  assert.equal(isReservedRoleDefinition("manager"), true);
+  assert.equal(isReservedRoleDefinition("chief"), true);
+  assert.equal(isReservedRoleDefinition("agent"), false);
   assert.equal(
     withPiAgentDir(global, () =>
       discoverAgentDefinitions().some(({ name }) =>
@@ -640,10 +646,24 @@ test("reserves independent ordinary Lead runtime profiles with narrow fields", (
     false,
   );
   const [flexible, orchestrator] = withPiAgentDir(global, () =>
-    discoverLeadDefinitions(),
+    discoverRoleDefinitions(),
   );
   assert.equal(flexible!.frontmatter.tools, undefined);
   assert.deepEqual(orchestrator!.frontmatter.tools, []);
+  assert.equal(
+    withPiAgentDir(
+      global,
+      () => discoverRoleDefinition("manager").frontmatter.tools,
+    ),
+    undefined,
+  );
+  assert.deepEqual(
+    withPiAgentDir(
+      global,
+      () => discoverRoleDefinition("chief").frontmatter.tools,
+    ),
+    [],
+  );
   for (const [field, value] of [
     ["model", '"provider/model"'],
     ["thinking", '"low"'],
@@ -658,10 +678,69 @@ test("reserves independent ordinary Lead runtime profiles with narrow fields", (
       `---\nname: orchestrator-lead\n${field}: ${value}\n---\n`,
     );
     assert.throws(
-      () => withPiAgentDir(global, () => discoverLeadDefinitions()),
+      () => withPiAgentDir(global, () => discoverRoleDefinitions()),
       new RegExp(`orchestrator-lead field ${field}: is not supported`),
     );
   }
+});
+
+test("Manager and Chief overlays use reserved runtime-profile scope", () => {
+  const project = mkdtempSync(join(tmpdir(), "pi-herdsman-role-project-"));
+  const projectAgents = join(project, ".pi", "agents");
+  const global = mkdtempSync(join(tmpdir(), "pi-herdsman-role-global-"));
+  const globalAgents = join(global, "agents");
+  mkdirSync(projectAgents, { recursive: true });
+  mkdirSync(globalAgents);
+  const managerProject = join(projectAgents, "manager.md");
+  const managerGlobal = join(globalAgents, "manager.md");
+  const chiefGlobal = join(globalAgents, "chief.md");
+  writeFileSync(
+    managerProject,
+    "---\nname: manager\nbodyMode: append\n---\nProject manager guidance",
+  );
+  writeFileSync(
+    managerGlobal,
+    "---\nname: manager\nbodyMode: append\n---\nGlobal manager guidance",
+  );
+  writeFileSync(
+    chiefGlobal,
+    "---\nname: chief\nbodyMode: append\n---\nGlobal chief guidance",
+  );
+  const manager = withPiAgentDir(global, () =>
+    discoverRoleDefinition("manager", { projectRoot: project }),
+  );
+  assert.match(manager.body, /Project manager guidance/);
+  assert.match(manager.body, /Global manager guidance/);
+  const chief = withPiAgentDir(global, () => discoverRoleDefinition("chief"));
+  assert.match(chief.body, /Global chief guidance/);
+  writeFileSync(
+    join(projectAgents, "chief.md"),
+    "---\nname: chief\n---\nProject chief guidance",
+  );
+  assert.throws(
+    () =>
+      withPiAgentDir(global, () =>
+        discoverRoleDefinition("chief", { projectRoot: project }),
+      ),
+    /chief definition: project overrides are not supported; configure chief globally instead/,
+  );
+  for (const name of ["manager", "chief"] as const)
+    for (const field of [
+      "model",
+      "thinking",
+      "systemPromptMode",
+      "skills",
+      "agents",
+    ]) {
+      writeFileSync(
+        join(globalAgents, `${name}.md`),
+        `---\nname: ${name}\n${field}: ${field === "skills" || field === "agents" ? '["scout"]' : field === "systemPromptMode" ? '"append"' : '"low"'}\n---\n`,
+      );
+      assert.throws(
+        () => withPiAgentDir(global, () => discoverRoleDefinition(name)),
+        new RegExp(`${name} field ${field}: is not supported`),
+      );
+    }
 });
 
 test("bundled definitions carry portable capabilities and role contracts", () => {
