@@ -2877,7 +2877,7 @@ export function registerLeadRuntime(
         currentAssignment.branch !== assignment.branch ||
         !currentManager ||
         currentManager.repoKey !== assignment.repoKey ||
-        !roleTransitions.sameManagerDescriptor(currentManager, manager)
+        !options.projectHost.sameManagerDescriptor(currentManager, manager)
       )
         throw new Error("Managed project Manager changed.");
       await options.commandHost.runHerdr(
