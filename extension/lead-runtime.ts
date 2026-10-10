@@ -1857,11 +1857,16 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           ctx.sessionManager.getSessionId(),
         );
         try {
-          const fresh = await host.loadStatusSnapshot(
+          const fresh = await host.controller.agentSnapshotView(
             ctx,
+            { kind: "lead" },
             host.controller.sessionSignal(),
           );
-          if (fresh.agents.length) {
+          if (fresh.stateIssues.length)
+            throw new Error(
+              "Owned Agent mailbox state is unresolved; stop not verified",
+            );
+          if (fresh.visible.length) {
             ctx.ui.notify("Agent state changed; reopen Stop all.", "warning");
             return;
           }

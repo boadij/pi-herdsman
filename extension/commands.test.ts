@@ -8650,6 +8650,35 @@ test("lead stop-all does not report an empty inventory while delegation is locke
   }
 });
 
+test("lead stop-all rejects an empty inventory with unresolved mailbox state", async () => {
+  const summaries: string[] = [];
+  let cleanupStarted = false;
+  const context = fakeContext() as any;
+  context.hasUI = true;
+  const runtime = createLeadCommandRuntime({
+    loadStatusSnapshot: async () => ({ agents: [] }),
+    controller: {
+      workspaceId: () => WORKSPACE,
+      sessionSignal: () => new AbortController().signal,
+      agentSnapshotView: async () => ({
+        stateIssues: [{ diagnostic: "unreadable mailbox" }],
+        visible: [],
+      }),
+      stopOwnedAgentsForSession: async () => {
+        cleanupStarted = true;
+      },
+    },
+    presentStopSummary: (summary: string) => summaries.push(summary),
+  } as any);
+
+  await assert.rejects(
+    runtime.confirmAndStopAll(context),
+    /Owned Agent mailbox state is unresolved; stop not verified/u,
+  );
+  assert.deepEqual(summaries, []);
+  assert.equal(cleanupStarted, false);
+});
+
 test("lead agents stop closes a direct subtree agents-first", async () => {
   setLeadEnvironment();
   const parent = {
