@@ -106,6 +106,25 @@ driven, with a 10-second reconciliation while active TUI supervision is
 enabled. The Manager elapsed-time widget redraws every two seconds for
 presentation, without acquiring a new authoritative snapshot.
 
+## Navigation
+
+In Pi's fullscreen TUI, click a visible Agent or supervision-tree row to focus
+its current live pane. Click a visible ancestor segment in an Agent breadcrumb
+to focus that exact Lead or Agent; the current identity segment is not a
+navigation target. On a managed Lead, click `managed` to focus the Manager
+currently assigned to the exact project. These mouse actions are unavailable
+in regular terminal/scrollback mode, which retains normal terminal selection
+and the existing keyboard/menu alternatives such as the Running menu and
+`/chief` or `/manager` overview.
+
+Navigation does not grant coordination authority. Agent targets are checked
+against the caller's durable ownership ancestry; Manager targets require the
+Lead's current exact project assignment; Chief-visible nested Leads remain
+observational. Paused or conflicted project work, lost or unresolved sessions,
+stale projections, truncated/omitted entries, and targets without a uniquely
+verified live Herdr pane are inert. Current placement is checked again when a
+click is handled; the status projection itself is never authorization.
+
 Headless mode has no UI-only periodic supervision observation. Explicit and
 model-context refreshes still acquire fresh state. A refresh failure never
 mutates mailbox/control eligibility.

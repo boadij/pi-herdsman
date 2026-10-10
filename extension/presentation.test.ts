@@ -1051,7 +1051,7 @@ test("status widget animates only moving states and collapses quiet trees", (t) 
       agents: [{ label: "settling", definition: "agent", state: "settling" }],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead"],
+      breadcrumb: [{ text: "lead" }],
     });
     assert.deepEqual(widget.render(160), [
       "● lead  1 settling",
@@ -1095,7 +1095,7 @@ test("status widget projects active herd duration without changing counts", (t) 
     stale: false,
     unavailable: false,
     herdRunStartedAt: Date.now() - 2_000,
-    breadcrumb: ["lead"],
+    breadcrumb: [{ text: "lead" }],
   });
   assert.match(widget.render(160)[0]!, /lead · \d+s/);
 
@@ -1107,7 +1107,7 @@ test("status widget projects active herd duration without changing counts", (t) 
     stale: false,
     unavailable: false,
     herdRunStartedAt: Date.now() - 2_000,
-    breadcrumb: ["lead"],
+    breadcrumb: [{ text: "lead" }],
   });
   assert.match(widget.render(160)[0]!, /lead · \d+s/);
   assert.match(widget.render(160)[0]!, /1 working · 1 blocked/);
@@ -2527,7 +2527,7 @@ test("Status widget renders complete execution metadata without changing ownersh
     agents: [],
     stale: false,
     unavailable: false,
-    breadcrumb: ["lead"],
+    breadcrumb: [{ text: "lead" }],
   };
   widget.setSnapshot({ ...snapshot, execution: { kind: "managed" } });
   assert.equal(widget.render(160)[0], "● lead · managed");
@@ -2543,7 +2543,11 @@ test("Status widget renders complete execution metadata without changing ownersh
   widget.setSnapshot(snapshot);
   assert.equal(widget.render(160)[0], "● lead");
 
-  const breadcrumb = ["lead", "implementer", "scout"];
+  const breadcrumb = [
+    { text: "lead" },
+    { text: "implementer" },
+    { text: "scout" },
+  ];
   widget.setSnapshot({
     ...snapshot,
     execution: { kind: "managed" },
@@ -2555,7 +2559,11 @@ test("Status widget renders complete execution metadata without changing ownersh
     widget.render(160)[0],
     "● lead → implementer → scout · managed  [read, bash]",
   );
-  assert.deepEqual(breadcrumb, ["lead", "implementer", "scout"]);
+  assert.deepEqual(breadcrumb, [
+    { text: "lead" },
+    { text: "implementer" },
+    { text: "scout" },
+  ]);
   assert.equal(widget.render(41)[0], "● lead → implementer → scout · managed");
   assert.doesNotMatch(widget.render(8)[0]!, /· managed/);
   for (let width = 0; width <= 160; width++)
@@ -2585,7 +2593,7 @@ test("Status widget keeps execution metadata ahead of elapsed time when narrow",
     agents: [],
     stale: false,
     unavailable: false,
-    breadcrumb: ["lead"],
+    breadcrumb: [{ text: "lead" }],
     execution: { kind: "managed" as const },
   };
   widget.setSnapshot(snapshot);
@@ -2605,7 +2613,7 @@ test("Status widget preserves Lead identity below the active-agent suffix width"
     agents: [{ label: "worker", definition: "agent", state: "working" }],
     stale: false,
     unavailable: false,
-    breadcrumb: ["lead"],
+    breadcrumb: [{ text: "lead" }],
   });
   const header = widget.render(10)[0]!;
   assert.match(header, /lead/);
@@ -2634,7 +2642,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       agents: [],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead", "implementer:one"],
+      breadcrumb: [{ text: "lead" }, { text: "implementer:one" }],
       ownTools: ["read", "bash", "ask_owner"],
       identityOnly: true,
     });
@@ -2650,7 +2658,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       agents: [],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead", "implementer:one"],
+      breadcrumb: [{ text: "lead" }, { text: "implementer:one" }],
       ownTools: [],
       identityOnly: true,
     });
@@ -2659,7 +2667,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       agents: [],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead", "implementer:one"],
+      breadcrumb: [{ text: "lead" }, { text: "implementer:one" }],
       ownTools: semanticTools,
       identityOnly: true,
     });
@@ -2679,7 +2687,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       agents: [],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead", "implementer:one"],
+      breadcrumb: [{ text: "lead" }, { text: "implementer:one" }],
       ownTools: ["read", "delegate_agent", "ask_owner"],
       identityOnly: true,
     });
@@ -2701,7 +2709,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       ],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead", "parent"],
+      breadcrumb: [{ text: "lead" }, { text: "parent" }],
       ownTools: ["read", "bash"],
     });
     const lines = widget.render(160);
@@ -2720,7 +2728,7 @@ test("Status widget headers keep tools separate from child metadata", (t) => {
       agents: [{ label: "child", definition: "agent", state: "working" }],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead", "parent"],
+      breadcrumb: [{ text: "lead" }, { text: "parent" }],
       ownTools: semanticTools,
     });
     const header = widget.render(54)[0]!;
@@ -2783,7 +2791,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
       ],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead"],
+      breadcrumb: [{ text: "lead" }],
     });
     const rendered = widget.render(160).join("\n");
     assert.match(rendered, /● lead/);
@@ -2834,7 +2842,7 @@ test("Status widget connectors preserve hierarchy and aligned family layout", (t
       ],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead", "implementer"],
+      breadcrumb: [{ text: "lead" }, { text: "implementer" }],
     });
 
     assert.deepEqual(widget.render(160), [
@@ -2860,7 +2868,11 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
       agents: [],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead", "implementer", "scout"],
+      breadcrumb: [
+        { text: "lead" },
+        { text: "implementer" },
+        { text: "scout" },
+      ],
       identityOnly: true,
     });
     assert.deepEqual(widget.render(160), ["● lead → implementer → scout"]);
@@ -2868,7 +2880,7 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
       agents: [],
       stale: false,
       unavailable: false,
-      breadcrumb: ["?", "scout"],
+      breadcrumb: [{ text: "?" }, { text: "scout" }],
       identityOnly: true,
     });
     assert.deepEqual(widget.render(160), ["● ? → scout"]);
@@ -2885,7 +2897,11 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
       agents: [],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead", "implementer", "scout"],
+      breadcrumb: [
+        { text: "lead" },
+        { text: "implementer" },
+        { text: "scout" },
+      ],
       identityOnly: true,
     });
     for (let width = 1; width <= 160; width++) {
@@ -2902,7 +2918,10 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
       agents: [],
       stale: false,
       unavailable: false,
-      breadcrumb: ["lead\u001b[31m", "審査🙂e\u0301\u001b[0m"],
+      breadcrumb: [
+        { text: "lead\u001b[31m" },
+        { text: "審査🙂e\u0301\u001b[0m" },
+      ],
       identityOnly: true,
     });
     for (let width = 1; width <= 160; width++) {
@@ -2912,6 +2931,158 @@ test("Breadcrumb rendering preserves identity, truncation, and safe Unicode", (t
     }
     assert.match(widget.render(160)[0], /● lead → 審査🙂é/);
   }
+});
+
+test("status widget hit regions select exact rows and visible ancestors only", (t) => {
+  const selected: unknown[] = [];
+  const widget = new StatusWidget(undefined, undefined, (intent) =>
+    selected.push(intent),
+  );
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [
+      {
+        label: "parent",
+        definition: "worker",
+        state: "working",
+        sessionId: "parent-session",
+      },
+      {
+        label: "child",
+        definition: "scout",
+        state: "working",
+        sessionId: "child-session",
+        parentLabel: "parent",
+      },
+      {
+        label: "unknown",
+        definition: "scout",
+        state: "unknown",
+        sessionId: "unknown-session",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+    breadcrumb: [
+      { text: "lead", sessionId: "lead-session" },
+      { text: "parent", sessionId: "parent-session" },
+    ],
+  });
+  widget.render(140);
+  const click = (x: number, y: number, width = 140) =>
+    widget.handleMouse({ type: "click", button: "left", x, y, width });
+  assert.equal(click(3, 0)?.handled, true);
+  assert.deepEqual(selected.pop(), {
+    kind: "session",
+    sessionId: "lead-session",
+  });
+  assert.equal(click(7, 0), undefined);
+  assert.equal(click(11, 0), undefined);
+  assert.equal(click(0, 1)?.handled, true);
+  assert.deepEqual(selected.pop(), {
+    kind: "session",
+    sessionId: "parent-session",
+  });
+  assert.equal(click(0, 2)?.handled, true);
+  assert.deepEqual(selected.pop(), {
+    kind: "session",
+    sessionId: "child-session",
+  });
+  assert.equal(click(0, 3), undefined);
+  assert.equal(click(0, 1, 139), undefined);
+});
+
+test("truncated Agent rows are not clickable when their label is hidden", (t) => {
+  const selected: unknown[] = [];
+  const widget = new StatusWidget(undefined, undefined, (intent) =>
+    selected.push(intent),
+  );
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [
+      {
+        label: "long-agent-label",
+        definition: "worker",
+        state: "working",
+        sessionId: "agent-session",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+    breadcrumb: [{ text: "lead" }],
+  });
+
+  const rows = widget.render(1);
+  assert.equal(stripVTControlCharacters(rows[1]!), "…");
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width: 1 }),
+    undefined,
+  );
+  assert.deepEqual(selected, []);
+});
+
+test("Agent definition does not substitute for a clipped identifying label", (t) => {
+  const selected: unknown[] = [];
+  const widget = new StatusWidget(undefined, undefined, (intent) =>
+    selected.push(intent),
+  );
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [
+      {
+        label: "worker",
+        definition: "worker",
+        state: "working",
+        sessionId: "agent-session",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+    breadcrumb: [{ text: "lead" }],
+  });
+
+  const width = 14;
+  const rows = widget.render(width);
+  assert.equal(stripVTControlCharacters(rows[1]!), "└─ ⠋ worker  …");
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width }),
+    undefined,
+  );
+  assert.deepEqual(selected, []);
+});
+
+test("managed marker has an independent visible-only hit region", (t) => {
+  const selected: unknown[] = [];
+  const widget = new StatusWidget(undefined, undefined, (intent) =>
+    selected.push(intent),
+  );
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [],
+    stale: false,
+    unavailable: false,
+    breadcrumb: [{ text: "lead" }],
+    execution: { kind: "managed" },
+    identityOnly: true,
+  });
+  widget.render(80);
+  const start = visibleWidth("● lead · ");
+  const click = (x: number) =>
+    widget.handleMouse({ type: "click", button: "left", x, y: 0, width: 80 });
+  assert.equal(click(start)?.handled, true);
+  assert.deepEqual(selected.pop(), { kind: "assigned-manager" });
+  assert.equal(click(start - 1), undefined);
+  assert.equal(click(start + visibleWidth("managed")), undefined);
+  widget.setSnapshot({
+    agents: [],
+    stale: true,
+    unavailable: false,
+    breadcrumb: [{ text: "lead" }],
+    execution: { kind: "managed" },
+    identityOnly: true,
+  });
+  widget.render(80);
+  assert.equal(click(start), undefined);
 });
 
 test("widget uses logical labels in the shared row formatter", (t) => {
@@ -4844,6 +5015,29 @@ test("Chief tree shows project and branch without internal paths or zero counts"
     )[0],
     "● chief · 1 manager · 2 direct leads",
   );
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "chief",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+  widget.render(120);
+  const click = (x: number, y: number) =>
+    widget.handleMouse({ type: "click", button: "left", x, y, width: 120 });
+  assert.equal(click(3, 1)?.handled, true);
+  assert.deepEqual(focused.pop(), {
+    kind: "session",
+    sessionId: "manager-session",
+  });
+  assert.equal(click(4, 2)?.handled, true);
+  assert.deepEqual(focused.pop(), {
+    kind: "session",
+    sessionId: "opaque",
+    parentSessionId: "manager-session",
+  });
+  assert.equal(click(0, 0), undefined);
 });
 
 test("Chief tree connects nested Manager Leads without nesting direct Leads", () => {
@@ -5090,6 +5284,84 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
     ),
   );
   assert.ok(chiefRows[1]!.includes("<success>└─ ●</success>"));
+});
+
+test("Manager standalone Lead rows expose their exact click target", () => {
+  const snapshot = {
+    project: "pi-herdsman",
+    work: [],
+    leads: [lead({ lead: "standalone-lead", branch: "feat/unassigned" })],
+  };
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+
+  assert.deepEqual(widget.render(120), [
+    "● manager · pi-herdsman",
+    "└─ ○ feat/unassigned · Lead",
+  ]);
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 4,
+      y: 1,
+      width: 120,
+    })?.handled,
+    true,
+  );
+  assert.deepEqual(focused, [
+    { kind: "session", sessionId: "standalone-lead" },
+  ]);
+});
+
+test("truncated supervision rows are not clickable when their name is hidden", () => {
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => [lead({ lead: "long-lead-session", displayName: "long-lead-name" })],
+    () => "fresh",
+    "chief",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+
+  const rows = widget.render(1);
+  assert.equal(stripVTControlCharacters(rows[1]!), "…");
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width: 1 }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
+});
+
+test("truncated Manager branch is not clickable when it matches row status", () => {
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => ({
+      work: [{ branch: "active", session: "assigned", status: "active" }],
+      leads: [
+        lead({ lead: "assigned", branch: "active", runtimeState: "working" }),
+      ],
+    }),
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+
+  const width = 16;
+  const rows = widget.render(width);
+  assert.equal(stripVTControlCharacters(rows[1]!), "└─ ● a… · active");
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
 });
 
 test("Manager work status outranks live Lead markers except when active", () => {

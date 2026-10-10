@@ -1407,16 +1407,19 @@ export default function (pi: ExtensionAPI): void {
     };
     const initialStatusBreadcrumb =
       controllerScope.kind === "lead"
-        ? ["lead"]
+        ? [{ text: "lead" }]
         : [
-            "?",
-            process.env.PI_HERDSMAN_AGENT_DEFINITION &&
-            process.env.PI_HERDSMAN_LABEL
-              ? displayIdentity(
-                  process.env.PI_HERDSMAN_AGENT_DEFINITION,
-                  process.env.PI_HERDSMAN_LABEL,
-                )
-              : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?"),
+            { text: "?" },
+            {
+              text:
+                process.env.PI_HERDSMAN_AGENT_DEFINITION &&
+                process.env.PI_HERDSMAN_LABEL
+                  ? displayIdentity(
+                      process.env.PI_HERDSMAN_AGENT_DEFINITION,
+                      process.env.PI_HERDSMAN_LABEL,
+                    )
+                  : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?"),
+            },
           ];
     let ownTools: string[] | undefined;
     const ownToolsSnapshot = (): { ownTools?: string[] } =>
