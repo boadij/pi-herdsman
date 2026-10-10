@@ -528,6 +528,9 @@ test("reserves the layered managed Lead definition outside the Agent roster", ()
   assert.equal(bundled.frontmatter.inheritGlobalContext, true);
   assert.equal(bundled.frontmatter.enabled, undefined);
   assert.match(bundled.body, /Delegate bounded project execution/);
+  assert.match(bundled.body, /non-overlapping execution scopes/);
+  assert.match(bundled.body, /independent assignments in parallel/);
+  assert.match(bundled.body, /dependent\s+assignments only after their prerequisites resolve/);
   assert.equal(
     withPiAgentDir(global, () =>
       discoverAgentDefinitions().some(({ name }) => name === "managed-lead"),
