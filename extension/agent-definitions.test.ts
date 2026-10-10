@@ -664,6 +664,17 @@ test("reserves independent runtime role profiles with narrow fields", () => {
     ),
     [],
   );
+  const managed = withPiAgentDir(global, () =>
+    discoverRoleDefinition(MANAGED_LEAD_DEFINITION_NAME),
+  );
+  for (const definition of [orchestrator!, managed]) {
+    assert.match(definition.body, /non-overlapping execution scopes/);
+    assert.match(definition.body, /independent assignments in parallel/);
+    assert.match(
+      definition.body,
+      /dependent\s+assignments only after their prerequisites resolve/,
+    );
+  }
   for (const [field, value] of [
     ["model", '"provider/model"'],
     ["thinking", '"low"'],
