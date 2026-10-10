@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.25.0](https://github.com/boadij/pi-herdsman/compare/v0.24.0...v0.25.0) (2026-10-10)
+
+
+### Features
+
+* **config:** add Manager and Chief role definitions ([#354](https://github.com/boadij/pi-herdsman/issues/354)) ([bce241d](https://github.com/boadij/pi-herdsman/commit/bce241df0b87d21444824ed231a9836d234e2c84))
+* **lead:** align dependency-aware delegation across orchestration Leads ([#356](https://github.com/boadij/pi-herdsman/issues/356)) ([304854b](https://github.com/boadij/pi-herdsman/commit/304854bc514f32e13689f46fd8417be167143b20))
+* **session:** automatically name managed Pi sessions ([#358](https://github.com/boadij/pi-herdsman/issues/358)) ([5ff11c6](https://github.com/boadij/pi-herdsman/commit/5ff11c61cd377d9d4b3cee525c3caa576c4a8b86))
+
+
+### Fixes
+
+* **agents:** stop owned agent trees across workspaces ([#349](https://github.com/boadij/pi-herdsman/issues/349)) ([0c779bb](https://github.com/boadij/pi-herdsman/commit/0c779bb7266fe71eabf3ae80194bb073acb43cfd))
+* **dev:** prepare dependencies before delegated worktree startup ([#351](https://github.com/boadij/pi-herdsman/issues/351)) ([87388e7](https://github.com/boadij/pi-herdsman/commit/87388e71a50aff29f289b5888402460b94bd97c6))
+
+
+### Other Changes
+
+* **dev:** pin Prettier and enforce formatting ([#357](https://github.com/boadij/pi-herdsman/issues/357)) ([540fab0](https://github.com/boadij/pi-herdsman/commit/540fab08421054f28fccd2a0449344409d3eea5a)), closes [#346](https://github.com/boadij/pi-herdsman/issues/346)
+
 ## [0.24.0](https://github.com/boadij/pi-herdsman/compare/v0.23.0...v0.24.0) (2026-10-10)
 
 
