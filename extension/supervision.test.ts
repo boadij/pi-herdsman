@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { acquireProcessLock } from "./lock.ts";
 import { test } from "node:test";
@@ -50,12 +50,14 @@ import {
   listCoordinationMessagePaths,
   listPeerLeadRecords,
   peerLeadLockPath,
+  peerLeadRecordPath,
   peerRuntime,
   readCoordinationMessage,
   readPeerLeadRecord,
   removePeerLeadRecord,
   removeCoordinationMessage,
   supervisionRuntime,
+  leadCoordinationStatePath,
   invalidateLeadCoordinationState,
   listChiefMessagePaths,
   normalizeHerdrLifecycleState,
@@ -312,6 +314,57 @@ test("peer lead presence rejects a changed or missing process-lock generation", 
       `${createHash("sha256").update("lead-generation").digest("hex")}.json`,
     ),
   );
+});
+
+test("record publication failures remove temporary files", () => {
+  const peers = peerRuntime(socket());
+  const fixture = peerRecord(peers, "publication-failure-peer");
+  const peerPath = peerLeadRecordPath(peers, fixture.record.piSessionId);
+  const supervision = supervisionRuntime(socket());
+  const leadState = state("publication-failure-lead");
+  const statePath = leadCoordinationStatePath(
+    supervision,
+    leadState.piSessionId,
+  );
+
+  const assertNoTemporaryFile = (path: string) => {
+    assert.deepEqual(
+      readdirSync(dirname(path)).filter(
+        (name) =>
+          name.startsWith(`.${basename(path)}.`) && name.endsWith(".tmp"),
+      ),
+      [],
+    );
+  };
+
+  try {
+    mkdirSync(peerPath);
+    assert.throws(
+      () => writePeerLeadRecord(peers, fixture.record),
+      (error) =>
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        typeof error.code === "string",
+    );
+    assertNoTemporaryFile(peerPath);
+
+    mkdirSync(dirname(statePath), { recursive: true });
+    mkdirSync(statePath);
+    assert.throws(
+      () => writeLeadCoordinationState(supervision, leadState),
+      (error) =>
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        typeof error.code === "string",
+    );
+    assertNoTemporaryFile(statePath);
+  } finally {
+    rmSync(peerPath, { recursive: true, force: true });
+    rmSync(statePath, { recursive: true, force: true });
+    fixture.release();
+  }
 });
 
 test("peer lead enumeration excludes arbitrary and duplicate JSON", () => {
