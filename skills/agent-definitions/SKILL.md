@@ -1,6 +1,6 @@
 ---
 name: agent-definitions
-description: Manage Pi Herdsman Agent definitions and Lead execution profiles. Use when inspecting, creating, customizing, enabling, disabling, or changing Agent-definition models, thinking, tools, skills, extensions, delegation, permissions, or instructions.
+description: Manage Pi Herdsman Agent definitions and reserved role profiles. Use when inspecting, creating, customizing, enabling, disabling, or changing Agent-definition models, thinking, tools, skills, extensions, delegation, permissions, or instructions.
 ---
 
 # Pi Herdsman Agent definitions
@@ -15,10 +15,10 @@ this skill does not define a second schema or management API.
    - In an ordinary Lead session, use `list_agents` first. It refreshes the
      definition roster and returns effective metadata plus contributing source
      paths.
-   - `flexible-lead`, `orchestrator-lead`, and `managed-lead` are intentionally
-     excluded from the Agent roster. Inspect the relevant bundled, project,
-     and global layers for these reserved definitions directly; do not expect
-     `list_agents` to expose them.
+   - Reserved role definitions are intentionally excluded from the Agent roster.
+     Inspect the relevant bundled and override layers directly; do not expect
+     `list_agents` to expose them. Chief is global-only; project-local Chief
+     definitions are rejected.
    - Read the canonical contract when exact field behavior matters:
      - `../../docs/reference/agent-definition-schema.md`
      - `../../docs/guides/agent-definitions.md`
@@ -45,16 +45,18 @@ this skill does not define a second schema or management API.
      rather than relying on prompt prose.
    - Herdsman preserves `permission:` for compatible extensions but does not
      enforce its contents itself.
-   - Before editing `managed-lead`, read the canonical schema for its reserved
-     restrictions.
-   - `flexible-lead` and `orchestrator-lead` are ordinary runtime profiles,
-     not launch definitions. They support only `name`, `description`, `body`,
-     `bodyMode` on overlays, `tools`, and `excludeTools`. Do not configure
+   - Before editing a reserved role definition, read the canonical schema for
+     its restrictions and authority boundaries.
+   - Lead, Manager, and Chief runtime profiles are not launch definitions. They
+     support only `name`, `description`, `body`, `bodyMode` on overlays,
+     `tools`, and `excludeTools`. Do not configure
      model, thinking, prompt launch mode, enabled/permission/agent policy,
      tools-default switches, skills, extensions, or context inheritance on
      these profiles. Their tool policy affects registered ordinary tools;
      Herdsman-owned tools cannot be activated through a profile and mandatory
-     Lead coordination tools remain available.
+     required coordination tools remain available. Manager preserves the saved
+     ordinary Lead tool baseline when `tools` is omitted. Chief defaults to no
+     ordinary tools and accepts global overrides only.
 
 4. Validate through Herdsman's existing definition engine.
    - After an edit in a Lead session, call `list_agents` again. Treat any
@@ -66,9 +68,8 @@ this skill does not define a second schema or management API.
 
 5. Report the changed scope and file, the effective change, and validation.
    Agent-definition changes affect future Agent assignments; they do not
-   mutate an active Agent. Ordinary Lead profile definitions are resolved at
-   session start/resume and when the user explicitly selects a mode through
-   `/lead`. Reselecting the current mode refreshes that ordinary profile in the
-   running session. In contrast, `managed-lead` is launch policy: changes do
-   not hot-reconfigure an assigned Lead, and taking effect requires a later
-   managed Lead process start.
+   mutate an active Agent. Lead execution profiles resolve at session start,
+   resume, or `/lead`. Manager and Chief profiles resolve at role activation or
+   restoration; repeating `/manager` or `/chief` refreshes the active profile.
+   `managed-lead` is launch policy: changes do not hot-reconfigure an assigned
+   Lead, and taking effect requires a later managed Lead process start.

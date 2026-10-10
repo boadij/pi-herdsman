@@ -2930,7 +2930,7 @@ test("malformed definitions do not abort ordinary lead startup", async () => {
   }
 });
 
-test("persisted Chief startup skips agent definition discovery", async () => {
+test("persisted Chief keeps verified authority and mandatory tools when definitions are invalid", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
   process.env.HERDR_TAB_ID = "chief-tab";
@@ -2972,7 +2972,15 @@ test("persisted Chief startup skips agent definition discovery", async () => {
       entries.some(
         (entry: any) => entry.customType === "pi_herdsman_definition_error",
       ),
-      false,
+      true,
+    );
+    const prompt = await pi.events.get("before_agent_start")![0](
+      { systemPrompt: "base", systemPromptOptions: { contextFiles: [] } },
+      context,
+    );
+    assert.match(
+      prompt?.systemPrompt ?? "",
+      /verified workspace-neutral Chief/,
     );
   } finally {
     pi.events.get("session_shutdown")?.[0]();
