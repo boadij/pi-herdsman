@@ -610,9 +610,16 @@ test("managed session start immediately recovers a durable request", async (t) =
     },
   });
   registerExtension!(agent.pi as never);
-  context = fakeAgentContext();
+  context = fakeAgentContext(agent.entries);
   try {
     await agent.events.get("session_start")![0](undefined, context);
+    assert.ok(
+      agent.entries.some(
+        (entry: any) =>
+          entry.type === "session_info" &&
+          entry.name === "agent · pump-recovery-agent",
+      ),
+    );
     await t.waitFor(() =>
       assert.equal(
         readAgentState(mailbox)?.lastAck?.requestId,
@@ -4329,6 +4336,7 @@ test("agent persists one identity entry before mailbox initialization", async ()
         label: "registered-agent",
       },
     },
+    { type: "session_info", name: "agent · registered-agent" },
   ]);
   assert.ok(readAgentState(mailbox));
   agent.events.get("session_shutdown")?.[0]();
@@ -4357,6 +4365,10 @@ test("agent rejects a conflicting persisted session identity", async () => {
     notices.some((message) =>
       message.includes("session identity does not match environment"),
     ),
+  );
+  assert.equal(
+    entries.some((entry: any) => entry.type === "session_info"),
+    false,
   );
   agent.events.get("session_shutdown")?.[0]();
   resetAgentMailbox(mailbox);
@@ -4395,6 +4407,7 @@ test("a forked session establishes identity for its own Pi session", async () =>
           label: "forked-agent",
         },
       },
+      { type: "session_info", name: "agent · forked-agent" },
     ]);
   } finally {
     agent.events.get("session_shutdown")?.[0]();

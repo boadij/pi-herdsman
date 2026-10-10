@@ -71,6 +71,7 @@ import {
 import {
   collapseDisplayText,
   createStatusWidget,
+  nameSessionIfUnset,
   type FocusIntent,
 } from "./presentation.ts";
 import { randomUUID } from "node:crypto";
@@ -2890,6 +2891,13 @@ export function registerManagedAgentSessionStartHandler(
       if (options.delegationEnabled)
         options.startControllerHealthScanner(ctx, metadataSignal);
       execution.initialized = true;
+      const definition = process.env.PI_HERDSMAN_AGENT_DEFINITION!;
+      const label = execution.assignment.agentLabel;
+      nameSessionIfUnset(
+        pi,
+        ctx,
+        definition === label ? label : `${definition} · ${label}`,
+      );
       execution.stopRequestObserver = observeMailbox(
         mailbox,
         (name) => /^request-.*\.json$/.test(name),

@@ -1023,7 +1023,11 @@ test("parent delegation lock makes concurrent close and delegate fail fast", asy
   try {
     for (const handler of parentPi.events.get("session_start") ?? [])
       await handler(undefined, parentContext);
-    assert.equal(parentPi.entries.length, 0, JSON.stringify(parentPi.entries));
+    assert.equal(
+      parentPi.entries.filter((entry: any) => entry.type === "custom").length,
+      0,
+      JSON.stringify(parentPi.entries),
+    );
 
     const closePromise = registeredAgentTool(leadPi, "close").execute(
       "close",
@@ -2123,6 +2127,12 @@ test("assigned project herd settlement publishes one nonterminal current-run han
   registerExtension!(pi.pi as never);
   try {
     await emit("session_start");
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.type === "session_info" && entry.name === `Lead · ${branch}`,
+      ),
+    );
     await emit("agent_start");
     const assignmentMessage = {
       customType: "pi-herdsman-project_assignment",
@@ -2271,6 +2281,12 @@ test("each direct managed Lead turn returns its response", async () => {
       message: assignmentMessage,
     });
     await emit("message_start", { message: assignmentMessage });
+    assert.ok(
+      pi.entries.some(
+        (entry: any) =>
+          entry.type === "session_info" && entry.name === `Lead · ${branch}`,
+      ),
+    );
     await emit("agent_start");
     branchEntries.push({
       type: "message",
