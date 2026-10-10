@@ -2591,6 +2591,32 @@ export function createAgentController(
       return false;
     }
   };
+  const recordDependencies: Parameters<typeof listedAgentRecord>[5] = {
+    persistedTranscriptReady,
+    cascadePlan: (items, state) =>
+      managedAgentCascadePlanFromSnapshot(items, state, sameIdentity),
+    assertCascadeSafe: (items) =>
+      assertManagedAgentCascadeSafe(items, sameIdentity),
+    runtimeForLabel: (label) => runtimes.get(label),
+    sameIdentity,
+    runtimeIdentityState: (runtime) => ({
+      version: 5,
+      build: options.build,
+      runId: runtime.runId,
+      ownerSessionId: runtime.ownerSessionId,
+      workspaceId: runtime.workspaceId,
+      agentLabel: runtime.label,
+      paneId: runtime.paneId,
+      piSessionId: runtime.piSessionId ?? "",
+      piSessionFile: runtime.piSessionFile,
+      cwd: runtime.cwd,
+      updatedAt: 0,
+    }),
+  };
+  const listRecordDependencies = {
+    ...recordDependencies,
+    persistedTranscriptReady: options.persistedTranscriptReady,
+  };
   const snapshots = (
     context: ExtensionContext,
     signal?: AbortSignal,
@@ -2663,28 +2689,7 @@ export function createAgentController(
       ownerSessionId,
       scope,
       unresolvedMailboxState,
-      {
-        persistedTranscriptReady: options.persistedTranscriptReady,
-        cascadePlan: (items, state) =>
-          managedAgentCascadePlanFromSnapshot(items, state, sameIdentity),
-        assertCascadeSafe: (items) =>
-          assertManagedAgentCascadeSafe(items, sameIdentity),
-        runtimeForLabel: (label) => runtimes.get(label),
-        sameIdentity,
-        runtimeIdentityState: (runtime) => ({
-          version: 5,
-          build: options.build,
-          runId: runtime.runId,
-          ownerSessionId: runtime.ownerSessionId,
-          workspaceId: runtime.workspaceId,
-          agentLabel: runtime.label,
-          paneId: runtime.paneId,
-          piSessionId: runtime.piSessionId ?? "",
-          piSessionFile: runtime.piSessionFile,
-          cwd: runtime.cwd,
-          updatedAt: 0,
-        }),
-      },
+      listRecordDependencies,
     );
   const leadTabLabel = async (context: ExtensionContext): Promise<string> => {
     const name = pi.getSessionName() ?? context.sessionManager.getSessionName();
@@ -3856,28 +3861,7 @@ export function createAgentController(
       context.sessionManager.getSessionId(),
       scope,
       unresolved,
-      {
-        persistedTranscriptReady,
-        cascadePlan: (items, parent) =>
-          managedAgentCascadePlanFromSnapshot(items, parent, sameIdentity),
-        assertCascadeSafe: (items) =>
-          assertManagedAgentCascadeSafe(items, sameIdentity),
-        runtimeForLabel: (label) => runtimes.get(label),
-        sameIdentity,
-        runtimeIdentityState: (runtime) => ({
-          version: 5,
-          build: options.build,
-          runId: runtime.runId,
-          ownerSessionId: runtime.ownerSessionId,
-          workspaceId: runtime.workspaceId,
-          agentLabel: runtime.label,
-          paneId: runtime.paneId,
-          piSessionId: runtime.piSessionId ?? "",
-          piSessionFile: runtime.piSessionFile,
-          cwd: runtime.cwd,
-          updatedAt: 0,
-        }),
-      },
+      recordDependencies,
     ).available_tools as string[];
     if (!actions.includes("read_agent_transcript")) {
       if (candidate.presence.kind === "unknown")
@@ -6733,28 +6717,7 @@ export function createAgentController(
         ownerSessionId,
         options.scope,
         unresolvedMailboxState,
-        {
-          persistedTranscriptReady,
-          cascadePlan: (snapshot, state) =>
-            managedAgentCascadePlanFromSnapshot(snapshot, state, sameIdentity),
-          assertCascadeSafe: (items) =>
-            assertManagedAgentCascadeSafe(items, sameIdentity),
-          runtimeForLabel: (label) => runtimes.get(label),
-          sameIdentity,
-          runtimeIdentityState: (runtime) => ({
-            version: 5,
-            build: options.build,
-            runId: runtime.runId,
-            ownerSessionId: runtime.ownerSessionId,
-            workspaceId: runtime.workspaceId,
-            agentLabel: runtime.label,
-            paneId: runtime.paneId,
-            piSessionId: runtime.piSessionId ?? "",
-            piSessionFile: runtime.piSessionFile,
-            cwd: runtime.cwd,
-            updatedAt: 0,
-          }),
-        },
+        recordDependencies,
       ).available_tools as string[]) ?? []
     ).flatMap((tool) => {
       switch (tool) {
