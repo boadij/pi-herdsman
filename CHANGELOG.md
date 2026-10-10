@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.25.1](https://github.com/boadij/pi-herdsman/compare/v0.25.0...v0.25.1) (2026-10-10)
+
+
+### Refactoring
+
+* **controller:** share managed-agent listing dependencies ([#362](https://github.com/boadij/pi-herdsman/issues/362)) ([0869b58](https://github.com/boadij/pi-herdsman/commit/0869b5814e6070bb53dd89a66aab3df18b578b2a)), closes [#360](https://github.com/boadij/pi-herdsman/issues/360)
+* **supervision:** consolidate atomic record publication ([#364](https://github.com/boadij/pi-herdsman/issues/364)) ([5b08161](https://github.com/boadij/pi-herdsman/commit/5b0816158464e33387cd34d52f9ad0f38224930b)), closes [#361](https://github.com/boadij/pi-herdsman/issues/361)
+* **supervision:** remove unused record aliases ([#365](https://github.com/boadij/pi-herdsman/issues/365)) ([445bb4e](https://github.com/boadij/pi-herdsman/commit/445bb4ed8a62b106aeace064020b99a4051fa57c))
+
 ## [0.25.0](https://github.com/boadij/pi-herdsman/compare/v0.24.0...v0.25.0) (2026-10-10)
 
 
