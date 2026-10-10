@@ -87,9 +87,9 @@ import support, {
   writeAgentState,
 } from "./support.ts";
 import { parseHerdrVersion } from "./herdr.ts";
-import { createLeadProjectRuntime } from "./lead-runtime.ts";
 
 test("new project worktree creation gets an extended Herdr timeout", async () => {
+  const { createLeadProjectRuntime } = await import("./lead-runtime.ts");
   const repoKey = realFs.realpathSync(process.cwd());
   const manager = {
     repoKey,
