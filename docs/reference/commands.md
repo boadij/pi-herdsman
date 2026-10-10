@@ -93,16 +93,18 @@ Ordinary usage retains its owned-session warning.
 ## `/herdsman definitions`
 
 Opens a flat native Definitions list of effective definitions, with reserved
-`flexible-lead`, `orchestrator-lead`, and `managed-lead` first in that order.
+`flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
+first in that order.
 Project definitions are included when Pi considers the
 project trusted. Each definition shows its contributing source or sources as
 `bundled`, `project`, and/or `global`. Edits write global overrides only.
 
-The three reserved Lead definitions are not Agents and remain excluded from
-Agent discovery and delegation. `flexible-lead` and `orchestrator-lead` support
-`Details` only; `managed-lead` supports `Model`, `Thinking`, and `Details`, but
-has no `Enabled` action. Definition edits take effect at the next applicable
-profile resolution, not by watching files while a profile is active.
+All five reserved role definitions are not Agents and remain excluded from
+Agent discovery and delegation. Runtime profiles support `Details` only;
+`managed-lead` supports `Model`, `Thinking`, and `Details`, but has no `Enabled`
+action. Repeating `/manager` or `/chief` refreshes the active profile after
+successful validation. Definition files are not watched while a profile is
+active.
 
 The details view shows applicable effective metadata:
 
@@ -138,7 +140,7 @@ model is known.
 Selecting the managed Lead opens the same Model, Thinking, and Details actions,
 without `Enabled`.
 
-Selecting either ordinary Lead profile opens `Details` only.
+Selecting any runtime profile, including Manager and Chief, opens `Details` only.
 
 When Pi provides an explicit scoped-model list, that scope is used. Otherwise
 available models are offered.
@@ -223,7 +225,10 @@ and is refused only when a Lead is waiting for this Manager's answer or the
 Manager's own ask to Chief remains pending; otherwise it
 relinquishes the lease and restores the exact Lead tool baseline, including
 `agent`, and Lead instruction profile. Invoking `/manager` while already active
-opens the overview without changing the role or lease. See
+re-resolves the Manager definition, applies it after the current turn becomes
+idle, then opens the overview; a failed refresh keeps the previous profile.
+Manager definitions accept trusted project and global overlays and preserve
+the ordinary Lead tool baseline when `tools` is omitted. See
 [Coordination](../concepts/coordination.md) for the role and project boundaries.
 
 The `Manager auto-start` setting optionally makes a new session attempt
@@ -243,7 +248,10 @@ retires an assignment; failed or ambiguous inventory preserves it. A retired
 assignment cannot be resumed, though new work may use the remaining Git branch.
 
 An eligible ordinary Lead can activate runtime Chief mode with `/chief`.
-While Chief, `/chief` opens the overview and `/chief leave` exits the mode.
+While Chief, `/chief` refreshes its validated profile after the current turn
+becomes idle and then opens the overview; a failed refresh keeps the previous
+profile. Chief accepts global definition overrides only and defaults to staff
+coordination tools. `/chief leave` exits the mode.
 A Manager cannot activate Chief. Chief's staff roster contains active
 Managers and ordinary unassigned Leads, including those in a project scope
 with an active Manager. A Manager's roster contains only live exact Leads named

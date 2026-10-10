@@ -386,6 +386,7 @@ test("session tree navigation restores each branch's execution mode, baseline, a
 
 test("Manager transitions and mode changes preserve the ordinary Lead baseline", async () => {
   setLeadEnvironment();
+  const managerOverride = join(PI_AGENTS_DIR, "manager.md");
   process.env.HERDR_PANE_ID = "manager-baseline-pane";
   process.env.HERDR_TAB_ID = "manager-baseline-tab";
   process.env.HERDR_SOCKET_PATH = join(
@@ -440,12 +441,102 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
       sessionLeadExecutionState(pi.entries)?.leadTools,
       baseline,
     );
+    writeFileSync(managerOverride, "---\nname: manager\ntools: []\n---\n");
+    await pi.commandOptions.get("manager").handler("", context);
+    assert.deepEqual(pi.pi.getActiveTools(), managerTools);
+    let releaseIdle!: () => void;
+    let markWaiting!: () => void;
+    const waiting = new Promise<void>((resolve) => (markWaiting = resolve));
+    const idle = new Promise<void>((resolve) => (releaseIdle = resolve));
+    const notices: string[] = [];
+    context.ui.notify = (message: string) => notices.push(message);
+    context.waitForIdle = async () => {
+      markWaiting();
+      await idle;
+    };
+    const refresh = pi.commandOptions.get("manager").handler("", context);
+    await waiting;
+    await pi.commandOptions.get("manager").handler("leave", context);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    releaseIdle();
+    await refresh;
+    assert.ok(notices.some((message) => message.includes("mode changed")));
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
     delete process.env.HERDR_SOCKET_PATH;
     delete process.env.HERDR_PANE_ID;
     delete process.env.HERDR_TAB_ID;
+    rmSync(managerOverride, { force: true });
   }
+});
+
+test("superseded Manager restoration releases its lease without replacing current state", async () => {
+  const { createLeadRuntimeState, resolveLeadControllerRole } =
+    await import("./lead-runtime.ts");
+  const state = createLeadRuntimeState();
+  let generation = 1;
+  let releaseOldVerification!: (value: unknown) => void;
+  const oldVerification = new Promise((resolve) => {
+    releaseOldVerification = resolve;
+  });
+  const released = new Set<string>();
+  let profileOwner: string | undefined;
+  const resolve = (
+    sessionId: string,
+    verifyManagerIdentity: () => Promise<unknown>,
+  ) => {
+    const startGeneration = generation;
+    const context = fakeContext() as any;
+    context.sessionManager = {
+      ...context.sessionManager,
+      getSessionId: () => sessionId,
+      getSessionFile: () => `/tmp/${sessionId}.jsonl`,
+    };
+    return resolveLeadControllerRole(
+      state,
+      context,
+      "lead",
+      {
+        identity: { paneId: "pane", tabId: "tab", workspaceId: "workspace" },
+        build: "test",
+        worktreeGroupScope: async () => ({
+          primaryWorkspaceId: "workspace",
+          repoKey: "repo",
+        }),
+        claimManagerLease: (() => ({
+          descriptor: { piSessionId: sessionId },
+          release: () => released.add(sessionId),
+        })) as any,
+        coordinationHealthy: () => true,
+        verifyManagerIdentity,
+        unresolvedManagerLease() {},
+        activationGuard() {},
+        persistLeadRole() {},
+        isCurrent: () => generation === startGeneration,
+      },
+      true,
+    ).then(() => {
+      if (generation === startGeneration)
+        profileOwner =
+          state.controllerRole === "manager" ? sessionId : undefined;
+    });
+  };
+
+  const old = resolve("old-session", () => oldVerification);
+  await Promise.resolve();
+  generation++;
+  const current = resolve("current-session", async () => true);
+  await current;
+  const currentLease = state.managerLease;
+  releaseOldVerification(true);
+  await old;
+
+  assert.equal(state.controllerRole, "manager");
+  assert.equal(state.managerLease, currentLease);
+  assert.equal(profileOwner, "current-session");
+  assert.ok(released.has("old-session"));
+  assert.ok(!released.has("current-session"));
 });
 
 test("Chief transitions and mode changes preserve the ordinary Lead baseline", async () => {
@@ -5196,6 +5287,87 @@ test("/agents placement subtree writes flat config outside project settings", as
   }
 });
 
+test("Chief profile drives the turn-start tools, prompt, and tool-call guard", async (t) => {
+  setLeadEnvironment();
+  const overridePath = join(PI_AGENTS_DIR, "chief.md");
+  const previousOverride = realFs.existsSync(overridePath)
+    ? readFileSync(overridePath, "utf8")
+    : undefined;
+  const previousEnvironment = new Map(
+    [
+      "HERDR_PANE_ID",
+      "HERDR_TAB_ID",
+      "HERDR_WORKSPACE_ID",
+      "HERDR_SOCKET_PATH",
+    ].map((key) => [key, process.env[key]]),
+  );
+  writeFileSync(
+    overridePath,
+    "---\nname: chief\ntools: [read]\n---\nConfigured chief body",
+  );
+  process.env.HERDR_PANE_ID = "chief-profile-pane";
+  process.env.HERDR_TAB_ID = "chief-profile-tab";
+  process.env.HERDR_WORKSPACE_ID = "chief-profile-workspace";
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `chief-profile-${randomUUID()}.sock`,
+  );
+  try {
+    const pi = fakeChiefPi({ activeTools: ["read"] });
+    const ctx = fakeContext() as any;
+    registerExtension!(pi.pi as never);
+    await pi.events.get("session_start")![0](undefined, ctx);
+    await pi.commandOptions.get("chief").handler("", ctx);
+    const event = {
+      systemPrompt: "base",
+      systemPromptOptions: { contextFiles: [] },
+    };
+    const prompt = await pi.events.get("before_agent_start")![0](event, ctx);
+    assert.match(
+      prompt?.systemPrompt ?? "",
+      /verified workspace-neutral Chief/,
+    );
+    assert.match(prompt?.systemPrompt ?? "", /Configured chief body/);
+    assert.ok(pi.pi.getActiveTools().includes("read"));
+    assert.ok(pi.pi.getActiveTools().includes("list_staff"));
+    assert.ok(!pi.pi.getActiveTools().includes("delegate_project"));
+    assert.equal(
+      await pi.events.get("tool_call")![0](
+        { toolName: "read", input: {} },
+        ctx,
+      ),
+      undefined,
+    );
+    assert.deepEqual(
+      await pi.events.get("tool_call")![0](
+        { toolName: "delegate_project", input: {} },
+        ctx,
+      ),
+      {
+        block: true,
+        reason: "Tool is unavailable in the active Chief profile.",
+      },
+    );
+    assert.deepEqual(
+      await pi.events.get("tool_call")![0](
+        { toolName: "bash", input: {} },
+        ctx,
+      ),
+      {
+        block: true,
+        reason: "Tool is unavailable in the active Chief profile.",
+      },
+    );
+    await pi.events.get("session_shutdown")?.[0](undefined, ctx);
+  } finally {
+    if (previousOverride === undefined) rmSync(overridePath, { force: true });
+    else writeFileSync(overridePath, previousOverride);
+    for (const [key, value] of previousEnvironment)
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+  }
+});
+
 test("Chief activation replaces the lead widget and overview selection is interactive", async (t) => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
@@ -6377,13 +6549,10 @@ test("Herdsman role menus dispatch through the shared role transition", async ()
           ? [[role, false]]
           : scenario.action === "leave"
             ? [[role, true]]
-            : [],
+            : [[role, false]],
       );
       assert.deepEqual(overviews, scenario.action === "overview" ? [role] : []);
-      assert.deepEqual(
-        notices,
-        scenario.action === "overview" ? [] : ["transition requested"],
-      );
+      assert.deepEqual(notices, ["transition requested"]);
     }
   }
 });
@@ -6471,7 +6640,7 @@ test("Herdsman root contextual help follows the selected row", async () => {
     await pi.commandOptions.get("herdsman").handler("", context);
     const help = (index: number) =>
       observed[index]?.find((line) =>
-        /Choose this ordinary Lead session|Manage running Agents, layout, and the owned Agent tree|Coordinate durable project work|Show Pi-native token usage|Inspect effective Agent and Lead definitions|Configure future-session/u.test(
+        /Choose this ordinary Lead session|Manage running Agents, layout, and the owned Agent tree|Coordinate durable project work|Show Pi-native token usage|Inspect effective Agent and role definitions|Configure future-session/u.test(
           line,
         ),
       ) ?? "";
@@ -6493,7 +6662,7 @@ test("Herdsman root contextual help follows the selected row", async () => {
     );
     assert.match(
       help(4),
-      /Inspect effective Agent and Lead definitions and edit global overrides\./u,
+      /Inspect effective Agent and role definitions and edit global overrides\./u,
     );
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -7773,6 +7942,18 @@ test("Definitions exposes managed Lead settings without Agent discovery", async 
   try {
     await command.handler("definitions", context);
     const definitionMenu = prompts.find(({ label }) => label === "Definitions");
+    assert.deepEqual(
+      definitionMenu?.options
+        .slice(0, 5)
+        .map((option) => option.split(/\s/u)[0]),
+      [
+        "flexible-lead",
+        "orchestrator-lead",
+        "managed-lead",
+        "manager",
+        "chief",
+      ],
+    );
     assert.ok(
       definitionMenu?.options.some((option) =>
         /managed-lead.*bundled/iu.test(option),
@@ -9916,12 +10097,12 @@ test("superseded lead startup cannot recover or publish over current session", a
   const { createLeadSessionStartRuntime } = await import("./lead-runtime.ts");
   let resolveOldDefinitions!: (value: {
     definitions: AgentDefinition[];
-    leadDefinitions: AgentDefinition[];
+    roleDefinitions: AgentDefinition[];
     projectTrusted: boolean;
   }) => void;
   const oldDefinitions = new Promise<{
     definitions: AgentDefinition[];
-    leadDefinitions: AgentDefinition[];
+    roleDefinitions: AgentDefinition[];
     projectTrusted: boolean;
   }>((resolve) => (resolveOldDefinitions = resolve));
   let currentAbortController: AbortController | undefined;
@@ -10004,7 +10185,7 @@ test("superseded lead startup cannot recover or publish over current session", a
         ? oldDefinitions
         : Promise.resolve({
             definitions: [],
-            leadDefinitions: [],
+            roleDefinitions: [],
             projectTrusted: true,
           });
     },
@@ -10036,7 +10217,7 @@ test("superseded lead startup cannot recover or publish over current session", a
   await currentStart;
   resolveOldDefinitions({
     definitions: [],
-    leadDefinitions: [],
+    roleDefinitions: [],
     projectTrusted: true,
   });
   await oldStart;

@@ -52,7 +52,8 @@ the session as ordinary `Orchestrate` execution.
 Manager is a dedicated project-coordination mode. It controls only Leads named
 by current `ProjectAssignment` records for its repository and has no `agent`
 capability of its own. Physical scope or worktree membership alone does not
-make a Lead a Manager report.
+make a Lead a Manager report. Its reserved `manager` definition customizes
+instructions and ordinary tool selection, not project assignments or authority.
 
 Project execution belongs to Leads and their Agent trees. Manager can inspect
 and communicate with direct Leads, but it does not acquire ownership of their
@@ -66,6 +67,10 @@ whose project scope has an active Manager. Assigned Leads remain under the
 Manager role even if its process is unavailable.
 
 Chief can observe bounded descendant summaries but acts only on direct reports.
+Its reserved `chief` definition customizes instructions and ordinary tool
+selection, not its workspace-neutral scope or supervision authority. Chief
+definitions accept global customization only; project-local policy does not
+change its behavior.
 
 ### Agent
 
