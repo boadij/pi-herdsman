@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.24.0](https://github.com/boadij/pi-herdsman/compare/v0.23.0...v0.24.0) (2026-10-10)
+
+
+### Features
+
+* **ui:** enable verified click-to-focus in status widgets ([#342](https://github.com/boadij/pi-herdsman/issues/342)) ([b7ca8fd](https://github.com/boadij/pi-herdsman/commit/b7ca8fdbfac7c431d1f4d22bc90ac8c6452c6f7e))
+
+
+### Fixes
+
+* **supervision:** preserve messages until delivery and reconcile Manager identity ([#339](https://github.com/boadij/pi-herdsman/issues/339)) ([f9b955a](https://github.com/boadij/pi-herdsman/commit/f9b955a815b05b624c8a8f6c343c5c3bf914d860))
+* **ui:** repair managed Lead to Manager navigation ([#344](https://github.com/boadij/pi-herdsman/issues/344)) ([d0777bc](https://github.com/boadij/pi-herdsman/commit/d0777bc651ed3ccf4a87cdf646dcf842d7b05fe4))
+
 ## [0.23.0](https://github.com/boadij/pi-herdsman/compare/v0.22.2...v0.23.0) (2026-10-09)
 
 
