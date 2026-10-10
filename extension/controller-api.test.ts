@@ -15,7 +15,6 @@ import type {
 import { OperationError } from "./errors.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import { acquireProcessLock, claimProcessLock } from "./lock.ts";
-import { createAgentController } from "./agent-controller.ts";
 import support, {
   CHILD_SESSION_ID,
   HERDSMAN_BUILD,
@@ -4989,6 +4988,7 @@ test("Manager rejects stopping an unassigned direct Lead", () =>
 test("Manager adopts a preexisting branch worktree for fresh delegation", () =>
   runManagerStartupScenario("preexisting"));
 test("empty stop inventory reports a valid Agent discovered in final verification", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
   setLeadEnvironment();
   const lifecycle = cascadeExecutor([]);
   const pi = fakePi({ exec: lifecycle.exec });
