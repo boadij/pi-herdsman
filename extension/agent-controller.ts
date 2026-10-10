@@ -57,6 +57,8 @@ import {
   renderCoordinationResult,
   truncateModelText,
   type StatusSnapshot,
+  type BreadcrumbSegment,
+  type FocusIntent,
 } from "./presentation.ts";
 import {
   reserveSemanticResultRef,
@@ -203,7 +205,7 @@ export function buildAgentStatusSnapshot(
     ...(herdStartedAt !== undefined ? { herdRunStartedAt: herdStartedAt } : {}),
     breadcrumb:
       host.scope.kind === "lead"
-        ? ["lead"]
+        ? [{ text: "lead" }]
         : statusBreadcrumb(
             view,
             host.environmentIdentity(ctx),
@@ -224,6 +226,11 @@ export function createAgentStatusRuntime() {
         clearPendingStart(label: string, expected: PendingStart): boolean;
         runtimeForLabel(label: string): Runtime | undefined;
         ownToolsSnapshot(): { ownTools?: string[] };
+        focusTarget?(
+          ctx: ExtensionContext,
+          intent: FocusIntent,
+          isCurrent: () => boolean,
+        ): Promise<void>;
       }
     | undefined;
   let statusWidget: ReturnType<typeof createStatusWidget> | undefined;
@@ -235,6 +242,7 @@ export function createAgentStatusRuntime() {
   let statusInFlight = false;
   let requestActive = false;
   let statusPrimed = false;
+  let focusInFlight = false;
   let lastValidStatus: StatusSnapshot = {
     agents: [],
     stale: false,
@@ -377,7 +385,39 @@ export function createAgentStatusRuntime() {
       clearTimer();
       statusContext = ctx;
       ctx.ui.setWidget("pi-herdsman", (tui: any, theme: any) => {
-        const widget = createStatusWidget(() => tui.requestRender(), theme);
+        let widget: ReturnType<typeof createStatusWidget>;
+        widget = createStatusWidget(
+          () => tui.requestRender(),
+          theme,
+          (intent) => {
+            if (
+              generation !== statusGeneration ||
+              ctx !== statusContext ||
+              statusWidgetGeneration !== generation ||
+              statusWidget !== widget
+            )
+              return;
+            const focus = options?.focusTarget;
+            if (!focus || focusInFlight) return;
+            const isCurrent = () =>
+              generation === statusGeneration &&
+              ctx === statusContext &&
+              statusWidgetGeneration === generation &&
+              statusWidget === widget;
+            focusInFlight = true;
+            void focus(ctx, intent, isCurrent)
+              .catch((error) => {
+                if (generation === statusGeneration && ctx === statusContext)
+                  ctx.ui.notify(
+                    String(error).replace(/^Error: /u, ""),
+                    "warning",
+                  );
+              })
+              .finally(() => {
+                if (generation === statusGeneration) focusInFlight = false;
+              });
+          },
+        );
         widget.setSnapshot(widgetSnapshot(lastValidStatus));
         if (generation === statusGeneration && ctx === statusContext) {
           statusWidget = widget;
@@ -397,12 +437,14 @@ export function createAgentStatusRuntime() {
       statusWidget?.dispose();
       statusWidget = undefined;
       requestActive = false;
+      focusInFlight = false;
       statusPrimed = false;
     },
     prepareSession: (ctx: ExtensionContext, beforeActivate?: () => void) => {
       clearTimer();
       statusRefresh = false;
       statusInFlight = false;
+      focusInFlight = false;
       removeWidget();
       statusWidgetGeneration = 0;
       statusContext = undefined;
@@ -425,6 +467,7 @@ export function createAgentStatusRuntime() {
       clearTimer();
       statusRefresh = false;
       statusInFlight = false;
+      focusInFlight = false;
       removeWidget();
       statusWidgetGeneration = 0;
       statusContext = undefined;
@@ -936,34 +979,44 @@ export function statusBreadcrumb(
   candidate: ManagedAgentState | undefined,
   identity: { definition?: string; label?: string },
   sameIdentity: (left: ManagedAgentState, right: ManagedAgentState) => boolean,
-): string[] {
-  if (!candidate) return ["?"];
-  const current = snapshot.agents.find(({ state }) =>
+): BreadcrumbSegment[] {
+  if (!candidate) return [{ text: "?" }];
+  const matches = snapshot.agents.filter(({ state }) =>
     sameIdentity(state, candidate),
   );
+  const current = matches.length === 1 ? matches[0] : undefined;
   if (!current)
     return [
-      "?",
-      identity.definition && identity.label
-        ? displayIdentity(identity.definition, identity.label)
-        : (identity.definition ?? "?"),
+      { text: "?" },
+      {
+        text:
+          identity.definition && identity.label
+            ? displayIdentity(identity.definition, identity.label)
+            : (identity.definition ?? "?"),
+      },
     ];
   const definitions = [
-    displayIdentity(current.agentDefinition, current.state.agentLabel),
+    {
+      text: displayIdentity(current.agentDefinition, current.state.agentLabel),
+      sessionId: current.state.piSessionId,
+    },
   ];
   const visited = new Set([current.state.piSessionId]);
   let ownerSessionId = current.state.ownerSessionId;
   while (true) {
-    const parent = snapshot.agents.find(
+    const parents = snapshot.agents.filter(
       ({ state }) => state.piSessionId === ownerSessionId,
     );
+    if (parents.length > 1) return [{ text: "?" }, ...definitions.reverse()];
+    const parent = parents[0];
     if (parent) {
       if (visited.has(parent.state.piSessionId))
-        return ["?", ...definitions.reverse()];
+        return [{ text: "?" }, ...definitions.reverse()];
       visited.add(parent.state.piSessionId);
-      definitions.push(
-        displayIdentity(parent.agentDefinition, parent.state.agentLabel),
-      );
+      definitions.push({
+        text: displayIdentity(parent.agentDefinition, parent.state.agentLabel),
+        sessionId: parent.state.piSessionId,
+      });
       ownerSessionId = parent.state.ownerSessionId;
       continue;
     }
@@ -972,10 +1025,12 @@ export function statusBreadcrumb(
         ({ state }) => state.piSessionId === ownerSessionId,
       )
     )
-      return ["?", ...definitions.reverse()];
-    return snapshot.leadSessionIds.includes(ownerSessionId)
-      ? ["lead", ...definitions.reverse()]
-      : ["?", ...definitions.reverse()];
+      return [{ text: "?" }, ...definitions.reverse()];
+    return snapshot.leadSessionIds.filter(
+      (sessionId) => sessionId === ownerSessionId,
+    ).length === 1
+      ? [{ text: "lead", sessionId: ownerSessionId }, ...definitions.reverse()]
+      : [{ text: "?" }, ...definitions.reverse()];
   }
 }
 

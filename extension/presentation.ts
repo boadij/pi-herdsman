@@ -118,6 +118,11 @@ export interface StatusAgent {
   inactiveMs?: number;
   parentLabel?: string;
 }
+export type BreadcrumbSegment = { text: string; sessionId?: string };
+export type FocusIntent =
+  | { kind: "session"; sessionId: string; parentSessionId?: string }
+  | { kind: "assigned-manager" };
+type HitRegion = { row: number; from: number; to: number; intent: FocusIntent };
 export type StatusExecution =
   { kind: "managed" } | { kind: "ordinary"; mode: LeadExecutionMode };
 export interface StatusSnapshot {
@@ -125,7 +130,7 @@ export interface StatusSnapshot {
   stale: boolean;
   unavailable: boolean;
   herdRunStartedAt?: number;
-  breadcrumb?: string[];
+  breadcrumb?: BreadcrumbSegment[];
   ownTools?: string[];
   identityOnly?: boolean;
   refreshedAt?: number;
@@ -625,6 +630,9 @@ export type SupervisedLeadSnapshot = Readonly<{
   displayName: string;
   branch?: string;
   project?: string;
+  paneId?: string;
+  tabId?: string;
+  workspaceId?: string;
   leadCounts?: Readonly<{ active: number; blocked: number; total: number }>;
   leads?: readonly Readonly<{
     session: string;
@@ -654,6 +662,8 @@ function managerPresentationSnapshot(
     displayName: manager.displayName,
     project: manager.project,
     workspaceId: manager.workspaceId,
+    paneId: manager.paneId,
+    tabId: manager.tabId,
     runtimeState: manager.runtimeState,
     agentCounts: manager.agentCounts,
     leadCounts: manager.leadCounts,
@@ -916,8 +926,10 @@ const MANAGER_METADATA_LAYOUTS = [
   { elapsed: false, context: false },
 ] as const;
 
-/** Renders the bounded ambient lead rows. */
-export function renderSupervisionLeads(
+type SupervisionRow = { text: string; intent?: FocusIntent };
+
+/** Renders the bounded ambient lead rows and their render-derived targets. */
+function renderSupervisionRows(
   reports: readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
   width: number,
   options: {
@@ -927,15 +939,17 @@ export function renderSupervisionLeads(
     theme?: any;
   } = {},
   selectedLead?: string,
-): string[] {
+): SupervisionRow[] {
   const status = options.status ?? "fresh";
   const role = options.role ?? "chief";
   if (status === "unavailable")
     return [
-      safeLine(
-        `${themed(options.theme, "success", "●")} ${themed(options.theme, "muted", `${role} · unavailable`)}`,
-        width,
-      ),
+      {
+        text: safeLine(
+          `${themed(options.theme, "success", "●")} ${themed(options.theme, "muted", `${role} · unavailable`)}`,
+          width,
+        ),
+      },
     ];
   const displays = orderedSupervisionLeads(presentationReports(reports));
   const groups = groupOrderedSupervisedLeads(displays);
@@ -1015,16 +1029,18 @@ export function renderSupervisionLeads(
         }),
       ) ?? MANAGER_METADATA_LAYOUTS.at(-1)!;
     return [
-      safeLine(header, width),
+      { text: safeLine(header, width) },
       ...visible.map((item, index) => {
         const branch = index === visible.length - 1 && !remaining ? "└─" : "├─";
         const lead = item.lead;
         const navigation = lead && lead.lead === selectedLead ? ">" : "";
         if (item.kind === "lead")
-          return safeLine(
-            `${themed(options.theme, lifecycleColor(item.lead.runtimeState), `${branch} ${navigation}${supervisionLeadMarker(item.lead)}`)} ${themed(options.theme, "muted", `${item.lead.branch ?? item.lead.displayName} · Lead`)}`,
-            width,
-          );
+          return {
+            text: safeLine(
+              `${themed(options.theme, lifecycleColor(item.lead.runtimeState), `${branch} ${navigation}${supervisionLeadMarker(item.lead)}`)} ${themed(options.theme, "muted", `${item.lead.branch ?? item.lead.displayName} · Lead`)}`,
+              width,
+            ),
+          };
         const marker =
           item.work.status === "active" && lead
             ? `${lead.runtimeState === "blocked" ? "!" : ""}${supervisionLeadMarker(lead)}`
@@ -1063,13 +1079,18 @@ export function renderSupervisionLeads(
               telemetryWidth,
           ),
         );
-        return safeLine(
-          `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${themed(options.theme, "muted", suffix)}${telemetry.map((value) => themed(options.theme, "muted", `  ${value}`)).join("")}`,
-          width,
-        );
+        return {
+          text: safeLine(
+            `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${themed(options.theme, "muted", suffix)}${telemetry.map((value) => themed(options.theme, "muted", `  ${value}`)).join("")}`,
+            width,
+          ),
+          ...(status === "fresh" && item.work.status === "active" && lead
+            ? { intent: { kind: "session" as const, sessionId: lead.lead } }
+            : {}),
+        };
       }),
       ...(remaining
-        ? [safeLine(`└─ … ${remaining} more · /manager`, width)]
+        ? [{ text: safeLine(`└─ … ${remaining} more · /manager`, width) }]
         : []),
     ];
   }
@@ -1081,25 +1102,62 @@ export function renderSupervisionLeads(
       const navigation = lead.lead === selectedLead ? ">" : "";
       const indicators = navigation;
       const counts = lead.leadCounts;
-      const row = safeLine(
-        `${themed(options.theme, lifecycleColor(lead.runtimeState), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", `${lead.displayName}${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`)}`,
-        width,
-      );
+      const intent =
+        status === "fresh"
+          ? { kind: "session" as const, sessionId: lead.lead }
+          : undefined;
+      const row = {
+        text: safeLine(
+          `${themed(options.theme, lifecycleColor(lead.runtimeState), `${branch} ${indicators}${marker}`)} ${themed(options.theme, "muted", `${lead.displayName}${counts?.total ? ` · ${counts.total} lead${counts.total === 1 ? "" : "s"}` : ""}${lead.agentCounts?.total ? ` · ${lead.agentCounts.total} agent${lead.agentCounts.total === 1 ? "" : "s"}` : ""}`)}`,
+          width,
+        ),
+        ...(intent ? { intent } : {}),
+      };
       const children = (lead.leads ?? []).slice(0, 3);
       const childIndent = branch === "└─" ? "   " : "│  ";
       return [
         row,
         ...children.map((child, childIndex) => {
           const childBranch = childIndex === children.length - 1 ? "└─" : "├─";
-          return safeLine(
-            `${themed(options.theme, "muted", `${childIndent}${childBranch} ${child.branch ?? child.display_name} · `)}${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
-            width,
-          );
+          return {
+            text: safeLine(
+              `${themed(options.theme, "muted", `${childIndent}${childBranch} ${child.branch ?? child.display_name} · `)}${themed(options.theme, lifecycleColor(child.runtime_state), child.runtime_state)}${themed(options.theme, "muted", `${child.agent_counts.total ? ` · ${child.agent_counts.total} agent${child.agent_counts.total === 1 ? "" : "s"}` : ""}`)}`,
+              width,
+            ),
+            ...(status === "fresh"
+              ? {
+                  intent: {
+                    kind: "session" as const,
+                    sessionId: child.session,
+                    parentSessionId: lead.lead,
+                  },
+                }
+              : {}),
+          };
         }),
       ];
     }),
-    ...(hidden > 0 ? [safeLine(`└─ … ${hidden} more · /${role}`, width)] : []),
+    ...(hidden > 0
+      ? [{ text: safeLine(`└─ … ${hidden} more · /${role}`, width) }]
+      : []),
   ];
+}
+
+/** Text-only projection retained for non-interactive callers. */
+export function renderSupervisionLeads(
+  reports: readonly SupervisedLeadSnapshot[] | SupervisionPresentationSnapshot,
+  width: number,
+  options: {
+    status?: SupervisionContextStatus;
+    ordinaryCap?: number;
+    role?: "chief" | "manager";
+    theme?: any;
+  } = {},
+  selectedLead?: string,
+): string[] {
+  return renderSupervisionRows(reports, width, options, selectedLead).map(
+    ({ text }) => text,
+  );
 }
 
 /** Bounded notification text; unlike TUI renderers it has no terminal width assumption. */
@@ -1320,15 +1378,55 @@ export function createSupervisionWidget(
   getStatus: () => SupervisionContextStatus,
   role: "chief" | "manager" = "chief",
   theme?: any,
-): { render(width: number): string[]; invalidate(): void } {
+  onFocus?: (intent: FocusIntent) => void,
+): {
+  render(width: number): string[];
+  handleMouse(event: {
+    type: string;
+    button: string;
+    width: number;
+    x: number;
+    y: number;
+  }): { handled: true; render: false } | undefined;
+  invalidate(): void;
+} {
+  let renderedWidth = -1;
+  let hits: HitRegion[] = [];
   return {
     render(width) {
-      return renderSupervisionLeads(getLeads(), width, {
+      renderedWidth = width;
+      const rows = renderSupervisionRows(getLeads(), width, {
         status: getStatus(),
         ordinaryCap: 6,
         role,
         theme,
-      }).filter((line) => line.length > 0);
+      }).filter(({ text }) => text.length > 0);
+      hits = [];
+      rows.forEach((row, index) => {
+        if (row.intent)
+          hits.push({
+            row: index,
+            from: 0,
+            to: Math.min(width, visibleWidth(row.text)),
+            intent: row.intent,
+          });
+      });
+      return rows.map(({ text }) => text);
+    },
+    handleMouse(event) {
+      if (
+        event.type !== "click" ||
+        event.button !== "left" ||
+        event.width !== renderedWidth
+      )
+        return;
+      const hit = hits.find(
+        ({ row, from, to }) =>
+          row === event.y && event.x >= from && event.x < to,
+      );
+      if (!hit || !onFocus) return;
+      onFocus(hit.intent);
+      return { handled: true, render: false };
     },
     invalidate() {},
   };
@@ -1460,23 +1558,44 @@ function safeDisplaySegment(value: string): string {
     .trim();
 }
 
-function renderBreadcrumb(segments: string[], width: number): string {
-  if (width <= 0) return "";
-  const names = segments.map(safeDisplaySegment).filter(Boolean);
-  const current = names.at(-1) ?? "?";
+function renderBreadcrumb(
+  segments: BreadcrumbSegment[],
+  width: number,
+): { text: string; hits: HitRegion[] } {
+  if (width <= 0) return { text: "", hits: [] };
+  const visible = segments
+    .map((segment) => ({ ...segment, text: safeDisplaySegment(segment.text) }))
+    .filter((segment) => segment.text);
+  const current = visible.at(-1) ?? { text: "?" };
   const marker = "●";
-  if (width <= visibleWidth(marker)) return truncateToWidth(marker, width, "");
+  if (width <= visibleWidth(marker))
+    return { text: truncateToWidth(marker, width, ""), hits: [] };
   const prefix = `${marker} `;
   const available = width - visibleWidth(prefix);
-  if (available <= 0) return marker;
-  const currentText = tailTruncate(current, available);
-  let result = `${prefix}${currentText}`;
-  for (let index = names.length - 2; index >= 0; index--) {
-    const candidate = `${prefix}${names[index]} → ${result.slice(prefix.length)}`;
-    if (visibleWidth(candidate) <= width) result = candidate;
+  if (available <= 0) return { text: marker, hits: [] };
+  const currentText = tailTruncate(current.text, available);
+  const included = [{ ...current, text: currentText }];
+  for (let index = visible.length - 2; index >= 0; index--) {
+    const candidate = [visible[index]!, ...included];
+    const candidateText = `${prefix}${candidate.map(({ text }) => text).join(" → ")}`;
+    if (visibleWidth(candidateText) <= width) included.unshift(visible[index]!);
     else break;
   }
-  return result;
+  const text = `${prefix}${included.map(({ text }) => text).join(" → ")}`;
+  const hits: HitRegion[] = [];
+  let x = visibleWidth(prefix);
+  included.forEach((segment, index) => {
+    const segmentWidth = visibleWidth(segment.text);
+    if (index < included.length - 1 && segment.sessionId)
+      hits.push({
+        row: 0,
+        from: x,
+        to: x + segmentWidth,
+        intent: { kind: "session", sessionId: segment.sessionId },
+      });
+    x += segmentWidth + (index < included.length - 1 ? visibleWidth(" → ") : 0);
+  });
+  return { text, hits };
 }
 function renderToolMetadata(
   tools: readonly string[] | undefined,
@@ -3500,8 +3619,16 @@ export class StatusWidget {
   private timer?: ReturnType<typeof setInterval>;
   private invalidateUI?: () => void;
   private theme: any;
-  constructor(invalidateUI?: () => void, theme?: any) {
+  private onFocus?: (intent: FocusIntent) => void;
+  private renderedWidth = -1;
+  private hits: HitRegion[] = [];
+  constructor(
+    invalidateUI?: () => void,
+    theme?: any,
+    onFocus?: (intent: FocusIntent) => void,
+  ) {
     this.invalidateUI = invalidateUI;
+    this.onFocus = onFocus;
     this.theme = theme ?? {
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
@@ -3509,6 +3636,8 @@ export class StatusWidget {
   }
   setSnapshot(snapshot: StatusSnapshot): void {
     this.snapshot = snapshot;
+    this.hits = [];
+    this.renderedWidth = -1;
     const animated = snapshot.agents.some(
       (agent) =>
         agent.state === "working" ||
@@ -3531,6 +3660,8 @@ export class StatusWidget {
   }
   render(width: number): string[] {
     const s = this.snapshot;
+    this.renderedWidth = width;
+    this.hits = [];
     const suffix = s.unavailable
       ? "unavailable"
       : `${formatStatusCounts(s.agents)}${s.stale ? " · stale" : ""}`;
@@ -3541,8 +3672,13 @@ export class StatusWidget {
     const elapsed = formatElapsed(s.herdRunStartedAt, Date.now());
     let run = !s.identityOnly && elapsed ? ` · ${elapsed}` : "";
     const suffixText = s.identityOnly || !suffix ? "" : `  ${suffix}`;
-    const breadcrumbSegments = s.breadcrumb ?? ["?"];
-    const breadcrumb = renderBreadcrumb(breadcrumbSegments, availableWidth);
+    const breadcrumbSegments = s.breadcrumb ?? [{ text: "?" }];
+    const renderedBreadcrumb = renderBreadcrumb(
+      breadcrumbSegments,
+      availableWidth,
+    );
+    const breadcrumb = renderedBreadcrumb.text;
+    if (!s.stale && !s.unavailable) this.hits.push(...renderedBreadcrumb.hits);
     const remainingWidth = Math.max(
       0,
       availableWidth - visibleWidth(breadcrumb),
@@ -3551,6 +3687,20 @@ export class StatusWidget {
       !!execution &&
       visibleWidth(execution) + visibleWidth(suffixText) <= remainingWidth;
     const shownExecution = executionFits ? execution : "";
+    if (
+      !s.stale &&
+      !s.unavailable &&
+      executionFits &&
+      s.execution?.kind === "managed"
+    ) {
+      const from = visibleWidth(breadcrumb) + visibleWidth(" · ");
+      this.hits.push({
+        row: 0,
+        from,
+        to: from + visibleWidth("managed"),
+        intent: { kind: "assigned-manager" },
+      });
+    }
     const tools = renderToolMetadata(
       s.ownTools,
       Math.max(
@@ -3579,26 +3729,72 @@ export class StatusWidget {
     const header = `${styledBreadcrumb}${styledExecution}${styledTools}${styledRun}${styledSuffix}`;
     const out = [truncateToWidth(header, availableWidth, "…")];
     if (s.identityOnly) return out;
-    out.push(
-      ...renderStatusRows(s.agents, {
-        now: Date.now(),
-        frame: this.frame,
-        width: Math.max(0, width),
-        theme: this.theme,
-      }).map(({ text }) => text),
-    );
+    const rows = renderStatusRows(s.agents, {
+      now: Date.now(),
+      frame: this.frame,
+      width: Math.max(0, width),
+      theme: this.theme,
+    });
+    out.push(...rows.map(({ text }) => text));
+    if (!s.stale && !s.unavailable)
+      rows.forEach((row, index) => {
+        const agent = s.agents.find(
+          ({ label, sessionId }) =>
+            label === row.label && sessionId === row.sessionId,
+        );
+        if (
+          !row.sessionId ||
+          s.agents.filter(({ sessionId }) => sessionId === row.sessionId)
+            .length !== 1 ||
+          !agent ||
+          agent.state === "unknown" ||
+          agent.state === "lost" ||
+          agent.state === "starting"
+        )
+          return;
+        this.hits.push({
+          row: index + 1,
+          from: 0,
+          to: Math.min(availableWidth, visibleWidth(row.text)),
+          intent: { kind: "session", sessionId: row.sessionId },
+        });
+      });
     return out;
+  }
+  handleMouse(event: {
+    type: string;
+    button: string;
+    width: number;
+    x: number;
+    y: number;
+  }): { handled: true; render: false } | undefined {
+    if (
+      event.type !== "click" ||
+      event.button !== "left" ||
+      event.width !== this.renderedWidth
+    )
+      return;
+    const hit = this.hits.find(
+      ({ row, from, to }) => row === event.y && event.x >= from && event.x < to,
+    );
+    if (!hit || !this.onFocus) return;
+    this.onFocus(hit.intent);
+    return { handled: true, render: false };
   }
   dispose(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.invalidateUI = undefined;
+    this.onFocus = undefined;
+    this.hits = [];
+    this.renderedWidth = -1;
   }
 }
 export function createStatusWidget(
   invalidate?: () => void,
   theme?: any,
+  onFocus?: (intent: FocusIntent) => void,
 ): StatusWidget {
-  return new StatusWidget(invalidate, theme);
+  return new StatusWidget(invalidate, theme, onFocus);
 }
 export { Text, truncateToWidth, visibleWidth };

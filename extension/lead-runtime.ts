@@ -84,6 +84,8 @@ import {
   renderRunningOptions,
   formatStatusCounts,
   createSupervisionWidget,
+  type FocusIntent,
+  type BreadcrumbSegment,
   type StatusSnapshot,
 } from "./presentation.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -964,7 +966,7 @@ export function createLeadSessionStartRuntime(host: {
   clearSupervisionUI(reset?: boolean): void;
   queueLeadPresentation(ctx: ExtensionContext): void;
   setOwnTools(tools: string[] | undefined): void;
-  initialStatusBreadcrumb(): string[];
+  initialStatusBreadcrumb(): BreadcrumbSegment[];
   ownToolsSnapshot(): { ownTools?: string[] };
   startSupervisionUI(ctx: ExtensionContext): void;
   setDefinitionRoster(roster: {
@@ -2830,6 +2832,121 @@ export function registerLeadRuntime(
     loadSnapshot: (ctx: ExtensionContext) =>
       loadStatusSnapshot(ctx, controller.sessionSignal(), false),
     runtimeForLabel: (label: string) => controller.runtimeForLabel(label),
+    focusTarget: async (
+      ctx: ExtensionContext,
+      intent: FocusIntent,
+      isCurrent: () => boolean,
+    ) => {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const signal = controller.sessionSignal();
+      const current = () =>
+        !!signal &&
+        !signal.aborted &&
+        isCurrent() &&
+        ctx.sessionManager.getSessionId() === sessionId &&
+        activeLeadRole(options.leadRuntime) === "lead" &&
+        !options.leadRuntime.roleSuspended;
+      if (!current()) throw new Error("Navigation is no longer available.");
+      if (intent.kind === "assigned-manager") {
+        const scope = await roleTransitions.currentWorktreeScope(ctx);
+        if (!current() || !scope)
+          throw new Error("Managed project assignment changed.");
+        const assignment = roleTransitions.projectAssignmentForScope(
+          scope,
+          sessionId,
+        );
+        const manager = await roleTransitions.currentManager(ctx);
+        if (
+          !current() ||
+          !assignment ||
+          !manager ||
+          manager.repoKey !== assignment.repoKey
+        )
+          throw new Error("Managed project Manager is unavailable.");
+        const target = await verifiedHerdrAgent(manager, {
+          listAgents: async () =>
+            (await options.identityHost.listAgents(ctx)).agents,
+          getAgent: async (paneId) =>
+            (await options.identityHost.getAgent(ctx, paneId))?.agent,
+          expectedSession: options.identityHost.expectedSession,
+          isPiAgent: options.identityHost.isPiAgent,
+          matchesExpectedSession: options.identityHost.matchesExpectedSession,
+        });
+        const currentManager = await roleTransitions.currentManager(ctx);
+        const currentScope = await roleTransitions.currentWorktreeScope(ctx);
+        const currentAssignment = currentScope
+          ? roleTransitions.projectAssignmentForScope(currentScope, sessionId)
+          : undefined;
+        if (
+          !current() ||
+          !target ||
+          !currentAssignment ||
+          currentAssignment.id !== assignment.id ||
+          currentAssignment.repoKey !== assignment.repoKey ||
+          currentAssignment.branch !== assignment.branch ||
+          !currentManager ||
+          currentManager.repoKey !== assignment.repoKey ||
+          !roleTransitions.sameManagerDescriptor(currentManager, manager)
+        )
+          throw new Error("Managed project Manager changed.");
+        await options.commandHost.runHerdr(
+          pi,
+          ctx,
+          ["agent", "focus", target.pane_id],
+          {
+            signal,
+          },
+        );
+        return;
+      }
+      const fresh = await loadStatusSnapshot(ctx, signal, false);
+      const matches = fresh.agents.filter(
+        (agent) =>
+          agent.sessionId === intent.sessionId &&
+          agent.state !== "lost" &&
+          agent.state !== "unknown" &&
+          agent.state !== "starting" &&
+          !!agent.paneId,
+      );
+      if (
+        !current() ||
+        fresh.stale ||
+        fresh.unavailable ||
+        matches.length !== 1
+      )
+        throw new Error("Agent changed; reopen Running.");
+      const target = matches[0]!;
+      const live = await identityRuntime.liveAgent(ctx, target.sessionId!);
+      if (!current() || live.length !== 1 || live[0]!.pane_id !== target.paneId)
+        throw new Error("Agent changed; reopen Running.");
+      const verified = await verifiedHerdrAgent(
+        {
+          piSessionId: target.sessionId!,
+          paneId: target.paneId!,
+          tabId: live[0]!.tab_id,
+          workspaceId: live[0]!.workspace_id,
+        },
+        {
+          listAgents: async () =>
+            (await options.identityHost.listAgents(ctx)).agents,
+          getAgent: async (paneId) =>
+            (await options.identityHost.getAgent(ctx, paneId))?.agent,
+          expectedSession: options.identityHost.expectedSession,
+          isPiAgent: options.identityHost.isPiAgent,
+          matchesExpectedSession: options.identityHost.matchesExpectedSession,
+        },
+      );
+      if (!current() || !verified)
+        throw new Error("Agent changed; reopen Running.");
+      await options.commandHost.runHerdr(
+        pi,
+        ctx,
+        ["agent", "focus", verified.pane_id],
+        {
+          signal,
+        },
+      );
+    },
   });
   let projectRuntime: ReturnType<typeof createLeadProjectRuntime>;
   const projectHost = options.projectHost;
@@ -3838,6 +3955,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
   let overviewGeneration = 0;
   let renderOverview: (() => void) | undefined;
   let renderWidget: (() => void) | undefined;
+  let widgetFocusInFlight = false;
+  let supervisionWidgetGeneration = 0;
 
   const generation = (ctx?: ExtensionContext): string =>
     [
@@ -3920,6 +4039,186 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     });
     return inFlight;
   };
+  const focusLead = async (
+    ctx: ExtensionContext,
+    leadId: string,
+    parentManagerSessionId?: string,
+    isCurrent: () => boolean = () => true,
+  ): Promise<void> => {
+    const currentGeneration = generation(ctx);
+    const fresh = await loadSnapshot(ctx);
+    if (
+      !isCurrent() ||
+      currentGeneration !== generation(ctx) ||
+      status(ctx) !== "fresh"
+    )
+      throw new Error("Lead changed; reopen staff.");
+    if (
+      host.activeRole() === "manager" &&
+      host
+        .managerSupervisionItems(fresh)
+        .filter(
+          (item) =>
+            item.kind === "work" &&
+            item.work.status === "active" &&
+            item.lead?.lead === leadId,
+        ).length !== 1
+    )
+      throw new Error("Lead is no longer active assigned work.");
+    const managers = host.listManagerDescriptors(host.supervisionRuntime());
+    const verifyManager = async (sessionId: string, report?: any) => {
+      const candidates = managers.filter(
+        (candidate) => candidate.piSessionId === sessionId,
+      );
+      if (candidates.length !== 1) return undefined;
+      const descriptor = candidates[0]!;
+      const agents = await host.listAllHerdrAgents(host.pi, ctx, ctx.signal);
+      const placements = agents.agents.filter(
+        (candidate: any) =>
+          host.isPiAgent(candidate) &&
+          host.herdrSessionId(candidate) === sessionId &&
+          candidate.pane_id === descriptor.paneId &&
+          candidate.tab_id === descriptor.tabId &&
+          candidate.workspace_id === descriptor.workspaceId &&
+          (!report ||
+            (report.paneId === descriptor.paneId &&
+              report.tabId === descriptor.tabId &&
+              report.workspaceId === descriptor.workspaceId)),
+      );
+      return placements.length === 1
+        ? { descriptor, paneId: descriptor.paneId }
+        : undefined;
+    };
+    let lead: any;
+    let parent: any;
+    let verifiedParent: any;
+    if (parentManagerSessionId) {
+      parent = host
+        .presentationReports(fresh)
+        .find(
+          (candidate: any) =>
+            candidate.role === "manager" &&
+            candidate.lead === parentManagerSessionId,
+        );
+      const children = parent?.leads?.filter(
+        (candidate: any) => candidate.session === leadId,
+      );
+      if (!parent || children?.length !== 1)
+        throw new Error("Lead changed; reopen staff.");
+      lead = { lead: leadId };
+    } else {
+      const matches = host
+        .presentationReports(fresh)
+        .filter((candidate: any) => candidate.lead === leadId);
+      if (matches.length !== 1) throw new Error("Lead changed; reopen staff.");
+      lead = matches[0];
+    }
+    if (parent || lead.role === "manager") {
+      const managerSessionId = parent?.lead ?? lead.lead;
+      const report = parent ?? lead;
+      const manager = await verifyManager(managerSessionId, report);
+      if (!manager || !isCurrent() || currentGeneration !== generation(ctx))
+        throw new Error("Manager changed; reopen staff.");
+      verifiedParent = manager.descriptor;
+      if (!parent) {
+        const currentManagers = host
+          .listManagerDescriptors(host.supervisionRuntime())
+          .filter((descriptor) => descriptor.piSessionId === managerSessionId);
+        if (
+          !isCurrent() ||
+          currentManagers.length !== 1 ||
+          !host.sameManagerDescriptor(currentManagers[0]!, manager.descriptor)
+        )
+          throw new Error("Manager changed; reopen staff.");
+        const currentAgent = await host.runHerdr(
+          host.pi,
+          ctx,
+          ["agent", "get", manager.paneId],
+          { signal: ctx.signal },
+        );
+        if (
+          !isCurrent() ||
+          host.herdrSessionId(currentAgent?.agent) !== managerSessionId ||
+          currentAgent?.agent?.pane_id !== manager.paneId ||
+          currentAgent?.agent?.tab_id !== manager.descriptor.tabId ||
+          currentAgent?.agent?.workspace_id !== manager.descriptor.workspaceId
+        )
+          throw new Error("Manager changed; reopen staff.");
+        const finalManagers = host
+          .listManagerDescriptors(host.supervisionRuntime())
+          .filter((descriptor) => descriptor.piSessionId === managerSessionId);
+        if (
+          !isCurrent() ||
+          finalManagers.length !== 1 ||
+          !host.sameManagerDescriptor(finalManagers[0]!, manager.descriptor)
+        )
+          throw new Error("Manager changed; reopen staff.");
+        await host.runHerdr(host.pi, ctx, ["agent", "focus", manager.paneId], {
+          signal: ctx.signal,
+        });
+        return;
+      }
+    }
+    const coordination = host.readLeadCoordinationState(
+      host.supervisionRuntime(),
+      leadId,
+    );
+    if (
+      !coordination ||
+      coordination.piSessionId !== leadId ||
+      (lead.instanceId !== undefined &&
+        coordination.instanceId !== lead.instanceId)
+    )
+      throw new Error("Lead changed; reopen staff.");
+    const verified = await host.listAllHerdrAgents(host.pi, ctx, ctx.signal);
+    if (!isCurrent() || currentGeneration !== generation(ctx))
+      throw new Error("Lead changed; reopen staff.");
+    const matches = verified.agents.filter(
+      (candidate: any) =>
+        host.isPiAgent(candidate) &&
+        host.herdrSessionId(candidate) === leadId &&
+        typeof candidate?.pane_id === "string" &&
+        (parentManagerSessionId ||
+          (candidate?.pane_id === lead.paneId &&
+            candidate?.tab_id === lead.tabId &&
+            candidate?.workspace_id === lead.workspaceId)),
+    );
+    if (matches.length !== 1) throw new Error("Lead changed; reopen staff.");
+    if (
+      currentGeneration !== generation(ctx) ||
+      !isCurrent() ||
+      (verifiedParent &&
+        !host
+          .listManagerDescriptors(host.supervisionRuntime())
+          .some((descriptor) =>
+            host.sameManagerDescriptor(descriptor, verifiedParent),
+          ))
+    )
+      throw new Error("Manager changed; reopen staff.");
+    const currentAgent = await host.runHerdr(
+      host.pi,
+      ctx,
+      ["agent", "get", matches[0]!.pane_id],
+      { signal: ctx.signal },
+    );
+    if (
+      !isCurrent() ||
+      host.herdrSessionId(currentAgent?.agent) !== leadId ||
+      currentAgent?.agent?.pane_id !== matches[0]!.pane_id ||
+      currentAgent?.agent?.workspace_id !== matches[0]!.workspace_id ||
+      currentAgent?.agent?.tab_id !== matches[0]!.tab_id
+    )
+      throw new Error("Lead changed; reopen staff.");
+    await host.runHerdr(
+      host.pi,
+      ctx,
+      ["agent", "focus", currentAgent.agent.pane_id],
+      {
+        signal: ctx.signal,
+      },
+    );
+  };
+
   const nextOverviewGeneration = (): number => ++overviewGeneration;
   const openOverview = async (
     ctx: ExtensionCommandContext,
@@ -4314,37 +4613,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     openOverview,
     loadSnapshot: loadSupervisionSnapshot,
     directReports,
-    focusLead: async (ctx: ExtensionContext, leadId: string): Promise<void> => {
-      const fresh = await loadSnapshot(ctx);
-      const lead = host
-        .presentationReports(fresh)
-        .find((candidate: any) => candidate.lead === leadId);
-      if (!lead) throw new Error("Lead changed; reopen staff.");
-      const coordination = host.readLeadCoordinationState(
-        host.supervisionRuntime(),
-        lead.lead,
-      );
-      if (
-        !coordination ||
-        coordination.piSessionId !== lead.lead ||
-        (lead.instanceId !== undefined &&
-          coordination.instanceId !== lead.instanceId)
-      )
-        throw new Error("Lead changed; reopen staff.");
-      const verified = await host.listAllHerdrAgents(host.pi, ctx, ctx.signal);
-      const matches = verified.agents.filter(
-        (candidate: any) =>
-          candidate?.pane_id === lead.paneId &&
-          candidate?.tab_id === lead.tabId &&
-          candidate?.workspace_id === lead.workspaceId &&
-          host.isPiAgent(candidate) &&
-          host.herdrSessionId(candidate) === lead.lead,
-      );
-      if (matches.length !== 1) throw new Error("Lead changed; reopen staff.");
-      await host.runHerdr(host.pi, ctx, ["agent", "focus", lead.paneId], {
-        signal: ctx.signal,
-      });
-    },
+    focusLead,
     focusChief: async (ctx: ExtensionCommandContext): Promise<void> => {
       const confirmed = await ctx.ui.confirm(
         "Focus Chief?",
@@ -4397,6 +4666,7 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
     registerWidget: (ctx: ExtensionContext, role: "chief" | "manager") => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
       try {
+        const widgetGeneration = ++supervisionWidgetGeneration;
         ctx.ui.setWidget("pi-herdsman-staff", (tui: any, theme: any) => {
           renderWidget = () => tui.requestRender();
           return createSupervisionWidget(
@@ -4404,6 +4674,37 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
             () => status(ctx),
             role,
             theme,
+            (intent) => {
+              if (
+                widgetFocusInFlight ||
+                widgetGeneration !== supervisionWidgetGeneration ||
+                generation(ctx) !== generationId ||
+                status(ctx) !== "fresh"
+              )
+                return;
+              if (intent.kind !== "session") return;
+              widgetFocusInFlight = true;
+              const isCurrent = () =>
+                widgetGeneration === supervisionWidgetGeneration &&
+                uiContext === ctx &&
+                generation(ctx) === generationId;
+              void focusLead(
+                ctx,
+                intent.sessionId,
+                intent.parentSessionId,
+                isCurrent,
+              )
+                .catch((error) => {
+                  if (isCurrent())
+                    ctx.ui.notify(
+                      String(error).replace(/^Error: /u, ""),
+                      "warning",
+                    );
+                })
+                .finally(() => {
+                  widgetFocusInFlight = false;
+                });
+            },
           );
         });
       } catch {
@@ -4412,6 +4713,8 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
       }
     },
     removeWidget: (ctx: ExtensionContext) => {
+      supervisionWidgetGeneration++;
+      widgetFocusInFlight = false;
       try {
         ctx.ui.setWidget("pi-herdsman-staff", undefined);
       } catch {

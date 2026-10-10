@@ -56,14 +56,23 @@ import {
   type AgentControllerOptions,
   type ManagedAgentSnapshotCollection,
 } from "./agent-controller.ts";
-import { runHerdr, sameCwd } from "./herdr.ts";
+import {
+  herdrSessionId,
+  listAllHerdrAgents,
+  runHerdr,
+  sameCwd,
+} from "./herdr.ts";
 import {
   displayIdentity,
   FILE_HANDOFF_GUIDANCE,
   prepareMessageInput,
   MANAGED_AGENT_BOOTSTRAP_EVENT,
 } from "./core.ts";
-import { collapseDisplayText, createStatusWidget } from "./presentation.ts";
+import {
+  collapseDisplayText,
+  createStatusWidget,
+  type FocusIntent,
+} from "./presentation.ts";
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import {
@@ -681,13 +690,19 @@ export function createManagedAgentLeafStatus(options: {
   identity(ctx: ExtensionContext): ManagedAgentState | undefined;
   sameIdentity(left: ManagedAgentState, right: ManagedAgentState): boolean;
   signal(): AbortSignal | undefined;
+  focusTarget?(
+    ctx: ExtensionContext,
+    intent: FocusIntent,
+    isCurrent: () => boolean,
+  ): Promise<void>;
 }) {
   let widget: ReturnType<typeof createStatusWidget> | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let context: ExtensionContext | undefined;
   let generation = 0;
   let inFlight = false;
-  let breadcrumb: string[] | undefined;
+  let focusInFlight = false;
+  let breadcrumb: ReturnType<typeof statusBreadcrumb> | undefined;
   let ownTools: string[] | undefined;
   const ownToolsSnapshot = () => (ownTools ? { ownTools } : {});
   const reset = () => {
@@ -701,6 +716,7 @@ export function createManagedAgentLeafStatus(options: {
     }
     context = undefined;
     inFlight = false;
+    focusInFlight = false;
   };
   const refresh = async (ctx: ExtensionContext, activeGeneration: number) => {
     if (activeGeneration !== generation || ctx !== context || inFlight) return;
@@ -733,14 +749,17 @@ export function createManagedAgentLeafStatus(options: {
           stale: false,
           unavailable: true,
           breadcrumb: breadcrumb ?? [
-            "?",
-            process.env.PI_HERDSMAN_AGENT_DEFINITION &&
-            process.env.PI_HERDSMAN_LABEL
-              ? displayIdentity(
-                  process.env.PI_HERDSMAN_AGENT_DEFINITION,
-                  process.env.PI_HERDSMAN_LABEL,
-                )
-              : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?"),
+            { text: "?" },
+            {
+              text:
+                process.env.PI_HERDSMAN_AGENT_DEFINITION &&
+                process.env.PI_HERDSMAN_LABEL
+                  ? displayIdentity(
+                      process.env.PI_HERDSMAN_AGENT_DEFINITION,
+                      process.env.PI_HERDSMAN_LABEL,
+                    )
+                  : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?"),
+            },
           ],
           ...ownToolsSnapshot(),
           identityOnly: true,
@@ -758,20 +777,54 @@ export function createManagedAgentLeafStatus(options: {
       const activeGeneration = generation;
       context = ctx;
       ctx.ui.setWidget("pi-herdsman", (tui, theme) => {
-        const next = createStatusWidget(() => tui.requestRender(), theme);
+        let next: ReturnType<typeof createStatusWidget>;
+        next = createStatusWidget(
+          () => tui.requestRender(),
+          theme,
+          (intent) => {
+            if (
+              activeGeneration !== generation ||
+              ctx !== context ||
+              widget !== next ||
+              focusInFlight
+            )
+              return;
+            if (!options.focusTarget) return;
+            focusInFlight = true;
+            const isCurrent = () =>
+              activeGeneration === generation &&
+              ctx === context &&
+              widget === next;
+            void options
+              .focusTarget(ctx, intent, isCurrent)
+              .catch((error) => {
+                if (activeGeneration === generation && ctx === context)
+                  ctx.ui.notify(
+                    String(error).replace(/^Error: /u, ""),
+                    "warning",
+                  );
+              })
+              .finally(() => {
+                if (activeGeneration === generation) focusInFlight = false;
+              });
+          },
+        );
         next.setSnapshot({
           agents: [],
           stale: false,
           unavailable: true,
           breadcrumb: [
-            "?",
-            process.env.PI_HERDSMAN_AGENT_DEFINITION &&
-            process.env.PI_HERDSMAN_LABEL
-              ? displayIdentity(
-                  process.env.PI_HERDSMAN_AGENT_DEFINITION,
-                  process.env.PI_HERDSMAN_LABEL,
-                )
-              : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?"),
+            { text: "?" },
+            {
+              text:
+                process.env.PI_HERDSMAN_AGENT_DEFINITION &&
+                process.env.PI_HERDSMAN_LABEL
+                  ? displayIdentity(
+                      process.env.PI_HERDSMAN_AGENT_DEFINITION,
+                      process.env.PI_HERDSMAN_LABEL,
+                    )
+                  : (process.env.PI_HERDSMAN_AGENT_DEFINITION ?? "?"),
+            },
           ],
           ...ownToolsSnapshot(),
           identityOnly: true,
@@ -1728,6 +1781,101 @@ export function registerManagedAgentRuntime(
         controller.clearPendingStart(label, expected),
       runtimeForLabel: (label) => controller.runtimeForLabel(label),
       ownToolsSnapshot: () => ({}),
+      focusTarget: async (ctx, intent, isCurrent) => {
+        if (intent.kind !== "session")
+          throw new Error("Manager navigation is unavailable from an Agent.");
+        const signal = controller.sessionSignal();
+        if (!signal) throw new Error("Agent session is no longer active.");
+        const ownerSessionId = ctx.sessionManager.getSessionId();
+        const view = await controller.agentSnapshotView(
+          ctx,
+          scope,
+          signal,
+          true,
+          false,
+        );
+        const fresh = buildAgentStatusSnapshot(view, ctx, {
+          scope,
+          listedAgentRecord: controller.listedAgentRecord,
+          runtimeForLabel: controller.runtimeForLabel,
+          environmentIdentity: (context) =>
+            managedAgentEnvironmentIdentity(context, options.build),
+          identityFromEnvironment: () => ({
+            definition: process.env.PI_HERDSMAN_AGENT_DEFINITION,
+            label: process.env.PI_HERDSMAN_LABEL,
+          }),
+          sameIdentity: sameManagedAgentIdentity,
+          ownToolsSnapshot: () => ({}),
+        });
+        const currentIdentity = managedAgentEnvironmentIdentity(
+          ctx,
+          options.build,
+        );
+        const breadcrumb = currentIdentity
+          ? statusBreadcrumb(
+              view,
+              currentIdentity,
+              {
+                definition: process.env.PI_HERDSMAN_AGENT_DEFINITION,
+                label: process.env.PI_HERDSMAN_LABEL,
+              },
+              sameManagedAgentIdentity,
+            )
+          : [];
+        const statusTarget = fresh.agents.filter(
+          (agent) => agent.sessionId === intent.sessionId,
+        );
+        const isAncestor = breadcrumb.some(
+          (segment) => segment.sessionId === intent.sessionId,
+        );
+        if (
+          !isCurrent() ||
+          signal.aborted ||
+          ctx.sessionManager.getSessionId() !== ownerSessionId ||
+          (statusTarget.length !== 1 && !isAncestor)
+        )
+          throw new Error("Agent changed; reopen status.");
+        if (
+          statusTarget.length === 1 &&
+          (statusTarget[0]!.state === "unknown" ||
+            statusTarget[0]!.state === "lost" ||
+            statusTarget[0]!.state === "starting" ||
+            !statusTarget[0]!.paneId)
+        )
+          throw new Error("Agent changed; reopen status.");
+        const { agents } = await listAllHerdrAgents(pi, ctx, signal);
+        const live = agents.filter(
+          (agent) =>
+            herdrSessionId(agent) === intent.sessionId &&
+            typeof agent.pane_id === "string",
+        );
+        if (
+          signal.aborted ||
+          !isCurrent() ||
+          live.length !== 1 ||
+          (statusTarget.length === 1 &&
+            live[0]!.pane_id !== statusTarget[0]!.paneId)
+        )
+          throw new Error("Agent changed; reopen status.");
+        const current = await runHerdr(
+          pi,
+          ctx,
+          ["agent", "get", live[0]!.pane_id],
+          { signal },
+        );
+        if (
+          signal.aborted ||
+          !isCurrent() ||
+          herdrSessionId(current?.agent) !== intent.sessionId ||
+          current?.agent?.pane_id !== live[0]!.pane_id ||
+          current?.agent?.workspace_id !== live[0]!.workspace_id ||
+          current?.agent?.tab_id !== live[0]!.tab_id
+        )
+          throw new Error("Agent changed; reopen status.");
+        await runHerdr(pi, ctx, ["agent", "focus", current.agent.pane_id], {
+          signal,
+        });
+      },
       loadSnapshot: async (ctx) => {
         const view = await controller.agentSnapshotView(
           ctx,
@@ -1792,6 +1940,67 @@ export function registerManagedAgentRuntime(
     identity: (ctx) => managedAgentEnvironmentIdentity(ctx, options.build),
     sameIdentity: sameManagedAgentIdentity,
     signal: () => metadataPublisher.signal,
+    focusTarget: async (ctx, intent, isCurrent) => {
+      if (intent.kind !== "session")
+        throw new Error("Manager navigation is unavailable from an Agent.");
+      const signal = metadataPublisher.signal;
+      const sessionId = ctx.sessionManager.getSessionId();
+      const snapshot = await managedAgentSnapshots(
+        pi,
+        ctx,
+        options.controllerOptions.snapshotDependencies,
+        signal,
+        true,
+        false,
+        undefined,
+        false,
+      );
+      const identity = managedAgentEnvironmentIdentity(ctx, options.build);
+      const breadcrumb = identity
+        ? statusBreadcrumb(
+            snapshot,
+            identity,
+            {
+              definition: process.env.PI_HERDSMAN_AGENT_DEFINITION,
+              label: process.env.PI_HERDSMAN_LABEL,
+            },
+            sameManagedAgentIdentity,
+          )
+        : [];
+      if (
+        signal?.aborted ||
+        !isCurrent() ||
+        ctx.sessionManager.getSessionId() !== sessionId ||
+        !breadcrumb.some((segment) => segment.sessionId === intent.sessionId)
+      )
+        throw new Error("Agent ancestry changed; reopen status.");
+      const { agents } = await listAllHerdrAgents(pi, ctx, signal);
+      const matches = agents.filter(
+        (agent) =>
+          herdrSessionId(agent) === intent.sessionId &&
+          typeof agent.pane_id === "string",
+      );
+      if (signal?.aborted || !isCurrent() || matches.length !== 1)
+        throw new Error("Agent changed; reopen status.");
+      const current = await runHerdr(
+        pi,
+        ctx,
+        ["agent", "get", matches[0]!.pane_id],
+        { signal },
+      );
+      if (
+        signal?.aborted ||
+        !isCurrent() ||
+        herdrSessionId(current?.agent) !== intent.sessionId ||
+        current?.agent?.pane_id !== matches[0]!.pane_id ||
+        current?.agent?.workspace_id !== matches[0]!.workspace_id ||
+        current?.agent?.tab_id !== matches[0]!.tab_id
+      )
+        throw new Error("Agent changed; reopen status.");
+      await runHerdr(pi, ctx, ["agent", "focus", current.agent.pane_id], {
+        signal,
+      });
+    },
   });
   const mutateAgentState = (
     update: (current: ManagedAgentState) => ManagedAgentState,

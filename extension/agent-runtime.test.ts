@@ -143,7 +143,10 @@ test("status breadcrumb trusts only validated Lead ancestry", () => {
       { definition: "scout", label: "scout" },
       sameIdentity,
     ),
-    ["lead", "scout:scout"],
+    [
+      { text: "lead", sessionId: LEAD_SESSION_ID },
+      { text: "scout:scout", sessionId: state.piSessionId },
+    ],
   );
   assert.deepEqual(
     statusBreadcrumb(
@@ -152,7 +155,29 @@ test("status breadcrumb trusts only validated Lead ancestry", () => {
       { definition: "scout", label: "scout" },
       sameIdentity,
     ),
-    ["?", "scout:scout"],
+    [{ text: "?" }, { text: "scout:scout", sessionId: state.piSessionId }],
+  );
+  const ambiguousParent = {
+    ...managedState("parent"),
+    piSessionId: state.ownerSessionId,
+    ownerSessionId: LEAD_SESSION_ID,
+  };
+  assert.deepEqual(
+    statusBreadcrumb(
+      {
+        agents: [
+          agent,
+          { state: ambiguousParent, agentDefinition: "worker" },
+          { state: { ...ambiguousParent }, agentDefinition: "worker" },
+        ],
+        mailboxes: [],
+        leadSessionIds: [LEAD_SESSION_ID],
+      },
+      state,
+      { definition: "scout", label: "scout" },
+      sameIdentity,
+    ),
+    [{ text: "?" }, { text: "scout:scout", sessionId: state.piSessionId }],
   );
 });
 const agentTool = (pi: ReturnType<typeof fakePi>, name: string) =>

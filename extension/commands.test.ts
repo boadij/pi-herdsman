@@ -8817,7 +8817,7 @@ test("status session preparation drops the previous session snapshot", async (t)
     agents: [{ label: "old-agent", definition: "scout", state: "working" }],
     stale: false,
     unavailable: false,
-    breadcrumb: ["lead", "scout:old-agent"],
+    breadcrumb: [{ text: "lead" }, { text: "scout:old-agent" }],
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.match(widgets[0]!.render(160).join("\n"), /lead → scout:old-agent/);
@@ -8833,7 +8833,7 @@ test("status session preparation drops the previous session snapshot", async (t)
     agents: [{ label: "stale-agent", definition: "scout", state: "working" }],
     stale: false,
     unavailable: false,
-    breadcrumb: ["lead", "scout:stale-agent"],
+    breadcrumb: [{ text: "lead" }, { text: "scout:stale-agent" }],
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(widgets[1]!.render(160), ["● ?  unavailable"]);
