@@ -9157,3 +9157,73 @@ test("transcript projects persisted agent evidence without Herdr terminal reads"
     resetAgentMailbox(mailbox);
   }
 });
+
+test("listing and transcript action retain distinct transcript-readiness callbacks", async () => {
+  const { createAgentController } = await import("./agent-controller.ts");
+  setLeadEnvironment();
+  const label = "transcript-readiness-routing";
+  const identity = {
+    ...recoveryIdentity(label),
+    piSessionFile: join(testTmpRoot, `${label}.jsonl`),
+  };
+  const context = fakeContext() as any;
+  const state = managedState(label, REQUEST_ID, identity);
+  state.ownerSessionId = context.sessionManager.getSessionId();
+  const mailbox = agentMailboxPath(WORKSPACE, label);
+  resetAgentMailbox(mailbox);
+  writeAgentState(mailbox, state);
+  realFs.writeFileSync(identity.piSessionFile, "persisted session evidence\n");
+  const pi = fakePi({
+    exec: leadExec(
+      label,
+      "working",
+      identity.piSessionId,
+      undefined,
+      identity.piSessionId,
+      identity,
+    ),
+  });
+  const controller = createAgentController(pi.pi as never, {
+    scope: { kind: "lead" },
+    build: HERDSMAN_BUILD,
+    extensionPath: "test",
+    isContextRetired: () => false,
+    snapshotDependencies: {
+      runtimeForLabel: () => undefined,
+      readLeadSessionIds: () => [],
+      staleAfterMs: 60_000,
+    },
+    persistedTranscriptReady: () => false,
+    agentDefinitions: async () => [],
+    readTranscript: () => ({
+      transcript: "persisted transcript",
+      truncated: false,
+    }),
+    workspaceId: () => WORKSPACE,
+    sendResultMessage: () => undefined,
+    sendAskMessage: () => undefined,
+    sessionRetired: () => false,
+    appendError: () => undefined,
+    onChanged: () => undefined,
+    onWorkChanged: () => undefined,
+    reportWatcherError: () => undefined,
+  });
+  try {
+    const listing = await controller.action(context, { action: "list" } as any);
+    assert.equal(
+      (listing.agents as any[])[0].available_tools.includes(
+        "read_agent_transcript",
+      ),
+      false,
+    );
+    const transcript = await controller.action(context, {
+      action: "transcript",
+      agent: label,
+    } as any);
+    assert.equal(transcript.ok, true);
+    assert.equal(transcript.transcript, "persisted transcript");
+  } finally {
+    resetAgentMailbox(mailbox);
+    realFs.rmSync(identity.piSessionFile, { force: true });
+  }
+});
