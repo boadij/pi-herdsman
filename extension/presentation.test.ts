@@ -5227,6 +5227,40 @@ test("Manager work rows show responsive Lead telemetry with semantic theme", () 
   assert.ok(chiefRows[1]!.includes("<success>└─ ●</success>"));
 });
 
+test("Manager standalone Lead rows expose their exact click target", () => {
+  const snapshot = {
+    project: "pi-herdsman",
+    work: [],
+    leads: [lead({ lead: "standalone-lead", branch: "feat/unassigned" })],
+  };
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => snapshot,
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+
+  assert.deepEqual(widget.render(120), [
+    "● manager · pi-herdsman",
+    "└─ ○ feat/unassigned · Lead",
+  ]);
+  assert.equal(
+    widget.handleMouse({
+      type: "click",
+      button: "left",
+      x: 4,
+      y: 1,
+      width: 120,
+    })?.handled,
+    true,
+  );
+  assert.deepEqual(focused, [
+    { kind: "session", sessionId: "standalone-lead" },
+  ]);
+});
+
 test("Manager work status outranks live Lead markers except when active", () => {
   const theme = {
     fg: (role: string, text: string) => `<${role}>${text}</${role}>`,

@@ -63,6 +63,7 @@ import support, {
   WORKSPACE,
   agentFromState,
   buildStatusRows,
+  agentControllerExecutor,
   cascadeExecutor,
   defaultFixtureIdentity,
   discoverAgent,
@@ -5326,6 +5327,256 @@ test("Chief activation replaces the lead widget and overview selection is intera
   await t.waitFor(() => assert.equal(overviewDone, 2, notices.join(" | ")));
 });
 
+test("supervision clicks verify standalone Manager Leads with fresh evidence despite stale cached status", async () => {
+  const { createLeadSupervisionRuntime } = await import("./lead-runtime.ts");
+  const { managerSupervisionItems, supervisionPresentationReports } =
+    await import("./presentation.ts");
+  const leadId = "standalone-click-lead";
+  const paneId = "standalone-click-pane";
+  const assignedLeadId = "assigned-click-lead";
+  const assignedPaneId = "assigned-click-pane";
+  const managerId = "click-manager-session";
+  const managerPaneId = "click-manager-pane";
+  let currentRole: "manager" | "chief" = "manager";
+  let currentSnapshot: any = {
+    project: "project",
+    work: [
+      {
+        branch: "feat/assigned",
+        session: assignedLeadId,
+        status: "active" as const,
+      },
+    ],
+    leads: [
+      {
+        lead: assignedLeadId,
+        displayName: "assigned",
+        branch: "feat/assigned",
+        runtimeState: "working" as const,
+        paneId: assignedPaneId,
+        tabId: "tab",
+        workspaceId: WORKSPACE,
+        availableActions: [],
+      },
+      {
+        lead: leadId,
+        displayName: "standalone",
+        branch: "feat/standalone",
+        runtimeState: "working" as const,
+        paneId,
+        tabId: "tab",
+        workspaceId: WORKSPACE,
+        availableActions: [],
+      },
+    ],
+  };
+  const focused: string[] = [];
+  let mismatch = false;
+  let deferNextLookup = false;
+  let loadCount = 0;
+  let markFocusLookupStarted!: () => void;
+  const focusLookupStarted = new Promise<void>(
+    (resolve) => (markFocusLookupStarted = resolve),
+  );
+  let resolveFocusLookup!: (value: typeof currentSnapshot) => void;
+  let runtime: ReturnType<typeof createLeadSupervisionRuntime>;
+  const currentState = {
+    chiefMode: "inactive" as "inactive" | "active",
+    controllerRole: "manager" as const,
+    roleSuspended: false,
+    managerLease: undefined,
+    chiefLease: undefined,
+    leadContext: undefined,
+    chiefModeGeneration: 0,
+    sessionGeneration: 0,
+    chiefActivationRollback: false,
+    instanceId: "test",
+  };
+  const host: any = {
+    activeRole: () => currentRole,
+    state: currentState,
+    pi: {},
+    isCurrentChief: () => currentRole === "chief",
+    herdrSessionSnapshot: async () => ({ agents: [] }),
+    managedAgentSnapshots: async () => ({ agents: [] }),
+    loadSnapshot: async () => {
+      loadCount++;
+      if (loadCount === 2 || deferNextLookup) {
+        deferNextLookup = false;
+        markFocusLookupStarted();
+        return await new Promise<typeof currentSnapshot>(
+          (resolve) => (resolveFocusLookup = resolve),
+        );
+      }
+      if (loadCount === 3) throw new Error("transient refresh failure");
+      return currentSnapshot;
+    },
+    managerSupervisionItems,
+    presentationReports: supervisionPresentationReports,
+    listManagerDescriptors: () =>
+      currentRole === "chief"
+        ? [
+            {
+              piSessionId: managerId,
+              paneId: managerPaneId,
+              tabId: "manager-tab",
+              workspaceId: WORKSPACE,
+            },
+          ]
+        : [],
+    sameManagerDescriptor: (left: any, right: any) =>
+      left.piSessionId === right.piSessionId && left.paneId === right.paneId,
+    supervisionRuntime: () => ({}),
+    readLeadCoordinationState: (_runtime: unknown, id: string) =>
+      [leadId, assignedLeadId].includes(id) ? { piSessionId: id } : undefined,
+    listAllHerdrAgents: async () => ({
+      agents: [
+        {
+          sessionId: managerId,
+          pane_id: managerPaneId,
+          tab_id: "manager-tab",
+          workspace_id: WORKSPACE,
+        },
+        {
+          sessionId: assignedLeadId,
+          pane_id: assignedPaneId,
+          tab_id: "tab",
+          workspace_id: WORKSPACE,
+        },
+        {
+          sessionId: leadId,
+          pane_id: paneId,
+          tab_id: "tab",
+          workspace_id: WORKSPACE,
+        },
+      ],
+    }),
+    isPiAgent: () => true,
+    herdrSessionId: (agent: any) => agent.sessionId,
+    runHerdr: async (_pi: unknown, _ctx: unknown, args: string[]) => {
+      if (args[0] === "agent" && args[1] === "get") {
+        const agent = [
+          [managerPaneId, managerId, "manager-tab"],
+          [assignedPaneId, assignedLeadId, "tab"],
+          [paneId, leadId, "tab"],
+        ].find(([pane]) => pane === args[2]);
+        return {
+          agent: {
+            sessionId: mismatch ? "replacement-session" : agent?.[1],
+            pane_id: args[2],
+            tab_id: agent?.[2],
+            workspace_id: WORKSPACE,
+          },
+        };
+      }
+      if (args[0] === "agent" && args[1] === "focus") focused.push(args[2]!);
+      return {};
+    },
+  };
+  runtime = createLeadSupervisionRuntime(host);
+  let widget: any;
+  const focusNotices: string[] = [];
+  const ctx = fakeContext() as any;
+  ctx.mode = "tui";
+  ctx.hasUI = true;
+  ctx.ui = {
+    ...ctx.ui,
+    notify: (message: string) => focusNotices.push(message),
+    setWidget: (_key: string, content: any) => {
+      if (typeof content === "function")
+        widget = content(
+          { requestRender: () => undefined },
+          { fg: (_color: string, text: string) => text },
+        );
+    },
+  };
+  runtime.registerWidget(ctx, "manager");
+  runtime.startPeriodic(ctx);
+  await runtime.refresh(ctx);
+  assert.match(widget.render(120).join("\n"), /feat\/standalone · Lead/);
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 2, width: 120 });
+  await focusLookupStarted;
+  await runtime.refresh(ctx);
+  resolveFocusLookup(currentSnapshot);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, [paneId]);
+  await runtime.refresh(ctx);
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, [paneId, assignedPaneId]);
+  await runtime.refresh(ctx);
+  mismatch = true;
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, [paneId, assignedPaneId]);
+  await runtime.refresh(ctx);
+  mismatch = false;
+  deferNextLookup = true;
+  const replacementLookupStarted = new Promise<void>((resolve) => {
+    markFocusLookupStarted = resolve;
+  });
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
+  await replacementLookupStarted;
+  currentState.sessionGeneration++;
+  resolveFocusLookup(currentSnapshot);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    focused,
+    [paneId, assignedPaneId],
+    "generation replacement during fresh lookup must not focus",
+  );
+
+  currentRole = "chief";
+  currentState.chiefMode = "active";
+  currentState.sessionGeneration++;
+  currentSnapshot = {
+    managers: [
+      {
+        session: managerId,
+        displayName: "project-manager",
+        project: "project",
+        workspaceId: WORKSPACE,
+        paneId: managerPaneId,
+        tabId: "manager-tab",
+        runtimeState: "working",
+        agentCounts: { active: 0, blocked: 0, total: 0 },
+        leadCounts: { active: 0, blocked: 0, total: 1 },
+        availableActions: ["inspect"],
+        leads: [
+          {
+            session: leadId,
+            displayName: "nested-lead",
+            branch: "feat/nested",
+            runtimeState: "working",
+            agentCounts: { active: 0, blocked: 0, total: 0 },
+          },
+        ],
+      },
+    ],
+    leads: [],
+  };
+  runtime.registerWidget(ctx, "chief");
+  await runtime.refresh(ctx);
+  assert.deepEqual(widget.render(120), [
+    "● chief · 1 manager",
+    "└─ ● project-manager · 1 lead",
+    "   └─ feat/nested · working",
+  ]);
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 1, width: 120 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  widget.handleMouse({ type: "click", button: "left", x: 5, y: 2, width: 120 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    focused,
+    [paneId, assignedPaneId, managerPaneId, paneId],
+    focusNotices.join(" | "),
+  );
+  assert.equal(currentRole, "chief", "nested navigation remains observational");
+  runtime.stopPeriodic();
+});
+
 test("Lead resume repairs stale staff from its durable displaced loadout", async () => {
   setLeadEnvironment();
   process.env.HERDR_PANE_ID = "chief-pane";
@@ -8621,15 +8872,281 @@ test("lead agents stop scopes its summary to the current lead subtree", async ()
   }
 });
 
-test("valid managed leaf agents receive identity-only TUI presentation", async () => {
+test("delegating managed Agents focus only fresh owned child-row identities", async (t) => {
+  const parentMailbox = setAgentEnvironment("delegating-parent", ["child"]);
+  process.env.PI_HERDSMAN_OWNER_SESSION_ID = LEAD_SESSION_ID;
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `managed-child-navigation-${randomUUID()}.sock`,
+  );
+  const parentState: ManagedAgentState = {
+    ...managedState("delegating-parent"),
+    paneId: "registered-pane",
+    piSessionId: DEFAULT_PI_SESSION_ID,
+    piSessionFile: "/tmp/registered-agent.jsonl",
+  };
+  const childState: ManagedAgentState = {
+    ...managedState("owned-child"),
+    ownerSessionId: DEFAULT_PI_SESSION_ID,
+    paneId: "owned-child-pane",
+    piSessionId: CHILD_SESSION_ID,
+    piSessionFile: "/tmp/owned-child-agent.jsonl",
+  };
+  nativeSessions.set(parentState.piSessionFile!, {
+    id: parentState.piSessionId!,
+    path: parentState.piSessionFile!,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: {
+          sessionId: parentState.piSessionId,
+          definition: "agent",
+          label: parentState.agentLabel,
+        },
+      },
+    ],
+  });
+  nativeSessions.set(childState.piSessionFile!, {
+    id: childState.piSessionId!,
+    path: childState.piSessionFile!,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: {
+          sessionId: childState.piSessionId,
+          definition: "child",
+          label: childState.agentLabel,
+        },
+      },
+    ],
+  });
+  const childMailbox = agentMailboxPath(WORKSPACE, childState.agentLabel);
+  writeAgentState(parentMailbox, parentState);
+  writeAgentState(childMailbox, childState);
+  const focused: string[] = [];
+  const executor = agentControllerExecutor(parentState, [childState]);
+  const pi = fakePi({
+    activeTools: () => ["read", "bash", "delegate_agent"],
+    exec: (command, args, options) => {
+      if (command === "herdr" && args[0] === "agent" && args[1] === "focus") {
+        focused.push(args[2]!);
+        return { stdout: "{}", stderr: "", code: 0 };
+      }
+      return executor(command, args, options);
+    },
+  });
+  const ctx = fakeAgentContext([
+    {
+      type: "custom",
+      customType: "pi-herdsman-agent-definition",
+      data: {
+        sessionId: DEFAULT_PI_SESSION_ID,
+        definition: "agent",
+        label: "delegating-parent",
+      },
+    },
+  ]) as any;
+  ctx.mode = "tui";
+  ctx.hasUI = true;
+  let widget: StatusWidget | undefined;
+  const notices: string[] = [];
+  ctx.ui = {
+    ...ctx.ui,
+    setWidget: (_key: string, content: unknown) => {
+      if (typeof content === "function")
+        widget = content(
+          { requestRender: () => undefined },
+          {
+            fg: (_color: string, value: string) => value,
+            bold: (value: string) => value,
+          },
+        );
+    },
+    notify: (message: string) => notices.push(message),
+  };
+  registerExtension!(pi.pi as never);
+  t.after(async () => {
+    await pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(parentMailbox);
+    resetAgentMailbox(childMailbox);
+    nativeSessions.delete(parentState.piSessionFile!);
+    nativeSessions.delete(childState.piSessionFile!);
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  });
+  await pi.events.get("session_start")![0](undefined, ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.ok(widget);
+  assert.match(
+    widget!.render(120).join("\n"),
+    /owned-child/,
+    notices.join(" | "),
+  );
+  widget!.handleMouse({
+    type: "click",
+    button: "left",
+    x: 4,
+    y: 1,
+    width: 120,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, ["owned-child-pane"]);
+
+  childState.ownerSessionId = "replacement-owner-session";
+  writeAgentState(childMailbox, childState);
+  widget!.handleMouse({
+    type: "click",
+    button: "left",
+    x: 4,
+    y: 1,
+    width: 120,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, ["owned-child-pane"]);
+  assert.ok(notices.some((message) => /Agent changed/u.test(message)));
+});
+
+test("Lead status child-row focus rechecks the exact Herdr session identity", async (t) => {
+  setLeadEnvironment();
+  const childState: ManagedAgentState = {
+    ...managedState("lead-owned-child"),
+    ownerSessionId: LEAD_SESSION_ID,
+    paneId: "lead-owned-child-pane",
+    piSessionId: CHILD_SESSION_ID,
+    piSessionFile: "/tmp/lead-owned-child.jsonl",
+  };
+  const mailbox = agentMailboxPath(WORKSPACE, childState.agentLabel);
+  writeAgentState(mailbox, childState);
+  nativeSessions.set(childState.piSessionFile!, {
+    id: childState.piSessionId!,
+    path: childState.piSessionFile!,
+    entries: [
+      {
+        type: "custom",
+        customType: "pi-herdsman-agent-definition",
+        data: {
+          sessionId: childState.piSessionId,
+          definition: "agent",
+          label: childState.agentLabel,
+        },
+      },
+    ],
+  });
+  let replaceIdentity = false;
+  const focused: string[] = [];
+  const herdrCalls: string[][] = [];
+  const executor = agentControllerExecutor(childState);
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (command === "herdr") herdrCalls.push(args);
+      if (command === "herdr" && args[0] === "agent" && args[1] === "focus") {
+        focused.push(args[2]!);
+        return { stdout: "{}", stderr: "", code: 0 };
+      }
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+        const agent = agentFromState(childState) as any;
+        if (replaceIdentity)
+          agent.agent_session.value = "replacement-child-session";
+        return {
+          stdout: JSON.stringify({ id: AGENT_ID, result: { agent } }),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return executor(command, args, options);
+    },
+  });
+  const ctx = fakeContext() as any;
+  ctx.mode = "tui";
+  ctx.hasUI = true;
+  let widget: StatusWidget | undefined;
+  const notices: string[] = [];
+  ctx.ui = {
+    ...ctx.ui,
+    setWidget: (_key: string, content: unknown) => {
+      if (typeof content === "function")
+        widget = content(
+          { requestRender: () => undefined },
+          {
+            fg: (_color: string, value: string) => value,
+            bold: (value: string) => value,
+          },
+        );
+    },
+    notify: (message: string) => notices.push(message),
+  };
+  registerExtension!(pi.pi as never);
+  t.after(async () => {
+    await pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    nativeSessions.delete(childState.piSessionFile!);
+    setLeadEnvironment();
+  });
+  await pi.events.get("session_start")![0](undefined, ctx);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.ok(widget);
+  assert.match(widget!.render(120).join("\n"), /lead-owned-child/);
+  widget!.handleMouse({
+    type: "click",
+    button: "left",
+    x: 4,
+    y: 1,
+    width: 120,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    focused,
+    ["lead-owned-child-pane"],
+    `${notices.join(" | ")} ${JSON.stringify(herdrCalls)}`,
+  );
+
+  replaceIdentity = true;
+  widget!.handleMouse({
+    type: "click",
+    button: "left",
+    x: 4,
+    y: 1,
+    width: 120,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, ["lead-owned-child-pane"]);
+  assert.ok(notices.some((message) => /Agent changed/u.test(message)));
+});
+
+test("valid managed leaf agents receive identity-only TUI presentation", async (t) => {
   const mailbox = setAgentEnvironment("leaf-agent");
+  t.after(async () => {
+    await pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(mailbox);
+    delete process.env.HERDR_SOCKET_PATH;
+    setLeadEnvironment();
+  });
+  process.env.PI_HERDSMAN_OWNER_SESSION_ID = LEAD_SESSION_ID;
+  process.env.HERDR_SOCKET_PATH = join(
+    tmpdir(),
+    `managed-leaf-navigation-${randomUUID()}.sock`,
+  );
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    role: "lead",
+    instanceId: randomUUID(),
+    piSessionId: LEAD_SESSION_ID,
+    updatedAt: Date.now(),
+  });
   let sessionRuntimeInitialized = false;
   let activeToolsCalls = 0;
+  let replaceLeadIdentity = false;
+  const focused: string[] = [];
   const state: ManagedAgentState = {
     ...managedState("leaf-agent"),
     piSessionId: DEFAULT_PI_SESSION_ID,
     piSessionFile: "/tmp/registered-agent.jsonl",
   };
+  writeAgentState(mailbox, state);
+  let currentSessionId = DEFAULT_PI_SESSION_ID;
+  let changeSessionOnNextSnapshot = false;
   const pi = fakePi({
     activeTools: () => {
       activeToolsCalls++;
@@ -8638,7 +9155,9 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
     },
     exec: (command, args) =>
       command === "herdr" && isApiSnapshot(args)
-        ? {
+        ? (changeSessionOnNextSnapshot &&
+            (currentSessionId = "replacement-agent-session"),
+          {
             stdout: JSON.stringify({
               id: AGENT_ID,
               result: {
@@ -8649,6 +9168,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
                       agent: "pi",
                       workspace_id: WORKSPACE,
                       pane_id: "lead-pane",
+                      tab_id: "lead-tab",
                       agent_session: {
                         source: "herdr:pi",
                         agent: "pi",
@@ -8670,6 +9190,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
                       },
                     },
                     {
+                      agent: "pi",
                       pane_id: "lead-pane",
                       workspace_id: WORKSPACE,
                       cwd: "/tmp",
@@ -8686,7 +9207,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
             }),
             stderr: "",
             code: 0,
-          }
+          })
         : command === "herdr" && isAgentList(args)
           ? {
               stdout: JSON.stringify({
@@ -8698,6 +9219,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
                       agent: "pi",
                       workspace_id: WORKSPACE,
                       pane_id: "lead-pane",
+                      tab_id: "lead-tab",
                       agent_session: {
                         source: "herdr:pi",
                         agent: "pi",
@@ -8728,12 +9250,43 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
                 stderr: "",
                 code: 0,
               }
-            : { stdout: "{}", stderr: "", code: 0 },
+            : command === "herdr" && args[0] === "agent" && args[1] === "get"
+              ? {
+                  stdout: JSON.stringify({
+                    id: AGENT_ID,
+                    result: {
+                      agent: {
+                        agent: "pi",
+                        pane_id: "lead-pane",
+                        workspace_id: WORKSPACE,
+                        tab_id: "lead-tab",
+                        agent_session: {
+                          source: "herdr:pi",
+                          agent: "pi",
+                          kind: "id",
+                          value: replaceLeadIdentity
+                            ? "replacement-session"
+                            : LEAD_SESSION_ID,
+                        },
+                      },
+                    },
+                  }),
+                  stderr: "",
+                  code: 0,
+                }
+              : command === "herdr" &&
+                  args[0] === "agent" &&
+                  args[1] === "focus"
+                ? (focused.push(args[2]!),
+                  { stdout: "{}", stderr: "", code: 0 })
+                : { stdout: "{}", stderr: "", code: 0 },
   });
   const context = fakeAgentContext() as any;
+  context.sessionManager.getSessionId = () => currentSessionId;
   context.mode = "tui";
   context.hasUI = true;
   let widget: StatusWidget | undefined;
+  const notices: string[] = [];
   context.ui = {
     setWidget: (_key: string, content: unknown) => {
       if (typeof content === "function")
@@ -8745,7 +9298,7 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
           },
         );
     },
-    notify: () => undefined,
+    notify: (message: string) => notices.push(message),
     select: async () => "tab",
   };
   registerExtension!(pi.pi as never);
@@ -8755,13 +9308,59 @@ test("valid managed leaf agents receive identity-only TUI presentation", async (
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.ok(widget);
   assert.deepEqual(widget!.render(160), [
-    "● ? → agent:leaf-agent  [read, bash, ask_owner]",
+    "● lead → agent:leaf-agent  [read, bash, ask_owner]",
   ]);
+  assert.equal(
+    widget!.handleMouse({
+      type: "click",
+      button: "left",
+      x: 3,
+      y: 0,
+      width: 160,
+    })?.handled,
+    true,
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, ["lead-pane"], notices.join(" | "));
+  replaceLeadIdentity = true;
+  widget!.handleMouse({
+    type: "click",
+    button: "left",
+    x: 3,
+    y: 0,
+    width: 160,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, ["lead-pane"]);
+  replaceLeadIdentity = false;
+  state.ownerSessionId = "replacement-owner-session";
+  writeAgentState(mailbox, state);
+  widget!.handleMouse({
+    type: "click",
+    button: "left",
+    x: 3,
+    y: 0,
+    width: 160,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(focused, ["lead-pane"]);
+  state.ownerSessionId = LEAD_SESSION_ID;
+  writeAgentState(mailbox, state);
+  changeSessionOnNextSnapshot = true;
+  widget!.handleMouse({
+    type: "click",
+    button: "left",
+    x: 3,
+    y: 0,
+    width: 160,
+  });
+  changeSessionOnNextSnapshot = false;
+  currentSessionId = "replacement-agent-session";
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  currentSessionId = DEFAULT_PI_SESSION_ID;
+  assert.deepEqual(focused, ["lead-pane"]);
   assert.equal(pi.tools.filter((tool) => tool.name === "ask_owner").length, 1);
   assert.ok(activeToolsCalls > 0);
-  await pi.events.get("session_shutdown")?.[0]();
-  resetAgentMailbox(mailbox);
-  setLeadEnvironment();
 });
 
 test("status session preparation drops the previous session snapshot", async (t) => {

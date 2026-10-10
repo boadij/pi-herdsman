@@ -2823,6 +2823,116 @@ export function registerLeadRuntime(
         : undefined;
     return { ...snapshot, ...(execution ? { execution } : {}) };
   };
+  const focusTarget = async (
+    ctx: ExtensionContext,
+    intent: FocusIntent,
+    isCurrent: () => boolean,
+  ): Promise<void> => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const signal = controller.sessionSignal();
+    const current = () =>
+      !!signal &&
+      !signal.aborted &&
+      isCurrent() &&
+      ctx.sessionManager.getSessionId() === sessionId &&
+      activeLeadRole(options.leadRuntime) === "lead" &&
+      !options.leadRuntime.roleSuspended;
+    if (!current()) throw new Error("Navigation is no longer available.");
+    if (intent.kind === "assigned-manager") {
+      const scope = await roleTransitions.currentWorktreeScope(ctx);
+      if (!current() || !scope)
+        throw new Error("Managed project assignment changed.");
+      const assignment = roleTransitions.projectAssignmentForScope(
+        scope,
+        sessionId,
+      );
+      const manager = await roleTransitions.currentManager(ctx);
+      if (
+        !current() ||
+        !assignment ||
+        !manager ||
+        manager.repoKey !== assignment.repoKey
+      )
+        throw new Error("Managed project Manager is unavailable.");
+      const target = await verifiedHerdrAgent(manager, {
+        listAgents: async () =>
+          (await options.identityHost.listAgents(ctx)).agents,
+        getAgent: async (paneId) =>
+          (await options.identityHost.getAgent(ctx, paneId))?.agent,
+        expectedSession: options.identityHost.expectedSession,
+        isPiAgent: options.identityHost.isPiAgent,
+        matchesExpectedSession: options.identityHost.matchesExpectedSession,
+      });
+      const currentManager = await roleTransitions.currentManager(ctx);
+      const currentScope = await roleTransitions.currentWorktreeScope(ctx);
+      const currentAssignment = currentScope
+        ? roleTransitions.projectAssignmentForScope(currentScope, sessionId)
+        : undefined;
+      if (
+        !current() ||
+        !target ||
+        !currentAssignment ||
+        currentAssignment.id !== assignment.id ||
+        currentAssignment.repoKey !== assignment.repoKey ||
+        currentAssignment.branch !== assignment.branch ||
+        !currentManager ||
+        currentManager.repoKey !== assignment.repoKey ||
+        !roleTransitions.sameManagerDescriptor(currentManager, manager)
+      )
+        throw new Error("Managed project Manager changed.");
+      await options.commandHost.runHerdr(
+        pi,
+        ctx,
+        ["agent", "focus", target.pane_id],
+        {
+          signal,
+        },
+      );
+      return;
+    }
+    const fresh = await loadStatusSnapshot(ctx, signal, false);
+    const matches = fresh.agents.filter(
+      (agent) =>
+        agent.sessionId === intent.sessionId &&
+        agent.state !== "lost" &&
+        agent.state !== "unknown" &&
+        agent.state !== "starting" &&
+        !!agent.paneId,
+    );
+    if (!current() || fresh.stale || fresh.unavailable || matches.length !== 1)
+      throw new Error("Agent changed; reopen Running.");
+    const target = matches[0]!;
+    const live = await identityRuntime.liveAgent(ctx, target.sessionId!);
+    if (!current() || live.length !== 1 || live[0]!.pane_id !== target.paneId)
+      throw new Error("Agent changed; reopen Running.");
+    const verified = await verifiedHerdrAgent(
+      {
+        piSessionId: target.sessionId!,
+        paneId: target.paneId!,
+        tabId: live[0]!.tab_id,
+        workspaceId: live[0]!.workspace_id,
+      },
+      {
+        listAgents: async () =>
+          (await options.identityHost.listAgents(ctx)).agents,
+        getAgent: async (paneId) =>
+          (await options.identityHost.getAgent(ctx, paneId))?.agent,
+        expectedSession: options.identityHost.expectedSession,
+        isPiAgent: options.identityHost.isPiAgent,
+        matchesExpectedSession: options.identityHost.matchesExpectedSession,
+      },
+    );
+    if (!current() || !verified)
+      throw new Error("Agent changed; reopen Running.");
+    await options.commandHost.runHerdr(
+      pi,
+      ctx,
+      ["agent", "focus", verified.pane_id],
+      {
+        signal,
+      },
+    );
+  };
   statusRuntime.configure({
     ...options.statusSnapshotHost,
     pendingStartEntries: () => controller.pendingStartEntries(),
@@ -2832,121 +2942,7 @@ export function registerLeadRuntime(
     loadSnapshot: (ctx: ExtensionContext) =>
       loadStatusSnapshot(ctx, controller.sessionSignal(), false),
     runtimeForLabel: (label: string) => controller.runtimeForLabel(label),
-    focusTarget: async (
-      ctx: ExtensionContext,
-      intent: FocusIntent,
-      isCurrent: () => boolean,
-    ) => {
-      const sessionId = ctx.sessionManager.getSessionId();
-      const signal = controller.sessionSignal();
-      const current = () =>
-        !!signal &&
-        !signal.aborted &&
-        isCurrent() &&
-        ctx.sessionManager.getSessionId() === sessionId &&
-        activeLeadRole(options.leadRuntime) === "lead" &&
-        !options.leadRuntime.roleSuspended;
-      if (!current()) throw new Error("Navigation is no longer available.");
-      if (intent.kind === "assigned-manager") {
-        const scope = await roleTransitions.currentWorktreeScope(ctx);
-        if (!current() || !scope)
-          throw new Error("Managed project assignment changed.");
-        const assignment = roleTransitions.projectAssignmentForScope(
-          scope,
-          sessionId,
-        );
-        const manager = await roleTransitions.currentManager(ctx);
-        if (
-          !current() ||
-          !assignment ||
-          !manager ||
-          manager.repoKey !== assignment.repoKey
-        )
-          throw new Error("Managed project Manager is unavailable.");
-        const target = await verifiedHerdrAgent(manager, {
-          listAgents: async () =>
-            (await options.identityHost.listAgents(ctx)).agents,
-          getAgent: async (paneId) =>
-            (await options.identityHost.getAgent(ctx, paneId))?.agent,
-          expectedSession: options.identityHost.expectedSession,
-          isPiAgent: options.identityHost.isPiAgent,
-          matchesExpectedSession: options.identityHost.matchesExpectedSession,
-        });
-        const currentManager = await roleTransitions.currentManager(ctx);
-        const currentScope = await roleTransitions.currentWorktreeScope(ctx);
-        const currentAssignment = currentScope
-          ? roleTransitions.projectAssignmentForScope(currentScope, sessionId)
-          : undefined;
-        if (
-          !current() ||
-          !target ||
-          !currentAssignment ||
-          currentAssignment.id !== assignment.id ||
-          currentAssignment.repoKey !== assignment.repoKey ||
-          currentAssignment.branch !== assignment.branch ||
-          !currentManager ||
-          currentManager.repoKey !== assignment.repoKey ||
-          !roleTransitions.sameManagerDescriptor(currentManager, manager)
-        )
-          throw new Error("Managed project Manager changed.");
-        await options.commandHost.runHerdr(
-          pi,
-          ctx,
-          ["agent", "focus", target.pane_id],
-          {
-            signal,
-          },
-        );
-        return;
-      }
-      const fresh = await loadStatusSnapshot(ctx, signal, false);
-      const matches = fresh.agents.filter(
-        (agent) =>
-          agent.sessionId === intent.sessionId &&
-          agent.state !== "lost" &&
-          agent.state !== "unknown" &&
-          agent.state !== "starting" &&
-          !!agent.paneId,
-      );
-      if (
-        !current() ||
-        fresh.stale ||
-        fresh.unavailable ||
-        matches.length !== 1
-      )
-        throw new Error("Agent changed; reopen Running.");
-      const target = matches[0]!;
-      const live = await identityRuntime.liveAgent(ctx, target.sessionId!);
-      if (!current() || live.length !== 1 || live[0]!.pane_id !== target.paneId)
-        throw new Error("Agent changed; reopen Running.");
-      const verified = await verifiedHerdrAgent(
-        {
-          piSessionId: target.sessionId!,
-          paneId: target.paneId!,
-          tabId: live[0]!.tab_id,
-          workspaceId: live[0]!.workspace_id,
-        },
-        {
-          listAgents: async () =>
-            (await options.identityHost.listAgents(ctx)).agents,
-          getAgent: async (paneId) =>
-            (await options.identityHost.getAgent(ctx, paneId))?.agent,
-          expectedSession: options.identityHost.expectedSession,
-          isPiAgent: options.identityHost.isPiAgent,
-          matchesExpectedSession: options.identityHost.matchesExpectedSession,
-        },
-      );
-      if (!current() || !verified)
-        throw new Error("Agent changed; reopen Running.");
-      await options.commandHost.runHerdr(
-        pi,
-        ctx,
-        ["agent", "focus", verified.pane_id],
-        {
-          signal,
-        },
-      );
-    },
+    focusTarget,
   });
   let projectRuntime: ReturnType<typeof createLeadProjectRuntime>;
   const projectHost = options.projectHost;
@@ -4047,24 +4043,19 @@ export function createLeadSupervisionRuntime(host: LeadSupervisionHost) {
   ): Promise<void> => {
     const currentGeneration = generation(ctx);
     const fresh = await loadSnapshot(ctx);
-    if (
-      !isCurrent() ||
-      currentGeneration !== generation(ctx) ||
-      status(ctx) !== "fresh"
-    )
+    if (!isCurrent() || currentGeneration !== generation(ctx))
       throw new Error("Lead changed; reopen staff.");
     if (
       host.activeRole() === "manager" &&
       host
         .managerSupervisionItems(fresh)
-        .filter(
-          (item) =>
-            item.kind === "work" &&
-            item.work.status === "active" &&
-            item.lead?.lead === leadId,
+        .filter((item) =>
+          item.kind === "lead"
+            ? item.lead.lead === leadId
+            : item.work.status === "active" && item.lead?.lead === leadId,
         ).length !== 1
     )
-      throw new Error("Lead is no longer active assigned work.");
+      throw new Error("Lead is no longer available.");
     const managers = host.listManagerDescriptors(host.supervisionRuntime());
     const verifyManager = async (sessionId: string, report?: any) => {
       const candidates = managers.filter(

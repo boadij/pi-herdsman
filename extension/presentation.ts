@@ -1040,6 +1040,14 @@ function renderSupervisionRows(
               `${themed(options.theme, lifecycleColor(item.lead.runtimeState), `${branch} ${navigation}${supervisionLeadMarker(item.lead)}`)} ${themed(options.theme, "muted", `${item.lead.branch ?? item.lead.displayName} · Lead`)}`,
               width,
             ),
+            ...(status === "fresh"
+              ? {
+                  intent: {
+                    kind: "session" as const,
+                    sessionId: item.lead.lead,
+                  },
+                }
+              : {}),
           };
         const marker =
           item.work.status === "active" && lead
