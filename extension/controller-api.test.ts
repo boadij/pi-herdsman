@@ -2049,6 +2049,13 @@ for (const scenario of [
     prospectivePath: true,
   },
   {
+    name: "names a Lead when its assignment arrives after startup",
+    moved: false,
+    mismatchedPath: false,
+    prospectivePath: false,
+    assignmentAfterStartup: true,
+  },
+  {
     name: "denies an exact Lead moved to a sibling worktree",
     moved: true,
     mismatchedPath: false,
@@ -2098,30 +2105,36 @@ for (const scenario of [
       text: `deliver only in the assigned checkout\n${"evidence\n".repeat(4096)}`,
       resultBindings: [expectedBinding],
     };
-    writeProjectAssignment(runtime, assignment);
-    writeChiefMessage(
-      {
-        version: 2,
-        id: sessionId,
-        leaseId: randomUUID(),
-        kind: "project_assignment",
-        fromSessionId: managerId,
-        toSessionId: sessionId,
-        leadSessionId: sessionId,
-        branch: assignment.branch,
-        text: "Project assignment ready.",
-        createdAt: Date.now(),
-      },
-      runtime,
-    );
-    const signal = listChiefMessagePaths(runtime, sessionId)
-      .map((path) => readChiefMessage(path))
-      .find((record) => record.kind === "project_assignment")!;
-    assert.ok(Buffer.byteLength(assignment.text, "utf8") > 16 * 1024);
-    assert.ok(chiefMessageBytes(signal) <= COORDINATION_MESSAGE_MAX_BYTES);
-    assert.equal(signal.text, "Project assignment ready.");
-    assert.equal(signal.resultBindings, undefined);
-    assert.doesNotMatch(signal.text, /evidence/);
+    const publishAssignment = () => {
+      writeProjectAssignment(runtime, assignment);
+      writeChiefMessage(
+        {
+          version: 2,
+          id: sessionId,
+          leaseId: randomUUID(),
+          kind: "project_assignment",
+          fromSessionId: managerId,
+          toSessionId: sessionId,
+          leadSessionId: sessionId,
+          branch: assignment.branch,
+          text: "Project assignment ready.",
+          createdAt: Date.now(),
+        },
+        runtime,
+      );
+    };
+    if (!scenario.assignmentAfterStartup) publishAssignment();
+    const assertSignal = () => {
+      const signal = listChiefMessagePaths(runtime, sessionId)
+        .map((path) => readChiefMessage(path))
+        .find((record) => record.kind === "project_assignment")!;
+      assert.ok(Buffer.byteLength(assignment.text, "utf8") > 16 * 1024);
+      assert.ok(chiefMessageBytes(signal) <= COORDINATION_MESSAGE_MAX_BYTES);
+      assert.equal(signal.text, "Project assignment ready.");
+      assert.equal(signal.resultBindings, undefined);
+      assert.doesNotMatch(signal.text, /evidence/);
+    };
+    if (!scenario.assignmentAfterStartup) assertSignal();
     const agent = {
       agent_session: {
         source: "herdr:pi",
@@ -2201,6 +2214,14 @@ for (const scenario of [
     };
     try {
       await pi.events.get("session_start")![0](undefined, ctx);
+      if (scenario.assignmentAfterStartup) {
+        assert.deepEqual(
+          entries.filter((entry: any) => entry.type === "session_info"),
+          [],
+        );
+        publishAssignment();
+        assertSignal();
+      }
       await t.waitFor(() =>
         assert.equal(listChiefMessagePaths(runtime, sessionId).length, 0),
       );
@@ -2215,6 +2236,13 @@ for (const scenario of [
       if (!scenario.moved && !scenario.mismatchedPath) {
         assert.equal(delivered[0].details.id, sessionId);
         assert.equal(delivered[0].details.branch, assignment.branch);
+        if (scenario.assignmentAfterStartup)
+          assert.deepEqual(
+            entries
+              .filter((entry: any) => entry.type === "session_info")
+              .map((entry: any) => entry.name),
+            [`Lead · ${assignment.branch}`],
+          );
         assert.ok(delivered[0].content.includes(assignment.branch));
         assert.ok(delivered[0].content.includes(assignment.text));
         assert.ok(Buffer.byteLength(delivered[0].content, "utf8") > 8 * 1024);
