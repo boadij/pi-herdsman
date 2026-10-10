@@ -644,6 +644,17 @@ test("reserves independent ordinary Lead runtime profiles with narrow fields", (
   );
   assert.equal(flexible!.frontmatter.tools, undefined);
   assert.deepEqual(orchestrator!.frontmatter.tools, []);
+  const managed = withPiAgentDir(global, () =>
+    discoverLeadDefinition(MANAGED_LEAD_DEFINITION_NAME),
+  );
+  for (const definition of [orchestrator!, managed]) {
+    assert.match(definition.body, /non-overlapping execution scopes/);
+    assert.match(definition.body, /independent assignments in parallel/);
+    assert.match(
+      definition.body,
+      /dependent\s+assignments only after their prerequisites resolve/,
+    );
+  }
   for (const [field, value] of [
     ["model", '"provider/model"'],
     ["thinking", '"low"'],
