@@ -15,6 +15,7 @@ import type {
 import { OperationError } from "./errors.ts";
 import { resultPath, resultRef } from "./storage.ts";
 import { acquireProcessLock, claimProcessLock } from "./lock.ts";
+import { createAgentController } from "./agent-controller.ts";
 import support, {
   CHILD_SESSION_ID,
   HERDSMAN_BUILD,
@@ -4987,6 +4988,65 @@ test("Manager rejects stopping an unassigned direct Lead", () =>
   runManagerStartupScenario("unassigned-close"));
 test("Manager adopts a preexisting branch worktree for fresh delegation", () =>
   runManagerStartupScenario("preexisting"));
+test("empty stop inventory reports a valid Agent discovered in final verification", async () => {
+  setLeadEnvironment();
+  const lifecycle = cascadeExecutor([]);
+  const pi = fakePi({ exec: lifecycle.exec });
+  const context = fakeContext() as any;
+  const owner = context.sessionManager.getSessionId();
+  const agent = managedState(
+    "final-snapshot-agent",
+    undefined,
+    recoveryIdentity("final-snapshot-agent"),
+  );
+  agent.ownerSessionId = owner;
+  const mailbox = agentMailboxPath(WORKSPACE, agent.agentLabel);
+  resetAgentMailbox(mailbox);
+  let discovered = false;
+  const controller = createAgentController(pi.pi as never, {
+    scope: { kind: "lead" },
+    build: HERDSMAN_BUILD,
+    extensionPath: "test",
+    isContextRetired: () => false,
+    snapshotDependencies: {
+      runtimeForLabel: () => undefined,
+      readLeadSessionIds: () => [],
+      staleAfterMs: 60_000,
+    },
+    persistedTranscriptReady: () => true,
+    agentDefinitions: async () => [],
+    readTranscript: () => ({ transcript: "", truncated: false }),
+    workspaceId: () => WORKSPACE,
+    sendResultMessage: () => undefined,
+    sendAskMessage: () => undefined,
+    sessionRetired: () => false,
+    appendError: () => undefined,
+    onChanged: () => {
+      if (discovered) return;
+      discovered = true;
+      lifecycle.live.set(agent.agentLabel, agent);
+      writeAgentState(mailbox, agent);
+    },
+    onWorkChanged: () => undefined,
+    reportWatcherError: () => undefined,
+  });
+  try {
+    const result = await controller.stopOwnedAgentsForSession(
+      context,
+      owner,
+      WORKSPACE,
+    );
+    assert.equal(result.complete, false);
+    assert.match(
+      result.summary,
+      /final-snapshot-agent: still present after stop/,
+    );
+    assert.doesNotMatch(result.summary, /No owned agents running/);
+  } finally {
+    resetAgentMailbox(mailbox);
+  }
+});
+
 test("new delegation may start from a remaining Git branch", () =>
   runManagerStartupScenario("existing-git-branch"));
 test("Manager opens and adopts a closed preexisting branch worktree", () =>

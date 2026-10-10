@@ -4432,17 +4432,20 @@ export function createAgentController(
       finalSnapshot.stateIssues.length === 0 &&
       !remaining.some(({ presence }) => presence.kind === "unknown");
     for (const agent of remaining)
-      if (agent.presence.kind === "unknown")
-        recordFailure(
-          agent.state.agentLabel,
-          "not closed: presence could not be verified",
-        );
+      recordFailure(
+        agent.state.agentLabel,
+        agent.presence.kind === "unknown"
+          ? "presence could not be verified"
+          : "still present after stop",
+      );
     if (!trustworthy && !failures.size)
       recordFailure("owned agents", "ownership state could not be verified");
+    const complete =
+      trustworthy && failures.size === 0 && remaining.length === 0;
     if (!targets.length)
       return {
-        complete: trustworthy && remaining.length === 0,
-        summary: trustworthy
+        complete,
+        summary: complete
           ? "No owned agents running."
           : `Owned Agent stop incomplete: ${[...failures.values()]
               .map(({ label, message }) => `${label}: ${message}`)
@@ -4461,7 +4464,7 @@ export function createAgentController(
     if (discarded.length)
       lines.push("Discarded:", ...discarded.map((entry) => `  ${entry}`));
     return {
-      complete: trustworthy && failures.size === 0 && remaining.length === 0,
+      complete,
       summary: lines.join("\n"),
     };
   };

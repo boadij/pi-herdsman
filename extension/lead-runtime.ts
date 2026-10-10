@@ -1852,7 +1852,23 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         host.controller.sessionSignal(),
       );
       if (!snapshot.agents.length) {
-        host.presentStopSummary("No owned agents running.");
+        const release = claimDelegationLock(
+          host.controller.workspaceId(),
+          ctx.sessionManager.getSessionId(),
+        );
+        try {
+          const fresh = await host.loadStatusSnapshot(
+            ctx,
+            host.controller.sessionSignal(),
+          );
+          if (fresh.agents.length) {
+            ctx.ui.notify("Agent state changed; reopen Stop all.", "warning");
+            return;
+          }
+          host.presentStopSummary("No owned agents running.");
+        } finally {
+          release();
+        }
         return;
       }
       const confirmed = await ctx.ui.confirm(
