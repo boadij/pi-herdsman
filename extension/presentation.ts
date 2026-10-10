@@ -1095,7 +1095,7 @@ function renderSupervisionRows(
     ];
   }
   return [
-    safeLine(header, width),
+    { text: safeLine(header, width) },
     ...shown.flatMap((lead, index) => {
       const branch = index === shown.length - 1 && hidden === 0 ? "└─" : "├─";
       const marker = supervisionLeadMarker(lead);

@@ -2543,7 +2543,11 @@ test("Status widget renders complete execution metadata without changing ownersh
   widget.setSnapshot(snapshot);
   assert.equal(widget.render(160)[0], "● lead");
 
-  const breadcrumb = ["lead", "implementer", "scout"];
+  const breadcrumb = [
+    { text: "lead" },
+    { text: "implementer" },
+    { text: "scout" },
+  ];
   widget.setSnapshot({
     ...snapshot,
     execution: { kind: "managed" },
@@ -2555,7 +2559,11 @@ test("Status widget renders complete execution metadata without changing ownersh
     widget.render(160)[0],
     "● lead → implementer → scout · managed  [read, bash]",
   );
-  assert.deepEqual(breadcrumb, ["lead", "implementer", "scout"]);
+  assert.deepEqual(breadcrumb, [
+    { text: "lead" },
+    { text: "implementer" },
+    { text: "scout" },
+  ]);
   assert.equal(widget.render(41)[0], "● lead → implementer → scout · managed");
   assert.doesNotMatch(widget.render(8)[0]!, /· managed/);
   for (let width = 0; width <= 160; width++)
