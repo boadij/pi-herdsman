@@ -1097,23 +1097,19 @@ function renderSupervisionRows(
                 ? "warning"
                 : "muted";
         const markerText = themed(options.theme, markerColor, marker);
-        const branchText = themed(
-          options.theme,
-          "muted",
-          safeLine(
-            item.work.branch,
-            width -
-              visibleWidth(prefix) -
-              visibleWidth(suffix) -
-              telemetryWidth,
-          ),
-        );
+        const branchWidth =
+          width - visibleWidth(prefix) - visibleWidth(suffix) - telemetryWidth;
+        const displayedBranch = safeLine(item.work.branch, branchWidth);
+        const branchText = themed(options.theme, "muted", displayedBranch);
         return {
           text: safeLine(
             `${themed(options.theme, "muted", `${branch} ${navigation}`)}${markerText} ${branchText}${themed(options.theme, "muted", suffix)}${telemetry.map((value) => themed(options.theme, "muted", `  ${value}`)).join("")}`,
             width,
           ),
-          ...(status === "fresh" && item.work.status === "active" && lead
+          ...(status === "fresh" &&
+          item.work.status === "active" &&
+          lead &&
+          displayedBranch === item.work.branch
             ? {
                 label: item.work.branch,
                 intent: { kind: "session" as const, sessionId: lead.lead },

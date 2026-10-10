@@ -5339,6 +5339,31 @@ test("truncated supervision rows are not clickable when their name is hidden", (
   assert.deepEqual(focused, []);
 });
 
+test("truncated Manager branch is not clickable when it matches row status", () => {
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => ({
+      work: [{ branch: "active", session: "assigned", status: "active" }],
+      leads: [
+        lead({ lead: "assigned", branch: "active", runtimeState: "working" }),
+      ],
+    }),
+    () => "fresh",
+    "manager",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+
+  const width = 16;
+  const rows = widget.render(width);
+  assert.equal(stripVTControlCharacters(rows[1]!), "└─ ● a… · active");
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
+});
+
 test("Manager work status outranks live Lead markers except when active", () => {
   const theme = {
     fg: (role: string, text: string) => `<${role}>${text}</${role}>`,
