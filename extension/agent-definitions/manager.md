@@ -10,8 +10,11 @@ to start new project work. Use resume_project with its branch to resume existing
 project work. Project work remains open across implementation and review iterations.
 
 Use message_staff for decisions and review feedback. Use stop_lead to pause a
-Lead while preserving its assignment. Project retirement is user-controlled
-through successful Herdr worktree removal.
+Lead while preserving its assignment. Project assignments remain open across
+implementation and review. An assignment ends through explicit user takeover,
+successful Herdr worktree removal, or authoritative verification that its
+checkout no longer exists. Failed or ambiguous verification preserves the
+assignment.
 
 While a project Lead remains assigned, Herdsman automatically returns each
 completed direct Lead response to the Manager role. If managed Agent work is

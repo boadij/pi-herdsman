@@ -8348,6 +8348,7 @@ export async function resolveLeadControllerRole(
     unresolvedManagerLease(): void;
     activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
     persistLeadRole: () => void;
+    isCurrent(): boolean;
   },
   optional = false,
 ): Promise<void> {
@@ -8367,6 +8368,7 @@ export async function resolveLeadControllerRole(
   try {
     scope = await deps.worktreeGroupScope(workspaceId, ctx.signal);
   } catch (error) {
+    if (!deps.isCurrent()) return;
     if (
       error instanceof OperationError &&
       error.detail.details?.herdrCode === "not_git_worktree"
@@ -8377,6 +8379,7 @@ export async function resolveLeadControllerRole(
     if (!optional) state.roleSuspended = true;
     throw error;
   }
+  if (!deps.isCurrent()) return;
   if (scope.primaryWorkspaceId !== workspaceId) {
     if (!optional) deps.persistLeadRole();
     return;
@@ -8396,6 +8399,10 @@ export async function resolveLeadControllerRole(
       try {
         verified = await deps.verifyManagerIdentity(lease.descriptor);
       } catch (error) {
+        if (!deps.isCurrent()) {
+          lease.release();
+          return;
+        }
         try {
           lease.release();
         } catch (releaseError) {
@@ -8406,6 +8413,10 @@ export async function resolveLeadControllerRole(
           throw releaseError;
         }
         throw error;
+      }
+      if (!deps.isCurrent()) {
+        lease.release();
+        return;
       }
       if (!verified) {
         try {
@@ -8435,6 +8446,7 @@ export async function resolveLeadControllerRole(
     state.managerLease = lease;
     state.controllerRole = "manager";
   } catch (error) {
+    if (!deps.isCurrent()) throw error;
     if (!state.roleSuspended) state.managerLease = undefined;
     if (!(error instanceof ProcessLockOccupiedError)) throw error;
     if (optional) {
@@ -9275,18 +9287,40 @@ export function createLeadRoleTransitions(
     if (host.processRole !== "lead")
       throw new Error("Only a lead can activate chief");
     if (!resumed && state.chiefMode === "active" && host.isCurrentChief(ctx)) {
-      const replacement = host.prepareSupervisoryProfile(ctx, "chief");
+      const sessionId = ctx.sessionManager.getSessionId();
+      const lease = state.chiefLease;
+      const generation = state.chiefModeGeneration;
       await ctx.waitForIdle();
+      if (
+        ctx.sessionManager.getSessionId() !== sessionId ||
+        state.chiefMode !== "active" ||
+        state.roleSuspended ||
+        !lease ||
+        state.chiefLease !== lease ||
+        state.chiefModeGeneration !== generation ||
+        !host.isCurrentChief(ctx)
+      )
+        throw new Error("Chief mode changed during profile refresh");
+      const replacement = host.prepareSupervisoryProfile(ctx, "chief");
       const previous = host.currentSupervisoryProfile(ctx, "chief");
       const previousTools = host.pi.getActiveTools();
+      const stillCurrent = () =>
+        ctx.sessionManager.getSessionId() === sessionId &&
+        state.chiefMode === "active" &&
+        !state.roleSuspended &&
+        state.chiefLease === lease &&
+        state.chiefModeGeneration === generation &&
+        host.isCurrentChief(ctx);
       try {
         host.commitSupervisoryProfile(replacement);
         host.reconcileRoleTools();
       } catch (error) {
-        host.commitSupervisoryProfile(previous);
-        try {
-          host.pi.setActiveTools(previousTools);
-        } catch {}
+        if (stillCurrent()) {
+          host.commitSupervisoryProfile(previous);
+          try {
+            host.pi.setActiveTools(previousTools);
+          } catch {}
+        }
         throw error;
       }
       return "Chief profile refreshed.";
@@ -9435,18 +9469,35 @@ export function createLeadRoleTransitions(
     ctx: ExtensionCommandContext,
   ): Promise<string> => {
     if (state.controllerRole === "manager" && !state.roleSuspended) {
-      const replacement = host.prepareSupervisoryProfile(ctx, "manager");
+      const sessionId = ctx.sessionManager.getSessionId();
+      const lease = state.managerLease;
       await ctx.waitForIdle();
+      if (
+        ctx.sessionManager.getSessionId() !== sessionId ||
+        state.controllerRole !== "manager" ||
+        state.roleSuspended ||
+        !lease ||
+        state.managerLease !== lease
+      )
+        throw new Error("Manager mode changed during profile refresh");
+      const replacement = host.prepareSupervisoryProfile(ctx, "manager");
       const previous = host.currentSupervisoryProfile(ctx, "manager");
       const previousTools = host.pi.getActiveTools();
+      const stillCurrent = () =>
+        ctx.sessionManager.getSessionId() === sessionId &&
+        state.controllerRole === "manager" &&
+        !state.roleSuspended &&
+        state.managerLease === lease;
       try {
         host.commitSupervisoryProfile(replacement);
         host.reconcileRoleTools();
       } catch (error) {
-        host.commitSupervisoryProfile(previous);
-        try {
-          host.pi.setActiveTools(previousTools);
-        } catch {}
+        if (stillCurrent()) {
+          host.commitSupervisoryProfile(previous);
+          try {
+            host.pi.setActiveTools(previousTools);
+          } catch {}
+        }
         throw error;
       }
       return "Manager profile refreshed.";
@@ -9735,11 +9786,7 @@ export function createLeadRoleTransitions(
         ? ((
             state.leadContext &&
             host.currentSupervisoryProfile(state.leadContext, "manager")
-          )?.tools ??
-            host.appendRegisteredTools(
-              host.normalizeBaseTools(source),
-              host.managerTools,
-            ))
+          )?.tools ?? [...host.managerTools])
         : (host.executionTools?.() ?? host.normalizeLeadTools(source)),
     );
   };
@@ -9748,6 +9795,7 @@ export function createLeadRoleTransitions(
     requestedRole: SessionRole,
     optional = false,
   ): Promise<void> => {
+    const generation = state.sessionGeneration;
     const resolve = (profile?: SupervisoryProfile, commit = true) => {
       const pending = resolveLeadControllerRole(
         state,
@@ -9768,11 +9816,13 @@ export function createLeadRoleTransitions(
           },
           activationGuard: host.activationGuard,
           persistLeadRole: () => host.persistRole("lead"),
+          isCurrent: () => state.sessionGeneration === generation,
         },
         optional,
       );
       if (!commit) return pending;
       return pending.then(() => {
+        if (state.sessionGeneration !== generation) return;
         host.commitSupervisoryProfile(
           state.controllerRole === "manager" && !state.roleSuspended
             ? profile

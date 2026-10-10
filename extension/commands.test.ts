@@ -444,7 +444,23 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     writeFileSync(managerOverride, "---\nname: manager\ntools: []\n---\n");
     await pi.commandOptions.get("manager").handler("", context);
     assert.deepEqual(pi.pi.getActiveTools(), managerTools);
+    let releaseIdle!: () => void;
+    let markWaiting!: () => void;
+    const waiting = new Promise<void>((resolve) => (markWaiting = resolve));
+    const idle = new Promise<void>((resolve) => (releaseIdle = resolve));
+    const notices: string[] = [];
+    context.ui.notify = (message: string) => notices.push(message);
+    context.waitForIdle = async () => {
+      markWaiting();
+      await idle;
+    };
+    const refresh = pi.commandOptions.get("manager").handler("", context);
+    await waiting;
     await pi.commandOptions.get("manager").handler("leave", context);
+    assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
+    releaseIdle();
+    await refresh;
+    assert.ok(notices.some((message) => message.includes("mode changed")));
     assert.deepEqual(pi.pi.getActiveTools(), [...baseline, ...leadTools]);
   } finally {
     await pi.events.get("session_shutdown")?.[0]();
@@ -453,6 +469,74 @@ test("Manager transitions and mode changes preserve the ordinary Lead baseline",
     delete process.env.HERDR_TAB_ID;
     rmSync(managerOverride, { force: true });
   }
+});
+
+test("superseded Manager restoration releases its lease without replacing current state", async () => {
+  const { createLeadRuntimeState, resolveLeadControllerRole } =
+    await import("./lead-runtime.ts");
+  const state = createLeadRuntimeState();
+  let generation = 1;
+  let releaseOldVerification!: (value: unknown) => void;
+  const oldVerification = new Promise((resolve) => {
+    releaseOldVerification = resolve;
+  });
+  const released = new Set<string>();
+  let profileOwner: string | undefined;
+  const resolve = (
+    sessionId: string,
+    verifyManagerIdentity: () => Promise<unknown>,
+  ) => {
+    const startGeneration = generation;
+    const context = fakeContext() as any;
+    context.sessionManager = {
+      ...context.sessionManager,
+      getSessionId: () => sessionId,
+      getSessionFile: () => `/tmp/${sessionId}.jsonl`,
+    };
+    return resolveLeadControllerRole(
+      state,
+      context,
+      "lead",
+      {
+        identity: { paneId: "pane", tabId: "tab", workspaceId: "workspace" },
+        build: "test",
+        worktreeGroupScope: async () => ({
+          primaryWorkspaceId: "workspace",
+          repoKey: "repo",
+        }),
+        claimManagerLease: (() => ({
+          descriptor: { piSessionId: sessionId },
+          release: () => released.add(sessionId),
+        })) as any,
+        coordinationHealthy: () => true,
+        verifyManagerIdentity,
+        unresolvedManagerLease() {},
+        activationGuard() {},
+        persistLeadRole() {},
+        isCurrent: () => generation === startGeneration,
+      },
+      true,
+    ).then(() => {
+      if (generation === startGeneration)
+        profileOwner =
+          state.controllerRole === "manager" ? sessionId : undefined;
+    });
+  };
+
+  const old = resolve("old-session", () => oldVerification);
+  await Promise.resolve();
+  generation++;
+  const current = resolve("current-session", async () => true);
+  await current;
+  const currentLease = state.managerLease;
+  releaseOldVerification(true);
+  await old;
+
+  assert.equal(state.controllerRole, "manager");
+  assert.equal(state.managerLease, currentLease);
+  assert.equal(profileOwner, "current-session");
+  assert.ok(released.has("old-session"));
+  assert.ok(!released.has("current-session"));
 });
 
 test("Chief transitions and mode changes preserve the ordinary Lead baseline", async () => {
