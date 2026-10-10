@@ -88,6 +88,69 @@ import support, {
 } from "./support.ts";
 import { parseHerdrVersion } from "./herdr.ts";
 
+test("new project worktree creation gets an extended Herdr timeout", async () => {
+  const { createLeadProjectRuntime } = await import("./lead-runtime.ts");
+  const repoKey = realFs.realpathSync(process.cwd());
+  const manager = {
+    repoKey,
+    workspaceId: WORKSPACE,
+    leaseId: randomUUID(),
+    piSessionId: randomUUID(),
+  };
+  const calls: { args: string[]; options: any }[] = [];
+  const signal = new AbortController().signal;
+  const runtime = createLeadProjectRuntime({
+    pi: {} as any,
+    leadRuntime: { managerLease: { descriptor: manager } } as any,
+    managerLease: () => ({ descriptor: manager }),
+    currentManager: async () => manager,
+    sameManagerDescriptor: () => true,
+    worktreeGroupScope: async () => ({
+      repoKey,
+      primaryWorkspaceId: WORKSPACE,
+      worktrees: [],
+    }),
+    runHerdr: async (_pi: any, _ctx: any, args: string[], options: any) => {
+      calls.push({ args, options });
+      if (args[1] === "list")
+        return {
+          source: { source_workspace_id: WORKSPACE, repo_key: repoKey },
+          worktrees: [],
+        } as any;
+      throw new Error("stop after observing create options");
+    },
+    supervisionRuntime: () => ({}),
+    readProjectAssignment: () => undefined,
+    messageLimits: async () => ({
+      inline: { bytes: 1000 },
+      mailbox: { bytes: 1000 },
+    }),
+    prepareMessageInput: (text: string) => ({ text, resultBindings: [] }),
+    resolveMessageFiles: () => [],
+    withProjectWorkLock: (_key: string, operation: () => unknown) =>
+      operation(),
+    appendDurableError: () => {},
+  } as any);
+
+  await assert.rejects(
+    runtime.activateProjectLead(
+      { action: "delegate", task: "test" },
+      {} as any,
+      signal,
+    ),
+    /stop after observing create options/,
+  );
+  assert.deepEqual(
+    calls.map(({ args }) => args.slice(0, 2)),
+    [
+      ["worktree", "list"],
+      ["worktree", "create"],
+    ],
+  );
+  assert.deepEqual(calls[0]?.options, { signal });
+  assert.deepEqual(calls[1]?.options, { signal, timeout: 180_000 });
+});
+
 test("runtime build identity includes exact executable bytes", () => {
   const path = join(tmpdir(), `herdsman-build-${randomUUID()}.js`);
   writeFileSync(path, "export default 1;\n");

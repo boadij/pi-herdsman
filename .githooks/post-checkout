@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+# Only run after a new checkout, not ordinary branch/file switching.
+[ "$3" = 1 ] || exit 0
+
+# Git passes a null previous HEAD for a new worktree or clone.
+case "$1" in
+  "" | *[!0]*) exit 0 ;;
+esac
+
+# Exclude the primary checkout and ordinary clone operations.
+git_dir=$(git rev-parse --path-format=absolute --git-dir)
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
+[ "$git_dir" != "$common_dir" ] || exit 0
+
+npm ci || {
+  printf '%s\n' \
+    "Worktree dependency installation failed. Run npm ci in this checkout before reusing it." >&2
+  exit 1
+}

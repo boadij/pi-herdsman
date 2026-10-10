@@ -5472,7 +5472,10 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
           "--no-focus",
         ];
         args.push("--base", operation.base ?? "HEAD");
-        const created = await runHerdr(pi, ctx, args, { signal });
+        const created = await runHerdr(pi, ctx, args, {
+          signal,
+          timeout: 180_000,
+        });
         workspaceId = created?.workspace?.workspace_id;
         paneId = created?.root_pane?.pane_id;
         tabId = created?.tab?.tab_id;
