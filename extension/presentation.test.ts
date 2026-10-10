@@ -2992,6 +2992,65 @@ test("status widget hit regions select exact rows and visible ancestors only", (
   assert.equal(click(0, 1, 139), undefined);
 });
 
+test("truncated Agent rows are not clickable when their label is hidden", (t) => {
+  const selected: unknown[] = [];
+  const widget = new StatusWidget(undefined, undefined, (intent) =>
+    selected.push(intent),
+  );
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [
+      {
+        label: "long-agent-label",
+        definition: "worker",
+        state: "working",
+        sessionId: "agent-session",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+    breadcrumb: [{ text: "lead" }],
+  });
+
+  const rows = widget.render(1);
+  assert.equal(stripVTControlCharacters(rows[1]!), "…");
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width: 1 }),
+    undefined,
+  );
+  assert.deepEqual(selected, []);
+});
+
+test("Agent definition does not substitute for a clipped identifying label", (t) => {
+  const selected: unknown[] = [];
+  const widget = new StatusWidget(undefined, undefined, (intent) =>
+    selected.push(intent),
+  );
+  t.after(() => widget.dispose());
+  widget.setSnapshot({
+    agents: [
+      {
+        label: "worker",
+        definition: "worker",
+        state: "working",
+        sessionId: "agent-session",
+      },
+    ],
+    stale: false,
+    unavailable: false,
+    breadcrumb: [{ text: "lead" }],
+  });
+
+  const width = 14;
+  const rows = widget.render(width);
+  assert.equal(stripVTControlCharacters(rows[1]!), "└─ ⠋ worker  …");
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width }),
+    undefined,
+  );
+  assert.deepEqual(selected, []);
+});
+
 test("managed marker has an independent visible-only hit region", (t) => {
   const selected: unknown[] = [];
   const widget = new StatusWidget(undefined, undefined, (intent) =>
@@ -5259,6 +5318,25 @@ test("Manager standalone Lead rows expose their exact click target", () => {
   assert.deepEqual(focused, [
     { kind: "session", sessionId: "standalone-lead" },
   ]);
+});
+
+test("truncated supervision rows are not clickable when their name is hidden", () => {
+  const focused: unknown[] = [];
+  const widget = createSupervisionWidget(
+    () => [lead({ lead: "long-lead-session", displayName: "long-lead-name" })],
+    () => "fresh",
+    "chief",
+    undefined,
+    (intent) => focused.push(intent),
+  );
+
+  const rows = widget.render(1);
+  assert.equal(stripVTControlCharacters(rows[1]!), "…");
+  assert.equal(
+    widget.handleMouse({ type: "click", button: "left", x: 0, y: 1, width: 1 }),
+    undefined,
+  );
+  assert.deepEqual(focused, []);
 });
 
 test("Manager work status outranks live Lead markers except when active", () => {

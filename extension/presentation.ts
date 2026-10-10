@@ -444,6 +444,7 @@ export function renderRunningOptions(rows: readonly StatusRow[]): string[] {
 
 export type StatusDisplayRow = Omit<StatusRow, "tree" | "spinner"> & {
   text: string;
+  labelStart: number;
 };
 
 const MIN_TASK_WIDTH = 16;
@@ -578,6 +579,9 @@ export function layoutStatusRows(
     }) ?? layouts.at(-1)!;
   return rows.map((row) => ({
     label: row.label,
+    labelStart: visibleWidth(
+      `${row.tree}${row.spinner} ${padVisible(row.definition, columns.definitionWidth)}  `,
+    ),
     ...(row.paneId ? { paneId: row.paneId } : {}),
     ...(row.sessionId ? { sessionId: row.sessionId } : {}),
     text: renderStatusLine(row, columns, layout, available, options.theme),
@@ -926,7 +930,23 @@ const MANAGER_METADATA_LAYOUTS = [
   { elapsed: false, context: false },
 ] as const;
 
-type SupervisionRow = { text: string; intent?: FocusIntent };
+type SupervisionRow = { text: string; label?: string; intent?: FocusIntent };
+
+function identifyingLabelVisible(
+  text: string,
+  label: string,
+  width: number,
+  expectedStart?: number,
+): boolean {
+  if (expectedStart !== undefined)
+    return label.length > 0 && expectedStart + visibleWidth(label) <= width;
+  const start = text.lastIndexOf(label);
+  return (
+    label.length > 0 &&
+    start >= 0 &&
+    visibleWidth(text.slice(0, start + label.length)) <= width
+  );
+}
 
 /** Renders the bounded ambient lead rows and their render-derived targets. */
 function renderSupervisionRows(
@@ -1042,6 +1062,7 @@ function renderSupervisionRows(
             ),
             ...(status === "fresh"
               ? {
+                  label: item.lead.branch ?? item.lead.displayName,
                   intent: {
                     kind: "session" as const,
                     sessionId: item.lead.lead,
@@ -1093,7 +1114,10 @@ function renderSupervisionRows(
             width,
           ),
           ...(status === "fresh" && item.work.status === "active" && lead
-            ? { intent: { kind: "session" as const, sessionId: lead.lead } }
+            ? {
+                label: item.work.branch,
+                intent: { kind: "session" as const, sessionId: lead.lead },
+              }
             : {}),
         };
       }),
@@ -1120,6 +1144,7 @@ function renderSupervisionRows(
           width,
         ),
         ...(intent ? { intent } : {}),
+        ...(intent ? { label: lead.displayName } : {}),
       };
       const children = (lead.leads ?? []).slice(0, 3);
       const childIndent = branch === "└─" ? "   " : "│  ";
@@ -1134,6 +1159,7 @@ function renderSupervisionRows(
             ),
             ...(status === "fresh"
               ? {
+                  label: child.branch ?? child.display_name,
                   intent: {
                     kind: "session" as const,
                     sessionId: child.session,
@@ -1411,7 +1437,11 @@ export function createSupervisionWidget(
       }).filter(({ text }) => text.length > 0);
       hits = [];
       rows.forEach((row, index) => {
-        if (row.intent)
+        if (
+          row.intent &&
+          row.label &&
+          identifyingLabelVisible(row.text, row.label, width)
+        )
           hits.push({
             row: index,
             from: 0,
@@ -3752,6 +3782,12 @@ export class StatusWidget {
         );
         if (
           !row.sessionId ||
+          !identifyingLabelVisible(
+            row.text,
+            row.label,
+            availableWidth,
+            row.labelStart,
+          ) ||
           s.agents.filter(({ sessionId }) => sessionId === row.sessionId)
             .length !== 1 ||
           !agent ||
