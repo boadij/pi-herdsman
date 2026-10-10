@@ -66,14 +66,14 @@ Precedence is `bundled < project < global`.
 All effective Agent definitions are sorted and validated together, including
 every `agents` reference.
 
-### Reserved Lead definitions
+### Reserved role definitions
 
-`flexible-lead`, `orchestrator-lead`, and `managed-lead` are reserved Lead
-definitions, not Agents. They are excluded from the Agent roster and cannot be
-selected by `delegate_agent`, referenced from `agents`, or disabled. The
-Definitions UI lists them first in this order: `flexible-lead`,
-`orchestrator-lead`, `managed-lead`. The two ordinary runtime profiles provide
-`Details` only; `managed-lead` additionally provides `Model` and `Thinking`.
+`flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
+are reserved role definitions, not Agents. They are excluded from the Agent
+roster and cannot be selected by `delegate_agent`, referenced from `agents`, or
+disabled. The Definitions UI lists them first in that order. Runtime profiles
+provide `Details` only; `managed-lead` additionally provides `Model` and
+`Thinking`.
 
 Ordinary unassigned Leads use their persisted execution choice: `flexible`
 selects `flexible-lead` and `orchestrate` selects `orchestrator-lead`. A future
@@ -82,20 +82,30 @@ setting. Exactly assigned project Leads use `managed-lead` instead. Execution
 choice is separate from Manager authority: only the current exact
 `ProjectAssignment` establishes that authority (see [ADR 0017](../adr/0017-use-project-assignments-for-managed-lead-authority.md)).
 
-The ordinary definitions are runtime profiles, not Pi launch definitions.
-They may configure only `name`, `description`, `body`, `bodyMode` on matching
-overlays, `tools`, and `excludeTools`. They reject `model`, `thinking`,
+The ordinary Lead profiles and the Manager and Chief definitions are runtime
+profiles, not Pi launch definitions. They may configure only `name`,
+`description`, `body`, `bodyMode` on matching overlays, `tools`, and
+`excludeTools`. They reject `model`, `thinking`,
 `systemPromptMode`, `enabled`, `permission`, `agents`, `noTools`,
 `noBuiltinTools`, `skills`, `noSkills`, `inheritSkills`, `extensions`,
 `noExtensions`, `inheritGlobalContext`, and `inheritProjectContext`.
 `bodyMode` is valid only on a matching overlay as described below.
 
-For an ordinary runtime profile, omitted `tools` preserves the ordinary Lead
-tool baseline. An explicit `tools` list selects only matching registered
-ordinary tools, then `excludeTools` is applied. Herdsman-owned tools cannot be
-activated through this policy; mandatory Lead coordination tools are restored
-after filtering and cannot be excluded. Unregistered configured tools remain
-unavailable rather than widening the selected policy.
+For an ordinary Lead or Manager profile, omitted `tools` preserves the saved
+ordinary Lead tool baseline. Chief's bundled definition sets `tools: []`, so
+its default exposes only mandatory staff coordination tools. An explicit
+`tools` list selects matching registered ordinary tools, then `excludeTools` is
+applied. Herdsman-owned tools cannot be activated through this policy;
+role-required coordination tools are restored after filtering and cannot be
+excluded. Unregistered configured tools remain unavailable rather than
+widening the selected policy. Manager overlays can be trusted-project or global;
+Chief accepts global overlays only because Chief is workspace-neutral. A
+project-local `chief` definition is rejected with guidance to configure it
+globally instead. Manager and Chief profiles resolve when activated or restored,
+and repeating `/manager` or `/chief` refreshes the active profile. Invalid
+configuration blocks explicit activation; an invalid profile during verified
+role restoration retains authority but restricts tools to mandatory role tools
+and uses the runtime-owned role contract without configurable instructions.
 
 If a persisted ordinary mode resolves to an invalid profile, Herdsman keeps the
 saved mode rather than silently switching to the other profile. The ordinary
@@ -120,7 +130,7 @@ allowlist or exclusion policy is used.
 Managed Lead project assignment handoff and settlement behavior is described
 in [Project orchestration](../guides/project-orchestration.md). Runtime
 profiles modify execution instructions and ordinary tool projection only;
-reserved Lead definitions do not compose or inherit from one another (see
+reserved runtime profiles are independent and do not compose or inherit (see
 [ADR 0018](../adr/0018-use-standalone-lead-execution-profiles.md)).
 
 ## Execution settings

@@ -65,17 +65,19 @@ import {
   agentLaunchArgs,
   configuredToolPolicy,
   configuredModel,
-  discoverLeadDefinition,
-  isReservedLeadDefinition,
+  discoverRoleDefinition,
+  isReservedRoleDefinition,
   matchesToolPattern,
   expandAgentBodyFiles,
   FLEXIBLE_LEAD_DEFINITION_NAME,
   ORCHESTRATOR_LEAD_DEFINITION_NAME,
   MANAGED_LEAD_DEFINITION_NAME,
+  MANAGER_DEFINITION_NAME,
+  CHIEF_DEFINITION_NAME,
   resolveChildModel,
   writePrivatePromptSnapshots,
   type AgentDefinition,
-  type LeadDefinitionName,
+  type RoleDefinitionName,
 } from "./agent-definitions.ts";
 import type { MessageFileInput } from "./core.ts";
 import type { ManagedAgentState, ResultBinding } from "./mailbox.ts";
@@ -188,6 +190,30 @@ type LeadTransitionHost = {
   projectMessageBytes: typeof import("./supervision.ts").projectMessageBytes;
   writeProjectMessage: typeof import("./supervision.ts").writeProjectMessage;
   currentChiefAuthority: LeadRoleTransitionRuntime["currentChiefAuthority"];
+};
+
+type LeadRoleTransitionHost = LeadTransitionHost & {
+  prepareSupervisoryProfile(
+    ctx: ExtensionContext,
+    role: "manager" | "chief",
+  ): SupervisoryProfile;
+  commitSupervisoryProfile(profile: SupervisoryProfile | undefined): void;
+  currentSupervisoryProfile(
+    ctx: ExtensionContext,
+    role: "manager" | "chief",
+  ): SupervisoryProfile | undefined;
+  fallbackSupervisoryProfile(
+    ctx: ExtensionContext,
+    role: "manager" | "chief",
+  ): SupervisoryProfile;
+};
+
+type SupervisoryProfile = {
+  role: "manager" | "chief";
+  definition: AgentDefinition;
+  tools: string[];
+  sessionId: string;
+  valid: boolean;
 };
 
 type LeadRuntimeOptions = {
@@ -305,11 +331,11 @@ type LeadCommandHost = {
   readConfig: typeof import("./config.ts").readConfig;
   contextAgentDefinitions(ctx: ExtensionContext): Promise<{
     definitions: AgentDefinition[];
-    leadDefinitions: AgentDefinition[];
+    roleDefinitions: AgentDefinition[];
     projectTrusted: boolean;
   }>;
-  discoverLeadDefinition(
-    name: LeadDefinitionName,
+  discoverRoleDefinition(
+    name: RoleDefinitionName,
     options?: {
       projectRoot?: string;
     },
@@ -742,11 +768,12 @@ export function createLeadToolState(
       if (registered.has(name) && !next.includes(name)) next.push(name);
     return next;
   };
-  const projectLeadTools = (
+  const projectRoleTools = (
     baseline: readonly string[],
     definition: AgentDefinition,
+    requiredTools: readonly string[],
   ) => {
-    const policy = configuredToolPolicy(definition, leadCoordinationNames);
+    const policy = configuredToolPolicy(definition, requiredTools);
     const selected = policy.explicit
       ? policy.tools.flatMap((pattern) =>
           [...registeredToolNames()].filter((name) =>
@@ -758,7 +785,7 @@ export function createLeadToolState(
       policy.excluded.some((pattern) => matchesToolPattern(pattern, name));
     return appendRegisteredTools(
       normalizeBaseTools(selected.filter((name) => !excluded(name))),
-      leadCoordinationNames,
+      requiredTools,
     );
   };
   return {
@@ -767,7 +794,11 @@ export function createLeadToolState(
     appendRegisteredTools,
     normalizeLeadTools: (tools: readonly string[]) =>
       appendRegisteredTools(normalizeBaseTools(tools), leadCoordinationNames),
-    projectLeadTools,
+    projectRoleTools,
+    projectLeadTools: (
+      baseline: readonly string[],
+      definition: AgentDefinition,
+    ) => projectRoleTools(baseline, definition, leadCoordinationNames),
     getLeadTools: () => leadTools,
     setLeadTools: (tools: string[] | undefined) => {
       leadTools = tools ? normalizeBaseTools(tools) : undefined;
@@ -920,11 +951,11 @@ export function createLeadSessionStartRuntime(host: {
     signal: AbortSignal,
     skipProfileResolution?: boolean,
     skipAssignmentLookup?: boolean,
-    leadDefinitions?: readonly AgentDefinition[],
+    roleDefinitions?: readonly AgentDefinition[],
   ): Promise<void>;
   discoverSessionDefinitions(ctx: ExtensionContext): Promise<{
     definitions: AgentDefinition[];
-    leadDefinitions: AgentDefinition[];
+    roleDefinitions: AgentDefinition[];
     projectTrusted: boolean;
   }>;
   setLeadExecutionPending(pending: boolean): void;
@@ -1149,7 +1180,7 @@ export function createLeadSessionStartRuntime(host: {
       let definitionSnapshot:
         | {
             definitions: AgentDefinition[];
-            leadDefinitions: AgentDefinition[];
+            roleDefinitions: AgentDefinition[];
           }
         | undefined;
       const needsLeadRoster = !(
@@ -1166,7 +1197,7 @@ export function createLeadSessionStartRuntime(host: {
         } catch (error) {
           if (sessionSignal.aborted) return;
           host.appendDefinitionError(ctx, error);
-          definitionSnapshot = { definitions: [], leadDefinitions: [] };
+          definitionSnapshot = { definitions: [], roleDefinitions: [] };
         }
       }
       if (sessionSignal.aborted) return;
@@ -1177,7 +1208,7 @@ export function createLeadSessionStartRuntime(host: {
             sessionSignal,
             skipLeadExecutionProfileResolution,
             malformedRole,
-            definitionSnapshot?.leadDefinitions,
+            definitionSnapshot?.roleDefinitions,
           );
         } finally {
           if (!sessionSignal.aborted) {
@@ -1246,9 +1277,16 @@ export function createLeadAgentEventRuntime(host: {
     content: string;
     display: boolean;
   }): void;
-  chiefSystemPrompt(options: BuildSystemPromptOptions): string;
+  chiefSystemPrompt(options: BuildSystemPromptOptions, body: string): string;
   isActiveManager(): boolean;
-  roleCharter(): string;
+  roleCharter(ctx: ExtensionContext): string;
+  currentChiefAllowedTools(
+    ctx: ExtensionContext,
+  ): readonly string[] | undefined;
+  supervisoryProfileBody(
+    ctx: ExtensionContext,
+    role: "manager" | "chief",
+  ): string;
   isActiveLead(): boolean;
   executionPrompt(): string | undefined;
   prepareLeadSupervisorStateMessage(
@@ -1264,7 +1302,6 @@ export function createLeadAgentEventRuntime(host: {
     LeadController,
     "settleAsks" | "sessionSignal" | "settleResults"
   >;
-  isStaffTool(name: string): boolean;
 }) {
   return {
     async beforeAgentStart(
@@ -1272,17 +1309,22 @@ export function createLeadAgentEventRuntime(host: {
       ctx: ExtensionContext,
     ): Promise<{ systemPrompt: string } | undefined> {
       if (host.isCurrentChief(ctx)) {
-        host.setActiveTools(host.chiefTools);
+        host.setActiveTools(
+          host.currentChiefAllowedTools(ctx) ?? host.chiefTools,
+        );
         host.leadInboxRuntime.holdStartPreflight(ctx);
         const message = await host.prepareSupervisionMessage(ctx);
         if (message) host.sendMessage(message);
         return {
-          systemPrompt: host.chiefSystemPrompt(event.systemPromptOptions),
+          systemPrompt: host.chiefSystemPrompt(
+            event.systemPromptOptions,
+            host.supervisoryProfileBody(ctx, "chief"),
+          ),
         };
       }
       event.systemPromptOptions ??= {};
       const sections = (event.systemPromptOptions.sections ??= {});
-      sections.pi_herdsman_role = host.roleCharter();
+      sections.pi_herdsman_role = host.roleCharter(ctx);
       if (host.isActiveManager()) {
         delete sections.pi_herdsman_lead_execution;
         delete sections.agent_definitions;
@@ -1322,9 +1364,17 @@ export function createLeadAgentEventRuntime(host: {
       event: any,
       ctx: ExtensionContext,
     ): { block: true; reason: string } | undefined {
-      if (host.isStaffTool(event.toolName) || !host.isCurrentChief(ctx))
+      if (
+        !host.isCurrentChief(ctx) ||
+        (host.currentChiefAllowedTools(ctx) ?? host.chiefTools).includes(
+          event.toolName,
+        )
+      )
         return undefined;
-      return { block: true, reason: "Chief mode may only use staff tools." };
+      return {
+        block: true,
+        reason: "Tool is unavailable in the active Chief profile.",
+      };
     },
   };
 }
@@ -1474,29 +1524,31 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
     async openDefinitionsMenu(ctx: ExtensionCommandContext): Promise<void> {
       let selectedDefinition: string | undefined;
       const loadDefinitions = async () => {
-        const { definitions, leadDefinitions } =
+        const { definitions, roleDefinitions } =
           await host.contextAgentDefinitions(ctx);
         return {
           definitions,
-          leadDefinitions: (
+          roleDefinitions: (
             [
               FLEXIBLE_LEAD_DEFINITION_NAME,
               ORCHESTRATOR_LEAD_DEFINITION_NAME,
               MANAGED_LEAD_DEFINITION_NAME,
+              MANAGER_DEFINITION_NAME,
+              CHIEF_DEFINITION_NAME,
             ] as const
           ).map((name) => {
-            const definition = leadDefinitions.find(
+            const definition = roleDefinitions.find(
               (candidate) => candidate.name === name,
             );
             if (!definition)
-              throw new Error(`Lead definition ${name} not found`);
+              throw new Error(`role definition ${name} not found`);
             return definition;
           }),
         };
       };
       const resolveDefinition = async (name: string) => {
         const loaded = await loadDefinitions();
-        return [...loaded.leadDefinitions, ...loaded.definitions].find(
+        return [...loaded.roleDefinitions, ...loaded.definitions].find(
           (candidate) => candidate.name === name,
         );
       };
@@ -1504,7 +1556,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         const loaded = await loadDefinitions();
         const definitions = loaded.definitions;
         const availableDefinitions = [
-          ...loaded.leadDefinitions,
+          ...loaded.roleDefinitions,
           ...definitions,
         ];
         const options = availableDefinitions.map((definition) => {
@@ -1516,10 +1568,12 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
           ]
             .filter(Boolean)
             .join(" + ");
-          const reservedLead = isReservedLeadDefinition(definition.name);
+          const reservedLead = isReservedRoleDefinition(definition.name);
           const runtimeProfile =
             definition.name === FLEXIBLE_LEAD_DEFINITION_NAME ||
-            definition.name === ORCHESTRATOR_LEAD_DEFINITION_NAME;
+            definition.name === ORCHESTRATOR_LEAD_DEFINITION_NAME ||
+            definition.name === MANAGER_DEFINITION_NAME ||
+            definition.name === CHIEF_DEFINITION_NAME;
           const description = [
             ...(!runtimeProfile ? [model, thinking] : []),
             sources,
@@ -1560,7 +1614,9 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             definition.name === MANAGED_LEAD_DEFINITION_NAME;
           const runtimeProfile =
             definition.name === FLEXIBLE_LEAD_DEFINITION_NAME ||
-            definition.name === ORCHESTRATOR_LEAD_DEFINITION_NAME;
+            definition.name === ORCHESTRATOR_LEAD_DEFINITION_NAME ||
+            definition.name === MANAGER_DEFINITION_NAME ||
+            definition.name === CHIEF_DEFINITION_NAME;
           const action = await host.selectMenu(
             ctx,
             definition.name,
@@ -1589,7 +1645,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
                     },
                   ]
                 : []),
-              ...(!isReservedLeadDefinition(definition.name)
+              ...(!isReservedRoleDefinition(definition.name)
                 ? [
                     {
                       value: "enabled",
@@ -2081,7 +2137,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
             {
               value: "definitions",
               label: "Definitions",
-              help: "Inspect effective Agent and Lead definitions and edit global overrides.",
+              help: "Inspect effective Agent and role definitions and edit global overrides.",
             },
             {
               value: "settings",
@@ -2158,6 +2214,7 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
       }
       try {
         if (!args.length && host.roleActive(role)) {
+          ctx.ui.notify(await host.transitionRole(role, false, ctx));
           await host.openSupervisionOverview(ctx);
           return;
         }
@@ -2166,6 +2223,8 @@ export function createLeadCommandRuntime(host: LeadCommandHost) {
         );
       } catch (error) {
         ctx.ui.notify(String(error).replace(/^Error: /, ""), "error");
+        if (!args.length && host.roleActive(role))
+          await host.openSupervisionOverview(ctx);
       }
     },
     async runHerdsmanCommand(
@@ -2252,6 +2311,74 @@ export function registerLeadRuntime(
     | { mode: LeadExecutionMode; valid: false; managed: boolean }
     | undefined;
   let leadExecutionPending = false;
+  let supervisoryProfile: SupervisoryProfile | undefined;
+  const prepareSupervisoryProfile = (
+    ctx: ExtensionContext,
+    role: "manager" | "chief",
+  ): SupervisoryProfile => {
+    const name =
+      role === "manager" ? MANAGER_DEFINITION_NAME : CHIEF_DEFINITION_NAME;
+    const definition = options.commandHost.discoverRoleDefinition(
+      name,
+      ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
+    );
+    const prepared = {
+      ...definition,
+      body: expandAgentBodyFiles(definition.body, [], `${role} role profile`),
+    };
+    const baseline =
+      role === "manager"
+        ? (leadToolState.getLeadTools() ??
+          leadToolState.normalizeBaseTools(pi.getActiveTools()))
+        : [];
+    return {
+      role,
+      definition: prepared,
+      tools: leadToolState.projectRoleTools(
+        baseline,
+        prepared,
+        role === "manager"
+          ? options.roleTransitionHost.managerTools
+          : options.roleTransitionHost.chiefTools,
+      ),
+      sessionId: ctx.sessionManager.getSessionId(),
+      valid: true,
+    };
+  };
+  const fallbackSupervisoryProfile = (
+    ctx: ExtensionContext,
+    role: "manager" | "chief",
+  ): SupervisoryProfile => ({
+    role,
+    definition: {
+      name:
+        role === "manager" ? MANAGER_DEFINITION_NAME : CHIEF_DEFINITION_NAME,
+      path: "",
+      frontmatter: {},
+      body: "",
+    },
+    tools: leadToolState.appendRegisteredTools(
+      [],
+      role === "manager"
+        ? options.roleTransitionHost.managerTools
+        : options.roleTransitionHost.chiefTools,
+    ),
+    sessionId: ctx.sessionManager.getSessionId(),
+    valid: false,
+  });
+  const commitSupervisoryProfile = (
+    profile: SupervisoryProfile | undefined,
+  ) => {
+    supervisoryProfile = profile;
+  };
+  const currentSupervisoryProfile = (
+    ctx: ExtensionContext,
+    role: "manager" | "chief",
+  ) =>
+    supervisoryProfile?.role === role &&
+    supervisoryProfile.sessionId === ctx.sessionManager.getSessionId()
+      ? supervisoryProfile
+      : undefined;
   const persistLeadExecution = (
     mode: LeadExecutionMode,
     tools: readonly string[],
@@ -2613,6 +2740,10 @@ export function registerLeadRuntime(
   };
   const roleTransitionServices = {
     ...roleHost,
+    prepareSupervisoryProfile,
+    commitSupervisoryProfile,
+    currentSupervisoryProfile,
+    fallbackSupervisoryProfile,
     removeProjectAssignment,
     controllerScope: { kind: "lead" },
     activationGuard,
@@ -3133,7 +3264,7 @@ export function registerLeadRuntime(
         : ORCHESTRATOR_LEAD_DEFINITION_NAME;
     const definition = definitions
       ? definitions.find((candidate) => candidate.name === name)
-      : options.commandHost.discoverLeadDefinition(
+      : options.commandHost.discoverRoleDefinition(
           name,
           ctx.isProjectTrusted() ? { projectRoot: ctx.cwd } : {},
         );
@@ -3152,7 +3283,7 @@ export function registerLeadRuntime(
     signal: AbortSignal,
     skipProfileResolution = false,
     skipAssignmentLookup = false,
-    leadDefinitions?: readonly AgentDefinition[],
+    roleDefinitions?: readonly AgentDefinition[],
   ): Promise<void> => {
     if (signal.aborted) return;
     const currentBaseline = () =>
@@ -3215,7 +3346,7 @@ export function registerLeadRuntime(
     }
     try {
       if (signal.aborted) return;
-      const definition = resolveExecutionDefinition(ctx, mode, leadDefinitions);
+      const definition = resolveExecutionDefinition(ctx, mode, roleDefinitions);
       if (signal.aborted) return;
       leadExecution = {
         mode,
@@ -3507,6 +3638,15 @@ export function registerLeadRuntime(
       leadExecution?.managed
         ? { managed: true, mode: leadExecution.mode }
         : { managed: false, mode: leadExecution?.mode ?? "flexible" },
+    supervisoryProfileBody: (
+      ctx: ExtensionContext,
+      role: "manager" | "chief",
+    ) =>
+      currentSupervisoryProfile(ctx, role)?.valid
+        ? currentSupervisoryProfile(ctx, role)!.definition.body
+        : "",
+    currentChiefAllowedTools: (ctx: ExtensionContext) =>
+      currentSupervisoryProfile(ctx, "chief")?.tools,
   };
 }
 
@@ -5611,7 +5751,7 @@ export function createLeadProjectRuntime(host: LeadProjectHost) {
         if (!piAlreadyRunning) {
           await assertUnoccupied(workspaceId!);
           const projectTrusted = ctx.isProjectTrusted();
-          const definition = discoverLeadDefinition(
+          const definition = discoverRoleDefinition(
             MANAGED_LEAD_DEFINITION_NAME,
             projectTrusted ? { projectRoot: cwd! } : {},
           );
@@ -8211,6 +8351,7 @@ export async function resolveLeadControllerRole(
     unresolvedManagerLease(): void;
     activationGuard(sessionId: string, role: "Chief" | "Manager"): void;
     persistLeadRole: () => void;
+    isCurrent(): boolean;
   },
   optional = false,
 ): Promise<void> {
@@ -8230,6 +8371,7 @@ export async function resolveLeadControllerRole(
   try {
     scope = await deps.worktreeGroupScope(workspaceId, ctx.signal);
   } catch (error) {
+    if (!deps.isCurrent()) return;
     if (
       error instanceof OperationError &&
       error.detail.details?.herdrCode === "not_git_worktree"
@@ -8240,6 +8382,7 @@ export async function resolveLeadControllerRole(
     if (!optional) state.roleSuspended = true;
     throw error;
   }
+  if (!deps.isCurrent()) return;
   if (scope.primaryWorkspaceId !== workspaceId) {
     if (!optional) deps.persistLeadRole();
     return;
@@ -8259,6 +8402,10 @@ export async function resolveLeadControllerRole(
       try {
         verified = await deps.verifyManagerIdentity(lease.descriptor);
       } catch (error) {
+        if (!deps.isCurrent()) {
+          lease.release();
+          return;
+        }
         try {
           lease.release();
         } catch (releaseError) {
@@ -8269,6 +8416,10 @@ export async function resolveLeadControllerRole(
           throw releaseError;
         }
         throw error;
+      }
+      if (!deps.isCurrent()) {
+        lease.release();
+        return;
       }
       if (!verified) {
         try {
@@ -8298,6 +8449,7 @@ export async function resolveLeadControllerRole(
     state.managerLease = lease;
     state.controllerRole = "manager";
   } catch (error) {
+    if (!deps.isCurrent()) throw error;
     if (!state.roleSuspended) state.managerLease = undefined;
     if (!(error instanceof ProcessLockOccupiedError)) throw error;
     if (optional) {
@@ -8421,7 +8573,7 @@ export function parseGitWorktreeInventory(output: string):
 
 export function createLeadRoleTransitions(
   state: LeadRuntimeState,
-  host: LeadTransitionHost,
+  host: LeadRoleTransitionHost,
 ) {
   const projectWorkLocks = new Map<string, Promise<void>>();
   const withProjectWorkLock = async <T>(
@@ -9116,6 +9268,7 @@ export function createLeadRoleTransitions(
         lifecycleError ??= error;
       }
       state.managerLease = undefined;
+      host.commitSupervisoryProfile(undefined);
       host.setLeadTools(undefined);
       host.resetSupervisionSnapshot();
       return { previousChiefMode, previousControllerRole, lifecycleError };
@@ -9136,10 +9289,62 @@ export function createLeadRoleTransitions(
   ): Promise<string> => {
     if (host.processRole !== "lead")
       throw new Error("Only a lead can activate chief");
+    if (!resumed && state.chiefMode === "active" && host.isCurrentChief(ctx)) {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const lease = state.chiefLease;
+      const generation = state.chiefModeGeneration;
+      await ctx.waitForIdle();
+      if (
+        ctx.sessionManager.getSessionId() !== sessionId ||
+        state.chiefMode !== "active" ||
+        state.roleSuspended ||
+        !lease ||
+        state.chiefLease !== lease ||
+        state.chiefModeGeneration !== generation ||
+        !host.isCurrentChief(ctx)
+      )
+        throw new Error("Chief mode changed during profile refresh");
+      const replacement = host.prepareSupervisoryProfile(ctx, "chief");
+      const previous = host.currentSupervisoryProfile(ctx, "chief");
+      const previousTools = host.pi.getActiveTools();
+      const stillCurrent = () =>
+        ctx.sessionManager.getSessionId() === sessionId &&
+        state.chiefMode === "active" &&
+        !state.roleSuspended &&
+        state.chiefLease === lease &&
+        state.chiefModeGeneration === generation &&
+        host.isCurrentChief(ctx);
+      try {
+        host.commitSupervisoryProfile(replacement);
+        host.reconcileRoleTools();
+      } catch (error) {
+        if (stillCurrent()) {
+          host.commitSupervisoryProfile(previous);
+          try {
+            host.pi.setActiveTools(previousTools);
+          } catch {}
+        }
+        throw error;
+      }
+      return "Chief profile refreshed.";
+    }
     if (state.controllerRole !== "lead" || state.roleSuspended)
       throw new Error("Chief mode is unavailable to a project Manager");
     const sessionId = ctx.sessionManager.getSessionId();
     host.activationGuard(sessionId, "Chief");
+    let profile: SupervisoryProfile;
+    try {
+      profile = host.prepareSupervisoryProfile(ctx, "chief");
+    } catch (error) {
+      if (!resumed) throw error;
+      profile = host.fallbackSupervisoryProfile(ctx, "chief");
+      host.appendDurableError(
+        host.pi,
+        ctx,
+        "pi_herdsman_definition_error",
+        error,
+      );
+    }
     state.chiefActivationRollback = false;
     const generation = ++state.chiefModeGeneration;
     const { paneId, workspaceId, tabId } = host.identity;
@@ -9196,6 +9401,7 @@ export function createLeadRoleTransitions(
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
+      host.commitSupervisoryProfile(profile);
       host.enterChief(ctx, lease, generation);
       enteredChief = true;
       host.clearNormalUI();
@@ -9214,6 +9420,7 @@ export function createLeadRoleTransitions(
       host.resetSupervisionSnapshot();
       state.chiefMode = "inactive";
       state.chiefLease = undefined;
+      host.commitSupervisoryProfile(undefined);
       host.clearChiefStartPreflight();
       try {
         host.reconcileRoleTools();
@@ -9264,6 +9471,40 @@ export function createLeadRoleTransitions(
   const activateManager = async (
     ctx: ExtensionCommandContext,
   ): Promise<string> => {
+    if (state.controllerRole === "manager" && !state.roleSuspended) {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const lease = state.managerLease;
+      await ctx.waitForIdle();
+      if (
+        ctx.sessionManager.getSessionId() !== sessionId ||
+        state.controllerRole !== "manager" ||
+        state.roleSuspended ||
+        !lease ||
+        state.managerLease !== lease
+      )
+        throw new Error("Manager mode changed during profile refresh");
+      const replacement = host.prepareSupervisoryProfile(ctx, "manager");
+      const previous = host.currentSupervisoryProfile(ctx, "manager");
+      const previousTools = host.pi.getActiveTools();
+      const stillCurrent = () =>
+        ctx.sessionManager.getSessionId() === sessionId &&
+        state.controllerRole === "manager" &&
+        !state.roleSuspended &&
+        state.managerLease === lease;
+      try {
+        host.commitSupervisoryProfile(replacement);
+        host.reconcileRoleTools();
+      } catch (error) {
+        if (stillCurrent()) {
+          host.commitSupervisoryProfile(previous);
+          try {
+            host.pi.setActiveTools(previousTools);
+          } catch {}
+        }
+        throw error;
+      }
+      return "Manager profile refreshed.";
+    }
     if (
       host.processRole !== "lead" ||
       host.controllerScope?.kind !== "lead" ||
@@ -9279,6 +9520,7 @@ export function createLeadRoleTransitions(
     const scope = await host.worktreeGroupScope(ctx, workspaceId);
     if (scope.primaryWorkspaceId !== workspaceId)
       throw new Error("/manager is available only in the primary workspace");
+    const profile = host.prepareSupervisoryProfile(ctx, "manager");
     let lease: ManagerLease;
     try {
       lease = host.claimManagerLease({
@@ -9300,6 +9542,7 @@ export function createLeadRoleTransitions(
     try {
       state.managerLease = lease;
       state.controllerRole = "manager";
+      host.commitSupervisoryProfile(profile);
       if (!host.getLeadTools())
         host.setLeadTools(host.normalizeLeadTools(host.pi.getActiveTools()));
       host.persistRole("manager");
@@ -9322,6 +9565,7 @@ export function createLeadRoleTransitions(
     } catch (error) {
       state.controllerRole = "lead";
       state.managerLease = undefined;
+      host.commitSupervisoryProfile(undefined);
       host.setLeadTools(previousTools);
       try {
         lease.release();
@@ -9377,6 +9621,7 @@ export function createLeadRoleTransitions(
       throw error;
     }
     state.managerLease = undefined;
+    host.commitSupervisoryProfile(undefined);
     host.reconcileRoleTools();
     host.clearSupervisionUI();
     host.startNormalUI(ctx);
@@ -9389,6 +9634,7 @@ export function createLeadRoleTransitions(
     host.advanceChiefInboxGeneration();
     host.clearChiefInboxTimer();
     host.clearSupervisionUI?.();
+    host.commitSupervisoryProfile(undefined);
     if (state.leadContext)
       await host.publishLeadRole(
         state.leadContext,
@@ -9526,7 +9772,12 @@ export function createLeadRoleTransitions(
       return;
     }
     if (activeLeadRole(state) === "chief") {
-      host.pi.setActiveTools([...host.chiefTools]);
+      host.pi.setActiveTools(
+        (
+          state.leadContext &&
+          host.currentSupervisoryProfile(state.leadContext, "chief")
+        )?.tools ?? [...host.chiefTools],
+      );
       return;
     }
     const current = host.pi.getActiveTools();
@@ -9535,10 +9786,10 @@ export function createLeadRoleTransitions(
       : host.normalizeBaseTools(current);
     host.pi.setActiveTools(
       activeLeadRole(state) === "manager"
-        ? host.appendRegisteredTools(
-            host.normalizeBaseTools(source),
-            host.managerTools,
-          )
+        ? ((
+            state.leadContext &&
+            host.currentSupervisoryProfile(state.leadContext, "manager")
+          )?.tools ?? [...host.managerTools])
         : (host.executionTools?.() ?? host.normalizeLeadTools(source)),
     );
   };
@@ -9546,29 +9797,61 @@ export function createLeadRoleTransitions(
     ctx: ExtensionContext,
     requestedRole: SessionRole,
     optional = false,
-  ): Promise<void> =>
-    resolveLeadControllerRole(
-      state,
-      ctx,
-      requestedRole,
-      {
-        identity: host.identity,
-        build: host.build,
-        worktreeGroupScope: (workspaceId, signal) =>
-          host.worktreeGroupScope(ctx, workspaceId, signal),
-        claimManagerLease: host.claimManagerLease,
-        coordinationHealthy: host.coordinationHealthy,
-        verifyManagerIdentity: (descriptor) =>
-          host.remoteChiefAgent(ctx, descriptor),
-        unresolvedManagerLease: () => {
-          host.markLeadCoordinationUnhealthy(ctx);
-          reconcileRoleTools();
+  ): Promise<void> => {
+    const generation = state.sessionGeneration;
+    const resolve = (profile?: SupervisoryProfile, commit = true) => {
+      const pending = resolveLeadControllerRole(
+        state,
+        ctx,
+        requestedRole,
+        {
+          identity: host.identity,
+          build: host.build,
+          worktreeGroupScope: (workspaceId, signal) =>
+            host.worktreeGroupScope(ctx, workspaceId, signal),
+          claimManagerLease: host.claimManagerLease,
+          coordinationHealthy: host.coordinationHealthy,
+          verifyManagerIdentity: (descriptor) =>
+            host.remoteChiefAgent(ctx, descriptor),
+          unresolvedManagerLease: () => {
+            host.markLeadCoordinationUnhealthy(ctx);
+            reconcileRoleTools();
+          },
+          activationGuard: host.activationGuard,
+          persistLeadRole: () => host.persistRole("lead"),
+          isCurrent: () => state.sessionGeneration === generation,
         },
-        activationGuard: host.activationGuard,
-        persistLeadRole: () => host.persistRole("lead"),
-      },
-      optional,
-    );
+        optional,
+      );
+      if (!commit) return pending;
+      return pending.then(() => {
+        if (state.sessionGeneration !== generation) return;
+        host.commitSupervisoryProfile(
+          state.controllerRole === "manager" && !state.roleSuspended
+            ? profile
+            : undefined,
+        );
+      });
+    };
+    if (requestedRole !== "manager" && !optional)
+      return resolve(undefined, false);
+    let profile: SupervisoryProfile | undefined;
+    if (requestedRole === "manager" || optional) {
+      try {
+        profile = host.prepareSupervisoryProfile(ctx, "manager");
+      } catch (error) {
+        if (optional) throw error;
+        profile = host.fallbackSupervisoryProfile(ctx, "manager");
+        host.appendDurableError(
+          host.pi,
+          ctx,
+          "pi_herdsman_definition_error",
+          error,
+        );
+      }
+    }
+    return resolve(profile);
+  };
   const finalizeOptionalManagerStartup = (ctx: ExtensionContext): void => {
     if (state.controllerRole !== "manager" || !state.managerLease) return;
     try {

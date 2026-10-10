@@ -306,8 +306,8 @@ role behavior.
 Verify the native Definitions list shows:
 
 - actionable definitions in one flat list, with reserved
-  `flexible-lead`, `orchestrator-lead`, and `managed-lead` first in that
-  canonical order;
+  `flexible-lead`, `orchestrator-lead`, `managed-lead`, `manager`, and `chief`
+  first in that canonical order;
 - contributing source words `bundled`, `project`, and `global`, including
   combinations where multiple sources contribute;
 - unpadded definition-name labels, with model, thinking, and provenance as
@@ -316,10 +316,11 @@ Verify the native Definitions list shows:
 - `Inherit current session` for model and thinking;
 - selected-row contextual help and width-safe layout in narrow panes.
 
-All three reserved Lead definitions remain non-Agent. `flexible-lead` and
-`orchestrator-lead` have Details only; `managed-lead` has Model, Thinking, and
-Details, but no Enabled action. Runtime-profile definitions reject launch-only
-fields such as model, thinking, extensions, skills, and context inheritance.
+All five reserved role definitions remain non-Agent. The Lead, Manager, and
+Chief runtime profiles have Details only; `managed-lead` has Model, Thinking,
+and Details, but no Enabled action. Runtime-profile definitions reject
+launch-only fields such as model, thinking, extensions, skills, and context
+inheritance. Repeating `/manager` or `/chief` refreshes its active profile.
 
 Structured `list_agents` should still retain exact deterministic metadata.
 

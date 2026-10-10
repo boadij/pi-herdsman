@@ -13,15 +13,22 @@ complete, run the following as the final pre-commit sequence:
 
 ```sh
 # Final pre-commit mutation; run once only.
-prettier . --write
+npm run format
 
 # Read-only verification before staging or committing.
+npm run format:check
 npm run check
 git diff --check
 ```
 
 Do not run formatting again between these verification commands and staging or
 committing.
+
+`npm run format` applies formatting; `npm run format:check` verifies it without
+changing files. Both use the locally installed Prettier version pinned by the
+lockfile. `npm run check` runs the bounded behavioral test suite,
+`npm run validate` composes formatting verification, tests, build, and package
+audit, and `git diff --check` checks Git whitespace.
 
 When reviewing staged work, also run as appropriate:
 
