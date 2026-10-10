@@ -28,6 +28,7 @@ import {
   projectAssignmentPath,
   listCoordinationMessagePaths,
   managerDescriptorPath,
+  claimManagerLease,
   removeChiefMessage,
   readChiefMessage,
   readManagerDescriptor,
@@ -9113,6 +9114,144 @@ test("Lead status child-row focus rechecks the exact Herdr session identity", as
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(focused, ["lead-owned-child-pane"]);
   assert.ok(notices.some((message) => /Agent changed/u.test(message)));
+});
+
+test("managed Lead marker focuses its verified Manager pane", async (t) => {
+  setLeadEnvironment();
+  const assignedWorkspace = `assigned-${randomUUID()}`;
+  const repoKey = `repo-${randomUUID()}`;
+  const branch = `branch-${randomUUID()}`;
+  process.env.HERDR_WORKSPACE_ID = assignedWorkspace;
+  const assignment = {
+    version: 2 as const,
+    id: LEAD_SESSION_ID,
+    repoKey,
+    branch,
+    text: "assigned work",
+  };
+  writeProjectAssignment(supervisionRuntime(), assignment);
+  const managerId = randomUUID();
+  const managerPaneId = "managed-marker-manager-pane";
+  const managerTabId = "managed-marker-manager-tab";
+  const managerLease = claimManagerLease({
+    build: HERDSMAN_BUILD,
+    piSessionId: managerId,
+    paneId: managerPaneId,
+    tabId: managerTabId,
+    workspaceId: WORKSPACE,
+    repoKey,
+  });
+  writeLeadCoordinationState(supervisionRuntime(), {
+    version: 1,
+    role: "manager",
+    instanceId: randomUUID(),
+    piSessionId: managerId,
+    updatedAt: Date.now(),
+  });
+  const managerAgent = {
+    agent: "pi",
+    pane_id: managerPaneId,
+    tab_id: managerTabId,
+    workspace_id: WORKSPACE,
+    agent_session: {
+      source: "herdr:pi",
+      agent: "pi",
+      kind: "id",
+      value: managerId,
+    },
+  };
+  const focused: string[] = [];
+  const executor = leadExec(
+    "managed-marker-agent",
+    "idle",
+    DEFAULT_PI_SESSION_ID,
+  );
+  const pi = fakePi({
+    exec: (command, args, options) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: {
+              source: {
+                source_workspace_id: WORKSPACE,
+                repo_key: repoKey,
+                repo_name: "project",
+              },
+              worktrees: [{ open_workspace_id: assignedWorkspace }],
+            },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (command === "herdr" && isAgentList(args))
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agents: [managerAgent] },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (command === "herdr" && args[0] === "agent" && args[1] === "get")
+        return {
+          stdout: JSON.stringify({
+            id: AGENT_ID,
+            result: { agent: managerAgent },
+          }),
+          stderr: "",
+          code: 0,
+        };
+      if (command === "herdr" && args[0] === "agent" && args[1] === "focus") {
+        focused.push(args[2]!);
+        return { stdout: "{}", stderr: "", code: 0 };
+      }
+      return executor(command, args, options);
+    },
+  });
+  const ctx = fakeContext() as any;
+  ctx.mode = "tui";
+  ctx.hasUI = true;
+  let widget: StatusWidget | undefined;
+  const notices: string[] = [];
+  ctx.ui = {
+    ...ctx.ui,
+    setWidget: (_key: string, content: unknown) => {
+      if (typeof content === "function")
+        widget = content(
+          { requestRender: () => undefined },
+          {
+            fg: (_color: string, value: string) => value,
+            bold: (value: string) => value,
+          },
+        );
+    },
+    notify: (message: string) => notices.push(message),
+  };
+  registerExtension!(pi.pi as never);
+  t.after(async () => {
+    await pi.events.get("session_shutdown")?.[0]();
+    managerLease.release();
+    rmSync(projectAssignmentPath(supervisionRuntime(), repoKey, branch), {
+      force: true,
+    });
+    setLeadEnvironment();
+  });
+  await pi.events.get("session_start")![0](undefined, ctx);
+  await t.waitFor(() =>
+    assert.match(widget?.render(120).join("\n") ?? "", /managed/u),
+  );
+  assert.ok(widget);
+  widget!.handleMouse({
+    type: "click",
+    button: "left",
+    x: visibleWidth("● lead · "),
+    y: 0,
+    width: 120,
+  });
+  await t.waitFor(() =>
+    assert.deepEqual(focused, [managerPaneId], notices.join(" | ")),
+  );
 });
 
 test("valid managed leaf agents receive identity-only TUI presentation", async (t) => {
