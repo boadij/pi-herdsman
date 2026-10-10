@@ -2566,6 +2566,64 @@ test("recovery cleanup finishes an idle restored herd without settlement", async
   }
 });
 
+test("Lead delegation holds the shared lifecycle lock through gated startup", async (t) => {
+  const fixture = createStagedAssignmentFixture("agent");
+  let starting: Promise<any> | undefined;
+  try {
+    await t.waitFor(() => assert.equal(fixture.initialStatusStarted, true));
+    starting = registeredAgentTool(fixture.pi, "delegate").execute(
+      "id",
+      { definition: "agent", task: "hold stop while startup is unresolved" },
+      undefined,
+      undefined,
+      fixture.context,
+    );
+    await t.waitFor(() =>
+      assert.ok(
+        fixture.pi.calls.some(
+          (args) => args[0] === "agent" && args[1] === "start",
+        ),
+      ),
+    );
+    let busy: unknown;
+    try {
+      const release = claimProcessLock(
+        delegationLockPathForTest(WORKSPACE, LEAD_SESSION_ID),
+        { name: "test delegation lifecycle" },
+      );
+      release();
+    } catch (error) {
+      busy = error;
+    }
+    assert.match(String(busy), /delegation lifecycle is in progress/i);
+    fixture.releaseInitialStatus();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(readAgentState(fixture.mailbox), undefined);
+    fixture.widgetValue.render(160);
+    fixture.releaseStart();
+    await t.waitFor(() => assert.equal(fixture.preSubmitValidationReady, true));
+    fixture.releasePreSubmitValidation();
+    await t.waitFor(() => assert.equal(fixture.requestObserved, true));
+    fixture.releaseAcknowledgement();
+    const result = await starting;
+    assert.equal(result.details.ok, true, JSON.stringify(result.details));
+
+    const release = claimProcessLock(
+      delegationLockPathForTest(WORKSPACE, LEAD_SESSION_ID),
+      { name: "test delegation lifecycle" },
+    );
+    release();
+  } finally {
+    fixture.releaseInitialStatus();
+    fixture.releaseStart();
+    fixture.releasePreSubmitValidation();
+    fixture.releaseAcknowledgement();
+    await starting?.catch(() => {});
+    fixture.pi.events.get("session_shutdown")?.[0]();
+    resetAgentMailbox(fixture.mailbox);
+  }
+});
+
 test("completed and mismatched herd history does not resurrect", async () => {
   for (const history of [
     [

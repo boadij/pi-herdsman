@@ -62,6 +62,7 @@ import support, {
   setAgentEnvironment,
   startupExecutor,
   agentMailboxPath,
+  delegationLockPathForTest,
   writeAsk,
   writePromptDefinition,
   writeRequest,
@@ -2633,6 +2634,8 @@ async function runManagerStartupScenario(
     | "close-resume"
     | "close-failure"
     | "close-takeover-race"
+    | "close-tree"
+    | "close-tree-failure"
     | "unassigned-close",
   projectTrusted = false,
   t?: TestContext,
@@ -2684,10 +2687,20 @@ async function runManagerStartupScenario(
     mode === "active-live" ||
     mode === "active-live-inspect-revoked" ||
     mode === "active-live-inspect-lease-replaced" ||
-    ["close-resume", "close-failure", "close-takeover-race"].includes(mode);
+    [
+      "close-resume",
+      "close-failure",
+      "close-takeover-race",
+      "close-tree",
+      "close-tree-failure",
+    ].includes(mode);
   let startupObservations = 0;
   let identityObservations = 0;
   let cleanupOwnershipObservations = 0;
+  let ownedTree: ManagedAgentState[] = [];
+  const closedTreePanes = new Set<string>();
+  const closeOrder: string[] = [];
+  let leadStopAttempts = 0;
   let emptySessionStat: ReturnType<typeof realFs.statSync> | undefined;
   let identityPolled: () => void = () => {};
   const identityPoll = new Promise<void>((resolve) => {
@@ -2947,10 +2960,37 @@ async function runManagerStartupScenario(
             cwd: childPath,
             terminal_id: "child-terminal",
           },
+          ...ownedTree
+            .filter((state) => !closedTreePanes.has(state.paneId))
+            .map((state) => ({
+              pane_id: state.paneId,
+              workspace_id: state.workspaceId,
+              tab_id: `${state.agentLabel}-tab`,
+              cwd: state.cwd,
+            })),
         ],
       });
     }
-    if (command === "herdr" && args[0] === "pane" && args[1] === "get")
+    if (command === "herdr" && args[0] === "pane" && args[1] === "get") {
+      const treeAgent = ownedTree.find(
+        (state) =>
+          state.paneId === args[2] && !closedTreePanes.has(state.paneId),
+      );
+      if (treeAgent)
+        return respond({
+          pane: {
+            pane_id: treeAgent.paneId,
+            workspace_id: treeAgent.workspaceId,
+            tab_id: `${treeAgent.agentLabel}-tab`,
+            cwd: treeAgent.cwd,
+            agent_session: {
+              source: "herdr:pi",
+              agent: "pi",
+              kind: "id",
+              value: treeAgent.piSessionId,
+            },
+          },
+        });
       return respond({
         pane: {
           pane_id:
@@ -2965,6 +3005,8 @@ async function runManagerStartupScenario(
             "close-resume",
             "close-failure",
             "close-takeover-race",
+            "close-tree",
+            "close-tree-failure",
             "unassigned-close",
           ].includes(mode) ||
             prospective) &&
@@ -2975,15 +3017,37 @@ async function runManagerStartupScenario(
             : {}),
         },
       });
+    }
     if (command === "herdr" && args[0] === "tab" && args[1] === "list")
       return respond({
-        tabs: [{ tab_id: "child-tab", workspace_id: childWorkspace }],
+        tabs: [
+          { tab_id: "child-tab", workspace_id: childWorkspace },
+          ...ownedTree
+            .filter((state) => !closedTreePanes.has(state.paneId))
+            .map((state) => ({
+              tab_id: `${state.agentLabel}-tab`,
+              workspace_id: state.workspaceId,
+            })),
+        ],
       });
     if (
       command === "herdr" &&
       args[0] === "pane" &&
       args[1] === "process-info"
     ) {
+      const treeAgent = ownedTree.find(
+        (state) =>
+          state.paneId === args[3] && !closedTreePanes.has(state.paneId),
+      );
+      if (treeAgent)
+        return respond({
+          process_info: {
+            pane_id: treeAgent.paneId,
+            shell_pid: 100,
+            foreground_process_group_id: 101,
+            foreground_processes: [{ pid: 101, argv0: "/usr/bin/pi" }],
+          },
+        });
       return respond({
         process_info: {
           pane_id: "child-pane",
@@ -2994,6 +3058,8 @@ async function runManagerStartupScenario(
               "close-resume",
               "close-failure",
               "close-takeover-race",
+              "close-tree",
+              "close-tree-failure",
               "unassigned-close",
             ].includes(mode) ||
               prospective)
@@ -3010,6 +3076,25 @@ async function runManagerStartupScenario(
           ],
         },
       });
+    }
+    if (command === "herdr" && args[0] === "pane" && args[1] === "close") {
+      const treeAgent = ownedTree.find((state) => state.paneId === args[2]);
+      if (treeAgent) {
+        if (mode === "close-tree-failure" && treeAgent.agentLabel === "scout")
+          return {
+            stdout: "{}",
+            stderr: "injected descendant close failure",
+            code: 1,
+          };
+        if (treeAgent.agentLabel === "researcher")
+          assert.ok(
+            closedTreePanes.has("scout-pane"),
+            "nested Agent must close before its parent",
+          );
+        closedTreePanes.add(treeAgent.paneId);
+        closeOrder.push(treeAgent.agentLabel);
+      }
+      return respond({});
     }
     if (command === "herdr" && args[0] === "pane" && args[1] === "read") {
       assert.deepEqual(args, [
@@ -3036,6 +3121,8 @@ async function runManagerStartupScenario(
           "close-resume",
           "close-failure",
           "close-takeover-race",
+          "close-tree",
+          "close-tree-failure",
           "unassigned-close",
         ].includes(mode)
       )
@@ -3047,6 +3134,16 @@ async function runManagerStartupScenario(
           "ctrl+d",
         ]);
       if (mode === "close-failure") throw new Error("stop refused");
+      if (mode === "close-tree" || mode === "close-tree-failure")
+        leadStopAttempts++;
+      if (mode === "close-tree") {
+        assert.equal(
+          closedTreePanes.size,
+          3,
+          "Lead must remain live until every owned Agent tree is closed",
+        );
+        closeOrder.push("lead");
+      }
       started = false;
       startupObservations = 0;
       return respond({});
@@ -3182,68 +3279,85 @@ async function runManagerStartupScenario(
       }
       return respond({
         snapshot: {
-          panes: [],
-          agents: ["occupied", "multiple"].includes(mode)
-            ? [
-                {
-                  agent_session: {
-                    source: "herdr:pi",
-                    agent: "pi",
-                    kind: "id",
-                    value: unrelatedSession,
-                  },
-                  workspace_id: childWorkspace,
-                  pane_id: "child-pane",
-                  tab_id: "child-tab",
-                },
-                ...(mode === "multiple"
-                  ? [
-                      {
-                        agent_session: {
-                          source: "herdr:pi",
-                          agent: "pi",
-                          kind: "id",
-                          value: secondSession,
-                        },
-                        workspace_id: childWorkspace,
-                        pane_id: "child-pane",
-                        tab_id: "child-tab",
-                      },
-                    ]
-                  : []),
-              ]
-            : started &&
-                startupObservations >= 2 &&
-                mode !== "missing-herdr-session"
+          panes: ownedTree
+            .filter((state) => !closedTreePanes.has(state.paneId))
+            .map((state) => ({
+              pane_id: state.paneId,
+              workspace_id: state.workspaceId,
+              cwd: state.cwd,
+              agent_session: {
+                source: "herdr:pi",
+                agent: "pi",
+                kind: "id",
+                value: state.piSessionId,
+              },
+            })),
+          agents: [
+            ...(["occupied", "multiple"].includes(mode)
               ? [
                   {
-                    agent_session:
-                      mode === "delayed-herdr-session" &&
-                      startupObservations === 2
-                        ? undefined
-                        : prospective
-                          ? {
-                              source: "herdr:pi",
-                              agent: "pi",
-                              kind: "path",
-                              value: childSessionPath,
-                            }
-                          : {
-                              source: "herdr:pi",
-                              agent: "pi",
-                              kind: "id",
-                              value:
-                                mode === "mismatched-session"
-                                  ? randomUUID()
-                                  : childSession,
-                            },
+                    agent_session: {
+                      source: "herdr:pi",
+                      agent: "pi",
+                      kind: "id",
+                      value: unrelatedSession,
+                    },
                     workspace_id: childWorkspace,
                     pane_id: "child-pane",
                     tab_id: "child-tab",
-                    cwd: childPath,
                   },
+                  ...(mode === "multiple"
+                    ? [
+                        {
+                          agent_session: {
+                            source: "herdr:pi",
+                            agent: "pi",
+                            kind: "id",
+                            value: secondSession,
+                          },
+                          workspace_id: childWorkspace,
+                          pane_id: "child-pane",
+                          tab_id: "child-tab",
+                        },
+                      ]
+                    : []),
                 ]
-              : [],
+              : started &&
+                  startupObservations >= 2 &&
+                  mode !== "missing-herdr-session"
+                ? [
+                    {
+                      agent_session:
+                        mode === "delayed-herdr-session" &&
+                        startupObservations === 2
+                          ? undefined
+                          : prospective
+                            ? {
+                                source: "herdr:pi",
+                                agent: "pi",
+                                kind: "path",
+                                value: childSessionPath,
+                              }
+                            : {
+                                source: "herdr:pi",
+                                agent: "pi",
+                                kind: "id",
+                                value:
+                                  mode === "mismatched-session"
+                                    ? randomUUID()
+                                    : childSession,
+                              },
+                      workspace_id: childWorkspace,
+                      pane_id: "child-pane",
+                      tab_id: "child-tab",
+                      cwd: childPath,
+                    },
+                  ]
+                : []),
+            ...ownedTree
+              .filter((state) => !closedTreePanes.has(state.paneId))
+              .map((state) => agentFromState(state)),
+          ],
         },
       });
     }
@@ -3351,6 +3465,8 @@ async function runManagerStartupScenario(
             "close-resume",
             "close-failure",
             "close-takeover-race",
+            "close-tree",
+            "close-tree-failure",
             "unassigned-close",
           ].includes(mode) &&
             started)
@@ -3365,10 +3481,23 @@ async function runManagerStartupScenario(
                 }),
               )
             : []),
+          ...ownedTree
+            .filter((state) => !closedTreePanes.has(state.paneId))
+            .map((state) => agentFromState(state)),
         ],
       });
     }
     if (command === "herdr" && args[0] === "agent" && args[1] === "get") {
+      const treeAgent = ownedTree.find(
+        (state) => (agentFromState(state) as any).name === args[2],
+      );
+      if (treeAgent)
+        return respond({
+          agent: {
+            ...agentFromState(treeAgent),
+            cwd: treeAgent.cwd,
+          },
+        });
       if (
         mode === "identity-cleanup-mismatch" &&
         identityObservations &&
@@ -3590,6 +3719,8 @@ async function runManagerStartupScenario(
       "close-resume",
       "close-failure",
       "close-takeover-race",
+      "close-tree",
+      "close-tree-failure",
     ].includes(mode);
     const resumeMode = activeMode || mode === "invalid-topology";
     if (activeMode) {
@@ -3674,7 +3805,13 @@ async function runManagerStartupScenario(
           updatedAt: Date.now(),
         });
       if (
-        ["close-resume", "close-failure", "close-takeover-race"].includes(mode)
+        [
+          "close-resume",
+          "close-failure",
+          "close-takeover-race",
+          "close-tree",
+          "close-tree-failure",
+        ].includes(mode)
       )
         writeLeadCoordinationState(supervisionRuntime(), {
           version: 1,
@@ -3940,7 +4077,13 @@ async function runManagerStartupScenario(
         );
         realFs.rmSync(conflictingPath, { force: true });
       } else if (
-        ["close-resume", "close-failure", "close-takeover-race"].includes(mode)
+        [
+          "close-resume",
+          "close-failure",
+          "close-takeover-race",
+          "close-tree",
+          "close-tree-failure",
+        ].includes(mode)
       ) {
         const control = (name: string, value: unknown) =>
           pi.tools
@@ -4003,6 +4146,145 @@ async function runManagerStartupScenario(
           assert.equal(
             listProjectAssignments(supervisionRuntime(), repoKey)[0]?.id,
             staleId,
+          );
+        } else if (mode === "close-tree" || mode === "close-tree-failure") {
+          assert.notEqual(childWorkspace, WORKSPACE);
+          const stateFor = (
+            label: string,
+            workspaceId: string,
+            ownerSessionId: string,
+            paneId: string,
+            cwd: string,
+          ): ManagedAgentState => {
+            const piSessionId = randomUUID();
+            return {
+              ...managedState(label, undefined, {
+                paneId,
+                tabId: `${paneId}-tab`,
+                piSessionId,
+                piSessionFile: `/tmp/${piSessionId}.jsonl`,
+              }),
+              workspaceId,
+              ownerSessionId,
+              cwd,
+            };
+          };
+          const researcher = stateFor(
+            "researcher",
+            childWorkspace,
+            staleId,
+            "researcher-pane",
+            childPath,
+          );
+          const scout = stateFor(
+            "scout",
+            childWorkspace,
+            researcher.piSessionId,
+            "scout-pane",
+            childPath,
+          );
+          const implementer = stateFor(
+            "implementer",
+            childWorkspace,
+            staleId,
+            "implementer-pane",
+            childPath,
+          );
+          const unrelatedResearcher = stateFor(
+            "researcher",
+            WORKSPACE,
+            LEAD_SESSION_ID,
+            "unrelated-researcher-pane",
+            "/tmp/manager-root",
+          );
+          ownedTree = [researcher, scout, implementer, unrelatedResearcher];
+          for (const state of ownedTree)
+            writeAgentState(
+              agentMailboxPath(state.workspaceId, state.agentLabel),
+              state,
+            );
+
+          const releaseDelegation = claimProcessLock(
+            delegationLockPathForTest(childWorkspace, staleId),
+            { name: "test delegation lifecycle" },
+          );
+          await assert.rejects(control("stop_lead", { session: staleId }));
+          assert.equal(started, true, "busy lifecycle must preserve the Lead");
+          assert.ok(
+            readAgentState(agentMailboxPath(childWorkspace, "researcher")),
+          );
+          releaseDelegation();
+
+          if (mode === "close-tree-failure") {
+            await assert.rejects(control("stop_lead", { session: staleId }));
+            assert.equal(started, true);
+            assert.equal(leadStopAttempts, 0);
+            assert.equal(
+              listProjectAssignments(supervisionRuntime(), repoKey)[0]?.id,
+              staleId,
+            );
+            assert.ok(
+              readAgentState(agentMailboxPath(childWorkspace, "researcher")),
+            );
+            assert.ok(
+              readAgentState(agentMailboxPath(childWorkspace, "scout")),
+            );
+            assert.equal(
+              readAgentState(agentMailboxPath(childWorkspace, "implementer")),
+              undefined,
+              "independent Agent tree should still be closed",
+            );
+            assert.ok(
+              readAgentState(agentMailboxPath(WORKSPACE, "researcher")),
+            );
+            return;
+          }
+
+          const closed = await control("stop_lead", { session: staleId });
+          assert.equal(closed.details.ok, true, JSON.stringify(closed.details));
+          assert.equal(closed.details.branch, "smoke/recover");
+          assert.equal(started, false, "Lead must stop after Agent cleanup");
+          assert.ok(
+            closeOrder.indexOf("scout") < closeOrder.indexOf("researcher"),
+          );
+          assert.ok(closeOrder.indexOf("implementer") < closeOrder.length);
+          assert.equal(closeOrder.length, 4);
+          assert.equal(closeOrder[3], "lead");
+          assert.equal(
+            readAgentState(agentMailboxPath(childWorkspace, "researcher")),
+            undefined,
+          );
+          assert.equal(
+            readAgentState(agentMailboxPath(childWorkspace, "scout")),
+            undefined,
+          );
+          assert.equal(
+            readAgentState(agentMailboxPath(childWorkspace, "implementer")),
+            undefined,
+          );
+          assert.ok(readAgentState(agentMailboxPath(WORKSPACE, "researcher")));
+          const survivingAgents = JSON.parse(
+            (await exec("herdr", ["agent", "list"])).stdout,
+          ).result.agents;
+          assert.ok(
+            survivingAgents.some(
+              (agent: any) =>
+                agent.workspace_id === WORKSPACE &&
+                agent.pane_id === "unrelated-researcher-pane",
+            ),
+            "same-label Agent in the Manager workspace must remain live",
+          );
+          assert.equal(
+            survivingAgents.some(
+              (agent: any) => agent.workspace_id === childWorkspace,
+            ),
+            false,
+          );
+          assert.deepEqual(
+            listProjectAssignments(supervisionRuntime(), repoKey).map(
+              ({ id }) => id,
+            ),
+            [staleId],
           );
         }
         return;
@@ -4586,6 +4868,8 @@ async function runManagerStartupScenario(
       );
     }
   } finally {
+    for (const state of ownedTree)
+      resetAgentMailbox(agentMailboxPath(state.workspaceId, state.agentLabel));
     releaseAssignmentLock?.();
     realFs.rmSync(attachmentPath, { force: true });
     if (previousConfig !== undefined)
@@ -4685,6 +4969,10 @@ for (const [mode, label] of [
   test(`Manager ${label}`, (t) => runManagerStartupScenario(mode, false, t));
 test("Manager stop preserves the exact assignment and resumes its session", () =>
   runManagerStartupScenario("close-resume"));
+test("Manager stops a cross-workspace Agent tree without touching duplicate-label local Agents", () =>
+  runManagerStartupScenario("close-tree"));
+test("Manager preserves its Lead after descendant cleanup failure", () =>
+  runManagerStartupScenario("close-tree-failure"));
 test("Manager retains assignment when exact Lead stop fails", () =>
   runManagerStartupScenario("close-failure"));
 test("Manager stop cannot race through takeover's assignment lock", () =>
