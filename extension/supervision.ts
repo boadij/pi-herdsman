@@ -2470,20 +2470,6 @@ export function invalidateLeadCoordinationState(
   fsyncDirectory(dirname(path));
 }
 
-export const coordinatorStatePath = leadCoordinationStatePath;
-export const readCoordinatorState = readLeadCoordinationState;
-export const writeCoordinatorState = writeLeadCoordinationState;
-export const invalidateCoordinatorState = invalidateLeadCoordinationState;
-export const COORDINATOR_STATE_MAX_BYTES = LEAD_STATE_MAX_BYTES;
-export const peerRecordPath = peerLeadRecordPath;
-export const peerLockPath = peerLeadLockPath;
-export const readPeerRecord = readPeerLeadRecord;
-export const writePeerRecord = writePeerLeadRecord;
-export const listPeerRecords = listPeerLeadRecords;
-export const removePeerRecord = removePeerLeadRecord;
-export const samePeerRecord = samePeerLeadRecord;
-export const samePeerGeneration = samePeerLeadGeneration;
-
 export function normalizeHerdrLifecycleState(agent: any): RuntimeState {
   const state = agent?.agent_status;
   return state === "idle" ||
