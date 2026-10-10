@@ -741,6 +741,7 @@ export function fakeContext(
     abort: () => undefined,
     isProjectTrusted: () => true,
     isIdle: () => true,
+    hasPendingMessages: () => false,
     waitForIdle: async () => undefined,
     getContextUsage: () => ({ tokens: 2, contextWindow: 10, percent: null }),
     sessionManager: {

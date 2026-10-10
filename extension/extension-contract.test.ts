@@ -3671,7 +3671,8 @@ test("lead metadata failures do not escape the serialized queue", async (t) => {
         args[1] === "report-metadata"
       ) {
         metadataCalls++;
-        if (metadataCalls === 1) throw new Error("metadata unavailable");
+        if (metadataCalls === 1 || metadataCalls === 3)
+          throw new Error("metadata unavailable");
       }
       return { stdout: "{}", stderr: "", code: 0 };
     },
@@ -3686,8 +3687,18 @@ test("lead metadata failures do not escape the serialized queue", async (t) => {
     assert.ok(pi.tools.some((tool) => tool.name === "message_supervisor"));
     await pi.events.get("session_info_changed")![0]({ name: "retry" }, context);
     await t.waitFor(() => assert.equal(metadataCalls, 2));
+    const errorCount = () =>
+      pi.entries.filter(
+        (entry: any) => entry?.customType === "pi_herdsman_state_error",
+      ).length;
+    const errorsAfterFirstFailure = errorCount();
+    await pi.events.get("session_info_changed")![0](
+      { name: "fail after recovery" },
+      context,
+    );
+    await t.waitFor(() => assert.equal(metadataCalls, 3));
+    assert.equal(errorCount(), errorsAfterFirstFailure + 1);
     assert.equal(unhandled.length, 0);
-    assert.equal(metadataCalls, 2);
   } finally {
     process.removeListener("unhandledRejection", onUnhandled);
     pi.events.get("session_shutdown")?.[0]();

@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import {
   mkdirSync,
   mkdtempSync,
+  existsSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -471,13 +472,17 @@ test("generic coordination transport orders and renders message peers", async ()
   writeCoordinationMessage(newer, runtime);
   writeCoordinationMessage(older, runtime);
   const sent: any[] = [];
+  const receipts = new Set<string>();
   assert.equal(
     await drainCoordinationInbox({
       runtime,
       sessionId: "lead-b",
       isAuthorized: (candidate) => candidate.kind === "peer_message",
-      isDelivered: () => false,
-      sendMessage: (value) => sent.push(value),
+      isDelivered: (messageId) => receipts.has(messageId),
+      sendMessage: (value) => {
+        sent.push(value);
+        receipts.add((value as any).details.id);
+      },
     }),
     2,
   );
@@ -529,6 +534,7 @@ test("peer presence and inbox transport are shared across socket runtimes", asyn
     });
     writeCoordinationMessage(record, peersA);
     const sent: any[] = [];
+    let delivered = false;
     assert.equal(
       await drainCoordinationInbox({
         runtime: peersB,
@@ -537,8 +543,11 @@ test("peer presence and inbox transport are shared across socket runtimes", asyn
           candidate.kind === "peer_message" &&
           candidate.fromSessionId === "lead-a" &&
           candidate.toSessionId === "lead-b",
-        isDelivered: () => false,
-        sendMessage: (value) => sent.push(value),
+        isDelivered: () => delivered,
+        sendMessage: (value) => {
+          sent.push(value);
+          delivered = true;
+        },
       }),
       1,
     );
@@ -734,14 +743,16 @@ test("queued traffic remains correlated to the exact lead session after restart"
   const original = message({ leadSessionId: "lead", fromSessionId: "lead" });
   writeChiefMessage(original, runtime);
   let delivered = 0;
+  let receipt = false;
   await drainCoordinationInbox({
     runtime,
     sessionId: original.toSessionId,
     isAuthorized: (record) =>
       record.leadSessionId === "lead" && record.fromSessionId === "lead",
-    isDelivered: () => false,
+    isDelivered: () => receipt,
     sendMessage: () => {
       delivered++;
+      receipt = true;
     },
   });
   assert.equal(delivered, 1);
@@ -1104,7 +1115,7 @@ test("lead session binds queued traffic and invalidation removes authority", () 
     runtime,
     sessionId: "chief",
     isAuthorized: (candidate) => candidate.leadSessionId === "lead",
-    isDelivered: () => false,
+    isDelivered: () => delivered,
     sendMessage: () => {
       delivered = true;
     },
@@ -1438,7 +1449,7 @@ test("inbox rechecks quarantine before accepting an already-delivered record", a
   );
 });
 
-test("deferred inbox records skip authorization and remain pending", async () => {
+test("deferred inbox records remain pending without authorization", async () => {
   const runtime = supervisionRuntime(socket());
   const record = message();
   const path = writeChiefMessage(record, runtime);
@@ -1471,10 +1482,91 @@ test("deferred inbox records skip authorization and remain pending", async () =>
     0,
   );
 
-  assert.equal(begun, 0);
+  assert.equal(begun, 1);
   assert.equal(authorized, 0);
   assert.equal(sent, 0);
   assert.deepEqual(listChiefMessagePaths(runtime, record.toSessionId), [path]);
+});
+
+test("Pi send return is not a receipt; later exact receipt enables safe cleanup", async () => {
+  const runtime = supervisionRuntime(socket());
+  const record = message();
+  const path = writeChiefMessage(record, runtime);
+  let persisted = false;
+  let accepted = 0;
+  const options = {
+    runtime,
+    sessionId: record.toSessionId,
+    isAuthorized: () => true,
+    isDelivered: () => persisted,
+    sendMessage: () => {},
+    accepted: () => {
+      accepted++;
+    },
+  };
+
+  assert.equal(await drainCoordinationInbox(options), 0);
+  assert.equal(existsSync(path), true);
+  assert.equal(accepted, 0);
+
+  persisted = true;
+  assert.equal(
+    await drainCoordinationInbox({
+      ...options,
+      deliveryMode: () => undefined,
+    }),
+    0,
+  );
+  assert.equal(existsSync(path), false);
+  assert.equal(accepted, 1);
+});
+
+test("receipt arriving during authorization prevents a duplicate submission", async () => {
+  const runtime = supervisionRuntime(socket());
+  const record = message();
+  const path = writeChiefMessage(record, runtime);
+  let persisted = false;
+  let sent = 0;
+  let accepted = 0;
+
+  assert.equal(
+    await drainCoordinationInbox({
+      runtime,
+      sessionId: record.toSessionId,
+      isAuthorized: async () => {
+        persisted = true;
+        return true;
+      },
+      isDelivered: () => persisted,
+      sendMessage: () => {
+        sent++;
+      },
+      accepted: () => {
+        accepted++;
+      },
+    }),
+    1,
+  );
+
+  assert.equal(sent, 0);
+  assert.equal(accepted, 1);
+  assert.equal(existsSync(path), false);
+});
+
+test("synchronous Pi submission failure retains the inbox record", async () => {
+  const runtime = supervisionRuntime(socket());
+  const record = message();
+  const path = writeChiefMessage(record, runtime);
+  await drainCoordinationInbox({
+    runtime,
+    sessionId: record.toSessionId,
+    isAuthorized: () => true,
+    isDelivered: () => false,
+    sendMessage: () => {
+      throw new Error("submission failed");
+    },
+  });
+  assert.equal(existsSync(path), true);
 });
 
 test("inbox orders valid records by createdAt and retains transient failures", async () => {
@@ -1654,17 +1746,20 @@ test("coordination envelopes identify senders without claiming recipient roles",
   });
   const delivered: { id: string; content: string }[] = [];
   for (const { route, record } of traffic) {
+    let receipt = false;
     assert.equal(
       await drainCoordinationInbox({
         runtime,
         sessionId: route.toSessionId,
         isAuthorized: (candidate) => candidate.id === record.id,
-        isDelivered: () => false,
-        sendMessage: (payload) =>
+        isDelivered: () => receipt,
+        sendMessage: (payload) => {
           delivered.push({
             id: (payload as any).details.id,
             content: (payload as any).content,
-          }),
+          });
+          receipt = true;
+        },
       }),
       1,
       route.name,
@@ -2474,15 +2569,17 @@ test("project assignment uses durable project transport, not Manager message fra
   });
   writeChiefMessage(record, runtime);
   const delivered: any[] = [];
+  let receipt = false;
   assert.equal(
     await drainCoordinationInbox({
       runtime,
       sessionId: session,
       isAuthorized: (candidate) =>
         candidate.toSessionId === session && candidate.text === instruction,
-      isDelivered: () => false,
+      isDelivered: () => receipt,
       sendMessage: (payload) => {
         delivered.push(payload);
+        receipt = true;
       },
     }),
     1,

@@ -772,10 +772,6 @@ export async function drainCoordinationInbox(
       }
       continue;
     }
-    const deliverAs = options.deliveryMode
-      ? options.deliveryMode(record)
-      : "followUp";
-    if (!deliverAs) continue;
     let token: unknown;
     const clearTransaction = async (): Promise<void> => {
       if (token === undefined) return;
@@ -790,6 +786,14 @@ export async function drainCoordinationInbox(
       token = await options.transaction?.begin(record);
       await options.transaction?.revalidate(token, "before-authorization");
     } catch {
+      await clearTransaction();
+      continue;
+    }
+    const deliverAs = options.deliveryMode
+      ? options.deliveryMode(record)
+      : "followUp";
+    const wasAlreadyDelivered = options.isDelivered(record.id);
+    if (!deliverAs && !wasAlreadyDelivered) {
       await clearTransaction();
       continue;
     }
@@ -840,29 +844,37 @@ export async function drainCoordinationInbox(
           options.sessionId,
           record.id,
         );
-        await options.sendMessage(
-          {
-            customType: `pi-herdsman-${record.kind}`,
-            content: deliveredMessageContent(record),
-            display: true,
-            details: {
-              id: record.id,
-              leaseId: record.leaseId,
-              fromSessionId: record.fromSessionId,
-              toSessionId: record.toSessionId,
-              leadSessionId: record.leadSessionId,
-              ...(record.branch ? { branch: record.branch } : {}),
+        // Authorization may have yielded while Pi persisted an earlier send.
+        if (!options.isDelivered(record.id)) {
+          await options.sendMessage(
+            {
+              customType: `pi-herdsman-${record.kind}`,
+              content: deliveredMessageContent(record),
+              display: true,
+              details: {
+                id: record.id,
+                leaseId: record.leaseId,
+                fromSessionId: record.fromSessionId,
+                toSessionId: record.toSessionId,
+                leadSessionId: record.leadSessionId,
+                ...(record.branch ? { branch: record.branch } : {}),
+              },
             },
-          },
-          { deliverAs, triggerTurn: true },
-          record,
-        );
-        await options.transaction?.revalidate(token, "after-send");
+            { deliverAs: deliverAs ?? "followUp", triggerTurn: true },
+            record,
+          );
+          await options.transaction?.revalidate(token, "after-send");
+        }
       } catch {
         await clearTransaction();
         continue;
       }
-      delivered += 1;
+      if (!options.isDelivered(record.id)) {
+        // Pi submission is not a persistence acknowledgement.
+        await clearTransaction();
+        continue;
+      }
+      if (!wasAlreadyDelivered) delivered += 1;
       try {
         await options.transaction?.revalidate(token, "before-accepted");
         assertChiefMessageNotQuarantined(
@@ -878,6 +890,7 @@ export async function drainCoordinationInbox(
       }
     } else {
       try {
+        if (!wasAlreadyDelivered) delivered += 1;
         await options.transaction?.revalidate(token, "already-delivered");
         assertChiefMessageNotQuarantined(
           options.runtime,

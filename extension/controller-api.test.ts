@@ -258,6 +258,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
   const descriptorPath = managerDescriptorPath(runtime, WORKSPACE);
   const descriptor = readFileSync(descriptorPath, "utf8");
   let managerReleased = false;
+  let managerIdentityUnavailable = false;
   const agents = [
     [chiefId, "chief-pane", "chief-tab", WORKSPACE],
     [managerId, "manager-pane", "manager-tab", WORKSPACE],
@@ -271,7 +272,12 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
   const exec = (_command: string, args: string[]) => {
     let result: unknown = {};
     if (isApiSnapshot(args)) result = { snapshot: { agents, panes: [] } };
-    else if (isAgentList(args)) result = { agents };
+    else if (isAgentList(args))
+      result = {
+        agents: managerIdentityUnavailable
+          ? agents.filter((agent) => agent.pane_id !== "manager-pane")
+          : agents,
+      };
     else if (args[0] === "agent" && args[1] === "get")
       result = { agent: agents.find((agent) => agent.pane_id === args[2]) };
     else if (args[0] === "workspace" && args[1] === "get")
@@ -297,7 +303,7 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
   };
   const pi = fakeChiefPi({ exec });
   registerExtension!(pi.pi as never);
-  const ctx = fakeContext() as any;
+  const ctx = fakeContext(pi.entries, []) as any;
   ctx.sessionManager = {
     ...ctx.sessionManager,
     getSessionId: () => leadId,
@@ -336,20 +342,18 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       assert.match(statusWidget!.render(160)[0], /^● lead · managed/),
     );
     ctx.isIdle = () => false;
-    writeChiefMessage(
-      {
-        version: 2,
-        id: randomUUID(),
-        leaseId: manager.descriptor.leaseId,
-        kind: "manager_message",
-        fromSessionId: managerId,
-        toSessionId: leadId,
-        leadSessionId: leadId,
-        text: "change direction now",
-        createdAt: Date.now(),
-      },
-      runtime,
-    );
+    const managerMessage = {
+      version: 2,
+      id: randomUUID(),
+      leaseId: manager.descriptor.leaseId,
+      kind: "manager_message",
+      fromSessionId: managerId,
+      toSessionId: leadId,
+      leadSessionId: leadId,
+      text: "change direction now",
+      createdAt: Date.now(),
+    } as const;
+    const managerMessagePath = writeChiefMessage(managerMessage, runtime);
     await t.waitFor(() => {
       const call = pi.sentMessageCalls.find(
         ({ message }: any) =>
@@ -362,7 +366,83 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
         triggerTurn: true,
       });
     });
-    assert.equal(listChiefMessagePaths(runtime, leadId).length, 0);
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    assert.equal(
+      pi.sentMessageCalls.filter(
+        ({ message }: any) => message?.details?.id === managerMessage.id,
+      ).length,
+      1,
+    );
+    assert.deepEqual(listChiefMessagePaths(runtime, leadId), [
+      managerMessagePath,
+    ]);
+    for (const handler of pi.events.get("agent_settled") ?? [])
+      await handler({ aborted: true }, ctx);
+    ctx.isIdle = () => true;
+    await t.waitFor(() =>
+      assert.equal(
+        pi.sentMessageCalls.filter(
+          ({ message }: any) => message?.details?.id === managerMessage.id,
+        ).length,
+        2,
+      ),
+    );
+    const sentMessage = pi.sentMessageCalls.find(
+      ({ message }: any) =>
+        message?.customType === "pi-herdsman-manager_message" &&
+        message?.details?.id === managerMessage.id,
+    )!.message as any;
+    pi.entries.push({ type: "custom", ...sentMessage });
+    assert.equal(ctx.sessionManager.getBranch().length, 0);
+    await t.waitFor(() =>
+      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+    );
+    const fallbackMessage = {
+      ...managerMessage,
+      id: randomUUID(),
+      text: "retry after Pi pre-run failure",
+      createdAt: Date.now(),
+    };
+    writeChiefMessage(fallbackMessage, runtime);
+    await t.waitFor(() =>
+      assert.equal(
+        pi.sentMessageCalls.filter(
+          ({ message }: any) => message?.details?.id === fallbackMessage.id,
+        ).length,
+        1,
+      ),
+    );
+    const originalNow = Date.now;
+    try {
+      let pending = true;
+      ctx.hasPendingMessages = () => pending;
+      Date.now = () => originalNow() + 30_001;
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      assert.equal(
+        pi.sentMessageCalls.filter(
+          ({ message }: any) => message?.details?.id === fallbackMessage.id,
+        ).length,
+        1,
+      );
+      pending = false;
+      await t.waitFor(() =>
+        assert.equal(
+          pi.sentMessageCalls.filter(
+            ({ message }: any) => message?.details?.id === fallbackMessage.id,
+          ).length,
+          2,
+        ),
+      );
+    } finally {
+      Date.now = originalNow;
+    }
+    const fallbackReceipt = pi.sentMessageCalls.find(
+      ({ message }: any) => message?.details?.id === fallbackMessage.id,
+    )!.message as any;
+    pi.entries.push({ type: "custom", ...fallbackReceipt });
+    await t.waitFor(() =>
+      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+    );
     const tool = pi.tools.find(
       (candidate) => candidate.name === "message_supervisor",
     )!;
@@ -424,8 +504,63 @@ test("a manually continued assigned Lead stays managed and rejects stale Manager
       branch: "smoke/routing",
       text: "routing assignment",
     });
+    const inconclusiveText = "retain while scope is unavailable";
+    const inconclusive = {
+      ...managerMessage,
+      id: randomUUID(),
+      text: inconclusiveText,
+    };
+    managerIdentityUnavailable = true;
+    const inconclusivePath = writeChiefMessage(inconclusive, runtime);
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    assert.deepEqual(listChiefMessagePaths(runtime, leadId), [
+      inconclusivePath,
+    ]);
+    assert.equal(
+      pi.sentMessageCalls.some(({ message }: any) =>
+        message?.content?.includes(inconclusiveText),
+      ),
+      false,
+    );
+    managerIdentityUnavailable = false;
+    await t.waitFor(() =>
+      assert.ok(
+        pi.sentMessageCalls.some(({ message }: any) =>
+          message?.content?.includes(inconclusiveText),
+        ),
+      ),
+    );
+    const inconclusiveReceipt = pi.sentMessageCalls.find(({ message }: any) =>
+      message?.content?.includes(inconclusiveText),
+    )!.message as any;
+    pi.entries.push({ type: "custom", ...inconclusiveReceipt });
+    await t.waitFor(() =>
+      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+    );
     manager.release();
     managerReleased = true;
+    const replacementManager = claimManagerLease({
+      piSessionId: managerId,
+      paneId: "manager-pane",
+      tabId: "manager-tab",
+      workspaceId: WORKSPACE,
+      repoKey: "repo-key",
+    });
+    const replacedText = "reject replaced Manager generation";
+    writeChiefMessage(
+      { ...managerMessage, id: randomUUID(), text: replacedText },
+      runtime,
+    );
+    await t.waitFor(() =>
+      assert.equal(listChiefMessagePaths(runtime, leadId).length, 0),
+    );
+    assert.equal(
+      pi.sentMessageCalls.some(({ message }: any) =>
+        message?.content?.includes(replacedText),
+      ),
+      false,
+    );
+    replacementManager.release();
     const withoutManager = await send("MANAGER_ABSENT_OK");
     assert.match(
       JSON.stringify(withoutManager),
@@ -1472,9 +1607,9 @@ test("Chief preflight defers inbox delivery until agent_start", async (t) => {
       code: 0,
     };
   };
-  const pi = fakeChiefPi({ exec });
+  const pi = fakeChiefPi({ exec, persistMessages: true });
   registerExtension!(pi.pi as never);
-  const ctx = fakeContext() as any;
+  const ctx = fakeContext(pi.entries) as any;
   ctx.sessionManager = {
     ...ctx.sessionManager,
     getSessionId: () => sessionId,
@@ -2017,6 +2152,7 @@ for (const scenario of [
     const entries: unknown[] = [];
     const pi = fakeChiefPi({
       entries,
+      persistMessages: true,
       exec: (_command, args) => {
         let result: unknown = {};
         if (isApiSnapshot(args))
@@ -2056,7 +2192,7 @@ for (const scenario of [
       },
     });
     registerExtension!(pi.pi as never);
-    const ctx = fakeContext() as any;
+    const ctx = fakeContext(entries) as any;
     ctx.sessionManager = {
       ...ctx.sessionManager,
       getSessionId: () => sessionId,
@@ -3769,10 +3905,12 @@ async function runManagerStartupScenario(
               ),
             sendMessage: (message) => delivered.push(message),
           });
-        assert.equal(await drain(), 1);
+        assert.equal(await drain(), 0);
         assert.equal(delivered[0].customType, "pi-herdsman-project_assignment");
         assert.equal(delivered[0].details.id, staleId);
         entries.push(delivered[0]);
+        assert.equal(await drain(), 0);
+        assert.equal(messages().length, 0);
         const stillRunning = await execute();
         assert.equal(stillRunning.details.action, "resume");
         assert.equal(stillRunning.details.already_running, true);

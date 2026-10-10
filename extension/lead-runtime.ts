@@ -943,7 +943,7 @@ export function createLeadSessionStartRuntime(host: {
   failClosedRole(ctx: ExtensionContext, error: unknown): Promise<void>;
   publishLeadRole(
     ctx: ExtensionContext,
-    mode: "active",
+    mode: "inactive" | "active" | "suspended",
     generation: number,
   ): void;
   activateChief(ctx: ExtensionContext, resumed: boolean): Promise<void>;
@@ -1186,6 +1186,12 @@ export function createLeadSessionStartRuntime(host: {
         }
       }
       if (sessionSignal.aborted) return;
+      if (host.roleTransitions.activeManager())
+        await host.publishLeadRole(
+          ctx,
+          "inactive",
+          host.roleTransitions.currentRoleGeneration(),
+        );
       if (needsLeadRoster) {
         try {
           const definitions = await host.visibleAgentDefinitionMetadata(
@@ -1221,7 +1227,10 @@ export function createLeadAgentEventRuntime(host: {
   isCurrentChief(ctx: ExtensionContext): boolean;
   setActiveTools(tools: readonly string[]): void;
   chiefTools: readonly string[];
-  leadInboxRuntime: Pick<LeadInboxRuntime, "holdStartPreflight">;
+  leadInboxRuntime: Pick<
+    LeadInboxRuntime,
+    "holdStartPreflight" | "agentSettled"
+  >;
   prepareSupervisionMessage(
     ctx: ExtensionContext,
   ): Promise<
@@ -1297,6 +1306,7 @@ export function createLeadAgentEventRuntime(host: {
       host.herdRun.agentStarted();
     },
     async agentSettled(ctx: ExtensionContext, aborted: boolean): Promise<void> {
+      host.leadInboxRuntime.agentSettled();
       host.controller.settleAsks(ctx, host.controller.sessionSignal());
       host.herdRun.agentSettled(ctx, aborted);
       await host.controller
@@ -2361,58 +2371,97 @@ export function registerLeadRuntime(
   };
   const roleHost = options.roleTransitionHost;
   let leadMetadataQueue = Promise.resolve();
+  let reportedRoleMetadataFailure: string | undefined;
   const publishLeadRole = (
     ctx: ExtensionContext,
-    mode: "inactive" | "active" | "suspended",
+    _mode: "inactive" | "active" | "suspended",
     generation: number,
   ): Promise<void> => {
-    const paneId = roleHost.paneId();
-    if (!paneId) return Promise.resolve();
-    const activeRole = () => activeLeadRole(leadRuntime);
-    const leadName =
-      mode === "inactive" && activeRole() === "lead"
-        ? roleHost.getSessionName()?.trim()
-        : undefined;
-    const args = [
-      "pane",
-      "report-metadata",
-      paneId,
-      "--source",
-      "pi-herdsman:lead",
-      "--title",
-      mode === "active"
-        ? "chief"
-        : activeRole() === "manager"
-          ? "Pi Herdsman manager"
-          : leadName || "Pi Herdsman lead",
-      ...(mode === "active"
-        ? ["--token", "pi_herdsman_role=chief"]
-        : mode === "inactive"
-          ? ["--token", `pi_herdsman_role=${activeRole()}`]
-          : ["--clear-token", "pi_herdsman_role"]),
-    ];
-    if (mode === "inactive" && activeRole() === "lead")
-      args.push(
-        leadName ? "--token" : "--clear-token",
-        leadName ? `pi_herdsman_name=${leadName}` : "pi_herdsman_name",
-      );
-    if (mode !== "inactive" || activeRole() !== "lead")
-      args.push(
-        "--clear-token",
-        "pi_herdsman_herd_run_started_at",
-        "--clear-token",
-        "pi_herdsman_context_percent",
-      );
+    const sessionId = ctx.sessionManager.getSessionId();
+    const sessionGeneration = leadRuntime.sessionGeneration;
+    const failureKey = `${sessionId}:${sessionGeneration}:${generation}`;
     leadMetadataQueue = leadMetadataQueue
       .catch(() => {})
       .then(async () => {
-        if (generation !== leadRuntime.chiefModeGeneration) return;
+        if (
+          generation !== leadRuntime.chiefModeGeneration ||
+          sessionGeneration !== leadRuntime.sessionGeneration ||
+          sessionId !== ctx.sessionManager.getSessionId()
+        )
+          return;
+        const paneId = roleHost.paneId();
+        if (!paneId) return;
+        const role =
+          leadRuntime.chiefMode === "active"
+            ? "chief"
+            : leadRuntime.controllerRole === "manager" &&
+                !leadRuntime.roleSuspended
+              ? "manager"
+              : leadRuntime.roleSuspended
+                ? undefined
+                : "lead";
+        const leadName =
+          role === "lead" ? roleHost.getSessionName()?.trim() : undefined;
+        const args = [
+          "pane",
+          "report-metadata",
+          paneId,
+          "--source",
+          "pi-herdsman:lead",
+          "--title",
+          role === "chief"
+            ? "chief"
+            : role === "manager"
+              ? "Pi Herdsman manager"
+              : leadName || "Pi Herdsman lead",
+          ...(role
+            ? ["--token", `pi_herdsman_role=${role}`]
+            : ["--clear-token", "pi_herdsman_role"]),
+        ];
+        if (role === "lead")
+          args.push(
+            leadName ? "--token" : "--clear-token",
+            leadName ? `pi_herdsman_name=${leadName}` : "pi_herdsman_name",
+          );
+        else
+          args.push(
+            "--clear-token",
+            "pi_herdsman_name",
+            "--clear-token",
+            "pi_herdsman_ask",
+          );
+        if (role !== "lead")
+          args.push(
+            "--clear-token",
+            "pi_herdsman_herd_run_started_at",
+            "--clear-token",
+            "pi_herdsman_context_percent",
+          );
         await roleHost.runHerdr(pi, ctx, args, {
           noResult: true,
           timeout: 10_000,
         });
+        reportedRoleMetadataFailure = undefined;
       })
-      .catch(() => {});
+      .catch((error) => {
+        if (
+          sessionGeneration !== leadRuntime.sessionGeneration ||
+          sessionId !== ctx.sessionManager.getSessionId()
+        )
+          return;
+        if (reportedRoleMetadataFailure === failureKey) return;
+        reportedRoleMetadataFailure = failureKey;
+        try {
+          roleHost.appendDurableError(
+            pi,
+            ctx,
+            "pi_herdsman_state_error",
+            error,
+          );
+        } catch {
+          // Presentation diagnostics cannot change authority.
+        }
+      });
     return leadMetadataQueue;
   };
   const queueLeadMetadata = (
@@ -2432,10 +2481,42 @@ export function registerLeadRuntime(
       );
       return;
     }
+    const sessionId = ctx.sessionManager.getSessionId();
+    const sessionGeneration = leadRuntime.sessionGeneration;
     leadMetadataQueue = leadMetadataQueue
       .catch(() => {})
-      .then(() => roleHost.reportLeadMetadata(pi, ctx, metadata))
-      .catch(() => {});
+      .then(() => {
+        if (
+          sessionGeneration !== leadRuntime.sessionGeneration ||
+          sessionId !== ctx.sessionManager.getSessionId() ||
+          leadRuntime.controllerRole !== "lead" ||
+          leadRuntime.roleSuspended
+        )
+          return;
+        return roleHost.reportLeadMetadata(pi, ctx, metadata).then(() => {
+          reportedRoleMetadataFailure = undefined;
+        });
+      })
+      .catch((error) => {
+        if (
+          sessionGeneration !== leadRuntime.sessionGeneration ||
+          sessionId !== ctx.sessionManager.getSessionId()
+        )
+          return;
+        const failureKey = `${sessionId}:${sessionGeneration}:${leadRuntime.chiefModeGeneration}`;
+        if (reportedRoleMetadataFailure === failureKey) return;
+        reportedRoleMetadataFailure = failureKey;
+        try {
+          roleHost.appendDurableError(
+            pi,
+            ctx,
+            "pi_herdsman_state_error",
+            error,
+          );
+        } catch {
+          // Presentation diagnostics cannot change authority.
+        }
+      });
   };
   const persistRole = (role: SessionRole): void => {
     const tools = leadToolState.getLeadTools();
@@ -6829,6 +6910,8 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
   let chiefInboxTimer: ReturnType<typeof setTimeout> | undefined;
   let chiefInboxGeneration = 0;
   let chiefInboxAbortController: AbortController | undefined;
+  let currentSubmittedAt: Map<string, number> | undefined;
+  let settledSubmissions = new Set<string>();
   type ChiefStartPreflight = {
     sessionId: string;
     sessionGeneration: number;
@@ -6904,7 +6987,7 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
   ): boolean =>
     record.toSessionId === ctx.sessionManager.getSessionId() &&
     ctx.sessionManager
-      .getBranch()
+      .getEntries()
       .some(
         (entry: any) =>
           entry?.customType === `pi-herdsman-${record.kind}` &&
@@ -7114,13 +7197,30 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
       );
     }
     const scope = await host.currentWorktreeScope(ctx);
-    if (!scope || !host.projectAssignmentForScope(scope, sessionId))
-      return false;
+    if (!scope) throw new Error("Project scope cannot be verified");
+    if (!host.projectAssignmentForScope(scope, sessionId)) return false;
     const manager = await currentManager(ctx, scope);
-    const state = readLeadCoordinationState(supervisionRuntime(), sessionId);
+    let state: ReturnType<typeof readLeadCoordinationState>;
+    try {
+      state = readLeadCoordinationState(supervisionRuntime(), sessionId);
+    } catch (error) {
+      const cause = error instanceof Error ? error.cause : undefined;
+      if (
+        cause instanceof SyntaxError ||
+        (cause instanceof Error &&
+          ["invalid lead state", "lead state too large"].includes(
+            cause.message,
+          ))
+      )
+        return false;
+      throw error;
+    }
+    if (!manager)
+      throw new Error("Manager authority is temporarily unavailable");
+    if (!state)
+      throw new Error("Lead coordination state is temporarily unavailable");
     return (
-      !!manager &&
-      !!state &&
+      (state.role ?? "lead") === "lead" &&
       record.leaseId === manager.leaseId &&
       record.fromSessionId === manager.piSessionId &&
       record.leadSessionId === sessionId &&
@@ -7149,6 +7249,12 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
         signal: AbortSignal | undefined;
       }
     >();
+    const submittedAt = new Map<string, number>();
+    currentSubmittedAt = submittedAt;
+    settledSubmissions = new Set();
+    // ponytail: process-local duplicate suppression; a crash before Pi
+    // persists the receipt may replay once. Durable exactly-once
+    // delivery would require a Pi-owned transactional acknowledgment.
     const revalidateTransaction = (token: unknown, phase: string): void => {
       const transaction = token as {
         generation?: number;
@@ -7185,6 +7291,18 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
           appendDurableError(pi, ctx, "pi_herdsman_state_error", error);
         },
         deliveryMode: (record: ChiefMessageRecord) => {
+          const attempted = submittedAt.get(record.id);
+          if (attempted !== undefined && !messageDelivered(ctx, record)) {
+            const elapsed = Date.now() - attempted;
+            const settled = settledSubmissions.has(record.id);
+            // Pi may fail before agent_settled; wait 30s before a quiet retry.
+            if (
+              !ctx.isIdle() ||
+              ctx.hasPendingMessages() ||
+              elapsed < (settled ? 1_000 : 30_000)
+            )
+              return undefined;
+          }
           const role = activeRole();
           const supervisorDownlink =
             (role === "lead" &&
@@ -7326,7 +7444,17 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               };
             }
             importResultBindings(pi, ctx, resultBindings, record.kind);
-            const result = await pi.sendMessage(payload, options);
+            if (messageDelivered(ctx, record)) return;
+            let result: void;
+            try {
+              result = pi.sendMessage(payload, options);
+            } catch (error) {
+              submittedAt.delete(record.id);
+              settledSubmissions.delete(record.id);
+              throw error;
+            }
+            submittedAt.set(record.id, Date.now());
+            settledSubmissions.delete(record.id);
             if (projectAssignment)
               managerDiagnostic("project_assignment_send", {
                 outcome: "resolved",
@@ -7372,8 +7500,13 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
               }
           },
         },
-        accepted: async (_record: ChiefMessageRecord) => {},
+        accepted: async (record: ChiefMessageRecord) => {
+          submittedAt.delete(record.id);
+          settledSubmissions.delete(record.id);
+        },
         rejected: (record: ChiefMessageRecord) => {
+          submittedAt.delete(record.id);
+          settledSubmissions.delete(record.id);
           if (!record.build || !sameRuntimeBuild(record.build, HERDSMAN_BUILD))
             ctx.ui.notify(
               record.build
@@ -7518,8 +7651,14 @@ export function createLeadInboxRuntime(host: LeadInboxHost) {
     },
     clearTimer,
     beginSession: () => {
+      currentSubmittedAt?.clear();
+      settledSubmissions.clear();
       chiefInboxAbortController?.abort();
       chiefInboxAbortController = new AbortController();
+    },
+    agentSettled: () => {
+      for (const id of currentSubmittedAt?.keys() ?? [])
+        settledSubmissions.add(id);
     },
     beginShutdown: () => {
       chiefInboxGeneration++;
@@ -9187,6 +9326,7 @@ export function createLeadRoleTransitions(
       !state.roleSuspended,
     activeChiefGeneration: () =>
       state.chiefMode === "active" ? state.chiefModeGeneration : undefined,
+    currentRoleGeneration: () => state.chiefModeGeneration,
     mayPublishLeadPresence: () =>
       state.chiefMode === "inactive" &&
       !state.roleSuspended &&
