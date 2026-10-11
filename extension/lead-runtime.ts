@@ -416,6 +416,9 @@ type LeadHerdRunHost = {
   currentWorktreeScope(
     ctx: ExtensionContext,
   ): Promise<WorktreeGroupScope | undefined>;
+  currentProjectAssignment?(
+    ctx: ExtensionContext,
+  ): Promise<ProjectAssignment | undefined>;
   projectAssignmentForScope(
     scope: WorktreeGroupScope,
     sessionId: string,
@@ -1369,10 +1372,13 @@ export function createLeadAgentEventRuntime(host: {
     async agentSettled(ctx: ExtensionContext, aborted: boolean): Promise<void> {
       host.leadInboxRuntime.agentSettled();
       host.controller.settleAsks(ctx, host.controller.sessionSignal());
-      await host.herdRun.agentSettled(ctx, aborted);
-      await host.controller
-        .settleResults(ctx, host.controller.sessionSignal())
-        .catch(() => {});
+      try {
+        await host.herdRun.agentSettled(ctx, aborted);
+      } finally {
+        await host.controller
+          .settleResults(ctx, host.controller.sessionSignal())
+          .catch(() => {});
+      }
     },
     toolCall(
       event: any,
@@ -2417,6 +2423,8 @@ export function registerLeadRuntime(
     ) => roleTransitions.currentManager(...args),
     currentWorktreeScope: (ctx: ExtensionContext) =>
       roleTransitions.currentWorktreeScope(ctx),
+    currentProjectAssignment: (ctx: ExtensionContext) =>
+      currentProjectAssignment(ctx),
     projectAssignmentForScope: (
       ...args: Parameters<typeof roleTransitions.projectAssignmentForScope>
     ) => roleTransitions.projectAssignmentForScope(...args),
@@ -3181,6 +3189,8 @@ export function registerLeadRuntime(
     listAgentStates: () => controller.listAgentStates(),
     currentWorktreeScope: (ctx: ExtensionContext) =>
       roleTransitions.currentWorktreeScope(ctx),
+    currentProjectAssignment: (ctx: ExtensionContext) =>
+      currentProjectAssignment(ctx),
     projectAssignmentForScope: (
       ...args: Parameters<typeof roleTransitions.projectAssignmentForScope>
     ) => roleTransitions.projectAssignmentForScope(...args),
@@ -4977,10 +4987,18 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         "manager",
         createdAt,
       );
-    const scope = await host.currentWorktreeScope(ctx);
-    const assignment = scope
-      ? host.projectAssignmentForScope(scope, ctx.sessionManager.getSessionId())
-      : undefined;
+    const assignment = host.currentProjectAssignment
+      ? await host.currentProjectAssignment(ctx)
+      : await host
+          .currentWorktreeScope(ctx)
+          .then((scope) =>
+            scope
+              ? host.projectAssignmentForScope(
+                  scope,
+                  ctx.sessionManager.getSessionId(),
+                )
+              : undefined,
+          );
     if (!assignment)
       return kind === "execution_failure" && role === "lead"
         ? host.publishChiefFailure(ctx, message, reportId!, "lead", createdAt)
@@ -4996,6 +5014,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     ));
   };
   let finishing: Promise<void> | undefined;
+  let idleFinishing: Promise<void> | undefined;
   const maybeFinish = (ctx: ExtensionContext): Promise<void> => {
     if (finishing) return finishing;
     if (herdRunStartedAt === undefined || !leadSettled)
@@ -5019,10 +5038,15 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         // Failed/cancelled herd runs are reported at settlement, before children
         // finish. Assigned projects require a completion handoff.
         if (outcome?.outcome === "completed") {
-          const scope = await host.currentWorktreeScope(ctx);
-          const assignment = scope
-            ? host.projectAssignmentForScope(scope, sessionId)
-            : undefined;
+          const assignment = host.currentProjectAssignment
+            ? await host.currentProjectAssignment(ctx)
+            : await host
+                .currentWorktreeScope(ctx)
+                .then((scope) =>
+                  scope
+                    ? host.projectAssignmentForScope(scope, sessionId)
+                    : undefined,
+                );
           if (assignment) {
             const message = outcome.summary
               ? `Herd run settled.\n\n${outcome.summary}`
@@ -5365,8 +5389,59 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
             error,
           );
         }
-      } else if (!herdOwnsHandoff && successful && summary) {
-        await publishProjectHandoff(ctx, summary, leadReportId);
+      } else if (
+        !herdOwnsHandoff &&
+        successful &&
+        summary &&
+        turnStartedAt !== undefined &&
+        leadReportId
+      ) {
+        try {
+          const assignment = host.currentProjectAssignment
+            ? await host.currentProjectAssignment(ctx)
+            : await host
+                .currentWorktreeScope(ctx)
+                .then((scope) =>
+                  scope
+                    ? host.projectAssignmentForScope(
+                        scope,
+                        ctx.sessionManager.getSessionId(),
+                      )
+                    : undefined,
+                );
+          if (assignment) {
+            host.pi.appendEntry(host.entryName, {
+              phase: "report_pending",
+              sessionId: ctx.sessionManager.getSessionId(),
+              startedAt: turnStartedAt,
+              reportId: leadReportId,
+              message: summary,
+            });
+            if (
+              await host.publishProjectMessage(
+                ctx,
+                assignment,
+                summary,
+                [],
+                "herd_run",
+                leadReportId,
+              )
+            )
+              host.pi.appendEntry(host.entryName, {
+                phase: "report_sent",
+                sessionId: ctx.sessionManager.getSessionId(),
+                startedAt: turnStartedAt,
+                reportId: leadReportId,
+              });
+          }
+        } catch (error) {
+          host.appendDurableError(
+            host.pi,
+            ctx,
+            "pi_herdsman_state_error",
+            error,
+          );
+        }
       }
       await maybeFinish(ctx);
       if (!herdOwnsHandoff && turnStartedAt !== undefined) {
@@ -5428,7 +5503,8 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
     },
     finishIfIdle: (ctx: ExtensionContext) => {
       if (!ctx.isIdle()) return;
-      void (async () => {
+      if (idleFinishing) return;
+      idleFinishing = (async () => {
         await restorePendingReports(ctx, ctx.sessionManager.getEntries());
         const currentEntries = ctx.sessionManager.getEntries() as any[];
         const hasUnsentHerdIntent = currentEntries.some((entry) => {
@@ -5513,9 +5589,18 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
           }
           await maybeFinish(ctx);
         }
-      })().catch((error) =>
-        host.appendDurableError(host.pi, ctx, "pi_herdsman_state_error", error),
-      );
+      })()
+        .catch((error) =>
+          host.appendDurableError(
+            host.pi,
+            ctx,
+            "pi_herdsman_state_error",
+            error,
+          ),
+        )
+        .finally(() => {
+          idleFinishing = undefined;
+        });
     },
     startedAt: () => herdRunStartedAt,
     shutdown: () => {

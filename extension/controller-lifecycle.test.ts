@@ -2020,6 +2020,125 @@ test("restored herd run keeps its start and closes after settlement", async (t) 
   }
 });
 
+test("registered managed Lead fails closed if its worktree scope disappears", async (t) => {
+  setLeadEnvironment();
+  process.env.HERDR_PANE_ID = "lead-pane";
+  const socket = join(tmpdir(), `managed-scope-loss-${randomUUID()}.sock`);
+  process.env.HERDR_SOCKET_PATH = socket;
+  const runtime = supervisionRuntime(socket);
+  const branch = `managed-${randomUUID()}`;
+  writeProjectAssignment(runtime, {
+    version: 2,
+    id: LEAD_SESSION_ID,
+    repoKey: "repo-key",
+    branch,
+    text: "Implement the assigned project",
+  });
+  const startedAt = Date.now();
+  const runReportId = randomUUID();
+  const reportId = randomUUID();
+  const entries: unknown[] = [
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: {
+        phase: "started",
+        sessionId: LEAD_SESSION_ID,
+        startedAt,
+        reportId: runReportId,
+      },
+    },
+    {
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data: {
+        phase: "report_pending",
+        sessionId: LEAD_SESSION_ID,
+        startedAt,
+        reportId,
+        runReportId,
+        message: "Existing assigned handoff",
+      },
+    },
+  ];
+  let scopeUnavailable = false;
+  const startup = startupExecutor("agent", () => DEFAULT_PI_SESSION_ID);
+  const pi = fakePi({
+    entries,
+    exec: async (command, args) => {
+      if (command === "herdr" && args[0] === "worktree" && args[1] === "list")
+        return scopeUnavailable
+          ? {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                error: {
+                  code: "not_git_worktree",
+                  message: "Workspace is not a Git worktree",
+                },
+              }),
+              stderr: "",
+              code: 1,
+            }
+          : {
+              stdout: JSON.stringify({
+                id: AGENT_ID,
+                result: {
+                  source: {
+                    repo_key: "repo-key",
+                    repo_name: "project",
+                    source_workspace_id: WORKSPACE,
+                  },
+                  worktrees: [],
+                },
+              }),
+              stderr: "",
+              code: 0,
+            };
+      return startup.exec(command, args);
+    },
+  });
+  const context = fakeContext(entries);
+  context.isIdle = () => false;
+  registerExtension!(pi.pi as never);
+  t.after(async () => {
+    for (const handler of pi.events.get("session_shutdown") ?? [])
+      await handler(undefined, context);
+  });
+  for (const handler of pi.events.get("session_start") ?? [])
+    await handler(undefined, context);
+  scopeUnavailable = true;
+  context.isIdle = () => true;
+  for (const handler of pi.events.get("agent_settled") ?? [])
+    await handler({ aborted: false }, context);
+
+  assert.ok(
+    entries.some(
+      (entry: any) =>
+        entry.customType === "pi_herdsman_state_error" &&
+        /Cannot verify the current project assignment/.test(entry.data.error),
+    ),
+    "production runtime records the fail-closed assignment diagnostic",
+  );
+  assert.equal(
+    entries.some(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "finished",
+    ),
+    false,
+    "a managed Lead must not finish when assignment scope cannot be verified",
+  );
+  assert.ok(
+    entries.some(
+      (entry: any) =>
+        entry.customType === "pi-herdsman-herd-run" &&
+        entry.data?.phase === "report_pending" &&
+        entry.data?.reportId === reportId,
+    ),
+    "the pending handoff remains durable",
+  );
+});
+
 test("aborted Lead settlement waits for active child work before finishing the herd", async () => {
   const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
   const pi = fakePi();
@@ -2412,6 +2531,78 @@ test("concurrent herd finalization publishes and finishes only once", async () =
   );
 });
 
+test("concurrent idle recovery replays and finishes only once", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.isIdle = () => true;
+  const reportId = randomUUID();
+  const startedAt = Date.now();
+  pi.entries.push(
+    ...([
+      {
+        phase: "started",
+        sessionId: LEAD_SESSION_ID,
+        startedAt,
+        reportId,
+      },
+      {
+        phase: "report_pending",
+        sessionId: LEAD_SESSION_ID,
+        startedAt,
+        reportId: randomUUID(),
+        runReportId: reportId,
+        message: "Recover this report",
+        kind: "execution_failure",
+        createdAt: startedAt,
+      },
+    ].map((data) => ({
+      type: "custom",
+      customType: "pi-herdsman-herd-run",
+      data,
+    })) as any[]),
+  );
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => (release = resolve));
+  let publications = 0;
+  const herd = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    entryName: "pi-herdsman-herd-run",
+    hasPendingStarts: () => false,
+    listAgentStates: () => [],
+    currentWorktreeScope: async () => undefined,
+    currentProjectAssignment: async () => undefined,
+    projectAssignmentForScope: () => undefined,
+    publishProjectMessage: async () => undefined,
+    publishChiefFailure: async () => {
+      publications++;
+      await blocked;
+      return true;
+    },
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: () => {},
+  });
+  herd.restoreSession(pi.entries, LEAD_SESSION_ID);
+  herd.finishIfIdle(context);
+  herd.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(publications, 1);
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    pi.entries.filter((entry: any) => entry.data?.phase === "finished").length,
+    1,
+  );
+  assert.equal(
+    pi.entries.filter((entry: any) => entry.data?.phase === "report_sent")
+      .length,
+    1,
+  );
+});
+
 test("failed successful-handoff publication keeps herd finalization retryable", async () => {
   const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
   const pi = fakePi();
@@ -2513,6 +2704,197 @@ test("successful unassigned Lead herd finishes without a project handoff", async
     false,
   );
   assert.deepEqual(chiefFailures, []);
+});
+
+test("managed Lead herd fails closed when its worktree scope is unavailable", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  let durableErrors = 0;
+  const herd = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    entryName: "pi-herdsman-herd-run",
+    hasPendingStarts: () => false,
+    listAgentStates: () => [],
+    currentWorktreeScope: async () => undefined,
+    currentProjectAssignment: async () => {
+      throw new Error("Cannot verify the current project assignment");
+    },
+    projectAssignmentForScope: () => undefined,
+    publishProjectMessage: async () => undefined,
+    publishChiefFailure: async () => false,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: (_pi, _ctx, category) => {
+      assert.equal(category, "pi_herdsman_state_error");
+      durableErrors++;
+    },
+  });
+  herd.agentStarted();
+  herd.begin(context);
+  const started = pi.entries.find(
+    (entry: any) => entry.data?.phase === "started",
+  ) as any;
+  pi.entries.push({
+    type: "custom",
+    customType: "pi-herdsman-herd-run",
+    data: {
+      phase: "report_pending",
+      sessionId: LEAD_SESSION_ID,
+      startedAt: started.data.startedAt,
+      reportId: randomUUID(),
+      runReportId: started.data.reportId,
+      message: "Existing handoff",
+    },
+  } as any);
+  herd.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "Completed" },
+    messageEntryId: "completed-response",
+  });
+  herd.beforeSettle({ outcome: "completed" });
+  await herd.agentSettled(context, false);
+
+  assert.ok(durableErrors > 0);
+  assert.equal(
+    pi.entries.some((entry: any) => entry.data?.phase === "finished"),
+    false,
+  );
+  assert.ok(
+    pi.entries.some(
+      (entry: any) =>
+        entry.data?.phase === "report_pending" &&
+        entry.data?.message === "Existing handoff",
+    ),
+  );
+});
+
+test("direct assigned Lead success records and replays a failed handoff", async () => {
+  const { createLeadAgentEventRuntime, createLeadHerdRunRuntime } =
+    await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  context.isIdle = () => true;
+  let publicationAttempts = 0;
+  let durableErrors = 0;
+  let settledResults = 0;
+  const assignment = { project: "assigned" } as any;
+  const herdRun = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    entryName: "pi-herdsman-herd-run",
+    hasPendingStarts: () => false,
+    listAgentStates: () => [],
+    currentWorktreeScope: async () => ({}) as any,
+    currentProjectAssignment: async () => assignment,
+    projectAssignmentForScope: () => assignment,
+    publishProjectMessage: async () => {
+      publicationAttempts++;
+      if (publicationAttempts === 1) throw new Error("publication failed");
+      return {} as any;
+    },
+    publishChiefFailure: async () => false,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: (_pi, _ctx, category) => {
+      assert.equal(category, "pi_herdsman_state_error");
+      durableErrors++;
+    },
+  });
+  const events = createLeadAgentEventRuntime({
+    isCurrentChief: () => false,
+    setActiveTools: () => {},
+    chiefTools: [],
+    leadInboxRuntime: { holdStartPreflight: () => {}, agentSettled: () => {} },
+    prepareSupervisionMessage: async () => undefined,
+    sendMessage: () => {},
+    chiefSystemPrompt: (_options, body) => body,
+    isActiveManager: () => false,
+    roleCharter: () => "",
+    currentChiefAllowedTools: () => undefined,
+    supervisoryProfileBody: () => "",
+    isActiveLead: () => true,
+    executionPrompt: () => undefined,
+    prepareLeadSupervisorStateMessage: async () => undefined,
+    definitionRoster: () => undefined,
+    consumeChiefStartPreflight: () => {},
+    herdRun,
+    controller: {
+      settleAsks: () => {},
+      sessionSignal: () => new AbortController().signal,
+      settleResults: async () => {
+        settledResults++;
+      },
+    },
+  });
+  events.agentStart(context);
+  herdRun.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "Direct completed summary" },
+    messageEntryId: "direct-completed-response",
+  });
+  herdRun.beforeSettle({ outcome: "completed" });
+  await events.agentSettled(context, false);
+
+  const pending = pi.entries.find(
+    (entry: any) => entry.data?.phase === "report_pending",
+  ) as any;
+  assert.ok(pending);
+  assert.equal(pending.data.message, "Direct completed summary");
+  assert.equal(durableErrors, 1);
+  assert.equal(settledResults, 1);
+  assert.equal(publicationAttempts, 1);
+
+  herdRun.finishIfIdle(context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(publicationAttempts, 2);
+  assert.equal(
+    pi.entries.filter((entry: any) => entry.data?.phase === "report_sent")
+      .length,
+    1,
+  );
+});
+
+test("direct unassigned Lead success creates no report intent", async () => {
+  const { createLeadHerdRunRuntime } = await import("./lead-runtime.ts");
+  const pi = fakePi();
+  const context = fakeContext(pi.entries);
+  context.sessionManager.getSessionId = () => LEAD_SESSION_ID;
+  let projectWrites = 0;
+  const herd = createLeadHerdRunRuntime({
+    pi: pi.pi as never,
+    activeRole: () => "lead",
+    entryName: "pi-herdsman-herd-run",
+    hasPendingStarts: () => false,
+    listAgentStates: () => [],
+    currentWorktreeScope: async () => undefined,
+    currentProjectAssignment: async () => undefined,
+    projectAssignmentForScope: () => undefined,
+    publishProjectMessage: async () => {
+      projectWrites++;
+      return undefined;
+    },
+    publishChiefFailure: async () => false,
+    requestStatusRefresh: () => {},
+    queueLeadPresentation: () => {},
+    appendDurableError: () => {},
+  });
+  herd.agentStarted();
+  herd.turnEnd({
+    outcome: "completed",
+    message: { role: "assistant", content: "Direct response" },
+    messageEntryId: "direct-response",
+  });
+  herd.beforeSettle({ outcome: "completed" });
+  await herd.agentSettled(context, false);
+  assert.equal(projectWrites, 0);
+  assert.equal(
+    pi.entries.some((entry: any) => entry.data?.phase === "report_pending"),
+    false,
+  );
 });
 
 test("newer unsent herd handoff blocks restoration after older report was sent", async (t) => {
