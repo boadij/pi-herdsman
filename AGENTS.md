@@ -21,6 +21,29 @@ smallest integration-agnostic capability supported by demonstrated need, and
 leave provider-, model-, extension-, tool-, storage-, and service-specific
 semantics to their owners.
 
+## Evidence-gated simplification
+
+Treat compiler diagnostics, static analysis, audit findings, and review
+suggestions as evidence to investigate, not automatic change requests.
+
+Before acting on a finding:
+
+1. Trace affected callers, consumers, runtime reachability, and the
+   authoritative contract.
+2. Identify the root cause; group cascading or duplicate diagnostics.
+3. Prefer deletion, reuse, consolidation, and native capabilities over new
+   code, dependencies, tooling, or configuration.
+4. Make changes only when they demonstrably improve correctness, safety,
+   simplicity, or maintainability; preserve existing behavior and safeguards.
+5. Validate the affected contract using the smallest meaningful existing check.
+
+Do not optimize for diagnostic counts, coverage percentages, or line counts.
+Do not add abstractions, suppressions, or tooling merely to satisfy an analyzer.
+If no worthwhile improvement is demonstrated, make no change.
+
+For occasional repository-wide investigations, use the
+[simplification-audit skill](.agents/skills/simplification-audit/SKILL.md).
+
 ## Instruction and interface design
 
 Repository changes must follow the principles in
