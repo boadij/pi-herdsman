@@ -409,20 +409,14 @@ type LeadCommandBaseHost = Omit<
 
 type LeadHerdRunHost = {
   activeRole(): "lead" | "manager" | "chief";
+  isManagedLead(): boolean;
   pi: ExtensionAPI;
   entryName: string;
   hasPendingStarts(): boolean;
   listAgentStates(): ReturnType<LeadController["listAgentStates"]>;
-  currentWorktreeScope(
-    ctx: ExtensionContext,
-  ): Promise<WorktreeGroupScope | undefined>;
-  currentProjectAssignment?(
+  currentProjectAssignment(
     ctx: ExtensionContext,
   ): Promise<ProjectAssignment | undefined>;
-  projectAssignmentForScope(
-    scope: WorktreeGroupScope,
-    sessionId: string,
-  ): ProjectAssignment | undefined;
   publishProjectMessage(
     ctx: ExtensionContext,
     assignment: ProjectAssignment,
@@ -3185,15 +3179,11 @@ export function registerLeadRuntime(
     pi,
     entryName: options.herdRunEntryName,
     activeRole: () => activeLeadRole(options.leadRuntime),
+    isManagedLead: () => !!leadExecution?.managed,
     hasPendingStarts: () => controller.hasPendingStarts(),
     listAgentStates: () => controller.listAgentStates(),
-    currentWorktreeScope: (ctx: ExtensionContext) =>
-      roleTransitions.currentWorktreeScope(ctx),
     currentProjectAssignment: (ctx: ExtensionContext) =>
       currentProjectAssignment(ctx),
-    projectAssignmentForScope: (
-      ...args: Parameters<typeof roleTransitions.projectAssignmentForScope>
-    ) => roleTransitions.projectAssignmentForScope(...args),
     publishProjectMessage: (
       ...args: Parameters<typeof roleTransitions.publishProjectMessage>
     ) => roleTransitions.publishProjectMessage(...args),
@@ -4987,18 +4977,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         "manager",
         createdAt,
       );
-    const assignment = host.currentProjectAssignment
-      ? await host.currentProjectAssignment(ctx)
-      : await host
-          .currentWorktreeScope(ctx)
-          .then((scope) =>
-            scope
-              ? host.projectAssignmentForScope(
-                  scope,
-                  ctx.sessionManager.getSessionId(),
-                )
-              : undefined,
-          );
+    const assignment = await host.currentProjectAssignment(ctx);
     if (!assignment)
       return kind === "execution_failure" && role === "lead"
         ? host.publishChiefFailure(ctx, message, reportId!, "lead", createdAt)
@@ -5038,19 +5017,11 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         // Failed/cancelled herd runs are reported at settlement, before children
         // finish. Assigned projects require a completion handoff.
         if (outcome?.outcome === "completed") {
-          const assignment = host.currentProjectAssignment
-            ? await host.currentProjectAssignment(ctx)
-            : await host
-                .currentWorktreeScope(ctx)
-                .then((scope) =>
-                  scope
-                    ? host.projectAssignmentForScope(scope, sessionId)
-                    : undefined,
-                );
-          if (assignment) {
-            const message = outcome.summary
-              ? `Herd run settled.\n\n${outcome.summary}`
-              : "Herd run settled without a verified Lead integration summary.";
+          const message = outcome.summary
+            ? `Herd run settled.\n\n${outcome.summary}`
+            : "Herd run settled without a verified Lead integration summary.";
+          let reportMessage = message;
+          if (host.isManagedLead()) {
             const entries = ctx.sessionManager.getEntries() as any[];
             const pending = entries.find(
               (entry) =>
@@ -5060,7 +5031,7 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 entry.data?.phase === "report_pending" &&
                 entry.data?.reportId === herdReportId,
             )?.data;
-            const reportMessage = pending?.message ?? message;
+            reportMessage = pending?.message ?? message;
             if (!pending)
               host.pi.appendEntry(host.entryName, {
                 phase: "report_pending",
@@ -5069,6 +5040,9 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
                 reportId: herdReportId,
                 message: reportMessage,
               });
+          }
+          const assignment = await host.currentProjectAssignment(ctx);
+          if (assignment) {
             if (
               !(await host.publishProjectMessage(
                 ctx,
@@ -5397,26 +5371,27 @@ export function createLeadHerdRunRuntime(host: LeadHerdRunHost) {
         leadReportId
       ) {
         try {
-          const assignment = host.currentProjectAssignment
-            ? await host.currentProjectAssignment(ctx)
-            : await host
-                .currentWorktreeScope(ctx)
-                .then((scope) =>
-                  scope
-                    ? host.projectAssignmentForScope(
-                        scope,
-                        ctx.sessionManager.getSessionId(),
-                      )
-                    : undefined,
-                );
+          if (host.isManagedLead()) {
+            const sessionId = ctx.sessionManager.getSessionId();
+            const pending = (ctx.sessionManager.getEntries() as any[]).some(
+              (entry) =>
+                entry?.type === "custom" &&
+                entry.customType === host.entryName &&
+                entry.data?.sessionId === sessionId &&
+                entry.data?.phase === "report_pending" &&
+                entry.data?.reportId === leadReportId,
+            );
+            if (!pending)
+              host.pi.appendEntry(host.entryName, {
+                phase: "report_pending",
+                sessionId,
+                startedAt: turnStartedAt,
+                reportId: leadReportId,
+                message: summary,
+              });
+          }
+          const assignment = await host.currentProjectAssignment(ctx);
           if (assignment) {
-            host.pi.appendEntry(host.entryName, {
-              phase: "report_pending",
-              sessionId: ctx.sessionManager.getSessionId(),
-              startedAt: turnStartedAt,
-              reportId: leadReportId,
-              message: summary,
-            });
             if (
               await host.publishProjectMessage(
                 ctx,
